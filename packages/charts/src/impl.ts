@@ -1586,6 +1586,11 @@ export class chart_impl implements chart_api {
     return this.hover?.cursor ?? null;
   }
 
+  /** The engine-hit series under the current hover, or `null` (drives the pointer cursor). */
+  hover_series_id(): number | null {
+    return this.hover?.series_id ?? null;
+  }
+
   /** Emit a crosshair-move event (called by the gesture recognizer). */
   emit_crosshair(x: number, y: number): void {
     this.last_crosshair = { x, y };
@@ -1608,6 +1613,13 @@ export class chart_impl implements chart_api {
     // A click/tap is a discrete, intentional action, so it is a good moment to announce the point
     // to assistive tech (unlike mouse hover, which would flood the live region).
     this.announce(x, y);
+    // TradingView-style click-to-select: select the series under the click (the frame build
+    // paints anchor points on it) and clear the selection on empty pane space. The hover
+    // hit-test refreshes at the click point first, so a click without a preceding move still
+    // arbitrates correctly.
+    this.update_hover(x, y);
+    this.wasm.set_selected_series(this.hover?.series_id ?? undefined);
+    this.repaint();
     if (this.click_subs.size === 0) return;
     const params = this.build_params(x, y);
     for (const h of this.click_subs) h(params);

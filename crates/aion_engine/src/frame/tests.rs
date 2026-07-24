@@ -1792,3 +1792,66 @@ fn last_value_cluster_overlap_resolution_uses_the_total_height() {
         "two-row clusters must be pushed two box heights apart, got {gap}"
     );
 }
+
+/// One candle series on 60s bars (light default background) for the selection-anchor tests.
+fn anchor_chart() -> ChartEngine {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times = [0.0, 60.0, 120.0, 180.0, 240.0];
+    let opens = [10.0, 11.0, 12.0, 11.5, 12.5];
+    let highs = [10.5, 11.5, 12.5, 12.0, 13.0];
+    let lows = [9.5, 10.5, 11.5, 11.0, 12.0];
+    let closes = [11.0, 12.0, 11.5, 12.5, 12.8];
+    chart
+        .set_series_data(0, &times, &opens, &highs, &lows, &closes)
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    chart
+}
+
+/// The circle prims in the primary pane's main layer as `(cx, radius, fill)`. With the
+/// default options (no pulse, no markers, no crosshair) only selection anchors emit discs.
+fn frame_discs(chart: &mut ChartEngine) -> Vec<(f32, f32, Color)> {
+    chart.build_frame().panes[0]
+        .main
+        .iter()
+        .filter_map(|prim| match prim {
+            Prim::Circle { cx, radius, fill, .. } => Some((*cx, *radius, *fill)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn selection_anchors_paint_theme_derived_discs_on_the_selected_series() {
+    const BLUE: Color = Color::rgb(0x29, 0x62, 0xff); // TradingView accent blue
+    let mut chart = anchor_chart();
+    // Nothing selected: no anchor discs.
+    assert!(frame_discs(&mut chart).is_empty());
+    chart.set_selected_series(Some(0));
+    let discs = frame_discs(&mut chart);
+    // One border disc (blue, radius 2.5 + 1.5 at dpr 1) + one fill disc (radius 2.5) per bar.
+    let borders: Vec<_> = discs.iter().copied().filter(|d| d.2 == BLUE).collect();
+    let fills: Vec<_> = discs.iter().copied().filter(|d| d.2 != BLUE).collect();
+    assert_eq!(borders.len(), 5);
+    assert_eq!(fills.len(), 5);
+    assert!(borders.iter().all(|d| (d.1 - 4.0).abs() < 1e-4));
+    assert!(fills.iter().all(|d| (d.1 - 2.5).abs() < 1e-4));
+    // Light background (default): white fills, each paired with a border disc at the same x.
+    assert!(fills.iter().all(|d| d.2 == Color::rgb(0xff, 0xff, 0xff)));
+    for fill in &fills {
+        assert!(borders.iter().any(|b| (b.0 - fill.0).abs() < 1e-4));
+    }
+    // Dark background: the fill tracks the background luminance to black, blue border stays.
+    chart
+        .apply_options(r##"{"layout":{"background":{"color":"#0d0d0d"}}}"##)
+        .unwrap();
+    let dark: Vec<_> = frame_discs(&mut chart);
+    let dark_fills: Vec<_> = dark.iter().copied().filter(|d| d.2 != BLUE).collect();
+    assert_eq!(dark.iter().filter(|d| d.2 == BLUE).count(), 5);
+    assert_eq!(dark_fills.len(), 5);
+    assert!(dark_fills.iter().all(|d| d.2 == Color::rgb(0, 0, 0)));
+    // Deselecting (an empty-pane click) removes the anchors.
+    chart.set_selected_series(None);
+    assert!(frame_discs(&mut chart).is_empty());
+}

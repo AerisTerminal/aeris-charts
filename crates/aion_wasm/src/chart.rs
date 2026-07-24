@@ -1295,6 +1295,16 @@ impl AionChart {
     pub fn clear_hover(&mut self) {
         self.inner.borrow_mut().engine.set_hovered_series(None);
     }
+    /// TradingView-style click-to-select: the host's click pipeline sets the series under the
+    /// click (`None` on empty pane space); while set, the frame build paints anchor points on
+    /// its drawn data points (theme-derived fill, accent-blue border). Call `render()`
+    /// afterwards.
+    pub fn set_selected_series(&mut self, id: Option<u32>) {
+        self.inner
+            .borrow_mut()
+            .engine
+            .set_selected_series(id.map(|id| id as usize));
+    }
     /// reference `chart.setCrosshairPosition(price, time, series)`: position the crosshair at a
     /// data point with no DOM event — `time` must resolve exactly to a bar (false
     /// otherwise); x is that bar's coordinate and y the price mapped through the given

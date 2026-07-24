@@ -434,6 +434,18 @@ impl ChartEngine {
     pub fn hovered_series(&self) -> Option<SeriesId> {
         self.hovered_series
     }
+
+    /// The selected series the frame build paints anchor points on (TradingView-style
+    /// click-to-select). Hosts refresh it from their click pipeline (empty-space clicks pass
+    /// `None`); a removed id never sticks.
+    pub fn set_selected_series(&mut self, id: Option<SeriesId>) {
+        self.selected_series =
+            id.filter(|&sid| self.series.iter().any(|s| s.id == sid && !s.removed));
+    }
+
+    pub fn selected_series(&self) -> Option<SeriesId> {
+        self.selected_series
+    }
 }
 
 #[cfg(test)]

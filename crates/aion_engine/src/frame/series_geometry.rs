@@ -945,4 +945,113 @@ impl ChartEngine {
             stroke: base,
         });
     }
+
+    /// TradingView-style SELECTION ANCHORS: while a series is selected (host click-to-select),
+    /// every drawn data point carries a small disc — a theme-derived fill with the TradingView
+    /// accent-blue border. The fill tracks the chart background's luminance instead of being a
+    /// pinned color: white on light backgrounds, black on dark ones.
+    pub(super) fn build_selection_anchors_frame(
+        &self,
+        pane_index: usize,
+        from: i64,
+        to: i64,
+        hpr: f64,
+        vpr: f64,
+        out: &mut Vec<Prim>,
+    ) {
+        const ANCHOR_RADIUS: f64 = 2.5;
+        const ANCHOR_BORDER_WIDTH: f64 = 1.5;
+        const ANCHOR_BORDER: Color = Color::rgb(0x29, 0x62, 0xff); // TradingView accent blue
+        let Some(selected) = self.selected_series else {
+            return;
+        };
+        let pane = &self.panes[pane_index];
+        for series in &self.series {
+            if series.id != selected || !series.visible || series.pane_index != pane_index {
+                continue;
+            }
+            let scale = pane_scale(pane, series_scale_target(series));
+            if scale.is_empty() {
+                continue;
+            }
+            let Some(base_value) = self.series_base_value(series.id, from) else {
+                continue;
+            };
+            let plot = self.data.plot(series.id);
+            let background = css_color(
+                &self.options.get().layout.background.color,
+                Color::rgb(0xff, 0xff, 0xff),
+            );
+            let fill = if background.luminance() > 160.0 {
+                Color::rgb(0xff, 0xff, 0xff)
+            } else {
+                Color::rgb(0, 0, 0)
+            };
+            let bar_spacing = self.time_scale.bar_spacing();
+            let x_at = |index| self.time_scale.index_to_coordinate(index) * hpr;
+            // One anchor per DRAWN item (the same conflated set the kind's geometry and hit
+            // test use), at the item's close/value coordinate.
+            let anchors: Vec<(f32, f32)> = match series.kind {
+                SeriesKind::Candlestick | SeriesKind::Bar => {
+                    visible_ohlc(plot, from, to, bar_spacing, hpr, x_at)
+                        .into_iter()
+                        .map(|bar| {
+                            (
+                                bar.x_px as f32,
+                                (scale.price_to_coordinate(bar.close, base_value) * vpr) as f32,
+                            )
+                        })
+                        .collect()
+                }
+                SeriesKind::Histogram => visible_histogram_rows(plot, from, to, bar_spacing, hpr, x_at)
+                    .into_iter()
+                    .map(|row| {
+                        (
+                            row.x_px as f32,
+                            (scale.price_to_coordinate(
+                                plot.value_at(row.source_row, PlotValueIndex::Close),
+                                base_value,
+                            ) * vpr) as f32,
+                        )
+                    })
+                    .collect(),
+                SeriesKind::Line | SeriesKind::Area | SeriesKind::Baseline => {
+                    let indices = plot.indices();
+                    visible_line_rows(plot, from, to, bar_spacing, hpr, x_at)
+                        .into_iter()
+                        .map(|row| {
+                            (
+                                (self.time_scale.index_to_coordinate(indices[row]) * hpr) as f32,
+                                (scale.price_to_coordinate(
+                                    plot.value_at(row, PlotValueIndex::Close),
+                                    base_value,
+                                ) * vpr) as f32,
+                            )
+                        })
+                        .collect()
+                }
+                // A custom series draws host-side: the engine has no geometry to anchor to.
+                SeriesKind::Custom => Vec::new(),
+            };
+            for (cx, cy) in anchors {
+                // The crosshair-marks disc idiom: the border is a larger filled disc underneath.
+                out.push(Prim::Circle {
+                    cx,
+                    cy,
+                    radius: ((ANCHOR_RADIUS + ANCHOR_BORDER_WIDTH) * vpr) as f32,
+                    fill: ANCHOR_BORDER,
+                    stroke_width: 0.0,
+                    stroke: ANCHOR_BORDER,
+                });
+                out.push(Prim::Circle {
+                    cx,
+                    cy,
+                    radius: (ANCHOR_RADIUS * vpr) as f32,
+                    fill,
+                    stroke_width: 0.0,
+                    stroke: fill,
+                });
+            }
+        }
+    }
 }

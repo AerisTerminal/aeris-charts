@@ -392,6 +392,19 @@ fn removing_the_hovered_series_releases_the_z_bump() {
 }
 
 #[test]
+fn removing_the_selected_series_releases_the_selection() {
+    let mut chart = settled_line_chart(&[100.0, 100.0, 100.0]);
+    assert_eq!(chart.selected_series(), None);
+    chart.set_selected_series(Some(0));
+    assert_eq!(chart.selected_series(), Some(0));
+    assert!(chart.remove_series(0));
+    assert_eq!(chart.selected_series(), None);
+    // A tombstoned id can never be re-pinned.
+    chart.set_selected_series(Some(0));
+    assert_eq!(chart.selected_series(), None);
+}
+
+#[test]
 fn is_better_hit_ports_reference_arbitration() {
     let point = SeriesHit {
         series: 0,

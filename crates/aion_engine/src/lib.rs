@@ -630,6 +630,10 @@ pub struct ChartEngine {
     /// from their hover pipeline. When `hoveredSeriesOnTop` holds, the frame build paints
     /// this series topmost (reference `hoveredSourceOnTopOrder`) without touching `series_order`.
     hovered_series: Option<SeriesId>,
+    /// The series the host last clicked (TradingView-style selection): while set, the frame
+    /// build paints anchor points on its drawn data points (theme-derived fill, accent-blue
+    /// border). Clicking empty pane space clears it.
+    selected_series: Option<SeriesId>,
     /// Series-primitive autoscale contributions for the current frame build (Phase C-b).
     /// Hosts clear and re-record them per frame, before any layout/autoscale pass runs;
     /// `autoscale_for_frame` unions them into the owning scales.
@@ -684,6 +688,7 @@ impl ChartEngine {
             month_names: MonthNames::default(),
             series_order: vec![main],
             hovered_series: None,
+            selected_series: None,
             primitive_autoscale: Vec::new(),
             price_formatter_fn: None,
             tick_mark_formatter_fn: None,
@@ -818,6 +823,13 @@ impl ChartEngine {
             .is_some_and(|hovered| tombstones.contains(&hovered))
         {
             self.hovered_series = None;
+        }
+        // A selected series leaving the chart drops its anchor points with it.
+        if self
+            .selected_series
+            .is_some_and(|selected| tombstones.contains(&selected))
+        {
+            self.selected_series = None;
         }
         self.sync_time_points();
         // reference chart-model.ts `removeSeries`: prune the pane the series left when it is empty

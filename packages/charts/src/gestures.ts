@@ -582,9 +582,14 @@ export function install_gestures(chart: chart_impl): () => void {
               ? "ew-resize"
               : "crosshair";
       // A primitive's cursor overrides the region cursor while its hit holds — but only over
-      // the pane (the hover state is not refreshed over the axis strips).
+      // the pane (the hover state is not refreshed over the axis strips). A series hit shows
+      // the click affordance (TradingView-style: a series is selectable), falling back to the
+      // region cursor off the geometry.
       overlay.style.cursor =
-        region_cursor === "crosshair" ? (chart.hover_cursor() ?? region_cursor) : region_cursor;
+        region_cursor === "crosshair"
+          ? (chart.hover_cursor() ??
+            (chart.hover_series_id() !== null ? "pointer" : region_cursor))
+          : region_cursor;
     }
     chart.repaint();
   };

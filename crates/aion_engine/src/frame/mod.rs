@@ -723,6 +723,10 @@ impl ChartEngine {
                 }
             }
             self.build_crosshair_frame(pi, pane_w_px as i32, hpr, vpr, &mut out.main);
+            // Selection anchors paint last: above the series and the crosshair marks.
+            if let Some((from, to)) = visible {
+                self.build_selection_anchors_frame(pi, from, to, hpr, vpr, &mut out.main);
+            }
             if pane_left_px != 0 {
                 translate_prims_x(&mut out.under, pane_left_px as i32);
                 translate_prims_x(&mut out.main, pane_left_px as i32);
