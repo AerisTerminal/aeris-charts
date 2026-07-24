@@ -531,7 +531,10 @@ fn reset_view_restores_time_defaults_and_reenables_autoscale() {
     assert_eq!(chart.price_scale_auto_scale(0, false), Some(true));
     chart.build_frame();
     let (min, max) = chart.price_scale_visible_range(0, false).unwrap();
-    assert!(min <= 99.0 && max >= 103.0, "range must fit the data, got ({min}, {max})");
+    assert!(
+        min <= 99.0 && max >= 103.0,
+        "range must fit the data, got ({min}, {max})"
+    );
 }
 
 #[test]

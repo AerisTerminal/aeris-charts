@@ -937,7 +937,12 @@ impl ChartEngine {
         // instead of the full-contrast color the title and price texts use.
         let muted_text_color = {
             let base = text_color;
-            Color::rgba(base.r(), base.g(), base.b(), (base.a() as f64 * 0.65).round() as u8)
+            Color::rgba(
+                base.r(),
+                base.g(),
+                base.b(),
+                (base.a() as f64 * 0.65).round() as u8,
+            )
         };
         // The title chip shares the main label color by default (matching the price and
         // countdown chips).

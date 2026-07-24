@@ -190,7 +190,9 @@ fn crosshair_column_contains_the_wick_column_at_any_dpr() {
     for dpr in [0.67, 0.75, 0.8, 0.9, 1.0, 1.25, 1.5, 2.0] {
         let mut chart = ChartEngine::new(800.0, 500.0, dpr);
         let times: Vec<f64> = (0..20).map(|i| i as f64 * 60.0).collect();
-        let base: Vec<f64> = (0..20).map(|i| 100.0 + (i as f64 * 0.7).sin() * 3.0).collect();
+        let base: Vec<f64> = (0..20)
+            .map(|i| 100.0 + (i as f64 * 0.7).sin() * 3.0)
+            .collect();
         let opens: Vec<f64> = base.clone();
         let closes: Vec<f64> = base.iter().map(|v| v + 0.4).collect();
         let highs: Vec<f64> = base.iter().map(|v| v + 1.2).collect();
@@ -229,7 +231,7 @@ fn crosshair_column_contains_the_wick_column_at_any_dpr() {
         assert!(!wicks.is_empty(), "dpr {dpr}: wick rects not found");
         for wick in wicks {
             assert!(
-                wick.x >= cross_x - cross_w + 1 && wick.x + wick.w - 1 <= cross_x,
+                wick.x > cross_x - cross_w && wick.x + wick.w - 1 <= cross_x,
                 "dpr {dpr}: wick {wick:?} escapes the crosshair column ({cross_x} w{cross_w})"
             );
         }
@@ -1621,7 +1623,12 @@ fn last_value_cluster_rows_toggle_independently() {
     assert_eq!(price.color, LINE.contrast_text());
     let muted = {
         let base = LINE.contrast_text();
-        Color::rgba(base.r(), base.g(), base.b(), (base.a() as f64 * 0.65).round() as u8)
+        Color::rgba(
+            base.r(),
+            base.g(),
+            base.b(),
+            (base.a() as f64 * 0.65).round() as u8,
+        )
     };
     assert_eq!(countdown.color, muted);
 
@@ -1870,7 +1877,9 @@ fn frame_discs(chart: &mut ChartEngine) -> Vec<(f32, f32, Color)> {
         .main
         .iter()
         .filter_map(|prim| match prim {
-            Prim::Circle { cx, radius, fill, .. } => Some((*cx, *radius, *fill)),
+            Prim::Circle {
+                cx, radius, fill, ..
+            } => Some((*cx, *radius, *fill)),
             _ => None,
         })
         .collect()

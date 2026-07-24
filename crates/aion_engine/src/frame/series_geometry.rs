@@ -1003,18 +1003,20 @@ impl ChartEngine {
                         })
                         .collect()
                 }
-                SeriesKind::Histogram => visible_histogram_rows(plot, from, to, bar_spacing, hpr, x_at)
-                    .into_iter()
-                    .map(|row| {
-                        (
-                            row.x_px as f32,
-                            (scale.price_to_coordinate(
-                                plot.value_at(row.source_row, PlotValueIndex::Close),
-                                base_value,
-                            ) * vpr) as f32,
-                        )
-                    })
-                    .collect(),
+                SeriesKind::Histogram => {
+                    visible_histogram_rows(plot, from, to, bar_spacing, hpr, x_at)
+                        .into_iter()
+                        .map(|row| {
+                            (
+                                row.x_px as f32,
+                                (scale.price_to_coordinate(
+                                    plot.value_at(row.source_row, PlotValueIndex::Close),
+                                    base_value,
+                                ) * vpr) as f32,
+                            )
+                        })
+                        .collect()
+                }
                 SeriesKind::Line | SeriesKind::Area | SeriesKind::Baseline => {
                     let indices = plot.indices();
                     visible_line_rows(plot, from, to, bar_spacing, hpr, x_at)
