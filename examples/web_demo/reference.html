@@ -48,14 +48,18 @@ const chart = createChart(container, {
   rightPriceScale: { visible: !requested_left_scale },
 });
 const series = chart.addSeries(CandlestickSeries, {
-  priceScaleId: requested_left_scale ? "left" : "right",
-  upColor: "#26a69a",
-  downColor: "#ef5350",
-  borderUpColor: "#26a69a",
-  borderDownColor: "#ef5350",
-  wickUpColor: "#26a69a",
-  wickDownColor: "#ef5350",
-});
+    priceScaleId: requested_left_scale ? "left" : "right",
+    upColor: "#26a69a",
+    downColor: "#ef5350",
+    borderUpColor: "#26a69a",
+    borderDownColor: "#ef5350",
+    wickUpColor: "#26a69a",
+    wickDownColor: "#ef5350",
+    // Aion product decision: its Dashed renders the LARGE pattern (normal dotted/dashed do not
+    // exist there). Pin the reference's price line to LargeDashed so the A/B fidelity harness
+    // compares like for like.
+    priceLineStyle: 3, // LineStyle.LargeDashed
+  });
 const data = generate_fixture_data(fixture);
 series.setData(data);
 chart.timeScale().fitContent();

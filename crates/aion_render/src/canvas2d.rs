@@ -579,7 +579,7 @@ mod tests {
                 y0: 0,
                 y1: 24,
                 width: 1,
-                style: LineStyle::LargeDashed,
+                style: LineStyle::Dashed,
                 color: C,
             }],
             &[],

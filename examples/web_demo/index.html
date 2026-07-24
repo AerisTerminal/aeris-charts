@@ -115,9 +115,7 @@
         <select id="cross_style">
           <option value="0">solid</option>
           <option value="1">dotted</option>
-          <option value="2">dashed</option>
-          <option value="3" selected>large dashed</option>
-          <option value="4">sparse dotted</option>
+          <option value="2" selected>dashed</option>
         </select>
       </label>
       <label>label bg <input type="color" id="cross_label_bg" value="#131722"></label>
@@ -138,8 +136,6 @@
           <option value="0" selected>solid</option>
           <option value="1">dotted</option>
           <option value="2">dashed</option>
-          <option value="3">large dashed</option>
-          <option value="4">sparse dotted</option>
         </select>
       </label>
       <label>font
@@ -159,8 +155,6 @@
           <option value="0">solid</option>
           <option value="1">dotted</option>
           <option value="2" selected>dashed</option>
-          <option value="3">large dashed</option>
-          <option value="4">sparse dotted</option>
         </select>
       </label>
       <label><input type="checkbox" id="last_value_toggle" checked> last value</label>
@@ -174,7 +168,7 @@
       <label>border <input type="color" id="axis_border_color" value="#f5f5f5"></label>
       <label><input type="checkbox" id="axis_border_visible" checked> borders</label>
       <label>text <input type="color" id="axis_text_color" value="#0a0a0a"></label>
-      <label>separator <input type="color" id="pane_separator_color" value="#2b2b43"></label>
+      <label>separator <input type="color" id="pane_separator_color" value="#f5f5f5" title="Pane divider color — follows the axis border color (theme-aware) until you pin an explicit one"></label>
     </div>
 
     <!-- watermark (reference v4 shape) -->
@@ -649,9 +643,11 @@ function apply_main_style() {
 }
 
 // Grid controls drive both families (vert + horz) at once; the engine stores them separately,
-// so a package consumer can style each family independently (reference lineStyle 0–4).
+// so a package consumer can style each family independently. Style set: 0 solid, 1 dotted
+// (renders sparse), 2 dashed (renders large) — the reference's normal dot/dash patterns are
+// intentionally absent.
 // Follow-or-pin: until the user pins a custom color, grid/axis colors track the theme tokens.
-const theme_color_touched = { grid: false, axis_border: false, axis_text: false };
+const theme_color_touched = { grid: false, axis_border: false, axis_text: false, separator: false };
 function apply_grid_style() {
   const color = document.getElementById("grid_color").value;
   const style = Number(document.getElementById("grid_style").value);
@@ -812,6 +808,8 @@ document.getElementById("font_family").addEventListener("change", apply_font);
 document.getElementById("font_size").addEventListener("input", apply_font);
 
 document.getElementById("pane_separator_color").addEventListener("input", (e) => {
+  // Pin an explicit divider color; until touched, the engine follows the axis border color.
+  theme_color_touched.separator = true;
   chart.apply_options({ layout: { panes: { separatorColor: e.target.value } } });
 });
 
@@ -880,6 +878,7 @@ document.getElementById("theme_select").addEventListener("change", (e) => {
   // after the theme patch so a user's explicit choice always wins.
   if (!theme_color_touched.axis_border) document.getElementById("axis_border_color").value = palette.border;
   apply_axis_border();
+  if (!theme_color_touched.separator) document.getElementById("pane_separator_color").value = palette.border;
   if (!theme_color_touched.axis_text) document.getElementById("axis_text_color").value = palette.text;
   chart.apply_options({ layout: { textColor: palette.text } });
   if (!theme_color_touched.grid) document.getElementById("grid_color").value = palette.grid;
@@ -893,6 +892,7 @@ if (requested_theme !== "light" && parity_fixture === null) {
   chart.apply_options(theme_options(requested_theme));
   document.getElementById("axis_border_color").value = palette.border;
   apply_axis_border();
+  document.getElementById("pane_separator_color").value = palette.border;
   document.getElementById("axis_text_color").value = palette.text;
   document.getElementById("grid_color").value = palette.grid;
   apply_grid_style();

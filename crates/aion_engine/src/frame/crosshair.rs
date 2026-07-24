@@ -27,8 +27,8 @@ impl ChartEngine {
         let horz_color = css_color(&ch.horz_line.color, CROSSHAIR_COLOR);
         // reference lineWidth is in CSS px; generalize the crisp "1 CSS px" rule (grid uses the same
         // `max(1, floor(ratio))`) so width 1 keeps today's output. Vertical lines take the
-        // horizontal ratio for thickness, horizontal lines the vertical ratio. Style is the reference
-        // lineStyle u8 (default LargeDashed), expanded to a dash pattern by the backends.
+        // horizontal ratio for thickness, horizontal lines the vertical ratio. Style is the
+        // lineStyle u8 (default Dashed — the large pattern), expanded by the backends.
         let vert_width = 1f64.max((ch.vert_line.width * hpr).floor()) as i32;
         let horz_width = 1f64.max((ch.horz_line.width * vpr).floor()) as i32;
         let vert_style = crate::line_style_from_u8(ch.vert_line.style);

@@ -11,7 +11,9 @@
 //! the reference's runtime object merge 1:1 and makes partial updates and round-tripping free.
 //!
 //! Colors are kept as CSS strings (as in reference); the render layer parses them. `LineStyle` is the
-//! numeric wire form reference uses (0 Solid, 1 Dotted, 2 Dashed, 3 LargeDashed, 4 SparseDotted).
+//! numeric wire form (0 Solid, 1 Dotted, 2 Dashed). The reference's 3 LargeDashed/4 SparseDotted
+//! do not exist in this engine: `Dotted` IS the sparse pattern and `Dashed` the large one, and
+//! the retired values fold into them (3 → Dashed, 4 → Dotted).
 //!
 //! Scope note: this covers the chart-level visual groups (layout, grid, crosshair), the axis
 //! strips' border cosmetics (`leftPriceScale`/`rightPriceScale`/`timeScale`), and the top-level
@@ -22,13 +24,12 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-/// reference `LineStyle` (`renderers/draw-line.ts`), numeric wire form.
+/// `LineStyle`, numeric wire form (0 Solid, 1 Dotted = sparse, 2 Dashed = large). Values 3/4
+/// (the reference's LargeDashed/SparseDotted) are retired and fold into 2/1 at the engine edge.
 pub mod line_style {
     pub const SOLID: u8 = 0;
     pub const DOTTED: u8 = 1;
     pub const DASHED: u8 = 2;
-    pub const LARGE_DASHED: u8 = 3;
-    pub const SPARSE_DOTTED: u8 = 4;
 }
 
 /// reference `CrosshairMode` (`model/crosshair.ts`), numeric wire form.
@@ -92,6 +93,8 @@ impl Default for BackgroundOptions {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PanesOptions {
+    /// The pane divider color. Empty (the default) follows the price-axis border color, so the
+    /// divider always matches the axis chrome and tracks its theme; an explicit value pins it.
     #[serde(rename = "separatorColor")]
     pub separator_color: String,
     /// reference `panes.separatorHoverColor` (default `rgba(178, 181, 189, 0.2)`): the hover band
@@ -103,7 +106,7 @@ pub struct PanesOptions {
 impl Default for PanesOptions {
     fn default() -> Self {
         Self {
-            separator_color: axis_border_color(),
+            separator_color: String::new(),
             separator_hover_color: "rgba(178, 181, 189, 0.2)".into(),
         }
     }
@@ -187,7 +190,8 @@ impl Default for CrosshairLineOptions {
         Self {
             color: crosshair_color(),
             width: 1.0,
-            style: line_style::LARGE_DASHED,
+            // Dashed renders the large pattern (what the reference's LargeDashed default showed).
+            style: line_style::DASHED,
             visible: true,
             label_visible: true,
             label_background_color: crosshair_label_bg(),
@@ -460,7 +464,7 @@ mod tests {
         assert_eq!(o.grid.horz_lines.style, line_style::SOLID);
         assert_eq!(o.crosshair.mode, crosshair_mode::NORMAL);
         assert!(!o.crosshair.do_not_snap_to_hidden_series_indices);
-        assert_eq!(o.crosshair.vert_line.style, line_style::LARGE_DASHED);
+        assert_eq!(o.crosshair.vert_line.style, line_style::DASHED);
         assert_eq!(o.crosshair.horz_line.label_background_color, "#131722");
         assert!(o.hovered_series_on_top);
         assert!(!o.auto_size);

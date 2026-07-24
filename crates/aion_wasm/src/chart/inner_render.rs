@@ -315,10 +315,13 @@ impl ChartInner {
         }
 
         // Separators between stacked panes (roadmap Phase B1): a border line at each pane
-        // boundary in the reference `layout.panes.separatorColor`; painted regardless of the time-axis
-        // border's visibility since they are functional dividers, not axis chrome.
+        // boundary. An unset `layout.panes.separatorColor` follows the price-axis border color
+        // (theme-aware like the axis chrome); an explicit value pins it. Painted regardless of
+        // the time-axis border's visibility since they are functional dividers, not axis chrome.
         let separator_color = Color::parse_css(&options.layout.panes.separator_color)
-            .unwrap_or(fallback)
+            .unwrap_or_else(|| {
+                Color::parse_css(&options.right_price_scale.border_color).unwrap_or(fallback)
+            })
             .to_hex();
         ctx.set_fill_style_str(&separator_color);
         for separator in &axis_frame.separators {

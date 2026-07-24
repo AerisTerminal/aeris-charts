@@ -20,20 +20,19 @@ pub enum LineStyle {
     Solid,
     Dotted,
     Dashed,
-    LargeDashed,
-    SparseDotted,
 }
 
 impl LineStyle {
-    /// Dash pattern in bitmap px for a given line width (RENDERING_SPEC.md §6).
+    /// Dash pattern in bitmap px for a given line width (RENDERING_SPEC.md §6, adjusted):
+    /// `Dotted` is the SPARSE pattern and `Dashed` the LARGE one — the reference's normal
+    /// dotted `[w, w]` and dashed `[2w, 2w]` patterns do not exist in this engine (dots too
+    /// close / dashes too short), and neither do its `LargeDashed`/`SparseDotted` variants.
     pub fn dash_pattern(&self, line_width: f32) -> Vec<f32> {
         let w = line_width;
         match self {
             LineStyle::Solid => vec![],
-            LineStyle::Dotted => vec![w, w],
-            LineStyle::Dashed => vec![2.0 * w, 2.0 * w],
-            LineStyle::LargeDashed => vec![6.0 * w, 6.0 * w],
-            LineStyle::SparseDotted => vec![w, 4.0 * w],
+            LineStyle::Dotted => vec![w, 4.0 * w],
+            LineStyle::Dashed => vec![6.0 * w, 6.0 * w],
         }
     }
 }

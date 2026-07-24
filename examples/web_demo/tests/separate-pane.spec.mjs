@@ -85,3 +85,89 @@ test("RSI toggle stacks a separate pane with its own scale; unchecking prunes it
   await wait_for_chart(page);
   expect(await page.evaluate(() => window.__chart.panes().length)).toBe(1);
 });
+
+test("pane divider follows the axis border color (theme-aware) until pinned", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  await wait_for_chart(page);
+  await page.check("#rsi_toggle");
+  await wait_for_chart(page);
+
+  const sep_y = await page.evaluate(() => Array.from(window.__chart.wasm.pane_separator_ys())[0]);
+  // The divider row near the separator coordinate whose pixels (at several x) match a color.
+  const divider_color = async () => {
+    const shot = await capture(page);
+    const scale = shot.width / (await page.evaluate(() => document.querySelector("#chart_container").getBoundingClientRect().width));
+    const y0 = Math.round(sep_y * scale);
+    const counts = new Map();
+    for (let y = y0 - 2; y <= y0 + 2; y++) {
+      for (const x of [10, 100, 200, 400, 600].map((v) => Math.round(v * scale))) {
+        const o = (y * shot.width + x) * 4;
+        const key = `${shot.data[o]},${shot.data[o + 1]},${shot.data[o + 2]}`;
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+    }
+    return counts;
+  };
+  const hex = (s) => [1, 3, 5].map((i) => Number.parseInt(s.slice(i, i + 2), 16));
+  const border_color = () => page.evaluate(() => window.__chart.options().rightPriceScale.borderColor);
+
+  // Default (light): the divider paints in the axis border color.
+  let expected = hex(await border_color()).join(",");
+  expect((await divider_color()).get(expected) ?? 0, `divider must use border color ${expected}`).toBeGreaterThanOrEqual(3);
+
+  // Dark theme: the axis border changes and the divider tracks it (#16191f).
+  await page.selectOption("#theme_select", "dark");
+  await wait_for_chart(page);
+  expected = hex(await border_color()).join(",");
+  expect(expected).toBe("22,25,31");
+  expect((await divider_color()).get(expected) ?? 0, `dark divider must use border color ${expected}`).toBeGreaterThanOrEqual(3);
+
+  // An explicit separator color pins it through theme switches.
+  await page.locator("#pane_separator_color").evaluate((el) => {
+    el.value = "#ff8800";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await wait_for_chart(page);
+  await page.selectOption("#theme_select", "light");
+  await wait_for_chart(page);
+  expect((await divider_color()).get("255,136,0") ?? 0, "pinned divider color survives theme switch").toBeGreaterThanOrEqual(3);
+});
+
+test("crosshair hides on separator hover and during the resize drag, then resumes", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  await wait_for_chart(page);
+  await page.waitForFunction(() => performance.now() > 600); // touch-suppression window
+  await page.check("#rsi_toggle");
+  await wait_for_chart(page);
+
+  const geom = await page.evaluate(() => {
+    const rect = document.querySelector("#chart_container").getBoundingClientRect();
+    const sep = Array.from(window.__chart.wasm.pane_separator_ys())[0];
+    return { left: rect.left, top: rect.top, sep };
+  });
+  const legend = () => page.evaluate(() => document.getElementById("legend").textContent);
+  const pane_x = geom.left + 400;
+  const pane_y = geom.top + geom.sep - 60; // inside pane 0, above the separator
+  const sep_page_y = geom.top + geom.sep;
+
+  // Hover inside the pane: the crosshair feeds the OHLC legend.
+  await page.mouse.move(pane_x, pane_y);
+  expect(await legend(), "crosshair feeds the legend over the pane").toContain("H");
+
+  // Hover the divider itself: chrome behavior — the crosshair hides (legend resets).
+  await page.mouse.move(pane_x, sep_page_y);
+  expect(await legend(), "separator hover hides the crosshair").toBe("O — H — L — C —");
+
+  // Drag the divider down: the crosshair stays hidden through the resize (no frozen frame).
+  await page.mouse.move(pane_x, sep_page_y);
+  await page.mouse.down();
+  await page.mouse.move(pane_x, sep_page_y + 40, { steps: 5 });
+  expect(await legend(), "crosshair hidden during the separator drag").toBe("O — H — L — C —");
+  const moved_sep = await page.evaluate(() => Array.from(window.__chart.wasm.pane_separator_ys())[0]);
+  expect(moved_sep).toBeGreaterThan(geom.sep); // the drag actually resized the pane
+  await page.mouse.up();
+
+  // Back inside the pane the crosshair resumes tracking.
+  await page.mouse.move(pane_x, geom.top + moved_sep - 60);
+  expect(await legend(), "crosshair resumes over the pane").toContain("H");
+});

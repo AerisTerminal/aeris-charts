@@ -534,6 +534,14 @@ export function install_gestures(chart: chart_impl): () => void {
     }
     if (sep_drag !== null) {
       apply_sep_drag(p);
+      // The separator is chrome (reference pane-separator.ts): the crosshair hides during the
+      // resize drag instead of freezing mid-pane at the grab point.
+      if (last_crosshair !== null) {
+        last_crosshair = null;
+        wasm.clear_crosshair();
+        chart.clear_hover();
+        chart.emit_crosshair_left();
+      }
       chart.repaint();
       return;
     }
@@ -559,9 +567,11 @@ export function install_gestures(chart: chart_impl): () => void {
     }
     // Crosshair: a hover over an axis strip is a pane mouseleave in the reference (its axis
     // strips are separate widgets) — the crosshair HIDES, and the hovered-source state clears
-    // with it. During an active captured drag keep feeding positions; the engine clamps them
-    // into the pane (the reference's document-level drag listeners do the same).
-    if (pointers.size > 0 || (price_axis_target_at(p) === null && !is_time_axis(p))) {
+    // with it. The pane separator is chrome the same way (reference pane-separator.ts), so a
+    // separator hover hides the crosshair too instead of pinning it onto the divider. During an
+    // active captured drag keep feeding positions; the engine clamps them into the pane (the
+    // reference's document-level drag listeners do the same).
+    if (pointers.size > 0 || (price_axis_target_at(p) === null && !is_time_axis(p) && separator_at(p.y) < 0)) {
       set_crosshair(p.x, p.y);
     } else if (last_crosshair !== null) {
       last_crosshair = null;

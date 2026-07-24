@@ -338,7 +338,7 @@ mod tests {
                     y0: 10,
                     y1: 490,
                     width: 2,
-                    style: LineStyle::SparseDotted,
+                    style: LineStyle::Dotted,
                     color: Color::rgb(0x95, 0x98, 0xa1),
                 },
             ]

@@ -26,25 +26,23 @@ struct PriceLinePatch {
     axis_label_text_color: Option<String>,
 }
 
-/// The TS wire name of a line style (`solid` … `sparse_dotted`, matching `line_style`).
+/// The TS wire name of a line style (`solid`/`dotted`/`dashed`, matching `line_style`).
 fn line_style_name(style: LineStyle) -> &'static str {
     match style {
         LineStyle::Dotted => "dotted",
         LineStyle::Dashed => "dashed",
-        LineStyle::LargeDashed => "large_dashed",
-        LineStyle::SparseDotted => "sparse_dotted",
         LineStyle::Solid => "solid",
     }
 }
 
 /// A patch's `line_style`: the TS string form, or the reference numeric enum for untyped callers.
+/// The retired names/values fold into their renamed equivalents (large_dashed → dashed,
+/// sparse_dotted → dotted).
 fn parse_line_style(value: &serde_json::Value) -> Option<LineStyle> {
     match value {
         serde_json::Value::String(s) => Some(match s.as_str() {
-            "dotted" => LineStyle::Dotted,
-            "dashed" => LineStyle::Dashed,
-            "large_dashed" => LineStyle::LargeDashed,
-            "sparse_dotted" => LineStyle::SparseDotted,
+            "dotted" | "sparse_dotted" => LineStyle::Dotted,
+            "dashed" | "large_dashed" => LineStyle::Dashed,
             _ => LineStyle::Solid,
         }),
         serde_json::Value::Number(n) => n.as_u64().map(|v| line_style_from_u8(v as u8)),

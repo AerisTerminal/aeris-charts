@@ -1075,7 +1075,7 @@ fn grid_line_style_and_color_flow_from_options() {
     )));
     assert!(under.iter().any(|p| matches!(
         p,
-        Prim::HLine { style: LineStyle::LargeDashed, color, .. } if *color == Color::rgb(0x44, 0x55, 0x66)
+        Prim::HLine { style: LineStyle::Dashed, color, .. } if *color == Color::rgb(0x44, 0x55, 0x66)
     )));
 }
 
@@ -1104,7 +1104,7 @@ fn crosshair_line_style_and_width_flow_from_options() {
     assert!(frame.panes[0].main.iter().any(|p| matches!(
         p,
         Prim::VLine {
-            style: LineStyle::LargeDashed,
+            style: LineStyle::Dashed,
             width: 1,
             ..
         }
@@ -1112,7 +1112,7 @@ fn crosshair_line_style_and_width_flow_from_options() {
     assert!(frame.panes[0].main.iter().any(|p| matches!(
         p,
         Prim::HLine {
-            style: LineStyle::LargeDashed,
+            style: LineStyle::Dashed,
             width: 1,
             ..
         }
@@ -1379,7 +1379,8 @@ fn price_line_options_merge_and_serialize_round_trip() {
     let options: serde_json::Value =
         serde_json::from_str(&chart.price_line_options_json(id).unwrap()).unwrap();
     assert_eq!(options["price"], 43.5);
-    assert_eq!(options["line_style"], "large_dashed");
+    // The retired `large_dashed` name folds into its renamed equivalent: it serializes `dashed`.
+    assert_eq!(options["line_style"], "dashed");
     assert_eq!(options["line_width"], 3);
     assert_eq!(options["title"], "T");
     assert_eq!(options["line_visible"], false);
@@ -2415,11 +2416,11 @@ fn magnet_treats_whitespace_as_no_bar() {
     chart.fit_content();
     chart.crosshair_mode = CrosshairMode::Magnet;
     // Cursor over the whitespace bar (time 2): no candidate, the horizontal line stays at
-    // the raw cursor y instead of snapping to a bar price. (The crosshair's LargeDashed
-    // HLine is distinguished from the Dashed built-in last-price line.)
+    // the raw cursor y instead of snapping to a bar price. (The crosshair's HLine is told
+    // apart from the built-in last-price line by the crosshair grey — both are Dashed now.)
     let crosshair_hline_y = |frame: &ChartFrame| {
         frame.panes[0].main.iter().find_map(|p| match p {
-            Prim::HLine { y, style, .. } if *style == LineStyle::LargeDashed => Some(*y),
+            Prim::HLine { y, color, .. } if *color == Color::rgb(0x95, 0x98, 0xa1) => Some(*y),
             _ => None,
         })
     };

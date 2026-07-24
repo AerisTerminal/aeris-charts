@@ -250,7 +250,7 @@ fn crosshair_clamps_into_pane_instead_of_vanishing() {
     assert!(frame.panes[0].main.iter().any(|p| matches!(
         p,
         Prim::HLine {
-            style: LineStyle::LargeDashed,
+            style: LineStyle::Dashed,
             ..
         }
     )));
@@ -299,7 +299,7 @@ fn crosshair_draws_without_a_primary_series() {
     assert!(frame.panes[0].main.iter().any(|p| matches!(
         p,
         Prim::HLine {
-            style: LineStyle::LargeDashed,
+            style: LineStyle::Dashed,
             ..
         }
     )));

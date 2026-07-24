@@ -212,8 +212,10 @@ pub fn line_style_from_u8(style: u8) -> LineStyle {
     match style {
         1 => LineStyle::Dotted,
         2 => LineStyle::Dashed,
-        3 => LineStyle::LargeDashed,
-        4 => LineStyle::SparseDotted,
+        // The reference's retired variants (3 LargeDashed, 4 SparseDotted) fold into their
+        // renamed equivalents — 3 renders exactly what `Dashed` renders, 4 what `Dotted` does.
+        3 => LineStyle::Dashed,
+        4 => LineStyle::Dotted,
         _ => LineStyle::Solid,
     }
 }
