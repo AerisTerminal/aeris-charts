@@ -29,10 +29,11 @@ pub fn optimal_candlestick_width(bar_spacing: f64, pixel_ratio: f64) -> i32 {
 }
 
 /// Crosshair-symmetry parity correction (RENDERING_SPEC.md §2.1): grid/crosshair line width is
-/// `floor(pixel_ratio)`; candle width parity must match it so the crosshair centers on candles.
+/// `floor(pixel_ratio)` clamped to 1 device px (the engines' `max(1, floor)` line rule); candle
+/// width parity must match it so the crosshair centers on candles at any ratio, sub-1 included.
 pub fn apply_crosshair_parity(mut bar_width: i32, pixel_ratio: f64) -> i32 {
     if bar_width >= 2 {
-        let wick_width = pixel_ratio.floor() as i32;
+        let wick_width = (pixel_ratio.floor() as i32).max(1);
         if (wick_width % 2) != (bar_width % 2) {
             bar_width -= 1;
         }
@@ -83,6 +84,10 @@ mod tests {
         assert_eq!(apply_crosshair_parity(6, 2.0), 6);
         // width 1 never corrected
         assert_eq!(apply_crosshair_parity(1, 2.0), 1);
+        // sub-1 dpr -> wick width clamps to 1 (odd), so bodies stay odd (centered on the wick)
+        assert_eq!(apply_crosshair_parity(4, 0.75), 3);
+        assert_eq!(apply_crosshair_parity(3, 0.75), 3);
+        assert_eq!(apply_crosshair_parity(6, 0.5), 5);
     }
 
     #[test]

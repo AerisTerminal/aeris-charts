@@ -80,6 +80,11 @@ fn draw_wicks(items: &[CandleItem], params: &CandlesParams, bar_width: i32, out:
 
     let mut wick_width = (hpr.floor()).min((params.bar_spacing * hpr).floor()) as i32;
     wick_width = (hpr.floor() as i32).max(wick_width.min(bar_width));
+    // Sub-1 DPR guard: floor(hpr) is 0 there, which would collapse the wick one column LEFT
+    // of the bar center (right = left - 1, the prev-edge clamp then pins it there) while the
+    // crosshair paints the center column — keep the wick on the center column like the
+    // crosshair's own `max(1, floor)` width rule.
+    wick_width = wick_width.max(1);
     let wick_offset = (wick_width as f64 * 0.5).floor() as i32;
 
     let mut prev_edge: Option<i32> = None;
@@ -388,6 +393,27 @@ mod tests {
         let body = rects(&out)[2];
         assert_eq!(body.h, 1);
         assert_eq!(body.y, 40);
+    }
+
+    #[test]
+    fn sub_one_dpr_wick_stays_on_the_center_column() {
+        // dpr 0.75: floor(hpr) = 0 would collapse the wick one column left of the bar center;
+        // the clamp keeps a 1px wick exactly on the center column (crosshair parity).
+        let items = [
+            candle(100.0, 50.0, 20.0, 60.0, 30.0),
+            candle(106.0, 50.0, 20.0, 60.0, 30.0),
+        ];
+        let p = CandlesParams {
+            wick_visible: true,
+            border_visible: false,
+            ..params(6.0, 0.75)
+        };
+        let mut out = Vec::new();
+        build_candles(&items, &p, &mut out);
+        let rs = rects(&out);
+        // scaled centers: round(100*0.75) = 75, round(106*0.75) = 80
+        assert_eq!((rs[0].x, rs[0].w), (75, 1));
+        assert_eq!((rs[2].x, rs[2].w), (80, 1));
     }
 
     #[test]

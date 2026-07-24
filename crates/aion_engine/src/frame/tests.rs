@@ -183,6 +183,60 @@ fn crosshair_chart() -> ChartEngine {
 }
 
 #[test]
+fn crosshair_column_contains_the_wick_column_at_any_dpr() {
+    // The vertical crosshair must land exactly on the hovered candle's wick at every device
+    // pixel ratio — including sub-1 browser zoom (75%/80%), where floor(dpr) = 0 once
+    // collapsed the wick one column left of the crosshair.
+    for dpr in [0.67, 0.75, 0.8, 0.9, 1.0, 1.25, 1.5, 2.0] {
+        let mut chart = ChartEngine::new(800.0, 500.0, dpr);
+        let times: Vec<f64> = (0..20).map(|i| i as f64 * 60.0).collect();
+        let base: Vec<f64> = (0..20).map(|i| 100.0 + (i as f64 * 0.7).sin() * 3.0).collect();
+        let opens: Vec<f64> = base.clone();
+        let closes: Vec<f64> = base.iter().map(|v| v + 0.4).collect();
+        let highs: Vec<f64> = base.iter().map(|v| v + 1.2).collect();
+        let lows: Vec<f64> = base.iter().map(|v| v - 1.2).collect();
+        chart
+            .set_series_data(0, &times, &opens, &highs, &lows, &closes)
+            .unwrap();
+        chart.time_scale.set_width(800.0);
+        chart
+            .apply_options(r#"{"timeScale": {"barSpacing": 8.0, "rightOffset": 2.0}}"#)
+            .unwrap();
+        let idx = 10i64;
+        let x_css = chart.time_scale.index_to_coordinate(idx);
+        chart.crosshair = Some((x_css, 250.0));
+        let frame = chart.build_frame();
+        let (cross_x, cross_w) = frame.panes[0]
+            .main
+            .iter()
+            .find_map(|p| match p {
+                Prim::VLine { x, width, .. } => Some((*x, *width)),
+                _ => None,
+            })
+            .expect("crosshair vertical line");
+        // The target bar's wick: the narrow rect columns nearest the bar's device center.
+        let center_dev = (x_css * dpr).round() as i32;
+        let wicks: Vec<aion_render::draw_list::IRect> = frame.panes[0]
+            .main
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Rect { rect, .. } if rect.w <= 2 && (rect.x - center_dev).abs() <= 3 => {
+                    Some(*rect)
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(!wicks.is_empty(), "dpr {dpr}: wick rects not found");
+        for wick in wicks {
+            assert!(
+                wick.x >= cross_x - cross_w + 1 && wick.x + wick.w - 1 <= cross_x,
+                "dpr {dpr}: wick {wick:?} escapes the crosshair column ({cross_x} w{cross_w})"
+            );
+        }
+    }
+}
+
+#[test]
 fn crosshair_clamps_into_pane_instead_of_vanishing() {
     let mut chart = crosshair_chart();
     // reference pane-widget.ts:714-719: out-of-range positions clamp instead of hiding the crosshair.

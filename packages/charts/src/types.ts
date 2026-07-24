@@ -870,6 +870,13 @@ export interface chart_api {
    * handles are index-based — re-fetch them with {@link chart_api.panes} afterwards.
    */
   swap_panes(first: number, second: number): boolean;
+  /**
+   * TradingView-style "reset view" in one action: the time scale returns to its configured
+   * defaults (reference `resetTimeScale`) and every pane's price scales re-enable autoscale
+   * (reference pane `resetPriceScale`, the price-axis double-click). A manually contracted or
+   * over-zoomed scale fits the data again on the next frame.
+   */
+  reset_view(): void;
   price_to_coordinate(price: number): number | null;
   coordinate_to_price(y: number): number | null;
   /**

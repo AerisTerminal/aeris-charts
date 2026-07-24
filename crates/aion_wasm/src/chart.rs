@@ -1305,6 +1305,11 @@ impl AionChart {
             .engine
             .set_selected_series(id.map(|id| id as usize));
     }
+    /// TradingView-style reset view: default bar spacing/right offset plus autoscale restored
+    /// on every pane's price scales; the next `render()` recalculates the visible ranges.
+    pub fn reset_view(&mut self) {
+        self.inner.borrow_mut().engine.reset_view();
+    }
     /// reference `chart.setCrosshairPosition(price, time, series)`: position the crosshair at a
     /// data point with no DOM event — `time` must resolve exactly to a bar (false
     /// otherwise); x is that bar's coordinate and y the price mapped through the given

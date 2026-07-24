@@ -494,6 +494,47 @@ fn public_price_scale_state_is_headless_and_manual_ranges_survive_rendering() {
 }
 
 #[test]
+fn reset_view_restores_time_defaults_and_reenables_autoscale() {
+    let mut chart = ChartEngine::new(300.0, 200.0, 1.0);
+    chart
+        .set_series_data(
+            0,
+            &[10.0, 20.0, 30.0],
+            &[100.0, 101.0, 102.0],
+            &[101.0, 102.0, 103.0],
+            &[99.0, 100.0, 101.0],
+            &[100.5, 101.5, 102.5],
+        )
+        .unwrap();
+    chart.time_scale.set_width(300.0);
+    chart.layout_panes(172.0);
+    chart.fit_content();
+    chart.build_frame();
+
+    // Simulate a user zoom/pan: custom spacing+offset and a manual (contracted) price range.
+    chart.set_bar_spacing(20.0);
+    chart.set_right_offset(2.0);
+    chart.set_price_scale_visible_range(0, false, 101.0, 101.2);
+    assert_eq!(chart.price_scale_auto_scale(0, false), Some(false));
+    chart.build_frame();
+    assert_eq!(
+        chart.price_scale_visible_range(0, false),
+        Some((101.0, 101.2))
+    );
+
+    chart.reset_view();
+    // Time scale back to the configured defaults (LWC resetTimeScale)…
+    assert_eq!(chart.bar_spacing(), 6.0);
+    assert_eq!(chart.right_offset(), 0.0);
+    // …and every pane's price scales autoscale again (LWC pane resetPriceScale); the next
+    // frame recalculates the range, so the contracted data fits the pane once more.
+    assert_eq!(chart.price_scale_auto_scale(0, false), Some(true));
+    chart.build_frame();
+    let (min, max) = chart.price_scale_visible_range(0, false).unwrap();
+    assert!(min <= 99.0 && max >= 103.0, "range must fit the data, got ({min}, {max})");
+}
+
+#[test]
 fn left_price_scale_owns_range_axis_labels_and_pane_origin() {
     let mut chart = ChartEngine::new(300.0, 200.0, 1.0);
     chart

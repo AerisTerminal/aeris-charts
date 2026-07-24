@@ -1828,6 +1828,11 @@ export class chart_impl implements chart_api {
     return true;
   }
 
+  reset_view(): void {
+    this.wasm.reset_view();
+    this.repaint();
+  }
+
   price_to_coordinate(price: number): number | null {
     return undef_to_null(this.wasm.price_to_coordinate(price));
   }

@@ -1450,6 +1450,19 @@ impl ChartEngine {
         self.time_scale.restore_default();
     }
 
+    /// TradingView-style "reset view" button semantics in one action: the time scale returns
+    /// to its configured defaults (reference `resetTimeScale`) AND every pane's price scales
+    /// re-enable autoscale (reference pane `resetPriceScale`, the price-axis double-click).
+    /// The next frame's autoscale pass recalculates the visible ranges, so a manually
+    /// contracted or over-zoomed price scale fits the data again.
+    pub fn reset_view(&mut self) {
+        self.reset_time_scale();
+        for pane in &mut self.panes {
+            pane.price_scale.set_auto_scale(true);
+            pane.left_scale.set_auto_scale(true);
+        }
+    }
+
     /// Deep-merge a JSON options patch into the chart options store (reference `applyOptions`
     /// semantics) and apply the runtime-affecting fields: the crosshair mode, plus any
     /// behavioral `timeScale` keys routed to the core scale through the same setters as the
