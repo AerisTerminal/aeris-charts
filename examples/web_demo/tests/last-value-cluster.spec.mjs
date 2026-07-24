@@ -1,12 +1,12 @@
 import { test, expect } from "@playwright/test";
 import { PNG } from "pngjs";
 
-// TradingView-style last-value cluster: title chip (darker shade) + price text + candle-close
-// countdown row, in one connected box with axis-facing corner radius. These specs drive the
-// live demo page (hourly bars ending at the current hour) through the public API only.
+// TradingView-style last-value cluster: title chip + price text + candle-close countdown row,
+// held together with side-specific corner radius. These specs drive the live demo page (hourly
+// bars ending at the current hour) through the public API only.
 
-const LABEL = [239, 83, 80]; // #ef5350 — the deterministic final DOWN bar's label color
-const CHIP = [172, 60, 58]; // LABEL darkened by 0.72 (the title chip shade)
+const LABEL = [239, 83,80]; // #ef5350 — the deterministic final DOWN bar's label color
+const CHIP = LABEL; // the title chip shares the main label color by default
 const ROW = 17; // 12px font + 2*2.5 padding
 
 const test_port = Number.parseInt(process.env.AION_TEST_PORT ?? "4174", 10);
@@ -38,7 +38,7 @@ async function open_cluster_page(browser, options) {
     const close = last.close - 2;
     window.__cluster_close = close;
     window.__main.update({ time: now, open: last.close, high: last.close + 0.6, low: close - 0.6, close });
-    window.__main.apply_options(opts);
+    window.__main.apply_options({ price_line_visible: false, ...opts });
   }, options);
   await page.evaluate(() => new Promise((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(resolve));
@@ -73,42 +73,63 @@ function near(a, b, tol = 12) {
 
 const is_box = (c) => near(c, LABEL) || near(c, CHIP);
 
-// Locate the OUTSIDE title chip (TradingView geometry: it sits on the pane side, a ~4px gap
-// before the axis border). CHIP is the chip-only color (the price line/last-value line is LABEL),
-// so these helpers are safe even when the dashed price line crosses the strip.
-function chip_extent(png, pane_w) {
-  let left = -1, right = -1, top = -1, bottom = -1;
-  for (let y = 0; y < png.height; y += 1) {
-    for (let x = 0; x < pane_w - 3; x += 1) {
-      if (near(px(png, x, y), CHIP)) {
-        if (left === -1) left = x;
-        right = Math.max(right, x);
-        if (top === -1) top = y;
-        bottom = y;
-      }
+// Locate the OUTSIDE title chip (TradingView geometry: it sits on the pane side, a ~2px gap
+// before the axis border). Since the chip shares the label color (candle bodies/wicks match
+// too), detection is by box coverage: a chip is a solid rectangle (≥ 70% LABEL pixels over a
+// 20px window on the row band); wicks/bodies never fill a window like that.
+const is_label = (c) => near(c, LABEL);
+
+function chip_boxes_at(png, y, x0, x1, row_h = 17) {
+  // A chip box is a run of columns with ≥ 1 LABEL pixel (allowing ≤ 8px text/AA dips), ≥ 12px
+  // wide, averaging ≥ 0.5 coverage. Wicks/bodies are too narrow or too sparse to qualify.
+  const hits_at = (x) => {
+    let hit = 0;
+    for (let yy = 0; yy < row_h; yy += 1) {
+      const o = ((y + yy) * png.width + x) * 4;
+      if (is_label([png.data[o], png.data[o + 1], png.data[o + 2]])) hit += 1;
+    }
+    return hit;
+  };
+  const boxes = [];
+  let cur = null;
+  let gap = 0;
+  for (let x = x0; x < x1; x += 1) {
+    const hit = hits_at(x);
+    if (hit >= 1) {
+      if (!cur) cur = { s: x, e: x, filled: 0 };
+      cur.e = x;
+      cur.filled += hit;
+      gap = 0;
+    } else if (cur) {
+      gap += 1;
+      if (gap > 8) { boxes.push(cur); cur = null; gap = 0; }
     }
   }
-  return { left, right, top, bottom, found: left !== -1 };
+  if (cur) boxes.push(cur);
+  return boxes.filter((b) => b.e - b.s + 1 >= 12 && b.filled / ((b.e - b.s + 1) * row_h) >= 0.5);
 }
 
-function find_chip(png, pane_w, y) {
-  let left = -1, right = -1;
-  for (let x = 0; x < pane_w - 3; x += 1) {
-    if (near(px(png, x, y), CHIP)) {
-      if (left === -1) left = x;
-      right = x;
-    }
-  }
-  return { left, right, found: left !== -1 };
+function chip_run_near(png, pane_w, anchor_y) {
+  const y = Math.round(anchor_y) - Math.floor(17 / 2);
+  const boxes = chip_boxes_at(png, y, Math.max(0, pane_w - 120), pane_w - 1);
+  if (boxes.length === 0) return { left: -1, right: -1, top: -1, bottom: -1, found: false };
+  const last = boxes[boxes.length - 1]; // the border-most box
+  return { left: last.s, right: last.e, top: y, bottom: y + 17, found: true };
 }
 
-function count_chip_left(png, pane_w) {
+function chip_extent(png, pane_w, anchor_y) {
+  const run = chip_run_near(png, pane_w, anchor_y);
+  return { left: run.left, right: run.right, top: run.top, bottom: run.bottom, found: run.found };
+}
+
+function find_chip(png, pane_w, anchor_y) {
+  return chip_run_near(png, pane_w, anchor_y);
+}
+
+function count_chip_left(png, pane_w, anchor_y) {
+  const y = Math.round(anchor_y) - Math.floor(17 / 2);
   let n = 0;
-  for (let y = 0; y < png.height; y += 1) {
-    for (let x = 0; x < pane_w - 3; x += 1) {
-      if (near(px(png, x, y), CHIP)) n += 1;
-    }
-  }
+  for (const box of chip_boxes_at(png, y, Math.max(0, pane_w - 120), pane_w - 1)) n += box.e - box.s + 1;
   return n;
 }
 
@@ -168,7 +189,7 @@ test("countdown_timer_needed gates on visibility and data (pure timer logic)", a
   expect(countdown_timer_needed([{ has_data: true }, { countdown_visible: true, has_data: true }])).toBe(true);
 });
 
-test("last-value cluster paints chip, price, and countdown rows; chip is visibly darker", async ({ browser }) => {
+test("last-value cluster paints chip, price, and countdown rows; the chip matches the label color", async ({ browser }) => {
   const { context, page } = await open_cluster_page(browser, {
     title: "AION",
     title_visible: true,
@@ -181,16 +202,17 @@ test("last-value cluster paints chip, price, and countdown rows; chip is visibly
   // One connected two-row box (~34px at the default 12px font).
   expect(box.bottom - box.top).toBeGreaterThanOrEqual(ROW * 2 - 4);
   expect(box.bottom - box.top).toBeLessThanOrEqual(ROW * 2 + 4);
-  // The title chip sits OUTSIDE the axis strip (pane side, gap before the border), darker.
-  const chip = find_chip(on, anchor.pane_w, box.top + Math.floor(ROW / 2));
+  // The title chip sits OUTSIDE the axis strip (pane side, ~2px gap before the border), in the
+  // SAME color as the price/countdown chips by default.
+  const chip = find_chip(on, anchor.pane_w, anchor.y);
   expect(chip.found, "title chip outside the strip").toBe(true);
-  expect(anchor.pane_w - chip.right - 1).toBeGreaterThanOrEqual(2); // visible gap to the border
+  const gap = anchor.pane_w - chip.right - 1;
+  expect(Math.abs(gap - 2)).toBeLessThanOrEqual(2);
   const chip_pixel = px(on, chip.left + 3, box.top + Math.floor(ROW / 2));
   const price_pixel = px(on, box.left + 3, box.top + Math.floor(ROW / 2));
   expect(near(chip_pixel, CHIP), `chip pixel ${chip_pixel}`).toBe(true);
   expect(near(price_pixel, LABEL), `price pixel ${price_pixel}`).toBe(true);
-  const luminance = (c) => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
-  expect(luminance(chip_pixel)).toBeLessThan(luminance(price_pixel) - 30);
+  expect(dist(chip_pixel, price_pixel)).toBeLessThanOrEqual(12); // matching colors by default
   // The countdown row sits below the top row, in the main label color, spanning the full width.
   expect(near(px(on, box.left + 3, box.bottom - 3), LABEL)).toBe(true);
   expect(near(px(on, box.right - 4, box.bottom - 3), LABEL)).toBe(true);
@@ -220,8 +242,7 @@ test("cluster parts toggle independently", async ({ browser }) => {
   let shot = await capture(page);
   let box = find_cluster(shot, anchor.pane_w);
   expect(box.bottom - box.top).toBeGreaterThanOrEqual(ROW * 2 - 4);
-  expect(count_chip_left(shot, anchor.pane_w)).toBe(0);
-  expect(count_color(shot, box, CHIP)).toBe(0);
+  expect(count_chip_left(shot, anchor.pane_w, anchor.y)).toBe(0);
   expect(count_color(shot, box, LABEL)).toBeGreaterThan(100);
   // Price text (white glyphs on the box) is still painted in the top row.
   expect(count_where(shot, { ...box, bottom: box.top + ROW }, is_white)).toBeGreaterThan(5);
@@ -231,10 +252,10 @@ test("cluster parts toggle independently", async ({ browser }) => {
   await page.evaluate(() => window.__main.apply_options({ title_visible: true, last_value_visible: false }));
   shot = await capture(page);
   box = find_cluster(shot, anchor.pane_w);
-  const extent = chip_extent(shot, anchor.pane_w);
+  const extent = chip_extent(shot, anchor.pane_w, anchor.y);
   expect(extent.found, "outside title chip present").toBe(true);
-  // Gap between the chip's right edge and the axis border (~4px, ±3 for AA).
-  expect(Math.abs(anchor.pane_w - extent.right - 1 - 4)).toBeLessThanOrEqual(3);
+  // Gap between the chip's right edge and the axis border (~2px, ±2 for AA).
+  expect(Math.abs(anchor.pane_w - extent.right - 1 - 2)).toBeLessThanOrEqual(2);
   // Inside the strip the top row is empty above the countdown; the countdown row has text.
   expect(count_where(shot, { ...box, top: box.top }, is_white)).toBeGreaterThan(5);
 
@@ -243,14 +264,14 @@ test("cluster parts toggle independently", async ({ browser }) => {
   shot = await capture(page);
   box = find_cluster(shot, anchor.pane_w);
   expect(box.bottom - box.top).toBeLessThanOrEqual(ROW + 3);
-  expect(count_chip_left(shot, anchor.pane_w)).toBeGreaterThan(20);
+  expect(count_chip_left(shot, anchor.pane_w, anchor.y)).toBeGreaterThan(20);
   expect(count_where(shot, { ...box, bottom: box.top + ROW }, is_white)).toBeGreaterThan(5);
 
   // Everything off: no cluster at all, no outside chip either.
   await page.evaluate(() => window.__main.apply_options({ last_value_visible: false, title_visible: false }));
   shot = await capture(page);
   expect(find_cluster(shot, anchor.pane_w).top).toBe(-1);
-  expect(count_chip_left(shot, anchor.pane_w)).toBe(0);
+  expect(count_chip_left(shot, anchor.pane_w, anchor.y)).toBe(0);
   await context.close();
 });
 
@@ -272,6 +293,41 @@ test("countdown row ticks with the 1s interval timer", async ({ browser }) => {
   const countdown_row = { left: box.left, right: box.right, top: box.bottom - ROW, bottom: box.bottom };
   expect(region_diff(first, second, countdown_row)).toBeGreaterThan(0);
   await context.close();
+});
+
+test("price and countdown chips share an exact edge at any DPR (no attachment gap)", async ({ browser }) => {
+  for (const dpr of [1, 1.35, 2]) {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: dpr, colorScheme: "light" });
+    const page = await context.newPage();
+    await page.goto(`${test_base_url}/`);
+    await wait_for_chart(page);
+    await page.evaluate(() => {
+      const now = Math.floor(Date.now() / 1000);
+      const last = window.__data[window.__data.length - 1];
+      const close = last.close - 2;
+      window.__cluster_close = close;
+      window.__main.update({ time: now, open: last.close, high: last.close + 0.6, low: close - 0.6, close });
+      window.__main.apply_options({ title: "AION", title_visible: true, countdown_visible: true, price_line_visible: false });
+    });
+    await page.waitForTimeout(300);
+    const shot = PNG.sync.read(await page.screenshot());
+    // Boundary column inside the strip (a few device px right of the border): walking down from
+    // above the cluster, once inside the boxes there must be NO white row until the boxes end.
+    const border_dev_x = Math.round((await page.evaluate(() => window.__chart.wasm.pane_left() + window.__chart.time_scale().width())) * dpr) + Math.round(4 * dpr);
+    const y0 = Math.round((await page.evaluate(() => window.__main.price_to_coordinate(window.__cluster_close))) * dpr);
+    let entered = false;
+    let gap_rows = 0;
+    for (let y = y0 - Math.round(30 * dpr); y < y0 + Math.round(45 * dpr); y++) {
+      const o = (y * shot.width + border_dev_x) * 4;
+      const r = shot.data[o], g = shot.data[o + 1], b2 = shot.data[o + 2];
+      const in_box = r > 200 && g < 130 && b2 < 130;
+      const white = r > 240 && g > 240 && b2 > 240;
+      if (in_box) entered = true;
+      else if (entered && white) gap_rows += 1;
+    }
+    expect(gap_rows, `dpr ${dpr}: white rows between attached chips`).toBe(0);
+    await context.close();
+  }
 });
 
 test("cluster rounds its axis-facing corners and keeps the chart-facing side sharp", async ({ browser }) => {
@@ -300,12 +356,12 @@ test("cluster rounds its axis-facing corners and keeps the chart-facing side sha
   expect(near(px(shot, box.right - 1, box.bottom - 4), LABEL)).toBe(true);
   // Chart-facing bottom-left corner: sharp.
   expect(near(px(shot, box.left, box.bottom - 1), LABEL)).toBe(true);
-  // The OUTSIDE title chip is a standalone rounded box: the corner pixel itself is AA-blended
-  // (between the background and the chip color), while the pixel right of it is fully filled.
-  const extent = chip_extent(shot, anchor.pane_w);
+  // The OUTSIDE title chip rounds only its OUTER side: the corner pixel itself is clipped
+  // (white, not chip), while the interior and the axis-facing edge are fully filled (sharp).
+  const extent = chip_extent(shot, anchor.pane_w, anchor.y);
   expect(extent.found).toBe(true);
-  const corner = px(shot, extent.left - 1, extent.top);
-  expect(dist(corner, CHIP)).toBeGreaterThan(25); // blended, not full chip color
-  expect(near(px(shot, extent.left, extent.top), CHIP)).toBe(true); // interior is full
+  expect(dist(px(shot, extent.left - 1, extent.top), CHIP)).toBeGreaterThan(12); // clipped corner
+  expect(near(px(shot, extent.left + 2, extent.top + 2), CHIP)).toBe(true); // interior is full
+  expect(near(px(shot, extent.right, extent.top), CHIP)).toBe(true); // axis-facing corner: sharp
   await context.close();
 });

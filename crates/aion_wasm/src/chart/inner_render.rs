@@ -442,15 +442,25 @@ impl ChartInner {
             font_family,
             font_size,
         )?;
+        let mut last_attach: Option<(u32, f64)> = None;
         for label in axis_frame.labels.iter().filter(|l| l.background.is_some()) {
             if let Some((x, y, w, h, color)) = label.background {
                 // Backgrounds are bitmap-aligned geometry, matching the reference's bitmap-coordinate pass.
                 // `to_css` keeps alpha so custom (e.g. price-line) label colors stay translucent.
                 ctx.set_fill_style_str(&color.to_css());
                 let bx = (x * dpr).round();
-                let by = (y * dpr).round();
+                // Attached rows (the price chip + its countdown chip) share an edge: the next
+                // box's top is the previous box's exact bottom — no per-box rounding gap between
+                // them at fractional DPR.
+                let by = match (label.attach_group, last_attach) {
+                    (Some(group), Some((last_group, last_bottom))) if group == last_group => {
+                        last_bottom
+                    }
+                    _ => (y * dpr).round(),
+                };
                 let bw = (w * dpr).round();
                 let bh = (h * dpr).round();
+                last_attach = label.attach_group.map(|group| (group, by + bh));
                 if label.background_corners.is_empty() {
                     ctx.fill_rect(bx, by, bw, bh);
                 } else {
@@ -466,6 +476,8 @@ impl ChartInner {
                         label.background_corners,
                     );
                 }
+            } else {
+                last_attach = None;
             }
             self.draw_axis_label_texts(std::iter::once(label), dpr, font_family, font_size)?;
         }

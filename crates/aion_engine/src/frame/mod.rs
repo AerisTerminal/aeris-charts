@@ -243,6 +243,10 @@ pub struct AxisLabel {
     /// own text. The last-value cluster puts it on the price-area label so the negotiated
     /// strip covers the title chip + price row (each label is otherwise measured alone).
     pub measure_extra: f64,
+    /// Attachment group: boxed labels sharing a group id are painted with SHARED edges — each
+    /// box's top edge is the previous box's exact bottom (no per-box rounding gaps between
+    /// attached rows like the price chip and its countdown chip).
+    pub attach_group: Option<u32>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

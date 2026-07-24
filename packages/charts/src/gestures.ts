@@ -498,6 +498,8 @@ export function install_gestures(chart: chart_impl): () => void {
     }
     const p = local_xy(e);
     pointers.set(e.pointerId, p);
+    // Any active pointer pauses the countdown timer (no mid-gesture repaint/lag).
+    if (pointers.size === 1) chart.set_interacting(true);
     if (pointers.size !== 1) return;
     press_origin = p;
     moved = false;
@@ -595,6 +597,7 @@ export function install_gestures(chart: chart_impl): () => void {
     touch_tracking = false;
     track_point = null;
     pointers.delete(e.pointerId);
+    if (pointers.size === 0) chart.set_interacting(false);
     if (pointers.size !== 0) return;
     if (sep_drag !== null) {
       sep_drag = null;
@@ -613,6 +616,7 @@ export function install_gestures(chart: chart_impl): () => void {
   const on_cancel = (e: PointerEvent) => {
     if (e.pointerType === "touch") return;
     pointers.delete(e.pointerId);
+    if (pointers.size === 0) chart.set_interacting(false);
     if (pointers.size !== 0) return;
     sep_drag = null;
     axis_drag = null;
@@ -745,6 +749,8 @@ export function install_gestures(chart: chart_impl): () => void {
     last_touch_ts = event_ts(e);
     stop_kinetic();
     stop_scroll_anim();
+    // Any active touch pauses the countdown timer (no mid-gesture repaint/lag).
+    if (e.touches.length > 0) chart.set_interacting(true);
     for (const t of Array.from(e.changedTouches)) {
       touch_regions.set(t.identifier, region_of(local_xy(t)));
     }
@@ -916,6 +922,7 @@ export function install_gestures(chart: chart_impl): () => void {
     for (const t of Array.from(e.changedTouches)) {
       touch_regions.delete(t.identifier);
     }
+    if (e.touches.length === 0) chart.set_interacting(false);
     let touch = active_touch_id !== null ? touch_with_id(e.changedTouches, active_touch_id) : null;
     if (touch === null && e.touches.length === 0) {
       // Somehow we missed the active touch's touchend (reference `_touchEndHandler` fallback).

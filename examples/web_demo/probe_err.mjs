@@ -1,0 +1,10 @@
+import { chromium } from "playwright";
+const b = await chromium.launch({ channel: "chromium" });
+const p = await (await b.newContext({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 })).newPage();
+p.on("pageerror", (e) => console.log("PAGEERROR:", e.message));
+p.on("console", (m) => { if (m.type() === "error" || m.type() === "warning") console.log("CONSOLE", m.type(), m.text().slice(0, 300)); });
+await p.goto("http://127.0.0.1:4174/");
+await p.waitForFunction(() => window.__chart?.backend?.() !== undefined, { timeout: 15000 }).catch((e) => console.log("chart never ready"));
+const ok = await p.evaluate(() => typeof window.__chart);
+console.log("chart:", ok);
+await b.close();

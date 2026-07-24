@@ -402,6 +402,7 @@ impl ChartEngine {
                             background: None,
                             background_corners: AxisLabelCorners::NONE,
                             measure_extra: 0.0,
+                            attach_group: None,
                         });
                     }
                 }
@@ -441,6 +442,7 @@ impl ChartEngine {
                             background: None,
                             background_corners: AxisLabelCorners::NONE,
                             measure_extra: 0.0,
+                            attach_group: None,
                         });
                     }
                 }
@@ -482,6 +484,7 @@ impl ChartEngine {
                     background: None,
                     background_corners: AxisLabelCorners::NONE,
                     measure_extra: 0.0,
+                    attach_group: None,
                 });
             }
             self.append_marker_labels(&mut out.labels, from, to);
@@ -633,6 +636,7 @@ impl ChartEngine {
                             background: None,
                             background_corners: AxisLabelCorners::NONE,
                             measure_extra: 0.0,
+                            attach_group: None,
                         });
                     }
                 }
@@ -722,6 +726,7 @@ impl ChartEngine {
                         )),
                         background_corners: AxisLabelCorners::for_align(align),
                         measure_extra: 0.0,
+                        attach_group: None,
                     });
                 }
             }
@@ -901,6 +906,7 @@ impl ChartEngine {
                         )),
                         background_corners: AxisLabelCorners::for_align(align),
                         measure_extra: 0.0,
+                        attach_group: None,
                     });
                     continue;
                 }
@@ -927,7 +933,9 @@ impl ChartEngine {
     {
         let right_strip = target != PriceScaleTarget::Left;
         let text_color = label.color.contrast_text();
-        let chip_color = label.color.darken(0.72);
+        // The title chip shares the main label color by default (matching the price and
+        // countdown chips).
+        let chip_color = label.color;
         let title_w = label.title.as_deref().map(measure);
         let chip_w = title_w.map(|w| w + 10.0).unwrap_or(0.0);
         let price_w = label.price_text.as_deref().map(measure).unwrap_or(0.0);
@@ -936,7 +944,7 @@ impl ChartEngine {
         // gap before the border), while the price chip and the countdown chip live inside the
         // strip, share ONE width (the wider of the two texts), and stack flush with left-aligned
         // text so they end at the exact same place — "held together".
-        const GAP: f64 = 4.0;
+        const GAP: f64 = 1.0;
         const PAD: f64 = 5.0;
         let inner_text_w = price_w.max(countdown_w);
         let inner_w = 1.0 + PAD + inner_text_w + PAD;
@@ -1001,15 +1009,16 @@ impl ChartEngine {
                 midpoint: AxisTextMidpoint::Label,
                 bold: false,
                 background: Some((chip_x, top_y, chip_w, chip_row_h, chip_color)),
-                // The outside chip is a standalone box — all four corners rounded.
-                background_corners: AxisLabelCorners {
-                    top_left: true,
-                    top_right: true,
-                    bottom_left: true,
-                    bottom_right: true,
+                // The outside chip rounds only its OUTER (chart-facing) side — sharp on the
+                // axis-facing side, matching the side rule for axis labels.
+                background_corners: if right_strip {
+                    AxisLabelCorners::LEFT
+                } else {
+                    AxisLabelCorners::RIGHT
                 },
                 // It lives on the pane, not in the strip: it never widens the axis.
                 measure_extra: 0.0,
+                attach_group: None,
             });
         }
         // The inside price chip renders only when the price text is present (never an empty box).
@@ -1026,6 +1035,8 @@ impl ChartEngine {
                 background_corners: axis_corners_top,
                 // text + the standard 21px label padding already covers the chip box.
                 measure_extra: 0.0,
+                // Price chip and countdown chip paint with a shared edge (attached).
+                attach_group: Some(1),
             });
         }
         if let Some(countdown) = &label.countdown {
@@ -1058,6 +1069,8 @@ impl ChartEngine {
                 background: Some((inner_x, countdown_y, inner_w, countdown_height, label.color)),
                 background_corners: corners,
                 measure_extra: 0.0,
+                // Attached to the price chip above (shared edge, no rounding gap).
+                attach_group: Some(1),
             });
         }
     }
@@ -1169,6 +1182,7 @@ impl ChartEngine {
                         )),
                         background_corners: AxisLabelCorners::for_align(align),
                         measure_extra: 0.0,
+                        attach_group: None,
                     });
                 }
             }
@@ -1198,6 +1212,7 @@ impl ChartEngine {
                     background: Some((box_x, self.pane_h + 1.0, width, height, label_bg)),
                     background_corners: AxisLabelCorners::BOTTOM,
                     measure_extra: 0.0,
+                    attach_group: None,
                 });
             }
         }

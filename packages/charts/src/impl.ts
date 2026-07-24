@@ -1107,6 +1107,13 @@ export class chart_impl implements chart_api {
   private anim_frame: number | null = null;
   /** The 1s candle-close countdown interval; `null` while no countdown is visible. */
   private countdown_timer: ReturnType<typeof setInterval> | null = null;
+  /** True while any pointer/touch is down — pauses the countdown tick so it can't repaint mid-gesture. */
+  private interacting = false;
+
+  /** The gesture recognizer marks pointer/touch activity (down = true, all-up = false). */
+  set_interacting(active: boolean): void {
+    this.interacting = active;
+  }
   /**
    * Cached "any live series has countdown_visible" flag (refreshed by `sync_countdown_timer`)
    * so streaming `update` calls can cheaply decide whether data-arrival may start the timer.
@@ -1324,7 +1331,9 @@ export class chart_impl implements chart_api {
       if (this.countdown_timer === null) {
         this.wasm.set_now_seconds(Date.now() / 1000);
         this.countdown_timer = setInterval(() => {
-          if (document.hidden) return;
+          // Skip while hidden or while the user is mid-gesture — a mid-drag repaint is the
+          // visible lag/flicker when moving the chart.
+          if (document.hidden || this.interacting) return;
           this.wasm.set_now_seconds(Date.now() / 1000);
           this.repaint();
         }, 1000);

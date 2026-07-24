@@ -1545,15 +1545,15 @@ fn last_value_cluster_rows_toggle_independently() {
     let Some((cd_x, cd_y, cd_w, cd_h, cd_bg)) = countdown.background else {
         panic!("countdown row is boxed")
     };
-    // The chip is a darker shade of the label color; the other rows keep the series bar color.
-    assert_eq!(chip_bg, LINE.darken(0.72));
+    // The chip shares the main label color by default (matching the price/countdown chips).
+    assert_eq!(chip_bg, LINE);
     assert_eq!(price_bg, LINE);
     assert_eq!(cd_bg, LINE);
     // TradingView geometry: the title chip sits OUTSIDE the strip (a small gap before the
     // border), the price chip and countdown chip share one width inside and stack flush.
     assert_eq!(chip_y, price_y);
     assert!(
-        (price_x - (chip_x + chip_w) - 4.0).abs() < 1e-9,
+        (price_x - (chip_x + chip_w) - 1.0).abs() < 1e-9,
         "chip-to-border gap"
     );
     assert!((price_y + price_h - cd_y).abs() < 1e-9, "flush stack");
@@ -1664,13 +1664,8 @@ fn boxed_axis_labels_select_the_axis_facing_corners() {
     };
     assert_eq!(
         corners_of("NDQ"),
-        AxisLabelCorners {
-            top_left: true,
-            top_right: true,
-            bottom_left: true,
-            bottom_right: true,
-        },
-        "the outside title chip is a standalone fully-rounded box"
+        AxisLabelCorners::LEFT,
+        "the outside title chip rounds only its outer (chart-facing) side"
     );
     assert_eq!(
         corners_of("12.50"),
@@ -1712,13 +1707,8 @@ fn boxed_axis_labels_select_the_axis_facing_corners() {
     };
     assert_eq!(
         corners_of("NDQ"),
-        AxisLabelCorners {
-            top_left: true,
-            top_right: true,
-            bottom_left: true,
-            bottom_right: true,
-        },
-        "the outside title chip is a standalone fully-rounded box"
+        AxisLabelCorners::RIGHT,
+        "the outside title chip rounds only its outer (chart-facing) side"
     );
     assert_eq!(
         corners_of("12.50"),
