@@ -933,6 +933,12 @@ impl ChartEngine {
     {
         let right_strip = target != PriceScaleTarget::Left;
         let text_color = label.color.contrast_text();
+        // The countdown row's text is slightly MUTED against the chip (TradingView-style)
+        // instead of the full-contrast color the title and price texts use.
+        let muted_text_color = {
+            let base = text_color;
+            Color::rgba(base.r(), base.g(), base.b(), (base.a() as f64 * 0.65).round() as u8)
+        };
         // The title chip shares the main label color by default (matching the price and
         // countdown chips).
         let chip_color = label.color;
@@ -1062,7 +1068,7 @@ impl ChartEngine {
                 text: countdown.clone(),
                 x: text_x,
                 y: countdown_y + countdown_height / 2.0,
-                color: text_color,
+                color: muted_text_color,
                 align: text_align,
                 midpoint: AxisTextMidpoint::Label,
                 bold: false,

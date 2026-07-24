@@ -1561,10 +1561,15 @@ fn last_value_cluster_rows_toggle_independently() {
     assert!((cd_w - price_w).abs() < 1e-9, "same width");
     assert_eq!(chip_h, price_h);
     assert_eq!(price_h, cd_h);
-    // All cluster texts share the contrast-pick text color.
+    // Title and price texts share the contrast-pick color; the countdown text is slightly
+    // muted against the chip (TradingView-style).
     assert_eq!(chip.color, LINE.contrast_text());
     assert_eq!(price.color, LINE.contrast_text());
-    assert_eq!(countdown.color, LINE.contrast_text());
+    let muted = {
+        let base = LINE.contrast_text();
+        Color::rgba(base.r(), base.g(), base.b(), (base.a() as f64 * 0.65).round() as u8)
+    };
+    assert_eq!(countdown.color, muted);
 
     // Price off, title + countdown on: only the outside title chip and the inside countdown
     // chip render — no empty price box.

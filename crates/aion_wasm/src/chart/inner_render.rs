@@ -447,6 +447,10 @@ impl ChartInner {
             if let Some((x, y, w, h, color)) = label.background {
                 // Backgrounds are bitmap-aligned geometry, matching the reference's bitmap-coordinate pass.
                 // `to_css` keeps alpha so custom (e.g. price-line) label colors stay translucent.
+                // Sizes come from the box's rounded far EDGE minus its rounded origin, so adjacent
+                // boxes (e.g. the outside title chip vs the in-strip price chip) keep a
+                // deterministic device-px gap instead of breathing ±1px from independent
+                // origin/width rounding.
                 ctx.set_fill_style_str(&color.to_css());
                 let bx = (x * dpr).round();
                 // Attached rows (the price chip + its countdown chip) share an edge: the next
@@ -458,8 +462,8 @@ impl ChartInner {
                     }
                     _ => (y * dpr).round(),
                 };
-                let bw = (w * dpr).round();
-                let bh = (h * dpr).round();
+                let bw = ((x + w) * dpr).round() - bx;
+                let bh = ((y + h) * dpr).round() - by;
                 last_attach = label.attach_group.map(|group| (group, by + bh));
                 if label.background_corners.is_empty() {
                     ctx.fill_rect(bx, by, bw, bh);
