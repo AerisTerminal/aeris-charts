@@ -74,8 +74,9 @@ pub struct TimeScaleCore {
     scroll_start_point: Option<Coordinate>,
     scale_start_point: Option<Coordinate>,
     common_transition_start_state: Option<TransitionState>,
-    /// Host-pushed "all scaling and scrolling disabled" flag (reference
-    /// `_isAllScalingAndScrollingDisabled`, time-scale.ts:975-986): forces fix-edge semantics.
+    /// Host-pushed "all scaling and scrolling disabled" aggregate (reference
+    /// `_isAllScalingAndScrollingDisabled`, time-scale.ts:975-986): label alignment only —
+    /// never consulted by the spacing/offset math, which reads the raw fix-edge options.
     interaction_disabled: bool,
 }
 
@@ -231,7 +232,7 @@ impl TimeScaleCore {
             self.bar_spacing = self.bar_spacing * new_width / old_width;
         }
 
-        if self.fix_left_edge() {
+        if self.options.fix_left_edge {
             if let Some(prev) = previous_visible_range {
                 if prev.left() <= 0.0 {
                     let delta = old_width - new_width;
@@ -364,27 +365,19 @@ impl TimeScaleCore {
     }
 
     /// Host-pushed "all scaling and scrolling disabled" flag (reference
-    /// `_isAllScalingAndScrollingDisabled`, time-scale.ts:975-986). The host's gesture flags live
-    /// outside the scale, so it pushes the aggregate state here; while set, every fix-edge
-    /// decision behaves as if both `fixLeftEdge` and `fixRightEdge` were on (reference time-scale.ts:657-659).
+    /// `_isAllScalingAndScrollingDisabled`, time-scale.ts:975-986). In the reference this
+    /// aggregate only feeds tick-mark label alignment (time-scale.ts:657-690); the scale math
+    /// (spacing floor, offset clamps, edge snapping) always reads the raw fixLeftEdge /
+    /// fixRightEdge options. The flag is stored for the label path and must not alter spacing
+    /// or offsets — a non-interactive chart must not react to resizes.
     pub fn set_interaction_disabled(&mut self, disabled: bool) {
-        if self.interaction_disabled == disabled {
-            return;
-        }
         self.interaction_disabled = disabled;
-        self.do_fix_left_edge();
-        self.correct_bar_spacing();
-        self.correct_offset();
     }
 
-    /// Effective fix-edge flags (reference `isLeftEdgeFixed`/`isRightEdgeFixed`,
-    /// time-scale.ts:658-659): the option, or the host-pushed all-interaction-disabled flag.
-    fn fix_left_edge(&self) -> bool {
-        self.options.fix_left_edge || self.interaction_disabled
-    }
-
-    fn fix_right_edge(&self) -> bool {
-        self.options.fix_right_edge || self.interaction_disabled
+    /// Whether the host has disabled every scroll/scale gesture (the reference's
+    /// label-alignment input, time-scale.ts:658-659). Scale math reads the raw options instead.
+    pub fn interaction_disabled(&self) -> bool {
+        self.interaction_disabled
     }
 
     fn max_bar_spacing(&self) -> f64 {
@@ -396,7 +389,7 @@ impl TimeScaleCore {
     }
 
     fn min_bar_spacing(&self) -> f64 {
-        if self.fix_left_edge() && self.fix_right_edge() && self.points_len != 0 {
+        if self.options.fix_left_edge && self.options.fix_right_edge && self.points_len != 0 {
             self.width / self.points_len as f64
         } else {
             self.options.min_bar_spacing
@@ -418,7 +411,7 @@ impl TimeScaleCore {
         let first_index = self.first_index()?;
         let base_index = self.base_index?;
 
-        let bars_estimation = if self.fix_left_edge() {
+        let bars_estimation = if self.options.fix_left_edge {
             self.width / self.bar_spacing
         } else {
             MIN_VISIBLE_BARS_COUNT.min(self.points_len as f64)
@@ -428,7 +421,7 @@ impl TimeScaleCore {
     }
 
     fn max_right_offset(&self) -> f64 {
-        if self.fix_right_edge() {
+        if self.options.fix_right_edge {
             0.0
         } else {
             (self.width / self.bar_spacing) - MIN_VISIBLE_BARS_COUNT.min(self.points_len as f64)
@@ -451,7 +444,7 @@ impl TimeScaleCore {
     }
 
     fn do_fix_left_edge(&mut self) {
-        if !self.fix_left_edge() {
+        if !self.options.fix_left_edge {
             return;
         }
         let Some(first_index) = self.first_index() else {
@@ -814,26 +807,34 @@ mod tests {
     }
 
     #[test]
-    fn interaction_disabled_forces_fix_edge_semantics() {
-        // reference time-scale.ts:657-659: with every scroll/scale flag off, the scale behaves as if
-        // both edges were fixed.
+    fn interaction_disabled_leaves_scale_math_untouched() {
+        // reference time-scale.ts:975-986: the all-interactions-disabled aggregate only feeds
+        // tick-label alignment (time-scale.ts:657-690); the spacing/offset math keeps reading
+        // the raw fixLeftEdge/fixRightEdge options, so a non-interactive chart never reacts to
+        // resizes or offset clamps as if its edges were fixed.
         let mut s = scale(400.0, 8.0, 0.0, 500, 300);
         s.set_interaction_disabled(true);
-        // right edge fixed: no future whitespace
+        // no forced fixRightEdge: future whitespace is still allowed
         s.set_right_offset(5.0);
-        assert_eq!(s.right_offset(), 0.0);
-        // left edge fixed: the past clamp keeps a full width of bars (0 - 300 - 1 + 400/8)
-        s.set_right_offset(-280.0);
-        assert_eq!(s.right_offset(), -251.0);
-        // clearing the flag restores the plain two-bar clamp (0 - 300 - 1 + 2 = -299 < -280)
-        s.set_interaction_disabled(false);
+        assert_eq!(s.right_offset(), 5.0);
+        // no forced fixLeftEdge: the past clamp stays the plain two-bar one
         s.set_right_offset(-280.0);
         assert_eq!(s.right_offset(), -280.0);
+        // no width/points spacing floor: fit-content spacing survives a width change
+        let mut s = scale(500.0, 500.0 / 300.0, 0.0, 300, 299);
+        s.set_interaction_disabled(true);
+        s.set_width(700.0);
+        assert_eq!(s.bar_spacing(), 500.0 / 300.0);
+        // the flag is readable for the label path and toggles freely
+        assert!(s.interaction_disabled());
+        s.set_interaction_disabled(false);
+        assert!(!s.interaction_disabled());
     }
 
     #[test]
     fn interaction_disabled_defaults_off_and_is_idempotent() {
         let mut s = scale(400.0, 8.0, 0.0, 500, 300);
+        assert!(!s.interaction_disabled());
         s.set_right_offset(5.0);
         // flag off: the future clamp is width/spacing - 2 bars, not 0
         assert_eq!(s.right_offset(), 5.0);

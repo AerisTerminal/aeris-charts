@@ -837,13 +837,16 @@ fn interaction_disabled_flag_reaches_the_time_scale() {
     chart.fit_content();
     chart.set_bar_spacing(10.0);
 
-    // reference `_isAllScalingAndScrollingDisabled`: with the flag pushed, the scale behaves as if
-    // both edges were fixed â€” future whitespace clamps away like fixRightEdge.
+    // reference `_isAllScalingAndScrollingDisabled` (time-scale.ts:975-986): the aggregate only
+    // feeds tick-label alignment — it must NOT force fix-edge semantics on the scale math, so
+    // offsets and spacing stay put (a non-interactive chart never reacts to resizes).
     chart.set_interaction_disabled(true);
+    assert!(chart.time_scale.interaction_disabled());
     chart.set_right_offset(5.0);
-    assert_eq!(chart.right_offset(), 0.0);
+    assert_eq!(chart.right_offset(), 5.0);
     chart.set_interaction_disabled(false);
-    chart.set_bar_spacing(10.0); // the flag's fix-both-edges pass raised the spacing floor
+    assert!(!chart.time_scale.interaction_disabled());
+    chart.set_bar_spacing(10.0);
     chart.set_right_offset(5.0);
     assert_eq!(chart.right_offset(), 5.0);
 }
