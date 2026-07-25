@@ -24,7 +24,8 @@
   #bar .hint { color: #787b86; font-size: 11px; }
   #status { align-self: center; margin-left: auto; color: #787b86; }
   /* The library creates and manages the canvases inside this container. */
-  #chart_container { flex: 1; position: relative; touch-action: none; overscroll-behavior: none; }
+  #chart_wrap { flex: 1; position: relative; min-height: 0; }
+  #chart_container { position: absolute; inset: 0; touch-action: none; overscroll-behavior: none; }
   /* crosshair-move legend (top-left, over the pane) driven by subscribe_crosshair_move */
   #legend { position: absolute; top: 8px; left: 8px; z-index: 3; font-size: 12px; color: #191919;
             background: rgba(255,255,255,0.7); padding: 3px 7px; border-radius: 3px; pointer-events: none;
@@ -88,6 +89,21 @@
 
     <div class="group" data-caption="Separate pane">
       <label title="RSI(14) oscillator in its own stacked pane (series.move_to_pane): dedicated price scale, draggable separator, crosshair + selection anchors work across panes; unchecking prunes the empty pane"><input type="checkbox" id="rsi_toggle"> RSI(14)</label>
+    </div>
+
+    <div class="group" data-caption="Multi-chart" title="Split into independent charts (engine workspace): each cell is a full chart with its own scales, type, and data. Click a chart to make it active, then split or close it; drag the divider to resize.">
+      <button id="split_h" type="button" title="Split the active chart side by side">split ↔</button>
+      <button id="split_v" type="button" title="Split the active chart stacked">split ↕</button>
+      <button id="close_cell" type="button" title="Close the active chart (not the primary one)">close</button>
+      <label title="Paywall-style cap on live charts (the workspace's usage signal reports every change)">max
+        <select id="max_charts">
+          <option value="0" selected>∞</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+        </select>
+      </label>
+      <span class="hint" id="grid_usage"></span>
     </div>
 
     <div class="group" data-caption="Plugins">
@@ -189,12 +205,15 @@
 
     <span id="status"></span>
   </div>
-  <div id="chart_container"><div id="legend">O — H — L — C —</div></div>
+  <div id="chart_wrap">
+    <div id="chart_container"></div>
+    <div id="legend">O — H — L — C —</div>
+  </div>
 </div>
 <script type="module">
 // Built from the real package distribution. The demo build copies @tradeaion/charts' published
 // artifacts; it does not compile or wire an engine of its own.
-import { create_chart, create_series_markers, create_text_watermark, theme_options, theme_palette } from "./dist/aion_charts.js";
+import { create_chart, create_chart_grid, create_series_markers, create_text_watermark, theme_options, theme_palette } from "./dist/aion_charts.js";
 import { generate_fixture_data } from "./fixture_data.js";
 import { fixture_theme } from "./fixture_styles.js";
 import { marker_fixture, volume_fixture } from "./fixture_features.js";
@@ -276,7 +295,27 @@ if (parity_fixture !== null) {
 }
 if (runtime_test === "adapterFailure") chart_options.__simulate_webgpu_adapter_failure = true;
 if (query.get("forceFallbackAdapter") === "1") chart_options.__force_webgpu_fallback_adapter = true;
-const chart = await create_chart(container, chart_options);
+
+// The interactive demo is grid-native (the engine workspace): the main chart is the first
+// cell, and the Multi-chart toolbar splits/closes further independent charts from there.
+// Runtime/parity fixtures keep the exact single-chart path (their manual resize must not race
+// a cell auto-resize observer).
+let grid = null;
+let chart;
+if (parity_fixture === null) {
+  grid = await create_chart_grid(container, {
+    chart_options,
+    // The split dividers follow the axis border color (default): same token, theme-aware.
+    on_usage: (u) => {
+      document.getElementById("grid_usage").textContent =
+        `${u.chart_count} chart${u.chart_count === 1 ? "" : "s"} · ${u.split_count} splits`;
+    },
+  });
+  chart = grid.cells()[0].chart;
+  window.__grid = grid; // debug/test handle
+} else {
+  chart = await create_chart(container, chart_options);
+}
 if (parity_fixture !== null) {
   chart.resize(
     parity_fixture.css_width,
@@ -761,6 +800,54 @@ document.getElementById("rsi_toggle").addEventListener("change", (e) => {
   }
 });
 
+// ---- Multi-chart (engine workspace): the main chart is the first cell; the toolbar acts on
+// the ACTIVE cell (last clicked). New cells are seeded as distinct assets and follow the theme.
+let active_cell = grid ? grid.cells()[0] : null;
+let split_asset_seq = 0;
+function seed_split_cell(cell) {
+  split_asset_seq += 1;
+  const data = generate_data(300, {
+    seed: 42 + split_asset_seq * 977,
+    start_price: 40 + split_asset_seq * 25,
+    close_span: 2.2,
+    wick_span: 0.9,
+    end_time: data_end_time(),
+  });
+  const series = cell.chart.add_series("candlestick", { title: `ASSET ${split_asset_seq}` });
+  series.set_data(data);
+  cell.chart.apply_options(theme_options(document.getElementById("theme_select").value));
+  cell.chart.time_scale().fit_content();
+  cell.chart.__seed_series = series; // debug/test handle
+}
+function data_end_time() {
+  return data[data.length - 1].time;
+}
+if (grid !== null) {
+  container.addEventListener("pointerdown", (e) => {
+    const hit = grid.cells().find((c) => c.element.contains(e.target));
+    if (hit) active_cell = hit;
+  }, true);
+  const split_active = async (direction) => {
+    if (!active_cell) return;
+    const next = await active_cell.split(direction);
+    if (next) {
+      seed_split_cell(next);
+      active_cell = next;
+    }
+  };
+  document.getElementById("split_h").addEventListener("click", () => split_active("horizontal"));
+  document.getElementById("split_v").addEventListener("click", () => split_active("vertical"));
+  document.getElementById("close_cell").addEventListener("click", () => {
+    // The primary cell hosts all the toolbar wiring — it cannot be closed from here.
+    if (active_cell && active_cell.id !== grid.cells()[0].id && active_cell.remove()) {
+      active_cell = grid.cells()[0];
+    }
+  });
+  document.getElementById("max_charts").addEventListener("change", (e) => {
+    grid.set_max_charts(Number(e.target.value) || null);
+  });
+}
+
 document.querySelectorAll('input[name="series"]').forEach((el) => {
   el.addEventListener("change", () => {
     main.set_type(el.value);
@@ -823,6 +910,8 @@ function apply_axis_border() {
     rightPriceScale: { borderColor, borderVisible },
     timeScale: { borderColor, borderVisible },
   });
+  // The split dividers follow the axis border token — re-resolve on an explicit border change.
+  if (grid !== null) grid.set_divider_color(null);
 }
 document.getElementById("axis_border_color").addEventListener("input", () => { theme_color_touched.axis_border = true; apply_axis_border(); });
 document.getElementById("axis_border_visible").addEventListener("change", apply_axis_border);
@@ -874,6 +963,11 @@ document.getElementById("theme_select").addEventListener("change", (e) => {
   const palette = theme_palette(e.target.value);
   // theme_options now includes the grid lines (grid follows the border token per theme).
   chart.apply_options(theme_options(e.target.value));
+  // Every split cell follows the theme too; the split dividers re-resolve the border token.
+  if (grid !== null) {
+    for (const cell of grid.cells()) cell.chart.apply_options(theme_options(e.target.value));
+    grid.set_divider_color(null);
+  }
   // Follow-or-pin: untouched pickers adopt the new theme tokens; pinned colors are re-applied
   // after the theme patch so a user's explicit choice always wins.
   if (!theme_color_touched.axis_border) document.getElementById("axis_border_color").value = palette.border;

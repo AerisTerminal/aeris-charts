@@ -13,6 +13,7 @@ mod price_scale_api;
 mod series_query_api;
 #[cfg(test)]
 mod tests;
+mod workspace;
 
 pub use frame::{
     AxisFrame, AxisLabel, AxisLabelCorners, AxisTextAlign, AxisTextMidpoint, ChartFrame, FramePane,
@@ -20,6 +21,7 @@ pub use frame::{
 pub use hit_test::{SeriesHit, SeriesHitKind};
 pub(crate) use indicators::IndicatorBinding;
 pub use indicators::IndicatorKind;
+pub use workspace::{SplitDirection, Workspace, WorkspaceError, WorkspaceUsage};
 
 use aion_core::format::price_formatter::PriceFormatter;
 use aion_core::format::time_formatter::{MonthNames, DEFAULT_DATE_FORMAT};

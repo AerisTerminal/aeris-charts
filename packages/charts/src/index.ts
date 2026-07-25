@@ -22,6 +22,7 @@ export * from "./primitives.js";
 export * from "./canvas_plugins.js";
 export * from "./custom_series.js";
 export * from "./builtin_plugins.js";
+export * from "./grid.js";
 import { chart_impl } from "./impl.js";
 import { ensure_init } from "./impl.js";
 import { theme_options } from "./theme.js";

@@ -36,11 +36,13 @@ function price_line_runs(png, y, is_line_pixel) {
 test("price line style select restyles the live price line", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   await wait_for_chart(page);
-  // Pin a unique line color so candle pixels can never be mistaken for the price line.
+  // Pin a unique line color so candle pixels can never be mistaken for the price line. Keep
+  // the RAW coordinate: row = round(y·scale) — rounding y first drifts the target row by one
+  // device px at .5 boundaries.
   const probe = await page.evaluate(() => {
     window.__main.apply_options({ price_line_color: "#ff00ff" });
     const last = window.__data[window.__data.length - 1];
-    return { y: Math.round(window.__main.price_to_coordinate(last.close)) };
+    return { y: window.__main.price_to_coordinate(last.close) };
   });
   const is_line = (c) => Math.abs(c[0] - 255) < 40 && Math.abs(c[1] - 0) < 40 && Math.abs(c[2] - 255) < 40;
   const css_w = await page.evaluate(() => document.querySelector("#chart_container").getBoundingClientRect().width);
@@ -49,13 +51,14 @@ test("price line style select restyles the live price line", async ({ page }) =>
   await wait_for_chart(page);
   const solid_png = await capture(page);
   const scale = solid_png.width / css_w;
-  const solid = price_line_runs(solid_png, Math.round(probe.y * scale), is_line);
+  const row = Math.round(probe.y * scale);
+  const solid = price_line_runs(solid_png, row, is_line);
   expect(solid.length, "solid style: one continuous run").toBeLessThanOrEqual(2);
   expect(solid.reduce((n, r) => n + (r.e - r.s), 0)).toBeGreaterThan(100);
 
   await page.selectOption("#price_line_style", "1"); // dotted
   await wait_for_chart(page);
-  const dotted = price_line_runs(await capture(page), Math.round(probe.y * scale), is_line);
+  const dotted = price_line_runs(await capture(page), row, is_line);
   expect(dotted.length, "dotted style: many short runs").toBeGreaterThan(10);
 });
 

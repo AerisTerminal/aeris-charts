@@ -27,9 +27,13 @@ mod text_cache;
 mod canvas2d_target;
 #[cfg(target_arch = "wasm32")]
 mod chart;
+#[cfg(target_arch = "wasm32")]
+mod workspace;
 
 #[cfg(target_arch = "wasm32")]
 pub use chart::{create_chart, AionChart};
+#[cfg(target_arch = "wasm32")]
+pub use workspace::AionWorkspace;
 
 #[cfg(target_arch = "wasm32")]
 pub use smoke::render_prim_smoke_2d;
