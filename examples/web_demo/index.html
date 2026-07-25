@@ -14,6 +14,9 @@
          display: flex; gap: 4px 10px; align-items: stretch; flex-wrap: wrap; }
   #bar .group { position: relative; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
                 padding: 10px 10px 4px; margin-top: 2px; border: 1px solid #e0e3eb; border-radius: 6px; }
+  /* The flex display above would otherwise beat the UA [hidden] rule (specificity) — the style
+     groups toggle via the `hidden` attribute, so it must win here. */
+  #bar .group[hidden] { display: none; }
   #bar .group::before { content: attr(data-caption); position: absolute; top: -8px; left: 8px;
                 padding: 0 5px; background: #fff; font-size: 9.5px; font-weight: 600; letter-spacing: 0.07em;
                 text-transform: uppercase; color: #787b86; }
@@ -91,7 +94,7 @@
       <label title="RSI(14) oscillator in its own stacked pane (series.move_to_pane): dedicated price scale, draggable separator, crosshair + selection anchors work across panes; unchecking prunes the empty pane"><input type="checkbox" id="rsi_toggle"> RSI(14)</label>
     </div>
 
-    <div class="group" data-caption="Multi-chart" title="Split into independent charts (engine workspace): each cell is a full chart with its own scales, type, and data. Click a chart to make it active, then split or close it; drag the divider to resize.">
+    <div class="group" data-caption="Multi-chart" title="Split into independent charts (engine workspace): each cell is a full chart with its own scales, type, and data. Click a chart to make it active — split/close, series type, and style then act on it; drag the divider to resize.">
       <button id="split_h" type="button" title="Split the active chart side by side">split ↔</button>
       <button id="split_v" type="button" title="Split the active chart stacked">split ↕</button>
       <button id="close_cell" type="button" title="Close the active chart (not the primary one)">close</button>
@@ -328,6 +331,11 @@ window.__chart = chart; // debug/test handle
 const data = generate_data(parity_fixture?.bar_count ?? 1000, parity_fixture ?? {});
 const main = chart.add_series("candlestick", requested_left_scale ? { priceScaleId: "left" } : undefined);
 main.set_data(data);
+if (grid !== null) {
+  // The root cell's primary series under the same handle the split cells get, so the toolbar's
+  // series controls (type + style) resolve the ACTIVE cell's series uniformly.
+  chart.__seed_series = main;
+}
 chart.time_scale().fit_content();
 if (Number.isFinite(requested_spacing)) {
   chart.time_scale().apply_options({ bar_spacing: requested_spacing, right_offset: 0 });
@@ -661,7 +669,7 @@ function sync_style_visibility(kind) {
 // body pickers alone recolor the whole candle.
 const candle_part_touched = { wick_up: false, wick_down: false, border_up: false, border_down: false };
 
-// Re-apply the current control values to the main series (used after a type change).
+// Re-apply the current control values to the active cell's series (used after a type change).
 function apply_main_style() {
   const options = {
     up_color: document.getElementById("up_color").value,
@@ -678,7 +686,22 @@ function apply_main_style() {
   if (candle_part_touched.wick_down) options.wick_down_color = document.getElementById("wick_down_color").value;
   if (candle_part_touched.border_up) options.border_up_color = document.getElementById("border_up_color").value;
   if (candle_part_touched.border_down) options.border_down_color = document.getElementById("border_down_color").value;
-  main.apply_options(options);
+  active_series().apply_options(options);
+}
+
+// The toolbar's series controls (type + style) act on the ACTIVE grid cell's primary series —
+// the root chart's `main` or a split cell's seeded series — never always the primary chart.
+function active_series() {
+  return (grid !== null && active_cell ? active_cell.chart.__seed_series : main) ?? main;
+}
+
+// Reflect the active chart in the toolbar: its series type selects the matching radio and
+// shows that type's style groups (called whenever the active cell changes).
+function sync_active_toolbar() {
+  const kind = active_series().series_type();
+  const radio = document.querySelector(`input[name="series"][value="${kind}"]`);
+  if (radio) radio.checked = true;
+  sync_style_visibility(kind);
 }
 
 // Grid controls drive both families (vert + horz) at once; the engine stores them separately,
@@ -697,16 +720,16 @@ document.getElementById("grid_toggle").addEventListener("change", apply_grid_sty
 document.getElementById("grid_color").addEventListener("input", () => { theme_color_touched.grid = true; apply_grid_style(); });
 document.getElementById("grid_style").addEventListener("change", apply_grid_style);
 
-// Built-in last-price line + last-value label toggles (main series).
-document.getElementById("price_line_toggle").addEventListener("change", (e) => main.apply_options({ price_line_visible: e.target.checked }));
-document.getElementById("price_line_style").addEventListener("change", (e) => main.apply_options({ price_line_style: Number(e.target.value) }));
+// Built-in last-price line + last-value label toggles (active cell's series).
+document.getElementById("price_line_toggle").addEventListener("change", (e) => active_series().apply_options({ price_line_visible: e.target.checked }));
+document.getElementById("price_line_style").addEventListener("change", (e) => active_series().apply_options({ price_line_style: Number(e.target.value) }));
 document.getElementById("reset_view_btn").addEventListener("click", () => chart.reset_view());
-document.getElementById("last_value_toggle").addEventListener("change", (e) => main.apply_options({ last_value_visible: e.target.checked }));
+document.getElementById("last_value_toggle").addEventListener("change", (e) => active_series().apply_options({ last_value_visible: e.target.checked }));
 // TradingView-style last-value cluster: title chip (darker shade, left of the price) and a
 // candle-close countdown row below. Typing a title or toggling either control applies the trio;
 // nothing is applied on load so the fidelity fixtures stay untouched.
 function apply_series_chrome() {
-  main.apply_options({
+  active_series().apply_options({
     title: document.getElementById("series_title").value,
     title_visible: document.getElementById("title_chip_toggle").checked,
     countdown_visible: document.getElementById("countdown_toggle").checked,
@@ -716,19 +739,19 @@ document.getElementById("title_chip_toggle").addEventListener("change", apply_se
 document.getElementById("series_title").addEventListener("input", apply_series_chrome);
 document.getElementById("countdown_toggle").addEventListener("change", apply_series_chrome);
 
-document.getElementById("up_color").addEventListener("input", () => main.apply_options({ up_color: document.getElementById("up_color").value }));
-document.getElementById("down_color").addEventListener("input", () => main.apply_options({ down_color: document.getElementById("down_color").value }));
-document.getElementById("wick_up_color").addEventListener("input", (e) => { candle_part_touched.wick_up = true; main.apply_options({ wick_up_color: e.target.value }); });
-document.getElementById("wick_down_color").addEventListener("input", (e) => { candle_part_touched.wick_down = true; main.apply_options({ wick_down_color: e.target.value }); });
-document.getElementById("border_up_color").addEventListener("input", (e) => { candle_part_touched.border_up = true; main.apply_options({ border_up_color: e.target.value }); });
-document.getElementById("border_down_color").addEventListener("input", (e) => { candle_part_touched.border_down = true; main.apply_options({ border_down_color: e.target.value }); });
-document.getElementById("wick_visible").addEventListener("change", (e) => main.apply_options({ wick_visible: e.target.checked }));
-document.getElementById("border_visible").addEventListener("change", (e) => main.apply_options({ border_visible: e.target.checked }));
+document.getElementById("up_color").addEventListener("input", () => active_series().apply_options({ up_color: document.getElementById("up_color").value }));
+document.getElementById("down_color").addEventListener("input", () => active_series().apply_options({ down_color: document.getElementById("down_color").value }));
+document.getElementById("wick_up_color").addEventListener("input", (e) => { candle_part_touched.wick_up = true; active_series().apply_options({ wick_up_color: e.target.value }); });
+document.getElementById("wick_down_color").addEventListener("input", (e) => { candle_part_touched.wick_down = true; active_series().apply_options({ wick_down_color: e.target.value }); });
+document.getElementById("border_up_color").addEventListener("input", (e) => { candle_part_touched.border_up = true; active_series().apply_options({ border_up_color: e.target.value }); });
+document.getElementById("border_down_color").addEventListener("input", (e) => { candle_part_touched.border_down = true; active_series().apply_options({ border_down_color: e.target.value }); });
+document.getElementById("wick_visible").addEventListener("change", (e) => active_series().apply_options({ wick_visible: e.target.checked }));
+document.getElementById("border_visible").addEventListener("change", (e) => active_series().apply_options({ border_visible: e.target.checked }));
 // Unpin every part override ("" = clear back to follow-body) and re-sync pickers to the body
 // colors the parts now follow.
 document.getElementById("candle_parts_reset").addEventListener("click", () => {
   candle_part_touched.wick_up = candle_part_touched.wick_down = candle_part_touched.border_up = candle_part_touched.border_down = false;
-  main.apply_options({ wick_up_color: "", wick_down_color: "", border_up_color: "", border_down_color: "" });
+  active_series().apply_options({ wick_up_color: "", wick_down_color: "", border_up_color: "", border_down_color: "" });
   const up = document.getElementById("up_color").value;
   const down = document.getElementById("down_color").value;
   document.getElementById("wick_up_color").value = up;
@@ -736,13 +759,13 @@ document.getElementById("candle_parts_reset").addEventListener("click", () => {
   document.getElementById("wick_down_color").value = down;
   document.getElementById("border_down_color").value = down;
 });
-document.getElementById("line_color").addEventListener("input", () => main.apply_options({ color: document.getElementById("line_color").value }));
+document.getElementById("line_color").addEventListener("input", () => active_series().apply_options({ color: document.getElementById("line_color").value }));
 document.getElementById("line_width").addEventListener("input", (e) => {
   document.getElementById("line_width_val").textContent = e.target.value;
-  main.apply_options({ line_width: Number(e.target.value) });
+  active_series().apply_options({ line_width: Number(e.target.value) });
 });
 document.getElementById("area_top").addEventListener("input", (e) => {
-  main.apply_options({ area_top_color: e.target.value, area_bottom_color: e.target.value + "00" });
+  active_series().apply_options({ area_top_color: e.target.value, area_bottom_color: e.target.value + "00" });
 });
 
 document.getElementById("sma_toggle").addEventListener("change", (e) => {
@@ -801,7 +824,8 @@ document.getElementById("rsi_toggle").addEventListener("change", (e) => {
 });
 
 // ---- Multi-chart (engine workspace): the main chart is the first cell; the toolbar acts on
-// the ACTIVE cell (last clicked). New cells are seeded as distinct assets and follow the theme.
+// the ACTIVE cell (last clicked) — split/close from the Multi-chart group, series type and
+// style from the rest of the toolbar. New cells are seeded as distinct assets and follow the theme.
 let active_cell = grid ? grid.cells()[0] : null;
 let split_asset_seq = 0;
 function seed_split_cell(cell) {
@@ -825,7 +849,10 @@ function data_end_time() {
 if (grid !== null) {
   container.addEventListener("pointerdown", (e) => {
     const hit = grid.cells().find((c) => c.element.contains(e.target));
-    if (hit) active_cell = hit;
+    if (hit && hit !== active_cell) {
+      active_cell = hit;
+      sync_active_toolbar();
+    }
   }, true);
   const split_active = async (direction) => {
     if (!active_cell) return;
@@ -833,6 +860,7 @@ if (grid !== null) {
     if (next) {
       seed_split_cell(next);
       active_cell = next;
+      sync_active_toolbar();
     }
   };
   document.getElementById("split_h").addEventListener("click", () => split_active("horizontal"));
@@ -841,6 +869,7 @@ if (grid !== null) {
     // The primary cell hosts all the toolbar wiring — it cannot be closed from here.
     if (active_cell && active_cell.id !== grid.cells()[0].id && active_cell.remove()) {
       active_cell = grid.cells()[0];
+      sync_active_toolbar();
     }
   });
   document.getElementById("max_charts").addEventListener("change", (e) => {
@@ -850,7 +879,7 @@ if (grid !== null) {
 
 document.querySelectorAll('input[name="series"]').forEach((el) => {
   el.addEventListener("change", () => {
-    main.set_type(el.value);
+    active_series().set_type(el.value);
     sync_style_visibility(el.value);
     apply_main_style();
   });

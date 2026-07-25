@@ -124,6 +124,43 @@ test("main demo splits into independent charts, drags dividers, meters, caps, an
   expect((await page.evaluate(() => window.__grid.usage())).chart_count).toBe(1);
 });
 
+test("the toolbar's series type and style act on the ACTIVE cell, not always the primary", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+  await page.click("#split_h");
+  await page.waitForFunction(() => document.querySelectorAll("#chart_container canvas").length === 8);
+  await wait_cell_charts(page);
+  const type_of = (i) => page.evaluate((idx) => window.__grid.cells()[idx].chart.__seed_series.series_type(), i);
+
+  // Activate the second chart and switch it to area: only it changes.
+  await activate_cell(page, 1);
+  await expect(page.locator('input[name="series"][value="candlestick"]')).toBeChecked();
+  await page.locator('input[name="series"][value="area"]').check();
+  expect(await type_of(1), "active cell switched to area").toBe("area");
+  expect(await type_of(0), "primary cell untouched").toBe("candlestick");
+  // The area fill style group appears for the area-typed active chart.
+  await expect(page.locator("#area_style")).toBeVisible();
+
+  // The toolbar tracks the active cell: back on the primary, its type is selected again and
+  // changes land there instead.
+  await activate_cell(page, 0);
+  await expect(page.locator('input[name="series"][value="candlestick"]')).toBeChecked();
+  await expect(page.locator("#area_style")).toBeHidden();
+  await page.locator('input[name="series"][value="line"]').check();
+  expect(await type_of(0), "primary switched to line").toBe("line");
+  expect(await type_of(1), "second cell keeps its area type").toBe("area");
+
+  // Style options follow the active cell too: recolor the primary's line only.
+  await page.evaluate(() => {
+    const el = document.getElementById("line_color");
+    el.value = "#ff00ff";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const color_of = (i) => page.evaluate((idx) => window.__grid.cells()[idx].chart.__seed_series.options().color, i);
+  expect(await color_of(0)).toBe("#ff00ff");
+  expect(await color_of(1)).not.toBe("#ff00ff");
+});
+
 test("divider drags never disturb a cell's candle spacing (even with interactions off)", async ({ page }) => {
   await page.goto("/");
   await wait_grid(page);
