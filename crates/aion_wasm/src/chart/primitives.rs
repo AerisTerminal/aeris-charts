@@ -283,6 +283,19 @@ impl ChartInner {
                 return result(hit.series, hit.external_id.clone(), hit.cursor.clone());
             }
         }
+        // Engine-owned drawing tools (drawings.rs): they paint in the pane's main layer above
+        // the series and the normal/bottom primitives, so their hit wins over everything
+        // except a `top`-layer primitive (handled above). A drawing hit reports no series and
+        // releases the hovered-series z-bump, and carries the part cursor (`move` on a body,
+        // `pointer` on a selected drawing's anchor handle).
+        if let Some(drawing) = self.engine.hit_test_drawing(x_css, y_css) {
+            self.engine.set_hovered_series(None);
+            return result(
+                None,
+                Some(format!("drawing:{}", drawing.id)),
+                Some(drawing.cursor.to_string()),
+            );
+        }
         // Walk the sources topmost-first, accumulating the best series hit (the reference's
         // `isBetterHit` arbitration); reaching the best primitive hit's owning series
         // returns whatever accumulated above it, else the primitive hit.

@@ -1462,6 +1462,139 @@ impl ChartInner {
     pub fn clear_crosshair(&mut self) {
         self.crosshair = None;
     }
+
+    // --- drawing tools (engine-owned drawing objects; aion_engine drawings.rs) ---
+    //
+    // Thin wire adapters: kinds cross as `u8` (`DrawingKind::from_u8`), anchors and options as
+    // JSON strings. All state, hit-testing, and drag math is engine-side; the gesture layer only
+    // forwards pointer samples and repaints.
+
+    /// Add a drawing from a JSON `[{logical, price}, ...]` anchor array plus an optional options
+    /// patch ("" = defaults). Returns the drawing id, or 0 when the engine rejects it.
+    pub fn add_drawing(
+        &mut self,
+        kind: u8,
+        pane: usize,
+        points_json: &str,
+        options_json: &str,
+    ) -> u32 {
+        let Some(kind) = DrawingKind::from_u8(kind) else {
+            return 0;
+        };
+        let Ok(points) = serde_json::from_str::<Vec<DrawingPoint>>(points_json) else {
+            return 0;
+        };
+        let options = (!options_json.is_empty()).then_some(options_json);
+        self.engine
+            .add_drawing(kind, pane, points, options)
+            .unwrap_or(0)
+    }
+    pub fn drawing_apply_options(&mut self, id: u32, options_json: &str) -> bool {
+        self.engine.drawing_apply_options(id, options_json)
+    }
+    pub fn drawing_set_points(&mut self, id: u32, points_json: &str) -> bool {
+        self.engine.drawing_set_points(id, points_json)
+    }
+    /// The drawing's options JSON ("" for an unknown id — the wasm boundary has no Option<String>).
+    pub fn drawing_options_json(&self, id: u32) -> String {
+        self.engine.drawing_options_json(id).unwrap_or_default()
+    }
+    pub fn drawing_points_json(&self, id: u32) -> String {
+        self.engine.drawing_points_json(id).unwrap_or_default()
+    }
+    pub fn drawings_json(&self) -> String {
+        self.engine.drawings_json()
+    }
+    pub fn remove_drawing(&mut self, id: u32) -> bool {
+        self.engine.remove_drawing(id)
+    }
+    pub fn clear_drawings(&mut self) {
+        self.engine.clear_drawings();
+    }
+    /// Click-to-select arbitration: selects the drawing under the point (clearing on a miss) and
+    /// reports whether one was hit, so the host can skip its series-selection path.
+    pub fn select_drawing_at(&mut self, x_css: f64, y_css: f64) -> bool {
+        self.engine.select_drawing_at(x_css, y_css)
+    }
+    pub fn set_selected_drawing(&mut self, id: Option<u32>) {
+        self.engine.set_selected_drawing(id);
+    }
+    pub fn selected_drawing(&self) -> Option<u32> {
+        self.engine.selected_drawing()
+    }
+    /// Delete/Backspace: remove the selected drawing. False while nothing is selected.
+    pub fn remove_selected_drawing(&mut self) -> bool {
+        self.engine.remove_selected_drawing()
+    }
+    /// Press routing: opens an anchor/body drag on the drawing under the point (false = the host
+    /// falls through to pan/scroll).
+    pub fn drawing_drag_start_at(&mut self, x_css: f64, y_css: f64) -> bool {
+        self.engine.drawing_drag_start_at(x_css, y_css)
+    }
+    /// Forward a drag position with the modifier state (magnet = OHLC snap, straighten =
+    /// 0°/45°/90° anchor constraint / dominant-axis body move; drawings.rs `DrawingModifiers`).
+    pub fn drawing_drag_to(&mut self, x_css: f64, y_css: f64, magnet: bool, straighten: bool) {
+        self.engine
+            .drawing_drag_to(x_css, y_css, DrawingModifiers { magnet, straighten });
+    }
+    pub fn drawing_drag_end(&mut self) {
+        self.engine.drawing_drag_end();
+    }
+    pub fn drawing_drag_active(&self) -> bool {
+        self.engine.drawing_drag_active()
+    }
+    /// Arm interactive creation of a tool kind ("" options = defaults).
+    pub fn drawing_create_begin(&mut self, kind: u8, options_json: &str) -> bool {
+        let Some(kind) = DrawingKind::from_u8(kind) else {
+            return false;
+        };
+        let options = (!options_json.is_empty()).then_some(options_json);
+        self.engine.drawing_create_begin(kind, options)
+    }
+    /// Place the next creation anchor (modifiers snap it): 0 unarmed, -1 pending more anchors,
+    /// > 0 the committed id.
+    pub fn drawing_create_click(
+        &mut self,
+        x_css: f64,
+        y_css: f64,
+        magnet: bool,
+        straighten: bool,
+    ) -> i64 {
+        self.engine
+            .drawing_create_click(x_css, y_css, DrawingModifiers { magnet, straighten })
+    }
+    pub fn drawing_create_move(&mut self, x_css: f64, y_css: f64, magnet: bool, straighten: bool) {
+        self.engine
+            .drawing_create_move(x_css, y_css, DrawingModifiers { magnet, straighten });
+    }
+    pub fn drawing_create_cancel(&mut self) {
+        self.engine.drawing_create_cancel();
+    }
+    pub fn drawing_create_active(&self) -> bool {
+        self.engine.drawing_create_active()
+    }
+
+    /// Begin a freehand brush stroke (pointer-down with the brush tool armed; "" options =
+    /// defaults). False off the panes/data.
+    pub fn brush_create_start(&mut self, options_json: &str, x_css: f64, y_css: f64) -> bool {
+        let options = (!options_json.is_empty()).then_some(options_json);
+        self.engine.brush_create_start(options, x_css, y_css)
+    }
+    /// Capture the next stroke point (engine-decimated by distance).
+    pub fn brush_create_add(&mut self, x_css: f64, y_css: f64) {
+        self.engine.brush_create_add(x_css, y_css);
+    }
+    /// Commit the stroke (pointer-up): RDP-simplified and stored as a selected drawing. 0 =
+    /// degenerate stroke discarded.
+    pub fn brush_create_end(&mut self) -> u32 {
+        self.engine.brush_create_end()
+    }
+    pub fn brush_create_cancel(&mut self) {
+        self.engine.brush_create_cancel();
+    }
+    pub fn brush_create_active(&self) -> bool {
+        self.engine.brush_create_active()
+    }
     pub fn price_axis_width(&self) -> f64 {
         self.axis_w
     }

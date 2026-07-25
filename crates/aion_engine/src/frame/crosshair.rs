@@ -250,21 +250,29 @@ impl ChartEngine {
         let index = self.snapped_crosshair_index(x_css);
         let (default_scale, default_base) = self.pane_default_scale(pane_index, from);
         let price = default_scale.coordinate_to_price(y_css, default_base);
-        if matches!(
-            self.crosshair_mode,
-            CrosshairMode::Normal | CrosshairMode::Hidden
-        ) {
-            return (price, y_css);
-        }
-        let keys: &[PlotValueIndex] = match self.crosshair_mode {
+        // The snapped price source: the configured magnet mode, or the Ctrl-held OHLC magnet
+        // (`crosshair_ohlc_magnet`, TradingView's temporary Ctrl magnet) which upgrades a
+        // Normal-mode crosshair to the MagnetOhlc candidate set without touching the
+        // configured mode.
+        let keys: Option<&[PlotValueIndex]> = match self.crosshair_mode {
             // reference magnetOHLCPlotRowKeys vs magnetPlotRowKeys (magnet.ts:13-21)
-            CrosshairMode::MagnetOhlc => &[
+            CrosshairMode::MagnetOhlc => Some(&[
                 PlotValueIndex::Open,
                 PlotValueIndex::High,
                 PlotValueIndex::Low,
                 PlotValueIndex::Close,
-            ],
-            _ => &[PlotValueIndex::Close],
+            ]),
+            CrosshairMode::Magnet => Some(&[PlotValueIndex::Close]),
+            CrosshairMode::Normal if self.crosshair_ohlc_magnet => Some(&[
+                PlotValueIndex::Open,
+                PlotValueIndex::High,
+                PlotValueIndex::Low,
+                PlotValueIndex::Close,
+            ]),
+            _ => None,
+        };
+        let Some(keys) = keys else {
+            return (price, y_css);
         };
         let mut candidates = Vec::new();
         for s in &self.series {

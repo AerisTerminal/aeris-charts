@@ -13,14 +13,15 @@ import { create_canvas_render_target } from "./canvas_plugins.js";
 import type { custom_series_item, custom_series_pane_view } from "./custom_series.js";
 import type {
   bars_info, chart_api, chart_options, data_changed_handler, dbl_click_handler,
-  deep_partial, handle_scale_options, handle_scroll_options, kinetic_scroll_options,
+  deep_partial, drawing_api, drawing_info, drawing_kind, drawing_options, drawing_point,
+  handle_scale_options, handle_scroll_options, kinetic_scroll_options,
   last_value_data, localization_options, logical_range,
   mismatch_direction, mouse_event_handler, mouse_event_params, ohlc_data, pane_api, price_line_api, price_line_options,
   price_range, price_scale_api, price_scale_options, series_api, series_data, series_kind,
   series_marker, series_marker_options, series_options, single_value_data, size_change_handler, time, time_range,
   time_scale_api, time_scale_options, tracking_mode_options, visible_logical_range_handler, visible_time_range_handler,
 } from "./types.js";
-import { KIND_TO_U8, LINE_STYLE_TO_U8, LINE_TYPE_TO_U8 } from "./types.js";
+import { DRAWING_KIND_TO_U8, KIND_TO_U8, LINE_STYLE_TO_U8, LINE_TYPE_TO_U8 } from "./types.js";
 
 // ---------------------------------------------------------------------------------------------
 // Implementation
@@ -956,8 +957,44 @@ interface canvas_primitive_entry {
 }
 
 /** Detach handle for a registered canvas primitive (the TS registry owns the lifecycle). */
-class canvas_primitive_handle_impl implements canvas_primitive_handle {
-  private detached = false;
+/**
+ * A live drawing handle (engine-owned drawing objects). `kind`/`pane_index` are cached at
+ * creation — they never change over a drawing's lifetime; everything else queries the engine.
+ */
+class drawing_impl implements drawing_api {
+  constructor(
+    private readonly chart: chart_impl,
+    readonly id: number,
+    private readonly drawing_kind: drawing_kind,
+    private readonly pane: number,
+  ) {}
+  kind(): drawing_kind {
+    return this.drawing_kind;
+  }
+  pane_index(): number {
+    return this.pane;
+  }
+  points(): drawing_point[] {
+    return JSON.parse(this.chart.wasm.drawing_points_json(this.id)) as drawing_point[];
+  }
+  set_points(points: drawing_point[]): void {
+    this.chart.wasm.drawing_set_points(this.id, JSON.stringify(points));
+    this.chart.repaint();
+  }
+  options(): drawing_options {
+    return JSON.parse(this.chart.wasm.drawing_options_json(this.id)) as drawing_options;
+  }
+  apply_options(options: Partial<drawing_options>): void {
+    this.chart.wasm.drawing_apply_options(this.id, JSON.stringify(options));
+    this.chart.repaint();
+  }
+  remove(): void {
+    this.chart.wasm.remove_drawing(this.id);
+    this.chart.repaint();
+  }
+}
+
+class canvas_primitive_handle_impl implements canvas_primitive_handle {  private detached = false;
 
   constructor(private readonly chart: chart_impl, private readonly entry: canvas_primitive_entry) {}
 
@@ -1090,6 +1127,10 @@ export class chart_impl implements chart_api {
   private last_crosshair: { x: number; y: number } | null = null;
   /** Last hover hit-test result (Phase C-d), refreshed on crosshair moves; feeds event params. */
   private hover: { series_id: number | null; object_id: string | null; cursor: string | null } | null = null;
+  /** The armed interactive drawing tool (`null` = none) and its options template JSON. */
+  private active_tool: drawing_kind | null = null;
+  private tool_options_json = "{}";
+  private tool_listener: ((tool: drawing_kind | null) => void) | null = null;
   private readonly backend_runtime_id: number;
   private anim_frame: number | null = null;
   /** The 1s candle-close countdown interval; `null` while no countdown is visible. */
@@ -1605,7 +1646,11 @@ export class chart_impl implements chart_api {
     // hit-test refreshes at the click point first, so a click without a preceding move still
     // arbitrates correctly.
     this.update_hover(x, y);
-    this.wasm.set_selected_series(this.hover?.series_id ?? undefined);
+    // TradingView-style click-to-select, drawings first: a drawing hit selects it and clears
+    // the series selection; a miss clears the drawing selection and falls through to the
+    // series under the click (or clears that on empty pane space).
+    const drawing_hit = this.wasm.select_drawing_at(x, y);
+    this.wasm.set_selected_series(drawing_hit ? undefined : (this.hover?.series_id ?? undefined));
     this.repaint();
     if (this.click_subs.size === 0) return;
     const params = this.build_params(x, y);
@@ -1624,6 +1669,136 @@ export class chart_impl implements chart_api {
     if (this.dbl_click_subs.size === 0) return;
     const params = this.build_params(x, y);
     for (const h of this.dbl_click_subs) h(params);
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Drawing tools (engine-owned drawing objects; the gesture layer routes presses/clicks/moves
+  // through the creation helpers below, everything else is thin wasm delegation)
+  // ---------------------------------------------------------------------------------------------
+
+  add_drawing(
+    kind: drawing_kind,
+    points: drawing_point[],
+    options?: Partial<drawing_options>,
+    pane_index = 0,
+  ): drawing_api {
+    const id = this.wasm.add_drawing(
+      DRAWING_KIND_TO_U8[kind],
+      pane_index,
+      JSON.stringify(points),
+      JSON.stringify(options ?? {}),
+    );
+    if (id === 0) {
+      throw new Error("aion: add_drawing rejected (stale pane, wrong anchor count, or non-finite anchors)");
+    }
+    this.repaint();
+    return new drawing_impl(this, id, kind, pane_index);
+  }
+
+  drawings(): drawing_api[] {
+    const list = JSON.parse(this.wasm.drawings_json()) as drawing_info[];
+    return list.map((d) => new drawing_impl(this, d.id, d.kind, d.pane_index));
+  }
+
+  clear_drawings(): void {
+    this.wasm.clear_drawings();
+    this.repaint();
+  }
+
+  set_drawing_tool(tool: drawing_kind | null, options?: Partial<drawing_options>): void {
+    const changed = this.active_tool !== tool;
+    this.active_tool = tool;
+    if (options !== undefined) this.tool_options_json = JSON.stringify(options);
+    if (tool === null) {
+      this.wasm.drawing_create_cancel();
+      this.wasm.brush_create_cancel();
+    }
+    if (changed) this.tool_listener?.(tool);
+  }
+
+  active_drawing_tool(): drawing_kind | null {
+    return this.active_tool;
+  }
+
+  set_drawing_tool_listener(listener: ((tool: drawing_kind | null) => void) | null): void {
+    this.tool_listener = listener;
+  }
+
+  selected_drawing(): drawing_api | null {
+    const id = this.wasm.selected_drawing();
+    if (id === undefined) return null;
+    const info = (JSON.parse(this.wasm.drawings_json()) as drawing_info[]).find((d) => d.id === id);
+    return info ? new drawing_impl(this, info.id, info.kind, info.pane_index) : null;
+  }
+
+  /** Whether an interactive drawing tool is armed (the recognizer routes pane clicks to creation). */
+  creation_armed(): boolean {
+    return this.active_tool !== null;
+  }
+
+  /** Whether an interactive creation is mid-placement (the engine's pending drawing). */
+  creation_active(): boolean {
+    return this.wasm.drawing_create_active();
+  }
+
+  /** Forward a mouse move to the engine's creation preview (no-op while unarmed). Modifiers:
+   * `magnet` snaps the preview anchor to the nearest bar's OHLC, `straighten` constrains a
+   * second anchor to 0°/45°/90° (a rectangle to a square). */
+  creation_move(x: number, y: number, magnet = false, straighten = false): void {
+    this.wasm.drawing_create_move(x, y, magnet, straighten);
+  }
+
+  /**
+   * Route a pane click into interactive creation (the gesture recognizer's click path): begins
+   * the engine's creation flow on the first click and places anchors on each click, disarming
+   * the tool after a commit (one-shot, TradingView default). `magnet` snaps the placed anchor
+   * to the nearest bar's OHLC, `straighten` constrains a second anchor. Returns whether the
+   * click was consumed (an armed tool over a pane).
+   */
+  creation_click(x: number, y: number, magnet = false, straighten = false): boolean {
+    if (this.active_tool === null || this.pane_index_at(x, y) === null) return false;
+    if (!this.wasm.drawing_create_active()) {
+      if (!this.wasm.drawing_create_begin(DRAWING_KIND_TO_U8[this.active_tool], this.tool_options_json)) {
+        this.set_drawing_tool(null);
+        return false;
+      }
+    }
+    if (this.wasm.drawing_create_click(x, y, magnet, straighten) > 0) {
+      this.set_drawing_tool(null);
+    }
+    return true;
+  }
+
+  /** Escape: disarm the tool (cancelling any pending creation) and deselect any drawing. */
+  cancel_drawing_interaction(): void {
+    this.set_drawing_tool(null);
+    this.wasm.set_selected_drawing(undefined);
+  }
+
+  /**
+   * Begin a freehand brush stroke (pointer-down with the brush tool armed): the engine captures
+   * and decimates the path, simplifies it on commit, and renders it as a smooth curve.
+   * Returns whether the stroke started (a pane was hit).
+   */
+  brush_create_start(x: number, y: number): boolean {
+    if (this.pane_index_at(x, y) === null) return false;
+    return this.wasm.brush_create_start(this.tool_options_json, x, y);
+  }
+
+  /** Forward a drag position to the engine's brush capture (no-op without an active stroke). */
+  brush_create_add(x: number, y: number): void {
+    this.wasm.brush_create_add(x, y);
+  }
+
+  /**
+   * Commit the brush stroke (pointer-up): the engine RDP-simplifies the path into a smooth
+   * curved drawing, left selected. Disarms the tool on a commit (one-shot, TradingView
+   * default); a click without a drag discards the stroke.
+   */
+  brush_create_end(): void {
+    if (this.wasm.brush_create_end() > 0) {
+      this.set_drawing_tool(null);
+    }
   }
 
   apply_options(options: deep_partial<chart_options>): void {

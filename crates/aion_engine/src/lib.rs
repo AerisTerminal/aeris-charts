@@ -5,6 +5,7 @@
 //! frame produced from this state. During the architecture recovery, frame construction is being
 //! migrated here incrementally from `aion_wasm`.
 
+mod drawings;
 mod frame;
 mod hit_test;
 mod indicators;
@@ -16,6 +17,11 @@ mod series_query_api;
 mod tests;
 mod workspace;
 
+pub(crate) use drawings::{BrushCapture, DrawingDrag, PendingDrawing};
+pub use drawings::{
+    Drawing, DrawingDragPart, DrawingHit, DrawingId, DrawingKind, DrawingModifiers, DrawingPoint,
+    TextMeasureFn, DRAWING_DEFAULT_COLOR,
+};
 pub use frame::{
     AxisFrame, AxisLabel, AxisLabelCorners, AxisTextAlign, AxisTextMidpoint, ChartFrame, FramePane,
 };
@@ -576,6 +582,7 @@ impl Default for Pane {
 }
 
 /// Platform-independent state for one chart instance.
+/// Platform-independent state for one chart instance.
 pub struct ChartEngine {
     pub time_scale: TimeScaleCore,
     pub panes: Vec<Pane>,
@@ -585,6 +592,12 @@ pub struct ChartEngine {
     pub tick_marks: TimeTickMarks,
     pub options: ChartOptionsStore,
     pub crosshair_mode: CrosshairMode,
+    /// TradingView's Ctrl-held magnet: while set, a Normal-mode crosshair snaps to the hovered
+    /// bar's OHLC exactly like `CrosshairMode::MagnetOhlc` (frame/crosshair.rs
+    /// `crosshair_snap`). The gesture layer forwards the live modifier state; the configured
+    /// `crosshair_mode` is untouched (Magnet/MagnetOhlc stay as configured, Hidden stays
+    /// hidden).
+    pub crosshair_ohlc_magnet: bool,
     pub animation_time: f64,
     pub next_price_line_id: u32,
     /// reference `timeScale.timeVisible` — label semantics only: whether axis/crosshair time labels
@@ -647,6 +660,26 @@ pub struct ChartEngine {
     /// Hosts clear and re-record them per frame, before any layout/autoscale pass runs;
     /// `autoscale_for_frame` unions them into the owning scales.
     primitive_autoscale: Vec<PrimitiveAutoscaleContribution>,
+    /// Engine-owned drawing objects (drawing tools: trend/horizontal/vertical lines, rectangle,
+    /// text) in z-order, bottom first. See drawings.rs.
+    drawings: Vec<Drawing>,
+    /// Next chart-unique drawing id (never reused; starts at 1 — 0 is the "no drawing" sentinel).
+    next_drawing_id: DrawingId,
+    /// The drawing the host last clicked (TradingView-style selection): while set, the frame
+    /// build paints anchor handles at its defining points and its anchors accept drags.
+    selected_drawing: Option<DrawingId>,
+    /// Active anchor/body drag session on a drawing (drawings.rs; the interaction.rs session
+    /// pattern — the engine owns the start snapshot and the math).
+    drawing_drag: Option<DrawingDrag>,
+    /// Interactive drawing creation in progress (drawings.rs): committed anchors plus a
+    /// preview point following the mouse.
+    pending_drawing: Option<PendingDrawing>,
+    /// Freehand brush capture in progress (drawings.rs): the decimated point list, simplified
+    /// at commit.
+    brush_capture: Option<BrushCapture>,
+    /// Optional host text-measure callback for drawing-label hit boxes (drawings.rs
+    /// [`TextMeasureFn`]); without one the engine estimates widths by character count.
+    text_measure_fn: Option<TextMeasureFn>,
     /// Kinetic (momentum) scroll sampler/coast for the active drag (engine interaction module,
     /// reference `KineticAnimation`); the host feeds samples and drives the coast per frame.
     kinetic: Option<aion_core::model::kinetic_animation::KineticAnimation>,
@@ -676,6 +709,7 @@ impl ChartEngine {
             tick_marks: TimeTickMarks::new(),
             options: ChartOptionsStore::new(),
             crosshair_mode: CrosshairMode::Normal,
+            crosshair_ohlc_magnet: false,
             animation_time: 0.0,
             next_price_line_id: 1,
             time_visible: true,
@@ -705,6 +739,13 @@ impl ChartEngine {
             hovered_series: None,
             selected_series: None,
             primitive_autoscale: Vec::new(),
+            drawings: Vec::new(),
+            next_drawing_id: 1,
+            selected_drawing: None,
+            drawing_drag: None,
+            pending_drawing: None,
+            brush_capture: None,
+            text_measure_fn: None,
             kinetic: None,
             scroll_animation: None,
             price_formatter_fn: None,

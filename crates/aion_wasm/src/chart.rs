@@ -44,9 +44,9 @@ use aion_core::options::{ChartOptions, WatermarkOptions};
 use aion_core::scale::price_scale_core::PriceScaleMode;
 use aion_engine::{
     crosshair_mode_from_u8, line_style_from_u8, marker_pos, marker_shape, AxisFrame, AxisLabel,
-    AxisLabelCorners, AxisTextAlign, AxisTextMidpoint, ChartEngine, Marker, Pane, PriceFormatterFn,
-    PriceScaleTarget, PrimitiveAutoscaleContribution, SeriesKind, TickMarkFormatterFn,
-    TimeFormatterFn,
+    AxisLabelCorners, AxisTextAlign, AxisTextMidpoint, ChartEngine, DrawingKind, DrawingModifiers,
+    DrawingPoint, Marker, Pane, PriceFormatterFn, PriceScaleTarget, PrimitiveAutoscaleContribution,
+    SeriesKind, TickMarkFormatterFn, TimeFormatterFn,
 };
 use aion_render::canvas2d::{execute as execute_canvas2d, Canvas2d, Viewport as CanvasViewport};
 use aion_render::color::Color;
@@ -411,7 +411,7 @@ pub async fn create_chart(
     };
     set_backend_visibility(&gpu_pane_el, &fallback_pane_el, gfx.is_some());
 
-    let inner = ChartInner {
+    let mut inner = ChartInner {
         gfx,
         gpu_pane: gpu_pane_el.clone(),
         fallback_pane: fallback_pane_el.clone(),
@@ -442,6 +442,23 @@ pub async fn create_chart(
             }
         },
     };
+    // Drawing-label hit boxes measure through the same axis canvas the engine's own labels use
+    // (drawings.rs `TextMeasureFn` — the host-injected formatter-hook pattern, so the engine
+    // stays headless). The font spec matches the `Prim::Text` rasterizer exactly.
+    let measure_ctx = inner.axis_ctx.clone();
+    inner.engine.set_text_measure(Some(Box::new(
+        move |text: &str, size: f64, family: &str, bold: bool| {
+            measure_ctx.set_font(&aion_render::draw_list::text_font_spec(
+                size as f32,
+                family,
+                bold,
+            ));
+            measure_ctx
+                .measure_text(text)
+                .map(|m| m.width())
+                .unwrap_or(0.0)
+        },
+    )));
 
     Ok(AionChart {
         inner: Rc::new(RefCell::new(inner)),
@@ -1380,6 +1397,11 @@ impl AionChart {
     pub fn set_crosshair(&mut self, x_css: f64, y_css: f64) {
         self.inner.borrow_mut().set_crosshair(x_css, y_css);
     }
+    /// TradingView's Ctrl-held magnet: the gesture layer forwards the live modifier state; a
+    /// Normal-mode crosshair then snaps to the hovered bar's OHLC on the next `render()`.
+    pub fn set_crosshair_ohlc_magnet(&mut self, enabled: bool) {
+        self.inner.borrow_mut().engine.crosshair_ohlc_magnet = enabled;
+    }
     pub fn clear_crosshair(&mut self) {
         self.inner.borrow_mut().clear_crosshair();
     }
@@ -1405,6 +1427,145 @@ impl AionChart {
             .borrow_mut()
             .engine
             .set_selected_series(id.map(|id| id as usize));
+    }
+
+    // --- drawing tools (engine-owned drawing objects; aion_engine drawings.rs) ---
+    // Kinds: 0 trend_line, 1 horizontal_line, 2 horizontal_ray, 3 vertical_line, 4 rectangle,
+    // 5 text. All coordinates are pane-relative CSS px (x from the pane's left, y from the
+    // chart's top — the crosshair's space). Call `render()` after mutations.
+
+    /// Add a drawing to `pane` from a JSON `[{logical, price}, ...]` anchor array and an
+    /// optional options patch ("" = defaults). Returns the drawing id (> 0), or 0 when the
+    /// engine rejects it (unknown kind, stale pane, wrong anchor count, non-finite anchors).
+    pub fn add_drawing(
+        &mut self,
+        kind: u8,
+        pane: usize,
+        points_json: &str,
+        options_json: &str,
+    ) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_drawing(kind, pane, points_json, options_json)
+    }
+    /// Merge an options patch into the drawing (reference `applyOptions` merge semantics).
+    pub fn drawing_apply_options(&mut self, id: u32, options_json: &str) -> bool {
+        self.inner
+            .borrow_mut()
+            .drawing_apply_options(id, options_json)
+    }
+    /// Replace the drawing's anchors from a JSON `[{logical, price}, ...]` array.
+    pub fn drawing_set_points(&mut self, id: u32, points_json: &str) -> bool {
+        self.inner.borrow_mut().drawing_set_points(id, points_json)
+    }
+    /// The drawing's options as snake_case JSON ("" for an unknown id).
+    pub fn drawing_options_json(&self, id: u32) -> String {
+        self.inner.borrow().drawing_options_json(id)
+    }
+    /// The drawing's anchors as a JSON `[{logical, price}, ...]` array ("" for an unknown id).
+    pub fn drawing_points_json(&self, id: u32) -> String {
+        self.inner.borrow().drawing_points_json(id)
+    }
+    /// Every drawing as a JSON array in z-order (`{id, kind, pane_index, points, ...options}`).
+    pub fn drawings_json(&self) -> String {
+        self.inner.borrow().drawings_json()
+    }
+    pub fn remove_drawing(&mut self, id: u32) -> bool {
+        self.inner.borrow_mut().remove_drawing(id)
+    }
+    /// Remove every drawing (the demo's "clear all").
+    pub fn clear_drawings(&mut self) {
+        self.inner.borrow_mut().clear_drawings();
+    }
+    /// Click-to-select arbitration: selects the drawing under the point (clears on a miss) and
+    /// reports whether one was hit, so the host skips its series-selection path.
+    pub fn select_drawing_at(&mut self, x_css: f64, y_css: f64) -> bool {
+        self.inner.borrow_mut().select_drawing_at(x_css, y_css)
+    }
+    pub fn set_selected_drawing(&mut self, id: Option<u32>) {
+        self.inner.borrow_mut().set_selected_drawing(id);
+    }
+    pub fn selected_drawing(&self) -> Option<u32> {
+        self.inner.borrow().selected_drawing()
+    }
+    /// Delete/Backspace: remove the selected drawing. False while nothing is selected.
+    pub fn remove_selected_drawing(&mut self) -> bool {
+        self.inner.borrow_mut().remove_selected_drawing()
+    }
+    /// Press routing for the gesture layer: opens an anchor/body drag on the drawing under the
+    /// point (false = the host falls through to pan/scroll). A successful grab selects the
+    /// drawing (TradingView parity).
+    pub fn drawing_drag_start_at(&mut self, x_css: f64, y_css: f64) -> bool {
+        self.inner.borrow_mut().drawing_drag_start_at(x_css, y_css)
+    }
+    pub fn drawing_drag_to(&mut self, x_css: f64, y_css: f64, magnet: bool, straighten: bool) {
+        self.inner
+            .borrow_mut()
+            .drawing_drag_to(x_css, y_css, magnet, straighten);
+    }
+    pub fn drawing_drag_end(&mut self) {
+        self.inner.borrow_mut().drawing_drag_end();
+    }
+    pub fn drawing_drag_active(&self) -> bool {
+        self.inner.borrow().drawing_drag_active()
+    }
+    /// Arm interactive creation of a tool kind ("" options = defaults): the next clicks place
+    /// anchors through `drawing_create_click`, moves preview through `drawing_create_move`.
+    pub fn drawing_create_begin(&mut self, kind: u8, options_json: &str) -> bool {
+        self.inner
+            .borrow_mut()
+            .drawing_create_begin(kind, options_json)
+    }
+    /// Place the next creation anchor: 0 unarmed, -1 pending more anchors, > 0 the committed
+    /// drawing's id (left selected, TradingView-style). `magnet` snaps the anchor to the nearest
+    /// bar's OHLC; `straighten` constrains a second anchor to 0°/45°/90° (a rectangle to a
+    /// square).
+    pub fn drawing_create_click(
+        &mut self,
+        x_css: f64,
+        y_css: f64,
+        magnet: bool,
+        straighten: bool,
+    ) -> i64 {
+        self.inner
+            .borrow_mut()
+            .drawing_create_click(x_css, y_css, magnet, straighten)
+    }
+    pub fn drawing_create_move(&mut self, x_css: f64, y_css: f64, magnet: bool, straighten: bool) {
+        self.inner
+            .borrow_mut()
+            .drawing_create_move(x_css, y_css, magnet, straighten);
+    }
+    pub fn drawing_create_cancel(&mut self) {
+        self.inner.borrow_mut().drawing_create_cancel();
+    }
+    pub fn drawing_create_active(&self) -> bool {
+        self.inner.borrow().drawing_create_active()
+    }
+
+    // --- freehand brush (press-drag-release capture; engine owns decimation/simplification) ---
+
+    /// Begin a brush stroke (pointer-down with the brush tool armed; "" options = defaults).
+    /// False off the panes/data.
+    pub fn brush_create_start(&mut self, options_json: &str, x_css: f64, y_css: f64) -> bool {
+        self.inner
+            .borrow_mut()
+            .brush_create_start(options_json, x_css, y_css)
+    }
+    /// Capture the next stroke point from a pointer move (engine-decimated by distance).
+    pub fn brush_create_add(&mut self, x_css: f64, y_css: f64) {
+        self.inner.borrow_mut().brush_create_add(x_css, y_css);
+    }
+    /// Commit the stroke (pointer-up): RDP-simplified into a smooth curved path and stored as
+    /// the selected drawing. 0 = degenerate stroke discarded (a click without a drag).
+    pub fn brush_create_end(&mut self) -> u32 {
+        self.inner.borrow_mut().brush_create_end()
+    }
+    pub fn brush_create_cancel(&mut self) {
+        self.inner.borrow_mut().brush_create_cancel();
+    }
+    pub fn brush_create_active(&self) -> bool {
+        self.inner.borrow().brush_create_active()
     }
     /// TradingView-style reset view: default bar spacing/right offset plus autoscale restored
     /// on every pane's price scales; the next `render()` recalculates the visible ranges.

@@ -1,0 +1,317 @@
+//! Drawing-tool frame emission (model in drawings.rs): each pane's committed drawings in
+//! z-order, the selected drawing's anchor handles, and the interactive-creation preview.
+//!
+//! Coordinates follow the frame build's conventions (frame/mod.rs): x is pane-local media px
+//! scaled by the exact horizontal ratio (the trailing `translate_prims_x` shifts everything
+//! when a left axis reserves space), y is chart-top-relative media px scaled by the vertical
+//! ratio — the same space the price-line/series geometry uses, so a drawing's prims land
+//! exactly on its converted anchors. Text goes through `Prim::Text`, so labels rasterize
+//! identically on both backends (the Canvas2D `fillText` path and the WebGPU atlas share the
+//! browser's glyph rasterizer by construction).
+
+use aion_render::color::Color;
+use aion_render::draw_list::{IRect, LineType, Prim, TextAlign};
+
+use crate::drawings::{Drawing, DrawingKind, DrawingTextHAlign, TEXT_PAD};
+use crate::ChartEngine;
+
+/// TradingView-style drawing anchor handle: a theme-derived disc with the accent-blue border
+/// (the crosshair-marks disc idiom — the border is a larger filled disc underneath). Slightly
+/// larger than the series selection anchors (2.5/1.5, series_geometry.rs) since these are
+/// drag targets.
+const ANCHOR_RADIUS: f64 = 4.0;
+const ANCHOR_BORDER_WIDTH: f64 = 1.5;
+const ANCHOR_BORDER: Color = Color::rgb(0x29, 0x62, 0xff); // TradingView accent blue
+
+impl ChartEngine {
+    /// Emit every drawing bound to `pane_index` (z-order: later overpaints earlier), the
+    /// selected drawing's anchor handles, and the in-progress creation preview. Drawings on
+    /// stale panes (removed after placement) draw nowhere, like a pane-less series.
+    pub(super) fn build_drawings_frame(
+        &self,
+        pane_index: usize,
+        pane_w_px: i32,
+        hpr: f64,
+        vpr: f64,
+        out: &mut Vec<Prim>,
+        points: &mut Vec<[f32; 2]>,
+    ) {
+        for drawing in &self.drawings {
+            if drawing.pane_index != pane_index {
+                continue;
+            }
+            let Some(px) = self.drawing_px(drawing) else {
+                continue;
+            };
+            let px: Vec<(f64, f64)> = px.into_iter().map(|(x, y)| (x * hpr, y * vpr)).collect();
+            self.build_drawing_prims(drawing, &px, pane_w_px, vpr, out, points);
+            self.build_drawing_text(drawing, &px, pane_w_px, vpr, out);
+            if self.selected_drawing == Some(drawing.id) {
+                // The brush shows anchor handles at its two ENDS (TradingView); the fixed kinds
+                // show one per defining anchor.
+                let handles: Vec<(f64, f64)> = if drawing.kind == DrawingKind::Brush && px.len() > 2
+                {
+                    vec![px[0], px[px.len() - 1]]
+                } else {
+                    px.clone()
+                };
+                build_anchor_handles(&handles, vpr, self.anchor_fill(), out);
+            }
+        }
+        // Live brush stroke: the decimated points so far paint as the same smooth curve the
+        // commit will store, so what the user sees while dragging is what they get.
+        if let Some(capture) = self.brush_capture() {
+            if capture.pane_index == pane_index && capture.points.len() >= 2 {
+                let px: Option<Vec<(f64, f64)>> = capture
+                    .points
+                    .iter()
+                    .map(|&point| self.drawing_to_px(pane_index, point))
+                    .collect();
+                if let Some(px) = px {
+                    let px: Vec<(f64, f64)> =
+                        px.into_iter().map(|(x, y)| (x * hpr, y * vpr)).collect();
+                    self.build_drawing_prims(&capture.options, &px, pane_w_px, vpr, out, points);
+                }
+            }
+        }
+        // Interactive creation: committed anchors plus the preview point render as a tentative
+        // drawing, with handles on the committed anchors (the reference rectangle-drawing-tool's
+        // PreviewRectangle — same geometry, shown while placing).
+        if let Some(pending) = self.pending_drawing() {
+            if pending.drawing.pane_index == pane_index {
+                let mut anchors = pending.drawing.points.clone();
+                if let Some(preview) = pending.preview {
+                    if anchors.len() < pending.drawing.kind.anchor_count() {
+                        anchors.push(preview);
+                    }
+                }
+                if anchors.len() == pending.drawing.kind.anchor_count() {
+                    let px: Option<Vec<(f64, f64)>> = anchors
+                        .iter()
+                        .map(|&point| self.drawing_to_px(pane_index, point))
+                        .collect();
+                    if let Some(px) = px {
+                        let px: Vec<(f64, f64)> =
+                            px.into_iter().map(|(x, y)| (x * hpr, y * vpr)).collect();
+                        self.build_drawing_prims(
+                            &pending.drawing,
+                            &px,
+                            pane_w_px,
+                            vpr,
+                            out,
+                            points,
+                        );
+                        let committed = pending.drawing.points.len();
+                        build_anchor_handles(&px[..committed], vpr, self.anchor_fill(), out);
+                    }
+                } else if anchors.len() == 1 {
+                    // A one-anchor kind awaiting its click, or a two-anchor kind before the
+                    // preview resolves: show the placed anchor as a handle alone.
+                    if let Some((x, y)) = self.drawing_to_px(pane_index, anchors[0]) {
+                        build_anchor_handles(&[(x * hpr, y * vpr)], vpr, self.anchor_fill(), out);
+                    }
+                }
+            }
+        }
+    }
+
+    /// One drawing's geometry prims at bitmap-px anchors `px`.
+    fn build_drawing_prims(
+        &self,
+        drawing: &Drawing,
+        px: &[(f64, f64)],
+        pane_w_px: i32,
+        vpr: f64,
+        out: &mut Vec<Prim>,
+        points: &mut Vec<[f32; 2]>,
+    ) {
+        let color = Color::parse_css(&drawing.color).unwrap_or(Color::rgb(0x29, 0x62, 0xff));
+        let crisp_width = (drawing.width * vpr).round().max(1.0) as i32;
+        match drawing.kind {
+            DrawingKind::TrendLine => {
+                let first_point = points.len() as u32;
+                points.push([px[0].0 as f32, px[0].1 as f32]);
+                points.push([px[1].0 as f32, px[1].1 as f32]);
+                out.push(Prim::Polyline {
+                    first_point,
+                    point_count: 2,
+                    width: (drawing.width * vpr) as f32,
+                    style: drawing.style,
+                    line_type: LineType::Simple,
+                    color,
+                });
+            }
+            DrawingKind::HorizontalLine => {
+                out.push(Prim::HLine {
+                    y: px[0].1.round() as i32,
+                    x0: 0,
+                    x1: pane_w_px,
+                    width: crisp_width,
+                    style: drawing.style,
+                    color,
+                });
+            }
+            DrawingKind::HorizontalRay => {
+                let x0 = (px[0].0.round() as i32).clamp(0, pane_w_px);
+                if x0 < pane_w_px {
+                    out.push(Prim::HLine {
+                        y: px[0].1.round() as i32,
+                        x0,
+                        x1: pane_w_px,
+                        width: crisp_width,
+                        style: drawing.style,
+                        color,
+                    });
+                }
+            }
+            DrawingKind::VerticalLine => {
+                let pane = &self.panes[drawing.pane_index];
+                out.push(Prim::VLine {
+                    x: px[0].0.round() as i32,
+                    y0: (pane.top * vpr).round().max(0.0) as i32,
+                    y1: ((pane.top + pane.height) * vpr).round().max(0.0) as i32,
+                    width: crisp_width,
+                    style: drawing.style,
+                    color,
+                });
+            }
+            DrawingKind::Rectangle => {
+                let (a, b) = (px[0], px[1]);
+                let left = a.0.min(b.0).round() as i32;
+                let top = a.1.min(b.1).round() as i32;
+                let width = (a.0 - b.0).abs().round() as i32;
+                let height = (a.1 - b.1).abs().round() as i32;
+                if width <= 0 || height <= 0 {
+                    return;
+                }
+                // reference rectangle-drawing-tool default: the fill is the border color washed
+                // out (its `previewFillColor`/`fillColor` alpha pattern) — 20% here.
+                let fill = drawing
+                    .fill_color
+                    .as_deref()
+                    .and_then(Color::parse_css)
+                    .unwrap_or(Color::rgba(color.r(), color.g(), color.b(), 51));
+                out.push(Prim::Rect {
+                    rect: IRect {
+                        x: left,
+                        y: top,
+                        w: width,
+                        h: height,
+                    },
+                    color: fill,
+                });
+                out.push(Prim::RectFrame {
+                    rect: IRect {
+                        x: left,
+                        y: top,
+                        w: width,
+                        h: height,
+                    },
+                    border: crisp_width,
+                    color,
+                });
+            }
+            // The text tool's geometry IS its label (emitted by `build_drawing_text`).
+            DrawingKind::Text => {}
+            DrawingKind::Brush => {
+                // TradingView's brush stroke: ONE smooth curved polyline through the
+                // simplified path (the same `LineType::Curved` interpolation the series line
+                // family uses), so the stroke is ultra smooth and identical on both backends.
+                let first_point = points.len() as u32;
+                for &(x, y) in px {
+                    points.push([x as f32, y as f32]);
+                }
+                out.push(Prim::Polyline {
+                    first_point,
+                    point_count: px.len() as u32,
+                    width: (drawing.width * vpr) as f32,
+                    style: drawing.style,
+                    line_type: LineType::Curved,
+                    color,
+                });
+            }
+        }
+    }
+
+    /// One drawing's text label (every tool can carry one): the placement resolves the 3×3
+    /// alignment against the tool's reference box (drawings.rs `text_box`/`text_placement`),
+    /// then emits a `Prim::Text` — x is the aligned edge, y the vertical center (the IR's
+    /// middle-baseline convention), so the run rasterizes identically on both backends.
+    fn build_drawing_text(
+        &self,
+        drawing: &Drawing,
+        px: &[(f64, f64)],
+        pane_w_px: i32,
+        vpr: f64,
+        out: &mut Vec<Prim>,
+    ) {
+        if drawing.text.is_empty() {
+            return;
+        }
+        let layout = &self.options.get().layout;
+        let size = drawing.text_size.unwrap_or(layout.font_size) * vpr;
+        let pane = &self.panes[drawing.pane_index];
+        let reference = ChartEngine::text_box(
+            drawing.kind,
+            px,
+            f64::from(pane_w_px),
+            pane.top * vpr,
+            pane.height * vpr,
+        );
+        let (x, y, align) = ChartEngine::text_placement(drawing, &reference, size, TEXT_PAD * vpr);
+        let color = drawing
+            .text_color
+            .as_deref()
+            .and_then(Color::parse_css)
+            .or_else(|| Color::parse_css(&layout.text_color))
+            .unwrap_or(Color::rgb(0, 0, 0));
+        out.push(Prim::Text {
+            x: x as f32,
+            y: y as f32,
+            text: drawing.text.clone(),
+            color,
+            size: size as f32,
+            family: layout.font_family.clone(),
+            align: match align {
+                DrawingTextHAlign::Left => TextAlign::Left,
+                DrawingTextHAlign::Center => TextAlign::Center,
+                DrawingTextHAlign::Right => TextAlign::Right,
+            },
+            bold: drawing.text_bold,
+        });
+    }
+
+    /// The anchor-handle fill for the current theme (white on light backgrounds, black on dark —
+    /// the series selection anchors' luminance rule, series_geometry.rs).
+    fn anchor_fill(&self) -> Color {
+        let background = Color::parse_css(&self.options.get().layout.background.color)
+            .unwrap_or(Color::rgb(0xff, 0xff, 0xff));
+        if background.luminance() > 160.0 {
+            Color::rgb(0xff, 0xff, 0xff)
+        } else {
+            Color::rgb(0, 0, 0)
+        }
+    }
+}
+
+/// One handle per anchor: the border disc underneath, the fill disc on top.
+fn build_anchor_handles(px: &[(f64, f64)], vpr: f64, fill: Color, out: &mut Vec<Prim>) {
+    for &(cx, cy) in px {
+        out.push(Prim::Circle {
+            cx: cx as f32,
+            cy: cy as f32,
+            radius: ((ANCHOR_RADIUS + ANCHOR_BORDER_WIDTH) * vpr) as f32,
+            fill: ANCHOR_BORDER,
+            stroke_width: 0.0,
+            stroke: ANCHOR_BORDER,
+        });
+        out.push(Prim::Circle {
+            cx: cx as f32,
+            cy: cy as f32,
+            radius: (ANCHOR_RADIUS * vpr) as f32,
+            fill,
+            stroke_width: 0.0,
+            stroke: fill,
+        });
+    }
+}

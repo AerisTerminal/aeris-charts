@@ -40,6 +40,11 @@ export function install_gestures(chart: chart_impl): () => void {
   let axis_drag: AxisDrag | null = null;
   let press_origin: { x: number; y: number } | null = null;
   let moved = false; // mouse press moved past the click slop (reference _cancelClick)
+  // Engine-owned drawing drag (anchor re-anchor or body move) started by a pane press on a
+  // drawing (drawings.rs); mutually exclusive with a pan `dragging` session.
+  let drawing_dragging = false;
+  // Freehand brush capture in progress (the engine decimates/simplifies the stroke).
+  let brush_drawing = false;
   // Vertical price pan session (reference `startScrollPrice`): the engine holds the range
   // snapshot and shift math; armed only while the scale is NOT in autoscale (its no-op gate).
   let price_pan: { pane: number; target: number } | null = null;
@@ -120,6 +125,22 @@ export function install_gestures(chart: chart_impl): () => void {
     // follows, so a hovered series' `hoveredSeriesOnTop` z-bump lands on the same frame.
     chart.update_hover(x, y);
     chart.emit_crosshair(x, y);
+  };
+
+  // TradingView's Ctrl-held magnet: while Ctrl/Cmd is down the Normal-mode crosshair snaps to
+  // the hovered bar's OHLC (engine `crosshair_ohlc_magnet`, consumed by the frame's
+  // `crosshair_snap`). Forwarded on every pointer move/down and on modifier key events, so a
+  // press/release without mouse movement still refreshes the snap live.
+  const apply_crosshair_magnet = (e: { ctrlKey: boolean; metaKey: boolean }) => {
+    wasm.set_crosshair_ohlc_magnet(e.ctrlKey || e.metaKey);
+  };
+  const on_modifier_key = (e: KeyboardEvent) => {
+    if (e.key !== "Control" && e.key !== "Meta") return;
+    apply_crosshair_magnet(e);
+    if (last_crosshair !== null) {
+      set_crosshair(last_crosshair.x, last_crosshair.y);
+      chart.repaint();
+    }
   };
 
   // reference `_firesTouchEvents`: synthetic mouse events fire within 500 ms of the last touch.
@@ -363,6 +384,7 @@ export function install_gestures(chart: chart_impl): () => void {
     }
     const p = local_xy(e);
     pointers.set(e.pointerId, p);
+    apply_crosshair_magnet(e);
     // Any active pointer pauses the countdown timer (no mid-gesture repaint/lag).
     if (pointers.size === 1) chart.set_interacting(true);
     if (pointers.size !== 1) return;
@@ -370,6 +392,23 @@ export function install_gestures(chart: chart_impl): () => void {
     moved = false;
     const region = arm_press(p);
     if (region !== "pane") return;
+    // Drawing tools: an armed tool consumes pane presses (anchors place on click, not drag); a
+    // successful drawing grab starts an engine-owned anchor/body drag. Both skip the pan.
+    if (chart.creation_armed()) {
+      // The brush captures the stroke as a press-drag (its own engine session, not clicks).
+      if (chart.active_drawing_tool() === "brush" && chart.brush_create_start(p.x, p.y)) {
+        brush_drawing = true;
+      }
+      set_crosshair(p.x, p.y);
+      chart.repaint();
+      return;
+    }
+    if (wasm.drawing_drag_start_at(p.x, p.y)) {
+      drawing_dragging = true;
+      set_crosshair(p.x, p.y);
+      chart.repaint();
+      return;
+    }
     // pane press: pan (time + price in one drag, like reference).
     if (chart.gesture_config().pan) {
       begin_scroll(p.x, "mouse");
@@ -390,6 +429,7 @@ export function install_gestures(chart: chart_impl): () => void {
     // hover (buttons === 0) or a left-drag (bit 0 set) passes.
     if (e.buttons !== 0 && (e.buttons & 1) === 0) return;
     const p = local_xy(e);
+    apply_crosshair_magnet(e);
 
     // active axis drag-to-scale
     if (axis_drag !== null) {
@@ -424,7 +464,17 @@ export function install_gestures(chart: chart_impl): () => void {
       moved = Math.abs(p.x - press_origin.x) + Math.abs(p.y - press_origin.y) >= SLOP_MANHATTAN;
     }
 
-    if (dragging) {
+    if (brush_drawing) {
+      // Freehand brush: the engine decimates and captures the stroke points (drawings.rs).
+      wasm.brush_create_add(p.x, p.y);
+    } else if (drawing_dragging) {
+      // Engine-owned anchor/body drag (drawings.rs): the engine re-anchors from the start
+      // snapshot; the crosshair feed below keeps tracking the cursor. Modifier keys are
+      // forwarded live (toggling mid-drag responds immediately, TradingView parity): Ctrl/Cmd =
+      // magnet (snap anchors to the nearest bar's OHLC), Shift = straighten (0°/45°/90° anchor
+      // constraint, dominant-axis body move). Ctrl never straightens.
+      wasm.drawing_drag_to(p.x, p.y, e.ctrlKey || e.metaKey, e.shiftKey);
+    } else if (dragging) {
       wasm.scroll_move(p.x);
       last_pan_x = p.x;
       wasm.kinetic_add_sample(p.x, performance.now());
@@ -443,6 +493,12 @@ export function install_gestures(chart: chart_impl): () => void {
       wasm.clear_crosshair();
       chart.clear_hover();
       chart.emit_crosshair_left();
+    }
+    // Interactive creation preview: the pending anchor follows the mouse (engine-owned), with
+    // the same live modifier snaps as a placement click (Ctrl = magnet to OHLC, Shift =
+    // straighten).
+    if (chart.creation_active()) {
+      chart.creation_move(p.x, p.y, e.ctrlKey || e.metaKey, e.shiftKey);
     }
     // Hover cursor feedback (no button pressed), resolved AFTER the crosshair feed refreshed
     // the hover hit-test, so a primitive's `hit_test` cursor applies on the same move it
@@ -487,6 +543,21 @@ export function install_gestures(chart: chart_impl): () => void {
       end_axis_drag();
       return;
     }
+    if (brush_drawing) {
+      // Commit the stroke (engine simplifies it into a smooth curved drawing, left selected).
+      brush_drawing = false;
+      chart.brush_create_end();
+      chart.repaint();
+      return;
+    }
+    if (drawing_dragging) {
+      // End the engine's drawing drag (no coast, no scroll session to close — the pan path
+      // never started). The click that follows (no move) routes to selection.
+      drawing_dragging = false;
+      wasm.drawing_drag_end();
+      chart.repaint();
+      return;
+    }
     // reference `mouseUpEvent` ends the scroll (maybe starting a kinetic coast) but never hides the
     // crosshair — that only happens on mouse leave, Escape, or a touch end.
     end_drag("mouse");
@@ -500,6 +571,14 @@ export function install_gestures(chart: chart_impl): () => void {
     if (pointers.size !== 0) return;
     sep_drag = null;
     end_axis_drag();
+    if (brush_drawing) {
+      brush_drawing = false;
+      wasm.brush_create_cancel();
+    }
+    if (drawing_dragging) {
+      drawing_dragging = false;
+      wasm.drawing_drag_end();
+    }
     end_drag("mouse");
     chart.repaint();
   };
@@ -510,6 +589,7 @@ export function install_gestures(chart: chart_impl): () => void {
     // reference `mouseLeaveEvent` hides the crosshair; an active captured drag is left alone.
     if (pointers.size > 0) return;
     set_sep_hover(-1);
+    wasm.set_crosshair_ohlc_magnet(false); // release the Ctrl-magnet with the hover
     chart.clear_hover(); // Phase C-d: release the hover hit + hovered-series z-bump
     wasm.clear_crosshair();
     chart.emit_crosshair_left();
@@ -546,6 +626,12 @@ export function install_gestures(chart: chart_impl): () => void {
     if (moved) return;
     if (fires_touch_events(e)) return; // we already emitted the tap as a click
     const p = local_xy(e);
+    // An armed drawing tool consumes pane clicks for anchor placement (engine-owned creation);
+    // modifiers snap the placed anchor (Ctrl = magnet to OHLC, Shift = straighten).
+    if (chart.creation_armed() && chart.creation_click(p.x, p.y, e.ctrlKey || e.metaKey, e.shiftKey)) {
+      chart.repaint();
+      return;
+    }
     chart.emit_click(p.x, p.y);
   };
 
@@ -849,7 +935,11 @@ export function install_gestures(chart: chart_impl): () => void {
     } else if (was_tap) {
       // A tap: emit the click and suppress the synthetic one (reference preventDefault after tapEvent).
       const p = local_xy(touch);
-      chart.emit_click(p.x, p.y);
+      if (chart.creation_armed() && chart.creation_click(p.x, p.y, false, false)) {
+        chart.repaint();
+      } else {
+        chart.emit_click(p.x, p.y);
+      }
       if (e.cancelable) e.preventDefault();
     }
     if (tap_count === 0 && e.cancelable) {
@@ -937,7 +1027,16 @@ export function install_gestures(chart: chart_impl): () => void {
       case "Home":
         wasm.fit_content();
         break;
+      case "Delete":
+      case "Backspace":
+        // TradingView-style: remove the selected drawing (engine-owned). Unhandled when
+        // nothing is selected, so the keys keep their browser behavior then.
+        handled = wasm.remove_selected_drawing();
+        break;
       case "Escape":
+        // Disarm a drawing tool / cancel a pending creation and deselect any drawing, then
+        // the existing crosshair clear.
+        chart.cancel_drawing_interaction();
         wasm.clear_crosshair();
         chart.repaint();
         chart.emit_crosshair_left();
@@ -969,6 +1068,9 @@ export function install_gestures(chart: chart_impl): () => void {
   overlay.addEventListener("touchmove", on_touch_move, { passive: false });
   overlay.addEventListener("touchend", on_touch_end, { passive: false });
   overlay.addEventListener("touchcancel", on_touch_cancel, { passive: false });
+  // Ctrl/Cmd press/release refreshes the crosshair magnet live (TradingView parity).
+  window.addEventListener("keydown", on_modifier_key);
+  window.addEventListener("keyup", on_modifier_key);
   // Hey mobile Safari, what's up? Without a non-passive touchmove listener Safari marks
   // touchstart and the following touchmoves cancelable=false, so the chart could not prevent
   // the page scroll once a drag starts (ported from reference mouse-event-handler.ts:654-659).
@@ -995,5 +1097,7 @@ export function install_gestures(chart: chart_impl): () => void {
     overlay.removeEventListener("touchend", on_touch_end);
     overlay.removeEventListener("touchcancel", on_touch_cancel);
     overlay.removeEventListener("touchmove", safari_dummy_touchmove);
+    window.removeEventListener("keydown", on_modifier_key);
+    window.removeEventListener("keyup", on_modifier_key);
   };
 }

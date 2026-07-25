@@ -641,6 +641,104 @@ export const KIND_TO_U8: Record<series_kind, number> = {
 };
 
 // ---------------------------------------------------------------------------------------------
+// Drawing tools (engine-owned drawing objects; aion_engine drawings.rs)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The drawing-tool kinds. Each tool is an engine-owned drawing object with defining anchor
+ * points: trend line (2), rectangle (2), horizontal line/ray, vertical line, and text
+ * (1 each), and the freehand brush (a variable-length path, anchor handles at the two ends) —
+ * TradingView's drawing tools in the spirit of the reference's plugin-examples.
+ */
+export type drawing_kind =
+  | "trend_line"
+  | "horizontal_line"
+  | "horizontal_ray"
+  | "vertical_line"
+  | "rectangle"
+  | "text"
+  | "brush";
+
+export const DRAWING_KIND_TO_U8: Record<drawing_kind, number> = {
+  trend_line: 0,
+  horizontal_line: 1,
+  horizontal_ray: 2,
+  vertical_line: 3,
+  rectangle: 4,
+  text: 5,
+  brush: 6,
+};
+
+/**
+ * One defining anchor of a drawing: a fractional logical bar index (integer values sit at bar
+ * centers — the engine's `logical_to_coordinate` space) plus a price. The unused coordinate of
+ * the full-span kinds is stored but never read (a horizontal line's `logical`, a vertical
+ * line's `price`).
+ */
+export interface drawing_point {
+  logical: number;
+  price: number;
+}
+
+/** Horizontal label alignment shared by every tool's text (canvas `textAlign` keywords). */
+export type drawing_text_h_align = "left" | "center" | "right";
+/** Vertical label alignment shared by every tool's text: above / centered on / below the tool. */
+export type drawing_text_v_align = "top" | "middle" | "bottom";
+
+/**
+ * A drawing's options (engine `Drawing`). Every tool can carry a text label placed by the
+ * 3×3 `text_h_align`/`text_v_align` against the tool's geometry. Colors parse per the engine's
+ * CSS rules; `""` for `fill_color`/`text_color` means "follow the default" (the border color at
+ * 20% alpha for a rectangle's fill, the chart's `layout.textColor` for labels), and
+ * `text_size: null` follows `layout.fontSize`.
+ */
+export interface drawing_options {
+  /** Line/border color (default `"#2962ff"`, TradingView's drawing blue). */
+  color: string;
+  /** Stroke width in CSS px (default 2; 1 for a rectangle's border). */
+  width: number;
+  /** Stroke style (default `"solid"`). */
+  style: line_style;
+  /** Rectangle fill (default `""` = the border color at 20% alpha). Unused by other kinds. */
+  fill_color: string;
+  /** The tool's text label (`""` = none). */
+  text: string;
+  /** Label color (default `""` = the chart's `layout.textColor`). */
+  text_color: string;
+  /** Label glyph size in CSS px (`null` = the chart's `layout.fontSize`). */
+  text_size: number | null;
+  text_bold: boolean;
+  text_h_align: drawing_text_h_align;
+  text_v_align: drawing_text_v_align;
+}
+
+/** A drawing as listed by {@link chart_api.drawings} (also the serialization format). */
+export interface drawing_info extends drawing_options {
+  id: number;
+  kind: drawing_kind;
+  pane_index: number;
+  points: drawing_point[];
+}
+
+/** A live handle to an engine-owned drawing. */
+export interface drawing_api {
+  readonly id: number;
+  kind(): drawing_kind;
+  pane_index(): number;
+  /** The defining anchors. */
+  points(): drawing_point[];
+  /** Replace the anchors (validated against the kind's anchor count). */
+  set_points(points: drawing_point[]): void;
+  /** The current options (reference `options()`). */
+  options(): drawing_options;
+  /** Deep-merge a patch onto this drawing's options (reference `applyOptions`). */
+  apply_options(options: Partial<drawing_options>): void;
+  /** Remove the drawing from the chart. */
+  remove(): void;
+}
+
+
+// ---------------------------------------------------------------------------------------------
 // Handles
 // ---------------------------------------------------------------------------------------------
 
@@ -898,6 +996,31 @@ export interface chart_api {
   /** Fire on a double-click inside the pane (the default fit-content action still runs). */
   subscribe_dbl_click(handler: dbl_click_handler): void;
   unsubscribe_dbl_click(handler: dbl_click_handler): void;
+  /**
+   * Add a drawing (engine-owned drawing object) to a pane (default 0) from its defining anchor
+   * points and repaint. Returns the live handle. Throws when the engine rejects the placement
+   * (stale pane, wrong anchor count for the kind, non-finite anchors).
+   */
+  add_drawing(kind: drawing_kind, points: drawing_point[], options?: Partial<drawing_options>, pane_index?: number): drawing_api;
+  /** Every drawing as live handles, in z-order (bottom first). */
+  drawings(): drawing_api[];
+  /** Remove every drawing (the "clear all" action) and repaint. */
+  clear_drawings(): void;
+  /**
+   * Arm an interactive drawing tool (TradingView-style), or disarm with `null`. While armed,
+   * pane clicks place the tool's anchors through the engine's creation flow — one click for the
+   * single-anchor kinds, two for `trend_line`/`rectangle` — the mouse previews the pending
+   * anchor, and Escape cancels. `options` templates the drawing created this way. One-shot:
+   * the tool disarms after each commit (listen with {@link chart_api.set_drawing_tool_listener}
+   * to sync a toolbar).
+   */
+  set_drawing_tool(tool: drawing_kind | null, options?: Partial<drawing_options>): void;
+  /** The armed interactive tool, or `null`. */
+  active_drawing_tool(): drawing_kind | null;
+  /** Register a listener for armed-tool changes (including the auto-disarm after a commit). */
+  set_drawing_tool_listener(listener: ((tool: drawing_kind | null) => void) | null): void;
+  /** The currently selected drawing (click-to-select; Delete/Backspace removes it), or `null`. */
+  selected_drawing(): drawing_api | null;
   /** Fire after the visible logical range changes. */
   subscribe_visible_logical_range_change(handler: visible_logical_range_handler): void;
   unsubscribe_visible_logical_range_change(handler: visible_logical_range_handler): void;

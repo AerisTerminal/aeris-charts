@@ -28,6 +28,7 @@ use crate::{
 mod axis;
 pub(crate) mod conflation;
 mod crosshair;
+mod drawings;
 mod series_geometry;
 #[cfg(test)]
 mod tests;
@@ -722,6 +723,17 @@ impl ChartEngine {
                     self.build_last_pulse_frame(&mut out.main, hpr, vpr);
                 }
             }
+            // Drawing tools (drawings.rs): above the series/chrome, below the crosshair
+            // (TradingView's drawings-under-crosshair order). The selected drawing's anchor
+            // handles and the interactive-creation preview emit with them.
+            self.build_drawings_frame(
+                pi,
+                pane_w_px as i32,
+                hpr,
+                vpr,
+                &mut out.main,
+                &mut out.points,
+            );
             self.build_crosshair_frame(pi, pane_w_px as i32, hpr, vpr, &mut out.main);
             // Selection anchors paint last: above the series and the crosshair marks.
             if let Some((from, to)) = visible {

@@ -119,6 +119,28 @@
       <label title="Canvas primitive (plugin platform C-e): the reference vertical-line plugin example, painted with raw Canvas2D calls on the plugin overlay"><input type="checkbox" id="vertline_toggle"> vert line</label>
     </div>
 
+    <div class="group" id="drawings_group" data-caption="Drawings" title="Engine-owned drawing tools (TradingView-style): click a tool, then click the chart to place its anchors (two clicks for trend/rect). Click a drawing to select it — drag its anchor handles to re-anchor, drag the body to move it; Delete/Backspace removes the selection, Escape deselects/cancels. Hold Ctrl to magnet-snap the crosshair and drawing anchors to the nearest bar's OHLC; hold Shift to straighten a dragged anchor to 0°/45°/90° (a rectangle to a square) or a body move to one axis.">
+      <button type="button" data-tool="trend_line" title="Trend line: two-anchor segment">trend</button>
+      <button type="button" data-tool="horizontal_line" title="Horizontal line across the pane at a price">h-line</button>
+      <button type="button" data-tool="horizontal_ray" title="Horizontal ray from the anchor to the right edge">h-ray</button>
+      <button type="button" data-tool="vertical_line" title="Vertical line spanning the pane at a bar">v-line</button>
+      <button type="button" data-tool="rectangle" title="Rectangle between two corners">rect</button>
+      <button type="button" data-tool="text" title="Text label at a point (uses the label text below)">text</button>
+      <button type="button" data-tool="brush" title="Freehand brush: drag to draw a smooth stroke; when selected its two end anchors re-anchor, the body moves">brush</button>
+      <label title="Stroke/border color — templates new drawings and applies live to the selected one">color <input type="color" id="drawing_color" value="#2962ff"></label>
+      <label title="Stroke style (solid/dotted/dashed) — templates new drawings and applies live to the selected one">style
+        <select id="drawing_style">
+          <option value="solid" selected>solid</option>
+          <option value="dotted">dotted</option>
+          <option value="dashed">dashed</option>
+        </select>
+      </label>
+      <label title="Stroke width in CSS px — templates new drawings and applies live to the selected one">w <input type="range" id="drawing_width" min="1" max="8" step="1" value="2"><span id="drawing_width_val">2</span></label>
+      <label title="Text label carried by newly created drawings (any tool)">label <input type="text" id="drawing_text" size="8"></label>
+      <button id="clear_drawings" type="button" title="Remove every drawing">clear all</button>
+      <span class="hint">Ctrl = snap crosshair + anchors to OHLC · Shift = straighten</span>
+    </div>
+
     <div class="group" data-caption="Crosshair">
       <label>mode
         <select id="cross_mode">
@@ -624,6 +646,54 @@ window.__set_vert_line = set_vert_line; // test hook
 window.__vert_line_active = () => vert_line_handle !== null; // test hook
 // Test hook: the package-owned plugin overlay canvas (gpu pane, fallback pane, plugin, overlay).
 window.__plugin_canvas = () => container.querySelectorAll("canvas")[2]; // test hook
+
+// ---- drawing tools (engine-owned drawing objects) ----------------------------------------------
+// Toolbar over the package's drawing API: a tool button arms interactive creation on the chart
+// (clicks place anchors, moves preview, Escape cancels — one-shot per drawing), "clear all"
+// empties the store. Selection, anchor/body dragging, and Delete/Backspace live in the engine
+// and gesture layer, not here.
+const drawing_tool_buttons = [...document.querySelectorAll("#drawings_group [data-tool]")];
+function sync_drawing_tool_buttons(tool) {
+  for (const button of drawing_tool_buttons) {
+    const active = button.dataset.tool === tool;
+    button.style.background = active ? "#2962ff" : "";
+    button.style.color = active ? "#fff" : "";
+  }
+}
+// The customization inputs template newly created drawings AND apply live to the selected one
+// (TradingView's floating settings, toolbar form).
+function drawing_options_from_inputs() {
+  return {
+    color: document.getElementById("drawing_color").value,
+    style: document.getElementById("drawing_style").value,
+    width: Number(document.getElementById("drawing_width").value),
+    text: document.getElementById("drawing_text").value,
+  };
+}
+function arm_drawing_tool(kind) {
+  const tool = chart.active_drawing_tool() === kind ? null : kind;
+  chart.set_drawing_tool(tool, drawing_options_from_inputs());
+}
+for (const button of drawing_tool_buttons) {
+  button.addEventListener("click", () => arm_drawing_tool(button.dataset.tool));
+}
+chart.set_drawing_tool_listener(sync_drawing_tool_buttons);
+for (const id of ["drawing_color", "drawing_style", "drawing_width"]) {
+  document.getElementById(id).addEventListener("change", () => {
+    const options = drawing_options_from_inputs();
+    // Re-template the armed tool (the next drawing picks the new settings up).
+    const tool = chart.active_drawing_tool();
+    if (tool !== null) chart.set_drawing_tool(tool, options);
+    // Apply live to the selected drawing, if any.
+    const selected = chart.selected_drawing();
+    if (selected !== null) selected.apply_options(options);
+  });
+}
+document.getElementById("drawing_width").addEventListener("input", (e) => {
+  document.getElementById("drawing_width_val").textContent = e.target.value;
+});
+document.getElementById("clear_drawings").addEventListener("click", () => chart.clear_drawings());
+sync_drawing_tool_buttons(null);
 
 status.textContent = `1000 bars · ${chart.backend()} · dpr ${(window.devicePixelRatio || 1).toFixed(3)}`;
 

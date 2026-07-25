@@ -176,9 +176,10 @@ fn distance_to_bezier_curve(x: f64, y: f64, points: [(f64, f64); 4]) -> f64 {
 /// single-visible-point segment report `Point`, stroke segments report `Line`. Aion's
 /// `visible_line_rows` selection already produces the drawn item set, so the items here are
 /// exactly the visible points (reference instead indexes into its full item list by the extended
-/// visible range — same set at the pane edges Aion draws).
+/// visible range — same set at the pane edges Aion draws). Shared with the brush drawing tool's
+/// body test (drawings.rs), whose smooth stroke is the same curved geometry.
 #[allow(clippy::too_many_arguments)] // mirrors the reference renderer-data signature
-fn hit_test_line_series(
+pub(crate) fn hit_test_line_series(
     points: &[(f64, f64)],
     x: f64,
     y: f64,

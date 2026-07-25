@@ -33,6 +33,28 @@ function price_line_runs(png, y, is_line_pixel) {
   return runs;
 }
 
+/**
+ * The price line's device row: the raw coordinate's rounding can drift a device px when the
+ * pane's fractional-dpr height rounds the bitmap (vpr ≠ dpr), so scan the neighborhood and
+ * take the row with the most line pixels.
+ */
+function best_line_row(png, row, is_line_pixel) {
+  let best = row;
+  let best_count = -1;
+  for (let y = Math.max(row - 2, 0); y <= Math.min(row + 2, png.height - 1); y++) {
+    let count = 0;
+    for (let x = 0; x < Math.floor(png.width / 2); x++) {
+      const o = (y * png.width + x) * 4;
+      if (is_line_pixel([png.data[o], png.data[o + 1], png.data[o + 2]])) count += 1;
+    }
+    if (count > best_count) {
+      best_count = count;
+      best = y;
+    }
+  }
+  return best;
+}
+
 test("price line style select restyles the live price line", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   await wait_for_chart(page);
@@ -51,14 +73,15 @@ test("price line style select restyles the live price line", async ({ page }) =>
   await wait_for_chart(page);
   const solid_png = await capture(page);
   const scale = solid_png.width / css_w;
-  const row = Math.round(probe.y * scale);
+  const row = best_line_row(solid_png, Math.round(probe.y * scale), is_line);
   const solid = price_line_runs(solid_png, row, is_line);
   expect(solid.length, "solid style: one continuous run").toBeLessThanOrEqual(2);
   expect(solid.reduce((n, r) => n + (r.e - r.s), 0)).toBeGreaterThan(100);
 
   await page.selectOption("#price_line_style", "1"); // dotted
   await wait_for_chart(page);
-  const dotted = price_line_runs(await capture(page), row, is_line);
+  const dotted_png = await capture(page);
+  const dotted = price_line_runs(dotted_png, best_line_row(dotted_png, row, is_line), is_line);
   expect(dotted.length, "dotted style: many short runs").toBeGreaterThan(10);
 });
 
