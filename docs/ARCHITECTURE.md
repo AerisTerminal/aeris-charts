@@ -49,8 +49,10 @@ What we deliberately change:
 - Multi-chart ready: one GPU device/queue shared across chart instances; each browser chart owns
   dedicated WebGPU and Canvas2D pane surfaces plus its axis/input overlay.
 - Public handle objects are adapters only. Time/index/logical conversions, visible-range mutation,
-  scroll/reset behavior, and price-scale range/autoscale/inversion/margin state live on the
-  platform-free `ChartEngine`; WASM delegates and TypeScript schedules repaint/callback delivery.
+  scroll/reset behavior, price-scale range/autoscale/inversion/margin state, and the interaction
+  models (axis drag-to-scale, price pan, kinetic coast, zoom increments, scroll easing — §6.2)
+  live on the platform-free `ChartEngine`; WASM delegates and TypeScript schedules
+  repaint/callback delivery.
 - Price-scale mode autoscale uses each series' first close at or right of the visible left edge,
   transforms its raw range into the shared normal/log/percentage/indexed domain, then merges it.
   Series coordinates use that same stable base. Engine-formatted axis labels plus a host-supplied
@@ -280,11 +282,18 @@ chart.apply_options(), chart.remove()
 
 ### 6.2 Input handling
 
-Port the reference's `MouseEventHandler` gesture recognizer to TS in the shell (tap/double-tap/long-tap,
-pressed-move, pinch with distance ratio, page-scroll heuristics, `preventDefault` rules,
-double-click 500ms window) and forward normalized gestures to Rust:
-`gesture(kind, x, y, extra)` — the model code (scroll/scale/kinetic/tracking-mode) lives in Rust.
-Wheel handling per spec §1.1 (delta modes, Windows-Chrome DPR correction).
+The reference's `MouseEventHandler` gesture recognizer is ported to TS in the shell
+(`packages/charts/src/gestures.ts`: tap/double-tap/long-tap, pressed-move, pinch with distance
+ratio, page-scroll heuristics, `preventDefault` rules, double-click 500ms window, crosshair
+tracking mode) and forwards normalized samples to Rust. **All interaction model code lives in
+the engine** (`aion_engine::interaction` + the scale cores): drag scroll sessions, axis
+drag-to-scale (`Time/PriceScaleCore.start_scale`/`scale_to`), vertical price pan
+(`start_scroll`/`scroll_to`), the kinetic momentum coast (`aion_core::KineticAnimation` — the
+host feeds px samples and drives the coast from its RAF scheduler), wheel/pinch zoom increment
+coefficients, and eased scroll-to-position animations (engine-owned cubic ease-out; the host
+only schedules ticks). Wheel delta normalization (delta modes, Windows-Chrome DPR correction)
+stays host-side as DOM/platform input conditioning, per spec §1.1. Because the models are
+headless, the native interaction harness runs the exact code the browser drives.
 
 ### 6.3 Plugin system (critical for the TradingView ambition)
 

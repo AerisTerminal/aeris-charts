@@ -11,6 +11,12 @@ async function wait_grid(page) {
   }));
 }
 
+/** Every cell's chart handle has resolved (a split rebuilds the layout once the chart is in). */
+async function wait_cell_charts(page) {
+  await page.waitForFunction(() => window.__grid.cells().every((c) => !!c.chart));
+  await wait_grid(page);
+}
+
 const canvas_count = (page) => page.evaluate(() => document.querySelectorAll("#chart_container canvas").length);
 
 /** Per-cell screenshots as PNGs (public take_screenshot per chart). */
@@ -51,6 +57,7 @@ test("main demo splits into independent charts, drags dividers, meters, caps, an
   // Split horizontally: two independent charts, both rendering candles.
   await page.click("#split_h");
   await page.waitForFunction(() => document.querySelectorAll("#chart_container canvas").length === 8);
+  await wait_cell_charts(page);
   let shots = await cell_shots(page);
   for (const shot of shots) {
     const green = count_color(shot, [38, 166, 154]);
@@ -82,6 +89,7 @@ test("main demo splits into independent charts, drags dividers, meters, caps, an
   await activate_cell(page, 1);
   await page.click("#split_v");
   await page.waitForFunction(() => document.querySelectorAll("#chart_container canvas").length === 12);
+  await wait_cell_charts(page);
   await expect(page.locator(".aion-grid-divider >> nth=1")).toHaveCSS("cursor", "row-resize");
   let usage = await page.evaluate(() => window.__grid.usage());
   expect(usage.chart_count).toBe(3);
@@ -116,11 +124,53 @@ test("main demo splits into independent charts, drags dividers, meters, caps, an
   expect((await page.evaluate(() => window.__grid.usage())).chart_count).toBe(1);
 });
 
+test("divider drags never disturb a cell's candle spacing (even with interactions off)", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+  await page.click("#split_h");
+  await page.waitForFunction(() => document.querySelectorAll("#chart_container canvas").length === 8);
+  await wait_grid(page);
+
+  // Dashboard-style embeds: all scroll/scale gestures off. The engine's all-interactions-off
+  // aggregate feeds label alignment only (reference time-scale.ts:975-986) — it must not force
+  // fix-edge semantics, so a resize leaves bar spacing and the right range edge untouched.
+  await page.evaluate(() => {
+    for (const cell of window.__grid.cells()) {
+      cell.chart.apply_options({ handle_scroll: false, handle_scale: false });
+      cell.chart.time_scale().fit_content();
+    }
+  });
+  const probe = (i) =>
+    page.evaluate((idx) => {
+      const chart = window.__grid.cells()[idx].chart;
+      const r = chart.wasm.visible_logical_range();
+      return { spacing: chart.wasm.bar_spacing(), right: r.length === 2 ? r[1] : null };
+    }, i);
+  const left_before = await probe(0);
+  const right_before = await probe(1);
+
+  const divider = page.locator(".aion-grid-divider >> nth=0");
+  const box = await divider.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 - 120, box.y + box.height / 2, { steps: 8 });
+  await page.mouse.up();
+  await wait_grid(page);
+
+  const left_after = await probe(0);
+  const right_after = await probe(1);
+  expect(right_after.spacing, "growing cell keeps its bar spacing").toBe(right_before.spacing);
+  expect(right_after.right, "growing cell keeps its right range edge").toBe(right_before.right);
+  expect(left_after.spacing, "shrinking cell keeps its bar spacing").toBe(left_before.spacing);
+  expect(left_after.right, "shrinking cell keeps its right range edge").toBe(left_before.right);
+});
+
 test("split dividers follow the axis border token (theme and explicit changes)", async ({ page }) => {
   await page.goto("/");
   await wait_grid(page);
   await page.click("#split_h");
   await page.waitForFunction(() => document.querySelectorAll("#chart_container canvas").length === 8);
+  await wait_cell_charts(page);
 
   const divider_rgb = () =>
     page.locator(".aion-grid-divider >> nth=0").evaluate((el) => getComputedStyle(el).backgroundColor);

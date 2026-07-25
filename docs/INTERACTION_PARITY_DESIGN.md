@@ -1,8 +1,19 @@
 # Aion Charts — Interaction & Accessibility Parity (Design)
 
-Status: **design for review — no code yet.** Companion to [ARCHITECTURE.md](ARCHITECTURE.md).
+Status: **implemented — engine-owned.** Companion to [ARCHITECTURE.md](ARCHITECTURE.md).
 Covers the three interaction gaps vs the reference charting library: **axis drag-to-scale**, **touch behavior**
 (kinetic scroll + tracking mode), and **accessibility**.
+
+> **Update (implementation landed):** the interaction MODELS all live in the engine
+> (`aion_engine::interaction`, plus `aion_core::KineticAnimation` and the scale cores'
+> `start_scale`/`scale_to`/`start_scroll`/`scroll_to`): axis drag-to-scale, vertical price pan,
+> kinetic coast (§3a **option B** — the JS loop was never kept), wheel/pinch zoom increments,
+> and the eased scroll-to-position animation (cubic ease-out engine-side). The TS gesture
+> recognizer ([`packages/charts/src/gestures.ts`](../packages/charts/src/gestures.ts)) only
+> classifies events, resolves ownership/config, and forwards normalized samples over the wasm
+> boundary while scheduling the animation frames. Headless tests pin the physics in
+> `aion_engine::interaction::tests` and `aion_core::model::kinetic_animation::tests`; browser
+> coverage is `examples/web_demo/tests/interaction-models.spec.mjs`.
 
 All interaction lives in the TS gesture recognizer
 ([`packages/charts/src/gestures.ts`](../packages/charts/src/gestures.ts)) driving wasm handles; the
@@ -60,7 +71,9 @@ the platform's smooth feel (the reference's own keyboard-lessness means the mapp
 **Cursor feedback** — extend the hover branch: `ns-resize` over a price axis, `ew-resize` over the
 time axis, `row-resize` over separators, else `crosshair`.
 
-**No engine change.** New option: `handle_scale.axis_pressed_mouse_move: boolean | { time, price }`
+**No engine change** (as originally scoped; the landed implementation routes the recognizer onto
+the scale cores' own `start_scale`/`scale_to` so the formulas run engine-side — see the header
+note). New option: `handle_scale.axis_pressed_mouse_move: boolean | { time, price }`
 added to `handle_scale_options` (defaults true), resolved in `resolved_gestures`.
 
 ---
@@ -77,8 +90,12 @@ reference coasts after a flick. Two implementations:
 - **B — engine-side kinetic model:** port the reference's `KineticAnimation` into `TimeScaleCore` and advance it
   from the existing animation tick. More faithful and headless-testable, but larger.
 
-Recommend **A first** (fast, cancellable, `prefers-reduced-motion`-aware), leaving B as an upgrade.
-New option `kinetic_scroll: boolean | { touch, mouse }` (reference default `{ touch: true, mouse: false }`).
+~~Recommend **A first** (fast, cancellable, `prefers-reduced-motion`-aware), leaving B as an upgrade.~~
+**Landed as B:** `aion_core::model::kinetic_animation::KineticAnimation` is the faithful px-domain
+port; the engine samples during the drag and the host drives the coast from its RAF loop
+(`kinetic_begin_sampling`/`kinetic_add_sample`/`kinetic_release`/`kinetic_position`), so the
+physics are headless-tested. New option `kinetic_scroll: boolean | { touch, mouse }` (reference
+default `{ touch: true, mouse: false }`).
 
 ### 3b. Touch crosshair vs pan (tracking mode, reference `trackingMode`)
 Today one finger pans **and** drives the crosshair. reference on touch: a drag **scrolls** (no crosshair);
@@ -122,12 +139,16 @@ as an intentional divergence rather than strict parity.
 | **I-d** | Accessibility wrapper: ARIA, live summary, keyboard nav | none | M |
 
 Each phase adds a Playwright interaction test (synthetic pointer/touch/keyboard events) and, for the
-option surfaces, TS type + `resolved_gestures` coverage. None require engine changes; kinetic can be
-upgraded to the engine-side model (3a-B) later if we want headless physics tests.
+option surfaces, TS type + `resolved_gestures` coverage. ~~None require engine changes; kinetic can be
+upgraded to the engine-side model (3a-B) later if we want headless physics tests.~~ The models were
+subsequently moved engine-side (header note): the physics are pinned headlessly in
+`aion_engine::interaction::tests` / `aion_core::model::kinetic_animation::tests` and in the browser
+by `examples/web_demo/tests/interaction-models.spec.mjs`.
 
 ## 6. Decisions for you
 
-1. **Kinetic**: JS loop first (recommended) or go straight to the engine-side model?
+1. **Kinetic**: ~~JS loop first (recommended) or go straight to the engine-side model?~~ **Resolved:
+   engine-side model (3a-B)** — `aion_core::KineticAnimation` + the engine's kinetic session API.
 2. **Touch crosshair**: adopt the reference's long-press tracking mode (recommended for parity), or keep our
    simpler "drag shows crosshair"?
 3. **Accessibility scope**: minimal (ARIA label + focusable + keyboard pan/zoom) or also the

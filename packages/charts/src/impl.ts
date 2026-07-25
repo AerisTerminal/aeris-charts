@@ -120,17 +120,6 @@ const PRICE_SCALE_JSON_OPTION_KEYS = [
 const KIND_NAMES = ["candlestick", "bar", "line", "area", "histogram", "baseline", "custom"] as const;
 
 /**
- * Index of the stacked pane containing CSS-y `y`, counted from the pane separators (shared by
- * the gesture recognizer and the mouse-event params).
- */
-export function pane_index_of_y(separator_ys: Float64Array, y: number): number {
-  let pane = 0;
-  for (const sy of separator_ys) if (y > sy) pane += 1;
-  return pane;
-}
-
-/** Pack a data array into the six Float64Arrays the engine expects (single-value → o=h=l=c). */
-/**
  * Convert a `time` input to the engine's UTC-seconds form. Business days and `"YYYY-MM-DD"` strings
  * are taken at UTC midnight (matching the reference's `Date.UTC(...)/1000`). A malformed value yields `NaN`,
  * which the engine's sanitizer drops as an invalid row.
@@ -657,9 +646,6 @@ class custom_series_impl extends series_impl {
 }
 
 class time_scale_impl implements time_scale_api {
-  /** Invalidation token: each new scroll call or user gesture supersedes an in-flight animation. */
-  private scroll_anim_token = 0;
-
   constructor(private readonly chart: chart_impl) {}
 
   scroll_position(): number {
@@ -667,25 +653,26 @@ class time_scale_impl implements time_scale_api {
   }
   /** Invalidate any in-flight animated scroll (a new scroll call or user gesture takes over). */
   cancel_scroll_animation(): void {
-    this.scroll_anim_token += 1;
+    this.chart.wasm.cancel_scroll_animation();
   }
   scroll_to_position(position: number, animated: boolean): void {
-    const token = ++this.scroll_anim_token;
     if (!animated || this.chart.prefers_reduced_motion()) {
+      this.chart.wasm.cancel_scroll_animation();
       this.chart.wasm.scroll_to_position(position);
       this.chart.repaint();
       return;
     }
-    const start = this.chart.wasm.scroll_position();
-    if (start === position) return;
-    const t0 = performance.now();
+    // The engine owns the cubic ease-out easing and applies every tick; this RAF loop is just
+    // host-side frame scheduling (a newer scroll or a user gesture supersedes engine-side).
+    if (this.chart.wasm.scroll_position() === position) {
+      this.chart.wasm.cancel_scroll_animation();
+      return;
+    }
+    this.chart.wasm.start_scroll_animation(position, SCROLL_ANIM_MS, performance.now());
     const step = () => {
-      if (token !== this.scroll_anim_token) return; // superseded mid-flight
-      const t = Math.min(1, (performance.now() - t0) / SCROLL_ANIM_MS);
-      const eased = 1 - Math.pow(1 - t, 3); // cubic ease-out
-      this.chart.wasm.scroll_to_position(start + (position - start) * eased);
+      const done = Number.isNaN(this.chart.wasm.scroll_animation_tick(performance.now()));
       this.chart.repaint();
-      if (t < 1) requestAnimationFrame(step);
+      if (!done) requestAnimationFrame(step);
     };
     requestAnimationFrame(step);
   }
@@ -1536,7 +1523,7 @@ export class chart_impl implements chart_api {
     if (x < 0 || x > this.wasm.time_scale_width()) return null;
     const pane_bottom = this.overlay.getBoundingClientRect().height - this.wasm.time_scale_height();
     if (y < 0 || y > pane_bottom) return null;
-    return pane_index_of_y(this.wasm.pane_separator_ys(), y);
+    return this.wasm.pane_index_at_y(y);
   }
 
   /** Build event params for a cursor at (x, y) in pane CSS px. */

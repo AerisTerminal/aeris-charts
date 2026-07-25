@@ -1267,6 +1267,107 @@ impl AionChart {
     pub fn scroll_end(&mut self) {
         self.inner.borrow_mut().scroll_end();
     }
+
+    // --- engine-owned interaction models (the TS recognizer forwards samples; all formulas
+    // live in the engine — see aion_engine::interaction) ---
+
+    /// reference wheel zoom increment: `sign(deltaY) * min(1, |deltaY|)`.
+    pub fn wheel_zoom_scale(&self, delta_y: f64) -> f64 {
+        self.inner.borrow().wheel_zoom_scale(delta_y)
+    }
+    /// reference pinch zoom increment: the scale-ratio delta ×5.
+    pub fn pinch_zoom_scale(&self, scale_delta: f64) -> f64 {
+        self.inner.borrow().pinch_zoom_scale(scale_delta)
+    }
+    /// reference wheel scroll delta: `deltaX * -80` px.
+    pub fn wheel_scroll_delta(&self, delta_x: f64) -> f64 {
+        self.inner.borrow().wheel_scroll_delta(delta_x)
+    }
+
+    /// Open a kinetic sampling session alongside the drag (`enabled = false` = no coast).
+    pub fn kinetic_begin_sampling(&mut self, enabled: bool, x_css: f64, now_ms: f64) {
+        self.inner
+            .borrow_mut()
+            .kinetic_begin_sampling(enabled, x_css, now_ms);
+    }
+    pub fn kinetic_add_sample(&mut self, x_css: f64, now_ms: f64) {
+        self.inner.borrow_mut().kinetic_add_sample(x_css, now_ms);
+    }
+    /// The drag was released: whether a momentum coast engaged (drive `kinetic_position`
+    /// per frame instead of ending the scroll session).
+    pub fn kinetic_release(&mut self, x_css: f64, now_ms: f64) -> bool {
+        self.inner.borrow_mut().kinetic_release(x_css, now_ms)
+    }
+    /// The coast's pointer position at `now_ms` (NaN when no coast is running).
+    pub fn kinetic_position(&self, now_ms: f64) -> f64 {
+        self.inner.borrow().kinetic_position(now_ms)
+    }
+    pub fn kinetic_finished(&self, now_ms: f64) -> bool {
+        self.inner.borrow().kinetic_finished(now_ms)
+    }
+    pub fn kinetic_stop(&mut self) {
+        self.inner.borrow_mut().kinetic_stop();
+    }
+
+    /// Axis drag-to-scale (reference pressedMouseMove on the axis widgets).
+    pub fn time_axis_start_scale(&mut self, x_css: f64) {
+        self.inner.borrow_mut().time_axis_start_scale(x_css);
+    }
+    pub fn time_axis_scale_to(&mut self, x_css: f64) {
+        self.inner.borrow_mut().time_axis_scale_to(x_css);
+    }
+    pub fn time_axis_end_scale(&mut self) {
+        self.inner.borrow_mut().time_axis_end_scale();
+    }
+    /// Whether a price-axis drag can scale this scale (false in percentage/indexed modes).
+    pub fn price_axis_scalable(&self, pane: usize, target: u8) -> bool {
+        self.inner.borrow().price_axis_scalable(pane, target)
+    }
+    pub fn price_axis_start_scale(&mut self, pane: usize, target: u8, y_css: f64) {
+        self.inner
+            .borrow_mut()
+            .price_axis_start_scale(pane, target, y_css);
+    }
+    pub fn price_axis_scale_to(&mut self, pane: usize, target: u8, y_css: f64) {
+        self.inner
+            .borrow_mut()
+            .price_axis_scale_to(pane, target, y_css);
+    }
+    pub fn price_axis_end_scale(&mut self, pane: usize, target: u8) {
+        self.inner.borrow_mut().price_axis_end_scale(pane, target);
+    }
+    /// Vertical price pan (reference `startScrollPrice`/`scrollPriceTo`).
+    pub fn price_axis_start_scroll(&mut self, pane: usize, target: u8, y_css: f64) {
+        self.inner
+            .borrow_mut()
+            .price_axis_start_scroll(pane, target, y_css);
+    }
+    pub fn price_axis_scroll_to(&mut self, pane: usize, target: u8, y_css: f64) {
+        self.inner
+            .borrow_mut()
+            .price_axis_scroll_to(pane, target, y_css);
+    }
+    pub fn price_axis_end_scroll(&mut self, pane: usize, target: u8) {
+        self.inner.borrow_mut().price_axis_end_scroll(pane, target);
+    }
+
+    /// Eased scroll-to-position (the engine owns the cubic ease-out and applies each tick).
+    pub fn start_scroll_animation(&mut self, target: f64, duration_ms: f64, now_ms: f64) {
+        self.inner
+            .borrow_mut()
+            .start_scroll_animation(target, duration_ms, now_ms);
+    }
+    /// Apply the eased position for `now_ms`; NaN when finished/none (stop scheduling).
+    pub fn scroll_animation_tick(&mut self, now_ms: f64) -> f64 {
+        self.inner.borrow_mut().scroll_animation_tick(now_ms)
+    }
+    pub fn cancel_scroll_animation(&mut self) {
+        self.inner.borrow_mut().cancel_scroll_animation();
+    }
+    /// Index of the stacked pane containing content-y `y` (engine-owned pane bounds).
+    pub fn pane_index_at_y(&self, y_css: f64) -> usize {
+        self.inner.borrow().pane_index_at_y(y_css)
+    }
     pub fn fit_content(&mut self) {
         self.inner.borrow_mut().fit_content();
     }

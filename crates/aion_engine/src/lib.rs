@@ -8,6 +8,7 @@
 mod frame;
 mod hit_test;
 mod indicators;
+mod interaction;
 mod price_line_api;
 mod price_scale_api;
 mod series_query_api;
@@ -21,6 +22,10 @@ pub use frame::{
 pub use hit_test::{SeriesHit, SeriesHitKind};
 pub(crate) use indicators::IndicatorBinding;
 pub use indicators::IndicatorKind;
+pub use interaction::{
+    pinch_zoom_scale, wheel_zoom_scale, ScrollAnimation, KINETIC_DUMPING, KINETIC_MAX_SPEED,
+    KINETIC_MIN_MOVE, KINETIC_MIN_SPEED, PINCH_ZOOM_INTENSITY, WHEEL_SCROLL_PX_PER_DELTA,
+};
 pub use workspace::{SplitDirection, Workspace, WorkspaceError, WorkspaceUsage};
 
 use aion_core::format::price_formatter::PriceFormatter;
@@ -642,6 +647,12 @@ pub struct ChartEngine {
     /// Hosts clear and re-record them per frame, before any layout/autoscale pass runs;
     /// `autoscale_for_frame` unions them into the owning scales.
     primitive_autoscale: Vec<PrimitiveAutoscaleContribution>,
+    /// Kinetic (momentum) scroll sampler/coast for the active drag (engine interaction module,
+    /// reference `KineticAnimation`); the host feeds samples and drives the coast per frame.
+    kinetic: Option<aion_core::model::kinetic_animation::KineticAnimation>,
+    /// In-flight eased scroll-to-position (engine interaction module); the host schedules the
+    /// ticks, the engine owns the easing and applies each step.
+    scroll_animation: Option<interaction::ScrollAnimation>,
     /// Optional host formatting callbacks (reference `localization.priceFormatter`/`timeFormatter` and
     /// `timeScale.tickMarkFormatter`). The engine stays headless — the host supplies plain boxed
     /// closures; each returns `None` to fall back to the built-in formatter (e.g. the callback
@@ -694,6 +705,8 @@ impl ChartEngine {
             hovered_series: None,
             selected_series: None,
             primitive_autoscale: Vec::new(),
+            kinetic: None,
+            scroll_animation: None,
             price_formatter_fn: None,
             tick_mark_formatter_fn: None,
             time_formatter_fn: None,
@@ -1419,7 +1432,9 @@ impl ChartEngine {
     }
 
     /// Host-pushed "all scaling and scrolling disabled" aggregate (reference
-    /// `_isAllScalingAndScrollingDisabled`): forces fix-edge semantics on the time scale.
+    /// `_isAllScalingAndScrollingDisabled`, time-scale.ts:975-986): label alignment only in the
+    /// reference — the scale math keeps reading the raw fix-edge options, so a non-interactive
+    /// chart never reacts to resizes.
     pub fn set_interaction_disabled(&mut self, disabled: bool) {
         self.time_scale.set_interaction_disabled(disabled);
     }

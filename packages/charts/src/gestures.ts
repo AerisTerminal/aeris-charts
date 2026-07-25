@@ -1,9 +1,11 @@
 /**
  * Pointer/wheel/keyboard gesture recognizer wired onto the axis/input overlay canvas.
  *
- * Beyond pan/zoom/crosshair it implements reference parity interactions:
- * - axis drag-to-scale (price axis = vertical, time axis = horizontal),
- * - kinetic (momentum) scroll after a flick (a faithful port of the reference's `KineticAnimation`),
+ * The recognizer (event classification, slop, ownership, tracking mode) lives here per
+ * ARCHITECTURE.md §6.2, but every interaction MODEL is engine-owned (`aion_engine::interaction`)
+ * and driven through the wasm handle: pan/scroll sessions, axis drag-to-scale, vertical price
+ * pan, kinetic (momentum) coast, wheel/pinch zoom increments, and eased scroll animations —
+ * the headless native harness runs the exact same code.
  * - touch: raw touch events with the reference's direction classification — a drag the chart does not
  *   own is released so the browser scrolls the page (reference does not use `touch-action: none`);
  *   long-press enters a crosshair "tracking" mode; two-finger pinch zooms,
@@ -12,7 +14,6 @@
  */
 
 import type { chart_impl } from "./impl.js";
-import { pane_index_of_y } from "./impl.js";
 
 const SLOP_MANHATTAN = 5; // px before a press becomes a drag (reference CancelClick/CancelTapManhattanDistance)
 const SEP_HIT = 4; // css px hit tolerance around a pane boundary
@@ -22,110 +23,8 @@ const DBL_TAP_MANHATTAN = 30; // max distance between the taps of a double-tap (
 const TOUCH_MOUSE_SUPPRESS_MS = 500; // ignore synthetic mouse events after a touch (reference Delay.PreventFiresTouchEvents)
 const KEY_SCROLL_MS = 160; // keyboard scroll animation (TradingView-style smooth step)
 
-// Kinetic coast constants in the px domain (reference KineticScrollConstants; reference divides them by the
-// bar spacing to work in rightOffset units, we sample pointer px directly).
-const KINETIC_MIN_SPEED = 0.2; // px/ms flick speed needed to coast (reference MinScrollSpeed)
-const KINETIC_MAX_SPEED = 7; // px/ms per-segment speed clamp (reference MaxScrollSpeed)
-const KINETIC_DUMPING = 0.997; // per-ms velocity damping (reference DumpingCoeff)
-const KINETIC_MIN_MOVE = 15; // px between samples (reference ScrollMinMove)
-const KINETIC_MAX_START_DELAY = 50; // ms the last sample may lag the release (reference MaxStartDelay)
-const KINETIC_EPSILON = 1; // px from the end position where the coast stops (reference EpsilonDistance)
-
-type kinetic_sample = { x: number; t: number };
-
-/**
- * Faithful port of reference `model/kinetic-animation.ts` in the px domain: release speed is the
- * distance-weighted average of up to three consecutive same-direction segments, and the coast
- * follows `start + speed * (c^t − 1) / ln(c)`.
- */
-class kinetic_animation {
-  private p1: kinetic_sample | null = null;
-  private p2: kinetic_sample | null = null;
-  private p3: kinetic_sample | null = null;
-  private p4: kinetic_sample | null = null;
-  private anim_start: kinetic_sample | null = null;
-  private duration_ms = 0;
-  private speed = 0; // px/ms, signed
-
-  /** reference `addPosition`: a new sample is pushed only after `KINETIC_MIN_MOVE` px of travel. */
-  add_position(x: number, t: number): void {
-    if (this.p1 !== null) {
-      if (this.p1.t === t) {
-        this.p1.x = x;
-        return;
-      }
-      if (Math.abs(this.p1.x - x) < KINETIC_MIN_MOVE) return;
-    }
-    this.p4 = this.p3;
-    this.p3 = this.p2;
-    this.p2 = this.p1;
-    this.p1 = { x, t };
-  }
-
-  /** reference `start`: freeze the release speed; a no-op when the samples cannot sustain a coast. */
-  start(x: number, t: number): void {
-    if (this.p1 === null || this.p2 === null) return;
-    if (t - this.p1.t > KINETIC_MAX_START_DELAY) return;
-
-    // Distance-weighted average speed; a segment counts only in the drag's release direction.
-    const segment_speed = (a: kinetic_sample, b: kinetic_sample): number => {
-      const v = (a.x - b.x) / (a.t - b.t);
-      return Math.sign(v) * Math.min(Math.abs(v), KINETIC_MAX_SPEED);
-    };
-    const speed1 = segment_speed(this.p1, this.p2);
-    const speeds = [speed1];
-    const dists = [this.p1.x - this.p2.x];
-    let total_dist = dists[0]!;
-    if (this.p3 !== null) {
-      const speed2 = segment_speed(this.p2, this.p3);
-      if (Math.sign(speed2) === Math.sign(speed1)) {
-        speeds.push(speed2);
-        dists.push(this.p2.x - this.p3.x);
-        total_dist += dists[1]!;
-        if (this.p4 !== null) {
-          const speed3 = segment_speed(this.p3, this.p4);
-          if (Math.sign(speed3) === Math.sign(speed1)) {
-            speeds.push(speed3);
-            dists.push(this.p3.x - this.p4.x);
-            total_dist += dists[2]!;
-          }
-        }
-      }
-    }
-    let result = 0;
-    for (let i = 0; i < speeds.length; i++) {
-      result += (dists[i]! / total_dist) * speeds[i]!;
-    }
-    if (Math.abs(result) < KINETIC_MIN_SPEED) return;
-
-    this.anim_start = { x, t };
-    this.speed = result;
-    // reference `durationMSec`: time until the remaining travel shrinks to KINETIC_EPSILON px.
-    const ln_c = Math.log(KINETIC_DUMPING);
-    this.duration_ms = Math.log((KINETIC_EPSILON * ln_c) / -Math.abs(result)) / ln_c;
-  }
-
-  /** reference `getPosition`. Only meaningful while `!finished(t)`. */
-  position(t: number): number {
-    const start = this.anim_start!;
-    const dt = t - start.t;
-    return start.x + (this.speed * (Math.pow(KINETIC_DUMPING, dt) - 1)) / Math.log(KINETIC_DUMPING);
-  }
-
-  /** reference `finished` (also true when `start` never engaged). */
-  finished(t: number): boolean {
-    if (this.anim_start === null) return true;
-    return Math.min(t - this.anim_start.t, this.duration_ms) === this.duration_ms;
-  }
-}
-
-/** Axis drag state, ported 1:1 from the reference's scale formulas (see `apply_axis_drag`):
- * - price: `PriceScale.scaleTo` — snapshot scaled around its center by a start-relative ratio.
- * - time: `TimeScale.scaleTo` — bar spacing by the ratio of distances-from-right.
- */
-type AxisDrag =
-  | { kind: "price"; pane: number; target: number; pane_top: number; pane_h: number; start_y: number; start_from: number; start_to: number }
-  | { kind: "time"; start_x: number; start_spacing: number };
+/** Active axis drag-to-scale session; the engine owns the start snapshot and the formulas. */
+type AxisDrag = { kind: "price"; pane: number; target: number } | { kind: "time" };
 
 /** Where a press landed; drives the touch ownership rules (the reference's per-widget handlers). */
 type press_region = "pane" | "price_axis" | "time_axis" | "separator";
@@ -141,9 +40,9 @@ export function install_gestures(chart: chart_impl): () => void {
   let axis_drag: AxisDrag | null = null;
   let press_origin: { x: number; y: number } | null = null;
   let moved = false; // mouse press moved past the click slop (reference _cancelClick)
-  // Vertical price pan state (reference `PriceScale.scrollTo`): snapshot of the dragged pane's range,
-  // armed only while the scale is NOT in autoscale (reference `startScrollPrice` no-ops under it).
-  let price_pan: { pane: number; target: number; start_y: number; from: number; to: number; pane_h: number; invert: boolean } | null = null;
+  // Vertical price pan session (reference `startScrollPrice`): the engine holds the range
+  // snapshot and shift math; armed only while the scale is NOT in autoscale (its no-op gate).
+  let price_pan: { pane: number; target: number } | null = null;
   let last_pan_x: number | null = null;
 
   // --- touch-only state (mirrors the reference `MouseEventHandler` fields) ---
@@ -175,8 +74,7 @@ export function install_gestures(chart: chart_impl): () => void {
   let pinch_prev_scale = 1; // reference _prevPinchScale
   let pinch_prevented = false; // reference _pinchPrevented
 
-  let kinetic: kinetic_animation | null = null;
-  let kinetic_raf: number | null = null;
+  let kinetic_raf: number | null = null; // RAF id while the engine's coast is being driven
 
   const local_xy = (e: { clientX: number; clientY: number }) => {
     const r = overlay.getBoundingClientRect();
@@ -213,16 +111,7 @@ export function install_gestures(chart: chart_impl): () => void {
     if (is_time_axis(p)) return "time_axis";
     return "pane";
   };
-  const pane_of = (y: number): number => pane_index_of_y(wasm.pane_separator_ys(), y);
-  /** Pane top offset and height in css px, derived from the separator positions. */
-  const pane_geom = (index: number): { top: number; h: number } => {
-    const seps = wasm.pane_separator_ys();
-    const total_h = overlay.getBoundingClientRect().height - wasm.time_scale_height();
-    let top = 0;
-    for (let i = 0; i < index && i < seps.length; i++) top = seps[i]! + 1;
-    const bottom = index < seps.length ? seps[index]! : total_h;
-    return { top, h: Math.max(1, bottom - top) };
-  };
+  const pane_of = (y: number): number => wasm.pane_index_at_y(y);
 
   const set_crosshair = (x: number, y: number) => {
     last_crosshair = { x, y };
@@ -256,105 +145,87 @@ export function install_gestures(chart: chart_impl): () => void {
   };
 
   const stop_kinetic = () => {
+    wasm.kinetic_stop();
     if (kinetic_raf !== null) {
       cancelAnimationFrame(kinetic_raf);
       kinetic_raf = null;
       wasm.scroll_end();
     }
   };
-  /** Drive the ported `KineticAnimation`; the coast continues the drag's scroll session. */
+  /** Drive the engine's kinetic coast; it continues the drag's scroll session (the RAF loop is
+   *  host scheduling — the sampling, release speed, decay, and finish all live in the engine). */
   const start_kinetic = (release_x: number) => {
-    const anim = kinetic!;
     const now = performance.now();
-    anim.start(release_x, now);
-    if (anim.finished(now)) {
+    if (!wasm.kinetic_release(release_x, now)) {
       wasm.scroll_end();
       return;
     }
     const step = () => {
       const t = performance.now();
-      if (anim.finished(t)) {
+      if (wasm.kinetic_finished(t)) {
         wasm.scroll_end();
         kinetic_raf = null;
         return;
       }
-      wasm.scroll_move(anim.position(t));
+      wasm.scroll_move(wasm.kinetic_position(t));
       chart.repaint();
       kinetic_raf = requestAnimationFrame(step);
     };
     kinetic_raf = requestAnimationFrame(step);
   };
 
-  /** Open a scroll session and (when the device wants a coast) start sampling for kinetic. */
+  /** Open a scroll session and (when the device wants a coast) start engine-side sampling. */
   const begin_scroll = (x: number, kind: "mouse" | "touch") => {
     wasm.scroll_start(x);
     dragging = true;
     last_pan_x = x;
     const cfg = chart.gesture_config();
     const enabled = kind === "touch" ? cfg.kinetic_touch : cfg.kinetic_mouse;
-    kinetic = enabled ? new kinetic_animation() : null;
-    kinetic?.add_position(x, performance.now());
+    wasm.kinetic_begin_sampling(enabled, x, performance.now());
   };
-  /** Arm the vertical price pan on `pane` at `start_y` (reference `startScrollPrice`): prefers the
-   * right scale, falls back to the left; skipped under autoscale or an unresolvable range. */
+  /** Arm the vertical price pan on `pane` (reference `startScrollPrice`): prefers the right
+   *  scale, falls back to the left; skipped under autoscale (the engine's own no-op gate). */
   const arm_price_pan = (pane: number, start_y: number) => {
-    price_pan = null;
-    const geom = pane_geom(pane);
+    disarm_price_pan();
     for (const target of [0, 1]) {
-      const range = wasm.price_scale_visible_range(pane, target);
-      if (range.length === 2 && wasm.price_scale_auto_scale(pane, target) === false) {
-        price_pan = {
-          pane,
-          target,
-          start_y,
-          from: range[0]!,
-          to: range[1]!,
-          pane_h: geom.h,
-          invert: wasm.price_scale_inverted(pane, target) === true,
-        };
+      if (wasm.price_scale_auto_scale(pane, target) === false) {
+        price_pan = { pane, target };
+        wasm.price_axis_start_scroll(pane, target, start_y);
         break;
       }
     }
+  };
+  /** Close the engine's price-pan session (a no-op arm leaves nothing to close). */
+  const disarm_price_pan = () => {
+    if (price_pan === null) return;
+    wasm.price_axis_end_scroll(price_pan.pane, price_pan.target);
+    price_pan = null;
   };
   /** End a pan drag: coast when the flick qualifies, otherwise just close the session. */
   const end_drag = (kind: "mouse" | "touch") => {
     if (!dragging) return;
     dragging = false;
     touch_scrolling = false;
-    price_pan = null;
+    disarm_price_pan();
     const cfg = chart.gesture_config();
     const enabled =
       (kind === "touch" ? cfg.kinetic_touch : cfg.kinetic_mouse) && !chart.prefers_reduced_motion();
-    if (enabled && kinetic !== null && last_pan_x !== null) {
+    if (enabled && last_pan_x !== null) {
       start_kinetic(last_pan_x);
     } else {
+      wasm.kinetic_stop();
       wasm.scroll_end();
     }
-    kinetic = null;
   };
 
   const apply_axis_drag = (p: { x: number; y: number }) => {
     if (axis_drag === null) return;
+    // The engine owns the start snapshot and the scale formulas (reference `PriceScale.scaleTo`
+    // / `TimeScale.scaleTo`); the recognizer just forwards the drag position.
     if (axis_drag.kind === "price") {
-      // reference `PriceScale.scaleTo`: the drag-start range snapshot is scaled around its center by
-      // `(startY + (h-1)*0.2) / (currentY + (h-1)*0.2)` — both measured up from the pane bottom.
-      const x = Math.max(0, axis_drag.pane_h - (p.y - axis_drag.pane_top));
-      const coeff = Math.max(
-        0.1,
-        (axis_drag.start_y + (axis_drag.pane_h - 1) * 0.2) / (x + (axis_drag.pane_h - 1) * 0.2),
-      );
-      const mid = (axis_drag.start_from + axis_drag.start_to) / 2;
-      const half = ((axis_drag.start_to - axis_drag.start_from) / 2) * coeff;
-      wasm.set_price_scale_visible_range(axis_drag.pane, axis_drag.target, mid - half, mid + half);
+      wasm.price_axis_scale_to(axis_drag.pane, axis_drag.target, p.y);
     } else {
-      // reference `TimeScale.scaleTo`: start spacing times the ratio of the distances from the pane's
-      // right edge at the current vs the drag-start x (drag right = zoom out).
-      const pane_w = wasm.time_scale_width();
-      const start_length = Math.min(Math.max(pane_w - p.x, 0), pane_w);
-      const current_length = Math.min(Math.max(pane_w - axis_drag.start_x, 0), pane_w);
-      if (start_length !== 0 && current_length !== 0) {
-        wasm.set_bar_spacing(axis_drag.start_spacing * (start_length / current_length));
-      }
+      wasm.time_axis_scale_to(p.x);
     }
   };
   const apply_sep_drag = (p: { x: number; y: number }) => {
@@ -365,24 +236,17 @@ export function install_gestures(chart: chart_impl): () => void {
   };
   const apply_price_pan = (y: number) => {
     if (price_pan === null) return;
-    // Vertical price pan (reference `PriceScale.scrollTo`): shift the press-time snapshot by
+    // Vertical price pan (reference `scrollPriceTo`): the engine shifts its armed snapshot by
     // dy * span/(h-1) — drag down moves the range up, so the candles follow the cursor.
-    const dy = (y - price_pan.start_y) * (price_pan.invert ? -1 : 1);
-    const shift = (dy * (price_pan.to - price_pan.from)) / (price_pan.pane_h - 1);
-    wasm.set_price_scale_visible_range(
-      price_pan.pane,
-      price_pan.target,
-      price_pan.from + shift,
-      price_pan.to + shift,
-    );
+    wasm.price_axis_scroll_to(price_pan.pane, price_pan.target, y);
   };
 
   /** Arm the press-region interaction shared by mousedown and touchstart; returns the region. */
   const arm_press = (p: { x: number; y: number }): press_region => {
     const cfg = chart.gesture_config();
     sep_drag = null;
-    axis_drag = null;
-    price_pan = null;
+    end_axis_drag();
+    disarm_price_pan();
     // separator drag takes precedence over any pan/scale (reference layout.panes.enableResize gates it)
     const si = separator_at(p.y);
     if (si >= 0) {
@@ -396,32 +260,33 @@ export function install_gestures(chart: chart_impl): () => void {
     // axis drag-to-scale: price axis (vertical) / time axis (horizontal)
     const price_target = price_axis_target_at(p);
     if (price_target !== null) {
-      if (cfg.axis_scale_price) {
-        const pane = pane_of(p.y);
-        // reference `PriceScale.scaleTo` is a no-op in percentage and indexed-to-100 modes.
-        const mode = wasm.price_scale_mode(pane, price_target);
-        const range = wasm.price_scale_visible_range(pane, price_target);
-        if (mode !== 2 && mode !== 3 && range.length === 2) {
-          const geom = pane_geom(pane);
-          axis_drag = {
-            kind: "price",
-            pane,
-            target: price_target,
-            pane_top: geom.top,
-            pane_h: geom.h,
-            start_y: geom.h - (p.y - geom.top),
-            start_from: range[0]!,
-            start_to: range[1]!,
-          };
-        }
+      const pane = pane_of(p.y);
+      // reference `PriceScale.scaleTo` is a no-op in percentage and indexed-to-100 modes (and on
+      // an empty scale) — the engine reports whether a drag can scale at all.
+      if (cfg.axis_scale_price && wasm.price_axis_scalable(pane, price_target)) {
+        axis_drag = { kind: "price", pane, target: price_target };
+        wasm.price_axis_start_scale(pane, price_target, p.y);
       }
       return "price_axis"; // never pan from an axis strip
     }
     if (is_time_axis(p)) {
-      if (cfg.axis_scale_time) axis_drag = { kind: "time", start_x: p.x, start_spacing: wasm.bar_spacing() };
+      if (cfg.axis_scale_time) {
+        axis_drag = { kind: "time" };
+        wasm.time_axis_start_scale(p.x);
+      }
       return "time_axis";
     }
     return "pane";
+  };
+  /** Close the engine's axis scale session (reference `endScale` on pointer release). */
+  const end_axis_drag = () => {
+    if (axis_drag === null) return;
+    if (axis_drag.kind === "price") {
+      wasm.price_axis_end_scale(axis_drag.pane, axis_drag.target);
+    } else {
+      wasm.time_axis_end_scale();
+    }
+    axis_drag = null;
   };
 
   // ---------------------------------------------------------------------------------------------
@@ -465,14 +330,14 @@ export function install_gestures(chart: chart_impl): () => void {
     if (!do_zoom && !do_scroll) return; // let the page scroll
     if (e.cancelable) e.preventDefault();
     if (do_zoom) {
-      const zoom_scale = Math.sign(delta_y) * Math.min(1, Math.abs(delta_y));
-      wasm.zoom(e.offsetX - wasm.pane_left(), zoom_scale);
+      // reference `_onMousewheel`: the normalized delta becomes the zoom increment (engine).
+      wasm.zoom(e.offsetX - wasm.pane_left(), wasm.wheel_zoom_scale(delta_y));
     }
     if (do_scroll) {
       // reference `scrollChart(deltaX * -80)`: "80 is a made up coefficient, and minus is for the
-      // 'natural' scroll" — expressed as a scroll session spanning a single jump.
+      // 'natural' scroll" (engine) — expressed as a scroll session spanning a single jump.
       wasm.scroll_start(0);
-      wasm.scroll_move(delta_x * -80);
+      wasm.scroll_move(wasm.wheel_scroll_delta(delta_x));
       wasm.scroll_end();
     }
     chart.repaint();
@@ -562,7 +427,7 @@ export function install_gestures(chart: chart_impl): () => void {
     if (dragging) {
       wasm.scroll_move(p.x);
       last_pan_x = p.x;
-      kinetic?.add_position(p.x, performance.now());
+      wasm.kinetic_add_sample(p.x, performance.now());
       apply_price_pan(p.y);
     }
     // Crosshair: a hover over an axis strip is a pane mouseleave in the reference (its axis
@@ -619,7 +484,7 @@ export function install_gestures(chart: chart_impl): () => void {
       return;
     }
     if (axis_drag !== null) {
-      axis_drag = null;
+      end_axis_drag();
       return;
     }
     // reference `mouseUpEvent` ends the scroll (maybe starting a kinetic coast) but never hides the
@@ -634,7 +499,7 @@ export function install_gestures(chart: chart_impl): () => void {
     if (pointers.size === 0) chart.set_interacting(false);
     if (pointers.size !== 0) return;
     sep_drag = null;
-    axis_drag = null;
+    end_axis_drag();
     end_drag("mouse");
     chart.repaint();
   };
@@ -775,12 +640,13 @@ export function install_gestures(chart: chart_impl): () => void {
       clear_longpress();
       touch_tracking = false;
       track_point = null;
-      price_pan = null;
-      axis_drag = null;
+      disarm_price_pan();
+      end_axis_drag();
       sep_drag = null;
       if (dragging) {
         dragging = false;
         touch_scrolling = false;
+        wasm.kinetic_stop();
         wasm.scroll_end();
       }
       return;
@@ -842,9 +708,10 @@ export function install_gestures(chart: chart_impl): () => void {
         const b = e.touches[1]!;
         const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
         if (chart.gesture_config().pinch_zoom) {
-          // reference PaneWidget.pinchEvent: incremental scale ×5, no clamp (the engine clamps spacing).
+          // reference PaneWidget.pinchEvent: incremental scale ×5 (engine), no clamp (the engine
+          // clamps spacing).
           const scale = dist / pinch_start_dist;
-          const zoom_scale = (scale - pinch_prev_scale) * 5;
+          const zoom_scale = wasm.pinch_zoom_scale(scale - pinch_prev_scale);
           pinch_prev_scale = scale;
           if (zoom_scale !== 0) {
             wasm.zoom(pinch_mid_x, zoom_scale);
@@ -886,6 +753,8 @@ export function install_gestures(chart: chart_impl): () => void {
         if (touch_scrolling) {
           touch_scrolling = false;
           dragging = false;
+          disarm_price_pan();
+          wasm.kinetic_stop();
           wasm.scroll_end();
         }
         return;
@@ -926,7 +795,7 @@ export function install_gestures(chart: chart_impl): () => void {
       }
       wasm.scroll_move(p.x);
       last_pan_x = p.x;
-      kinetic?.add_position(p.x, performance.now());
+      wasm.kinetic_add_sample(p.x, performance.now());
       apply_price_pan(p.y);
       chart.repaint();
     }
@@ -1008,6 +877,8 @@ export function install_gestures(chart: chart_impl): () => void {
       if (dragging) {
         dragging = false;
         touch_scrolling = false;
+        disarm_price_pan();
+        wasm.kinetic_stop();
         wasm.scroll_end();
       }
     }
@@ -1026,19 +897,17 @@ export function install_gestures(chart: chart_impl): () => void {
       scroll_anim = null;
     }
   };
-  /** TradingView-style smooth keyboard scroll: ease the scroll position to the target over
-   * ~160 ms instead of jumping. (`rightOffset` semantics match reference: larger = newer view.) */
+  /** TradingView-style smooth keyboard scroll: the engine eases the scroll position to the
+   *  target over ~160 ms (cubic ease-out, engine-owned) instead of jumping. The RAF loop is
+   *  host scheduling; `rightOffset` semantics match reference: larger = newer view. */
   const animate_scroll_to = (target: number) => {
     stop_scroll_anim();
-    const start = wasm.scroll_position();
-    if (start === target) return;
-    const t0 = performance.now();
+    if (wasm.scroll_position() === target) return;
+    wasm.start_scroll_animation(target, KEY_SCROLL_MS, performance.now());
     const step_fn = () => {
-      const t = Math.min(1, (performance.now() - t0) / KEY_SCROLL_MS);
-      const eased = 1 - Math.pow(1 - t, 3);
-      wasm.scroll_to_position(start + (target - start) * eased);
+      const done = Number.isNaN(wasm.scroll_animation_tick(performance.now()));
       chart.repaint();
-      scroll_anim = t < 1 ? requestAnimationFrame(step_fn) : null;
+      scroll_anim = done ? null : requestAnimationFrame(step_fn);
     };
     scroll_anim = requestAnimationFrame(step_fn);
   };

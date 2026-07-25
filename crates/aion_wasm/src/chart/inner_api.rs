@@ -1173,6 +1173,113 @@ impl ChartInner {
     pub fn scroll_end(&mut self) {
         self.time_scale.end_scroll();
     }
+
+    // --- engine-owned interaction models (kinetic, axis drag-to-scale, price pan, eased
+    // scroll): the TS recognizer forwards normalized samples and schedules frames; every
+    // formula lives in the engine so the headless harness runs the same code. ---
+
+    /// reference wheel zoom increment: `sign(deltaY) * min(1, |deltaY|)`.
+    pub fn wheel_zoom_scale(&self, delta_y: f64) -> f64 {
+        aion_engine::wheel_zoom_scale(delta_y)
+    }
+    /// reference pinch zoom increment: the scale-ratio delta ×5.
+    pub fn pinch_zoom_scale(&self, scale_delta: f64) -> f64 {
+        aion_engine::pinch_zoom_scale(scale_delta)
+    }
+    /// reference wheel scroll: `deltaX * -80` px ("made-up coefficient").
+    pub fn wheel_scroll_delta(&self, delta_x: f64) -> f64 {
+        delta_x * aion_engine::WHEEL_SCROLL_PX_PER_DELTA
+    }
+
+    /// Open a kinetic sampling session alongside the drag (seeded with the first sample);
+    /// `enabled = false` mirrors the reference's null animation (no coast on release).
+    pub fn kinetic_begin_sampling(&mut self, enabled: bool, x_css: f64, now_ms: f64) {
+        self.engine.kinetic_begin_sampling(enabled, x_css, now_ms);
+    }
+    pub fn kinetic_add_sample(&mut self, x_css: f64, now_ms: f64) {
+        self.engine.kinetic_add_sample(x_css, now_ms);
+    }
+    /// The drag was released: returns whether a momentum coast engaged (the host then drives
+    /// `kinetic_position` per frame instead of ending the scroll session).
+    pub fn kinetic_release(&mut self, x_css: f64, now_ms: f64) -> bool {
+        self.engine.kinetic_release(x_css, now_ms)
+    }
+    /// The coast's pointer position at `now_ms` (-1 sentinel-free: NaN when no coast runs).
+    pub fn kinetic_position(&self, now_ms: f64) -> f64 {
+        self.engine.kinetic_position(now_ms).unwrap_or(f64::NAN)
+    }
+    pub fn kinetic_finished(&self, now_ms: f64) -> bool {
+        self.engine.kinetic_finished(now_ms)
+    }
+    pub fn kinetic_stop(&mut self) {
+        self.engine.kinetic_stop();
+    }
+
+    /// Axis drag-to-scale arms/applies (reference `TimeAxisWidget`/`PriceAxisWidget`
+    /// pressedMouseMove): y is chart-content CSS px for price axes, x pane-relative for time.
+    pub fn time_axis_start_scale(&mut self, x_css: f64) {
+        self.engine.time_axis_start_scale(x_css);
+    }
+    pub fn time_axis_scale_to(&mut self, x_css: f64) {
+        self.engine.time_axis_scale_to(x_css);
+    }
+    pub fn time_axis_end_scale(&mut self) {
+        self.engine.time_axis_end_scale();
+    }
+    /// Whether a price-axis drag can scale this scale (false in percentage/indexed-to-100
+    /// modes or with no range — reference `PriceScale.scaleTo` no-ops there).
+    pub fn price_axis_scalable(&self, pane: usize, target: u8) -> bool {
+        self.engine
+            .price_axis_scalable(pane, price_scale_target_from_u8(target))
+    }
+    pub fn price_axis_start_scale(&mut self, pane: usize, target: u8, y_css: f64) {
+        self.engine
+            .price_axis_start_scale(pane, price_scale_target_from_u8(target), y_css);
+    }
+    pub fn price_axis_scale_to(&mut self, pane: usize, target: u8, y_css: f64) {
+        self.engine
+            .price_axis_scale_to(pane, price_scale_target_from_u8(target), y_css);
+    }
+    pub fn price_axis_end_scale(&mut self, pane: usize, target: u8) {
+        self.engine
+            .price_axis_end_scale(pane, price_scale_target_from_u8(target));
+    }
+    /// Vertical price pan (reference `startScrollPrice`/`scrollPriceTo`; no-ops in autoscale).
+    pub fn price_axis_start_scroll(&mut self, pane: usize, target: u8, y_css: f64) {
+        self.engine
+            .price_axis_start_scroll(pane, price_scale_target_from_u8(target), y_css);
+    }
+    pub fn price_axis_scroll_to(&mut self, pane: usize, target: u8, y_css: f64) {
+        self.engine
+            .price_axis_scroll_to(pane, price_scale_target_from_u8(target), y_css);
+    }
+    pub fn price_axis_end_scroll(&mut self, pane: usize, target: u8) {
+        self.engine
+            .price_axis_end_scroll(pane, price_scale_target_from_u8(target));
+    }
+
+    /// Eased scroll-to-position (cubic ease-out): the engine owns the easing and applies each
+    /// tick; the host schedules frames and repaints. A newer start or a user gesture
+    /// (`cancel_scroll_animation`) supersedes.
+    pub fn start_scroll_animation(&mut self, target: f64, duration_ms: f64, now_ms: f64) {
+        self.engine
+            .start_scroll_animation(target, duration_ms, now_ms);
+    }
+    /// Apply the eased position for `now_ms`; returns NaN when the animation is finished or
+    /// none is running (the host then stops scheduling frames).
+    pub fn scroll_animation_tick(&mut self, now_ms: f64) -> f64 {
+        self.engine
+            .scroll_animation_tick(now_ms)
+            .unwrap_or(f64::NAN)
+    }
+    pub fn cancel_scroll_animation(&mut self) {
+        self.engine.cancel_scroll_animation();
+    }
+    /// Index of the stacked pane containing content-y `y` (engine-owned pane bounds).
+    pub fn pane_index_at_y(&self, y_css: f64) -> usize {
+        self.engine.pane_index_at_y(y_css)
+    }
+
     pub fn fit_content(&mut self) {
         self.engine.fit_content();
     }
