@@ -1056,7 +1056,9 @@ fn grid_line_style_and_color_flow_from_options() {
     // Turning the grid on yields solid lines in both families.
     chart
         .options
-        .apply_str(r##"{"grid": { "vertLines": { "visible": true }, "horzLines": { "visible": true } }}"##)
+        .apply_str(
+            r##"{"grid": { "vertLines": { "visible": true }, "horzLines": { "visible": true } }}"##,
+        )
         .unwrap();
     let mut frame = ChartFrame::default();
     chart.build_frame_into(&mut frame);
