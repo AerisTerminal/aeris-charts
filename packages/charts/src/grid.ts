@@ -59,6 +59,10 @@ export interface chart_grid_options {
    *  axis border color — the divider is axis chrome, so it tracks the same token (theme and
    *  explicit border changes); an explicit string pins it. */
   divider_color?: string | null;
+  /** Keyboard shortcuts for splitting (default `false`): `Ctrl/Cmd+H` splits the ACTIVE cell
+   *  horizontally (side by side), `Ctrl/Cmd+V` vertically (stacked). The active cell is the
+   *  last one pointer-pressed. Keys are ignored while typing in an input/editable field. */
+  shortcuts?: boolean;
 }
 
 export interface chart_grid {
@@ -68,6 +72,8 @@ export interface chart_grid {
   set_max_charts(n: number | null): void;
   /** Pin a divider color, or pass `null` to re-enter follow mode (divider = axis border). */
   set_divider_color(color: string | null): void;
+  /** The active cell (the last one pointer-pressed) — the target of the split shortcuts. */
+  active_cell(): grid_cell;
   destroy(): void;
 }
 
@@ -255,6 +261,10 @@ export async function create_chart_grid(
       remove: () => remove(record),
     } as handle_record;
     cells.set(id, record);
+    // The last pointer-pressed cell is the ACTIVE one — the target of the split shortcuts.
+    slot.addEventListener("pointerdown", () => {
+      active_id = id;
+    });
     // The slot must be ATTACHED (real size) before the chart measures its container: a
     // detached host reads 0×0, the first fit packs at minimum spacing, and the later
     // auto-resize explodes the visible range.
@@ -312,6 +322,10 @@ export async function create_chart_grid(
     cell.chart.remove();
     cell.slot.remove();
     cells.delete(cell.id);
+    // The active target moves to a surviving cell when the active one leaves.
+    if (active_id === cell.id) {
+      active_id = cells.keys().next().value as number;
+    }
     reconcile();
     emit_usage();
     return true;
@@ -319,6 +333,7 @@ export async function create_chart_grid(
 
   // The root chart (engine cell id 1).
   const root_id = (JSON.parse(workspace.cell_ids_json()) as number[])[0] as number;
+  let active_id = root_id;
   await add_chart(root_id);
   reconcile();
 
@@ -326,6 +341,31 @@ export async function create_chart_grid(
   // device grid — repaint them so the line keeps full device-pixel coverage.
   const on_window_resize = () => restyle_dividers();
   window.addEventListener("resize", on_window_resize);
+
+  /** Split shortcuts: Ctrl/Cmd+H splits the active cell horizontally, Ctrl/Cmd+V vertically.
+   *  Never fires while typing in a field or when the cap/veto rejects the split. */
+  const on_keydown = (e: KeyboardEvent) => {
+    if (!(e.ctrlKey || e.metaKey) || e.repeat) return;
+    const key = e.key.toLowerCase();
+    if (key !== "h" && key !== "v") return;
+    const target = e.target as HTMLElement | null;
+    if (
+      target !== null &&
+      (target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.tagName === "SELECT" ||
+        target.isContentEditable)
+    ) {
+      return;
+    }
+    const cell = cells.get(active_id);
+    if (cell === undefined) return;
+    e.preventDefault(); // Ctrl+H/Ctrl+V is history/paste in the browser
+    void split(cell, key === "h" ? "horizontal" : "vertical");
+  };
+  if (options.shortcuts === true) {
+    document.addEventListener("keydown", on_keydown);
+  }
 
   if (options.usage_heartbeat_ms && options.usage_heartbeat_ms > 0) {
     heartbeat = setInterval(emit_usage, options.usage_heartbeat_ms);
@@ -341,9 +381,12 @@ export async function create_chart_grid(
     set_divider_color: (color) => {
       divider_color = color;
       reconcile();
-    },    destroy: () => {
+    },
+    active_cell: () => cells.get(active_id)!.handle,
+    destroy: () => {
       if (heartbeat !== null) clearInterval(heartbeat);
       window.removeEventListener("resize", on_window_resize);
+      document.removeEventListener("keydown", on_keydown);
       for (const cell of cells.values()) {
         cell.chart.unsubscribe_options_change(restyle_dividers);
         cell.chart.remove();

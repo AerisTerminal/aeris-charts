@@ -152,7 +152,7 @@
       </label>
       <label title="Italic label glyphs — templates new drawings and applies live to the selected one"><input type="checkbox" id="drawing_italic"> italic</label>
       <button id="clear_drawings" type="button" title="Remove every drawing">clear all</button>
-      <span class="hint">Ctrl = snap crosshair + anchors to OHLC · Shift = straighten</span>
+      <span class="hint">Ctrl = snap crosshair + anchors to OHLC · Shift = straighten · Ctrl+H/V = split the active chart ↔/↕</span>
     </div>
 
     <div class="group" data-caption="Crosshair">
@@ -344,6 +344,8 @@ let chart;
 if (parity_fixture === null) {
   grid = await create_chart_grid(container, {
     chart_options,
+    // Split shortcuts: Ctrl/Cmd+H splits the active cell horizontally, Ctrl/Cmd+V vertically.
+    shortcuts: true,
     // The split dividers follow the axis border color (default): same token, theme-aware.
     on_usage: (u) => {
       document.getElementById("grid_usage").textContent =

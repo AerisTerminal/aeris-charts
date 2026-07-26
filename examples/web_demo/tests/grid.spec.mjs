@@ -267,3 +267,41 @@ test("split dividers follow the axis border token (theme and explicit changes)",
   await wait_grid(page);
   expect(await divider_rgb()).toBe("rgb(255, 136, 0)");
 });
+
+test("Ctrl+H/V split the active cell; typing fields and the cap still hold", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+  expect(await canvas_count(page)).toBe(4);
+
+  // Ctrl+H splits the (initially active) primary cell horizontally.
+  await page.keyboard.press("Control+h");
+  await page.waitForFunction(() => document.querySelectorAll("#chart_container canvas").length === 8);
+  await wait_cell_charts(page);
+  expect((await page.evaluate(() => window.__grid.usage())).chart_count).toBe(2);
+
+  // Ctrl+V splits the SAME active cell again (still the primary) vertically.
+  await page.keyboard.press("Control+v");
+  await page.waitForFunction(() => document.querySelectorAll("#chart_container canvas").length === 12);
+  await wait_cell_charts(page);
+  expect((await page.evaluate(() => window.__grid.usage())).chart_count).toBe(3);
+
+  // Pressing another cell retargets the shortcut: it splits, the primary stays put.
+  await activate_cell(page, 2);
+  await page.keyboard.press("Control+h");
+  await page.waitForFunction(() => document.querySelectorAll("#chart_container canvas").length === 16);
+  await wait_cell_charts(page);
+  expect((await page.evaluate(() => window.__grid.usage())).chart_count).toBe(4);
+
+  // Typing in an input does NOT split.
+  await page.locator("#drawing_text").click();
+  await page.keyboard.press("Control+v");
+  await page.waitForTimeout(300);
+  expect(await canvas_count(page)).toBe(16);
+
+  // The paywall cap still gates the shortcut (max 4): the next Ctrl+H is a no-op.
+  await page.selectOption("#max_charts", "4");
+  await page.keyboard.press("Control+h");
+  await page.waitForTimeout(300);
+  expect(await canvas_count(page)).toBe(16);
+  expect((await page.evaluate(() => window.__grid.usage())).chart_count).toBe(4);
+});
