@@ -1042,8 +1042,22 @@ fn grid_line_style_and_color_flow_from_options() {
     chart.time_scale.set_width(760.0);
     chart.fit_content();
 
-    // Default: solid grid in the under-paint bucket.
+    // Default: grid hidden (Aion ships grid-free); no grid lines in the under-paint bucket.
     use aion_render::draw_list::Prim;
+    let mut frame = ChartFrame::default();
+    chart.build_frame_into(&mut frame);
+    let grid_lines: Vec<_> = frame.panes[0]
+        .under
+        .iter()
+        .filter(|p| matches!(p, Prim::VLine { .. } | Prim::HLine { .. }))
+        .collect();
+    assert!(grid_lines.is_empty());
+
+    // Turning the grid on yields solid lines in both families.
+    chart
+        .options
+        .apply_str(r##"{"grid": { "vertLines": { "visible": true }, "horzLines": { "visible": true } }}"##)
+        .unwrap();
     let mut frame = ChartFrame::default();
     chart.build_frame_into(&mut frame);
     let grid_lines: Vec<_> = frame.panes[0]
@@ -1104,13 +1118,13 @@ fn crosshair_line_style_and_width_flow_from_options() {
     chart.fit_content();
     chart.crosshair = Some((200.0, 120.0));
 
-    // Default: reference LargeDashed crosshair at the crisp 1px width.
+    // Default: Aion's dotted crosshair at the crisp 1px width.
     let mut frame = ChartFrame::default();
     chart.build_frame_into(&mut frame);
     assert!(frame.panes[0].main.iter().any(|p| matches!(
         p,
         Prim::VLine {
-            style: LineStyle::Dashed,
+            style: LineStyle::Dotted,
             width: 1,
             ..
         }
@@ -1118,7 +1132,7 @@ fn crosshair_line_style_and_width_flow_from_options() {
     assert!(frame.panes[0].main.iter().any(|p| matches!(
         p,
         Prim::HLine {
-            style: LineStyle::Dashed,
+            style: LineStyle::Dotted,
             width: 1,
             ..
         }
@@ -1558,7 +1572,7 @@ fn series_options_json_covers_the_ts_field_set() {
     // TradingView-style last-value cluster options: LWC-parity defaults.
     assert_eq!(options["title"], "");
     assert_eq!(options["title_visible"], true);
-    assert_eq!(options["countdown_visible"], false);
+    assert_eq!(options["countdown_visible"], true);
 
     // Set state round-trips with colors and flags intact.
     chart.series[0].up_color = Some("#26a69a".to_string());
@@ -1682,7 +1696,7 @@ fn series_style_options_default_to_reference() {
     assert_eq!(options["price_line_source"], 0); // PriceLineSource.LastBar
     assert_eq!(options["price_line_width"], 1.0);
     assert_eq!(options["price_line_color"], "");
-    assert_eq!(options["price_line_style"], 2); // LineStyle.Dashed
+    assert_eq!(options["price_line_style"], 1); // LineStyle.Dotted
     assert_eq!(options["line_style"], 0); // LineStyle.Solid
     assert_eq!(options["line_visible"], true);
     assert_eq!(options["point_markers_radius"], serde_json::Value::Null);

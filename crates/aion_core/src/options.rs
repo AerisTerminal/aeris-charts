@@ -156,7 +156,8 @@ impl Default for GridLineOptions {
         Self {
             color: grid_color(),
             style: line_style::SOLID,
-            visible: true,
+            // Deliberate divergence from the reference (visible): Aion charts ship grid-free.
+            visible: false,
         }
     }
 }
@@ -176,7 +177,7 @@ pub struct GridOptions {
 pub struct CrosshairLineOptions {
     pub color: String,
     pub width: f64,
-    /// [`line_style`] value (default LargeDashed).
+    /// [`line_style`] value (default Dotted).
     pub style: u8,
     pub visible: bool,
     #[serde(rename = "labelVisible")]
@@ -190,8 +191,9 @@ impl Default for CrosshairLineOptions {
         Self {
             color: crosshair_color(),
             width: 1.0,
-            // Dashed renders the large pattern (what the reference's LargeDashed default showed).
-            style: line_style::DASHED,
+            // Deliberate divergence from the reference's LargeDashed default: Aion crosshair
+            // lines are dotted out of the box.
+            style: line_style::DOTTED,
             visible: true,
             label_visible: true,
             label_background_color: crosshair_label_bg(),
@@ -464,7 +466,7 @@ mod tests {
         assert_eq!(o.grid.horz_lines.style, line_style::SOLID);
         assert_eq!(o.crosshair.mode, crosshair_mode::NORMAL);
         assert!(!o.crosshair.do_not_snap_to_hidden_series_indices);
-        assert_eq!(o.crosshair.vert_line.style, line_style::DASHED);
+        assert_eq!(o.crosshair.vert_line.style, line_style::DOTTED);
         assert_eq!(o.crosshair.horz_line.label_background_color, "#131722");
         assert!(o.hovered_series_on_top);
         assert!(!o.auto_size);
@@ -527,7 +529,7 @@ mod tests {
         assert_eq!(o.grid.vert_lines.color, "#000000");
         // ...siblings within the same object survived...
         assert_eq!(o.grid.vert_lines.style, line_style::SOLID);
-        assert!(o.grid.vert_lines.visible);
+        assert!(!o.grid.vert_lines.visible);
         // ...and the neighbouring family is untouched.
         assert_eq!(o.grid.horz_lines.color, "#D6DCDE");
     }

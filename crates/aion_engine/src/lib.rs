@@ -332,7 +332,7 @@ pub struct SeriesEntry {
     /// darker chip of the last-value cluster. The chip renders even when the price label itself
     /// is off (`last_value_visible: false`).
     pub title_visible: bool,
-    /// TradingView-style candle-close countdown (default false): stack a countdown row below the
+    /// TradingView-style candle-close countdown (default true): stack a countdown row below the
     /// price inside the last-value cluster. Hidden when the series has no usable bar interval
     /// or the host installed no clock (`now_override`).
     pub countdown_visible: bool,
@@ -346,7 +346,7 @@ pub struct SeriesEntry {
     /// string is stored verbatim (reference `series.options()` returns the applied string); it is
     /// parsed only at render time, falling back to the follow behavior when unparseable.
     pub price_line_color: Option<String>,
-    /// reference `priceLineStyle` (default 2 = Dashed; the reference LineStyle numbering).
+    /// reference `priceLineStyle` (default 1 = Dotted; the reference LineStyle numbering).
     pub price_line_style: u8,
     /// reference line/area/baseline `lineStyle` (default 0 = Solid; reference LineStyle numbering).
     pub line_style: u8,
@@ -455,12 +455,12 @@ impl SeriesEntry {
             last_value_visible: true,
             title: String::new(),
             title_visible: true,
-            countdown_visible: false,
+            countdown_visible: true,
             price_line_visible: true,
             price_line_source: 0,
             price_line_width: 1.0,
             price_line_color: None,
-            price_line_style: 2,
+            price_line_style: 1,
             line_style: 0,
             line_visible: true,
             point_markers_radius: None,

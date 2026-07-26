@@ -252,7 +252,7 @@ fn crosshair_clamps_into_pane_instead_of_vanishing() {
     assert!(frame.panes[0].main.iter().any(|p| matches!(
         p,
         Prim::HLine {
-            style: LineStyle::Dashed,
+            style: LineStyle::Dotted,
             ..
         }
     )));
@@ -301,7 +301,7 @@ fn crosshair_draws_without_a_primary_series() {
     assert!(frame.panes[0].main.iter().any(|p| matches!(
         p,
         Prim::HLine {
-            style: LineStyle::Dashed,
+            style: LineStyle::Dotted,
             ..
         }
     )));
@@ -558,7 +558,7 @@ fn price_line_family_renders_per_series_with_reference_defaults() {
             .filter_map(|p| match p {
                 Prim::HLine {
                     y,
-                    style: LineStyle::Dashed,
+                    style: LineStyle::Dotted,
                     width,
                     color,
                     ..
@@ -569,7 +569,7 @@ fn price_line_family_renders_per_series_with_reference_defaults() {
     };
 
     // reference priceLineVisible default true: every visible series gets a built-in last-price
-    // line (dashed, 1px, following the bar color — the line color for a line series).
+    // line (dotted, 1px, following the bar color — the line color for a line series).
     let lines = dashed_ylines(&mut chart);
     assert_eq!(lines.len(), 2);
     assert!(lines
@@ -1214,7 +1214,7 @@ fn last_value_label_background_honors_the_per_point_color() {
     let frame = chart.build_frame();
     assert!(frame.panes[0].main.iter().any(|p| matches!(
         p,
-        Prim::HLine { color, style: LineStyle::Dashed, .. } if *color == Color(POINT_RED)
+        Prim::HLine { color, style: LineStyle::Dotted, .. } if *color == Color(POINT_RED)
     )));
 }
 
@@ -1277,14 +1277,14 @@ fn custom_series_last_value_line_and_label_follow_the_frame_values() {
     let frame = chart.build_frame();
     assert!(frame.panes[0].main.iter().any(|p| matches!(
         p,
-        Prim::HLine { color, style: LineStyle::Dashed, .. } if *color == global.color
+        Prim::HLine { color, style: LineStyle::Dotted, .. } if *color == global.color
     )));
     // priceLineSource LastVisible switches the line to the visible record.
     chart.series[custom].price_line_source = 1;
     let frame = chart.build_frame();
     assert!(frame.panes[0].main.iter().any(|p| matches!(
         p,
-        Prim::HLine { color, style: LineStyle::Dashed, .. } if *color == visible.color
+        Prim::HLine { color, style: LineStyle::Dotted, .. } if *color == visible.color
     )));
     // The last-value axis label always tracks the visible record (reference lastValueData(false)).
     let axis = chart.build_axis_frame(80.0, |t| t.len() as f64 * 7.0);

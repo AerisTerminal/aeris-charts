@@ -265,6 +265,7 @@ export type deep_partial<T> = { [K in keyof T]?: deep_partial<T[K]> };
 export interface grid_line_options {
   color: string;
   style: number;
+  /** Show the grid lines (Aion default `false` — charts ship grid-free). */
   visible: boolean;
 }
 
@@ -276,7 +277,7 @@ export interface crosshair_line_options {
   color?: string;
   /** Stroke width in CSS px. */
   width?: number;
-  /** Line style (`line_style` value; default LargeDashed). */
+  /** Line style (`line_style` value; default Dotted). */
   style?: number;
   visible?: boolean;
   /** Display the crosshair label on the relevant scale (reference `labelVisible`, default `true`). */
@@ -513,7 +514,7 @@ export interface series_options {
   title_visible?: boolean;
   /**
    * Stack a candle-close countdown row below the price inside the last-value cluster
-   * (TradingView-style; default `false`). The package ticks a 1s timer while any visible
+   * (TradingView-style; default `true`). The package ticks a 1s timer while any visible
    * series with data has this on.
    */
   countdown_visible?: boolean;
@@ -525,7 +526,7 @@ export interface series_options {
   price_line_width?: number;
   /** Price line color (reference `priceLineColor`); default `""` follows the series color. */
   price_line_color?: string;
-  /** Price line style, a `LINE_STYLE_TO_U8` value (reference `priceLineStyle`, default 2 Dashed). */
+  /** Price line style, a `LINE_STYLE_TO_U8` value (reference `priceLineStyle`, default 1 Dotted). */
   price_line_style?: number;
   /** Line stroke style 0-4, a `LINE_STYLE_TO_U8` value (reference `lineStyle`, default 0 Solid). */
   line_style?: number;
