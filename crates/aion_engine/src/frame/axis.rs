@@ -870,6 +870,27 @@ impl ChartEngine {
             (right, PriceScaleTarget::Right),
             (left, PriceScaleTarget::Left),
         ] {
+            // One chip width per scale: every price chip on the strip — a plain price-only
+            // box (indicator outputs) or a cluster's inner price/countdown box (the main
+            // series) — spans the widest label's box, so all chips line up exactly.
+            let shared_box_w = group
+                .iter()
+                .map(|label| {
+                    let text_w = label
+                        .price_text
+                        .as_deref()
+                        .map(&measure)
+                        .unwrap_or(0.0)
+                        .max(label.countdown.as_deref().map(&measure).unwrap_or(0.0));
+                    if label.title.is_none() && label.countdown.is_none() {
+                        // Plain single-box need: 1px edge + 5+5+5 padding.
+                        1.0 + 5.0 + 5.0 + 5.0 + text_w
+                    } else {
+                        // Cluster inner need: 1px edge + 5 + text + 5.
+                        1.0 + 5.0 + text_w + 5.0
+                    }
+                })
+                .fold(0.0_f64, f64::max);
             for label in group {
                 // Plain single-box label (no chip, no countdown): the reference-shaped emission,
                 // byte-identical to pre-cluster behavior.
@@ -877,7 +898,7 @@ impl ChartEngine {
                     let Some(text) = label.price_text else {
                         continue;
                     };
-                    let width = 1.0 + 5.0 + 5.0 + 5.0 + measure(&text);
+                    let width = shared_box_w.max(1.0 + 5.0 + 5.0 + 5.0 + measure(&text));
                     let (x, align, background_x) = if target == PriceScaleTarget::Left {
                         (
                             self.pane_left - 10.0,
@@ -912,7 +933,7 @@ impl ChartEngine {
                     });
                     continue;
                 }
-                self.append_last_value_cluster(labels, &label, target, measure);
+                self.append_last_value_cluster(labels, &label, target, measure, shared_box_w);
             }
         }
     }
@@ -930,6 +951,7 @@ impl ChartEngine {
         label: &LastValueLabel,
         target: PriceScaleTarget,
         measure: &F,
+        shared_inner_w: f64,
     ) where
         F: Fn(&str) -> f64,
     {
@@ -960,7 +982,9 @@ impl ChartEngine {
         const GAP: f64 = 1.0;
         const PAD: f64 = 5.0;
         let inner_text_w = price_w.max(countdown_w);
-        let inner_w = 1.0 + PAD + inner_text_w + PAD;
+        // The scale-shared chip width (the widest box on the strip) so every cluster's inner
+        // chips match the other series' price chips exactly; never narrower than its own text.
+        let inner_w = shared_inner_w.max(1.0 + PAD + inner_text_w + PAD);
         let border_x = if right_strip {
             self.pane_left + self.pane_w
         } else {

@@ -88,6 +88,34 @@ test("rsi and macd stack their own panes with channel strip and four-state histo
   expect(macd_green, "macd histogram strong-state pixels").toBeGreaterThan(20);
 });
 
+test("indicator chips: hidden auto-name, no countdown, 1px default, style overrides", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+  const out = await page.evaluate(() => {
+    const rsi = window.__chart.add_rsi(window.__main, 14);
+    const before = rsi.options();
+    // The platform surfaces its own chip: custom name, chip visible, dotted 2px line.
+    rsi.apply_options({ title: "RSI(14) 1h", title_visible: true, line_style: 1, line_width: 2 });
+    const after = rsi.options();
+    return {
+      before: {
+        title: before.title,
+        title_visible: before.title_visible,
+        countdown: before.countdown_visible,
+        width: before.line_width,
+      },
+      after: {
+        title: after.title,
+        title_visible: after.title_visible,
+        line_style: after.line_style,
+        line_width: after.line_width,
+      },
+    };
+  });
+  expect(out.before).toEqual({ title: "RSI 14", title_visible: false, countdown: false, width: 1 });
+  expect(out.after).toEqual({ title: "RSI(14) 1h", title_visible: true, line_style: 1, line_width: 2 });
+});
+
 test("stochastic, atr, vwap, and wma register with lineage and placement", async ({ page }) => {
   await page.goto("/");
   await wait_grid(page);

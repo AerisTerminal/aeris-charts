@@ -325,6 +325,19 @@ impl ChartEngine {
         let ids = (0..outputs)
             .map(|_| self.add_series(SeriesKind::Line))
             .collect::<Vec<_>>();
+        // Indicator chrome defaults: no candle-close countdown (theirs is a line value, not a
+        // bar close), the auto-generated name chip stays hidden until the platform enables it
+        // (`title_visible`), and the line draws at 1px — every default is overridable through
+        // the ordinary series options.
+        let title = indicator_title(&kind);
+        for &id in &ids {
+            if let Some(s) = self.series.iter_mut().find(|s| s.id == id) {
+                s.countdown_visible = false;
+                s.title_visible = false;
+                s.title = title.clone();
+                s.line_width = Some(1.0);
+            }
+        }
         self.indicators.push(IndicatorBinding {
             source,
             kind,
@@ -545,6 +558,34 @@ impl ChartEngine {
 fn rolling_mean(values: &[f64], period: usize) -> Option<f64> {
     (period > 0 && values.len() >= period)
         .then(|| values[values.len() - period..].iter().sum::<f64>() / period as f64)
+}
+
+/// The auto-generated indicator name behind the (hidden-by-default) name chip — what
+/// TradingView shows in its indicator legend ("SMA 20", "MACD 12 26 9"). Platforms can read it
+/// via the series options or override it with their own `title`.
+fn indicator_title(kind: &IndicatorKind) -> String {
+    let params = |d: f64| {
+        if d.fract() == 0.0 {
+            format!("{}", d as i64)
+        } else {
+            format!("{d}")
+        }
+    };
+    match kind {
+        IndicatorKind::Sma { period } => format!("SMA {period}"),
+        IndicatorKind::Ema { period } => format!("EMA {period}"),
+        IndicatorKind::Bollinger { period, deviation } => {
+            format!("Bollinger {period} {}", params(*deviation))
+        }
+        IndicatorKind::Rsi { period } => format!("RSI {period}"),
+        IndicatorKind::Macd { fast, slow, signal } => format!("MACD {fast} {slow} {signal}"),
+        IndicatorKind::Stochastic { k_period, d_period } => {
+            format!("Stochastic {k_period} {d_period}")
+        }
+        IndicatorKind::Atr { period } => format!("ATR {period}"),
+        IndicatorKind::Vwap => "VWAP".to_string(),
+        IndicatorKind::Wma { period } => format!("WMA {period}"),
+    }
 }
 
 fn rolling_bollinger(values: &[f64], period: usize, deviation: f64) -> Option<(f64, f64, f64)> {

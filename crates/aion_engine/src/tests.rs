@@ -925,6 +925,58 @@ fn remove_series_tombstones_slot_and_drops_derived_indicators() {
 }
 
 #[test]
+fn indicator_outputs_drop_the_countdown_hide_the_name_chip_and_default_to_1px() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let values = [1.0, 2.0, 3.0, 4.0, 5.0];
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0, 3.0, 4.0, 5.0],
+            &values,
+            &values,
+            &values,
+            &values,
+        )
+        .unwrap();
+    let rsi = chart.add_rsi(0, 2).expect("valid rsi");
+    let entry = chart.series.iter().find(|s| s.id == rsi).unwrap();
+    // No candle countdown on a line value, the auto name chip exists but stays hidden, 1px line.
+    assert!(!entry.countdown_visible);
+    assert!(!entry.title_visible);
+    assert_eq!(entry.title, "RSI 2");
+    assert_eq!(entry.line_width, Some(1.0));
+
+    // The whole native set auto-names itself for the platform's chips.
+    let sma = chart.add_sma(0, 2).unwrap();
+    let ema = chart.add_ema(0, 2).unwrap();
+    let bands = chart.add_bollinger(0, 3, 2.0);
+    let bands_frac = chart.add_bollinger(0, 3, 2.5);
+    let macd = chart.add_macd(0, 2, 3, 2);
+    let stoch = chart.add_stochastic(0, 2, 3);
+    let atr = chart.add_atr(0, 2).unwrap();
+    let vwap = chart.add_vwap(0, None).unwrap();
+    let wma = chart.add_wma(0, 3).unwrap();
+    let title_of = |id: SeriesId| {
+        chart
+            .series
+            .iter()
+            .find(|s| s.id == id)
+            .unwrap()
+            .title
+            .clone()
+    };
+    assert_eq!(title_of(sma), "SMA 2");
+    assert_eq!(title_of(ema), "EMA 2");
+    assert_eq!(title_of(bands[0]), "Bollinger 3 2");
+    assert_eq!(title_of(bands_frac[0]), "Bollinger 3 2.5");
+    assert_eq!(title_of(macd[0]), "MACD 2 3 2");
+    assert_eq!(title_of(stoch[0]), "Stochastic 2 3");
+    assert_eq!(title_of(atr), "ATR 2");
+    assert_eq!(title_of(vwap), "VWAP");
+    assert_eq!(title_of(wma), "WMA 3");
+}
+
+#[test]
 fn oscillator_indicators_get_their_own_pane_and_band_levels() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     chart

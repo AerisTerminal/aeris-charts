@@ -715,6 +715,59 @@ fn dashed_line_style_splits_the_polyline_into_solid_runs() {
 }
 
 #[test]
+fn indicator_price_chip_matches_the_main_chip_width_and_stands_one_row_tall() {
+    let mut chart = countdown_chart();
+    chart.now_override = Some(250.0);
+    chart.series[0].title = "BTC".to_string();
+    chart.series[0].countdown_visible = true;
+    chart.add_sma(0, 2).expect("valid sma");
+
+    let labels = boxed_labels(&mut chart);
+    // Main: title chip + price chip + countdown row; the SMA: its single price box (no
+    // countdown, no name chip by default).
+    assert_eq!(labels.len(), 4);
+    let main_price = labels
+        .iter()
+        .find(|l| l.text == "12.50")
+        .expect("main price chip");
+    let sma_price = labels
+        .iter()
+        .find(|l| l.text == "12.00")
+        .expect("sma price chip");
+    let bg = |l: &AxisLabel| l.background.expect("boxed");
+    assert_eq!(
+        bg(main_price).2,
+        bg(sma_price).2,
+        "one shared chip width across the scale"
+    );
+    assert_eq!(
+        bg(main_price).3,
+        bg(sma_price).3,
+        "the indicator's box is a single row tall"
+    );
+}
+
+#[test]
+fn indicator_lines_support_dotted_and_dashed_styles() {
+    let polylines = |chart: &mut ChartEngine| {
+        chart.build_frame().panes[0]
+            .main
+            .iter()
+            .filter(|p| matches!(p, Prim::Polyline { .. }))
+            .count()
+    };
+    let mut chart = countdown_chart();
+    let sma = chart.add_sma(0, 2).expect("valid sma");
+    let solid = polylines(&mut chart);
+    chart.series[sma].line_style = 1; // dotted
+    let dotted = polylines(&mut chart);
+    assert!(dotted > solid, "dotted splits the stroke into dash runs");
+    chart.series[sma].line_style = 2; // dashed
+    let dashed = polylines(&mut chart);
+    assert!(dashed > solid, "dashed splits the stroke into dash runs");
+}
+
+#[test]
 fn bollinger_band_fill_paints_between_upper_and_lower() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     let times = [1.0, 2.0, 3.0, 4.0];
