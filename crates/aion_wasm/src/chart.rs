@@ -1455,6 +1455,11 @@ impl AionChart {
     pub fn set_crosshair_ohlc_magnet(&mut self, enabled: bool) {
         self.inner.borrow_mut().engine.crosshair_ohlc_magnet = enabled;
     }
+
+    /// Whether the OHLC crosshair magnet is currently engaged.
+    pub fn crosshair_ohlc_magnet(&self) -> bool {
+        self.inner.borrow().engine.crosshair_ohlc_magnet
+    }
     pub fn clear_crosshair(&mut self) {
         self.inner.borrow_mut().clear_crosshair();
     }

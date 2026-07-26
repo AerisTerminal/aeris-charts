@@ -79,6 +79,11 @@ export interface chart_grid {
   set_divider_color(color: string | null): void;
   /** The active cell (the last one pointer-pressed) — the target of the split shortcuts. */
   active_cell(): grid_cell;
+  /** Maximize a cell to the full container (the others + dividers hide), or pass `null` to
+   *  restore. Ctrl/Cmd+click on a cell toggles this (TradingView's maximize pane). */
+  maximize(cell: grid_cell | null): void;
+  /** The maximized cell, or `null` when the grid is in its normal layout. */
+  maximized_cell(): grid_cell | null;
   destroy(): void;
 }
 
@@ -267,9 +272,15 @@ export async function create_chart_grid(
     } as handle_record;
     cells.set(id, record);
     // The last pointer-pressed cell is the ACTIVE one — the target of the split shortcuts.
-    slot.addEventListener("pointerdown", () => {
+    // Ctrl/Cmd+click toggles the cell's full-container maximize (never while a drawing tool is
+    // armed on it — a Ctrl+click there is a magnet anchor placement). CAPTURE phase: the
+    // chart's gesture layer stops propagation on bubble, which would otherwise eat both.
+    slot.addEventListener("pointerdown", (e) => {
       active_id = id;
-    });
+      if ((e.ctrlKey || e.metaKey) && record.chart !== null && record.chart.active_drawing_tool() === null) {
+        toggle_maximize(id);
+      }
+    }, true);
     // The slot must be ATTACHED (real size) before the chart measures its container: a
     // detached host reads 0×0, the first fit packs at minimum spacing, and the later
     // auto-resize explodes the visible range.
@@ -308,6 +319,41 @@ export async function create_chart_grid(
     // The split wrappers (and their dividers) are rebuilt wholesale; cell slots are reused.
     dividers.clear();
     container.replaceChildren(build(layout));
+    apply_maximize();
+  };
+
+  /** The maximized cell id (full container), or `null` in the normal layout. */
+  let maximized_id: number | null = null;
+  /** Apply the maximize state: the maximized cell takes the container; the other cells and the
+   *  dividers hide (`display:none`). The maximized slot also gets an explicit `1 1 100%` flex —
+   *  its ratio weight would otherwise cap it at exactly its share: with a flex-grow sum < 1 the
+   *  spec distributes free space UN-normalized, so a 0.5-weight slot stays at 50% even alone. */
+  const apply_maximize = () => {
+    for (const record of cells.values()) {
+      const on = maximized_id === null || record.id === maximized_id;
+      record.slot.style.display = on ? "" : "none";
+      if (maximized_id !== null && record.id === maximized_id) {
+        record.slot.style.flex = "1 1 100%";
+      }
+    }
+    container.querySelectorAll(".aion-grid-divider").forEach((el) => {
+      (el as HTMLElement).style.display = maximized_id === null ? "" : "none";
+    });
+  };
+  /** Set (or clear) the maximized cell; clearing rebuilds the layout so the engine's split
+   *  ratios win their flex weights back (the maximize override replaced them). */
+  const set_maximized = (id: number | null) => {
+    maximized_id = id;
+    if (maximized_id === null) {
+      for (const record of cells.values()) record.slot.style.flex = "";
+      reconcile(); // re-derives the ratio weights; its tail reapplies the (now-clear) state
+      return;
+    }
+    apply_maximize();
+  };
+  /** Ctrl/Cmd+click semantics: maximize the cell, or restore when it's already maximized. */
+  const toggle_maximize = (id: number) => {
+    set_maximized(maximized_id === id ? null : id);
   };
 
   const split = async (cell: cell_record, direction: split_direction): Promise<grid_cell | null> => {
@@ -384,6 +430,11 @@ export async function create_chart_grid(
       reconcile();
     },
     active_cell: () => cells.get(active_id)!.handle,
+    maximize: (cell) => set_maximized(cell === null ? null : cell.id),
+    maximized_cell: () => {
+      const record = maximized_id === null ? undefined : cells.get(maximized_id);
+      return record === undefined ? null : record.handle;
+    },
     destroy: () => {
       if (heartbeat !== null) clearInterval(heartbeat);
       window.removeEventListener("resize", on_window_resize);

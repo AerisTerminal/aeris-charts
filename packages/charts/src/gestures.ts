@@ -130,12 +130,12 @@ export function install_gestures(chart: chart_impl): () => void {
     chart.emit_crosshair(x, y);
   };
 
-  // TradingView's Ctrl-held magnet: while Ctrl/Cmd is down the Normal-mode crosshair snaps to
-  // the hovered bar's OHLC (engine `crosshair_ohlc_magnet`, consumed by the frame's
-  // `crosshair_snap`). Forwarded on every pointer move/down and on modifier key events, so a
-  // press/release without mouse movement still refreshes the snap live.
+  // TradingView's Ctrl-held magnet, scoped to DRAWING work: the Normal-mode crosshair snaps
+  // to the hovered bar's OHLC only while a drawing tool is armed (anchor placement/preview) —
+  // plain browsing never price-snaps on Ctrl. Forwarded on every pointer move/down and on
+  // modifier key events, so a press/release without mouse movement still refreshes the snap live.
   const apply_crosshair_magnet = (e: { ctrlKey: boolean; metaKey: boolean }) => {
-    wasm.set_crosshair_ohlc_magnet(e.ctrlKey || e.metaKey);
+    wasm.set_crosshair_ohlc_magnet((e.ctrlKey || e.metaKey) && chart.creation_armed());
   };
   const on_modifier_key = (e: KeyboardEvent) => {
     if (e.key !== "Control" && e.key !== "Meta") return;

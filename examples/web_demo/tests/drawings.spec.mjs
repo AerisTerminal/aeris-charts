@@ -861,6 +861,9 @@ test("Shift squares a rectangle on the second placement click", async ({ page })
 
 test("Ctrl magnets the crosshair to the hovered bar's OHLC", async ({ page }) => {
   await goto_fixture(page);
+  // The Ctrl magnet engages only for drawing work: arm a tool first (plain browsing never
+  // price-snaps on Ctrl).
+  await page.evaluate(() => window.__chart.set_drawing_tool("trend_line"));
   // The crosshair's horizontal line is the default crosshair gray â€” find the pane row with
   // the most of it (the dashed line covers the pane width).
   const CROSS = [149, 152, 161]; // #9598a1
@@ -1387,7 +1390,7 @@ test("rectangle: middle pans unselected, drags selected, 8 anchors from the firs
   }), { points });
   const range = () => page.evaluate(() => window.__chart.time_scale().get_visible_logical_range());
 
-  // Unselected: a middle grab pans the chart — the rectangle does not move.
+  // Unselected: a middle grab pans the chart ï¿½ the rectangle does not move.
   const r0 = await range();
   const center = await center_of(before.points);
   await page.mouse.move(center.x, center.y);
@@ -1441,7 +1444,7 @@ test("a vertical line body-drag with Ctrl snaps to the bar center (TradingView m
     window.__chart.add_drawing("vertical_line", [{ logical: l1, price: 0 }]);
   }, s);
   await settle_frames(page);
-  // Grab the line's body (not its anchor handle) with Ctrl and drag between two bars — the
+  // Grab the line's body (not its anchor handle) with Ctrl and drag between two bars ï¿½ the
   // single-anchor line's body drag IS the anchor drag, so the magnet snaps it to a bar center.
   const grab = await spot(page, s.l1, s.p_mid);
   const between = await page.evaluate(({ l0, l1 }) => {
@@ -1458,4 +1461,35 @@ test("a vertical line body-drag with Ctrl snaps to the bar center (TradingView m
   await settle_frames(page);
   const points = (await drawings(page))[0].points;
   expect(Number.isInteger(points[0].logical), "snapped onto a bar center").toBe(true);
+});
+
+test("Ctrl magnet engages only while a drawing tool is armed", async ({ page }) => {
+  await page.goto("/?runtimeTest=presentedFrame&backend=canvas2d&forceFallbackAdapter=1");
+  await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
+  await page.waitForFunction(() => performance.now() > 600);
+  const box = await page.locator("#chart_container canvas").first().boundingBox();
+  const hover = async () => {
+    for (let i = 0; i < 4; i++) {
+      await page.mouse.move(box.x + box.width / 2 - 30 + i * 20, box.y + box.height / 2);
+      await page.waitForTimeout(120);
+    }
+  };
+  const magnet = () => page.evaluate(() => window.__chart.wasm.crosshair_ohlc_magnet());
+
+  // Plain browsing: Ctrl held, no tool armed ï¿½ the crosshair must NOT price-snap.
+  await page.keyboard.down("Control");
+  await hover();
+  expect(await magnet()).toBe(false);
+
+  // Armed tool: the same Ctrl hover engages the magnet for the drawing flow.
+  await page.evaluate(() => window.__chart.set_drawing_tool("vertical_line"));
+  await hover();
+  expect(await magnet()).toBe(true);
+
+  // Disarming (Escape) drops it back off even with Ctrl still held.
+  await focus_overlay(page);
+  await page.keyboard.press("Escape");
+  await hover();
+  expect(await magnet()).toBe(false);
+  await page.keyboard.up("Control");
 });

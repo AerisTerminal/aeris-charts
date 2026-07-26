@@ -347,3 +347,42 @@ test("the shortcut registry accepts combo overrides", async ({ page }) => {
   expect(await page.evaluate(() => window.__scratch.chart_count())).toBe(2);
   await page.evaluate(() => { window.__scratch.destroy(); document.getElementById("scratch_grid").remove(); });
 });
+
+test("Ctrl+click maximizes a cell to full container and restores", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+  await page.click("#split_h");
+  await page.waitForFunction(() => document.querySelectorAll("#chart_container canvas").length === 8);
+  await wait_cell_charts(page);
+
+  const widths = () => page.evaluate(() => window.__grid.cells().map((c) => {
+    const r = c.element.getBoundingClientRect();
+    return { display: c.element.style.display, width: r.width };
+  }));
+  const before = await widths();
+  expect(before[1].width).toBeGreaterThan(100);
+
+  // Ctrl+click the second cell: it takes the container, the first cell and dividers hide.
+  const point = await page.evaluate(() => {
+    const rect = window.__grid.cells()[1].element.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  });
+  await page.keyboard.down("Control");
+  await page.mouse.click(point.x, point.y);
+  await page.keyboard.up("Control");
+  const maximized = await widths();
+  expect(maximized[0].display).toBe("none");
+  expect(maximized[1].display).toBe("");
+  expect(maximized[1].width).toBeGreaterThan(before[1].width + before[0].width - 20);
+  expect(await page.evaluate(() => window.__grid.maximized_cell()?.id ?? null)).toBe(2);
+
+  // Ctrl+click again: everything reappears.
+  await page.keyboard.down("Control");
+  await page.mouse.click(point.x, point.y);
+  await page.keyboard.up("Control");
+  const restored = await widths();
+  expect(restored[0].display).toBe("");
+  expect(restored[1].display).toBe("");
+  expect(restored[1].width).toBeLessThan(restored[0].width + 20);
+  expect(await page.evaluate(() => window.__grid.maximized_cell())).toBeNull();
+});
