@@ -1596,6 +1596,9 @@ export class chart_impl implements chart_api {
     this.series_by_id.set(id, series);
     if (options) series.apply_options(options);
     this.emit_series_change(this.series_added_subs, series, this.pane_of_series(id));
+    // Separate-pane indicators create their pane engine-side: relayout now so the new pane
+    // gets real bounds on this frame instead of waiting for the next incidental repaint.
+    this.repaint();
     return series;
   }
 
@@ -1611,6 +1614,34 @@ export class chart_impl implements chart_api {
     const ids = this.wasm.add_bollinger(source.id, Math.max(1, Math.floor(period)), deviation);
     if (ids.length !== 3) throw new Error("aion: invalid Bollinger configuration");
     return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options), this.indicator_series(ids[2]!, options)];
+  }
+
+  add_rsi(source: series_api, period: number, options?: Partial<series_options>): series_api {
+    return this.indicator_series(this.wasm.add_rsi(source.id, Math.max(1, Math.floor(period))), options);
+  }
+
+  add_macd(source: series_api, fast: number, slow: number, signal: number, options?: Partial<series_options>): [series_api, series_api, series_api] {
+    const ids = this.wasm.add_macd(source.id, Math.max(1, Math.floor(fast)), Math.max(1, Math.floor(slow)), Math.max(1, Math.floor(signal)));
+    if (ids.length !== 3) throw new Error("aion: invalid MACD configuration");
+    return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options), this.indicator_series(ids[2]!, options)];
+  }
+
+  add_stochastic(source: series_api, k_period: number, d_period: number, options?: Partial<series_options>): [series_api, series_api] {
+    const ids = this.wasm.add_stochastic(source.id, Math.max(1, Math.floor(k_period)), Math.max(1, Math.floor(d_period)));
+    if (ids.length !== 2) throw new Error("aion: invalid Stochastic configuration");
+    return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options)];
+  }
+
+  add_atr(source: series_api, period: number, options?: Partial<series_options>): series_api {
+    return this.indicator_series(this.wasm.add_atr(source.id, Math.max(1, Math.floor(period))), options);
+  }
+
+  add_vwap(source: series_api, volume_source?: series_api | null, options?: Partial<series_options>): series_api {
+    return this.indicator_series(this.wasm.add_vwap(source.id, volume_source?.id ?? -1), options);
+  }
+
+  add_wma(source: series_api, period: number, options?: Partial<series_options>): series_api {
+    return this.indicator_series(this.wasm.add_wma(source.id, Math.max(1, Math.floor(period))), options);
   }
 
   subscribe_crosshair_move(handler: mouse_event_handler): void {

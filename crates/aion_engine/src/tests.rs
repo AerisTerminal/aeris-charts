@@ -925,6 +925,191 @@ fn remove_series_tombstones_slot_and_drops_derived_indicators() {
 }
 
 #[test]
+fn oscillator_indicators_get_their_own_pane_and_band_levels() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0, 3.0, 4.0, 5.0],
+            &[1.0, 2.0, 3.0, 4.0, 5.0],
+            &[1.0, 2.0, 3.0, 4.0, 5.0],
+            &[1.0, 2.0, 3.0, 4.0, 5.0],
+            &[1.0, 2.0, 3.0, 4.0, 5.0],
+        )
+        .unwrap();
+    let rsi = chart.add_rsi(0, 2).expect("valid rsi");
+    // A fresh oscillator pane holds the output at the reduced stretch.
+    assert_eq!(chart.panes.len(), 2);
+    assert!((chart.panes[1].stretch_factor - 0.3).abs() < 1e-9);
+    let entry = chart.series.iter().find(|s| s.id == rsi).unwrap();
+    assert_eq!(entry.pane_index, 1);
+    // Dotted muted 30/70 band lines without axis labels.
+    let mut prices: Vec<f64> = entry.price_lines.iter().map(|l| l.price).collect();
+    prices.sort_by(|a, b| a.total_cmp(b));
+    assert_eq!(prices, vec![30.0, 70.0]);
+    assert!(entry
+        .price_lines
+        .iter()
+        .all(|l| !l.axis_label_visible && l.style == LineStyle::Dotted));
+    assert_eq!(chart.indicator_info(rsi).unwrap().kind, "rsi");
+}
+
+#[test]
+fn macd_outputs_are_line_line_histogram_with_four_state_colors() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let values = [1.0, 2.0, 3.0, 4.0, 3.0, 2.0, 1.0, 2.0, 3.0, 4.0];
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
+            &values,
+            &values,
+            &values,
+            &values,
+        )
+        .unwrap();
+    let ids = chart.add_macd(0, 2, 3, 2);
+    assert_eq!(ids.len(), 3);
+    assert_eq!(chart.series_kind(ids[0]), Some(SeriesKind::Line));
+    assert_eq!(chart.series_kind(ids[1]), Some(SeriesKind::Line));
+    assert_eq!(chart.series_kind(ids[2]), Some(SeriesKind::Histogram));
+    // All three live in the same new oscillator pane.
+    assert!(ids
+        .iter()
+        .all(|&id| chart.series.iter().find(|s| s.id == id).unwrap().pane_index == 1));
+    // Output slots and the packed signal period.
+    assert_eq!(chart.indicator_info(ids[0]).unwrap().output_index, 0);
+    assert_eq!(chart.indicator_info(ids[2]).unwrap().output_index, 2);
+    let info = chart.indicator_info(ids[0]).unwrap();
+    assert_eq!(
+        (info.kind, info.period, info.deviation),
+        ("macd", 3, Some(2.0))
+    );
+    // Every installed histogram row carries one of the four palette colors.
+    let rows = chart.data.series_data(ids[2]).unwrap().1[3].len();
+    assert!(rows > 0);
+    const PALETTE: [u32; 4] = [0x26a69aff, 0x26a69a80, 0xef5350ff, 0xef535080];
+    for r in 0..rows {
+        let color = chart
+            .data
+            .point_color(
+                ids[2],
+                aion_core::model::data_layer::PointColorChannel::Body,
+                r,
+            )
+            .expect("every histogram row is colored");
+        assert!(
+            PALETTE.contains(&color),
+            "color {color:#x} is in the palette"
+        );
+    }
+}
+
+#[test]
+fn vwap_stays_on_the_source_pane_and_weights_by_the_volume_series() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart
+        .set_series_data(
+            0,
+            &[0.0, 3_600.0, 86_400.0],
+            &[10.0, 20.0, 30.0],
+            &[10.0, 20.0, 30.0],
+            &[10.0, 20.0, 30.0],
+            &[10.0, 20.0, 30.0],
+        )
+        .unwrap();
+    let volume = chart.add_series(SeriesKind::Histogram);
+    chart
+        .set_series_data(
+            volume,
+            &[0.0, 3_600.0, 86_400.0],
+            &[1.0, 3.0, 5.0],
+            &[1.0, 3.0, 5.0],
+            &[1.0, 3.0, 5.0],
+            &[1.0, 3.0, 5.0],
+        )
+        .unwrap();
+    let vwap = chart.add_vwap(0, Some(volume)).expect("valid vwap");
+    assert_eq!(
+        chart
+            .series
+            .iter()
+            .find(|s| s.id == vwap)
+            .unwrap()
+            .pane_index,
+        0
+    );
+    assert_eq!(chart.indicator_info(vwap).unwrap().kind, "vwap");
+    let values = &chart.data.series_data(vwap).unwrap().1[3];
+    // (10*1 + 20*3) / 4 = 17.5 on day 0; the new UTC day restarts at 30.
+    assert!((values[1] - 17.5).abs() < 1e-9);
+    assert!((values[2] - 30.0).abs() < 1e-9);
+}
+
+#[test]
+fn wma_atr_and_stochastic_place_and_report() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let values = [1.0, 2.0, 3.0, 4.0, 5.0];
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0, 3.0, 4.0, 5.0],
+            &values,
+            &values,
+            &values,
+            &values,
+        )
+        .unwrap();
+    let wma = chart.add_wma(0, 3).expect("valid wma");
+    assert_eq!(
+        chart
+            .series
+            .iter()
+            .find(|s| s.id == wma)
+            .unwrap()
+            .pane_index,
+        0
+    );
+    assert_eq!(chart.indicator_info(wma).unwrap().kind, "wma");
+    // (1*1 + 2*2 + 3*3) / 6 at index 2.
+    let wma_values = &chart.data.series_data(wma).unwrap().1[3];
+    assert!((wma_values[0] - 14.0 / 6.0).abs() < 1e-9);
+
+    let atr = chart.add_atr(0, 2).expect("valid atr");
+    assert_ne!(
+        chart
+            .series
+            .iter()
+            .find(|s| s.id == atr)
+            .unwrap()
+            .pane_index,
+        0
+    );
+    assert_eq!(chart.indicator_info(atr).unwrap().kind, "atr");
+
+    let stoch = chart.add_stochastic(0, 2, 2);
+    assert_eq!(stoch.len(), 2);
+    let info = chart.indicator_info(stoch[0]).unwrap();
+    assert_eq!(
+        (info.kind, info.period, info.deviation),
+        ("stochastic", 2, Some(2.0))
+    );
+    assert_eq!(chart.indicator_info(stoch[1]).unwrap().output_index, 1);
+    // 20/80 band levels on the %K output.
+    let mut prices: Vec<f64> = chart
+        .series
+        .iter()
+        .find(|s| s.id == stoch[0])
+        .unwrap()
+        .price_lines
+        .iter()
+        .map(|l| l.price)
+        .collect();
+    prices.sort_by(|a, b| a.total_cmp(b));
+    assert_eq!(prices, vec![20.0, 80.0]);
+}
+
+#[test]
 fn bollinger_creates_three_output_series() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     chart

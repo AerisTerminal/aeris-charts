@@ -17,7 +17,7 @@ use aion_core::scale::price_scale_core::{PriceScaleCore, PriceScaleMode};
 use aion_render::bars::{build_bars, BarItem, BarsParams};
 use aion_render::candles::{build_candles, CandleItem, CandlesParams};
 use aion_render::color::Color;
-use aion_render::draw_list::{Gradient, LineStyle, LineType, Prim};
+use aion_render::draw_list::{Gradient, IRect, LineStyle, LineType, Prim};
 use aion_render::histogram::{build_histogram, HistogramItem, HistogramParams};
 use aion_render::line::{dash_split, expand_line, LinePoint};
 
@@ -471,7 +471,10 @@ fn translate_prims_x(prims: &mut [Prim], dx: i32) {
                 c[0] += dxf;
             }
             Prim::Text { x, .. } => *x += dxf,
-            Prim::Polyline { .. } | Prim::AreaFill { .. } | Prim::Background { .. } => {}
+            Prim::Polyline { .. }
+            | Prim::AreaFill { .. }
+            | Prim::BandFill { .. }
+            | Prim::Background { .. } => {}
         }
     }
 }
@@ -680,18 +683,45 @@ impl ChartEngine {
                             &mut out.main,
                             scale,
                         ),
-                        SeriesKind::Line | SeriesKind::Area => self.build_line_frame(
-                            *rs,
-                            from,
-                            to,
-                            hpr,
-                            vpr,
-                            pane.top,
-                            pane.top + pane.height,
-                            &mut out.main,
-                            &mut out.points,
-                            scale,
-                        ),
+                        SeriesKind::Line | SeriesKind::Area => {
+                            // Oscillator channel band (RSI 30/70, Stochastic 20/80): a
+                            // translucent strip between the two price levels spanning the
+                            // pane, under the indicator's lines (TradingView-style).
+                            if let Some((lower_level, upper_level)) = self.oscillator_channel(rs.id)
+                            {
+                                let y_upper = (scale
+                                    .price_to_coordinate(upper_level, rs.base_value)
+                                    * vpr) as f32;
+                                let y_lower = (scale
+                                    .price_to_coordinate(lower_level, rs.base_value)
+                                    * vpr) as f32;
+                                let top = y_upper.min(y_lower);
+                                let height = (y_lower - y_upper).abs();
+                                if height >= 1.0 {
+                                    out.main.push(Prim::Rect {
+                                        rect: IRect {
+                                            x: 0,
+                                            y: top.round() as i32,
+                                            w: pane_w_px as i32,
+                                            h: height.round() as i32,
+                                        },
+                                        color: Color::rgba(0x78, 0x7B, 0x86, 0x33),
+                                    });
+                                }
+                            }
+                            self.build_line_frame(
+                                *rs,
+                                from,
+                                to,
+                                hpr,
+                                vpr,
+                                pane.top,
+                                pane.top + pane.height,
+                                &mut out.main,
+                                &mut out.points,
+                                scale,
+                            )
+                        }
                         SeriesKind::Baseline => self.build_baseline_frame(
                             *rs,
                             from,

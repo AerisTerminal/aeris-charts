@@ -210,6 +210,40 @@ pub fn geom_prim_to_tris(prim: &Prim, points: &[[f32; 2]], out: &mut Vec<TriVert
             );
             out.extend(mesh.vertices.iter().map(tri));
         }
+        Prim::BandFill {
+            upper_first,
+            lower_first,
+            point_count,
+            fill,
+        } => {
+            let upper = pool_slice(points, *upper_first, *point_count);
+            let lower = pool_slice(points, *lower_first, *point_count);
+            let n = upper.len().min(lower.len());
+            if n < 2 {
+                return;
+            }
+            let col = [
+                fill.r() as f32 / 255.0,
+                fill.g() as f32 / 255.0,
+                fill.b() as f32 / 255.0,
+                fill.a() as f32 / 255.0,
+            ];
+            // Two triangles per segment quad (upper_i, lower_i, lower_i+1, upper_i+1).
+            let v = |p: &aion_render::line::LinePoint| TriVertex {
+                pos: [p.x as f32, p.y as f32],
+                color: col,
+            };
+            for i in 0..n - 1 {
+                out.extend([
+                    v(&upper[i]),
+                    v(&lower[i]),
+                    v(&lower[i + 1]),
+                    v(&upper[i]),
+                    v(&lower[i + 1]),
+                    v(&upper[i + 1]),
+                ]);
+            }
+        }
         Prim::Polyline {
             first_point,
             point_count,

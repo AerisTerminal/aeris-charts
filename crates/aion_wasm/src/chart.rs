@@ -632,6 +632,40 @@ impl AionChart {
             .add_bollinger(source_id, period, deviation)
     }
 
+    /// Add a Wilder RSI line in its own oscillator pane (30/70 band lines + channel fill).
+    pub fn add_rsi(&mut self, source_id: u32, period: u32) -> u32 {
+        self.inner.borrow_mut().add_rsi(source_id, period)
+    }
+
+    /// Add MACD line, signal line, and histogram (four-state colors) in their own pane.
+    pub fn add_macd(&mut self, source_id: u32, fast: u32, slow: u32, signal: u32) -> Vec<u32> {
+        self.inner
+            .borrow_mut()
+            .add_macd(source_id, fast, slow, signal)
+    }
+
+    /// Add Stochastic %K and %D lines in their own pane (20/80 band lines + channel fill).
+    pub fn add_stochastic(&mut self, source_id: u32, k_period: u32, d_period: u32) -> Vec<u32> {
+        self.inner
+            .borrow_mut()
+            .add_stochastic(source_id, k_period, d_period)
+    }
+
+    /// Add a Wilder ATR line in its own oscillator pane.
+    pub fn add_atr(&mut self, source_id: u32, period: u32) -> u32 {
+        self.inner.borrow_mut().add_atr(source_id, period)
+    }
+
+    /// Add a session-anchored VWAP line on the source's pane (`volume_source` -1 = unit weights).
+    pub fn add_vwap(&mut self, source_id: u32, volume_source: i32) -> u32 {
+        self.inner.borrow_mut().add_vwap(source_id, volume_source)
+    }
+
+    /// Add a weighted moving-average line on the source's pane.
+    pub fn add_wma(&mut self, source_id: u32, period: u32) -> u32 {
+        self.inner.borrow_mut().add_wma(source_id, period)
+    }
+
     /// Sets the main series' data (series 0). `times` are ascending UTC seconds.
     pub fn set_data(
         &mut self,

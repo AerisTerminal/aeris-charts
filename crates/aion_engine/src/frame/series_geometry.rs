@@ -385,6 +385,45 @@ impl ChartEngine {
         } else {
             LINE
         };
+        // Bollinger background fill: the band between this UPPER output and its LOWER
+        // companion, in the band color at TradingView's 0.2 background alpha, painted under
+        // the band strokes. Both outputs share bar times, so the rows (and x's) align
+        // point-for-point; a count mismatch skips the fill rather than drawing a wrong one.
+        if let Some(lower_id) = self.bollinger_fill_companion(rs.id) {
+            let lower_plot = self.data.plot(lower_id);
+            let lower_idxs = lower_plot.indices();
+            let lower_close = lower_plot.column(PlotValueIndex::Close);
+            let lower_rows = visible_line_rows(
+                lower_plot,
+                from,
+                to,
+                self.time_scale.bar_spacing(),
+                hpr,
+                |index| self.time_scale.index_to_coordinate(index) * hpr,
+            );
+            if lower_rows.len() == rows.len() && rows.len() >= 2 {
+                let upper_first = points.len() as u32;
+                points.extend_from_slice(&row_points);
+                let lower_first = points.len() as u32;
+                points.extend(lower_rows.iter().map(|&r| {
+                    [
+                        (self.time_scale.index_to_coordinate(lower_idxs[r]) * hpr) as f32,
+                        (scale.price_to_coordinate(lower_close[r], rs.base_value) * vpr) as f32,
+                    ]
+                }));
+                out.push(Prim::BandFill {
+                    upper_first,
+                    lower_first,
+                    point_count: rows.len() as u32,
+                    fill: Color::rgba(
+                        color.r(),
+                        color.g(),
+                        color.b(),
+                        (color.a() as f64 * 0.2).round() as u8,
+                    ),
+                });
+            }
+        }
         // reference data-item colors (series-bar-colorer.ts Line/Area arms — area reads `lineColor`,
         // mapped onto the body channel): a per-point color governs the stroke segment leaving
         // its point and the point marker. Resolved per visible point, falling back to the

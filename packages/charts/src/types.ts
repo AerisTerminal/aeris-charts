@@ -179,10 +179,14 @@ export interface pane_geometry {
  * 1 = middle, 2 = lower; SMA/EMA: always 0.
  */
 export interface indicator_info {
-  kind: "sma" | "ema" | "bollinger";
+  kind: "sma" | "ema" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "wma";
   period: number;
+  /** Second parameter when the kind has one: Bollinger deviation, MACD signal period,
+   *  Stochastic %D period; otherwise `null`. */
   deviation: number | null;
   source: series_api;
+  /** Bollinger: 0 = upper, 1 = middle, 2 = lower. MACD: 0 = line, 1 = signal, 2 = histogram.
+   *  Stochastic: 0 = %K, 1 = %D. Everything else: 0. */
   output_index: number;
 }
 
@@ -1027,8 +1031,25 @@ export interface chart_api {
   add_sma(source: series_api, period: number, options?: Partial<series_options>): series_api;
   /** Add a Rust-native exponential moving-average line derived from an existing series. */
   add_ema(source: series_api, period: number, options?: Partial<series_options>): series_api;
-  /** Add upper, middle, and lower Rust-native Bollinger-band lines. */
+  /** Add upper, middle, and lower Rust-native Bollinger-band lines (with the TradingView-style
+   *  background fill between the bands). */
   add_bollinger(source: series_api, period: number, deviation?: number, options?: Partial<series_options>): [series_api, series_api, series_api];
+  /** Add a Rust-native Wilder RSI line in its own oscillator pane (dotted 30/70 band lines and
+   *  the translucent channel strip between them). */
+  add_rsi(source: series_api, period: number, options?: Partial<series_options>): series_api;
+  /** Add MACD line, signal line, and histogram in their own oscillator pane; the histogram's
+   *  per-bar color follows the four TradingView states (strong/weak × above/below zero). */
+  add_macd(source: series_api, fast: number, slow: number, signal: number, options?: Partial<series_options>): [series_api, series_api, series_api];
+  /** Add Stochastic %K and %D lines in their own oscillator pane (dotted 20/80 band lines and
+   *  the translucent channel strip between them). */
+  add_stochastic(source: series_api, k_period: number, d_period: number, options?: Partial<series_options>): [series_api, series_api];
+  /** Add a Rust-native Wilder ATR line in its own oscillator pane. */
+  add_atr(source: series_api, period: number, options?: Partial<series_options>): series_api;
+  /** Add a session-anchored (UTC-day reset) VWAP line on the source's pane. `volume_source`
+   *  supplies per-bar volume (e.g. the volume histogram series); `null`/omitted = unit weights. */
+  add_vwap(source: series_api, volume_source?: series_api | null, options?: Partial<series_options>): series_api;
+  /** Add a Rust-native weighted moving-average line (linear weights, recent heaviest). */
+  add_wma(source: series_api, period: number, options?: Partial<series_options>): series_api;
   apply_options(options: deep_partial<chart_options>): void;
   options(): unknown;
   time_scale(): time_scale_api;

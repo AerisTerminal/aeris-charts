@@ -278,6 +278,29 @@ pub fn execute(
                 target.close_path();
                 target.fill();
             }
+            Prim::BandFill {
+                upper_first,
+                lower_first,
+                point_count,
+                fill,
+            } => {
+                let upper = pool_slice(points, *upper_first, *point_count);
+                let lower = pool_slice(points, *lower_first, *point_count);
+                if upper.len() < 2 || lower.len() < 2 {
+                    continue;
+                }
+                target.set_fill_solid(*fill);
+                target.begin_path();
+                target.move_to(upper[0].x as f32, upper[0].y as f32);
+                for p in &upper[1..] {
+                    target.line_to(p.x as f32, p.y as f32);
+                }
+                for p in lower.iter().rev() {
+                    target.line_to(p.x as f32, p.y as f32);
+                }
+                target.close_path();
+                target.fill();
+            }
             Prim::Circle {
                 cx,
                 cy,

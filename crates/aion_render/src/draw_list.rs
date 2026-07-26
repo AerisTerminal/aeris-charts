@@ -129,6 +129,15 @@ pub enum Prim {
         line_type: LineType,
         gradient: Gradient,
     },
+    /// Solid fill between two polylines over the same x sequence (Bollinger-style band
+    /// fills). Both ranges index the shared point pool and hold `point_count` entries; the
+    /// path closes upper-forward + lower-backward.
+    BandFill {
+        upper_first: u32,
+        lower_first: u32,
+        point_count: u32,
+        fill: Color,
+    },
     RoundRect {
         x: f32,
         y: f32,

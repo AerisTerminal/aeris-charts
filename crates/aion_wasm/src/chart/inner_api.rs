@@ -67,6 +67,57 @@ impl ChartInner {
             .collect()
     }
 
+    pub fn add_rsi(&mut self, source_id: u32, period: u32) -> u32 {
+        self.engine
+            .add_rsi(source_id as SeriesId, period as usize)
+            .map(|id| id as u32)
+            .unwrap_or(u32::MAX)
+    }
+
+    pub fn add_macd(&mut self, source_id: u32, fast: u32, slow: u32, signal: u32) -> Vec<u32> {
+        self.engine
+            .add_macd(
+                source_id as SeriesId,
+                fast as usize,
+                slow as usize,
+                signal as usize,
+            )
+            .into_iter()
+            .map(|id| id as u32)
+            .collect()
+    }
+
+    pub fn add_stochastic(&mut self, source_id: u32, k_period: u32, d_period: u32) -> Vec<u32> {
+        self.engine
+            .add_stochastic(source_id as SeriesId, k_period as usize, d_period as usize)
+            .into_iter()
+            .map(|id| id as u32)
+            .collect()
+    }
+
+    pub fn add_atr(&mut self, source_id: u32, period: u32) -> u32 {
+        self.engine
+            .add_atr(source_id as SeriesId, period as usize)
+            .map(|id| id as u32)
+            .unwrap_or(u32::MAX)
+    }
+
+    /// `volume_source`: series id supplying the per-bar volume column, or -1 for unit weights.
+    pub fn add_vwap(&mut self, source_id: u32, volume_source: i32) -> u32 {
+        let volume = (volume_source >= 0).then_some(volume_source as SeriesId);
+        self.engine
+            .add_vwap(source_id as SeriesId, volume)
+            .map(|id| id as u32)
+            .unwrap_or(u32::MAX)
+    }
+
+    pub fn add_wma(&mut self, source_id: u32, period: u32) -> u32 {
+        self.engine
+            .add_wma(source_id as SeriesId, period as usize)
+            .map(|id| id as u32)
+            .unwrap_or(u32::MAX)
+    }
+
     /// Sets the main series' data (series 0). `times` are ascending UTC seconds.
     pub fn set_data(
         &mut self,
