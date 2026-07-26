@@ -139,9 +139,12 @@ export async function create_chart_grid(
     return edge_ids((side === "last" ? node.b : node.a) as layout_node, side);
   };
 
-  /** The draggable split divider: a 1px line with a 5px hit area (padding + background-clip),
-   *  col/row cursor per direction. Dragging adjusts the two sides' flex weights live and
-   *  persists the final ratio engine-side on release. */
+  /** The draggable split divider: a 5px hit area consuming 1px of layout (negative margins),
+   *  col/row cursor per direction. The 1px line is the CENTER STOP of a gradient painted across
+   *  the 5px box — no padding or content-box sizing involved, so a host page's global
+   *  `box-sizing` reset (even `!important`) cannot collapse the line to zero width. Dragging
+   *  adjusts the two sides' flex weights live and persists the final ratio engine-side on
+   *  release. */
   const make_divider = (
     node: layout_node,
     horizontal: boolean,
@@ -150,11 +153,12 @@ export async function create_chart_grid(
   ): HTMLDivElement => {
     const div = document.createElement("div");
     div.className = "aion-grid-divider";
+    const line = `transparent 2px, ${resolve_divider_color()} 2px, ${resolve_divider_color()} 3px, transparent 3px`;
     div.style.cssText =
-      "flex:0 0 1px;z-index:4;touch-action:none;" +
-      `background:${resolve_divider_color()};background-clip:content-box;` +
+      "flex:0 0 5px;position:relative;z-index:4;touch-action:none;" +
+      `background:linear-gradient(to ${horizontal ? "right" : "bottom"}, ${line});` +
       `cursor:${horizontal ? "col-resize" : "row-resize"};` +
-      (horizontal ? "margin:0 -2px;padding:0 2px;" : "margin:-2px 0;padding:2px 0;");
+      (horizontal ? "margin:0 -2px;" : "margin:-2px 0;");
     div.addEventListener("pointerdown", (e) => {
       e.preventDefault();
       div.setPointerCapture(e.pointerId);

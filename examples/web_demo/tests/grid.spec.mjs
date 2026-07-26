@@ -202,6 +202,37 @@ test("divider drags never disturb a cell's candle spacing (even with interaction
   expect(left_after.right, "shrinking cell keeps its right range edge").toBe(left_before.right);
 });
 
+test("the divider keeps its 1px line under a global border-box reset", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+  // Platform pages commonly reset `box-sizing: border-box` globally (even `!important`); the
+  // divider paints its line as a gradient stop across a fixed 5px box, so no content box can
+  // collapse under it.
+  await page.addStyleTag({ content: "*, *::before, *::after { box-sizing: border-box !important; }" });
+  await page.click("#split_h");
+  await page.waitForFunction(() => document.querySelectorAll("#chart_container canvas").length === 8);
+  await wait_cell_charts(page);
+  const divider = page.locator(".aion-grid-divider >> nth=0");
+  const box = await divider.boundingBox();
+  expect(box.width).toBeGreaterThanOrEqual(5); // the full hit area
+
+  // The 1px line actually paints: screenshot the divider strip and count border-color pixels.
+  const png = PNG.sync.read(await page.screenshot({ clip: box }));
+  const border_hex = await page.evaluate(() => window.__chart.options().rightPriceScale.borderColor);
+  const target = [1, 3, 5].map((i) => parseInt(border_hex.slice(i, i + 2), 16));
+  expect(count_color(png, target, 10), "the line paints under the reset").toBeGreaterThan(100);
+
+  // The drag hit area survives too.
+  const widths = () => page.evaluate(() => window.__grid.cells().map((c) => c.element.getBoundingClientRect().width));
+  const before = await widths();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 100, box.y + box.height / 2, { steps: 5 });
+  await page.mouse.up();
+  const after = await widths();
+  expect(after[0], "drag still resizes under the reset").toBeGreaterThan(before[0] + 40);
+});
+
 test("split dividers follow the axis border token (theme and explicit changes)", async ({ page }) => {
   await page.goto("/");
   await wait_grid(page);
@@ -210,7 +241,11 @@ test("split dividers follow the axis border token (theme and explicit changes)",
   await wait_cell_charts(page);
 
   const divider_rgb = () =>
-    page.locator(".aion-grid-divider >> nth=0").evaluate((el) => getComputedStyle(el).backgroundColor);
+    page.locator(".aion-grid-divider >> nth=0").evaluate((el) => {
+      // The line color is the gradient's center stop (transparent stops serialize as rgba(0,0,0,0)).
+      const stops = getComputedStyle(el).backgroundImage.match(/rgba?\([^)]+\)/g) ?? [];
+      return stops.find((s) => !s.startsWith("rgba(0, 0, 0, 0)")) ?? "";
+    });
   const border_hex = () => page.evaluate(() => window.__chart.options().rightPriceScale.borderColor);
   const to_rgb = (hex) => `rgb(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(", ")})`;
 
