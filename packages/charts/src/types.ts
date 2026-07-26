@@ -82,6 +82,21 @@ export interface whitespace_data {
 
 export type series_data = ohlc_data | single_value_data | whitespace_data;
 
+/**
+ * Columnar input for {@link series_api.set_data_typed}: one `Float64Array` per channel,
+ * all of equal length. `times` are UTC seconds (the engine's time unit — convert with the
+ * same rules `set_data` applies: UTC-midnight for business days / "YYYY-MM-DD" strings).
+ * Single-value series repeat their value in all four price channels. Whitespace slots are
+ * all-NaN rows.
+ */
+export interface ohlc_columns {
+  times: Float64Array;
+  open: Float64Array;
+  high: Float64Array;
+  low: Float64Array;
+  close: Float64Array;
+}
+
 /** Inclusive logical (bar-index) range. */
 export interface logical_range {
   from: number;
@@ -761,6 +776,13 @@ export interface drawing_api {
 export interface series_api {
   /** Replace the series' data. Accepts OHLC or single-value points; packed to typed arrays here. */
   set_data(data: readonly series_data[]): void;
+  /**
+   * Replace the series' data from already-packed columns, skipping `set_data`'s per-object
+   * JS packing. `times` are UTC seconds (the engine's time unit); single-value series
+   * (line/area/histogram) repeat their value in all four price channels. All arrays must
+   * share a length; the engine's usual sort/dedupe/sanitize rules apply.
+   */
+  set_data_typed(columns: ohlc_columns): void;
   /** Append a new point or replace the last one (streaming). */
   update(point: series_data): void;
   /**

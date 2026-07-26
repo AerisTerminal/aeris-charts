@@ -16,7 +16,7 @@ import type {
   deep_partial, drawing_api, drawing_info, drawing_kind, drawing_options, drawing_point,
   handle_scale_options, handle_scroll_options, kinetic_scroll_options,
   last_value_data, localization_options, logical_range,
-  mismatch_direction, mouse_event_handler, mouse_event_params, ohlc_data, pane_api, price_line_api, price_line_options,
+  mismatch_direction, mouse_event_handler, mouse_event_params, ohlc_columns, ohlc_data, pane_api, price_line_api, price_line_options,
   price_range, price_scale_api, price_scale_options, series_api, series_data, series_kind,
   series_marker, series_marker_options, series_options, single_value_data, size_change_handler, time, time_range,
   time_scale_api, time_scale_options, tracking_mode_options, visible_logical_range_handler, visible_time_range_handler,
@@ -289,6 +289,25 @@ class series_impl implements series_api {
     for (const handler of this.data_changed_subs) handler("full");
   }
 
+  /**
+   * Columnar fast path: already-packed typed arrays go straight to the engine, skipping
+   * the per-object JS packing of `set_data` (measured at ~0.5 µs/bar — dominant cost of
+   * bulk installs from feed handlers that hold columnar data). `times` are UTC seconds
+   * (the engine's time unit, see `time_to_utc_seconds`); single-value series repeat
+   * their value across all four price channels. Per-point colors are not carried —
+   * apply them after with the usual options/colors path. The engine's sort/dedupe/
+   * sanitize rules apply exactly as with `set_data`.
+   */
+  set_data_typed(columns: ohlc_columns): void {
+    this.assert_live();
+    this.chart.wasm.set_series_data_typed(
+      this.id, columns.times, columns.open, columns.high, columns.low, columns.close,
+    );
+    this.chart.sync_countdown_timer();
+    this.chart.repaint();
+    for (const handler of this.data_changed_subs) handler("full");
+  }
+
   update(point: series_data): void {
     this.assert_live();
     // A whitespace point (`{time}` only) streams as an all-NaN bar; the engine keeps the slot.
@@ -307,7 +326,7 @@ class series_impl implements series_api {
     );
     // Data arriving on a countdown-enabled series can start the timer (cheap flag check).
     if (this.chart.countdown_series_present) this.chart.sync_countdown_timer();
-    this.chart.repaint();
+    this.chart.schedule_repaint();
     for (const handler of this.data_changed_subs) handler("update");
   }
 
@@ -619,8 +638,16 @@ class custom_series_impl extends series_impl {
   update(item: custom_series_item): void {
     this.assert_live();
     this.chart.wasm.update_custom_series_item(this.id, { ...item, time: time_to_utc_seconds(item.time) });
+    // Custom series compute their price values through the JS pane view during render,
+    // so this path must stay synchronous: last_value_data and friends read that
+    // render-computed state immediately after an update.
     this.chart.repaint();
     for (const handler of this.data_changed_subs) handler("update");
+  }
+
+  set_data_typed(): void {
+    // A custom series carries raw plugin items aligned by time, not OHLC columns.
+    console.warn("aion: set_data_typed() does not apply to a custom series");
   }
 
   /** The raw items aligned with the engine rows (sorted, last-wins deduped). */
@@ -1146,6 +1173,8 @@ export class chart_impl implements chart_api {
   private countdown_timer: ReturnType<typeof setInterval> | null = null;
   /** True while any pointer/touch is down — pauses the countdown tick so it can't repaint mid-gesture. */
   private interacting = false;
+  /** Pending rAF handle for a coalesced repaint; `null` when no repaint is scheduled. */
+  private repaint_raf: number | null = null;
 
   /** The gesture recognizer marks pointer/touch activity (down = true, all-up = false). */
   set_interacting(active: boolean): void {
@@ -1202,8 +1231,31 @@ export class chart_impl implements chart_api {
     this.plugin_resize_observer.observe(container);
   }
 
+  /**
+   * Coalesce renders onto the next animation frame. The streaming hot path
+   * (series `update` on built-in series) must not pay a full render per tick: N calls
+   * inside one frame produce exactly one repaint, which is what the engine's
+   * invalidate-mask design assumes (reference behavior: mutations invalidate, the
+   * frame flush renders). One-shot mutations (set_data, pop, options, gestures,
+   * resize, explicit render(), take_screenshot) still repaint synchronously — axis
+   * sizing hysteresis and custom-series render-time price computation make their
+   * render counts observable. Any synchronous repaint cancels a pending scheduled
+   * frame and paints immediately.
+   */
+  schedule_repaint(): void {
+    if (this.removed || this.repaint_raf !== null) return;
+    this.repaint_raf = requestAnimationFrame(() => {
+      this.repaint_raf = null;
+      this.repaint();
+    });
+  }
+
   /** Repaint unless torn down. Named distinctly from the public `render` for internal use. */
   repaint(): void {
+    if (this.repaint_raf !== null) {
+      cancelAnimationFrame(this.repaint_raf);
+      this.repaint_raf = null;
+    }
     if (!this.removed) {
       this.wasm.render();
       // The text editor tracks its anchor through the change that drove this repaint
@@ -2287,6 +2339,10 @@ export class chart_impl implements chart_api {
   remove(): void {
     if (this.removed) return;
     this.removed = true;
+    if (this.repaint_raf !== null) {
+      cancelAnimationFrame(this.repaint_raf);
+      this.repaint_raf = null;
+    }
     this.close_text_editor(false);
     this.stop_animation();
     this.stop_countdown_timer();
