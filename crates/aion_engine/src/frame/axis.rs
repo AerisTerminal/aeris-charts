@@ -21,6 +21,10 @@ struct LastValueLabel {
     /// Countdown row text; `None` when `countdown_visible` is off, the series has no usable
     /// bar interval, or no host clock is installed.
     countdown: Option<String>,
+    /// The owning series' id — the attach group of this cluster's chips, so its price and
+    /// countdown chips paint with a shared edge WITHOUT chaining into another series' cluster
+    /// (a shared constant chained every cluster on the axis into one giant box).
+    group_id: u32,
     y: f64,
     height: f64,
     top_height: f64,
@@ -923,6 +927,7 @@ impl ChartEngine {
                     price_text: show_price.then_some(text),
                     title,
                     countdown,
+                    group_id: series.id as u32,
                     // The price row stays centered on the value coordinate; the countdown row
                     // hangs below, so the cluster center shifts down by half the countdown row.
                     y: y + countdown_height / 2.0,
@@ -1145,8 +1150,10 @@ impl ChartEngine {
                 background_corners: axis_corners_top,
                 // text + the standard 21px label padding already covers the chip box.
                 measure_extra: 0.0,
-                // Price chip and countdown chip paint with a shared edge (attached).
-                attach_group: Some(1),
+                // Price chip and countdown chip paint with a shared edge (attached) — the
+                // group id is the series id, so the attach never chains into another series'
+                // cluster on the same strip.
+                attach_group: Some(label.group_id),
             });
         }
         if let Some(countdown) = &label.countdown {
@@ -1179,8 +1186,10 @@ impl ChartEngine {
                 background: Some((inner_x, countdown_y, inner_w, countdown_height, label.color)),
                 background_corners: corners,
                 measure_extra: 0.0,
-                // Attached to the price chip above (shared edge, no rounding gap).
-                attach_group: Some(1),
+                // Attached to the price chip above (shared edge, no rounding gap) — the
+                // group id is the series id, so the attach never chains into another series'
+                // cluster on the same strip.
+                attach_group: Some(label.group_id),
             });
         }
     }

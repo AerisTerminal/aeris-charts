@@ -893,8 +893,18 @@ document.getElementById("sma_toggle").addEventListener("change", (e) => {
 
 document.getElementById("vol_toggle").addEventListener("change", (e) => {
   if (e.target.checked && vol_series === null) {
-    // overlay on the price pane's bottom band; green/red by the main series' up/down direction.
-    vol_series = chart.add_series("histogram", { overlay: true, scale_margins: { top: 0.82, bottom: 0 }, histogram_updown: true, price_line_visible: false, last_value_visible: false });
+    // TradingView volume: overlay on the price pane's bottom band, green/red by bar direction,
+    // with the title chip + volume-formatted last value (581.54K) on the axis — no countdown.
+    vol_series = chart.add_series("histogram", {
+      overlay: true,
+      scale_margins: { top: 0.82, bottom: 0 },
+      histogram_updown: true,
+      price_line_visible: false,
+      title: "Volume",
+      title_visible: true,
+      price_format: { type: "volume" },
+      countdown_visible: false,
+    });
     vol_series.set_data(volume_data);
   } else if (!e.target.checked && vol_series !== null) {
     // Exercises the real remove_series API (tombstones the engine slot, not just clears data).

@@ -367,3 +367,40 @@ test("cluster rounds its axis-facing corners and keeps the chart-facing side sha
   expect(near(px(shot, extent.right, extent.top), CHIP)).toBe(true); // axis-facing corner: sharp
   await context.close();
 });
+
+test("two clustered series never chain into one box; the volume shows title + volume value", async ({ page }) => {
+  await page.goto("/");
+  await wait_for_chart(page);
+  await page.evaluate(() => {
+    const now = Math.floor(Date.now() / 1000);
+    const last = window.__data[window.__data.length - 1];
+    const close = last.close - 2;
+    window.__cluster_close = close;
+    window.__main.update({ time: now, open: last.close, high: last.close + 0.6, low: close - 0.6, close });
+  });
+  await page.check("#vol_toggle");
+  await page.evaluate(() => new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  }));
+
+  // The volume cluster: outside title chip "Volume" + volume-formatted value (K/M suffix).
+  const shot = await capture(page);
+  const anchor = await cluster_anchor(page);
+  const axis_x0 = Math.round(anchor.pane_w);
+  // The strip between the main cluster's bottom and the volume band must NOT be a continuous
+  // red column (the attach-group chaining bug merged every cluster on the strip into one box).
+  const main_bottom = Math.round(anchor.y + ROW);
+  const strip = new PNG({ width: shot.width - axis_x0, height: Math.max(1, shot.height - main_bottom - 90) });
+  PNG.bitblt(shot, strip, axis_x0, main_bottom, strip.width, strip.height, 0, 0);
+  let red_rows = 0;
+  for (let y = 0; y < strip.height; y++) {
+    let red_in_row = 0;
+    for (let x = 0; x < strip.width; x++) {
+      const o = (y * strip.width + x) * 4;
+      if (Math.abs(strip.data[o] - 239) <= 25 && Math.abs(strip.data[o + 1] - 83) <= 25 && Math.abs(strip.data[o + 2] - 80) <= 25) red_in_row++;
+    }
+    // A chain box would paint red across the whole strip on EVERY row between the clusters.
+    if (red_in_row > strip.width * 0.8) red_rows++;
+  }
+  expect(red_rows, "no merged red column between the two clusters").toBeLessThan(4);
+});

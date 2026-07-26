@@ -778,6 +778,37 @@ fn indicator_lines_support_dotted_and_dashed_styles() {
 }
 
 #[test]
+fn last_value_clusters_attach_only_within_their_own_series() {
+    let mut chart = countdown_chart();
+    chart.now_override = Some(250.0);
+    chart.series[0].title = "BTC".to_string();
+    chart.series[0].countdown_visible = true;
+    // A second series with its own (countdown-only) cluster on the same strip.
+    let extra = chart.add_series(SeriesKind::Histogram);
+    let times = [0.0, 60.0, 120.0, 180.0, 240.0];
+    let values = [1.0, 2.0, 3.0, 2.0, 1.0];
+    chart
+        .set_series_data(extra, &times, &values, &values, &values, &values)
+        .unwrap();
+
+    let labels = chart
+        .build_axis_frame(80.0, |t| t.len() as f64 * 7.0)
+        .labels;
+    let groups: Vec<u32> = labels.iter().filter_map(|l| l.attach_group).collect();
+    // The main cluster's chips share one group (the main series' id 0)…
+    assert!(groups.contains(&0));
+    // …and the volume cluster's chips share a DIFFERENT group (its own series id): clusters
+    // never chain into each other (a shared constant merged them into one giant box).
+    assert!(groups.contains(&(extra as u32)));
+    // Chips within one cluster: price + countdown share the same group id.
+    let main_chips = groups.iter().filter(|&&g| g == 0).count();
+    assert!(
+        main_chips >= 2,
+        "price + countdown chips share the cluster group"
+    );
+}
+
+#[test]
 fn horizontal_line_drawings_label_the_axis_in_the_line_color() {
     use crate::drawings::{DrawingKind, DrawingPoint};
 
