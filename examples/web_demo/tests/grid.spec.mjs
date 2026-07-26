@@ -305,3 +305,45 @@ test("Ctrl+H/V split the active cell; typing fields and the cap still hold", asy
   expect(await canvas_count(page)).toBe(16);
   expect((await page.evaluate(() => window.__grid.usage())).chart_count).toBe(4);
 });
+
+test("shortcut splits come up seeded (the on_cell_added hook fires)", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+  await page.keyboard.press("Control+h");
+  await page.waitForFunction(() => document.querySelectorAll("#chart_container canvas").length === 8);
+  await wait_cell_charts(page);
+  // Both cells render candles — the shortcut path runs the same seeding hook as the button.
+  const shots = await cell_shots(page);
+  for (const shot of shots) {
+    const green = count_color(shot, [38, 166, 154]);
+    const red = count_color(shot, [239, 83, 80]);
+    expect(green + red, "shortcut-created cell renders its seeded candles").toBeGreaterThan(200);
+  }
+});
+
+test("the shortcut registry accepts combo overrides", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+  // A scratch grid with the vertical split re-keyed: ctrl+shift+x, default ctrl+v disabled.
+  await page.evaluate(async () => {
+    const mod = await import("/dist/aion_charts.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:640px;height:400px;z-index:50;background:white;";
+    host.id = "scratch_grid";
+    document.body.appendChild(host);
+    window.__scratch = await mod.create_chart_grid(host, {
+      shortcuts: { "grid.split_vertical": "ctrl+shift+x" },
+      on_cell_added: (cell) => {
+        const s = cell.chart.add_series("line");
+        s.set_data([{ time: 1, value: 1 }, { time: 2, value: 2 }]);
+      },
+    });
+  });
+  // The overridden combo splits; the default combo does not.
+  await page.keyboard.press("Control+Shift+x");
+  await page.waitForFunction(() => window.__scratch.chart_count() === 2);
+  await page.keyboard.press("Control+v");
+  await page.waitForTimeout(300);
+  expect(await page.evaluate(() => window.__scratch.chart_count())).toBe(2);
+  await page.evaluate(() => { window.__scratch.destroy(); document.getElementById("scratch_grid").remove(); });
+});

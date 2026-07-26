@@ -346,6 +346,9 @@ if (parity_fixture === null) {
     chart_options,
     // Split shortcuts: Ctrl/Cmd+H splits the active cell horizontally, Ctrl/Cmd+V vertically.
     shortcuts: true,
+    // Every split-created cell (button OR shortcut) is seeded as a distinct asset — this is
+    // what keeps shortcut splits from coming up blank.
+    on_cell_added: (cell) => seed_split_cell(cell),
     // The split dividers follow the axis border color (default): same token, theme-aware.
     on_usage: (u) => {
       document.getElementById("grid_usage").textContent =
@@ -987,9 +990,9 @@ if (grid !== null) {
   }, true);
   const split_active = async (direction) => {
     if (!active_cell) return;
+    // The grid's on_cell_added hook seeds the new cell (shared with the shortcut path).
     const next = await active_cell.split(direction);
     if (next) {
-      seed_split_cell(next);
       active_cell = next;
       sync_active_toolbar();
     }

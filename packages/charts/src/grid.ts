@@ -15,6 +15,8 @@
 import { AionWorkspace } from "../pkg/aion_wasm.js";
 import { create_chart } from "./index.js";
 import { ensure_init } from "./impl.js";
+import { DEFAULT_SHORTCUTS, install_shortcuts } from "./shortcuts.js";
+import type { shortcut_action } from "./shortcuts.js";
 import type { chart_api, chart_options, deep_partial } from "./types.js";
 
 /** `horizontal` places the two charts side by side; `vertical` stacks them. */
@@ -59,10 +61,13 @@ export interface chart_grid_options {
    *  axis border color — the divider is axis chrome, so it tracks the same token (theme and
    *  explicit border changes); an explicit string pins it. */
   divider_color?: string | null;
-  /** Keyboard shortcuts for splitting (default `false`): `Ctrl/Cmd+H` splits the ACTIVE cell
-   *  horizontally (side by side), `Ctrl/Cmd+V` vertically (stacked). The active cell is the
-   *  last one pointer-pressed. Keys are ignored while typing in an input/editable field. */
-  shortcuts?: boolean;
+  /** Split shortcuts: `true` uses the engine defaults (shortcuts.ts `DEFAULT_SHORTCUTS`), an
+   *  object overrides individual combos (e.g. `{ "grid.split_vertical": "ctrl+shift+x" }`).
+   *  Default `false` (no shortcuts). Keys never fire while typing in a field. */
+  shortcuts?: boolean | Partial<Record<shortcut_action, string>>;
+  /** Fired for every cell created by a split (button or shortcut path): the platform's hook
+   *  to seed/configure the fresh chart (data, theme, chrome). */
+  on_cell_added?: (cell: grid_cell) => void;
 }
 
 export interface chart_grid {
@@ -312,6 +317,8 @@ export async function create_chart_grid(
     if (new_id < 0) return null; // engine cap (paywall tier) or unknown cell
     const created = await add_chart(new_id);
     reconcile();
+    // One hook for every split path (button or shortcut): the platform seeds the fresh cell.
+    options.on_cell_added?.(created.handle);
     emit_usage();
     return created.handle;
   };
@@ -342,30 +349,24 @@ export async function create_chart_grid(
   const on_window_resize = () => restyle_dividers();
   window.addEventListener("resize", on_window_resize);
 
-  /** Split shortcuts: Ctrl/Cmd+H splits the active cell horizontally, Ctrl/Cmd+V vertically.
-   *  Never fires while typing in a field or when the cap/veto rejects the split. */
-  const on_keydown = (e: KeyboardEvent) => {
-    if (!(e.ctrlKey || e.metaKey) || e.repeat) return;
-    const key = e.key.toLowerCase();
-    if (key !== "h" && key !== "v") return;
-    const target = e.target as HTMLElement | null;
-    if (
-      target !== null &&
-      (target.tagName === "INPUT" ||
-        target.tagName === "TEXTAREA" ||
-        target.tagName === "SELECT" ||
-        target.isContentEditable)
-    ) {
-      return;
-    }
-    const cell = cells.get(active_id);
-    if (cell === undefined) return;
-    e.preventDefault(); // Ctrl+H/Ctrl+V is history/paste in the browser
-    void split(cell, key === "h" ? "horizontal" : "vertical");
-  };
-  if (options.shortcuts === true) {
-    document.addEventListener("keydown", on_keydown);
-  }
+  /** Install the split shortcuts from the registry (shortcuts.ts): defaults, with any
+   *  platform overrides merged in. */
+  const detach_shortcuts =
+    options.shortcuts === undefined || options.shortcuts === false
+      ? null
+      : install_shortcuts(
+          (["grid.split_horizontal", "grid.split_vertical"] as const).map((action) => ({
+            combo:
+              (typeof options.shortcuts === "object" ? options.shortcuts[action] : undefined) ??
+              DEFAULT_SHORTCUTS[action].combo,
+            run: () => {
+              const cell = cells.get(active_id);
+              if (cell !== undefined) {
+                void split(cell, action === "grid.split_horizontal" ? "horizontal" : "vertical");
+              }
+            },
+          })),
+        );
 
   if (options.usage_heartbeat_ms && options.usage_heartbeat_ms > 0) {
     heartbeat = setInterval(emit_usage, options.usage_heartbeat_ms);
@@ -386,7 +387,7 @@ export async function create_chart_grid(
     destroy: () => {
       if (heartbeat !== null) clearInterval(heartbeat);
       window.removeEventListener("resize", on_window_resize);
-      document.removeEventListener("keydown", on_keydown);
+      detach_shortcuts?.();
       for (const cell of cells.values()) {
         cell.chart.unsubscribe_options_change(restyle_dividers);
         cell.chart.remove();
