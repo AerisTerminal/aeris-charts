@@ -1,6 +1,6 @@
 {
   "name": "@tradeaion/charts",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "type": "module",
   "description": "Aion Charts public TypeScript API (snake_case, semantics mirror the reference charting library v5)",
   "license": "MIT",

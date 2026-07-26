@@ -99,6 +99,13 @@ impl Color {
         }
     }
 
+    /// Same hue at full opacity: RGB preserved, alpha forced to 0xFF. Used for the last-value
+    /// cluster's chip backgrounds (title/price/countdown), which follow the series color but
+    /// must never turn translucent when that color carries alpha (TradingView-style).
+    pub fn solid(&self) -> Color {
+        Color::rgba(self.r(), self.g(), self.b(), 0xFF)
+    }
+
     /// Darker shade of this color: every sRGB channel scaled by `factor` (clamped to 0..=1),
     /// alpha preserved. Used for the title chip of the last-value label cluster, which renders
     /// in a darker shade of the label color (TradingView-style).
@@ -201,6 +208,16 @@ mod tests {
             Color::rgb(0, 0, 0)
         );
         assert_eq!(Color::rgb(0x26, 0xa6, 0x9a).to_hex(), "#26a69a");
+    }
+
+    #[test]
+    fn solid_forces_full_opacity_keeping_hue() {
+        assert_eq!(
+            Color::rgba(0x26, 0xa6, 0x9a, 0x80).solid(),
+            Color::rgb(0x26, 0xa6, 0x9a)
+        );
+        // Already-opaque colors pass through unchanged.
+        assert_eq!(Color::rgb(10, 20, 30).solid(), Color::rgb(10, 20, 30));
     }
 
     #[test]

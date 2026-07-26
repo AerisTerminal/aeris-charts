@@ -1571,6 +1571,36 @@ fn countdown_text_tracks_the_pinned_host_clock() {
 }
 
 #[test]
+fn last_value_cluster_chips_stay_solid_when_the_series_color_is_translucent() {
+    let mut chart = countdown_chart();
+    chart.now_override = Some(250.0);
+    chart.series[0].title = "NDQ".to_string();
+    chart.series[0].countdown_visible = true;
+    // Half-alpha series color: the chips keep the hue but must paint fully opaque.
+    chart.series[0].line_color = Some("rgba(38,166,154,0.5)".to_string());
+
+    let labels = boxed_labels(&mut chart);
+    assert_eq!(labels.len(), 3);
+    let solid = Color::rgb(0x26, 0xa6, 0x9a);
+    for label in &labels {
+        let Some((_, _, _, _, bg)) = label.background else {
+            panic!("cluster label is boxed")
+        };
+        assert_eq!(bg, solid, "chip background for {:?}", label.text);
+    }
+
+    // The plain single-box price label (title + countdown off) is solid too.
+    let mut chart = countdown_chart();
+    chart.series[0].line_color = Some("rgba(38,166,154,0.5)".to_string());
+    let labels = boxed_labels(&mut chart);
+    assert_eq!(labels.len(), 1);
+    let Some((_, _, _, _, bg)) = labels[0].background else {
+        panic!("price label is boxed")
+    };
+    assert_eq!(bg, solid);
+}
+
+#[test]
 fn last_value_cluster_rows_toggle_independently() {
     let mut chart = countdown_chart();
     chart.now_override = Some(250.0);

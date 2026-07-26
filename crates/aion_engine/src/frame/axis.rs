@@ -855,7 +855,9 @@ impl ChartEngine {
                     y: y + countdown_height / 2.0,
                     height: top_height + countdown_height,
                     top_height,
-                    color,
+                    // Chip backgrounds follow the series color but always paint solid: a
+                    // translucent bar/line color must not bleed through the chips.
+                    color: color.solid(),
                     align,
                 });
             }
