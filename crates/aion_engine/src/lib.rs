@@ -356,19 +356,6 @@ pub struct SeriesEntry {
     /// reference `pointMarkersRadius` (default `undefined`): `None` = auto (`lineWidth / 2 + 2`,
     /// line-pane-view.ts).
     pub point_markers_radius: Option<f64>,
-    /// reference `crosshairMarkerVisible` (default true).
-    pub crosshair_marker_visible: bool,
-    /// reference `crosshairMarkerRadius` in CSS px (default 4).
-    pub crosshair_marker_radius: f64,
-    /// reference `crosshairMarkerBorderColor` (default `''`): `None` uses the chart background color,
-    /// as the reference's `backgroundColorAtYPercentFromTop` does for the solid background. Stored
-    /// verbatim as a CSS string; parsed at render time.
-    pub crosshair_marker_border_color: Option<String>,
-    /// reference `crosshairMarkerBackgroundColor` (default `''`): `None` follows the bar color.
-    /// Stored verbatim as a CSS string; parsed at render time.
-    pub crosshair_marker_background_color: Option<String>,
-    /// reference `crosshairMarkerBorderWidth` in CSS px (default 2).
-    pub crosshair_marker_border_width: f64,
     /// reference baseline `topFillColor1` (default `rgba(38, 166, 154, 0.28)`); `None` = reference default.
     /// Stored verbatim as a CSS string; parsed at render time.
     pub top_fill_color1: Option<String>,
@@ -464,11 +451,6 @@ impl SeriesEntry {
             line_style: 0,
             line_visible: true,
             point_markers_radius: None,
-            crosshair_marker_visible: true,
-            crosshair_marker_radius: 4.0,
-            crosshair_marker_border_color: None,
-            crosshair_marker_background_color: None,
-            crosshair_marker_border_width: 2.0,
             top_fill_color1: None,
             top_fill_color2: None,
             top_line_color: None,

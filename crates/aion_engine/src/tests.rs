@@ -677,7 +677,8 @@ fn crosshair_geometry_is_host_independent() {
         .main
         .iter()
         .any(|p| matches!(p, aion_render::draw_list::Prim::HLine { .. })));
-    assert!(frame.panes[0]
+    // The hover marker is removed: the crosshair paints lines only, no circle marks.
+    assert!(!frame.panes[0]
         .main
         .iter()
         .any(|p| matches!(p, aion_render::draw_list::Prim::Circle { .. })));
@@ -2018,11 +2019,6 @@ fn series_style_options_default_to_reference() {
         "line_style",
         "line_visible",
         "point_markers_radius",
-        "crosshair_marker_visible",
-        "crosshair_marker_radius",
-        "crosshair_marker_border_color",
-        "crosshair_marker_background_color",
-        "crosshair_marker_border_width",
         "top_fill_color1",
         "top_fill_color2",
         "top_line_color",
@@ -2049,11 +2045,6 @@ fn series_style_options_default_to_reference() {
     assert_eq!(options["line_style"], 0); // LineStyle.Solid
     assert_eq!(options["line_visible"], true);
     assert_eq!(options["point_markers_radius"], serde_json::Value::Null);
-    assert_eq!(options["crosshair_marker_visible"], true);
-    assert_eq!(options["crosshair_marker_radius"], 4.0);
-    assert_eq!(options["crosshair_marker_border_color"], "");
-    assert_eq!(options["crosshair_marker_background_color"], "");
-    assert_eq!(options["crosshair_marker_border_width"], 2.0);
     assert_eq!(options["top_fill_color1"], "");
     assert_eq!(options["top_fill_color2"], "");
     assert_eq!(options["top_line_color"], "");
@@ -2083,11 +2074,6 @@ fn series_apply_options_json_round_trips_all_new_fields() {
         "line_style": 2,
         "line_visible": false,
         "point_markers_radius": 6.5,
-        "crosshair_marker_visible": false,
-        "crosshair_marker_radius": 7,
-        "crosshair_marker_border_color": "#445566",
-        "crosshair_marker_background_color": "#778899",
-        "crosshair_marker_border_width": 3,
         "top_fill_color1": "rgba(1,2,3,0.5)",
         "top_fill_color2": "#040506",
         "top_line_color": "#070809",
@@ -2118,11 +2104,6 @@ fn series_apply_options_json_round_trips_all_new_fields() {
     assert_eq!(options["line_style"], 2);
     assert_eq!(options["line_visible"], false);
     assert_eq!(options["point_markers_radius"], 6.5);
-    assert_eq!(options["crosshair_marker_visible"], false);
-    assert_eq!(options["crosshair_marker_radius"], 7.0);
-    assert_eq!(options["crosshair_marker_border_color"], "#445566");
-    assert_eq!(options["crosshair_marker_background_color"], "#778899");
-    assert_eq!(options["crosshair_marker_border_width"], 3.0);
     assert_eq!(options["top_fill_color1"], "rgba(1,2,3,0.5)");
     assert_eq!(options["top_fill_color2"], "#040506");
     assert_eq!(options["top_line_color"], "#070809");
@@ -2167,8 +2148,6 @@ fn series_apply_options_json_round_trips_color_strings_verbatim() {
     assert!(chart.series_apply_options_json(
         0,
         r##"{"price_line_color": "#FF0000",
-             "crosshair_marker_border_color": "rgba(1, 2, 3, 0.5)",
-             "crosshair_marker_background_color": "red",
              "top_line_color": "#FF0000",
              "top_fill_color1": "rgba(1, 2, 3, 0.5)",
              "top_fill_color2": "red",
@@ -2179,11 +2158,6 @@ fn series_apply_options_json_round_trips_color_strings_verbatim() {
     let options: serde_json::Value =
         serde_json::from_str(&chart.series_options_json(0).unwrap()).unwrap();
     assert_eq!(options["price_line_color"], "#FF0000");
-    assert_eq!(
-        options["crosshair_marker_border_color"],
-        "rgba(1, 2, 3, 0.5)"
-    );
-    assert_eq!(options["crosshair_marker_background_color"], "red");
     assert_eq!(options["top_line_color"], "#FF0000");
     assert_eq!(options["top_fill_color1"], "rgba(1, 2, 3, 0.5)");
     assert_eq!(options["top_fill_color2"], "red");

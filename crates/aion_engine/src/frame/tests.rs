@@ -929,50 +929,20 @@ fn point_markers_radius_option_overrides_the_reference_auto_default() {
 }
 
 #[test]
-fn crosshair_marks_cover_all_line_series_with_per_series_options() {
+fn the_crosshair_paints_no_hover_marker_on_line_series() {
     let mut chart = two_identical_line_series();
     let x = chart.time_scale.index_to_coordinate(2);
     chart.crosshair = Some((x, 120.0));
-    let circles = |chart: &mut ChartEngine| {
-        chart.build_frame().panes[0]
-            .main
-            .iter()
-            .filter_map(|p| match p {
-                Prim::Circle { radius, fill, .. } => Some((*radius, *fill)),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-    };
-
-    // reference crosshair-marks-pane-view: one mark per visible line-like series at the crosshair
-    // index. Defaults: radius 4 + border 2, border = chart background, fill = bar color.
-    let marks = circles(&mut chart);
-    assert_eq!(marks.len(), 4);
-    assert!(marks
+    let frame = chart.build_frame();
+    // The hover marker was removed: no circle prims ride the crosshair anymore.
+    assert!(!frame.panes[0]
+        .main
         .iter()
-        .any(|&(r, c)| r == 6.0 && c == Color::rgb(0xff, 0xff, 0xff)));
-    assert!(marks.iter().any(|&(r, c)| r == 4.0 && c == LINE));
-
-    // crosshairMarkerVisible: false drops the series' mark.
-    chart.series[1].crosshair_marker_visible = false;
-    assert_eq!(circles(&mut chart).len(), 2);
-
-    // Per-series radius / border width / pinned colors reach the frame.
-    chart.series[0].crosshair_marker_radius = 7.0;
-    chart.series[0].crosshair_marker_border_width = 3.0;
-    chart.series[0].crosshair_marker_border_color = Some("#010203".to_string());
-    chart.series[0].crosshair_marker_background_color = Some("#040506".to_string());
-    let marks = circles(&mut chart);
-    assert!(marks
-        .iter()
-        .any(|&(r, c)| r == 10.0 && c == Color::rgb(0x01, 0x02, 0x03)));
-    assert!(marks
-        .iter()
-        .any(|&(r, c)| r == 7.0 && c == Color::rgb(0x04, 0x05, 0x06)));
+        .any(|p| matches!(p, Prim::Circle { .. })));
 }
 
 #[test]
-fn baseline_quadrant_options_flow_into_fills_strokes_and_marker() {
+fn baseline_quadrant_options_flow_into_fills_and_strokes() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     chart.series[0].kind = SeriesKind::Baseline;
     let times = [1.0, 2.0];
@@ -1006,18 +976,6 @@ fn baseline_quadrant_options_flow_into_fills_strokes_and_marker() {
         p,
         Prim::Polyline { color, .. } if *color == Color::rgb(0xef, 0x53, 0x50)
     )));
-
-    // The crosshair marker background follows the baseline bar colorer: the last bar sits
-    // above the baseline, so the marker is the top line color.
-    let x = chart.time_scale.index_to_coordinate(1);
-    chart.crosshair = Some((x, 120.0));
-    let frame = chart.build_frame();
-    assert!(frame.panes[0].main.iter().any(|p| matches!(
-        p,
-        Prim::Circle { radius, fill, .. }
-            if *radius == 4.0 && *fill == Color::rgb(0x26, 0xa6, 0x9a)
-    )));
-    chart.crosshair = None;
 
     // Per-quadrant options: custom colors/widths, and a dashed quadrant style splits runs.
     assert!(chart.series_apply_options_json(
