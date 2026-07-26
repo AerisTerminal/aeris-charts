@@ -847,8 +847,15 @@ impl ChartEngine {
     /// data layer and the series list (`series[rs.id]` is used directly), so compaction would
     /// invalidate every other id. The emptied, hidden slot is inert in all draw/scale paths.
     pub fn remove_series(&mut self, id: SeriesId) -> bool {
+        !self.remove_series_tracked(id).is_empty()
+    }
+
+    /// `remove_series` that reports every tombstoned id: the series itself plus any indicator
+    /// output series dropped with it (empty when the id is unknown or already removed). Hosts
+    /// use the report to fire per-series removal events and drop their own per-series state.
+    pub fn remove_series_tracked(&mut self, id: SeriesId) -> Vec<SeriesId> {
         if !self.series.iter().any(|s| s.id == id && !s.removed) {
-            return false;
+            return Vec::new();
         }
         // The pane losing the series may collapse afterwards (reference `_cleanupIfPaneIsEmpty`).
         let home_pane = self
@@ -901,7 +908,7 @@ impl ChartEngine {
         if let Some(pane_index) = home_pane {
             self.cleanup_if_pane_is_empty(pane_index);
         }
-        true
+        tombstones
     }
 
     /// Record a series primitive's autoscale contribution for the next autoscale pass (plugin

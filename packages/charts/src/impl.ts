@@ -14,10 +14,10 @@ import type { custom_series_item, custom_series_pane_view } from "./custom_serie
 import type {
   bars_info, chart_api, chart_options, data_changed_handler, dbl_click_handler,
   deep_partial, drawing_api, drawing_info, drawing_kind, drawing_options, drawing_point,
-  handle_scale_options, handle_scroll_options, kinetic_scroll_options,
+  handle_scale_options, handle_scroll_options, indicator_info, kinetic_scroll_options,
   last_value_data, localization_options, logical_range,
-  mismatch_direction, mouse_event_handler, mouse_event_params, ohlc_columns, ohlc_data, pane_api, price_line_api, price_line_options,
-  price_range, price_scale_api, price_scale_options, series_api, series_data, series_kind,
+  mismatch_direction, mouse_event_handler, mouse_event_params, ohlc_columns, ohlc_data, options_change_handler, pane_api, pane_geometry, price_line_api, price_line_options,
+  price_range, price_scale_api, price_scale_options, series_api, series_change_handler, series_data, series_kind,
   series_marker, series_marker_options, series_options, single_value_data, size_change_handler, time, time_range,
   time_scale_api, time_scale_options, tracking_mode_options, visible_logical_range_handler, visible_time_range_handler,
 } from "./types.js";
@@ -571,6 +571,19 @@ class series_impl implements series_api {
     const kind = this.chart.wasm.series_kind(this.id) ?? KIND_TO_U8[this.kind];
     return KIND_NAMES[kind] ?? "candlestick";
   }
+  indicator_info(): indicator_info | null {
+    const raw = JSON.parse(this.chart.wasm.series_indicator_info_json(this.id)) as
+      | { kind: indicator_info["kind"]; period: number; deviation: number | null; source: number; output_index: number }
+      | null;
+    if (raw === null) return null;
+    return {
+      kind: raw.kind,
+      period: raw.period,
+      deviation: raw.deviation,
+      source: this.chart.series_handle(raw.source),
+      output_index: raw.output_index,
+    };
+  }
   subscribe_data_changed(handler: data_changed_handler): void {
     this.data_changed_subs.add(handler);
   }
@@ -884,6 +897,11 @@ class pane_impl implements pane_api {
   get_height(): number {
     return this.chart.wasm.pane_height(this.index);
   }
+  get_geometry(): pane_geometry {
+    // `{}` answers a stale index (e.g. after a pane removal) — report zeros.
+    const g = JSON.parse(this.chart.wasm.pane_geometry_json(this.index)) as Partial<pane_geometry>;
+    return { left: g.left ?? 0, top: g.top ?? 0, width: g.width ?? 0, height: g.height ?? 0 };
+  }
   set_height(height: number): void {
     this.chart.wasm.set_pane_height(this.index, height);
     this.chart.repaint();
@@ -1145,6 +1163,9 @@ export class chart_impl implements chart_api {
   private readonly visible_logical_range_subs = new Set<visible_logical_range_handler>();
   private readonly visible_time_range_subs = new Set<visible_time_range_handler>();
   private readonly size_change_subs = new Set<size_change_handler>();
+  private readonly series_added_subs = new Set<series_change_handler>();
+  private readonly series_removed_subs = new Set<series_change_handler>();
+  private readonly options_change_subs = new Set<options_change_handler>();
   private last_visible_logical_range: logical_range | null;
   private last_visible_time_range: time_range | null;
   private last_ts_width: number;
@@ -1481,6 +1502,7 @@ export class chart_impl implements chart_api {
     if (options) {
       series.apply_options(options);
     }
+    this.emit_series_change(this.series_added_subs, series, this.pane_of_series(id));
     return series;
   }
 
@@ -1511,6 +1533,7 @@ export class chart_impl implements chart_api {
     // reference createCustomSeriesDefinition: the view's defaultOptions merge UNDER the caller's.
     const merged = { ...(pane_view.default_options ?? {}), ...(options ?? {}) } as Partial<series_options>;
     if (Object.keys(merged).length > 0) series.apply_options(merged);
+    this.emit_series_change(this.series_added_subs, series, this.pane_of_series(id));
     return series;
   }
 
@@ -1518,10 +1541,21 @@ export class chart_impl implements chart_api {
     const impl = this.series_by_id.get(series.id);
     // Ignore a foreign handle or one already removed (idempotent, matching reference leniency).
     if (!impl) return;
-    // The engine tombstones the primary series (id 0) safely, so no id is refused here.
-    if (!this.wasm.remove_series(series.id)) return;
-    impl.mark_removed();
-    this.series_by_id.delete(series.id);
+    // Pane indices are captured BEFORE the engine tombstones: a removed series reports no pane,
+    // and the removal can cascade to derived indicator outputs living on other panes.
+    const pane_of = new Map<number, number>();
+    for (const id of this.series_by_id.keys()) pane_of.set(id, this.pane_of_series(id));
+    // The engine tombstones the primary series (id 0) safely, so no id is refused here. The
+    // tracked removal reports the series plus every derived indicator output dropped with it.
+    const dropped = this.wasm.remove_series_tracked(series.id);
+    if (dropped.length === 0) return;
+    for (const id of dropped) {
+      const handle = this.series_by_id.get(id);
+      if (!handle) continue;
+      handle.mark_removed();
+      this.series_by_id.delete(id);
+      this.emit_series_change(this.series_removed_subs, handle, pane_of.get(id) ?? 0);
+    }
     this.sync_countdown_timer();
     this.repaint();
   }
@@ -1561,6 +1595,7 @@ export class chart_impl implements chart_api {
     const series = new series_impl(id, "line", this);
     this.series_by_id.set(id, series);
     if (options) series.apply_options(options);
+    this.emit_series_change(this.series_added_subs, series, this.pane_of_series(id));
     return series;
   }
 
@@ -1613,6 +1648,35 @@ export class chart_impl implements chart_api {
   }
   unsubscribe_size_change(handler: size_change_handler): void {
     this.size_change_subs.delete(handler);
+  }
+  subscribe_series_added(handler: series_change_handler): void {
+    this.series_added_subs.add(handler);
+  }
+  unsubscribe_series_added(handler: series_change_handler): void {
+    this.series_added_subs.delete(handler);
+  }
+  subscribe_series_removed(handler: series_change_handler): void {
+    this.series_removed_subs.add(handler);
+  }
+  unsubscribe_series_removed(handler: series_change_handler): void {
+    this.series_removed_subs.delete(handler);
+  }
+  subscribe_options_change(handler: options_change_handler): void {
+    this.options_change_subs.add(handler);
+  }
+  unsubscribe_options_change(handler: options_change_handler): void {
+    this.options_change_subs.delete(handler);
+  }
+
+  /** A series' current pane index (0 fallback for a tombstoned/unknown id). */
+  private pane_of_series(id: number): number {
+    return undef_to_null(this.wasm.series_pane_index(id)) ?? 0;
+  }
+
+  /** Notify series-lifecycle subscribers (added and removed share the payload shape). */
+  private emit_series_change(subs: Set<series_change_handler>, series: series_api, pane_index: number): void {
+    if (subs.size === 0) return;
+    for (const h of subs) h({ series, pane_index });
   }
 
   /** Invalidate any in-flight animated `scroll_to_position` (user gestures take over scrolling). */
@@ -2109,6 +2173,7 @@ export class chart_impl implements chart_api {
       this.wasm.apply_options(JSON.stringify(engine_options));
     }
     this.repaint();
+    for (const h of this.options_change_subs) h(options);
   }
 
   /**

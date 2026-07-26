@@ -944,6 +944,70 @@ fn bollinger_creates_three_output_series() {
 }
 
 #[test]
+fn indicator_info_reports_lineage_and_output_slots() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0, 3.0],
+            &[1.0, 2.0, 3.0],
+            &[1.0, 2.0, 3.0],
+            &[1.0, 2.0, 3.0],
+            &[1.0, 2.0, 3.0],
+        )
+        .unwrap();
+    let sma = chart.add_sma(0, 2).expect("valid indicator");
+    let info = chart.indicator_info(sma).expect("output carries lineage");
+    assert_eq!(info.kind, "sma");
+    assert_eq!(info.period, 2);
+    assert_eq!(info.deviation, None);
+    assert_eq!(info.source, 0);
+    assert_eq!(info.output_index, 0);
+
+    let ids = chart.add_bollinger(0, 3, 2.5);
+    let upper = chart.indicator_info(ids[0]).unwrap();
+    assert_eq!(upper.kind, "bollinger");
+    assert_eq!(upper.deviation, Some(2.5));
+    assert_eq!(
+        (0..3)
+            .map(|i| chart.indicator_info(ids[i]).unwrap().output_index)
+            .collect::<Vec<_>>(),
+        [0, 1, 2]
+    );
+
+    // The source series itself and unknown ids are not indicator outputs.
+    assert_eq!(chart.indicator_info(0), None);
+    assert_eq!(chart.indicator_info(999), None);
+}
+
+#[test]
+fn remove_series_tracked_reports_the_series_and_its_derived_outputs() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0, 3.0],
+            &[1.0, 2.0, 3.0],
+            &[1.0, 2.0, 3.0],
+            &[1.0, 2.0, 3.0],
+            &[1.0, 2.0, 3.0],
+        )
+        .unwrap();
+    let sma = chart.add_sma(0, 2).expect("valid indicator");
+    let bands = chart.add_bollinger(0, 3, 2.0);
+
+    let mut dropped = chart.remove_series_tracked(0);
+    dropped.sort_unstable();
+    let mut expected = vec![0, sma];
+    expected.extend(bands);
+    expected.sort_unstable();
+    assert_eq!(dropped, expected);
+    // Everything tombstoned: a second attempt (or an unknown id) reports nothing.
+    assert!(chart.remove_series_tracked(0).is_empty());
+    assert!(chart.remove_series_tracked(42).is_empty());
+}
+
+#[test]
 fn retained_frame_reuses_pane_buffers() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     chart

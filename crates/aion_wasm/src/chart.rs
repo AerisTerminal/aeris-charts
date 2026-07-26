@@ -572,6 +572,18 @@ impl AionChart {
         self.inner.borrow_mut().remove_series(id)
     }
 
+    /// `remove_series` reporting every tombstoned id (the series plus derived indicator
+    /// outputs) for the host's per-series removal events; empty = nothing removed.
+    pub fn remove_series_tracked(&mut self, id: u32) -> Vec<u32> {
+        self.inner.borrow_mut().remove_series_tracked(id)
+    }
+
+    /// JSON lineage of an indicator output series (`{"kind","period","deviation","source",
+    /// "output_index"}`), or `null` for a plain/source series — platform chip chrome backing.
+    pub fn series_indicator_info_json(&self, id: u32) -> String {
+        self.inner.borrow().series_indicator_info_json(id)
+    }
+
     /// reference v5.2 `ISeriesApi.pop(count)`: remove the last `count` data points (count clamps
     /// to the data length; per-point colors shift along). Returns the new data length.
     pub fn series_pop(&mut self, id: u32, count: u32) -> u32 {
@@ -926,6 +938,12 @@ impl AionChart {
     pub fn pane_separator_ys(&self) -> Vec<f64> {
         self.inner.borrow().pane_separator_ys()
     }
+    /// JSON `{left, top, width, height}` of pane `i`'s content area in CSS px relative to the
+    /// chart container — the anchor for platform-rendered per-pane chrome (indicator chips).
+    pub fn pane_geometry_json(&self, i: usize) -> String {
+        self.inner.borrow().pane_geometry_json(i)
+    }
+
     /// Drag the separator below pane `i` by `delta_css`. Call `render()` after (roadmap Phase B1).
     pub fn drag_pane_separator(&mut self, i: usize, delta_css: f64) {
         self.inner.borrow_mut().drag_pane_separator(i, delta_css);

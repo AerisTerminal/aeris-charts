@@ -21,7 +21,47 @@ pub(crate) struct IndicatorBinding {
     last_source_time: Option<i64>,
 }
 
+/// An indicator output series' lineage: which binding it belongs to (kind + params), the
+/// source series it derives from, and which output slot it is (Bollinger: 0 = upper,
+/// 1 = middle, 2 = lower; SMA/EMA: always 0). Platforms read this to render their own
+/// indicator chrome (legend chips, counts, settings) without the engine owning any UI.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct IndicatorInfo {
+    pub kind: &'static str,
+    pub period: usize,
+    pub deviation: Option<f64>,
+    pub source: SeriesId,
+    pub output_index: usize,
+}
+
 impl ChartEngine {
+    /// The binding an output series belongs to, or `None` when `id` is not an indicator output
+    /// (a plain series, an unknown/removed id, or a source series itself).
+    pub fn indicator_info(&self, id: SeriesId) -> Option<IndicatorInfo> {
+        self.indicators.iter().find_map(|binding| {
+            binding
+                .outputs
+                .iter()
+                .position(|&output| output == id)
+                .map(|output_index| {
+                    let (kind, period, deviation) = match binding.kind {
+                        IndicatorKind::Sma { period } => ("sma", period, None),
+                        IndicatorKind::Ema { period } => ("ema", period, None),
+                        IndicatorKind::Bollinger { period, deviation } => {
+                            ("bollinger", period, Some(deviation))
+                        }
+                    };
+                    IndicatorInfo {
+                        kind,
+                        period,
+                        deviation,
+                        source: binding.source,
+                        output_index,
+                    }
+                })
+        })
+    }
+
     /// Add a Rust-native simple moving-average producer. The returned line series is owned by the
     /// engine and is recomputed whenever its source series changes.
     pub fn add_sma(&mut self, source: SeriesId, period: usize) -> Option<SeriesId> {

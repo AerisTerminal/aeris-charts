@@ -162,6 +162,39 @@ export type visible_time_range_handler = (range: time_range | null) => void;
 /** Receives the time scale's new media size in px (reference `SizeChangeEventHandler`). */
 export type size_change_handler = (width: number, height: number) => void;
 
+/** Geometry of a pane's content area in CSS px relative to the chart container's top-left —
+ *  the anchor for platform-rendered per-pane chrome (indicator chips, legends). */
+export interface pane_geometry {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * An indicator output series' lineage (engine `IndicatorInfo`): which binding it belongs to
+ * (kind + params), the source series it derives from, and which output slot it is — everything
+ * a platform needs to render its own TradingView-style indicator chip (title, params, source,
+ * hide/remove actions) without the engine owning any UI. Bollinger slots: 0 = upper,
+ * 1 = middle, 2 = lower; SMA/EMA: always 0.
+ */
+export interface indicator_info {
+  kind: "sma" | "ema" | "bollinger";
+  period: number;
+  deviation: number | null;
+  source: series_api;
+  output_index: number;
+}
+
+/** Series lifecycle event (platform chrome: legend chips, indicator counts). */
+export interface series_change_event {
+  series: series_api;
+  pane_index: number;
+}
+export type series_change_handler = (event: series_change_event) => void;
+/** Receives the patch passed to {@link chart_api.apply_options} (theme/border retokening). */
+export type options_change_handler = (options: deep_partial<chart_options>) => void;
+
 export interface time_scale_options {
   /** Distance between adjacent bars in CSS pixels. */
   bar_spacing: number;
@@ -835,6 +868,14 @@ export interface series_api {
    * the series auto-detaches its primitives (the `detached` hook fires).
    */
   attach_primitive(primitive: series_primitive): series_primitive_handle;
+  /**
+   * The indicator lineage of this series when it is an output of
+   * {@link chart_api.add_sma}/{@link chart_api.add_ema}/{@link chart_api.add_bollinger}, or
+   * `null` for a plain (or source) series. Combined with {@link pane_api.get_series} and
+   * {@link pane_api.get_geometry} this is the enumeration half of platform indicator chrome:
+   * which indicators are active, where they live, and what to label them.
+   */
+  indicator_info(): indicator_info | null;
   /** The engine-side series id. */
   readonly id: number;
 }
@@ -897,6 +938,13 @@ export interface pane_api {
   pane_index(): number;
   /** Current CSS height in px (from the last layout pass). */
   get_height(): number;
+  /**
+   * This pane's content-area geometry in CSS px relative to the chart container's top-left
+   * (from the last layout pass). Absolutely-position platform chrome against it — e.g. a
+   * TradingView-style indicator chip pinned at `{ left, top }` of the pane. A stale handle
+   * (after a pane removal) reports zeros.
+   */
+  get_geometry(): pane_geometry;
   /** Resize this pane to `height` CSS px, absorbing the delta from its neighbour. */
   set_height(height: number): void;
   /** This pane's relative stretch factor (height weight). */
@@ -1034,6 +1082,28 @@ export interface chart_api {
   /** Fire on a double-click inside the pane (the default fit-content action still runs). */
   subscribe_dbl_click(handler: dbl_click_handler): void;
   unsubscribe_dbl_click(handler: dbl_click_handler): void;
+  /**
+   * Fire when a series appears on the chart: {@link chart_api.add_series},
+   * {@link chart_api.add_custom_series}, and every output of
+   * {@link chart_api.add_sma}/{@link chart_api.add_ema}/{@link chart_api.add_bollinger} (one
+   * event per output, so an added indicator is observable the moment it exists). Pair with
+   * {@link series_api.indicator_info} to tell indicator outputs apart from plain series.
+   */
+  subscribe_series_added(handler: series_change_handler): void;
+  unsubscribe_series_added(handler: series_change_handler): void;
+  /**
+   * Fire when a series leaves the chart via {@link chart_api.remove_series} — one event per
+   * tombstoned series, so removing a source series also reports its derived indicator outputs.
+   */
+  subscribe_series_removed(handler: series_change_handler): void;
+  unsubscribe_series_removed(handler: series_change_handler): void;
+  /**
+   * Fire after {@link chart_api.apply_options} applies a patch, receiving that patch. This is
+   * the retokening signal for platform chrome that follows chart options — e.g. the split-grid
+   * divider tracking `rightPriceScale.borderColor` live.
+   */
+  subscribe_options_change(handler: options_change_handler): void;
+  unsubscribe_options_change(handler: options_change_handler): void;
   /**
    * Add a drawing (engine-owned drawing object) to a pane (default 0) from its defining anchor
    * points and repaint. Returns the live handle. Throws when the engine rejects the placement

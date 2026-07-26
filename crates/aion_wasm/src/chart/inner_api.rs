@@ -25,6 +25,26 @@ impl ChartInner {
         removed
     }
 
+    /// `remove_series` that reports every tombstoned id (the series plus its derived indicator
+    /// outputs) so the host can fire one removal event per series; empty = nothing removed.
+    pub fn remove_series_tracked(&mut self, id: u32) -> Vec<u32> {
+        let dropped = self.engine.remove_series_tracked(id as SeriesId);
+        if !dropped.is_empty() {
+            self.detach_orphaned_series_primitives();
+            self.drop_orphaned_custom_series();
+        }
+        dropped.into_iter().map(|id| id as u32).collect()
+    }
+
+    /// JSON [`IndicatorInfo`] for an indicator output series, or `null` for a plain/source
+    /// series — the lineage a platform needs to render its own indicator chips.
+    pub fn series_indicator_info_json(&self, id: u32) -> String {
+        match self.engine.indicator_info(id as SeriesId) {
+            Some(info) => serde_json::to_string(&info).unwrap_or_else(|_| "null".to_string()),
+            None => "null".to_string(),
+        }
+    }
+
     pub fn add_sma(&mut self, source_id: u32, period: u32) -> u32 {
         self.engine
             .add_sma(source_id as SeriesId, period as usize)
@@ -518,6 +538,20 @@ impl ChartInner {
     /// CSS height of pane `i` from the last layout pass.
     pub fn pane_height(&self, i: usize) -> f64 {
         self.panes.get(i).map(|p| p.height).unwrap_or(0.0)
+    }
+
+    /// JSON `{left, top, width, height}` of pane `i`'s content area in CSS px relative to the
+    /// chart container's top-left (`{}` for a stale index). This is the anchor a platform
+    /// absolutely-positions per-pane chrome against (e.g. a TradingView-style indicator chip
+    /// at the pane's top-left). Reflects the last layout pass.
+    pub fn pane_geometry_json(&self, i: usize) -> String {
+        match self.panes.get(i) {
+            Some(p) => format!(
+                r#"{{"left":{},"top":{},"width":{},"height":{}}}"#,
+                self.pane_left, p.top, self.pane_w, p.height
+            ),
+            None => "{}".to_string(),
+        }
     }
 
     /// Relative stretch factor of pane `i`.

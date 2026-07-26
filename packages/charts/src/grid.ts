@@ -133,6 +133,19 @@ export async function create_chart_grid(
   const usage = (): grid_usage => JSON.parse(workspace.usage_json(now_seconds())) as grid_usage;
   const emit_usage = () => options.on_usage?.(usage());
 
+  /** The live divider elements (rebuilt by `reconcile`), repainted when the follow-source
+   *  chart's options change (the axis border token is live, not sampled once). */
+  const dividers = new Set<{ el: HTMLDivElement; horizontal: boolean }>();
+  /** Paint a divider's 1px line as the center stop of a gradient across its 5px box. */
+  const paint_divider = (el: HTMLDivElement, horizontal: boolean) => {
+    const line = `transparent 2px, ${resolve_divider_color()} 2px, ${resolve_divider_color()} 3px, transparent 3px`;
+    el.style.background = `linear-gradient(to ${horizontal ? "right" : "bottom"}, ${line})`;
+  };
+  /** Re-resolve and repaint every divider (axis border changed, or a pinned color was set). */
+  const restyle_dividers = () => {
+    for (const { el, horizontal } of dividers) paint_divider(el, horizontal);
+  };
+
   /** The adjacent cell ids flanking a split node (its divider's left/top and right/bottom). */
   const edge_ids = (node: layout_node, side: "first" | "last"): number => {
     if (node.kind === "cell") return node.id as number;
@@ -153,12 +166,12 @@ export async function create_chart_grid(
   ): HTMLDivElement => {
     const div = document.createElement("div");
     div.className = "aion-grid-divider";
-    const line = `transparent 2px, ${resolve_divider_color()} 2px, ${resolve_divider_color()} 3px, transparent 3px`;
     div.style.cssText =
       "flex:0 0 5px;position:relative;z-index:4;touch-action:none;" +
-      `background:linear-gradient(to ${horizontal ? "right" : "bottom"}, ${line});` +
       `cursor:${horizontal ? "col-resize" : "row-resize"};` +
       (horizontal ? "margin:0 -2px;" : "margin:-2px 0;");
+    paint_divider(div, horizontal);
+    dividers.add({ el: div, horizontal });
     div.addEventListener("pointerdown", (e) => {
       e.preventDefault();
       div.setPointerCapture(e.pointerId);
@@ -227,6 +240,9 @@ export async function create_chart_grid(
     reconcile();
     record.chart = await create_chart(host, { autoSize: true, ...options.chart_options });
     record.handle.chart = record.chart;
+    // The divider follows the first chart's axis border token live: any apply_options on any
+    // cell (theme switch, explicit borderColor) repaints the dividers without a topology change.
+    record.chart.subscribe_options_change(restyle_dividers);
     return record;
   };
 
@@ -253,6 +269,8 @@ export async function create_chart_grid(
       return div;
     };
     const layout = JSON.parse(workspace.layout_json()) as layout_node;
+    // The split wrappers (and their dividers) are rebuilt wholesale; cell slots are reused.
+    dividers.clear();
     container.replaceChildren(build(layout));
   };
 
@@ -269,6 +287,7 @@ export async function create_chart_grid(
 
   const remove = (cell: cell_record): boolean => {
     if (!workspace.remove(cell.id)) return false; // unknown id or the last chart
+    cell.chart.unsubscribe_options_change(restyle_dividers);
     cell.chart.remove();
     cell.slot.remove();
     cells.delete(cell.id);
@@ -298,8 +317,12 @@ export async function create_chart_grid(
       reconcile();
     },    destroy: () => {
       if (heartbeat !== null) clearInterval(heartbeat);
-      for (const cell of cells.values()) cell.chart.remove();
+      for (const cell of cells.values()) {
+        cell.chart.unsubscribe_options_change(restyle_dividers);
+        cell.chart.remove();
+      }
       cells.clear();
+      dividers.clear();
       container.replaceChildren();
       container.style.display = "";
       container.style.overflow = "";
