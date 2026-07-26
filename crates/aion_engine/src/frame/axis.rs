@@ -490,6 +490,7 @@ impl ChartEngine {
             self.append_marker_labels(&mut out.labels, from, to);
         }
         self.append_price_line_labels(&mut out.labels, &measure);
+        self.append_drawing_line_labels(&mut out.labels, &measure);
         self.append_last_value_label(&mut out.labels, &measure);
         self.append_crosshair_labels(&mut out.labels, &measure);
         out.separators = self
@@ -729,6 +730,78 @@ impl ChartEngine {
                         attach_group: None,
                     });
                 }
+            }
+        }
+    }
+
+    /// TradingView's horizontal-line/ray axis label: the drawing's price boxed on the price
+    /// axis in the LINE's own color (the label is part of the drawing — recoloring the line
+    /// recolors the label on the next frame), with the contrast-pick text color. Formatted
+    /// with the pane's primary series' price format, like the price-line labels.
+    pub(super) fn append_drawing_line_labels<F>(&self, labels: &mut Vec<AxisLabel>, measure: &F)
+    where
+        F: Fn(&str) -> f64,
+    {
+        let font_size = self.options.get().layout.font_size;
+        for (pi, pane) in self.panes.iter().enumerate() {
+            let Some(scale) = self.drawing_scale(pi) else {
+                continue;
+            };
+            if scale.is_empty() {
+                continue;
+            }
+            let base = self.drawing_scale_base(pi);
+            let series = self
+                .series
+                .iter()
+                .find(|s| s.pane_index == pi && !s.overlay && s.visible && !s.left_scale);
+            for drawing in &self.drawings {
+                if drawing.pane_index != pi
+                    || !matches!(
+                        drawing.kind,
+                        DrawingKind::HorizontalLine | DrawingKind::HorizontalRay
+                    )
+                {
+                    continue;
+                }
+                let Some(point) = drawing.points.first() else {
+                    continue;
+                };
+                let y = scale.price_to_coordinate(point.price, base);
+                if y < pane.top || y > pane.top + pane.height {
+                    continue;
+                }
+                let logical = scale.price_to_logical_value(point.price, base);
+                let text = match series {
+                    Some(s) => self.format_series_value(s, scale, logical),
+                    None => self.format_scale_value(scale, logical),
+                };
+                // The label IS the line: background in the drawing's color (parsed per frame,
+                // so option changes track), contrast-picked text.
+                let background = Color::parse_css(&drawing.color)
+                    .unwrap_or(Color::rgb(0x29, 0x62, 0xff))
+                    .solid();
+                let width = 1.0 + 5.0 + 5.0 + 5.0 + measure(&text);
+                let height = font_size + 2.5 * 2.0;
+                labels.push(AxisLabel {
+                    text,
+                    x: self.pane_left + self.pane_w + 10.0,
+                    y,
+                    color: background.contrast_text(),
+                    align: AxisTextAlign::Left,
+                    midpoint: AxisTextMidpoint::Label,
+                    bold: false,
+                    background: Some((
+                        self.pane_left + self.pane_w,
+                        y - height / 2.0,
+                        width,
+                        height,
+                        background,
+                    )),
+                    background_corners: AxisLabelCorners::for_align(AxisTextAlign::Left),
+                    measure_extra: 0.0,
+                    attach_group: None,
+                });
             }
         }
     }

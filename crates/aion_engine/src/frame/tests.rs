@@ -778,6 +778,43 @@ fn indicator_lines_support_dotted_and_dashed_styles() {
 }
 
 #[test]
+fn horizontal_line_drawings_label_the_axis_in_the_line_color() {
+    use crate::drawings::{DrawingKind, DrawingPoint};
+
+    let mut chart = countdown_chart();
+    let id = chart
+        .add_drawing(
+            DrawingKind::HorizontalLine,
+            0,
+            vec![DrawingPoint {
+                logical: 1.0,
+                price: 12.0,
+            }],
+            None,
+        )
+        .unwrap();
+    let label_at = |chart: &mut ChartEngine| {
+        chart
+            .build_axis_frame(80.0, |t| t.len() as f64 * 7.0)
+            .labels
+            .into_iter()
+            .find(|l| l.text == "12.00" && l.background.is_some())
+            .expect("the h-line labels the axis")
+    };
+    let label = label_at(&mut chart);
+    let (_, _, _, _, bg) = label.background.expect("boxed");
+    assert_eq!(bg, Color::rgb(0x29, 0x62, 0xff), "default drawing color");
+    assert_eq!(label.color, bg.contrast_text());
+
+    // The label is part of the line: recoloring the drawing recolors the label.
+    assert!(chart.drawing_apply_options(id, r##"{"color":"#ff0000"}"##));
+    let label = label_at(&mut chart);
+    let (_, _, _, _, bg) = label.background.expect("boxed");
+    assert_eq!(bg, Color::rgb(0xff, 0x00, 0x00));
+    assert_eq!(label.color, bg.contrast_text());
+}
+
+#[test]
 fn bollinger_band_fill_paints_between_upper_and_lower() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     let times = [1.0, 2.0, 3.0, 4.0];

@@ -21,6 +21,7 @@ use aion_render::draw_list::{Gradient, IRect, LineStyle, LineType, Prim};
 use aion_render::histogram::{build_histogram, HistogramItem, HistogramParams};
 use aion_render::line::{dash_split, expand_line, LinePoint};
 
+use crate::drawings::DrawingKind;
 use crate::{
     ChartEngine, PriceFormatKind, PriceScaleTarget, SeriesKind, SeriesPriceFormat, PANE_SEPARATOR,
 };
