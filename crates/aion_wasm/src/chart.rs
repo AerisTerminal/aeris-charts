@@ -447,11 +447,12 @@ pub async fn create_chart(
     // stays headless). The font spec matches the `Prim::Text` rasterizer exactly.
     let measure_ctx = inner.axis_ctx.clone();
     inner.engine.set_text_measure(Some(Box::new(
-        move |text: &str, size: f64, family: &str, bold: bool| {
+        move |text: &str, size: f64, family: &str, weight: u16, italic: bool| {
             measure_ctx.set_font(&aion_render::draw_list::text_font_spec(
                 size as f32,
                 family,
-                bold,
+                weight,
+                italic,
             ));
             measure_ctx
                 .measure_text(text)
@@ -1466,6 +1467,10 @@ impl AionChart {
     pub fn drawing_points_json(&self, id: u32) -> String {
         self.inner.borrow().drawing_points_json(id)
     }
+    /// One anchor's CSS-px position `[x, y]` in overlay space (empty when it cannot convert).
+    pub fn drawing_point_to_coordinate(&self, id: u32, index: usize) -> Vec<f64> {
+        self.inner.borrow().drawing_point_to_coordinate(id, index)
+    }
     /// Every drawing as a JSON array in z-order (`{id, kind, pane_index, points, ...options}`).
     pub fn drawings_json(&self) -> String {
         self.inner.borrow().drawings_json()
@@ -1484,6 +1489,12 @@ impl AionChart {
     }
     pub fn set_selected_drawing(&mut self, id: Option<u32>) {
         self.inner.borrow_mut().set_selected_drawing(id);
+    }
+    /// Mark the text drawing the host's typing-mode editor currently owns: its
+    /// placeholder/label is suppressed in the next `render()` so the editor's preview is the
+    /// only visual for it. Clear (`undefined`) when the editor closes.
+    pub fn set_editing_drawing(&mut self, id: Option<u32>) {
+        self.inner.borrow_mut().engine.set_editing_drawing(id);
     }
     pub fn selected_drawing(&self) -> Option<u32> {
         self.inner.borrow().selected_drawing()

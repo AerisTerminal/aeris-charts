@@ -137,6 +137,20 @@
       </label>
       <label title="Stroke width in CSS px — templates new drawings and applies live to the selected one">w <input type="range" id="drawing_width" min="1" max="8" step="1" value="2"><span id="drawing_width_val">2</span></label>
       <label title="Text label carried by newly created drawings (any tool)">label <input type="text" id="drawing_text" size="8"></label>
+      <label title="Label text color — templates new drawings and applies live to the selected one">text <input type="color" id="drawing_text_color" value="#0a0a0a"></label>
+      <label title="Label font size in CSS px — templates new drawings and applies live to the selected one">size <input type="number" id="drawing_text_size" min="8" max="72" step="1" value="12"></label>
+      <label title="Label font weight — templates new drawings and applies live to the selected one">weight
+        <select id="drawing_weight">
+          <option value="300">300</option>
+          <option value="400" selected>400</option>
+          <option value="500">500</option>
+          <option value="600">600</option>
+          <option value="700">700</option>
+          <option value="800">800</option>
+          <option value="900">900</option>
+        </select>
+      </label>
+      <label title="Italic label glyphs — templates new drawings and applies live to the selected one"><input type="checkbox" id="drawing_italic"> italic</label>
       <button id="clear_drawings" type="button" title="Remove every drawing">clear all</button>
       <span class="hint">Ctrl = snap crosshair + anchors to OHLC · Shift = straighten</span>
     </div>
@@ -668,6 +682,10 @@ function drawing_options_from_inputs() {
     style: document.getElementById("drawing_style").value,
     width: Number(document.getElementById("drawing_width").value),
     text: document.getElementById("drawing_text").value,
+    text_color: document.getElementById("drawing_text_color").value,
+    text_size: Number(document.getElementById("drawing_text_size").value),
+    text_weight: Number(document.getElementById("drawing_weight").value),
+    text_italic: document.getElementById("drawing_italic").checked,
   };
 }
 function arm_drawing_tool(kind) {
@@ -678,15 +696,46 @@ for (const button of drawing_tool_buttons) {
   button.addEventListener("click", () => arm_drawing_tool(button.dataset.tool));
 }
 chart.set_drawing_tool_listener(sync_drawing_tool_buttons);
-for (const id of ["drawing_color", "drawing_style", "drawing_width"]) {
+// The toolbar mirrors the SELECTION (TradingView's settings panel): clicking a drawing loads
+// its style into the inputs, so a later change applies on top of the drawing's current style
+// instead of resetting the rest. (#rrggbb needed for the color inputs; other CSS forms skip.)
+function css_to_hex(css) {
+  if (!css) return null;
+  if (css[0] === "#") return css.length <= 7 ? css : css.slice(0, 7);
+  const m = css.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+  if (!m) return null;
+  return "#" + [m[1], m[2], m[3]].map((n) => Number(n).toString(16).padStart(2, "0")).join("");
+}
+function sync_drawing_inputs_from_selection() {
+  const selected = chart.selected_drawing();
+  if (selected === null) return;
+  const o = selected.options();
+  const set = (id, value) => { if (value !== null && value !== undefined) document.getElementById(id).value = value; };
+  set("drawing_color", css_to_hex(o.color));
+  set("drawing_style", o.style);
+  document.getElementById("drawing_width").value = String(o.width);
+  document.getElementById("drawing_width_val").textContent = String(o.width);
+  set("drawing_text", o.text);
+  set("drawing_text_color", css_to_hex(o.text_color));
+  set("drawing_text_size", String(o.text_size ?? 12));
+  set("drawing_weight", String(o.text_weight ?? 400));
+  document.getElementById("drawing_italic").checked = o.text_italic;
+}
+document.getElementById("chart_container").addEventListener("pointerup", () => setTimeout(sync_drawing_inputs_from_selection, 0));
+for (const id of ["drawing_color", "drawing_style", "drawing_width", "drawing_text_color", "drawing_text_size", "drawing_weight", "drawing_italic"]) {
   document.getElementById(id).addEventListener("change", () => {
     const options = drawing_options_from_inputs();
     // Re-template the armed tool (the next drawing picks the new settings up).
     const tool = chart.active_drawing_tool();
     if (tool !== null) chart.set_drawing_tool(tool, options);
-    // Apply live to the selected drawing, if any.
+    // Apply live to the selected drawing, if any — but NEVER write an empty template label
+    // over a drawing's real text (an empty `text` would wipe it back to the placeholder).
     const selected = chart.selected_drawing();
-    if (selected !== null) selected.apply_options(options);
+    if (selected !== null) {
+      const patch = { ...options };
+      if (patch.text === "") delete patch.text;
+      selected.apply_options(patch);
+    }
   });
 }
 document.getElementById("drawing_width").addEventListener("input", (e) => {

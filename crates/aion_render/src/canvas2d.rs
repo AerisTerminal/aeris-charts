@@ -338,14 +338,15 @@ pub fn execute(
                 size,
                 family,
                 align,
-                bold,
+                weight,
+                italic,
             } => {
                 if !text.is_empty() {
                     target.fill_text(
                         text,
                         *x,
                         *y,
-                        &text_font_spec(*size, family, *bold),
+                        &text_font_spec(*size, family, *weight, *italic),
                         *color,
                         *align,
                     );
@@ -711,7 +712,8 @@ mod tests {
                     size: 24.0,
                     family: "Roboto".into(),
                     align: TextAlign::Center,
-                    bold: true,
+                    weight: 700,
+                    italic: false,
                 },
                 Prim::Text {
                     x: 0.0,
@@ -721,7 +723,8 @@ mod tests {
                     size: 12.0,
                     family: "Roboto".into(),
                     align: TextAlign::Left,
-                    bold: false,
+                    weight: 400,
+                    italic: false,
                 },
             ],
             &[],
@@ -735,9 +738,16 @@ mod tests {
     #[test]
     fn font_spec_uses_numeric_weight_and_plain_size() {
         assert_eq!(
-            text_font_spec(12.0, "Inter, sans-serif", false),
+            text_font_spec(12.0, "Inter, sans-serif", 400, false),
             "400 12px Inter, sans-serif"
         );
-        assert_eq!(text_font_spec(11.5, "Inter", true), "700 11.5px Inter");
+        assert_eq!(
+            text_font_spec(11.5, "Inter", 700, false),
+            "700 11.5px Inter"
+        );
+        assert_eq!(
+            text_font_spec(11.5, "Inter", 600, true),
+            "italic 600 11.5px Inter"
+        );
     }
 }

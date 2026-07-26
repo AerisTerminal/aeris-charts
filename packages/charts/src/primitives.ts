@@ -68,14 +68,23 @@ export interface primitive_draw_context {
    * (Canvas `textBaseline: "middle"`, the axis-label convention). `options.size` is the glyph
    * size in bitmap px (default: `layout.fontSize × dpr`), `options.font` the font family
    * (default: `layout.fontFamily`), `options.color` any CSS color (default:
-   * `layout.textColor`), `options.bold` selects weight 700 over 400. For overlay text below
-   * the axis chrome use {@link pane_primitive.text_views}.
+   * `layout.textColor`), `options.weight` the numeric CSS font weight 100–900 (default 400;
+   * `options.bold` is the legacy shorthand for 700), and `options.italic` the style. For
+   * overlay text below the axis chrome use {@link pane_primitive.text_views}.
    */
   text(
     x: number,
     y: number,
     text: string,
-    options?: { color?: string; size?: number; font?: string; align?: "left" | "center" | "right"; bold?: boolean },
+    options?: {
+      color?: string;
+      size?: number;
+      font?: string;
+      align?: "left" | "center" | "right";
+      bold?: boolean;
+      weight?: number;
+      italic?: boolean;
+    },
   ): void;
 }
 

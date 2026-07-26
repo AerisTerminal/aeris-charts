@@ -271,7 +271,7 @@ fn rectangle_hit_covers_interior_and_border() {
 fn text_hit_uses_measured_box() {
     let mut chart = settled_chart();
     // Host-style measure hook: 0.5 em per glyph (replaces the 0.6 estimate).
-    chart.set_text_measure(Some(Box::new(|text, size, _family, _bold| {
+    chart.set_text_measure(Some(Box::new(|text, size, _family, _weight, _italic| {
         text.chars().count() as f64 * size * 0.5
     })));
     let id = chart
@@ -286,11 +286,13 @@ fn text_hit_uses_measured_box() {
         )
         .unwrap();
     let (ax, ay) = (x_at(&chart, 5.0), y_at(&chart, 11.0));
-    // Center/middle placement: the 40×24 box centers on the anchor.
+    // Center/middle placement: the 40×24 box centers on the anchor, plus the container
+    // padding (4 px) on every side.
     assert_eq!(chart.hit_test_drawing(ax, ay).unwrap().id, id);
     assert_eq!(chart.hit_test_drawing(ax + 19.0, ay).unwrap().id, id);
-    assert!(chart.hit_test_drawing(ax + 21.0, ay).is_none());
-    assert!(chart.hit_test_drawing(ax, ay + 13.0).is_none());
+    assert_eq!(chart.hit_test_drawing(ax + 23.0, ay).unwrap().id, id);
+    assert!(chart.hit_test_drawing(ax + 25.0, ay).is_none());
+    assert!(chart.hit_test_drawing(ax, ay + 17.0).is_none());
 }
 
 #[test]
@@ -1032,4 +1034,199 @@ fn brush_capture_end_discards_a_degenerate_stroke() {
     assert!(chart.brush_create_start(None, x_at(&chart, 2.0), y_at(&chart, 10.0)));
     chart.brush_create_cancel();
     assert!(!chart.brush_create_active());
+}
+
+// --- text tool: placeholder + container ---
+
+/// The text prims emitted for the current drawings (text + color) and the container boxes
+/// (fill colors and border frames), from a fresh frame.
+type TextPrims = (Vec<(String, Color)>, Vec<(Color, Option<(i32, Color)>)>);
+
+fn text_prims(chart: &mut ChartEngine) -> TextPrims {
+    let frame = chart.build_frame();
+    let mut texts = Vec::new();
+    let mut fills = Vec::new();
+    let mut frame_border = None;
+    for prim in &frame.panes[0].main {
+        match prim {
+            Prim::Text { text, color, .. } => texts.push((text.clone(), *color)),
+            Prim::Rect { color, .. } => fills.push(*color),
+            Prim::RectFrame { border, color, .. } => frame_border = Some((*border, *color)),
+            _ => {}
+        }
+    }
+    let boxes = fills.into_iter().map(|fill| (fill, frame_border)).collect();
+    (texts, boxes)
+}
+
+#[test]
+fn empty_text_tool_renders_the_muted_placeholder_and_hits_it() {
+    let mut chart = settled_chart();
+    let id = chart
+        .add_drawing(
+            DrawingKind::Text,
+            0,
+            vec![DrawingPoint {
+                logical: 5.0,
+                price: 11.0,
+            }],
+            None,
+        )
+        .unwrap();
+    let (texts, _) = text_prims(&mut chart);
+    let (_, color) = texts
+        .iter()
+        .find(|(t, _)| t == TEXT_PLACEHOLDER)
+        .expect("placeholder rendered");
+    // Muted: the resolved text color at half alpha (layout default is near-black).
+    assert!(color.a() < 200, "placeholder is muted: {color:?}");
+    // The preview reads bold and ≥ 12 CSS px (dpr 1 here, so bitmap size == CSS size).
+    let frame = chart.build_frame();
+    let (size, weight) = frame.panes[0]
+        .main
+        .iter()
+        .find_map(|prim| match prim {
+            Prim::Text {
+                text, size, weight, ..
+            } if text == TEXT_PLACEHOLDER => Some((*size, *weight)),
+            _ => None,
+        })
+        .expect("placeholder rendered");
+    assert_eq!(weight, 700, "placeholder is bold");
+    assert!(size >= 12.0, "placeholder is at least 12px: {size}");
+    // And it is a click target (the placeholder opens the editor) — the measured box covers it.
+    let hit = chart
+        .hit_test_drawing(x_at(&chart, 5.0), y_at(&chart, 11.0))
+        .expect("placeholder is clickable");
+    assert_eq!(hit.id, id);
+    // Setting text replaces the placeholder with the real run at full strength.
+    assert!(chart.drawing_apply_options(id, r##"{"text":"hello"}"##));
+    let (texts, _) = text_prims(&mut chart);
+    assert!(texts.iter().all(|(t, _)| t != TEXT_PLACEHOLDER));
+    let (_, color) = texts
+        .iter()
+        .find(|(t, _)| t == "hello")
+        .expect("label rendered");
+    assert_eq!(color.a(), 255);
+}
+
+#[test]
+fn text_styling_options_round_trip_and_render() {
+    let mut chart = settled_chart();
+    let id = chart
+        .add_drawing(
+            DrawingKind::Text,
+            0,
+            vec![DrawingPoint {
+                logical: 5.0,
+                price: 11.0,
+            }],
+            Some(r##"{"text":"styled","text_weight":600,"text_italic":true,"text_color":"#ff0000"}"##),
+        )
+        .unwrap();
+    let options: serde_json::Value =
+        serde_json::from_str(&chart.drawing_options_json(id).unwrap()).unwrap();
+    assert_eq!(options["text_weight"], 600);
+    assert_eq!(options["text_italic"], true);
+    // The legacy boolean derives from the weight (semibold and up reads bold).
+    assert_eq!(options["text_bold"], true);
+    assert_eq!(options["text_color"], "#ff0000");
+    // The emitted Prim::Text carries the weight and the italic flag.
+    let frame = chart.build_frame();
+    let (weight, italic) = frame.panes[0]
+        .main
+        .iter()
+        .find_map(|prim| match prim {
+            Prim::Text {
+                text,
+                weight,
+                italic,
+                ..
+            } if text == "styled" => Some((*weight, *italic)),
+            _ => None,
+        })
+        .expect("label rendered");
+    assert_eq!((weight, italic), (600, true));
+    // The legacy `text_bold` shorthand maps to 700; an explicit weight wins and is validated.
+    assert!(chart.drawing_apply_options(id, r##"{"text_bold":true}"##));
+    assert_eq!(chart.drawing(id).unwrap().text_weight, Some(700));
+    assert!(chart.drawing_apply_options(id, r##"{"text_weight":500}"##));
+    assert_eq!(chart.drawing(id).unwrap().text_weight, Some(500));
+    assert!(chart.drawing_apply_options(id, r##"{"text_weight":99}"##));
+    assert_eq!(
+        chart.drawing(id).unwrap().text_weight,
+        Some(500),
+        "out of range ignored"
+    );
+    assert!(chart.drawing_apply_options(id, r##"{"text_bold":false}"##));
+    assert_eq!(
+        chart.drawing(id).unwrap().text_weight,
+        None,
+        "bold off resets to normal"
+    );
+}
+
+#[test]
+fn editing_drawing_suppresses_the_placeholder() {
+    let mut chart = settled_chart();
+    let id = chart
+        .add_drawing(
+            DrawingKind::Text,
+            0,
+            vec![DrawingPoint {
+                logical: 5.0,
+                price: 11.0,
+            }],
+            None,
+        )
+        .unwrap();
+    let (texts, _) = text_prims(&mut chart);
+    assert!(texts.iter().any(|(t, _)| t == TEXT_PLACEHOLDER));
+    // The host's typing-mode editor owns the visual: the placeholder/label is suppressed.
+    chart.set_editing_drawing(Some(id));
+    assert_eq!(chart.editing_drawing(), Some(id));
+    let (texts, _) = text_prims(&mut chart);
+    assert!(texts.iter().all(|(t, _)| t != TEXT_PLACEHOLDER));
+    // Clearing the flag restores it.
+    chart.set_editing_drawing(None);
+    let (texts, _) = text_prims(&mut chart);
+    assert!(texts.iter().any(|(t, _)| t == TEXT_PLACEHOLDER));
+}
+
+#[test]
+fn text_tool_container_draws_a_crisp_box_behind_the_run() {
+    let mut chart = settled_chart();
+    let id = chart
+        .add_drawing(
+            DrawingKind::Text,
+            0,
+            vec![DrawingPoint {
+                logical: 5.0,
+                price: 11.0,
+            }],
+            Some(r##"{"text":"boxed","box_color":"rgba(255, 0, 0, 0.5)","box_border_color":"#0000ff","box_border_width":2}"##),
+        )
+        .unwrap();
+    let (texts, boxes) = text_prims(&mut chart);
+    assert!(texts.iter().any(|(t, _)| t == "boxed"));
+    // Exactly one container fill (candle rects carry their own colors).
+    let container: Vec<_> = boxes
+        .iter()
+        .filter(|(fill, _)| *fill == Color::rgba(0xff, 0, 0, 0x80))
+        .collect();
+    assert_eq!(container.len(), 1);
+    let (_, border) = container[0];
+    assert_eq!(*border, Some((2, Color::rgb(0, 0, 0xff))));
+    // Options round-trip the container settings.
+    let options: serde_json::Value =
+        serde_json::from_str(&chart.drawing_options_json(id).unwrap()).unwrap();
+    assert_eq!(options["box_color"], "rgba(255, 0, 0, 0.5)");
+    assert_eq!(options["box_border_color"], "#0000ff");
+    assert_eq!(options["box_border_width"], 2.0);
+    // Clearing both removes the box (candle rects are unaffected, of course).
+    assert!(chart.drawing_apply_options(id, r##"{"box_color":"","box_border_color":""}"##));
+    let (_, boxes) = text_prims(&mut chart);
+    assert!(boxes
+        .iter()
+        .all(|(fill, _)| *fill != Color::rgba(0xff, 0, 0, 0x80)));
 }

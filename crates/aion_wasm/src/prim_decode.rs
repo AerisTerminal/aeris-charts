@@ -222,8 +222,24 @@ fn decode_one(
                 Some("right") => TextAlign::Right,
                 _ => TextAlign::Left,
             },
-            bold: command
-                .get("bold")
+            // Numeric CSS weight (100–900) wins; the boolean `bold` shorthand maps to 700.
+            weight: command
+                .get("weight")
+                .and_then(serde_json::Value::as_u64)
+                .map(|w| (w as u16).clamp(100, 900))
+                .unwrap_or(
+                    if command
+                        .get("bold")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false)
+                    {
+                        700
+                    } else {
+                        400
+                    },
+                ),
+            italic: command
+                .get("italic")
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false),
         }),
@@ -464,7 +480,8 @@ mod tests {
                     size: 12.0,
                     family: "DefaultFamily".into(),
                     align: TextAlign::Center,
-                    bold: true,
+                    weight: 700,
+                    italic: false,
                 },
             ]
         );
@@ -492,7 +509,8 @@ mod tests {
                     size: 24.0,
                     family: "DefaultFamily".into(),
                     align: TextAlign::Left,
-                    bold: false,
+                    weight: 400,
+                    italic: false,
                 },
                 Prim::Text {
                     x: 3.0,
@@ -502,7 +520,8 @@ mod tests {
                     size: 9.5,
                     family: "Custom".into(),
                     align: TextAlign::Right,
-                    bold: true,
+                    weight: 700,
+                    italic: false,
                 },
                 Prim::Text {
                     x: 5.0,
@@ -512,7 +531,8 @@ mod tests {
                     size: 24.0,
                     family: "DefaultFamily".into(),
                     align: TextAlign::Left,
-                    bold: false,
+                    weight: 400,
+                    italic: false,
                 },
                 Prim::Text {
                     x: 7.0,
@@ -522,7 +542,8 @@ mod tests {
                     size: 24.0,
                     family: "DefaultFamily".into(),
                     align: TextAlign::Left,
-                    bold: false,
+                    weight: 400,
+                    italic: false,
                 },
             ]
         );

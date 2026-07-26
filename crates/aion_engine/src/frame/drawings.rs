@@ -12,7 +12,9 @@
 use aion_render::color::Color;
 use aion_render::draw_list::{IRect, LineType, Prim, TextAlign};
 
-use crate::drawings::{Drawing, DrawingKind, DrawingTextHAlign, TEXT_PAD};
+use crate::drawings::{
+    Drawing, DrawingKind, DrawingTextHAlign, TEXT_PAD, TEXT_PLACEHOLDER_MIN_SIZE,
+};
 use crate::ChartEngine;
 
 /// TradingView-style drawing anchor handle: a theme-derived disc with the accent-blue border
@@ -236,7 +238,11 @@ impl ChartEngine {
     /// One drawing's text label (every tool can carry one): the placement resolves the 3×3
     /// alignment against the tool's reference box (drawings.rs `text_box`/`text_placement`),
     /// then emits a `Prim::Text` — x is the aligned edge, y the vertical center (the IR's
-    /// middle-baseline convention), so the run rasterizes identically on both backends.
+    /// middle-baseline convention), so the run rasterizes identically on both backends. An
+    /// empty text tool renders the muted "+ Add Text" prompt (drawings.rs `TEXT_PLACEHOLDER`),
+    /// and a text tool with a `box_color`/`box_border_color` gets its container (crisp
+    /// integer-snapped `Rect`/`RectFrame` prims behind the run — TradingView's text-box
+    /// background/border).
     fn build_drawing_text(
         &self,
         drawing: &Drawing,
@@ -245,11 +251,28 @@ impl ChartEngine {
         vpr: f64,
         out: &mut Vec<Prim>,
     ) {
-        if drawing.text.is_empty() {
+        let is_text_tool = drawing.kind == DrawingKind::Text;
+        if drawing.text.is_empty() && !is_text_tool {
             return;
         }
+        // While the host's typing-mode editor owns a text drawing, its label/placeholder is
+        // suppressed — the editor's preview is the only visual for it (TradingView's editing
+        // state).
+        if is_text_tool && self.editing_drawing == Some(drawing.id) {
+            return;
+        }
+        let placeholder = is_text_tool && drawing.text.is_empty();
         let layout = &self.options.get().layout;
-        let size = drawing.text_size.unwrap_or(layout.font_size) * vpr;
+        let size = if placeholder {
+            // The preview reads bold + bigger (≥ 12 CSS px, TradingView's prompt).
+            drawing
+                .text_size
+                .unwrap_or(layout.font_size)
+                .max(TEXT_PLACEHOLDER_MIN_SIZE)
+                * vpr
+        } else {
+            drawing.text_size.unwrap_or(layout.font_size) * vpr
+        };
         let pane = &self.panes[drawing.pane_index];
         let reference = ChartEngine::text_box(
             drawing.kind,
@@ -265,10 +288,54 @@ impl ChartEngine {
             .and_then(Color::parse_css)
             .or_else(|| Color::parse_css(&layout.text_color))
             .unwrap_or(Color::rgb(0, 0, 0));
+        // The placeholder is muted (TradingView's prompt): the resolved text color at half alpha.
+        let color = if placeholder {
+            Color::rgba(color.r(), color.g(), color.b(), color.a() / 2)
+        } else {
+            color
+        };
+
+        // The container (text tool with a background/border): a box wrapping the run, emitted
+        // as the rectangle tool's crisp integer-snapped prims (`Rect` fill + `RectFrame`
+        // border) — strong-color thin geometry at fractional positions AA-phases differently
+        // between the backends, so the box snaps to whole device px (TradingView's boxes are
+        // crisp the same way).
+        let box_fill = drawing.box_color.as_deref().and_then(Color::parse_css);
+        let box_border = drawing
+            .box_border_color
+            .as_deref()
+            .and_then(Color::parse_css);
+        if is_text_tool && (box_fill.is_some() || box_border.is_some()) {
+            let width = self.measure_drawing_text(drawing, size);
+            let height = size * 1.2;
+            let pad = 4.0 * vpr;
+            let left = match align {
+                DrawingTextHAlign::Left => x,
+                DrawingTextHAlign::Center => x - width / 2.0,
+                DrawingTextHAlign::Right => x - width,
+            };
+            let rect = IRect {
+                x: (left - pad).round() as i32,
+                y: (y - height / 2.0 - pad).round() as i32,
+                w: (width + 2.0 * pad).round().max(1.0) as i32,
+                h: (height + 2.0 * pad).round().max(1.0) as i32,
+            };
+            if let Some(fill) = box_fill {
+                out.push(Prim::Rect { rect, color: fill });
+            }
+            if let Some(border) = box_border {
+                out.push(Prim::RectFrame {
+                    rect,
+                    border: (drawing.box_border_width * vpr).round().max(1.0) as i32,
+                    color: border,
+                });
+            }
+        }
+
         out.push(Prim::Text {
             x: x as f32,
             y: y as f32,
-            text: drawing.text.clone(),
+            text: drawing.display_text().to_string(),
             color,
             size: size as f32,
             family: layout.font_family.clone(),
@@ -277,7 +344,14 @@ impl ChartEngine {
                 DrawingTextHAlign::Center => TextAlign::Center,
                 DrawingTextHAlign::Right => TextAlign::Right,
             },
-            bold: drawing.text_bold,
+            // The preview reads bold (TradingView's prompt); the committed label uses the
+            // drawing's own weight (normal 400 when unset).
+            weight: if placeholder {
+                700
+            } else {
+                drawing.text_weight.unwrap_or(400)
+            },
+            italic: drawing.text_italic,
         });
     }
 

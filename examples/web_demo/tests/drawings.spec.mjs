@@ -83,6 +83,24 @@ function pixel_diff(a, b) {
   return pixelmatch(a.data, b.data, null, a.width, a.height, { threshold: 0, includeAA: true });
 }
 
+/** Crop a (w×h) region centered on device px (cx, cy), clamped into the image. */
+function crop_around(png, cx, cy, w, h) {
+  const x = Math.max(0, Math.min(Math.round(cx - w / 2), png.width - w));
+  const y = Math.max(0, Math.min(Math.round(cy - h / 2), png.height - h));
+  const out = new PNG({ width: w, height: h });
+  PNG.bitblt(png, out, x, y, w, h, 0, 0);
+  return out;
+}
+
+/** Count dark-ish pixels (muted placeholder text on the light fixture background). */
+function count_dark(png, max_lum = 170) {
+  let n = 0;
+  for (let o = 0; o < png.data.length; o += 4) {
+    if (png.data[o] < max_lum && png.data[o + 1] < max_lum && png.data[o + 2] < max_lum) n += 1;
+  }
+  return n;
+}
+
 /** The visible mid-range logical indexes and prices to anchor drawings deterministically. */
 async function anchor_spots(page) {
   return page.evaluate(() => {
@@ -537,6 +555,16 @@ test("drawing tools render pixel-identical on WebGPU and Canvas2D (AA coverage s
         text: "parity label", text_size: 16, text_bold: true, text_h_align: "right", text_v_align: "bottom",
         text_color: "#7b1fa2",
       });
+      // A boxed text (container background + border) and an empty text (muted placeholder).
+      chart.add_drawing("text", [{ logical: l0 + 8, price: hi }], {
+        text: "boxed", box_color: "rgba(41, 98, 255, 0.85)", box_border_color: "#e91e63",
+        box_border_width: 2, text_color: "#ffffff",
+      });
+      chart.add_drawing("text", [{ logical: l0 + 16, price: lo + (hi - lo) / 4 }], {});
+      // A styled label (heavy weight + italic) — its own atlas/font-spec path.
+      chart.add_drawing("text", [{ logical: Math.floor((l0 + l1) / 2), price: lo - 2 }], {
+        text: "styled 800 italic", text_weight: 800, text_italic: true, text_color: "#e91e63",
+      });
       // A smooth brush stroke (curved polyline through a simplified path).
       chart.add_drawing("brush", [
         { logical: l0 + 4, price: lo - 0.5 },
@@ -972,8 +1000,59 @@ test("brush: a click without a drag discards the stroke", async ({ page }) => {
   expect(await page.evaluate(() => window.__chart.active_drawing_tool())).toBeNull();
 });
 
-test("tool customization templates new drawings and applies live to the selected one", async ({ page }) => {
-  // The full demo (toolbar visible) — style/width/color are the drawing customization settings.
+test("changing style mid-edit never wipes the typed text; font size control applies", async ({ page }) => {
+  // The full demo (toolbar visible) — the regression: typing in the editor, then changing a
+  // style input, used to write the toolbar's EMPTY label field into the drawing, wiping the
+  // typed text back to the placeholder.
+  await page.goto("/");
+  await wait_for_chart(page);
+  await page.waitForFunction(() => performance.now() > 600);
+  const offset = await page.evaluate(() => {
+    const r = document.getElementById("chart_container").getBoundingClientRect();
+    return { left: r.left, top: r.top };
+  });
+  const spots = await anchor_spots(page);
+  const p = await spot(page, spots.l0, spots.p_mid);
+
+  await page.click("#drawings_group [data-tool='text']");
+  await page.mouse.click(p.x + offset.left, p.y + offset.top);
+  const editor = page.locator("#chart_container #aion-text-input");
+  await expect(editor).toBeVisible();
+  await editor.fill("keep me");
+  // Change the weight like a real user (focusing the toolbar input blurs the editor, which
+  // commits the text first; the change then applies the style) — the text must survive.
+  await page.evaluate(() => document.getElementById("drawing_weight").focus());
+  await page.selectOption("#drawing_weight", "700");
+  await expect(page.locator("#chart_container #aion-text-editor")).toHaveCount(0);
+  const options = await page.evaluate(() => window.__chart.drawings()[0].options());
+  expect(options.text).toBe("keep me");
+  expect(options.text_weight).toBe(700);
+
+  // The font-size control templates/applies too.
+  await page.evaluate(() => {
+    const el = document.getElementById("drawing_text_size");
+    el.value = "24";
+    el.dispatchEvent(new Event("change"));
+  });
+  const sized = await page.evaluate(() => window.__chart.drawings()[0].options());
+  expect(sized.text_size).toBe(24);
+  expect(sized.text).toBe("keep me");
+
+  // Selecting the drawing syncs its style into the toolbar inputs.
+  const at = { x: p.x + offset.left, y: p.y + offset.top };
+  await page.mouse.click(at.x, at.y);
+  await page.keyboard.press("Escape"); // close the typing-mode editor the click opened
+  const synced = await page.evaluate(() => ({
+    weight: document.getElementById("drawing_weight").value,
+    size: document.getElementById("drawing_text_size").value,
+    text: document.getElementById("drawing_text").value,
+  }));
+  expect(synced.weight).toBe("700");
+  expect(synced.size).toBe("24");
+  expect(synced.text).toBe("keep me");
+});
+
+test("tool customization templates new drawings and applies live to the selected one", async ({ page }) => {  // The full demo (toolbar visible) — style/width/color are the drawing customization settings.
   await page.goto("/");
   await wait_for_chart(page);
   await page.waitForFunction(() => performance.now() > 600);
@@ -1019,4 +1098,274 @@ test("tool customization templates new drawings and applies live to the selected
   const updated = await page.evaluate(() => window.__chart.drawings()[0].options());
   expect(updated.style).toBe("dashed");
   expect(updated.width).toBe(3);
+});
+
+test("text tool: press places and opens typing mode; typing replaces the preview", async ({ page }) => {
+  await goto_fixture(page);
+  // No crosshair pixels near the probes.
+  await page.evaluate(() => window.__chart.apply_options({ crosshair: { mode: 2 } }));
+  const s = await anchor_spots(page);
+  const p = await spot(page, s.l0, s.p_mid);
+  const clean = await capture(page);
+  await page.evaluate(() => window.__chart.set_drawing_tool("text"));
+  await page.mouse.click(p.x, p.y);
+  // Typing mode: the editing chrome is a square, thick blue-bordered box with a focused input
+  // and the bold muted "Add text" preview (and nothing else — the engine's own placeholder is
+  // suppressed while editing).
+  const wrap = page.locator("#chart_container #aion-text-editor");
+  await expect(wrap).toBeVisible();
+  const editor = wrap.locator("#aion-text-input");
+  await expect(editor).toBeFocused();
+  const preview = wrap.locator("#aion-text-preview");
+  await expect(preview).toHaveText("Add text");
+  expect(await wrap.evaluate((el) => getComputedStyle(el).borderRadius)).toBe("0px");
+  expect(await wrap.evaluate((el) => getComputedStyle(el).border)).toContain("2px");
+  const border_color = await wrap.evaluate((el) => getComputedStyle(el).borderColor);
+  expect(border_color).toBe("rgb(41, 98, 255)");
+  // One visual only: the canvas's muted-text pixels at the anchor stay at the clean baseline —
+  // the engine's own placeholder prim is suppressed while editing (the selected drawing's
+  // blue anchor handle stays, correctly).
+  const dark_clean = count_dark(crop_around(clean, p.x * PR, p.y * PR, 130, 26));
+  const dark_editing = count_dark(crop_around(await capture(page), p.x * PR, p.y * PR, 130, 26));
+  expect(dark_editing, "engine placeholder suppressed while editing").toBeLessThanOrEqual(dark_clean);
+
+  // Typing hides the "Add text" preview immediately; the box hugs the typed text.
+  await editor.fill("engine label");
+  await expect(preview).toBeHidden();
+  await page.keyboard.press("Enter");
+  await settle_frames(page);
+  // Committed: the chrome is gone, the drawing carries the text.
+  await expect(page.locator("#chart_container #aion-text-editor")).toHaveCount(0);
+  const list = await drawings(page);
+  expect(list).toHaveLength(1);
+  expect((await page.evaluate(() => window.__chart.drawings()[0].options())).text).toBe("engine label");
+});
+
+test("text tool: Escape cancels the edit; clicking the label reopens typing mode", async ({ page }) => {
+  await goto_fixture(page);
+  const s = await anchor_spots(page);
+  await page.evaluate(({ l0, p_mid }) => {
+    window.__chart.add_drawing("text", [{ logical: l0, price: p_mid }], { text: "original" });
+  }, s);
+  await settle_frames(page);
+  // Click the label: typing mode opens, prefilled.
+  const p = await spot(page, s.l0, s.p_mid);
+  await page.mouse.click(p.x, p.y);
+  const editor = page.locator("#chart_container #aion-text-input");
+  await expect(editor).toBeVisible();
+  await expect(editor).toHaveText("original");
+  // The preview is hidden for a non-empty edit.
+  await expect(page.locator("#aion-text-preview")).toBeHidden();
+  // Escape discards the edit.
+  await editor.fill("discarded");
+  await page.keyboard.press("Escape");
+  await settle_frames(page);
+  await expect(page.locator("#chart_container #aion-text-editor")).toHaveCount(0);
+  expect((await page.evaluate(() => window.__chart.drawings()[0].options())).text).toBe("original");
+});
+
+test("empty text shows the muted placeholder, and clicking it opens typing mode", async ({ page }) => {
+  await goto_fixture(page);
+  // No crosshair pixels near the probes.
+  await page.evaluate(() => window.__chart.apply_options({ crosshair: { mode: 2 } }));
+  const s = await anchor_spots(page);
+  const clean = await capture(page);
+  await page.evaluate(({ l0, p_mid }) => {
+    window.__chart.add_drawing("text", [{ logical: l0, price: p_mid }]);
+  }, s);
+  await settle_frames(page);
+  // The "Add text" placeholder paints at the anchor (muted) and is a click target.
+  const p = await spot(page, s.l0, s.p_mid);
+  const with_placeholder = await capture(page);
+  expect(
+    pixel_diff(crop_around(clean, p.x * PR, p.y * PR, 130, 26), crop_around(with_placeholder, p.x * PR, p.y * PR, 130, 26)),
+    "placeholder paints",
+  ).toBeGreaterThan(30);
+  await page.mouse.click(p.x, p.y);
+  const editor = page.locator("#chart_container #aion-text-input");
+  await expect(editor).toBeVisible();
+  await expect(editor).toHaveText("");
+  // While editing, the engine's placeholder is suppressed: the region's muted-text pixels drop
+  // back to the clean baseline (the selected drawing's blue anchor handle stays, correctly).
+  const dark_clean = count_dark(crop_around(clean, p.x * PR, p.y * PR, 130, 26));
+  const dark_placeholder = count_dark(crop_around(with_placeholder, p.x * PR, p.y * PR, 130, 26));
+  expect(dark_placeholder, "placeholder text paints").toBeGreaterThan(dark_clean + 20);
+  const dark_editing = count_dark(crop_around(await capture(page), p.x * PR, p.y * PR, 130, 26));
+  expect(dark_editing, "engine placeholder suppressed while editing").toBeLessThanOrEqual(dark_clean);
+  await editor.fill("from placeholder");
+  await page.keyboard.press("Enter");
+  await settle_frames(page);
+  expect((await page.evaluate(() => window.__chart.drawings()[0].options())).text).toBe("from placeholder");
+});
+
+test("text drawing moves freely in both directions with a body drag", async ({ page }) => {
+  await goto_fixture(page);
+  const s = await anchor_spots(page);
+  await page.evaluate(({ l0, p_mid }) => {
+    window.__chart.add_drawing("text", [{ logical: l0, price: p_mid }], { text: "movable" });
+  }, s);
+  await settle_frames(page);
+  const before = (await drawings(page))[0].points[0];
+  const p = await spot(page, s.l0, s.p_mid);
+  // Drag the label diagonally: both the logical and the price follow.
+  await page.mouse.move(p.x, p.y);
+  await page.mouse.down();
+  await page.mouse.move(p.x + 45, p.y - 25, { steps: 4 });
+  await page.mouse.up();
+  await settle_frames(page);
+  const after = (await drawings(page))[0].points[0];
+  expect(after.logical).not.toBeCloseTo(before.logical, 3);
+  expect(after.price).not.toBeCloseTo(before.price, 3);
+  // Clicking the label afterwards still opens typing mode (movement does not eat the click).
+  const moved_p = { x: p.x + 45, y: p.y - 25 };
+  await page.mouse.click(moved_p.x, moved_p.y);
+  await expect(page.locator("#chart_container #aion-text-input")).toBeVisible();
+  await page.keyboard.press("Escape");
+});
+
+test("the editor tracks its anchor through wheel zoom and scroll (no displacement)", async ({ page }) => {
+  await goto_fixture(page);
+  const s = await anchor_spots(page);
+  await page.evaluate(({ l0, p_mid }) => {
+    window.__chart.add_drawing("text", [{ logical: l0, price: p_mid }], { text: "anchored" });
+  }, s);
+  await settle_frames(page);
+  const p = await spot(page, s.l0, s.p_mid);
+  await page.mouse.click(p.x, p.y);
+  const editor = page.locator("#chart_container #aion-text-input");
+  await expect(editor).toBeVisible();
+  const text_center = () => page.evaluate(() => {
+    const editor = document.querySelector("#aion-text-input");
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    const r = range.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  });
+  const anchor_of = () => page.evaluate(() => {
+    const c = window.__chart.wasm.drawing_point_to_coordinate(window.__chart.drawings()[0].id, 0);
+    return { x: c[0], y: c[1] };
+  });
+  // Wheel-zoom over the pane (does NOT blur the editor): the visible range and the anchor's
+  // pixel position change — the editor must follow.
+  await page.mouse.move(p.x + 100, p.y);
+  await page.mouse.wheel(0, -240);
+  await settle_frames(page);
+  await expect(editor).toBeVisible();
+  let a = await anchor_of();
+  let c = await text_center();
+  expect(Math.abs(c.x - a.x), "editor follows the anchor through zoom").toBeLessThanOrEqual(2);
+  expect(Math.abs(c.y - a.y)).toBeLessThanOrEqual(2);
+
+  // Wheel-scroll pans the chart: same tracking contract.
+  await page.mouse.wheel(240, 0);
+  await settle_frames(page);
+  await expect(editor).toBeVisible();
+  a = await anchor_of();
+  c = await text_center();
+  expect(Math.abs(c.x - a.x), "editor follows the anchor through scroll").toBeLessThanOrEqual(2);
+  expect(Math.abs(c.y - a.y)).toBeLessThanOrEqual(2);
+  await page.keyboard.press("Escape");
+});
+
+test("typing mode keeps the text pixel-anchored (no shift, same size) as it grows", async ({ page }) => {  await goto_fixture(page);
+  // No crosshair pixels near the probes.
+  await page.evaluate(() => window.__chart.apply_options({ crosshair: { mode: 2 } }));
+  const s = await anchor_spots(page);
+  await page.evaluate(({ l0, p_mid }) => {
+    window.__chart.add_drawing("text", [{ logical: l0, price: p_mid }], { text: "devraj" });
+  }, s);
+  await settle_frames(page);
+  const p = await spot(page, s.l0, s.p_mid);
+  await page.mouse.click(p.x, p.y);
+  const editor = page.locator("#chart_container #aion-text-input");
+  await expect(editor).toBeVisible();
+  // The editable's REAL text rect (Range) vs the engine anchor — the calibration's contract.
+  const metrics = () => page.evaluate(() => {
+    const editor = document.querySelector("#aion-text-input");
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    const r = range.getBoundingClientRect();
+    const cs = getComputedStyle(editor);
+    return {
+      center: { x: r.left + r.width / 2, y: r.top + r.height / 2 },
+      font_size: cs.fontSize,
+      font_style: cs.fontStyle,
+      font_weight: cs.fontWeight,
+    };
+  });
+  const expected_size = await page.evaluate(() => Math.max(window.__chart.options().layout.fontSize, 12));
+  let m = await metrics();
+  expect(Math.abs(m.center.x - p.x), "text x on the anchor").toBeLessThanOrEqual(1.5);
+  expect(Math.abs(m.center.y - p.y), "text y on the anchor").toBeLessThanOrEqual(1.5);
+  // Same font size/style/weight as the engine's committed text.
+  expect(m.font_size).toBe(`${expected_size}px`);
+  expect(m.font_style).toBe("normal");
+  expect(m.font_weight).toBe("400");
+  // Growing the text keeps the anchor (no drifting/lifting while typing).
+  await editor.fill("devraj the great king of everything");
+  m = await metrics();
+  expect(Math.abs(m.center.x - p.x), "grown text x still on the anchor").toBeLessThanOrEqual(1.5);
+  expect(Math.abs(m.center.y - p.y), "grown text y still on the anchor").toBeLessThanOrEqual(1.5);
+  await page.keyboard.press("Escape");
+});
+
+test("text styling: weight, italic, and color flow through options and pixels", async ({ page }) => {  await goto_fixture(page);
+  // No crosshair pixels near the probes.
+  await page.evaluate(() => window.__chart.apply_options({ crosshair: { mode: 2 } }));
+  const s = await anchor_spots(page);
+  await page.evaluate(({ l0, p_mid }) => {
+    window.__chart.add_drawing("text", [{ logical: l0, price: p_mid }], {
+      text: "styled",
+      text_weight: 800,
+      text_italic: true,
+      text_color: "#7b1fa2",
+    });
+  }, s);
+  await settle_frames(page);
+  const options = await page.evaluate(() => window.__chart.drawings()[0].options());
+  expect(options.text_weight).toBe(800);
+  expect(options.text_italic).toBe(true);
+  expect(options.text_color).toBe("#7b1fa2");
+  // Derived legacy boolean (semibold and up reads bold).
+  expect(options.text_bold).toBe(true);
+  // The styled label paints (purple pixels at the anchor).
+  const p = await spot(page, s.l0, s.p_mid);
+  expect(color_centroid(await capture(page), PURPLE), "styled label paints").not.toBeNull();
+
+  // Patching down to normal weight + non-italic changes the footprint measurably.
+  const heavy = await capture(page);
+  await page.evaluate(() => window.__chart.drawings()[0].apply_options({ text_weight: 400, text_italic: false }));
+  await settle_frames(page);
+  const normal = await capture(page);
+  expect(pixel_diff(
+    crop_around(heavy, p.x * PR, p.y * PR, 160, 30),
+    crop_around(normal, p.x * PR, p.y * PR, 160, 30),
+  ), "weight/italic change restyles the label").toBeGreaterThan(50);
+  const after = await page.evaluate(() => window.__chart.drawings()[0].options());
+  expect(after.text_weight).toBe(400);
+  expect(after.text_italic).toBe(false);
+  expect(after.text_bold).toBe(false);
+});
+
+test("text tool container: background and border make it a box", async ({ page }) => {  await goto_fixture(page);
+  const s = await anchor_spots(page);
+  await page.evaluate(({ l0, p_mid }) => {
+    window.__chart.add_drawing("text", [{ logical: l0, price: p_mid }], {
+      text: "boxed",
+      box_color: "rgba(41, 98, 255, 0.85)",
+      box_border_color: "#e91e63",
+      box_border_width: 2,
+      text_color: "#ffffff",
+    });
+  }, s);
+  await settle_frames(page);
+  const p = await spot(page, s.l0, s.p_mid);
+  const crop = crop_around(await capture(page), p.x * PR, p.y * PR, 120, 40);
+  expect(count_color(crop, [41, 98, 255], 60), "box background paints").toBeGreaterThan(50);
+  expect(count_color(crop, [233, 30, 99], 60), "box border paints").toBeGreaterThan(10);
+  // The options round-trip exposes the container settings.
+  const options = await page.evaluate(() => window.__chart.drawings()[0].options());
+  expect(options.box_color).toBe("rgba(41, 98, 255, 0.85)");
+  expect(options.box_border_color).toBe("#e91e63");
+  expect(options.box_border_width).toBe(2);
 });

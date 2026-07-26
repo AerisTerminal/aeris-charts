@@ -707,9 +707,24 @@ export interface drawing_options {
   text_color: string;
   /** Label glyph size in CSS px (`null` = the chart's `layout.fontSize`). */
   text_size: number | null;
+  /** Label font weight (numeric CSS weight 100–900; `null` = normal 400, 700 = bold). */
+  text_weight: number | null;
+  /** Italic label glyphs (default `false`). */
+  text_italic: boolean;
+  /**
+   * Legacy boolean view of the label weight (`true` = semibold or heavier, i.e.
+   * `text_weight >= 600`). In patches, `text_bold: true` maps to weight 700 and `false`
+   * resets to normal when no explicit `text_weight` is given.
+   */
   text_bold: boolean;
   text_h_align: drawing_text_h_align;
   text_v_align: drawing_text_v_align;
+  /** Text-tool container background (TradingView's text-box background; default `""` = none). */
+  box_color: string;
+  /** Text-tool container border color (default `""` = none). */
+  box_border_color: string;
+  /** Text-tool container border width in CSS px (default 1). */
+  box_border_width: number;
 }
 
 /** A drawing as listed by {@link chart_api.drawings} (also the serialization format). */

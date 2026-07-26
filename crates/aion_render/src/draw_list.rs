@@ -69,12 +69,19 @@ impl TextAlign {
     }
 }
 
-/// CSS font shorthand for a text run: `"{weight} {size}px {family}"` with weight 700/400.
-/// `size` is in the IR's bitmap px; `family` is the resolved family list (the layout
-/// `fontFamily` default is folded in by the decoder). One string shared by the Canvas2D
-/// executor's `fillText` and the WebGPU host rasterizer, so both draw the same glyphs.
-pub fn text_font_spec(size: f32, family: &str, bold: bool) -> String {
-    format!("{} {}px {}", if bold { 700 } else { 400 }, size, family)
+/// CSS font shorthand for a text run: `"[{italic} ]{weight} {size}px {family}"` with `weight`
+/// the numeric CSS font weight (100–900; 400 normal, 700 bold). `size` is in the IR's bitmap
+/// px; `family` is the resolved family list (the layout `fontFamily` default is folded in by
+/// the decoder). One string shared by the Canvas2D executor's `fillText` and the WebGPU host
+/// rasterizer, so both draw the same glyphs.
+pub fn text_font_spec(size: f32, family: &str, weight: u16, italic: bool) -> String {
+    format!(
+        "{}{} {}px {}",
+        if italic { "italic " } else { "" },
+        weight,
+        size,
+        family
+    )
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -164,7 +171,9 @@ pub enum Prim {
         size: f32,
         family: String,
         align: TextAlign,
-        bold: bool,
+        /// Numeric CSS font weight (100–900; 400 normal, 700 bold).
+        weight: u16,
+        italic: bool,
     },
 }
 

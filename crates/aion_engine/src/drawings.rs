@@ -202,16 +202,33 @@ pub struct Drawing {
     /// Rectangle fill CSS string; `None` fills with the border color at 20% alpha. Unused by
     /// the line kinds and the text tool.
     pub fill_color: Option<String>,
-    /// The tool's text label (`""` = none).
+    /// The tool's text label (`""` = none). The text tool renders the [`TEXT_PLACEHOLDER`]
+    /// prompt instead and clicks open the host's editor.
     pub text: String,
     /// Label color CSS string; `None` follows the chart's `layout.textColor`.
     pub text_color: Option<String>,
     /// Label glyph size in CSS px; `None` follows the chart's `layout.fontSize`.
     pub text_size: Option<f64>,
-    pub text_bold: bool,
+    /// Label font weight (numeric CSS weight 100–900; `None` = normal 400, 700 = bold).
+    pub text_weight: Option<u16>,
+    pub text_italic: bool,
     pub text_h_align: DrawingTextHAlign,
     pub text_v_align: DrawingTextVAlign,
+    /// Text-tool container background CSS string (TradingView's text-box background); `None`
+    /// draws no box. Text tool only.
+    pub box_color: Option<String>,
+    /// Text-tool container border CSS string; `None` draws no border. Text tool only.
+    pub box_border_color: Option<String>,
+    /// Text-tool container border width in CSS px (default 1).
+    pub box_border_width: f64,
 }
+
+/// The prompt the text tool renders while it carries no text (TradingView's "Add text"),
+/// painted bold (≥ 12 px) and muted, and clickable (it opens the host's editor).
+pub const TEXT_PLACEHOLDER: &str = "Add text";
+
+/// Minimum glyph size for the placeholder prompt in CSS px (the preview reads bold + bigger).
+pub(crate) const TEXT_PLACEHOLDER_MIN_SIZE: f64 = 12.0;
 
 impl Drawing {
     fn new(id: DrawingId, kind: DrawingKind, pane_index: usize, points: Vec<DrawingPoint>) -> Self {
@@ -231,9 +248,23 @@ impl Drawing {
             text: String::new(),
             text_color: None,
             text_size: None,
-            text_bold: false,
+            text_weight: None,
+            text_italic: false,
             text_h_align: DrawingTextHAlign::Center,
             text_v_align: DrawingTextVAlign::Middle,
+            box_color: None,
+            box_border_color: None,
+            box_border_width: 1.0,
+        }
+    }
+
+    /// The label a drawing actually renders: its `text`, or the muted [`TEXT_PLACEHOLDER`]
+    /// prompt for an empty text tool.
+    pub fn display_text(&self) -> &str {
+        if self.kind == DrawingKind::Text && self.text.is_empty() {
+            TEXT_PLACEHOLDER
+        } else {
+            self.text.as_str()
         }
     }
 }
@@ -269,9 +300,10 @@ pub struct DrawingModifiers {
 
 /// Host text-measure callback for drawing-label hit boxes (the formatter-hook pattern: the
 /// engine stays headless; hosts inject a plain boxed closure measuring `text` at
-/// `{bold} {size}px {family}` and returning the width in the same px units as `size`). Without
-/// one the engine estimates `chars × size × 0.6` (deterministic for native tests).
-pub type TextMeasureFn = Box<dyn Fn(&str, f64, &str, bool) -> f64>;
+/// `{italic} {weight} {size}px {family}` and returning the width in the same px units as
+/// `size`). Without one the engine estimates `chars × size × 0.6` (deterministic for native
+/// tests).
+pub type TextMeasureFn = Box<dyn Fn(&str, f64, &str, u16, bool) -> f64>;
 
 /// Active anchor/body drag session (the interaction.rs session pattern: the engine owns the
 /// start snapshot and the math; hosts forward drag positions).
@@ -388,6 +420,12 @@ pub(crate) struct DrawingPatch {
     text_color: Option<String>,
     #[serde(alias = "textSize")]
     text_size: Option<f64>,
+    #[serde(alias = "textWeight")]
+    text_weight: Option<u16>,
+    #[serde(alias = "textItalic")]
+    text_italic: Option<bool>,
+    /// Legacy shorthand: `text_bold: true` maps to weight 700 when no explicit `text_weight` is
+    /// given; `false` resets to normal (400).
     #[serde(alias = "textBold")]
     text_bold: Option<bool>,
     #[serde(
@@ -402,6 +440,12 @@ pub(crate) struct DrawingPatch {
         alias = "textVertAlign"
     )]
     text_v_align: Option<String>,
+    #[serde(alias = "boxColor")]
+    box_color: Option<String>,
+    #[serde(alias = "boxBorderColor")]
+    box_border_color: Option<String>,
+    #[serde(alias = "boxBorderWidth")]
+    box_border_width: Option<f64>,
 }
 
 /// A patch's `style`: the TS string form (`solid`/`dotted`/`dashed`), or the reference numeric
@@ -467,8 +511,17 @@ impl Drawing {
                 self.text_size = Some(size);
             }
         }
-        if let Some(bold) = patch.text_bold {
-            self.text_bold = bold;
+        // Explicit weight wins; the legacy `text_bold` shorthand maps onto it (true → 700,
+        // false → normal).
+        if let Some(weight) = patch.text_weight {
+            if (100..=900).contains(&weight) {
+                self.text_weight = Some(weight);
+            }
+        } else if let Some(bold) = patch.text_bold {
+            self.text_weight = bold.then_some(700);
+        }
+        if let Some(italic) = patch.text_italic {
+            self.text_italic = italic;
         }
         if let Some(align) = patch
             .text_h_align
@@ -484,6 +537,17 @@ impl Drawing {
         {
             self.text_v_align = align;
         }
+        if let Some(css) = patch.box_color {
+            update_css_slot(&mut self.box_color, css);
+        }
+        if let Some(css) = patch.box_border_color {
+            update_css_slot(&mut self.box_border_color, css);
+        }
+        if let Some(width) = patch.box_border_width {
+            if width.is_finite() && width > 0.0 {
+                self.box_border_width = width;
+            }
+        }
     }
 
     fn options_json(&self) -> serde_json::Value {
@@ -495,9 +559,14 @@ impl Drawing {
             "text": self.text,
             "text_color": self.text_color.as_deref().unwrap_or(""),
             "text_size": self.text_size,
-            "text_bold": self.text_bold,
+            "text_weight": self.text_weight,
+            "text_italic": self.text_italic,
+            "text_bold": self.text_weight.unwrap_or(400) >= 600,
             "text_h_align": self.text_h_align.name(),
             "text_v_align": self.text_v_align.name(),
+            "box_color": self.box_color.as_deref().unwrap_or(""),
+            "box_border_color": self.box_border_color.as_deref().unwrap_or(""),
+            "box_border_width": self.box_border_width,
         })
     }
 }
@@ -787,13 +856,22 @@ impl ChartEngine {
         (x, y, h)
     }
 
-    /// Measure (or estimate) a label's width in the same px units as `size`.
+    /// Measure (or estimate) a label's width in the same px units as `size`. Measures the
+    /// DISPLAY text (`drawing.display_text()` — the "Add text" placeholder included, at the
+    /// placeholder's bold weight when it applies).
     pub(crate) fn measure_drawing_text(&self, drawing: &Drawing, size: f64) -> f64 {
         let layout = &self.options.get().layout;
         let family = layout.font_family.as_str();
+        let text = drawing.display_text();
+        let placeholder = drawing.kind == DrawingKind::Text && drawing.text.is_empty();
+        let weight = if placeholder {
+            700
+        } else {
+            drawing.text_weight.unwrap_or(400)
+        };
         match &self.text_measure_fn {
-            Some(measure) => measure(drawing.text.as_str(), size, family, drawing.text_bold),
-            None => drawing.text.chars().count() as f64 * size * 0.6,
+            Some(measure) => measure(text, size, family, weight, drawing.text_italic),
+            None => text.chars().count() as f64 * size * 0.6,
         }
     }
 
@@ -904,6 +982,15 @@ impl ChartEngine {
         Some(serde_json::to_string(&self.drawing(id)?.points).unwrap_or_default())
     }
 
+    /// One anchor's media-px position (x pane-relative, y chart-top — the host's overlay
+    /// coordinate space; the text editor positions itself with it). `None` for an unknown
+    /// id/index or when the anchor cannot convert (stale pane, empty scale/data).
+    pub fn drawing_point_to_coordinate(&self, id: DrawingId, index: usize) -> Option<(f64, f64)> {
+        let drawing = self.drawing(id)?;
+        let point = drawing.points.get(index)?;
+        self.drawing_to_px(drawing.pane_index, *point)
+    }
+
     /// Every drawing as a JSON array of `{id, kind, pane_index, points, ...options}` in z-order.
     pub fn drawings_json(&self) -> String {
         let list: Vec<serde_json::Value> = self
@@ -938,6 +1025,21 @@ impl ChartEngine {
 
     pub fn selected_drawing(&self) -> Option<DrawingId> {
         self.selected_drawing
+    }
+
+    /// Mark the text drawing the host's typing-mode editor currently owns (TradingView's
+    /// editing state): the frame suppresses its placeholder/label so the editor's preview is
+    /// the only visual for it. Cleared when the editor closes. An unknown id never sticks.
+    pub fn set_editing_drawing(&mut self, id: Option<DrawingId>) {
+        self.editing_drawing = id.filter(|&eid| {
+            self.drawings
+                .iter()
+                .any(|d| d.id == eid && d.kind == DrawingKind::Text)
+        });
+    }
+
+    pub fn editing_drawing(&self) -> Option<DrawingId> {
+        self.editing_drawing
     }
 
     /// Select the drawing under pane-relative media px `(x, y)` (the host click pipeline):
@@ -1060,10 +1162,8 @@ impl ChartEngine {
                 .is_some()
             }
             DrawingKind::Text => {
-                if drawing.text.is_empty() {
-                    // An unlabeled text tool's click target is its anchor disc.
-                    return (x - px[0].0).hypot(y - px[0].1) <= ANCHOR_HIT_RADIUS;
-                }
+                // The click target is the rendered run (the label, or the "+ Add Text"
+                // placeholder while empty) plus the container padding.
                 let layout = &self.options.get().layout;
                 let size = drawing.text_size.unwrap_or(layout.font_size);
                 let reference =
@@ -1076,7 +1176,10 @@ impl ChartEngine {
                     DrawingTextHAlign::Center => tx - width / 2.0,
                     DrawingTextHAlign::Right => tx - width,
                 };
-                x >= left && x <= left + width && y >= ty - height / 2.0 && y <= ty + height / 2.0
+                x >= left - TEXT_PAD
+                    && x <= left + width + TEXT_PAD
+                    && y >= ty - height / 2.0 - TEXT_PAD
+                    && y <= ty + height / 2.0 + TEXT_PAD
             }
         }
     }

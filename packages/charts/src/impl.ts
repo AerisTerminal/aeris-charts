@@ -1131,6 +1131,15 @@ export class chart_impl implements chart_api {
   private active_tool: drawing_kind | null = null;
   private tool_options_json = "{}";
   private tool_listener: ((tool: drawing_kind | null) => void) | null = null;
+  /** The text-tool editing session (a contentEditable over the chart, TradingView's typing mode). */
+  private text_editor: HTMLElement | null = null;
+  private text_editor_id = 0;
+  /**
+   * Re-anchor the open editor after any repaint-driving change (wheel zoom/scroll, pinch,
+   * resize, data update): it re-queries the anchor's coordinates from the settled engine
+   * scales and repositions the box, so the editor tracks its drawing instead of displacing.
+   */
+  private text_editor_reposition: (() => void) | null = null;
   private readonly backend_runtime_id: number;
   private anim_frame: number | null = null;
   /** The 1s candle-close countdown interval; `null` while no countdown is visible. */
@@ -1197,6 +1206,9 @@ export class chart_impl implements chart_api {
   repaint(): void {
     if (!this.removed) {
       this.wasm.render();
+      // The text editor tracks its anchor through the change that drove this repaint
+      // (wheel zoom/scroll, pinch, resize, data update) — before plugin passes composite.
+      this.text_editor_reposition?.();
       this.run_canvas_primitives();
       this.emit_visible_range_changes();
     }
@@ -1651,6 +1663,14 @@ export class chart_impl implements chart_api {
     // series under the click (or clears that on empty pane space).
     const drawing_hit = this.wasm.select_drawing_at(x, y);
     this.wasm.set_selected_series(drawing_hit ? undefined : (this.hover?.series_id ?? undefined));
+    // A click on a text drawing (its label, or the muted "+ Add Text" placeholder) goes
+    // straight into typing mode (TradingView parity).
+    if (drawing_hit) {
+      const selected = this.selected_drawing();
+      if (selected !== null && selected.kind() === "text") {
+        this.open_text_editor(selected);
+      }
+    }
     this.repaint();
     if (this.click_subs.size === 0) return;
     const params = this.build_params(x, y);
@@ -1707,6 +1727,7 @@ export class chart_impl implements chart_api {
 
   set_drawing_tool(tool: drawing_kind | null, options?: Partial<drawing_options>): void {
     const changed = this.active_tool !== tool;
+    if (changed) this.close_text_editor(true); // arming another tool commits the edit
     this.active_tool = tool;
     if (options !== undefined) this.tool_options_json = JSON.stringify(options);
     if (tool === null) {
@@ -1764,7 +1785,13 @@ export class chart_impl implements chart_api {
       }
     }
     if (this.wasm.drawing_create_click(x, y, magnet, straighten) > 0) {
+      const tool = this.active_tool;
       this.set_drawing_tool(null);
+      // The text tool goes straight into typing mode after placement (TradingView parity).
+      if (tool === "text") {
+        const drawing = this.selected_drawing();
+        if (drawing !== null) this.open_text_editor(drawing);
+      }
     }
     return true;
   }
@@ -1799,6 +1826,195 @@ export class chart_impl implements chart_api {
     if (this.wasm.brush_create_end() > 0) {
       this.set_drawing_tool(null);
     }
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Text-tool editing session (TradingView's typing mode — package-owned host DOM; the engine
+  // renders the label, the placeholder, and the container, and stays DOM-free)
+  // ---------------------------------------------------------------------------------------------
+
+  /** Whether the text editor is currently open. */
+  text_editor_active(): boolean {
+    return this.text_editor !== null;
+  }
+
+  /**
+   * Open the typing-mode editor for a text drawing (TradingView's editing chrome): a square,
+   * thick blue-bordered box centered on the anchor, hugging the text, with a bold muted
+   * "Add text" preview that disappears the moment the user types. Enter or blur commits,
+   * Escape cancels. While open, the engine suppresses its own placeholder/label for this
+   * drawing (the editor's preview is the only visual for it).
+   */
+  open_text_editor(drawing: drawing_api): void {
+    this.close_text_editor(true);
+    let coords = this.wasm.drawing_point_to_coordinate(drawing.id, 0);
+    if (coords.length !== 2) return;
+    const options = drawing.options();
+    const layout = (this.options() as { layout?: { fontSize?: number; fontFamily?: string; textColor?: string; background?: { color?: string } } }).layout ?? {};
+    const font_size = Math.max(options.text_size ?? layout.fontSize ?? 12, 12);
+    const font_family = layout.fontFamily ?? "sans-serif";
+    // The exact CSS shorthand the engine rasterizes with. `line-height: normal` keeps the DOM
+    // line box on the font's own ascent+descent metrics — the same midpoint Chrome's canvas
+    // `textBaseline: "middle"` uses — so the editor's glyphs sit exactly on the engine run's
+    // center (a fixed 1.2 line box lifted the text ~0.5 css px).
+    const style_prefix = options.text_italic ? "italic " : "";
+    const font = `${style_prefix}${options.text_weight ?? 400} ${font_size}px ${font_family}`;
+    const preview_font = `${style_prefix}700 ${font_size}px ${font_family}`;
+
+    // Square, thick blue-bordered container hugging the text (no radius).
+    const wrap = document.createElement("div");
+    wrap.id = "aion-text-editor";
+    wrap.style.position = "absolute";
+    wrap.style.zIndex = "10";
+    wrap.style.border = "2px solid #2962ff";
+    wrap.style.borderRadius = "0";
+    wrap.style.background = options.box_color || layout.background?.color || "#ffffff";
+    wrap.style.padding = "4px";
+
+    // The "Add text" preview (bold, muted, ≥ 12px): hidden as soon as the user types.
+    const preview = document.createElement("span");
+    preview.id = "aion-text-preview";
+    preview.textContent = "Add text";
+    preview.style.position = "absolute";
+    preview.style.left = "4px";
+    preview.style.top = "50%";
+    preview.style.transform = "translateY(-50%)";
+    preview.style.font = preview_font;
+    preview.style.color = "rgba(120, 123, 134, 0.7)"; // muted gray
+    preview.style.pointerEvents = "none";
+    preview.style.whiteSpace = "nowrap";
+
+    const editor = document.createElement("div");
+    editor.id = "aion-text-input";
+    editor.contentEditable = "true";
+    editor.textContent = options.text;
+    editor.style.font = font;
+    editor.style.lineHeight = "normal"; // the font's own ascent+descent center (see above)
+    editor.style.color = options.text_color || layout.textColor || "#0a0a0a";
+    editor.style.background = "transparent";
+    editor.style.border = "none";
+    editor.style.outline = "none";
+    editor.style.padding = "0";
+    editor.style.margin = "0";
+    editor.style.display = "block";
+    editor.style.whiteSpace = "nowrap";
+
+    // Hug-the-text width: measure with the exact font spec the engine rasterizes with.
+    const measure_ctx = document.createElement("canvas").getContext("2d");
+    // Self-calibrating alignment (no font-metric guessing): the editable IS a real inline
+    // element, so a Range over its text tells us where the glyphs ACTUALLY land (an <input>
+    // has untrackable internal text layout); the box then shifts so that rect aligns to the
+    // anchor exactly as the engine's placement does (Left = run starts at the anchor, Center =
+    // centered, Right = ends; Top = above, Middle = centered, Bottom = below, same 4px pad).
+    const position_editor = () => {
+      const rect = this.container.getBoundingClientRect();
+      const anchor_x = Math.min(Math.max(coords[0]!, 20), rect.width - 20);
+      const anchor_y = Math.min(Math.max(coords[1]!, 20), rect.height - 20);
+      // Provisional placement, then one measured correction.
+      wrap.style.left = `${Math.round(anchor_x - wrap.offsetWidth / 2)}px`;
+      wrap.style.top = `${Math.round(anchor_y - wrap.offsetHeight / 2)}px`;
+      const range = document.createRange();
+      range.selectNodeContents(editor);
+      const r = range.getBoundingClientRect();
+      // An empty editable has no text rects — fall back to the provisional centering.
+      if (r.width === 0 && editor.textContent === "") return;
+      const m = {
+        left: r.left - rect.left,
+        right: r.right - rect.left,
+        top: r.top - rect.top,
+        bottom: r.bottom - rect.top,
+      };
+      const pad = 4;
+      let dx = 0;
+      if (options.text_h_align === "left") dx = anchor_x + pad - m.left;
+      else if (options.text_h_align === "right") dx = anchor_x - pad - m.right;
+      else dx = anchor_x - (m.left + m.right) / 2;
+      let dy = 0;
+      if (options.text_v_align === "top") dy = anchor_y - pad - m.bottom;
+      else if (options.text_v_align === "bottom") dy = anchor_y + pad - m.top;
+      else dy = anchor_y - (m.top + m.bottom) / 2;
+      wrap.style.left = `${Math.round(Number.parseFloat(wrap.style.left) + dx)}px`;
+      wrap.style.top = `${Math.round(Number.parseFloat(wrap.style.top) + dy)}px`;
+    };
+    const set_width = () => {
+      const text = editor.textContent ?? "";
+      if (measure_ctx !== null) {
+        measure_ctx.font = text === "" ? preview_font : font;
+        const w = measure_ctx.measureText(text === "" ? preview.textContent : text).width;
+        editor.style.width = `${Math.ceil(w) + 4}px`;
+      }
+      preview.style.display = text === "" ? "" : "none";
+      position_editor();
+    };
+    set_width();
+    editor.addEventListener("input", set_width);
+    editor.addEventListener("keydown", (e) => {
+      // The editor owns its keys (the chart's Delete/arrows/Escape must not fire).
+      e.stopPropagation();
+      if (e.key === "Enter") {
+        e.preventDefault(); // no newline — single-line labels
+        this.close_text_editor(true);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        this.close_text_editor(false);
+      }
+    });
+    editor.addEventListener("blur", () => this.close_text_editor(true));
+
+    wrap.appendChild(preview);
+    wrap.appendChild(editor);
+    this.container.appendChild(wrap);
+    position_editor();
+
+    this.text_editor = editor;
+    this.text_editor_id = drawing.id;
+    // Follow the anchor across repaints (wheel zoom/scroll, resize, data changes): the engine
+    // settles the scales first, then the editor re-anchors. A vanished drawing closes the edit.
+    this.text_editor_reposition = () => {
+      if (this.text_editor === null) return;
+      const fresh = this.wasm.drawing_point_to_coordinate(drawing.id, 0);
+      if (fresh.length !== 2) {
+        this.close_text_editor(false);
+        return;
+      }
+      coords = fresh;
+      position_editor();
+    };
+    // The engine's own placeholder/label is suppressed while editing (one visual only).
+    this.wasm.set_editing_drawing(drawing.id);
+    this.repaint();
+    editor.focus();
+    // Caret at the END of the existing text (TradingView's editing entry), not a select-all.
+    const selection = window.getSelection();
+    if (selection !== null) {
+      const range = document.createRange();
+      range.selectNodeContents(editor);
+      range.collapse(false);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+  }
+
+  /**
+   * Close the typing-mode editor, applying the typed text on `commit` (an empty commit leaves
+   * the drawing text empty — the muted "Add text" placeholder keeps it re-editable).
+   */
+  close_text_editor(commit: boolean): void {
+    const editor = this.text_editor;
+    if (editor === null) return;
+    this.text_editor = null;
+    this.text_editor_reposition = null;
+    const wrap = this.container.querySelector("#aion-text-editor");
+    wrap?.remove();
+    this.wasm.set_editing_drawing(undefined);
+    if (commit) {
+      // Single-line labels: pasted newlines flatten to spaces.
+      const text = (editor.textContent ?? "").replace(/\s*\n\s*/g, " ");
+      this.wasm.drawing_apply_options(this.text_editor_id, JSON.stringify({ text }));
+    }
+    this.repaint();
+    // Hand keyboard focus back to the gesture overlay (Delete/arrows work again).
+    this.overlay_el().focus();
   }
 
   apply_options(options: deep_partial<chart_options>): void {
@@ -2071,6 +2287,7 @@ export class chart_impl implements chart_api {
   remove(): void {
     if (this.removed) return;
     this.removed = true;
+    this.close_text_editor(false);
     this.stop_animation();
     this.stop_countdown_timer();
     window.removeEventListener("aion-chart-backend-lost", this.backend_loss_handler);

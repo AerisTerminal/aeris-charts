@@ -45,6 +45,9 @@ export function install_gestures(chart: chart_impl): () => void {
   let drawing_dragging = false;
   // Freehand brush capture in progress (the engine decimates/simplifies the stroke).
   let brush_drawing = false;
+  // A text-tool press that already committed (mousedown placement) — the trailing click is
+  // swallowed so it cannot re-open the typing-mode editor.
+  let text_tool_press_committed = false;
   // Vertical price pan session (reference `startScrollPrice`): the engine holds the range
   // snapshot and shift math; armed only while the scale is NOT in autoscale (its no-op gate).
   let price_pan: { pane: number; target: number } | null = null;
@@ -398,6 +401,14 @@ export function install_gestures(chart: chart_impl): () => void {
       // The brush captures the stroke as a press-drag (its own engine session, not clicks).
       if (chart.active_drawing_tool() === "brush" && chart.brush_create_start(p.x, p.y)) {
         brush_drawing = true;
+      } else if (chart.active_drawing_tool() === "text") {
+        // TradingView: the text tool places on PRESS and opens typing mode immediately.
+        if (chart.creation_click(p.x, p.y, e.ctrlKey || e.metaKey, e.shiftKey)) {
+          text_tool_press_committed = true;
+          // Keep the browser's default mousedown focus-grab (to the overlay) from blurring
+          // the just-opened editor.
+          e.preventDefault();
+        }
       }
       set_crosshair(p.x, p.y);
       chart.repaint();
@@ -626,6 +637,12 @@ export function install_gestures(chart: chart_impl): () => void {
     if (moved) return;
     if (fires_touch_events(e)) return; // we already emitted the tap as a click
     const p = local_xy(e);
+    // A text-tool press that already committed swallowed its trailing click (mousedown
+    // placement opened the typing-mode editor).
+    if (text_tool_press_committed) {
+      text_tool_press_committed = false;
+      return;
+    }
     // An armed drawing tool consumes pane clicks for anchor placement (engine-owned creation);
     // modifiers snap the placed anchor (Ctrl = magnet to OHLC, Shift = straighten).
     if (chart.creation_armed() && chart.creation_click(p.x, p.y, e.ctrlKey || e.metaKey, e.shiftKey)) {

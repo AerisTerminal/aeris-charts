@@ -677,6 +677,10 @@ pub struct ChartEngine {
     /// Freehand brush capture in progress (drawings.rs): the decimated point list, simplified
     /// at commit.
     brush_capture: Option<BrushCapture>,
+    /// The text drawing the host's typing-mode editor currently owns (drawings.rs): its
+    /// placeholder/label is suppressed in the frame so the editor's preview is the only
+    /// visual for it.
+    editing_drawing: Option<DrawingId>,
     /// Optional host text-measure callback for drawing-label hit boxes (drawings.rs
     /// [`TextMeasureFn`]); without one the engine estimates widths by character count.
     text_measure_fn: Option<TextMeasureFn>,
@@ -745,6 +749,7 @@ impl ChartEngine {
             drawing_drag: None,
             pending_drawing: None,
             brush_capture: None,
+            editing_drawing: None,
             text_measure_fn: None,
             kinetic: None,
             scroll_animation: None,

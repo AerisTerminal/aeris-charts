@@ -1502,6 +1502,14 @@ impl ChartInner {
     pub fn drawing_points_json(&self, id: u32) -> String {
         self.engine.drawing_points_json(id).unwrap_or_default()
     }
+    /// One anchor's CSS-px position `[x, y]` (x includes the pane's left offset — overlay
+    /// space; empty when it cannot convert). The text editor positions itself with it.
+    pub fn drawing_point_to_coordinate(&self, id: u32, index: usize) -> Vec<f64> {
+        self.engine
+            .drawing_point_to_coordinate(id, index)
+            .map(|(x, y)| vec![x + self.pane_left, y])
+            .unwrap_or_default()
+    }
     pub fn drawings_json(&self) -> String {
         self.engine.drawings_json()
     }

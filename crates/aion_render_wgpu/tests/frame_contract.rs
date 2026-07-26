@@ -24,7 +24,8 @@ fn text_prim(x: f32) -> Prim {
         size: 12.0,
         family: "Test".into(),
         align: aion_render::draw_list::TextAlign::Left,
-        bold: false,
+        weight: 400,
+        italic: false,
     }
 }
 

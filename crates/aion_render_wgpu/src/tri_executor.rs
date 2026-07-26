@@ -389,7 +389,8 @@ mod tests {
                 size: 12.0,
                 family: "Test".into(),
                 align: aion_render::draw_list::TextAlign::Left,
-                bold: false,
+                weight: 400,
+                italic: false,
             },
         ];
         let (mut fill, mut stroke) = (Vec::new(), Vec::new());

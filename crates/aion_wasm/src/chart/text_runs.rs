@@ -63,7 +63,8 @@ impl TextRunStore {
             size,
             family,
             align,
-            bold,
+            weight,
+            italic,
         } = prim
         else {
             return None;
@@ -72,7 +73,7 @@ impl TextRunStore {
             return None;
         }
         let (x, y) = (*x, *y);
-        let font = text_font_spec(*size, family, *bold);
+        let font = text_font_spec(*size, family, *weight, *italic);
         self.ctx.set_font(&font);
         self.ctx.set_text_align(align.canvas_keyword());
         self.ctx.set_text_baseline("middle");
