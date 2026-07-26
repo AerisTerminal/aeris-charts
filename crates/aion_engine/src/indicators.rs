@@ -326,14 +326,14 @@ impl ChartEngine {
             .map(|_| self.add_series(SeriesKind::Line))
             .collect::<Vec<_>>();
         // Indicator chrome defaults: no candle-close countdown (theirs is a line value, not a
-        // bar close), the auto-generated name chip stays hidden until the platform enables it
-        // (`title_visible`), and the line draws at 1px — every default is overridable through
-        // the ordinary series options.
+        // bar close), the auto-generated name chip shows (platforms override the name through
+        // the series `title` option — custom-script indicators will set their own), and the
+        // line draws at 1px — every default is overridable through the ordinary series options.
         let title = indicator_title(&kind);
         for &id in &ids {
             if let Some(s) = self.series.iter_mut().find(|s| s.id == id) {
                 s.countdown_visible = false;
-                s.title_visible = false;
+                s.title_visible = true;
                 s.title = title.clone();
                 s.line_width = Some(1.0);
             }

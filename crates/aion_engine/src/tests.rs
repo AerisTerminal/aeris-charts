@@ -925,7 +925,7 @@ fn remove_series_tombstones_slot_and_drops_derived_indicators() {
 }
 
 #[test]
-fn indicator_outputs_drop_the_countdown_hide_the_name_chip_and_default_to_1px() {
+fn indicator_outputs_drop_the_countdown_show_the_name_chip_and_default_to_1px() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     let values = [1.0, 2.0, 3.0, 4.0, 5.0];
     chart
@@ -940,9 +940,9 @@ fn indicator_outputs_drop_the_countdown_hide_the_name_chip_and_default_to_1px() 
         .unwrap();
     let rsi = chart.add_rsi(0, 2).expect("valid rsi");
     let entry = chart.series.iter().find(|s| s.id == rsi).unwrap();
-    // No candle countdown on a line value, the auto name chip exists but stays hidden, 1px line.
+    // No candle countdown on a line value, the auto name chip shows, 1px line.
     assert!(!entry.countdown_visible);
-    assert!(!entry.title_visible);
+    assert!(entry.title_visible);
     assert_eq!(entry.title, "RSI 2");
     assert_eq!(entry.line_width, Some(1.0));
 

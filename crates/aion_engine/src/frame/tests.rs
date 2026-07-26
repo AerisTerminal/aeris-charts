@@ -723,9 +723,9 @@ fn indicator_price_chip_matches_the_main_chip_width_and_stands_one_row_tall() {
     chart.add_sma(0, 2).expect("valid sma");
 
     let labels = boxed_labels(&mut chart);
-    // Main: title chip + price chip + countdown row; the SMA: its single price box (no
-    // countdown, no name chip by default).
-    assert_eq!(labels.len(), 4);
+    // Main: title chip + price chip + countdown row; the SMA: its name chip + price box (no
+    // countdown) — one row tall like the main chip.
+    assert_eq!(labels.len(), 5);
     let main_price = labels
         .iter()
         .find(|l| l.text == "12.50")
@@ -744,6 +744,16 @@ fn indicator_price_chip_matches_the_main_chip_width_and_stands_one_row_tall() {
         bg(main_price).3,
         bg(sma_price).3,
         "the indicator's box is a single row tall"
+    );
+    // The indicator's name chip renders too (auto-titled), outside the strip.
+    let sma_name = labels
+        .iter()
+        .find(|l| l.text == "SMA 2")
+        .expect("sma name chip");
+    assert_eq!(
+        bg(sma_name).3,
+        bg(sma_price).3,
+        "name chip matches the row height"
     );
 }
 

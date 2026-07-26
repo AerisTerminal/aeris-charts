@@ -88,7 +88,7 @@ test("rsi and macd stack their own panes with channel strip and four-state histo
   expect(macd_green, "macd histogram strong-state pixels").toBeGreaterThan(20);
 });
 
-test("indicator chips: hidden auto-name, no countdown, 1px default, style overrides", async ({ page }) => {
+test("indicator chips: auto-name on, no countdown, 1px default, style overrides", async ({ page }) => {
   await page.goto("/");
   await wait_grid(page);
   const out = await page.evaluate(() => {
@@ -112,7 +112,7 @@ test("indicator chips: hidden auto-name, no countdown, 1px default, style overri
       },
     };
   });
-  expect(out.before).toEqual({ title: "RSI 14", title_visible: false, countdown: false, width: 1 });
+  expect(out.before).toEqual({ title: "RSI 14", title_visible: true, countdown: false, width: 1 });
   expect(out.after).toEqual({ title: "RSI(14) 1h", title_visible: true, line_style: 1, line_width: 2 });
 });
 
