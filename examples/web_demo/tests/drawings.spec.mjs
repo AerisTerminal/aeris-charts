@@ -1433,3 +1433,29 @@ test("rectangle: middle pans unselected, drags selected, 8 anchors from the firs
   expect(count_color(await capture(page), BLUE), "8 anchors during the draw").toBeGreaterThan(40);
   await page.keyboard.press("Escape");
 });
+
+test("a vertical line body-drag with Ctrl snaps to the bar center (TradingView magnet)", async ({ page }) => {
+  await goto_fixture(page);
+  const s = await anchor_spots(page);
+  await page.evaluate(({ l1 }) => {
+    window.__chart.add_drawing("vertical_line", [{ logical: l1, price: 0 }]);
+  }, s);
+  await settle_frames(page);
+  // Grab the line's body (not its anchor handle) with Ctrl and drag between two bars — the
+  // single-anchor line's body drag IS the anchor drag, so the magnet snaps it to a bar center.
+  const grab = await spot(page, s.l1, s.p_mid);
+  const between = await page.evaluate(({ l0, l1 }) => {
+    const a = window.__chart.time_scale().logical_to_coordinate(l0);
+    const b = window.__chart.time_scale().logical_to_coordinate(l1);
+    return (a + b) / 2;
+  }, s);
+  await page.keyboard.down("Control");
+  await page.mouse.move(grab.x, grab.y);
+  await page.mouse.down();
+  await page.mouse.move(between, grab.y, { steps: 4 });
+  await page.mouse.up();
+  await page.keyboard.up("Control");
+  await settle_frames(page);
+  const points = (await drawings(page))[0].points;
+  expect(Number.isInteger(points[0].logical), "snapped onto a bar center").toBe(true);
+});

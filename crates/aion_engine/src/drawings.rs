@@ -1399,15 +1399,33 @@ impl ChartEngine {
                 } else {
                     (dx, dy)
                 };
+                let single_anchor = points.len() == 1;
                 for (index, slot) in points.iter_mut().enumerate() {
                     let (dx, dy) = match kind {
                         DrawingKind::HorizontalLine => (0.0, dy),
                         DrawingKind::VerticalLine => (dx, 0.0),
                         _ => (dx, dy),
                     };
-                    let Some(point) = convert(index, dx, dy) else {
+                    let Some(mut point) = convert(index, dx, dy) else {
                         return;
                     };
+                    // Single-anchor kinds drag by their line, not a handle — the body drag IS
+                    // the anchor drag, so the magnet applies here too (a Ctrl-dragged vertical
+                    // line snaps to bar centers, a horizontal one to the nearest OHLC price).
+                    if modifiers.magnet && single_anchor {
+                        let snapped = self.magnet_snap_point(pane, point);
+                        point = match kind {
+                            DrawingKind::HorizontalLine => DrawingPoint {
+                                price: snapped.price,
+                                ..point
+                            },
+                            DrawingKind::VerticalLine => DrawingPoint {
+                                logical: snapped.logical,
+                                ..point
+                            },
+                            _ => snapped,
+                        };
+                    }
                     *slot = point;
                 }
             }

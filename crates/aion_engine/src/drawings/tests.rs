@@ -231,6 +231,56 @@ fn vertical_line_hit() {
 }
 
 #[test]
+fn body_drag_with_ctrl_magnets_single_anchor_lines() {
+    let mut chart = settled_chart();
+    let magnet = DrawingModifiers {
+        magnet: true,
+        straighten: false,
+    };
+    // A vertical line dragged by its body with Ctrl snaps its x to the nearest bar center.
+    let vline = chart
+        .add_drawing(
+            DrawingKind::VerticalLine,
+            0,
+            vec![DrawingPoint {
+                logical: 2.3,
+                price: 0.0,
+            }],
+            None,
+        )
+        .unwrap();
+    chart.set_selected_drawing(Some(vline));
+    let x = chart.time_scale.logical_to_coordinate(2.3);
+    assert!(chart.drawing_drag_start_at(x, 250.0));
+    chart.drawing_drag_to(chart.time_scale.logical_to_coordinate(5.4), 250.0, magnet);
+    chart.drawing_drag_end();
+    let d = chart.drawings.iter().find(|d| d.id == vline).unwrap();
+    assert_eq!(d.points[0].logical, 5.0, "snapped to bar 5's center");
+
+    // A horizontal line's body drag with Ctrl snaps its price to the nearest OHLC of the bar
+    // under the cursor.
+    let hline = chart
+        .add_drawing(
+            DrawingKind::HorizontalLine,
+            0,
+            vec![DrawingPoint {
+                logical: 2.0,
+                price: 10.9,
+            }],
+            None,
+        )
+        .unwrap();
+    chart.set_selected_drawing(Some(hline));
+    let y = y_at(&chart, 10.9);
+    assert!(chart.drawing_drag_start_at(x_at(&chart, 4.0), y));
+    chart.drawing_drag_to(x_at(&chart, 4.0), y_at(&chart, 11.9), magnet);
+    chart.drawing_drag_end();
+    let d = chart.drawings.iter().find(|d| d.id == hline).unwrap();
+    // Bar 4's OHLC all read 11.0 in the settled fixture — the only snap target.
+    assert_eq!(d.points[0].price, 11.0, "snapped to the bar's value");
+}
+
+#[test]
 fn the_creation_preview_shows_all_eight_rectangle_anchors() {
     let mut chart = settled_chart();
     assert!(chart.drawing_create_begin(DrawingKind::Rectangle, None));
@@ -659,6 +709,7 @@ fn full_span_kinds_freeze_the_unused_axis_in_drags() {
         )
         .unwrap();
     let x = x_at(&chart, 4.0);
+    println!("x={} hit={:?}", x, chart.hit_test_drawing(x, 250.0));
     assert!(chart.drawing_drag_start_at(x, 250.0));
     chart.drawing_drag_to(x_at(&chart, 6.0), 400.0, DrawingModifiers::default());
     chart.drawing_drag_end();
