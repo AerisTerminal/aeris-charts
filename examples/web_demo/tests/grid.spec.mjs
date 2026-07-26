@@ -242,9 +242,9 @@ test("split dividers follow the axis border token (theme and explicit changes)",
 
   const divider_rgb = () =>
     page.locator(".aion-grid-divider >> nth=0").evaluate((el) => {
-      // The line color is the gradient's center stop (transparent stops serialize as rgba(0,0,0,0)).
-      const stops = getComputedStyle(el).backgroundImage.match(/rgba?\([^)]+\)/g) ?? [];
-      return stops.find((s) => !s.startsWith("rgba(0, 0, 0, 0)")) ?? "";
+      // The line color is the solid inner strip's background.
+      const inner = el.firstElementChild;
+      return inner ? getComputedStyle(inner).backgroundColor : "";
     });
   const border_hex = () => page.evaluate(() => window.__chart.options().rightPriceScale.borderColor);
   const to_rgb = (hex) => `rgb(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(", ")})`;

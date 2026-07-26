@@ -92,9 +92,11 @@ test("pane divider follows the axis border color (theme-aware) until pinned", as
   await page.check("#rsi_toggle");
   await wait_for_chart(page);
 
-  const sep_y = await page.evaluate(() => Array.from(window.__chart.wasm.pane_separator_ys())[0]);
   // The divider row near the separator coordinate whose pixels (at several x) match a color.
+  // Read fresh each sample: a theme switch can shift the demo page's own chrome (the chart
+  // container gains/loses a few px), which moves the separator.
   const divider_color = async () => {
+    const sep_y = await page.evaluate(() => Array.from(window.__chart.wasm.pane_separator_ys())[0]);
     const shot = await capture(page);
     const scale = shot.width / (await page.evaluate(() => document.querySelector("#chart_container").getBoundingClientRect().width));
     const y0 = Math.round(sep_y * scale);

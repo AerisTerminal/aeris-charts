@@ -136,10 +136,32 @@ export async function create_chart_grid(
   /** The live divider elements (rebuilt by `reconcile`), repainted when the follow-source
    *  chart's options change (the axis border token is live, not sampled once). */
   const dividers = new Set<{ el: HTMLDivElement; horizontal: boolean }>();
-  /** Paint a divider's 1px line as the center stop of a gradient across its 5px box. */
+  /** Paint a divider's line as a solid strip snapped to the ABSOLUTE device-pixel grid:
+   *  exactly `max(1, floor(dpr))` device pixels at full coverage — the same hairline the
+   *  canvas axis border draws (inner_render border_w). A CSS gradient band can't do this
+   *  (its stop edges anti-alias at fractional positions into a washed-out 2px line), and a
+   *  fractional transform re-samples the same way — so the strip is POSITIONED (never
+   *  transformed) on an integer device boundary, re-measured at paint time and on restyle. */
   const paint_divider = (el: HTMLDivElement, horizontal: boolean) => {
-    const line = `transparent 2px, ${resolve_divider_color()} 2px, ${resolve_divider_color()} 3px, transparent 3px`;
-    el.style.background = `linear-gradient(to ${horizontal ? "right" : "bottom"}, ${line})`;
+    requestAnimationFrame(() => {
+      if (!el.isConnected) return;
+      const dpr = window.devicePixelRatio || 1;
+      const device_w = Math.max(1, Math.floor(dpr));
+      const w = device_w / dpr; // css px per full-coverage device pixel(s)
+      const rect = el.getBoundingClientRect();
+      const edge = horizontal ? rect.left : rect.top;
+      const size = horizontal ? rect.width : rect.height;
+      const aligned_dev = Math.round((edge + size / 2) * dpr - device_w / 2);
+      const offset = aligned_dev / dpr - edge;
+      let inner = el.firstElementChild as HTMLDivElement | null;
+      if (inner === null) {
+        inner = document.createElement("div");
+        el.appendChild(inner);
+      }
+      inner.style.cssText = horizontal
+        ? `position:absolute;top:0;bottom:0;left:${offset}px;width:${w}px;background:${resolve_divider_color()};`
+        : `position:absolute;left:0;right:0;top:${offset}px;height:${w}px;background:${resolve_divider_color()};`;
+    });
   };
   /** Re-resolve and repaint every divider (axis border changed, or a pinned color was set). */
   const restyle_dividers = () => {
@@ -153,11 +175,10 @@ export async function create_chart_grid(
   };
 
   /** The draggable split divider: a 5px hit area consuming 1px of layout (negative margins),
-   *  col/row cursor per direction. The 1px line is the CENTER STOP of a gradient painted across
-   *  the 5px box — no padding or content-box sizing involved, so a host page's global
-   *  `box-sizing` reset (even `!important`) cannot collapse the line to zero width. Dragging
-   *  adjusts the two sides' flex weights live and persists the final ratio engine-side on
-   *  release. */
+   *  col/row cursor per direction. The visible line is a solid inner strip snapped to the
+   *  device-pixel grid (see `paint_divider`), so it matches the canvas axis border's hairline
+   *  under any DPR and any host-page `box-sizing` reset. Dragging adjusts the two sides' flex
+   *  weights live and persists the final ratio engine-side on release. */
   const make_divider = (
     node: layout_node,
     horizontal: boolean,
@@ -301,6 +322,11 @@ export async function create_chart_grid(
   await add_chart(root_id);
   reconcile();
 
+  // A window resize or DPR change (moving across monitors) shifts every divider off the
+  // device grid — repaint them so the line keeps full device-pixel coverage.
+  const on_window_resize = () => restyle_dividers();
+  window.addEventListener("resize", on_window_resize);
+
   if (options.usage_heartbeat_ms && options.usage_heartbeat_ms > 0) {
     heartbeat = setInterval(emit_usage, options.usage_heartbeat_ms);
   }
@@ -317,6 +343,7 @@ export async function create_chart_grid(
       reconcile();
     },    destroy: () => {
       if (heartbeat !== null) clearInterval(heartbeat);
+      window.removeEventListener("resize", on_window_resize);
       for (const cell of cells.values()) {
         cell.chart.unsubscribe_options_change(restyle_dividers);
         cell.chart.remove();

@@ -90,6 +90,8 @@ pub struct PriceScaleCore {
     /// Extra px margins requested by autoscale info providers.
     margin_above: f64,
     margin_below: f64,
+    /// Height the fractional scale margins resolve against (0 = the scale's own height).
+    margins_height: f64,
     log_formula: LogFormula,
     min_move: f64,
     scale_start_point: Option<f64>,
@@ -105,6 +107,7 @@ impl PriceScaleCore {
             price_range: None,
             margin_above: 0.0,
             margin_below: 0.0,
+            margins_height: 0.0,
             log_formula: DEF_LOG_FORMULA,
             min_move: 0.01,
             scale_start_point: None,
@@ -226,6 +229,25 @@ impl PriceScaleCore {
         self.height = height;
     }
 
+    /// Set the height the FRACTIONAL scale margins (`scale_margins.top/bottom`) are computed
+    /// against (default 0 = the scale's own height). Stacked panes pin this to the pane's own
+    /// slot height: the scale itself spans the full content height (clipped into the slot by
+    /// the pixel internal margins), so taking the fractions of the full height would subtract
+    /// up to 30% of the WHOLE chart from a small pane and invert its coordinate mapping.
+    pub fn set_margins_height(&mut self, height: f64) {
+        self.margins_height = height;
+    }
+
+    /// The height the fractional margins resolve against (the scale's own height unless a
+    /// pane pinned its slot height).
+    fn margins_height(&self) -> f64 {
+        if self.margins_height > 0.0 {
+            self.margins_height
+        } else {
+            self.height
+        }
+    }
+
     pub fn price_range(&self) -> Option<&PriceRange> {
         self.price_range.as_ref()
     }
@@ -283,17 +305,17 @@ impl PriceScaleCore {
 
     fn top_margin_px(&self) -> f64 {
         if self.is_inverted() {
-            self.options.scale_margins.bottom * self.height + self.margin_below
+            self.options.scale_margins.bottom * self.margins_height() + self.margin_below
         } else {
-            self.options.scale_margins.top * self.height + self.margin_above
+            self.options.scale_margins.top * self.margins_height() + self.margin_above
         }
     }
 
     fn bottom_margin_px(&self) -> f64 {
         if self.is_inverted() {
-            self.options.scale_margins.top * self.height + self.margin_above
+            self.options.scale_margins.top * self.margins_height() + self.margin_above
         } else {
-            self.options.scale_margins.bottom * self.height + self.margin_below
+            self.options.scale_margins.bottom * self.margins_height() + self.margin_below
         }
     }
 

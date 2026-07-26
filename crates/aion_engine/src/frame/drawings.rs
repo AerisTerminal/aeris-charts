@@ -10,7 +10,7 @@
 //! browser's glyph rasterizer by construction).
 
 use aion_render::color::Color;
-use aion_render::draw_list::{IRect, LineType, Prim, TextAlign};
+use aion_render::draw_list::{IRect, LineStyle, LineType, Prim, TextAlign};
 
 use crate::drawings::{
     Drawing, DrawingKind, DrawingTextHAlign, TEXT_PAD, TEXT_PLACEHOLDER_MIN_SIZE,
@@ -49,15 +49,20 @@ impl ChartEngine {
             self.build_drawing_prims(drawing, &px, pane_w_px, vpr, out, points);
             self.build_drawing_text(drawing, &px, pane_w_px, vpr, out);
             if self.selected_drawing == Some(drawing.id) {
-                // The brush shows anchor handles at its two ENDS (TradingView); the fixed kinds
-                // show one per defining anchor.
-                let handles: Vec<(f64, f64)> = if drawing.kind == DrawingKind::Brush && px.len() > 2
-                {
-                    vec![px[0], px[px.len() - 1]]
+                // The rectangle shows its eight TradingView anchors: rounded discs on the
+                // corners, slightly-rounded squares on the edge midpoints. The brush shows
+                // handles at its two ENDS; the fixed kinds show one per defining anchor.
+                if drawing.kind == DrawingKind::Rectangle && px.len() == 2 {
+                    build_rectangle_handles(&px, vpr, self.anchor_fill(), out);
                 } else {
-                    px.clone()
-                };
-                build_anchor_handles(&handles, vpr, self.anchor_fill(), out);
+                    let handles: Vec<(f64, f64)> =
+                        if drawing.kind == DrawingKind::Brush && px.len() > 2 {
+                            vec![px[0], px[px.len() - 1]]
+                        } else {
+                            px.clone()
+                        };
+                    build_anchor_handles(&handles, vpr, self.anchor_fill(), out);
+                }
             }
         }
         // Live brush stroke: the decimated points so far paint as the same smooth curve the
@@ -103,8 +108,15 @@ impl ChartEngine {
                             out,
                             points,
                         );
-                        let committed = pending.drawing.points.len();
-                        build_anchor_handles(&px[..committed], vpr, self.anchor_fill(), out);
+                        if pending.drawing.kind == DrawingKind::Rectangle {
+                            // TradingView shows all eight anchors while the rectangle is being
+                            // drawn (committed corner + live preview corner), not only after
+                            // the commit.
+                            build_rectangle_handles(&px, vpr, self.anchor_fill(), out);
+                        } else {
+                            let committed = pending.drawing.points.len();
+                            build_anchor_handles(&px[..committed], vpr, self.anchor_fill(), out);
+                        }
                     }
                 } else if anchors.len() == 1 {
                     // A one-anchor kind awaiting its click, or a two-anchor kind before the
@@ -202,16 +214,42 @@ impl ChartEngine {
                     },
                     color: fill,
                 });
-                out.push(Prim::RectFrame {
-                    rect: IRect {
-                        x: left,
-                        y: top,
-                        w: width,
-                        h: height,
-                    },
-                    border: crisp_width,
-                    color,
-                });
+                if drawing.style == LineStyle::Solid {
+                    out.push(Prim::RectFrame {
+                        rect: IRect {
+                            x: left,
+                            y: top,
+                            w: width,
+                            h: height,
+                        },
+                        border: crisp_width,
+                        color,
+                    });
+                } else {
+                    // Dotted/dashed border: four crisp line prims sharing the dash pattern,
+                    // centered on the frame's inner edge (where RectFrame paints).
+                    let half = (crisp_width as f64 / 2.0) as i32;
+                    for y in [top + half, top + height - half] {
+                        out.push(Prim::HLine {
+                            y,
+                            x0: left,
+                            x1: left + width,
+                            width: crisp_width,
+                            style: drawing.style,
+                            color,
+                        });
+                    }
+                    for x in [left + half, left + width - half] {
+                        out.push(Prim::VLine {
+                            x,
+                            y0: top,
+                            y1: top + height,
+                            width: crisp_width,
+                            style: drawing.style,
+                            color,
+                        });
+                    }
+                }
             }
             // The text tool's geometry IS its label (emitted by `build_drawing_text`).
             DrawingKind::Text => {}
@@ -387,5 +425,59 @@ fn build_anchor_handles(px: &[(f64, f64)], vpr: f64, fill: Color, out: &mut Vec<
             stroke_width: 0.0,
             stroke: fill,
         });
+    }
+}
+
+/// The rectangle's eight TradingView handles: fully-rounded discs on the four corners and
+/// slightly-rounded square handles on the four edge midpoints (the midpoint drags resize one
+/// edge independently).
+fn build_rectangle_handles(px: &[(f64, f64)], vpr: f64, fill: Color, out: &mut Vec<Prim>) {
+    let anchors = ChartEngine::rectangle_anchors(px);
+    for (index, &(cx, cy)) in anchors.iter().enumerate() {
+        if index % 2 == 0 {
+            // Corners: the standard disc handles.
+            out.push(Prim::Circle {
+                cx: cx as f32,
+                cy: cy as f32,
+                radius: ((ANCHOR_RADIUS + ANCHOR_BORDER_WIDTH) * vpr) as f32,
+                fill: ANCHOR_BORDER,
+                stroke_width: 0.0,
+                stroke: ANCHOR_BORDER,
+            });
+            out.push(Prim::Circle {
+                cx: cx as f32,
+                cy: cy as f32,
+                radius: (ANCHOR_RADIUS * vpr) as f32,
+                fill,
+                stroke_width: 0.0,
+                stroke: fill,
+            });
+        } else {
+            // Edge midpoints: slightly-rounded squares (2px corner radius), border square
+            // underneath, fill square on top.
+            let outer = ((ANCHOR_RADIUS + ANCHOR_BORDER_WIDTH) * vpr) as f32;
+            let inner = (ANCHOR_RADIUS * vpr) as f32;
+            let radii = [2.0 * vpr as f32; 4];
+            out.push(Prim::RoundRect {
+                x: cx as f32 - outer,
+                y: cy as f32 - outer,
+                w: outer * 2.0,
+                h: outer * 2.0,
+                radii,
+                fill: ANCHOR_BORDER,
+                border_width: 0.0,
+                border_color: ANCHOR_BORDER,
+            });
+            out.push(Prim::RoundRect {
+                x: cx as f32 - inner,
+                y: cy as f32 - inner,
+                w: inner * 2.0,
+                h: inner * 2.0,
+                radii,
+                fill,
+                border_width: 0.0,
+                border_color: fill,
+            });
+        }
     }
 }

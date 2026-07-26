@@ -231,7 +231,111 @@ fn vertical_line_hit() {
 }
 
 #[test]
-fn rectangle_hit_covers_interior_and_border() {
+fn the_creation_preview_shows_all_eight_rectangle_anchors() {
+    let mut chart = settled_chart();
+    assert!(chart.drawing_create_begin(DrawingKind::Rectangle, None));
+    // First corner committed; the preview follows the cursor — all eight handles paint
+    // immediately (TradingView), not only after the second click commits.
+    // First corner committed (the -1 "awaiting more anchors" result), the preview follows the
+    // cursor — all eight handles paint immediately (TradingView), not only after the commit.
+    chart.drawing_create_click(
+        x_at(&chart, 2.0),
+        y_at(&chart, 10.0),
+        DrawingModifiers::default(),
+    );
+    chart.drawing_create_move(
+        x_at(&chart, 6.0),
+        y_at(&chart, 12.0),
+        DrawingModifiers::default(),
+    );
+    let frame = chart.build_frame();
+    let main = &frame.panes[0].main;
+    let circles = main
+        .iter()
+        .filter(|p| matches!(p, Prim::Circle { .. }))
+        .count();
+    let rounds = main
+        .iter()
+        .filter(|p| matches!(p, Prim::RoundRect { .. }))
+        .count();
+    assert_eq!(circles, 8, "four corner discs during the preview");
+    assert_eq!(rounds, 8, "four midpoint squares during the preview");
+    chart.drawing_create_cancel();
+}
+
+#[test]
+fn a_selected_rectangle_paints_eight_handles_and_a_styleable_border() {
+    let mut chart = settled_chart();
+    let id = chart
+        .add_drawing(
+            DrawingKind::Rectangle,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 10.0,
+                },
+                DrawingPoint {
+                    logical: 6.0,
+                    price: 12.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    chart.set_selected_drawing(Some(id));
+
+    let frame = chart.build_frame();
+    let main = &frame.panes[0].main;
+    let drawing_color = Color::parse_css(DRAWING_DEFAULT_COLOR).unwrap();
+    let circles = main
+        .iter()
+        .filter(|p| matches!(p, Prim::Circle { .. }))
+        .count();
+    let rounds = main
+        .iter()
+        .filter(|p| matches!(p, Prim::RoundRect { .. }))
+        .count();
+    assert_eq!(
+        circles, 8,
+        "four corner discs (border + fill each), got {circles}"
+    );
+    assert_eq!(
+        rounds, 8,
+        "four midpoint squares (border + fill each), got {rounds}"
+    );
+    assert!(
+        main.iter()
+            .any(|p| matches!(p, Prim::RectFrame { color, .. } if *color == drawing_color)),
+        "the default border is the solid frame"
+    );
+
+    // Dotted/dashed borders: the frame becomes four crisp line prims in the drawing color.
+    assert!(chart.drawing_apply_options(id, r#"{"style":"dotted"}"#));
+    let frame = chart.build_frame();
+    let main = &frame.panes[0].main;
+    assert!(
+        !main
+            .iter()
+            .any(|p| matches!(p, Prim::RectFrame { color, .. } if *color == drawing_color)),
+        "no solid frame under a dotted border"
+    );
+    let dotted_lines = main
+        .iter()
+        .filter(|p| {
+            matches!(
+                p,
+                Prim::HLine { style: LineStyle::Dotted, color, .. }
+                | Prim::VLine { style: LineStyle::Dotted, color, .. }
+                if *color == drawing_color
+            )
+        })
+        .count();
+    assert_eq!(dotted_lines, 4, "four dotted border segments");
+}
+
+#[test]
+fn rectangle_body_hits_the_frame_band_not_the_middle() {
     let mut chart = settled_chart();
     let id = chart
         .add_drawing(
@@ -252,19 +356,160 @@ fn rectangle_hit_covers_interior_and_border() {
         .unwrap();
     let (left, right) = (x_at(&chart, 2.0), x_at(&chart, 6.0));
     let (bottom, top) = (y_at(&chart, 10.0), y_at(&chart, 12.0));
-    // Interior, border, and just outside within tolerance.
+    // TradingView: the fill is not a drag surface while UNSELECTED — the middle misses (the
+    // chart pans there); once selected (a border click), the middle moves the drawing.
+    assert!(chart
+        .hit_test_drawing((left + right) / 2.0, (top + bottom) / 2.0)
+        .is_none());
+    chart.set_selected_drawing(Some(id));
+    let mid = chart.hit_test_drawing((left + right) / 2.0, (top + bottom) / 2.0);
+    assert_eq!(
+        mid,
+        Some(DrawingHit {
+            id,
+            part: DrawingDragPart::Body,
+            cursor: "move"
+        })
+    );
+    chart.set_selected_drawing(None);
+    // The border frame and just outside it (within tolerance) grab the body.
+    assert_eq!(chart.hit_test_drawing(left, top).unwrap().id, id);
+    assert_eq!(chart.hit_test_drawing(right, bottom).unwrap().id, id);
     assert_eq!(
         chart
-            .hit_test_drawing((left + right) / 2.0, (top + bottom) / 2.0)
+            .hit_test_drawing(left, (top + bottom) / 2.0)
             .unwrap()
             .id,
         id
     );
-    assert_eq!(chart.hit_test_drawing(left, top).unwrap().id, id);
+    assert_eq!(
+        chart
+            .hit_test_drawing((left + right) / 2.0, bottom)
+            .unwrap()
+            .id,
+        id
+    );
     assert!(chart.hit_test_drawing(left - 2.0, top).is_some());
     // Clear misses outside the box.
     assert!(chart.hit_test_drawing(left - 12.0, top).is_none());
     assert!(chart.hit_test_drawing(right + 12.0, bottom).is_none());
+}
+
+#[test]
+fn rectangle_shows_eight_anchors_with_directional_cursors() {
+    let mut chart = settled_chart();
+    let id = chart
+        .add_drawing(
+            DrawingKind::Rectangle,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 10.0,
+                },
+                DrawingPoint {
+                    logical: 6.0,
+                    price: 12.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    chart.set_selected_drawing(Some(id));
+    let (left, right) = (x_at(&chart, 2.0), x_at(&chart, 6.0));
+    let (bottom, top) = (y_at(&chart, 10.0), y_at(&chart, 12.0));
+    let (mx, my) = ((left + right) / 2.0, (top + bottom) / 2.0);
+    // Clock order from the top-left: corners get diagonal cursors, midpoints straight ones.
+    let cases: [((f64, f64), usize, &str); 8] = [
+        ((left, top), 0, "nwse-resize"),
+        ((mx, top), 1, "ns-resize"),
+        ((right, top), 2, "nesw-resize"),
+        ((right, my), 3, "ew-resize"),
+        ((right, bottom), 4, "nwse-resize"),
+        ((mx, bottom), 5, "ns-resize"),
+        ((left, bottom), 6, "nesw-resize"),
+        ((left, my), 7, "ew-resize"),
+    ];
+    for ((x, y), index, cursor) in cases {
+        let hit = chart.hit_test_drawing(x, y).unwrap();
+        assert_eq!(hit.part, DrawingDragPart::Anchor(index), "anchor {index}");
+        assert_eq!(hit.cursor, cursor, "anchor {index} cursor");
+    }
+    // Unselected, the same anchor point hits nothing (the middle is not a body surface).
+    chart.set_selected_drawing(None);
+    assert!(chart.hit_test_drawing(mx, top).is_some()); // the frame band still bodies
+}
+
+#[test]
+fn rectangle_anchor_drags_resize_independently_and_flip_across_the_opposite_side() {
+    let mut chart = settled_chart();
+    let id = chart
+        .add_drawing(
+            DrawingKind::Rectangle,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 10.0,
+                },
+                DrawingPoint {
+                    logical: 6.0,
+                    price: 12.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    chart.set_selected_drawing(Some(id));
+    let (left, right) = (x_at(&chart, 2.0), x_at(&chart, 6.0));
+    let (bottom, top) = (y_at(&chart, 10.0), y_at(&chart, 12.0));
+    let mx = (left + right) / 2.0;
+    let box_of = |chart: &ChartEngine| {
+        let d = chart.drawings.iter().find(|d| d.id == id).unwrap();
+        let px = chart.drawing_px(d).unwrap();
+        (
+            px[0].0.min(px[1].0),
+            px[0].1.min(px[1].1),
+            px[0].0.max(px[1].0),
+            px[0].1.max(px[1].1),
+        )
+    };
+
+    // Top-mid anchor (1) drag: only the top edge moves; x sides stay.
+    let close = |a: f64, b: f64| (a - b).abs() < 1e-6; // px→logical→px round-trip fuzz
+    assert!(chart.drawing_drag_start_at(mx, top));
+    chart.drawing_drag_to(mx + 30.0, top - 40.0, DrawingModifiers::default());
+    chart.drawing_drag_end();
+    let (l, t, r, b) = box_of(&chart);
+    assert!(close(l, left) && close(r, right));
+    assert!(close(t, top - 40.0));
+    assert!(close(b, bottom));
+
+    // Top-mid dragged BELOW the bottom edge: the box flips — the bottom edge holds, the
+    // dragged edge becomes the new bottom.
+    assert!(chart.drawing_drag_start_at(mx, t));
+    chart.drawing_drag_to(mx, bottom + 50.0, DrawingModifiers::default());
+    chart.drawing_drag_end();
+    let (l, t2, r, b2) = box_of(&chart);
+    assert!(close(l, left) && close(r, right));
+    assert!(
+        close(t2, bottom),
+        "the opposite edge stays put through the flip"
+    );
+    assert!(close(b2, bottom + 50.0));
+
+    // Corner (4 = bottom-right) drag past the top-left: both axes flip independently.
+    assert!(chart.drawing_drag_start_at(r, b2));
+    chart.drawing_drag_to(left - 60.0, t2 - 60.0, DrawingModifiers::default());
+    chart.drawing_drag_end();
+    let (l3, t3, r3, b3) = box_of(&chart);
+    assert!(
+        close(r3, left),
+        "the fixed corner side holds through the flip"
+    );
+    assert!(close(b3, t2));
+    assert!(close(l3, left - 60.0));
+    assert!(close(t3, t2 - 60.0));
 }
 
 #[test]

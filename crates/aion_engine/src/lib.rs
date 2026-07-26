@@ -554,6 +554,12 @@ impl Pane {
         self.price_scale.set_height(content_h);
         self.left_scale.set_height(content_h);
         self.overlay_scale.set_height(content_h);
+        // Fractional scale margins (top 0.2 / bottom 0.1) resolve against the pane's OWN slot,
+        // not the full content height — a small pane would otherwise go negative inside and
+        // flip its coordinate mapping (a dragged-short pane inverting its scale).
+        self.price_scale.set_margins_height(self.height);
+        self.left_scale.set_margins_height(self.height);
+        self.overlay_scale.set_margins_height(self.height);
         self.refresh_internal_margins();
     }
 

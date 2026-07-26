@@ -1369,3 +1369,67 @@ test("text tool container: background and border make it a box", async ({ page }
   expect(options.box_border_color).toBe("#e91e63");
   expect(options.box_border_width).toBe(2);
 });
+
+test("rectangle: middle pans unselected, drags selected, 8 anchors from the first click", async ({ page }) => {
+  await goto_fixture(page);
+  const s = await anchor_spots(page);
+  await page.evaluate(({ l0, l1, p_lo, p_hi }) => {
+    window.__chart.add_drawing("rectangle", [
+      { logical: l0, price: p_lo },
+      { logical: l1, price: p_hi },
+    ], { color: "#2962ff" });
+  }, s);
+  await settle_frames(page);
+  const before = (await drawings(page))[0];
+  const center_of = (points) => page.evaluate(({ points }) => ({
+    x: (window.__chart.time_scale().logical_to_coordinate(points[0].logical) + window.__chart.time_scale().logical_to_coordinate(points[1].logical)) / 2,
+    y: (window.__main.price_to_coordinate(points[0].price) + window.__main.price_to_coordinate(points[1].price)) / 2,
+  }), { points });
+  const range = () => page.evaluate(() => window.__chart.time_scale().get_visible_logical_range());
+
+  // Unselected: a middle grab pans the chart — the rectangle does not move.
+  const r0 = await range();
+  const center = await center_of(before.points);
+  await page.mouse.move(center.x, center.y);
+  await page.mouse.down();
+  await page.mouse.move(center.x + 120, center.y, { steps: 5 });
+  await page.mouse.up();
+  await settle_frames(page);
+  const r1 = await range();
+  expect(r1.from, "the middle grab panned the chart").not.toBeCloseTo(r0.from, 3);
+  expect((await drawings(page))[0].points[0].logical).toBeCloseTo(before.points[0].logical, 6);
+  await page.evaluate((r) => window.__chart.time_scale().set_visible_logical_range(r), r0);
+  await settle_frames(page);
+
+  // Select with a border click: all 8 anchors paint.
+  const border = await page.evaluate(({ points }) => ({
+    x: (window.__chart.time_scale().logical_to_coordinate(points[0].logical) + window.__chart.time_scale().logical_to_coordinate(points[1].logical)) / 2,
+    y: window.__main.price_to_coordinate(points[1].price),
+  }), { points: before.points });
+  await page.mouse.click(border.x, border.y);
+  await settle_frames(page);
+  expect(count_color(await capture(page), BLUE), "8 anchors once selected").toBeGreaterThan(40);
+
+  // Selected: the middle now drags the whole rectangle.
+  const spacing = await bar_spacing(page);
+  const center2 = await center_of(before.points);
+  await page.mouse.move(center2.x, center2.y);
+  await page.mouse.down();
+  await page.mouse.move(center2.x + 4 * spacing, center2.y, { steps: 5 });
+  await page.mouse.up();
+  await settle_frames(page);
+  const moved = (await drawings(page))[0];
+  expect(moved.points[0].logical).toBeCloseTo(before.points[0].logical + 4, 1);
+  expect(moved.points[1].logical).toBeCloseTo(before.points[1].logical + 4, 1);
+
+  // Creation: the 8 anchors show from the first click (before the second commits).
+  await page.keyboard.press("Delete");
+  await page.evaluate(() => window.__chart.set_drawing_tool("rectangle", { color: "#2962ff" }));
+  const c1 = await spot(page, s.l0, s.p_lo);
+  await page.mouse.click(c1.x, c1.y);
+  const c2 = await spot(page, s.l1, s.p_hi);
+  await page.mouse.move(c2.x, c2.y);
+  await settle_frames(page);
+  expect(count_color(await capture(page), BLUE), "8 anchors during the draw").toBeGreaterThan(40);
+  await page.keyboard.press("Escape");
+});

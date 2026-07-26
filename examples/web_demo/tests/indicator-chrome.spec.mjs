@@ -116,8 +116,9 @@ test("split divider live-tracks the axis border token on apply_options (no topol
 
   const divider_rgb = () =>
     page.locator(".aion-grid-divider >> nth=0").evaluate((el) => {
-      const stops = getComputedStyle(el).backgroundImage.match(/rgba?\([^)]+\)/g) ?? [];
-      return stops.find((s) => !s.startsWith("rgba(0, 0, 0, 0)")) ?? "";
+      // The line color is the solid inner strip's background.
+      const inner = el.firstElementChild;
+      return inner ? getComputedStyle(inner).backgroundColor : "";
     });
 
   // Direct apply_options on the primary chart — no demo input, no split/remove reconcile.

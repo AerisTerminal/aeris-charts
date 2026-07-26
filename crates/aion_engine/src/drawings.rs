@@ -761,6 +761,38 @@ impl ChartEngine {
             .collect()
     }
 
+    /// The rectangle's 8 TradingView anchors derived from its two corners (media px), in
+    /// clock order from the top-left: 0 TL, 1 top-mid, 2 TR, 3 right-mid, 4 BR, 5 bottom-mid,
+    /// 6 BL, 7 left-mid. Corners resize both adjacent edges, midpoints one edge — all with
+    /// flip-on-cross (the opposite side stays put). Works on any px basis (media/bitmap).
+    pub(crate) fn rectangle_anchors(px: &[(f64, f64)]) -> [(f64, f64); 8] {
+        let (a, b) = (px[0], px[1]);
+        let (l, r) = (a.0.min(b.0), a.0.max(b.0));
+        let (t, bo) = (a.1.min(b.1), a.1.max(b.1));
+        let (mx, my) = ((l + r) / 2.0, (t + bo) / 2.0);
+        [
+            (l, t),
+            (mx, t),
+            (r, t),
+            (r, my),
+            (r, bo),
+            (mx, bo),
+            (l, bo),
+            (l, my),
+        ]
+    }
+
+    /// The directional resize cursor for a rectangle anchor (TradingView parity): diagonal
+    /// cursors on the corners, straight ones on the edge midpoints.
+    pub(crate) fn rectangle_anchor_cursor(index: usize) -> &'static str {
+        match index {
+            0 | 4 => "nwse-resize",
+            2 | 6 => "nesw-resize",
+            1 | 5 => "ns-resize",
+            _ => "ew-resize", // 3 | 7
+        }
+    }
+
     // --- text placement (shared by render and hit-testing) ---
 
     /// The label's reference box for a drawing in the caller's units. `px` holds the anchors
@@ -1070,34 +1102,49 @@ impl ChartEngine {
         }
         let pane = self.pane_at_y(y)?;
         // The selected drawing's anchor handles win over every body (they paint above all).
-        // The brush shows handles at its two ENDS only; the fixed kinds show one per anchor.
+        // The brush shows handles at its two ENDS only; the rectangle shows its eight
+        // TradingView anchors (four corners + four edge midpoints); the rest show one per
+        // defining anchor.
         if let Some(selected) = self.selected_drawing {
             if let Some(drawing) = self.drawing(selected) {
                 if drawing.pane_index == pane {
                     if let Some(px) = self.drawing_px(drawing) {
-                        let anchor_indexes: &[usize] = match drawing.kind {
-                            DrawingKind::Brush if px.len() > 2 => &[0, px.len() - 1],
-                            _ => &[],
-                        };
-                        if anchor_indexes.is_empty() {
-                            for (index, &(ax, ay)) in px.iter().enumerate() {
+                        if drawing.kind == DrawingKind::Rectangle && px.len() == 2 {
+                            let anchors = Self::rectangle_anchors(&px);
+                            for (index, &(ax, ay)) in anchors.iter().enumerate() {
                                 if (x - ax).hypot(y - ay) <= ANCHOR_HIT_RADIUS {
                                     return Some(DrawingHit {
                                         id: selected,
                                         part: DrawingDragPart::Anchor(index),
-                                        cursor: "pointer",
+                                        cursor: Self::rectangle_anchor_cursor(index),
                                     });
                                 }
                             }
                         } else {
-                            for &index in anchor_indexes {
-                                let (ax, ay) = px[index];
-                                if (x - ax).hypot(y - ay) <= ANCHOR_HIT_RADIUS {
-                                    return Some(DrawingHit {
-                                        id: selected,
-                                        part: DrawingDragPart::Anchor(index),
-                                        cursor: "pointer",
-                                    });
+                            let anchor_indexes: &[usize] = match drawing.kind {
+                                DrawingKind::Brush if px.len() > 2 => &[0, px.len() - 1],
+                                _ => &[],
+                            };
+                            if anchor_indexes.is_empty() {
+                                for (index, &(ax, ay)) in px.iter().enumerate() {
+                                    if (x - ax).hypot(y - ay) <= ANCHOR_HIT_RADIUS {
+                                        return Some(DrawingHit {
+                                            id: selected,
+                                            part: DrawingDragPart::Anchor(index),
+                                            cursor: "pointer",
+                                        });
+                                    }
+                                }
+                            } else {
+                                for &index in anchor_indexes {
+                                    let (ax, ay) = px[index];
+                                    if (x - ax).hypot(y - ay) <= ANCHOR_HIT_RADIUS {
+                                        return Some(DrawingHit {
+                                            id: selected,
+                                            part: DrawingDragPart::Anchor(index),
+                                            cursor: "pointer",
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -1137,13 +1184,23 @@ impl ChartEngine {
             }
             DrawingKind::VerticalLine => (x - px[0].0).abs() <= tolerance,
             DrawingKind::Rectangle => {
+                // TradingView: the fill is a drag surface only while the drawing is SELECTED
+                // (a border click selects first); unselected, the body hits just the band
+                // around the border frame and the middle pans the chart.
                 let (a, b) = (px[0], px[1]);
                 let (left, right) = (a.0.min(b.0), a.0.max(b.0));
                 let (top, bottom) = (a.1.min(b.1), a.1.max(b.1));
-                x >= left - HIT_TOLERANCE
-                    && x <= right + HIT_TOLERANCE
-                    && y >= top - HIT_TOLERANCE
-                    && y <= bottom + HIT_TOLERANCE
+                let within_x = x >= left - tolerance && x <= right + tolerance;
+                let within_y = y >= top - tolerance && y <= bottom + tolerance;
+                if !within_x || !within_y {
+                    return false;
+                }
+                if self.selected_drawing == Some(drawing.id) {
+                    return true;
+                }
+                let near_v_edge = (x - left).abs() <= tolerance || (x - right).abs() <= tolerance;
+                let near_h_edge = (y - top).abs() <= tolerance || (y - bottom).abs() <= tolerance;
+                near_v_edge || near_h_edge
             }
             DrawingKind::Brush => {
                 // The stroke the user sees IS the smooth curve: test against the same curved
@@ -1238,6 +1295,76 @@ impl ChartEngine {
         };
         match part {
             DrawingDragPart::Anchor(index) => {
+                if kind == DrawingKind::Rectangle && points.len() == 2 && index < 8 {
+                    // Rectangle anchors (drawings.rs `rectangle_anchors` clock order): a corner
+                    // drag moves that corner (Shift squares against the fixed opposite corner),
+                    // an edge-midpoint drag moves only that edge. Every slot KEEPS its corner
+                    // identity — crossing the opposite side flips visually at render (the box
+                    // normalizes), it never reorders the anchors or slides the fixed side
+                    // (TradingView parity).
+                    let Some(mut cursor_pt) = self.drawing_from_px(pane, x, y) else {
+                        return;
+                    };
+                    if modifiers.magnet {
+                        cursor_pt = self.magnet_snap_point(pane, cursor_pt);
+                    }
+                    let Some((mx, my)) = self.drawing_to_px(pane, cursor_pt) else {
+                        return;
+                    };
+                    let (a, b) = (start_px[0], start_px[1]);
+                    let (mut xs, mut ys) = ([a.0, b.0], [a.1, b.1]);
+                    let (l, r) = (a.0.min(b.0), a.0.max(b.0));
+                    let (t, bo) = (a.1.min(b.1), a.1.max(b.1));
+                    match index {
+                        0 | 2 | 4 | 6 => {
+                            let (fx, fy) = match index {
+                                0 => (r, bo),
+                                2 => (l, bo),
+                                4 => (l, t),
+                                _ => (r, t),
+                            };
+                            let (nx, ny) = if modifiers.straighten {
+                                // Shift-square: the larger dragged side wins, the drag quadrant's
+                                // signs kept (straighten_point's rect arm).
+                                let side = (mx - fx).abs().max((my - fy).abs());
+                                (
+                                    fx + if mx < fx { -side } else { side },
+                                    fy + if my < fy { -side } else { side },
+                                )
+                            } else {
+                                (mx, my)
+                            };
+                            // The dragged corner's x/y stay on their slots (identity
+                            // preserved through flips; the fixed corner's slots untouched).
+                            let x_slot = match index {
+                                0 | 6 => usize::from(a.0 > b.0), // left corners
+                                _ => usize::from(a.0 < b.0),     // right corners (2 | 4)
+                            };
+                            let y_slot = match index {
+                                0 | 2 => usize::from(a.1 > b.1), // top corners
+                                _ => usize::from(a.1 < b.1),     // bottom corners (4 | 6)
+                            };
+                            xs[x_slot] = nx;
+                            ys[y_slot] = ny;
+                        }
+                        1 => ys[usize::from(a.1 > b.1)] = my, // top edge
+                        3 => xs[usize::from(a.0 < b.0)] = mx, // right edge
+                        5 => ys[usize::from(a.1 < b.1)] = my, // bottom edge
+                        _ => xs[usize::from(a.0 > b.0)] = mx, // left edge (7)
+                    }
+                    let (Some(p0), Some(p1)) = (
+                        self.drawing_from_px(pane, xs[0], ys[0]),
+                        self.drawing_from_px(pane, xs[1], ys[1]),
+                    ) else {
+                        return;
+                    };
+                    points[0] = p0;
+                    points[1] = p1;
+                    if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
+                        drawing.points = points;
+                    }
+                    return;
+                }
                 if index >= points.len() {
                     return;
                 }

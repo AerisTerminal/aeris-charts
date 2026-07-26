@@ -977,6 +977,52 @@ fn indicator_outputs_drop_the_countdown_show_the_name_chip_and_default_to_1px() 
 }
 
 #[test]
+fn a_dragged_short_pane_contracts_its_scale_instead_of_flipping_it() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let values = [1.0, 2.0, 3.0, 4.0, 5.0, 4.0, 3.0, 2.0];
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            &values,
+            &values,
+            &values,
+            &values,
+        )
+        .unwrap();
+    chart.add_rsi(0, 2).expect("valid rsi");
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+
+    let upright = |chart: &ChartEngine, pi: usize| {
+        let scale = &chart.panes[pi].price_scale;
+        let range = *scale.price_range().expect("a price range");
+        scale.internal_height() > 0.0
+            && scale.price_to_coordinate(range.max_value(), 0.0)
+                < scale.price_to_coordinate(range.min_value(), 0.0)
+    };
+
+    // Default oscillator stretch: the small pane keeps an upright, positive-height mapping.
+    chart.layout_panes(400.0);
+    chart.autoscale_visible();
+    assert!(upright(&chart, 0), "main pane upright");
+    assert!(upright(&chart, 1), "indicator pane upright");
+
+    // Squeeze the main pane to a strip and grow the indicator pane (the separator-drag
+    // extremes): both scales contract but never flip.
+    chart.panes[0].stretch_factor = 0.2;
+    chart.panes[1].stretch_factor = 2.0;
+    chart.layout_panes(400.0);
+    chart.autoscale_visible();
+    assert!(upright(&chart, 0), "squeezed main pane stays upright");
+    assert!(upright(&chart, 1), "grown indicator pane stays upright");
+    // The fractional margins (0.2 + 0.1) resolve against the pane's own slot: the internal
+    // height is 70% of the pane height regardless of the total content height.
+    let slot = chart.panes[1].height;
+    assert!((chart.panes[1].price_scale.internal_height() - 0.7 * slot).abs() < 1e-9);
+}
+
+#[test]
 fn oscillator_indicators_get_their_own_pane_and_band_levels() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     chart
