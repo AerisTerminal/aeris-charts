@@ -5,7 +5,7 @@ Copyright (c) 2026 TradeAion. All rights reserved.
 This license governs the Origin Charts charting engine and all associated
 source code, compiled artifacts (including JavaScript, WebAssembly, and
 Rust crates), documentation, and example code (collectively, the
-"Software") distributed in this repository and in the @origin/charts
+"Software") distributed in this repository and in the @tradeaion/charts
 package.
 
 1. NO FREE USE. The Software is commercial, proprietary software. No

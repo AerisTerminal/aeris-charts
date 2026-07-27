@@ -53,17 +53,17 @@ try {
   run("npm", ["install", "--silent", "--no-audit", "--no-fund", join(pkg_dir, tgz)], scratch);
 
   // 3. Import the installed module (must be side-effect-free) and check the API surface.
-  const entry = join(scratch, "node_modules", "@origin", "charts", "dist", "index.js");
+  const entry = join(scratch, "node_modules", "@tradeaion", "charts", "dist", "index.js");
   const mod = await import(pathToFileURL(entry).href);
   assert.equal(typeof mod.create_chart, "function", "create_chart not exported");
   assert.equal(typeof mod.init_wasm, "function", "init_wasm not exported");
 
   // 4. The wasm binary shipped with real content.
-  const wasm = statSync(join(scratch, "node_modules", "@origin", "charts", "dist", "origin_wasm_bg.wasm"));
+  const wasm = statSync(join(scratch, "node_modules", "@tradeaion", "charts", "dist", "origin_wasm_bg.wasm"));
   assert.ok(wasm.size > 100_000, `wasm binary suspiciously small (${wasm.size} bytes)`);
 
   const pkg = JSON.parse(
-    readFileSync(join(scratch, "node_modules", "@origin", "charts", "package.json"), "utf8"),
+    readFileSync(join(scratch, "node_modules", "@tradeaion", "charts", "package.json"), "utf8"),
   );
   assert.equal(pkg.license, "SEE LICENSE IN LICENSE");
 

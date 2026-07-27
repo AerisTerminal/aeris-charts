@@ -15,7 +15,7 @@ Their architecture is a textbook layered MVC and it maps cleanly onto Rust:
 
 | reference layer | Responsibility | Origin equivalent |
 |---|---|---|
-| `api/` | Public façade, options merging, data validation | TS package `@origin/charts` + `origin-api` (Rust) |
+| `api/` | Public façade, options merging, data validation | TS package `@tradeaion/charts` + `origin-api` (Rust) |
 | `model/` | ChartModel, Pane, Series, TimeScale, PriceScale, Crosshair, DataLayer | `origin-core` crate (pure, platform-free) |
 | `views/` | Per-source pane/axis views: convert model → renderer data, cache & invalidate | `origin-core::views` |
 | `renderers/` | Stateless draw routines on an abstract 2D target | `origin-render` draw-list builders |
@@ -246,7 +246,7 @@ Frame loop & surfaces:
 
 ## 6. Host shell & public API
 
-### 6.1 JS/TS package (`@origin/charts`)
+### 6.1 JS/TS package (`@tradeaion/charts`)
 
 Mirror the reference v5 API surface so users (and our future platform code) get a familiar contract:
 

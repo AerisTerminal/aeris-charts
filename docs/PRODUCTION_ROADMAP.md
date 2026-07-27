@@ -100,7 +100,7 @@ Canvas2D, native PNG, goldens, and the demo are consumers of that same engine an
   `origin_render` IR before a backend sees it.
 - **R3. Real native/golden path.** Build native PNGs and goldens by feeding data/options to
   `ChartEngine`, not by hand-authoring a chart-like primitive scene.
-- **R4. Real package boundary.** `@origin/charts` produces its own JS, declarations, and WASM under
+- **R4. Real package boundary.** `@tradeaion/charts` produces its own JS, declarations, and WASM under
   `dist`; the demo consumes those distribution artifacts and the library build never targets the
   demo directory.
 - **R5. Contract tests.** Run the same fixture through WebGPU/Canvas2D/native backends and assert
@@ -117,7 +117,7 @@ Canvas2D, native PNG, goldens, and the demo are consumers of that same engine an
 
 ### Phase A — Make it a consumable library  ✅ complete; breadth follow-up remains
 
-*Exit: `npm install @origin/charts`, feed OHLC, get a styled chart, wire a tooltip — the reference
+*Exit: `npm install @tradeaion/charts`, feed OHLC, get a styled chart, wire a tooltip — the reference
 "getting started" story works end to end.*
 
 - **A1. Real TS API façade.** `create_chart(container, options?) → IChartApi`-equivalent;
@@ -192,7 +192,7 @@ Canvas2D, native PNG, goldens, and the demo are consumers of that same engine an
 
 ## 5. Definition of "near production ready"
 
-- [x] `@origin/charts` installs and runs the reference getting-started example unmodified in spirit.
+- [x] `@tradeaion/charts` installs and runs the reference getting-started example unmodified in spirit.
 - [x] Options parity for the common groups; `apply_options` deep-merge works.
 - [x] Malformed data is rejected with clear errors, never a wasm panic.
 - [x] Volume + at least one indicator pane render correctly with independent scales.
@@ -266,7 +266,7 @@ Progress is appended here as phases land (newest last).
   (siblings survive, patches accumulate) and reach pixels (bg 94.8% red, blue grid lines present).
   15 new unit tests. Next: A1 (real TS façade), A5 (subscriptions).
 - 2026-07-12 — **A1 done** (real library façade). `packages/charts/src/index.ts` is now a typed
-  `@origin/charts` API over the wasm engine — no longer a stub: `create_chart(container, options?)`
+  `@tradeaion/charts` API over the wasm engine — no longer a stub: `create_chart(container, options?)`
   → `Promise<chart_api>` (creates the two stacked canvases, installs the gesture recognizer,
   applies options); `add_series(kind, options?)` → series handle (`set_data`/`update`/`set_type`/
   `apply_options`, typed-array packing at the boundary); `time_scale()` (fit/visible-range get+set/
@@ -891,7 +891,7 @@ Progress is appended here as phases land (newest last).
   13-file, 362 kB tarball with public access. Fixed a dry-run leak (`npm_config_dry_run`
   propagated into the pack smoke test's inner `npm pack`). Remaining for v0.1.0: create the
   `@origin` npm org, add `NPM_TOKEN` to repo secrets, push tag `v0.1.0` — the CI publish job does
-  the rest; then verify `bun add @origin/charts` (primary) and `npm i` in fresh consumers.
+  the rest; then verify `bun add @tradeaion/charts` (primary) and `npm i` in fresh consumers.
 
 ## 11. Revised execution order
 

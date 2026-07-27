@@ -1,6 +1,6 @@
 /**
- * Public data, option, and handle types for `@origin/charts` (snake_case; semantics mirror
- * the reference charting library v5). Extracted from `index.ts`.
+ * Public data, option, and handle types for `@tradeaion/charts` (snake_case). Extracted from
+ * `index.ts`.
  */
 
 import type { pane_primitive, pane_primitive_handle, series_primitive, series_primitive_handle } from "./primitives.js";

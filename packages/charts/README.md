@@ -1,4 +1,4 @@
-# @origin/charts
+# @tradeaion/charts
 
 A trading-chart engine in **Rust + WebGPU + WASM**, pixel-faithful to
 the reference charting library v5, with a plain
@@ -15,24 +15,24 @@ with the `read:packages` scope (in GitHub Actions, use the built-in `GITHUB_TOKE
 
 ```toml
 [install.scopes]
-"@origin" = { token = "$GITHUB_READ_PACKAGES_TOKEN", url = "https://npm.pkg.github.com/" }
+"@tradeaion" = { token = "$GITHUB_READ_PACKAGES_TOKEN", url = "https://npm.pkg.github.com/" }
 ```
 
 (Reference an env var; don't hardcode the token.) Then:
 
 ```sh
-bun add @origin/charts
+bun add @tradeaion/charts
 ```
 
 **npm** — add to your project's `.npmrc`:
 
 ```
-@origin:registry=https://npm.pkg.github.com
+@tradeaion:registry=https://npm.pkg.github.com
 //npm.pkg.github.com/:_authToken=${GITHUB_READ_PACKAGES_TOKEN}
 ```
 
 ```sh
-npm install @origin/charts
+npm install @tradeaion/charts
 ```
 
 No Rust toolchain or native build step is needed — the package ships prebuilt JS + WASM.
@@ -40,7 +40,7 @@ No Rust toolchain or native build step is needed — the package ships prebuilt 
 ## Quick start
 
 ```ts
-import { create_chart } from "@origin/charts";
+import { create_chart } from "@tradeaion/charts";
 
 // Async: WebGPU backend acquisition (the one deliberate divergence from the reference's sync createChart).
 const chart = await create_chart(document.getElementById("chart"), {
@@ -73,14 +73,14 @@ The package is ESM-only and ships two artifacts side by side in `dist/`: `index.
 
   ```ts
   // vite.config.ts
-  export default { optimizeDeps: { exclude: ["@origin/charts"] } };
+  export default { optimizeDeps: { exclude: ["@tradeaion/charts"] } };
   ```
 
   or point the engine at an explicit wasm URL:
 
   ```ts
-  import { create_chart, init_wasm } from "@origin/charts";
-  import wasm_url from "@origin/charts/dist/origin_wasm_bg.wasm?url";
+  import { create_chart, init_wasm } from "@tradeaion/charts";
+  import wasm_url from "@tradeaion/charts/dist/origin_wasm_bg.wasm?url";
 
   await init_wasm(wasm_url); // call once, before the first create_chart
   ```
