@@ -86,7 +86,10 @@ impl ChartInner {
             let Some(gfx) = self.gfx.as_mut() else {
                 return Err(JsValue::from_str("WebGPU state disappeared mid-render"));
             };
+            let shared = Rc::clone(&gfx.shared);
+            let renderers = Rc::clone(&gfx.renderers);
             let text_runs = &mut self.text_runs;
+            let mut atlas = shared.atlas.borrow_mut();
             for (group, pane_frame) in self.gpu_groups.iter_mut().zip(&engine_frame.panes) {
                 group.scissor = Some(pane_frame.scissor);
                 group.clear();
@@ -97,12 +100,11 @@ impl ChartInner {
                 // the wicks on WebGPU exactly as they do on Canvas2D. Text prims resolve
                 // through the host's browser-rasterized atlas cache (chart/text_runs.rs) and
                 // schedule as tex-quad runs at their prim position in the same order.
-                let atlas = &mut gfx.atlas;
-                let queue = &gfx.queue;
+                let queue = &shared.queue;
                 let mut resolve_text = |prim: &Prim| {
                     text_runs
                         .as_mut()
-                        .and_then(|runs| runs.resolve(atlas, queue, prim))
+                        .and_then(|runs| runs.resolve(&mut atlas, queue, prim))
                 };
                 prims_to_group(
                     &pane_frame.under,
@@ -125,7 +127,7 @@ impl ChartInner {
             }
             let groups = &self.gpu_groups[..];
             gfx.msaa.ensure(
-                &gfx.device,
+                &shared.device,
                 gfx.config.format,
                 gfx.config.width,
                 gfx.config.height,
@@ -137,7 +139,7 @@ impl ChartInner {
                     SurfaceErrorAction::Reconfigure => {
                         // Resize and suspend/resume can invalidate only the swapchain. Reconfigure
                         // and retry once; if that fails, the warm Canvas2D pane takes over.
-                        gfx.surface.configure(&gfx.device, &gfx.config);
+                        gfx.surface.configure(&shared.device, &gfx.config);
                         match gfx.surface.get_current_texture() {
                             Ok(frame) => Ok(Some(frame)),
                             Err(retry_error)
@@ -166,16 +168,16 @@ impl ChartInner {
                         a: 1.0,
                     };
                     render_frame(
-                        &gfx.device,
-                        &gfx.queue,
+                        &shared.device,
+                        &shared.queue,
                         gfx.msaa.view(),
                         &view,
                         gfx.config.width,
                         gfx.config.height,
                         bg_clear,
-                        &gfx.quad_renderer,
-                        &gfx.tex_renderer,
-                        &gfx.tri_renderer,
+                        &renderers.quad,
+                        &renderers.tex,
+                        &renderers.tri,
                         groups,
                     );
                     frame.present();

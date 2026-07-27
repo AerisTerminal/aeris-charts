@@ -3,7 +3,7 @@
 Goal: a production trading-chart engine with the **visual fidelity and API ergonomics of
 the reference charting library** and the **long-term extensibility of a TradingView-class platform**
 (indicators, drawings, multi-pane, plugins), powered by Rust compiled to WASM rendering through
-WebGPU (with a WebGL2 fallback path).
+WebGPU (with a Canvas2D fallback path; no WebGL backend by decision).
 
 Companion document: [RENDERING_SPEC.md](RENDERING_SPEC.md) — the exact pixel math we replicate.
 
@@ -209,10 +209,10 @@ Text stack:
   sans via `local()` queries in JS and pass the bytes in; ship a bundled fallback (e.g. Inter)
   for deterministic tests.
 
-Fallback: a WebGL2 backend later via wgpu's GL backend (same code) — WebGPU coverage in 2026 is
-good (Chrome/Edge/Firefox stable, Safari 26+) but a fallback matters for a production product.
-Worst-case fallback is a Canvas2D executor for the same DrawList IR (cheap to write, guaranteed
-correct, slow — nice for SSR/screenshots too).
+Fallback: **no WebGL backend** (decision 2026-07-27 — WebGPU + Canvas2D are the only two backends).
+WebGPU coverage in 2026 is good (Chrome/Edge/Firefox stable, Safari 26+); where WebGPU is
+unavailable the product path is the Canvas2D executor for the same DrawList IR (cheap to write,
+guaranteed correct, slower — also used for SSR/screenshots).
 
 Frame loop & surfaces:
 
@@ -358,7 +358,9 @@ Mechanisms:
   1M load/streaming gates pass; repeatable pan/zoom/crosshair measurements remain.
 - The repeatable native interaction harness currently measures a 1M-bar single-series headless
   crosshair frame at ~0.21 ms mean and a forced 10-series × 50k-visible-bars frame at ~3.11 ms
-  mean. Those figures exclude browser executor/presentation cost; the browser 60 fps gate remains.
+  mean. The browser-side gate now exists as `examples/web_demo/tests/perf-gate.spec.mjs` (rAF
+frame deltas during scripted pan/zoom/crosshair; report-only under SwiftShader, strict via
+`ORIGIN_PERF_STRICT=1`).
 - No GC pressure: events and data cross the boundary through preallocated typed arrays.
 
 ---
@@ -450,10 +452,10 @@ scale: `add_series`/`set_series_data`/`set_series_color`, per-series render by k
 bars/line/area/histogram), autoscale over the union of all series. Verified: candlestick +
 orange SMA(20) overlay coexisting, SMA sparse (starts 19 bars in) yet aligned. Remaining:
 overlay price scales (volume at bottom), panes + separators + resize, `moveSeriesToPane`, pane
-primitives, watermark, screenshot, autoSize, multi-chart device sharing, time-scale sync.
+primitives, watermark, screenshot, autoSize, time-scale sync.
 
 **Phase 6 — Plugin surface & hardening (ongoing).** JS plugin recorder, series/pane primitive JS
-API, custom series API, WebGL2/Canvas2D fallback executor, perf pass (1M-bar benchmarks),
+API, custom series API, Canvas2D fallback executor, perf pass (1M-bar benchmarks),
 docs site with reference-style examples, drawings/tools groundwork.
 
 ---
@@ -463,7 +465,7 @@ docs site with reference-style examples, drawings/tools groundwork.
 | Risk | Mitigation |
 |---|---|
 | Text crispness vs Canvas2D | Per-DPR rasterization, integer placement, yMidCorrection; golden tests at DPR 1/1.25/2/3; fallback: rasterize labels via hidden 2D canvas into the atlas (pixel-identical by construction) |
-| WebGPU availability / context loss | wgpu GL backend + Canvas2D DrawList executor; device-lost → recreate & full invalidate |
+| WebGPU availability / context loss | Canvas2D DrawList executor (WebGL explicitly out of scope); device-lost → recreate & full invalidate |
 | JS↔WASM chattiness | Typed-array batching, lazy event params, callbacks only for visible labels |
 | f32 precision at deep zoom | f64 model math; translate-then-scale in encode so vertex coords stay small |
 | Scope creep toward TradingView | Phases 1–4 ship a reference-equivalent product; platform features are additive because the plugin/z-order/pane architecture is in from day one |

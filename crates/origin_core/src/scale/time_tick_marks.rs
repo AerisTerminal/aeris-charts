@@ -161,6 +161,14 @@ impl TimeTickMarks {
         }
     }
 
+    /// Streaming hot path: append a single point's weight without any O(n) scratch vector.
+    /// Matches `fill_weights_for_points` semantics for one appended point with a known
+    /// predecessor.
+    pub fn push_weight(&mut self, index: TimePointIndex, weight: u8) {
+        self.cache = None;
+        self.marks_by_weight.entry(weight).or_default().push(index);
+    }
+
     /// Port of `TickMarks.build`: `max_width` is the max label width in px
     /// (`(font_size + 4) * 5 / 8 * max_label_chars`), `spacing` the current bar spacing.
     pub fn build(&mut self, spacing: f64, max_width: f64) -> &[TickMark] {

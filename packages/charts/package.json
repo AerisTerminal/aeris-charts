@@ -1,6 +1,6 @@
 {
   "name": "@origin/charts",
-  "version": "0.7.9",
+  "version": "0.8.0",
   "type": "module",
   "description": "Origin Charts public TypeScript API (snake_case, semantics mirror the reference charting library v5)",
   "license": "SEE LICENSE IN LICENSE",

@@ -1167,7 +1167,7 @@ impl ChartInner {
         if let Some(gfx) = self.gfx.as_mut() {
             gfx.config.width = bitmap_w;
             gfx.config.height = bitmap_h;
-            gfx.surface.configure(&gfx.device, &gfx.config);
+            gfx.surface.configure(&gfx.shared.device, &gfx.config);
         }
         // Update geometry eagerly so fit_content/zoom/scroll called before the next render
         // (and the price_axis_width getter) see the new pane size, not a stale one.

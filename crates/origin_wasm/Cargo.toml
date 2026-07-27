@@ -18,6 +18,7 @@ origin_render_wgpu = { path = "../origin_render_wgpu" }
 
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
+futures-channel = "0.3"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = [
     "HtmlCanvasElement",
@@ -41,3 +42,9 @@ console_error_panic_hook = "0.1"
 
 [lints]
 workspace = true
+
+# wasm-pack runs wasm-opt at -Oz on release builds (binaryen from the wasm-pack cache).
+# Size beats the last few percent of wasm throughput here: the engine hot loops are
+# already headless-gated at 5x the 60fps budget, and download size is a product metric.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Oz", "--enable-mutable-globals", "--enable-nontrapping-float-to-int", "--enable-bulk-memory", "--enable-sign-ext"]

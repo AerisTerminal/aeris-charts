@@ -1887,17 +1887,15 @@ impl ChartEngine {
 
         let times = self.data.merged_times();
         let appended = times.len() == self.synced_points_len + 1
-            && !times.is_empty()
+            && self.synced_points_len > 0
             && times.last().copied() > self.synced_last_time;
         if appended {
-            let mut weights = vec![0u8; times.len()];
-            origin_core::scale::time_tick_marks::fill_weights_for_points(
-                times,
-                &mut weights,
-                self.synced_points_len,
-            );
-            self.tick_marks
-                .append_weights(self.synced_points_len, &weights);
+            let start = self.synced_points_len;
+            let weight = origin_core::scale::time_tick_marks::weight_by_time(
+                times[start],
+                times[start - 1],
+            ) as u8;
+            self.tick_marks.push_weight(start as i64, weight);
         } else if times.len() != self.synced_points_len {
             let mut weights = vec![0u8; times.len()];
             origin_core::scale::time_tick_marks::fill_weights_for_points(times, &mut weights, 0);

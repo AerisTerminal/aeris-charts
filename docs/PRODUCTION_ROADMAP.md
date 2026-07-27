@@ -935,3 +935,27 @@ matrix is:
 
 Coverage means automated browser tests for those conditions, plus visual and geometry parity checks,
 so the fallback is a real product path rather than a separately maintained demo mode.
+
+---
+
+## 12. Optimization & performance hardening (tracked, 2026-07-27)
+
+Decision record and status for the engine-optimization work package. The WebGL2 fallback idea is
+**cancelled** — WebGPU + Canvas2D are the only two backends, now and going forward.
+
+| # | Item | Mechanism | Status |
+|---|---|---|---|
+| O1 | **Browser 60 fps gate** | Playwright `tests/perf-gate.spec.mjs`: scripted pan/zoom/crosshair on a 100k-bar fixture, rAF delta sampling, mean/p95/max reported; strict mode via `ORIGIN_PERF_STRICT=1` | ✅ Done — baseline recorded (SwiftShader CI: software raster, report-only by design) |
+| O2 | **Bundle size** | `wasm-opt -Oz` + bulk-memory/sign-ext via `[package.metadata.wasm-pack]`, `panic = "abort"`, `strip = "symbols"`, `opt-level = "z"` on external deps | ✅ Done — wasm 904,603 → 885,397 raw (~349 KB gz; residual is wgpu/naga, structural on stable Rust) |
+| O3 | **WebGL2 fallback** | Removed from all docs; wgpu already compiles `webgpu`-only features | ✅ Removed |
+| O4 | **Glyph atlas idle / native text** | Deterministic native text: bundled Inter (`origin_native/assets/Inter.ttf`) + `ab_glyph` rasterization into tiny-skia; `TinySkiaCanvas::fill_text` implemented | ✅ Done |
+| O5 | **Fractional-DPR compositor gaps** | Exact `devicePixelContentBox` sizing (already landed) is the complete actionable fix — pane bitmap maps 1:1 to physical pixels. The residual measured diff is the *reference's own* layered-canvas smearing at fractional DPR, i.e. we are already ahead; no further code action exists | ✅ Closed — verified via D1 goldens at fractional DPR |
+| O6 | **Multi-chart device sharing** | One shared wgpu `Device/Queue` (+ atlas + per-format pipeline cache) across chart instances via a thread-local singleton in `origin_wasm` (`SharedGpu`); lost devices are dropped and recreated on demand | ✅ Done |
+| O7 | **Tick-weight streaming path** | `sync_time_points` uses `TimeTickMarks::push_weight` — no more O(n) zeroed weight vector per appended bar | ✅ Done |
+
+Rules going forward:
+
+- No performance claim ships without either a headless gate (`perf_gate`, `interaction_perf`) or
+  the browser gate (O1) backing it.
+- Bundle size is regression-guarded by CI artifact-size reporting on `origin_wasm_bg.wasm`.
+- Any new backend must consume the shared `ChartFrame` contract — no per-backend chart state.

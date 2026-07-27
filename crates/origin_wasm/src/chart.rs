@@ -133,18 +133,51 @@ fn mismatch_direction_from_i8(direction: i8) -> MismatchDirection {
 /// Height (css px) of the separator between stacked panes.
 const PANE_SEPARATOR: f64 = 1.0;
 
-struct Gfx {
+/// Renderers shared across charts for one surface format. Pipelines and shader modules are
+/// the expensive part of device setup; they depend only on the (shared) device and format.
+struct FormatRenderers {
+    quad: QuadRenderer,
+    tri: TriRenderer,
+    tex: TexQuadRenderer,
+}
+
+/// One GPU context shared by every chart instance in the page (ARCHITECTURE.md §6.5):
+/// a single adapter/device/queue, one label atlas (glyphs cached across charts), and a
+/// per-format renderer cache. Per-chart state is only the surface, its config, and the
+/// size-dependent MSAA target. wasm32 is single-threaded, so `Rc`/`RefCell` suffice.
+struct SharedGpu {
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
+    atlas: RefCell<LabelAtlas>,
+    renderers: RefCell<std::collections::HashMap<wgpu::TextureFormat, Rc<FormatRenderers>>>,
+    device_lost: Arc<AtomicBool>,
+}
+
+impl SharedGpu {
+    fn renderers_for(&self, format: wgpu::TextureFormat) -> Rc<FormatRenderers> {
+        if let Some(renderers) = self.renderers.borrow().get(&format) {
+            return Rc::clone(renderers);
+        }
+        let renderers = Rc::new(FormatRenderers {
+            quad: QuadRenderer::new(&self.device, format, SAMPLE_COUNT),
+            tri: TriRenderer::new(&self.device, format, SAMPLE_COUNT),
+            tex: TexQuadRenderer::new(&self.device, format, self.atlas.borrow().view(), SAMPLE_COUNT),
+        });
+        self.renderers
+            .borrow_mut()
+            .insert(format, Rc::clone(&renderers));
+        renderers
+    }
+}
+
+struct Gfx {
+    shared: Rc<SharedGpu>,
+    renderers: Rc<FormatRenderers>,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
-    quad_renderer: QuadRenderer,
-    tri_renderer: TriRenderer,
     msaa: MsaaTarget,
-    /// Label atlas the host's text runs pack into. The atlas owns the texture the tex
-    /// renderer's bind group references, so it must stay alive for the renderer's lifetime.
-    atlas: LabelAtlas,
-    tex_renderer: TexQuadRenderer,
     device_lost: Arc<AtomicBool>,
 }
 
@@ -1867,38 +1900,94 @@ impl ChartInner {
     // --- rendering ---
 }
 
-/// Attempt to initialize WebGPU. A failure is recoverable because the same chart frame can be
-/// executed by the Canvas2D backend.
-async fn try_create_gfx(
-    pane_canvas: web_sys::HtmlCanvasElement,
-    css_width: f64,
-    css_height: f64,
-    dpr: f64,
-    runtime_id: u32,
-    simulate_adapter_failure: bool,
-    force_fallback_adapter: bool,
-) -> Result<Gfx, JsValue> {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-    let surface = instance
-        .create_surface(wgpu::SurfaceTarget::Canvas(pane_canvas))
-        .map_err(|e| JsValue::from_str(&format!("create_surface failed: {e}")))?;
-    if simulate_adapter_failure {
-        return Err(JsValue::from_str(
-            "request_adapter failed: deterministic runtime-matrix injection",
-        ));
+/// Outcome of a shared-GPU init attempt, delivered to every waiting `create_chart` call.
+type SharedGpuResult = Result<Rc<SharedGpu>, String>;
+type SharedGpuWaiters = Rc<RefCell<Vec<futures_channel::oneshot::Sender<SharedGpuResult>>>>;
+
+/// Slot for the page-wide shared GPU context. `Pending` serializes concurrent `create_chart`
+/// calls so exactly one adapter/device request is ever in flight; waiters are woken with the
+/// outcome. A `Ready` context whose device was later lost is discarded and recreated on demand.
+enum SharedGpuSlot {
+    Empty,
+    Pending(SharedGpuWaiters),
+    Ready(Rc<SharedGpu>),
+}
+
+thread_local! {
+    static SHARED_GPU: RefCell<SharedGpuSlot> = const { RefCell::new(SharedGpuSlot::Empty) };
+}
+
+enum SharedGpuAction {
+    Ready(Rc<SharedGpu>),
+    Wait(futures_channel::oneshot::Receiver<SharedGpuResult>),
+    Create(SharedGpuWaiters),
+}
+
+async fn shared_gpu(runtime_id: u32, force_fallback_adapter: bool) -> Result<Rc<SharedGpu>, JsValue> {
+    let action = SHARED_GPU.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if let SharedGpuSlot::Ready(shared) = &*slot {
+            if !shared.device_lost.load(Ordering::Acquire) {
+                return SharedGpuAction::Ready(Rc::clone(shared));
+            }
+            // Lost device: drop the poisoned context; every chart already fell back to
+            // Canvas2D individually, and new charts must not inherit a dead device.
+            *slot = SharedGpuSlot::Empty;
+        }
+        match &*slot {
+            SharedGpuSlot::Pending(waiters) => {
+                let (tx, rx) = futures_channel::oneshot::channel();
+                waiters.borrow_mut().push(tx);
+                SharedGpuAction::Wait(rx)
+            }
+            SharedGpuSlot::Empty => {
+                let waiters = Rc::new(RefCell::new(Vec::new()));
+                *slot = SharedGpuSlot::Pending(Rc::clone(&waiters));
+                SharedGpuAction::Create(waiters)
+            }
+            SharedGpuSlot::Ready(_) => unreachable!("ready slot handled above"),
+        }
+    });
+    match action {
+        SharedGpuAction::Ready(shared) => Ok(shared),
+        SharedGpuAction::Wait(rx) => rx
+            .await
+            .map_err(|_| JsValue::from_str("shared GPU init dropped"))?
+            .map_err(|e| JsValue::from_str(&format!("shared GPU init failed: {e}"))),
+        SharedGpuAction::Create(waiters) => {
+            let result = create_shared_gpu(runtime_id, force_fallback_adapter).await;
+            SHARED_GPU.with(|slot| {
+                let mut slot = slot.borrow_mut();
+                match &result {
+                    Ok(shared) => *slot = SharedGpuSlot::Ready(Rc::clone(shared)),
+                    Err(_) => *slot = SharedGpuSlot::Empty,
+                }
+            });
+            for tx in waiters.borrow_mut().drain(..) {
+                let _ = tx.send(result.clone());
+            }
+            result.map_err(|e| JsValue::from_str(&e))
+        }
     }
+}
+
+async fn create_shared_gpu(
+    runtime_id: u32,
+    force_fallback_adapter: bool,
+) -> Result<Rc<SharedGpu>, String> {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: Some(&surface),
+            compatible_surface: None,
             force_fallback_adapter,
         })
         .await
-        .map_err(|e| JsValue::from_str(&format!("request_adapter failed: {e}")))?;
+        .map_err(|e| format!("request_adapter failed: {e}"))?;
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor::default())
         .await
-        .map_err(|e| JsValue::from_str(&format!("request_device failed: {e}")))?;
+        .map_err(|e| format!("request_device failed: {e}"))?;
     let device_lost = Arc::new(AtomicBool::new(false));
     let lost_flag = Arc::clone(&device_lost);
     device.set_device_lost_callback(move |reason, _message| {
@@ -1909,27 +1998,55 @@ async fn try_create_gfx(
             notify_origin_backend_loss(runtime_id);
         }
     });
+    Ok(Rc::new(SharedGpu {
+        atlas: RefCell::new(LabelAtlas::new(&device)),
+        renderers: RefCell::new(std::collections::HashMap::new()),
+        instance,
+        adapter,
+        device,
+        queue,
+        device_lost,
+    }))
+}
+
+/// Attempt to initialize WebGPU. A failure is recoverable because the same chart frame can be
+/// executed by the Canvas2D backend. The adapter/device/queue/atlas/pipelines come from the
+/// page-wide shared context (`shared_gpu`); only the surface, its config, and the MSAA target
+/// are per chart.
+async fn try_create_gfx(
+    pane_canvas: web_sys::HtmlCanvasElement,
+    css_width: f64,
+    css_height: f64,
+    dpr: f64,
+    runtime_id: u32,
+    simulate_adapter_failure: bool,
+    force_fallback_adapter: bool,
+) -> Result<Gfx, JsValue> {
+    if simulate_adapter_failure {
+        return Err(JsValue::from_str(
+            "request_adapter failed: deterministic runtime-matrix injection",
+        ));
+    }
+    let shared = shared_gpu(runtime_id, force_fallback_adapter).await?;
+    let surface = shared
+        .instance
+        .create_surface(wgpu::SurfaceTarget::Canvas(pane_canvas))
+        .map_err(|e| JsValue::from_str(&format!("create_surface failed: {e}")))?;
     let bitmap_w = (css_width * dpr).round().max(1.0) as u32;
     let bitmap_h = (css_height * dpr).round().max(1.0) as u32;
     let config = surface
-        .get_default_config(&adapter, bitmap_w, bitmap_h)
+        .get_default_config(&shared.adapter, bitmap_w, bitmap_h)
         .ok_or_else(|| JsValue::from_str("surface not supported by adapter"))?;
-    surface.configure(&device, &config);
-    let quad_renderer = QuadRenderer::new(&device, config.format, SAMPLE_COUNT);
-    let atlas = LabelAtlas::new(&device);
-    let tex_renderer = TexQuadRenderer::new(&device, config.format, atlas.view(), SAMPLE_COUNT);
-    let tri_renderer = TriRenderer::new(&device, config.format, SAMPLE_COUNT);
-    let msaa = MsaaTarget::new(&device, config.format, bitmap_w, bitmap_h);
+    surface.configure(&shared.device, &config);
+    let renderers = shared.renderers_for(config.format);
+    let msaa = MsaaTarget::new(&shared.device, config.format, bitmap_w, bitmap_h);
+    let device_lost = Arc::clone(&shared.device_lost);
     Ok(Gfx {
-        device,
-        queue,
+        shared,
+        renderers,
         surface,
         config,
-        quad_renderer,
-        tri_renderer,
         msaa,
-        atlas,
-        tex_renderer,
         device_lost,
     })
 }

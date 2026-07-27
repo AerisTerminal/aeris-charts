@@ -9,14 +9,23 @@
 pub mod engine_scene;
 pub mod scene;
 
+use ab_glyph::{Font, FontArc, PxScale, ScaleFont};
 use origin_engine::ChartEngine;
 use origin_render::canvas2d::{execute, Canvas2d, Viewport};
 use origin_render::color::Color;
-use origin_render::draw_list::Prim;
+use origin_render::draw_list::{Prim, TextAlign};
+use std::sync::LazyLock;
 use tiny_skia::{
     Color as SkColor, FillRule, GradientStop, LinearGradient, Paint, PathBuilder, Pixmap, Point,
-    Rect, Shader, SpreadMode, Stroke, StrokeDash, Transform,
+    PremultipliedColorU8, Rect, Shader, SpreadMode, Stroke, StrokeDash, Transform,
 };
+
+/// Bundled Inter face (SIL OFL, <https://github.com/google/fonts>) parsed once. The font is
+/// committed in-tree so golden renders are machine-independent — no system font lookup.
+static FONT: LazyLock<FontArc> = LazyLock::new(|| {
+    FontArc::try_from_slice(include_bytes!("../assets/Inter.ttf"))
+        .expect("bundled Inter.ttf must be a valid font")
+});
 
 /// Current fill style. Rebuilt into a `tiny_skia` shader on each paint so we sidestep the
 /// `Shader<'a>` lifetime — solid colors and vertical gradients both own their data.
@@ -166,6 +175,33 @@ impl TinySkiaCanvas {
         }
         pb.finish()
     }
+
+    /// Source-over blend of one coverage sample into the premultiplied pixmap.
+    fn blend_coverage(&mut self, x: i32, y: i32, color: SkColor, coverage: f32) {
+        let (w, h) = (self.pixmap.width() as i32, self.pixmap.height() as i32);
+        if x < 0 || y < 0 || x >= w || y >= h {
+            return;
+        }
+        let idx = (y as u32 * self.pixmap.width() + x as u32) as usize;
+        let sa = color.alpha() * coverage;
+        let inv = 1.0 - sa;
+        let dst = self.pixmap.pixels()[idx];
+        let chan = |src: f32, dst: u8| {
+            (src * 255.0 * sa + dst as f32 * inv)
+                .round()
+                .clamp(0.0, 255.0) as u8
+        };
+        let a = (sa * 255.0 + dst.alpha() as f32 * inv)
+            .round()
+            .clamp(0.0, 255.0) as u8;
+        self.pixmap.pixels_mut()[idx] = PremultipliedColorU8::from_rgba(
+            chan(color.red(), dst.red()),
+            chan(color.green(), dst.green()),
+            chan(color.blue(), dst.blue()),
+            a,
+        )
+        .expect("blended channels are in range");
+    }
 }
 
 impl Canvas2d for TinySkiaCanvas {
@@ -250,6 +286,71 @@ impl Canvas2d for TinySkiaCanvas {
             Transform::identity(),
             None,
         );
+    }
+
+    /// Rasterize a text run with the bundled face. The `font` spec carries the size
+    /// (`"{weight} {size}px {family}"`); the single bundled face stands in for every
+    /// family/weight/italic, matching the Canvas2D semantics everywhere metrics allow:
+    /// x is the `align`ed edge, y the vertical center (`textBaseline: "middle"`, approximated
+    /// by the ascent/descent midpoint). Coordinates are used as-is (already bitmap space).
+    fn fill_text(
+        &mut self,
+        text: &str,
+        x: f32,
+        y: f32,
+        font: &str,
+        color: Color,
+        align: TextAlign,
+    ) {
+        let Some(size) = font
+            .split_whitespace()
+            .find_map(|tok| tok.strip_suffix("px")?.parse::<f32>().ok())
+        else {
+            return;
+        };
+        let scale = PxScale::from(size);
+        let scaled = FONT.as_scaled(scale);
+        let baseline = y + (scaled.ascent() + scaled.descent()) / 2.0;
+        let run_width = |scaled: &ab_glyph::PxScaleFont<&FontArc>| -> f32 {
+            let mut w = 0.0;
+            let mut prev = None;
+            for ch in text.chars() {
+                let id = scaled.glyph_id(ch);
+                if let Some(p) = prev {
+                    w += scaled.kern(p, id);
+                }
+                w += scaled.h_advance(id);
+                prev = Some(id);
+            }
+            w
+        };
+        let mut pen_x = match align {
+            TextAlign::Left => x,
+            TextAlign::Center => x - run_width(&scaled) / 2.0,
+            TextAlign::Right => x - run_width(&scaled),
+        };
+        let ink = sk(color);
+        let mut prev = None;
+        for ch in text.chars() {
+            let id = scaled.glyph_id(ch);
+            if let Some(p) = prev {
+                pen_x += scaled.kern(p, id);
+            }
+            let glyph = id.with_scale_and_position(scale, ab_glyph::point(pen_x, baseline));
+            pen_x += scaled.h_advance(id);
+            prev = Some(id);
+            if let Some(outlined) = FONT.outline_glyph(glyph) {
+                let bounds = outlined.px_bounds();
+                outlined.draw(|gx, gy, cov| {
+                    self.blend_coverage(
+                        bounds.min.x as i32 + gx as i32,
+                        bounds.min.y as i32 + gy as i32,
+                        ink,
+                        cov,
+                    );
+                });
+            }
+        }
     }
 }
 
@@ -471,6 +572,45 @@ mod tests {
             bottom[0] > 215,
             "bottom should be near-white, got {bottom:?}"
         );
+    }
+
+    #[test]
+    fn text_prim_rasterizes_glyphs_in_the_text_color() {
+        let bg = Color::rgb(0xff, 0xff, 0xff);
+        let ink = Color::rgb(0x00, 0x66, 0x00);
+        let text = |x: f32, align: TextAlign| Prim::Text {
+            x,
+            y: 30.0,
+            text: "Ag 123".into(),
+            color: ink,
+            size: 24.0,
+            family: "Inter".into(),
+            align,
+            weight: 400,
+            italic: false,
+        };
+        let canvas = render_prims(200, 60, bg, &[text(10.0, TextAlign::Left)], &[]);
+        let ink_pixels = (0..60)
+            .flat_map(|py| (0..200).map(move |px| (px, py)))
+            .filter(|&(px, py)| {
+                let [r, g, b, a] = canvas.pixel_rgba(px, py);
+                a == 0xff && r < 0x40 && (0x30..0x9b).contains(&g) && b < 0x40
+            })
+            .count();
+        assert!(
+            ink_pixels >= 50,
+            "expected at least 50 ink-colored glyph pixels, got {ink_pixels}"
+        );
+
+        // alignment semantics: a centered run has ink on both sides of its anchor, and the
+        // left-aligned run has no ink left of its anchor x.
+        let centered = render_prims(200, 60, bg, &[text(100.0, TextAlign::Center)], &[]);
+        let has_ink = |c: &TinySkiaCanvas, x0: u32, x1: u32| {
+            (x0..x1).any(|px| (0..60).any(|py| c.pixel_rgba(px, py) != [0xff, 0xff, 0xff, 0xff]))
+        };
+        assert!(has_ink(&centered, 0, 100));
+        assert!(has_ink(&centered, 100, 200));
+        assert!(!has_ink(&canvas, 0, 10));
     }
 
     #[test]

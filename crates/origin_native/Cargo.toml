@@ -9,6 +9,7 @@ description = "Native rasterizer target for the Prim IR: tiny-skia backend for g
 origin_core = { path = "../origin_core" }
 origin_engine = { path = "../origin_engine" }
 origin_render = { path = "../origin_render" }
+ab_glyph = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tiny-skia = "0.11"

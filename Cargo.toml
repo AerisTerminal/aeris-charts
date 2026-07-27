@@ -30,5 +30,13 @@ todo = "warn"
 opt-level = 3
 lto = "thin"
 codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+# External deps (wgpu, naga, wasm-bindgen, ...) dominate the wasm binary; our hot loops
+# live in workspace crates, which stay at opt-level 3. This trims download size without
+# touching engine throughput (headless perf gates measure workspace code).
+[profile.release.package."*"]
+opt-level = "z"
 
 # wasm release builds care about size too; tune later per-target.
