@@ -2793,21 +2793,27 @@ fn series_pop_removes_tail_and_shifts_point_colors() {
     assert_eq!(chart.series_pop(0, 0), Some(5), "count 0 is a no-op");
     assert_eq!(chart.series_pop(0, 2), Some(3));
     assert_eq!(
-        chart
-            .data
-            .point_color(0, origin_core::model::data_layer::PointColorChannel::Body, 0),
+        chart.data.point_color(
+            0,
+            origin_core::model::data_layer::PointColorChannel::Body,
+            0
+        ),
         Some(11)
     );
     assert_eq!(
-        chart
-            .data
-            .point_color(0, origin_core::model::data_layer::PointColorChannel::Body, 2),
+        chart.data.point_color(
+            0,
+            origin_core::model::data_layer::PointColorChannel::Body,
+            2
+        ),
         Some(33)
     );
     assert_eq!(
-        chart
-            .data
-            .point_color(0, origin_core::model::data_layer::PointColorChannel::Body, 3),
+        chart.data.point_color(
+            0,
+            origin_core::model::data_layer::PointColorChannel::Body,
+            3
+        ),
         None
     );
     assert_eq!(chart.data.merged_times(), &[1, 2, 3]);

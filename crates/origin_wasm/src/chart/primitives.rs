@@ -455,8 +455,10 @@ impl ChartInner {
                 if let Ok(hook) = hook.dyn_into::<js_sys::Function>() {
                     if let Err(error) = hook.call0(&obj) {
                         web_sys::console::warn_1(
-                            &format!("origin: series primitive `update_all_views` threw — {error:?}")
-                                .into(),
+                            &format!(
+                                "origin: series primitive `update_all_views` threw — {error:?}"
+                            )
+                            .into(),
                         );
                     }
                 }

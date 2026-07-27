@@ -1891,10 +1891,9 @@ impl ChartEngine {
             && times.last().copied() > self.synced_last_time;
         if appended {
             let start = self.synced_points_len;
-            let weight = origin_core::scale::time_tick_marks::weight_by_time(
-                times[start],
-                times[start - 1],
-            ) as u8;
+            let weight =
+                origin_core::scale::time_tick_marks::weight_by_time(times[start], times[start - 1])
+                    as u8;
             self.tick_marks.push_weight(start as i64, weight);
         } else if times.len() != self.synced_points_len {
             let mut weights = vec![0u8; times.len()];

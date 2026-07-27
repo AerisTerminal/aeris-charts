@@ -776,7 +776,8 @@ impl ChartInner {
                 }
                 if let Err(error) = hook.call1(&primitive, &params) {
                     web_sys::console::warn_1(
-                        &format!("origin: series primitive `attached` hook threw — {error:?}").into(),
+                        &format!("origin: series primitive `attached` hook threw — {error:?}")
+                            .into(),
                     );
                 }
             }

@@ -163,7 +163,12 @@ impl SharedGpu {
         let renderers = Rc::new(FormatRenderers {
             quad: QuadRenderer::new(&self.device, format, SAMPLE_COUNT),
             tri: TriRenderer::new(&self.device, format, SAMPLE_COUNT),
-            tex: TexQuadRenderer::new(&self.device, format, self.atlas.borrow().view(), SAMPLE_COUNT),
+            tex: TexQuadRenderer::new(
+                &self.device,
+                format,
+                self.atlas.borrow().view(),
+                SAMPLE_COUNT,
+            ),
         });
         self.renderers
             .borrow_mut()
@@ -1923,7 +1928,10 @@ enum SharedGpuAction {
     Create(SharedGpuWaiters),
 }
 
-async fn shared_gpu(runtime_id: u32, force_fallback_adapter: bool) -> Result<Rc<SharedGpu>, JsValue> {
+async fn shared_gpu(
+    runtime_id: u32,
+    force_fallback_adapter: bool,
+) -> Result<Rc<SharedGpu>, JsValue> {
     let action = SHARED_GPU.with(|slot| {
         let mut slot = slot.borrow_mut();
         if let SharedGpuSlot::Ready(shared) = &*slot {
