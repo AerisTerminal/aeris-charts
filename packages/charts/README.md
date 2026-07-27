@@ -1,4 +1,4 @@
-# @tradeaion/charts
+# @origin/charts
 
 A trading-chart engine in **Rust + WebGPU + WASM**, pixel-faithful to
 the reference charting library v5, with a plain
@@ -15,24 +15,24 @@ with the `read:packages` scope (in GitHub Actions, use the built-in `GITHUB_TOKE
 
 ```toml
 [install.scopes]
-"@tradeaion" = { token = "$GITHUB_READ_PACKAGES_TOKEN", url = "https://npm.pkg.github.com/" }
+"@origin" = { token = "$GITHUB_READ_PACKAGES_TOKEN", url = "https://npm.pkg.github.com/" }
 ```
 
 (Reference an env var; don't hardcode the token.) Then:
 
 ```sh
-bun add @tradeaion/charts
+bun add @origin/charts
 ```
 
 **npm** — add to your project's `.npmrc`:
 
 ```
-@tradeaion:registry=https://npm.pkg.github.com
+@origin:registry=https://npm.pkg.github.com
 //npm.pkg.github.com/:_authToken=${GITHUB_READ_PACKAGES_TOKEN}
 ```
 
 ```sh
-npm install @tradeaion/charts
+npm install @origin/charts
 ```
 
 No Rust toolchain or native build step is needed — the package ships prebuilt JS + WASM.
@@ -40,7 +40,7 @@ No Rust toolchain or native build step is needed — the package ships prebuilt 
 ## Quick start
 
 ```ts
-import { create_chart } from "@tradeaion/charts";
+import { create_chart } from "@origin/charts";
 
 // Async: WebGPU backend acquisition (the one deliberate divergence from the reference's sync createChart).
 const chart = await create_chart(document.getElementById("chart"), {
@@ -58,13 +58,13 @@ chart.time_scale().fit_content();
 
 API semantics mirror the reference charting library v5 (options, series handles, time/price scale handles,
 events), with snake_case naming. See the
-[repository](https://github.com/TradeAion/Aion_charts) for the full docs.
+[repository](https://github.com/TradeAion/Origin_charts) for the full docs.
 
 ## Bundler notes
 
 The package is ESM-only and ships two artifacts side by side in `dist/`: `index.js` and
-`aion_wasm_bg.wasm`. The wasm is fetched relative to the bundle
-(`new URL("aion_wasm_bg.wasm", import.meta.url)`).
+`origin_wasm_bg.wasm`. The wasm is fetched relative to the bundle
+(`new URL("origin_wasm_bg.wasm", import.meta.url)`).
 
 - **webpack 5 / Next.js / Vite production builds**: works out of the box (the wasm is emitted as
   an asset).
@@ -73,14 +73,14 @@ The package is ESM-only and ships two artifacts side by side in `dist/`: `index.
 
   ```ts
   // vite.config.ts
-  export default { optimizeDeps: { exclude: ["@tradeaion/charts"] } };
+  export default { optimizeDeps: { exclude: ["@origin/charts"] } };
   ```
 
   or point the engine at an explicit wasm URL:
 
   ```ts
-  import { create_chart, init_wasm } from "@tradeaion/charts";
-  import wasm_url from "@tradeaion/charts/dist/aion_wasm_bg.wasm?url";
+  import { create_chart, init_wasm } from "@origin/charts";
+  import wasm_url from "@origin/charts/dist/origin_wasm_bg.wasm?url";
 
   await init_wasm(wasm_url); // call once, before the first create_chart
   ```
@@ -94,4 +94,4 @@ browser environment.
 
 ## License
 
-[MIT](../../LICENSE)
+Proprietary — commercial license required. See [LICENSE](../../LICENSE).

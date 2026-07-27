@@ -1,4 +1,4 @@
-# Aion Charts — Engine Architecture Plan (Rust + WebGPU + WASM)
+# Origin Charts — Engine Architecture Plan (Rust + WebGPU + WASM)
 
 Goal: a production trading-chart engine with the **visual fidelity and API ergonomics of
 the reference charting library** and the **long-term extensibility of a TradingView-class platform**
@@ -13,13 +13,13 @@ Companion document: [RENDERING_SPEC.md](RENDERING_SPEC.md) — the exact pixel m
 
 Their architecture is a textbook layered MVC and it maps cleanly onto Rust:
 
-| reference layer | Responsibility | Aion equivalent |
+| reference layer | Responsibility | Origin equivalent |
 |---|---|---|
-| `api/` | Public façade, options merging, data validation | TS package `@aion/charts` + `aion-api` (Rust) |
-| `model/` | ChartModel, Pane, Series, TimeScale, PriceScale, Crosshair, DataLayer | `aion-core` crate (pure, platform-free) |
-| `views/` | Per-source pane/axis views: convert model → renderer data, cache & invalidate | `aion-core::views` |
-| `renderers/` | Stateless draw routines on an abstract 2D target | `aion-render` draw-list builders |
-| `gui/` | Canvas/DOM management, event handling, RAF loop, layout | `aion-wasm` (host shell) + `aion-render-wgpu` |
+| `api/` | Public façade, options merging, data validation | TS package `@origin/charts` + `origin-api` (Rust) |
+| `model/` | ChartModel, Pane, Series, TimeScale, PriceScale, Crosshair, DataLayer | `origin-core` crate (pure, platform-free) |
+| `views/` | Per-source pane/axis views: convert model → renderer data, cache & invalidate | `origin-core::views` |
+| `renderers/` | Stateless draw routines on an abstract 2D target | `origin-render` draw-list builders |
+| `gui/` | Canvas/DOM management, event handling, RAF loop, layout | `origin-wasm` (host shell) + `origin-render-wgpu` |
 
 Key ideas we keep verbatim:
 
@@ -67,11 +67,11 @@ the public TypeScript API (`create_chart`, `add_series`, `set_data`), diverging 
 the reference charting library's camelCase.
 
 ```
-aion_charts/
+origin_charts/
 ├─ crates/
-│  ├─ aion_core/          # platform-free chart model (no wasm, no gpu deps)
-│  ├─ aion_indicators/    # pure Rust SMA/EMA/Bollinger producers
-│  ├─ aion_engine/        # headless chart coordinator + backend-neutral frame production
+│  ├─ origin_core/          # platform-free chart model (no wasm, no gpu deps)
+│  ├─ origin_indicators/    # pure Rust SMA/EMA/Bollinger producers
+│  ├─ origin_engine/        # headless chart coordinator + backend-neutral frame production
 │  │  ├─ src/
 │  │  │  ├─ model/        # chart, pane, series, time_scale, price_scale, crosshair, magnet,
 │  │  │  │                # data_layer, plot_list, range, invalidate_mask, kinetic
@@ -80,11 +80,11 @@ aion_charts/
 │  │  │  │                # price_tick_span, weight generator
 │  │  │  ├─ format/       # price/percent/volume/date/time formatters, text width abstraction
 │  │  │  └─ options/      # all option structs + defaults (mirror reference defaults)
-│  ├─ aion_render/        # DrawList IR: primitives, layers, text runs; no gpu deps
-│  ├─ aion_render_wgpu/   # wgpu backend: pipelines, glyph atlas, batching, surfaces
-│  ├─ aion_wasm/          # wasm-bindgen shell: DOM events, ResizeObserver, RAF, clipboard,
+│  ├─ origin_render/        # DrawList IR: primitives, layers, text runs; no gpu deps
+│  ├─ origin_render_wgpu/   # wgpu backend: pipelines, glyph atlas, batching, surfaces
+│  ├─ origin_wasm/          # wasm-bindgen shell: DOM events, ResizeObserver, RAF, clipboard,
 │  │                      # canvas surface creation, JS callback plumbing
-│  └─ aion_native/        # tiny-skia host for headless PNGs & golden tests
+│  └─ origin_native/        # tiny-skia host for headless PNGs & golden tests
 ├─ packages/
 │  └─ charts/             # TypeScript API package (thin, mirrors reference API semantics, snake_case)
 ├─ docs/
@@ -93,16 +93,16 @@ aion_charts/
    └─ unit/
 ```
 
-Dependency rules: `aion_core` depends on nothing platform-specific (usable for server-side
-rendering & native apps later). `aion_engine` owns complete chart instances and depends only on
-`aion_core` + `aion_render`. `aion_render` knows primitives, not GPUs. Only
-`aion_render_wgpu` touches wgpu. Only `aion_wasm` touches the DOM. Browser, native, screenshot,
-and test hosts must all drive the same `aion_engine::ChartEngine`; no host may own chart state or
+Dependency rules: `origin_core` depends on nothing platform-specific (usable for server-side
+rendering & native apps later). `origin_engine` owns complete chart instances and depends only on
+`origin_core` + `origin_render`. `origin_render` knows primitives, not GPUs. Only
+`origin_render_wgpu` touches wgpu. Only `origin_wasm` touches the DOM. Browser, native, screenshot,
+and test hosts must all drive the same `origin_engine::ChartEngine`; no host may own chart state or
 construct a separate chart-like scene.
 
 ---
 
-## 3. Core model (aion-core)
+## 3. Core model (origin-core)
 
 Direct port of the reference model with Rust idioms:
 
@@ -145,7 +145,7 @@ crypto-scale values (1e-8 ticks) and avoids f32 jitter when zoomed into large ti
 
 ---
 
-## 4. View layer & draw-list IR (aion-render)
+## 4. View layer & draw-list IR (origin-render)
 
 Views keep the reference's caching discipline (`_dataInvalidated / _optionsInvalidated / _invalidated`,
 `visibleTimedValues` slicing) but emit a **DrawList** instead of calling Canvas2D:
@@ -180,7 +180,7 @@ Design points:
   layer and composite `static_texture + top layer` — same perf characteristics as reference, one canvas.
 - Gradients: vertical linear only (background, area) — trivially in-shader.
 
-## 5. WebGPU backend (aion-render-wgpu)
+## 5. WebGPU backend (origin-render-wgpu)
 
 Pipelines (all `Rgba8Unorm`/`Bgra8Unorm`, premultiplied alpha, single render pass per frame per chart):
 
@@ -204,7 +204,7 @@ Text stack:
   `yMidCorrection` trick (measure ascent/descent, center on the label box) — this is what makes
   axis text look like Canvas2D `textBaseline:'middle'`.
 - Text measurement (`TextWidthCache`, 200-entry LRU keyed by string with digit-normalization like
-  reference) lives in `aion-core` behind a `MeasureText` trait implemented by the glyph engine.
+  reference) lives in `origin-core` behind a `MeasureText` trait implemented by the glyph engine.
 - Font default: same stack as reference (`-apple-system, ..., sans-serif`) — we load the platform
   sans via `local()` queries in JS and pass the bytes in; ship a bundled fallback (e.g. Inter)
   for deterministic tests.
@@ -246,7 +246,7 @@ Frame loop & surfaces:
 
 ## 6. Host shell & public API
 
-### 6.1 JS/TS package (`@aion/charts`)
+### 6.1 JS/TS package (`@origin/charts`)
 
 Mirror the reference v5 API surface so users (and our future platform code) get a familiar contract:
 
@@ -286,9 +286,9 @@ The reference's `MouseEventHandler` gesture recognizer is ported to TS in the sh
 (`packages/charts/src/gestures.ts`: tap/double-tap/long-tap, pressed-move, pinch with distance
 ratio, page-scroll heuristics, `preventDefault` rules, double-click 500ms window, crosshair
 tracking mode) and forwards normalized samples to Rust. **All interaction model code lives in
-the engine** (`aion_engine::interaction` + the scale cores): drag scroll sessions, axis
+the engine** (`origin_engine::interaction` + the scale cores): drag scroll sessions, axis
 drag-to-scale (`Time/PriceScaleCore.start_scale`/`scale_to`), vertical price pan
-(`start_scroll`/`scroll_to`), the kinetic momentum coast (`aion_core::KineticAnimation` — the
+(`start_scroll`/`scroll_to`), the kinetic momentum coast (`origin_core::KineticAnimation` — the
 host feeds px samples and drives the coast from its RAF scheduler), wheel/pinch zoom increment
 coefficients, and eased scroll-to-position animations (engine-owned cubic ease-out; the host
 only schedules ticks). Wheel delta normalization (delta modes, Windows-Chrome DPR correction)
@@ -316,7 +316,7 @@ Three tiers, mirroring the reference's proven design (spec §16, reference `plug
 ### 6.4 Indicator/compute layer
 
 Keep the engine data-in/draw-out. Indicators are producers that own output series — the same model
-as the reference's `indicator-examples`. `aion_indicators` contains pure SMA, EMA, and Bollinger functions;
+as the reference's `indicator-examples`. `origin_indicators` contains pure SMA, EMA, and Bollinger functions;
 `ChartEngine` binds their outputs to ordinary line series and recomputes them on source updates.
 The core does not know indicator formulas, and the browser does not calculate chart data.
 
@@ -329,7 +329,7 @@ memory win for 8-chart layouts). Time-scale sync = the reference pattern
 
 ### 6.6 Server/native rendering
 
-Because `aion-core` + `aion-render` are platform-free, `aion-native` (wgpu on Vulkan/Metal +
+Because `origin-core` + `origin-render` are platform-free, `origin-native` (wgpu on Vulkan/Metal +
 readback) gives golden-image tests, server-side chart PNGs, and a path to desktop apps.
 
 ---
@@ -369,7 +369,7 @@ Mechanisms:
    plot list. Port test vectors into Rust unit tests (`tests/unit`).
 2. **Golden-image diffing.** Render fixed scenarios (candles at bar spacings 0.5–50, DPR 1/1.25/2/3,
    both themes, axis label edge cases, dashed styles, histograms with tiny spacing) in
-   the reference charting library via headless Chromium → PNG; render the same scene in `aion-native` → PNG;
+   the reference charting library via headless Chromium → PNG; render the same scene in `origin-native` → PNG;
    assert per-pixel diff within tolerance (rects must be *exact*; AA lines/text get a small
    perceptual tolerance). These live in `tests/goldens` and run in CI.
 3. **Interaction parity tests.** Scripted gesture sequences (wheel-zoom at x, drag, pinch, axis
@@ -382,16 +382,16 @@ Mechanisms:
 
 ## 9. Phased roadmap
 
-**Phase 0 — Skeleton. ✅ DONE (2026-07-11).** Workspace (`aion_core`, `aion_render`,
-`aion_render_wgpu` with wgpu 25, `aion_wasm`), solid-quad pipeline (instanced integer rects,
+**Phase 0 — Skeleton. ✅ DONE (2026-07-11).** Workspace (`origin_core`, `origin_render`,
+`origin_render_wgpu` with wgpu 25, `origin_wasm`), solid-quad pipeline (instanced integer rects,
 premultiplied alpha, no MSAA), quad executor (Rect/RectFrame/HLine/VLine incl. CPU dash
 expansion), wasm-bindgen chart shell with canvas surface, zoom/pan/crosshair/fit gestures,
 resize with fractional DPR. Demo at `examples/web_demo` (serve via `.claude/launch.json`,
-build with `wasm-pack build crates/aion_wasm --target web --out-dir ../../examples/web_demo/pkg`).
+build with `wasm-pack build crates/origin_wasm --target web --out-dir ../../examples/web_demo/pkg`).
 Verified in-browser: only exact palette colors on canvas (zero AA bleed), zoom compounds at
 exactly 1.1^n, dashed crosshair coverage exactly 50%.
 
-**Phase 1 — The chart core (3–4 wks). PARTIALLY DONE.** `aion_core` port: time scale ✅,
+**Phase 1 — The chart core (3–4 wks). PARTIALLY DONE.** `origin_core` port: time scale ✅,
 price scale (all 4 modes + log formula) ✅, tick span calculator ✅, invalidate mask ✅,
 formatters (price/percent/volume) ✅, candlestick geometry ✅ (66 unit tests).
 Remaining: data layer + plot list (merged time points, whitespace, chunked min/max cache),
@@ -443,7 +443,7 @@ histogram series. The 1M load/streaming benchmark gate passes. Remaining: repeat
 benchmarks and the broader series/API parity tracked in `PRODUCTION_ROADMAP.md`.
 
 **Phase 5 — Multi-pane & platform features (2–3 wks). PARTIALLY DONE.** Done: **multi-series
-data layer** (`aion_core::data_layer` — merged union of all series' timestamps, per-series
+data layer** (`origin_core::data_layer` — merged union of all series' timestamps, per-series
 PlotList keyed by merged index, whitespace where a series is absent, O(1) streaming append +
 full rebuild on insert; 6 tests). Chart now holds N series on one shared time axis + price
 scale: `add_series`/`set_series_data`/`set_series_color`, per-series render by kind (candles/

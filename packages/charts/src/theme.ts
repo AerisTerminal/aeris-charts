@@ -1,5 +1,5 @@
 /**
- * Default style settings — the single place to re-theme `@tradeaion/charts`.
+ * Default style settings — the single place to re-theme `@origin/charts`.
  *
  * Each theme maps the platform's design tokens onto the chart-options tree:
  * - `background` → the chart main background (`layout.background.color`)

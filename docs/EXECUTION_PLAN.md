@@ -1,11 +1,11 @@
-# Aion Charts — Execution Plan
+# Origin Charts — Execution Plan
 
 Status legend: `[x]` done (with date) · `[ ]` pending. Ground truth: the full audit of
 2026-07-21 (engine vs reference 5.2.0 feature parity, packaging, styling/control APIs). Companion to
 [ARCHITECTURE.md](ARCHITECTURE.md), [PRODUCTION_ROADMAP.md](PRODUCTION_ROADMAP.md),
 [PLUGIN_PLATFORM_DESIGN.md](PLUGIN_PLATFORM_DESIGN.md).
 
-Goal: (1) make `@tradeaion/charts` installable via `bun add` (primary) / `npm i` from **GitHub
+Goal: (1) make `@origin/charts` installable via `bun add` (primary) / `npm i` from **GitHub
 Packages** (private — no public npm registry) with no source clone or Rust toolchain, (2) close
 the enumerable reference API-breadth gaps, (3) land the plugin platform.
 
@@ -22,13 +22,13 @@ the enumerable reference API-breadth gaps, (3) land the plugin platform.
 A consumer must get a working chart from the registry alone: bundled ESM + flat types + the wasm
 binary inside `dist/`, resolved relative to the bundle (`new URL(..., import.meta.url)`).
 
-- [x] 1.1 `LICENSE` (MIT) at repo root, copied into `packages/charts/` and `crates/aion_wasm/`
+- [x] 1.1 `LICENSE` (MIT) at repo root, copied into `packages/charts/` and `crates/origin_wasm/`
       (silences the wasm-pack warning; npm auto-includes it from the package root). — 2026-07-21
 - [x] 1.2 `packages/charts/README.md` — install, quick start, async `create_chart` note, browser-only
       note, Vite caveat. — 2026-07-21
 - [x] 1.3 `packages/charts/package.json` metadata: `license`, `author`, `repository` (with
       `directory: "packages/charts"`), `bugs`, `homepage`, `keywords`, `engines`,
-      `publishConfig.access: "public"` (scoped `@aion/*` requires it). Also workspace
+      `publishConfig.access: "public"` (scoped `@origin/*` requires it). Also workspace
       `Cargo.toml` repository URL. — 2026-07-21
 - [x] 1.4 `clean` + `prepublishOnly` scripts (kills stale `dist/src/*.d.ts` duplicates; guarantees a
       fresh build at publish). Also excluded the broken-sourcemap `dist/index.js.map` from the
@@ -37,7 +37,7 @@ binary inside `dist/`, resolved relative to the bundle (`new URL(..., import.met
       `ensure_init(url?)` in `impl.ts` — the documented escape hatch for Vite dev / custom asset
       hosting. — 2026-07-21
 - [x] 1.6 Pack smoke test (`scripts/pack_smoke.mjs` + `test:pack` script): `npm pack` → install the
-      tarball into a scratch dir → assert the module imports and `dist/aion_wasm_bg.wasm` shipped.
+      tarball into a scratch dir → assert the module imports and `dist/origin_wasm_bg.wasm` shipped.
       Also runs in CI on every push. — 2026-07-21
 - [x] 1.7 Publish CI job in `.github/workflows/ci.yml` (tag-triggered `v*`, gated on rust+package+
       browser jobs, `npm publish` with `publishConfig.access: public`, `NPM_TOKEN` secret).
@@ -179,11 +179,11 @@ buffer; swappable for a typed-array ABI later without changing the plugin API).
 
 **Distribution decision (2026-07-23, user):** publish to **GitHub Packages**, keep the package
 **private** (no public npm registry). GPR rules: scope must match the repo owner → the package is
-`@tradeaion/charts`; publishing authenticates with the built-in `GITHUB_TOKEN` (no npm org/token);
+`@origin/charts`; publishing authenticates with the built-in `GITHUB_TOKEN` (no npm org/token);
 installs always require a `read:packages` PAT (privacy is enforced at the registry regardless of
 repo visibility).
 
-- [x] 4.1 Distribution target switched: name `@tradeaion/charts`, `publishConfig.registry`
+- [x] 4.1 Distribution target switched: name `@origin/charts`, `publishConfig.registry`
       `https://npm.pkg.github.com`, CI publish job → GPR with `secrets.GITHUB_TOKEN` +
       `packages: write`, READMEs rewritten (bunfig.toml / .npmrc auth), pack smoke updated.
       — 2026-07-23
@@ -194,9 +194,9 @@ repo visibility).
       fix: the browser job had never been green on CI (pixel thresholds calibrated to the dev
       machine's SwiftShader build) → marked report-only (`continue-on-error`) and removed from the
       publish gate; the dev-machine suite remains the strict gate (28/28).
-      Remaining: first consumer install `bun add @tradeaion/charts` with a `read:packages` PAT.
+      Remaining: first consumer install `bun add @origin/charts` with a `read:packages` PAT.
 - [x] 4.3 React wrapper — **decided: descoped.** Closed-source internal React app; no distribution
-      need, so no `@tradeaion/react` package. The ~50-line `use_chart` lifecycle hook lives in the
+      need, so no `@origin/react` package. The ~50-line `use_chart` lifecycle hook lives in the
       app itself (StrictMode-safe create/destroy). Revisit only if the engine is ever published for
       external consumers. — 2026-07-23
 - [x] 4.4 Docs: root README install section (bun-primary, GPR); phases archived into
@@ -207,10 +207,10 @@ repo visibility).
 ## Progress log
 
 - 2026-07-21 — Plan created from the parity/packaging/API audit.
-- 2026-07-21 — **Phase 1 complete (1.1–1.8).** `@aion/charts` is publish-ready: LICENSE ×3, package
+- 2026-07-21 — **Phase 1 complete (1.1–1.8).** `@origin/charts` is publish-ready: LICENSE ×3, package
   README, full metadata + `publishConfig.access: public`, clean/prepublish chain, `init_wasm(url?)`
   Vite escape hatch, pack smoke test (local + CI), tag-triggered publish job. Tarball: 10 files,
-  314 kB packed, wasm 492 kB, imports cleanly. Remaining before 4.2 can ship: create the `@aion`
+  314 kB packed, wasm 492 kB, imports cleanly. Remaining before 4.2 can ship: create the `@origin`
   npm org and add the `NPM_TOKEN` repo secret (4.1). Next up: Phase 2a surface corrections.
 - 2026-07-21 — **Bun is the primary install method** (README/plan reordered; `bun add` verified
   end-to-end against the packed tarball: install 295 ms, module imports, wasm ships).
@@ -259,9 +259,9 @@ repo visibility).
   (fixed the `npm_config_dry_run` leak into the pack smoke test). To ship v0.1.0 (user actions):
   1. create a PAT with `read:packages` + `write:packages` for local installs (in CI the built-in
   `GITHUB_TOKEN` covers it — no secret setup needed); 2. `git tag v0.1.0 && git push origin v0.1.0`
-  — the publish CI job builds, gates, and publishes `@tradeaion/charts` to GitHub Packages;
-  3. verify in a fresh consumer: `bun add @tradeaion/charts` (with the bunfig scope auth from the
-  package README) then `import { create_chart } from "@tradeaion/charts"`.
+  — the publish CI job builds, gates, and publishes `@origin/charts` to GitHub Packages;
+  3. verify in a fresh consumer: `bun add @origin/charts` (with the bunfig scope auth from the
+  package README) then `import { create_chart } from "@origin/charts"`.
 - 2026-07-23 — **WebGPU bucket-order fidelity bug fixed.** The WebGPU executor painted family
   buckets (tris → quads) within a layer while Canvas2D paints in prim order, so markers/rounded
   shapes z-ordered differently across backends (275 px on the marker fixture). Fixed with

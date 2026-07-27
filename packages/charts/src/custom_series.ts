@@ -1,5 +1,5 @@
 /**
- * Custom series (plugin platform Phase C-c) — Aion's take on the reference charting library v5's
+ * Custom series (plugin platform Phase C-c) — Origin's take on the reference charting library v5's
  * `addCustomSeries`/`ICustomSeriesPaneView` (reference api/chart-api.ts, model/icustom-series.ts).
  *
  * A custom series is a user-defined series TYPE: the engine owns its time mapping (its data

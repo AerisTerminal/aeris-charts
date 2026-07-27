@@ -1,17 +1,17 @@
 {
-  "name": "@tradeaion/charts",
+  "name": "@origin/charts",
   "version": "0.7.9",
   "type": "module",
-  "description": "Aion Charts public TypeScript API (snake_case, semantics mirror the reference charting library v5)",
-  "license": "MIT",
+  "description": "Origin Charts public TypeScript API (snake_case, semantics mirror the reference charting library v5)",
+  "license": "SEE LICENSE IN LICENSE",
   "author": "TradeAion",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TradeAion/Aion_charts.git",
+    "url": "git+https://github.com/TradeAion/Origin_charts.git",
     "directory": "packages/charts"
   },
-  "bugs": "https://github.com/TradeAion/Aion_charts/issues",
-  "homepage": "https://github.com/TradeAion/Aion_charts#readme",
+  "bugs": "https://github.com/TradeAion/Origin_charts/issues",
+  "homepage": "https://github.com/TradeAion/Origin_charts#readme",
   "keywords": [
     "chart",
     "charts",
@@ -44,10 +44,10 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true});require('fs').rmSync('pkg',{recursive:true,force:true})\"",
-    "build:wasm": "wasm-pack build ../../crates/aion_wasm --target web --out-dir ../../packages/charts/pkg",
+    "build:wasm": "wasm-pack build ../../crates/origin_wasm --target web --out-dir ../../packages/charts/pkg",
     "build:js": "esbuild src/index.ts --bundle --format=esm --sourcemap --outfile=dist/index.js",
     "build:types": "tsc --declaration --emitDeclarationOnly --outDir dist --noEmit false",
-    "build:copy-wasm": "node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});fs.copyFileSync('pkg/aion_wasm_bg.wasm','dist/aion_wasm_bg.wasm')\"",
+    "build:copy-wasm": "node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});fs.copyFileSync('pkg/origin_wasm_bg.wasm','dist/origin_wasm_bg.wasm')\"",
     "build": "npm run build:wasm && npm run build:js && npm run build:types && npm run build:copy-wasm",
     "lint": "oxlint src",
     "test:pack": "node scripts/pack_smoke.mjs",

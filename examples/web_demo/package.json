@@ -1,9 +1,9 @@
 {
-  "name": "@aion/charts-web-demo",
+  "name": "@origin/charts-web-demo",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "npm --prefix ../../packages/charts run build && node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});fs.copyFileSync('../../packages/charts/dist/index.js','dist/aion_charts.js');fs.copyFileSync('../../packages/charts/dist/index.js.map','dist/index.js.map');fs.copyFileSync('../../packages/charts/dist/aion_wasm_bg.wasm','dist/aion_wasm_bg.wasm')\"",
+    "build": "npm --prefix ../../packages/charts run build && node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});fs.copyFileSync('../../packages/charts/dist/index.js','dist/origin_charts.js');fs.copyFileSync('../../packages/charts/dist/index.js.map','dist/index.js.map');fs.copyFileSync('../../packages/charts/dist/origin_wasm_bg.wasm','dist/origin_wasm_bg.wasm')\"",
     "test:browser": "playwright test"
   },
   "devDependencies": {

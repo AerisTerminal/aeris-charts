@@ -1,4 +1,4 @@
-# Aion Charts — Production Roadmap
+# Origin Charts — Production Roadmap
 
 Path from the current engine (renders candles/bars/line/area/histogram/baseline, multiple panes,
 both axes, crosshair, zoom/pan/streaming) to a **near-production charting library on par with
@@ -13,8 +13,8 @@ phase ordering in ARCHITECTURE.md §9 where they disagree — see "Reordering ra
 
 ## 1. Honest state assessment (2026-07-17)
 
-- **Aion:** ~9,600 lines Rust across `aion_core` / `aion_engine` / `aion_render` /
-  `aion_render_wgpu` / `aion_wasm` / `aion_native`, plus an ~800-line TypeScript façade.
+- **Origin:** ~9,600 lines Rust across `origin_core` / `origin_engine` / `origin_render` /
+  `origin_render_wgpu` / `origin_wasm` / `origin_native`, plus an ~800-line TypeScript façade.
 - **reference v5.2.0 source** (`tmp/refsrc/`): ~30,300 lines TS.
 
 **Strong (done well):** core scale math (price scale 4 modes + log, time scale, tick spans),
@@ -31,7 +31,7 @@ data volumes, and broader visual goldens.
 ### Current baseline after the architecture recovery
 
 The implementation has moved beyond the original recovery point. `ChartEngine` is now the
-canonical headless model and frame producer; `aion_wasm` is a browser lifecycle/binding adapter;
+canonical headless model and frame producer; `origin_wasm` is a browser lifecycle/binding adapter;
 the package builds independently from the demo; indicators are Rust-owned producers; and the
 demo renders those public engine outputs. Phase R1/R2/R3/R4/R6 are therefore complete in substance.
 The remaining R work is contract/parity verification (R5), not another model rewrite.
@@ -43,9 +43,9 @@ shared-memory design.
 
 ---
 
-## 2. Gap map (reference has it → Aion doesn't)
+## 2. Gap map (reference has it → Origin doesn't)
 
-| Area | Reference library | Aion status | Severity |
+| Area | Reference library | Origin status | Severity |
 |---|---|---|---|
 | Public TS API | `api/chart-api.ts`, `series-api.ts`, handles | façade plus chart/series/time/price-scale handles present; event/plugin breadth remains | 🟡 Med |
 | Options system | deep-merge, ~8 groups, per-series | deep-merge and common chart/series options present | 🟡 Med |
@@ -92,15 +92,15 @@ place; remaining work is verification that every supported backend consumes the 
 *Exit: one DOM/GPU-free chart instance produces one backend-neutral frame; WebGPU, browser
 Canvas2D, native PNG, goldens, and the demo are consumers of that same engine and package.*
 
-- **R1. Headless chart ownership.** `aion_engine::ChartEngine` owns panes, series, merged data,
-  scales, options, interaction state, layout, and invalidation. `aion_wasm` owns only browser
+- **R1. Headless chart ownership.** `origin_engine::ChartEngine` owns panes, series, merged data,
+  scales, options, interaction state, layout, and invalidation. `origin_wasm` owns only browser
   lifecycle and bindings.
-- **R2. Backend-neutral frame.** Move every chart builder out of `aion_wasm`; eliminate
+- **R2. Backend-neutral frame.** Move every chart builder out of `origin_wasm`; eliminate
   `TriVertex`/`DrawGroup` from model/frame construction. All geometry is expressed in the
-  `aion_render` IR before a backend sees it.
+  `origin_render` IR before a backend sees it.
 - **R3. Real native/golden path.** Build native PNGs and goldens by feeding data/options to
   `ChartEngine`, not by hand-authoring a chart-like primitive scene.
-- **R4. Real package boundary.** `@aion/charts` produces its own JS, declarations, and WASM under
+- **R4. Real package boundary.** `@origin/charts` produces its own JS, declarations, and WASM under
   `dist`; the demo consumes those distribution artifacts and the library build never targets the
   demo directory.
 - **R5. Contract tests.** Run the same fixture through WebGPU/Canvas2D/native backends and assert
@@ -117,13 +117,13 @@ Canvas2D, native PNG, goldens, and the demo are consumers of that same engine an
 
 ### Phase A — Make it a consumable library  ✅ complete; breadth follow-up remains
 
-*Exit: `npm install @aion/charts`, feed OHLC, get a styled chart, wire a tooltip — the reference
+*Exit: `npm install @origin/charts`, feed OHLC, get a styled chart, wire a tooltip — the reference
 "getting started" story works end to end.*
 
 - **A1. Real TS API façade.** `create_chart(container, options?) → IChartApi`-equivalent;
   `add_series(kind, options?) → series handle` (object, not a `u32`); `series.set_data/update`;
   `chart.remove()`. Typed-array packing at the boundary (no per-bar JS objects).
-- **A2. Options system.** New `aion_core::options` module mirroring reference defaults (RENDERING_SPEC
+- **A2. Options system.** New `origin_core::options` module mirroring reference defaults (RENDERING_SPEC
   §15): layout, grid, crosshair, time_scale, right/left price_scale, localization, per-series.
   `apply_options` deep-merge on chart / series / scale.
 - **A3. Data validation.** Port `data-validators.ts`: monotonic time, dedupe, NaN rejection,
@@ -157,7 +157,7 @@ Canvas2D, native PNG, goldens, and the demo are consumers of that same engine an
 
 ### Phase D — Hardening  🔴 next execution priority
 
-- **D1. Golden-image harness:** headless Chromium renders reference PNGs; `aion_native` renders ours;
+- **D1. Golden-image harness:** headless Chromium renders reference PNGs; `origin_native` renders ours;
   per-pixel diff (rects exact, AA/text small tolerance). Protects fidelity claims + catches
   regressions across A–C. The package now exposes `take_screenshot()`, which returns a
   device-pixel-sized canvas composed from a synchronous retained-frame Canvas2D execution and the
@@ -192,7 +192,7 @@ Canvas2D, native PNG, goldens, and the demo are consumers of that same engine an
 
 ## 5. Definition of "near production ready"
 
-- [x] `@aion/charts` installs and runs the reference getting-started example unmodified in spirit.
+- [x] `@origin/charts` installs and runs the reference getting-started example unmodified in spirit.
 - [x] Options parity for the common groups; `apply_options` deep-merge works.
 - [x] Malformed data is rejected with clear errors, never a wasm panic.
 - [x] Volume + at least one indicator pane render correctly with independent scales.
@@ -214,19 +214,19 @@ Progress is appended here as phases land (newest last).
 - 2026-07-17 — **Architecture audit: Phase R inserted and C/D feature work paused.** The demo did
   use the TypeScript façade, but the façade build targeted the demo directly and the actual chart
   instance (`ChartInner`) mixed platform-neutral state with DOM and WebGPU resources inside
-  `aion_wasm`. The native golden rendered a handcrafted chart-like scene rather than the engine.
-  Recovery began with a DOM/GPU-free `aion_engine` crate; chart-owned state (`ChartEngine`, panes,
+  `origin_wasm`. The native golden rendered a handcrafted chart-like scene rather than the engine.
+  Recovery began with a DOM/GPU-free `origin_engine` crate; chart-owned state (`ChartEngine`, panes,
   series, scales, data, options, interaction/viewport state) moved there and the WASM host now
   contains it. The package build now emits independent `dist/index.js`, `index.d.ts`, and WASM;
   the demo copies those published artifacts as a separate application build. Remaining R work:
   finish contract/parity coverage and remove the legacy handcrafted primitive fixture once the
   low-level renderer regression is split into its own explicit test.
 
-- 2026-07-17 — **Phase R2/R3 increment: shared core frame + real native golden.** `aion_engine`
+- 2026-07-17 — **Phase R2/R3 increment: shared core frame + real native golden.** `origin_engine`
   now produces a DOM/GPU-free `ChartFrame` containing pane scissor geometry, grid, autoscaled
-  candles, bars, lines, areas, and histograms as `aion_render::Prim` values. The WASM render path
+  candles, bars, lines, areas, and histograms as `origin_render::Prim` values. The WASM render path
   consumes that frame for all pane geometry; only WebGPU submission and browser text labels remain
-  in the adapter. `aion_native::render_engine` consumes the
+  in the adapter. `origin_native::render_engine` consumes the
   same frame, and a committed `engine.png` golden now exercises a real `ChartEngine` fixture rather
   than only the handcrafted primitive scene. Native unit, golden, workspace tests, package build,
   package import smoke, and demo build are green.
@@ -239,17 +239,17 @@ Progress is appended here as phases land (newest last).
 
 - 2026-07-17 — **Phase R1 increment: shared data/layout bookkeeping.** Sanitized series installs,
   streaming updates, time-point/tick synchronization, autoscaling, and stacked-pane layout now
-  execute in `aion_engine`; WASM keeps only diagnostics and browser-facing measurements. This
+  execute in `origin_engine`; WASM keeps only diagnostics and browser-facing measurements. This
   removes the second model mutation and pane-layout implementation from the browser shell.
 
 - 2026-07-17 — **Phase R5 increment: real Canvas2D pane fallback.** `create_chart` now treats
   WebGPU initialization as optional. When unavailable, the pane canvas executes the same
-  `ChartFrame` through `aion_render::canvas2d`, with per-pane clipping; the overlay continues to
+  `ChartFrame` through `origin_render::canvas2d`, with per-pane clipping; the overlay continues to
   render browser text labels. The fallback is no longer limited to a primitive smoke test. The
   packaged demo was also opened and rendered successfully with no browser console errors.
 
 - 2026-07-12 — Roadmap authored. Beginning Phase A.
-- 2026-07-12 — **A3 done.** `aion_core::model::data_validation` (sanitize_ohlc / sanitize_point:
+- 2026-07-12 — **A3 done.** `origin_core::model::data_validation` (sanitize_ohlc / sanitize_point:
   repair-and-report — drop non-finite/out-of-range, stable-sort, dedupe last-wins, error only on
   length mismatch). Wired into wasm `set_series_data` / `update_bar`; malformed feeds warn + render
   instead of panicking. 11 unit tests.
@@ -257,16 +257,16 @@ Progress is appended here as phases land (newest last).
   `price_to_coordinate` / `coordinate_to_price`, `time_to_coordinate` / `coordinate_to_time`,
   `visible_logical_range` + setter, `visible_time_range` + setter. Verified in-browser: price/time
   roundtrips exact, off-chart queries return `undefined`, setters apply.
-- 2026-07-12 — **A2 done** (options system). `aion_core::options`: serde-backed structs with
+- 2026-07-12 — **A2 done** (options system). `origin_core::options`: serde-backed structs with
   reference-matching defaults (layout/grid/crosshair) + `ChartOptionsStore` doing reference `merge`-semantics
-  deep-merge (nested objects merge key-by-key; scalars/arrays/null replace). `aion_render::Color`
+  deep-merge (nested objects merge key-by-key; scalars/arrays/null replace). `origin_render::Color`
   gained `#rgb`/`#rgba` shorthand + `rgb()/rgba()` parsing. Wired `apply_options` / `options_json`
   into the wasm chart; grid colors+visibility, crosshair line colors+visibility, and the
   background clear color now come from options. Verified in-browser: partial patches deep-merge
   (siblings survive, patches accumulate) and reach pixels (bg 94.8% red, blue grid lines present).
   15 new unit tests. Next: A1 (real TS façade), A5 (subscriptions).
 - 2026-07-12 — **A1 done** (real library façade). `packages/charts/src/index.ts` is now a typed
-  `@aion/charts` API over the wasm engine — no longer a stub: `create_chart(container, options?)`
+  `@origin/charts` API over the wasm engine — no longer a stub: `create_chart(container, options?)`
   → `Promise<chart_api>` (creates the two stacked canvases, installs the gesture recognizer,
   applies options); `add_series(kind, options?)` → series handle (`set_data`/`update`/`set_type`/
   `apply_options`, typed-array packing at the boundary); `time_scale()` (fit/visible-range get+set/
@@ -332,7 +332,7 @@ Progress is appended here as phases land (newest last).
   per-pane axes, draggable resize, per-pane crosshair). Optional later: a richer `panes()` handle
   API. Next: B3 (baseline/step/curved line types, point markers, last-price animation) + B4
   (series markers, price-lines API).
-- 2026-07-12 — **B3 increment 1 done** (step & curved line types). `aion_render::line::expand_line`
+- 2026-07-12 — **B3 increment 1 done** (step & curved line types). `origin_render::line::expand_line`
   transforms a polyline by `LineType`: `WithSteps` inserts a horizontal-then-vertical corner per
   interval; `Curved` tessellates a Catmull-Rom spline (16 segs/interval) through the knots. Applied
   in both `build_line_stroke` and `build_area_fill`. Series carry a `line_type`;
@@ -345,7 +345,7 @@ Progress is appended here as phases land (newest last).
   threshold behavior. `set_series_point_markers(id, bool)` → façade `add_series(kind, {
   point_markers: true })`. Verified in-browser: zoomed in (bar spacing 46) markers add 358 px;
   zoomed out (0.75) they add 0 (hidden). Remaining B3: baseline series, last-price animation.
-- 2026-07-12 — **B3 increment 3 done** (baseline series). `aion_render::line::build_baseline`
+- 2026-07-12 — **B3 increment 3 done** (baseline series). `origin_render::line::build_baseline`
   strokes+fills a line split at a baseline y, splitting each crossing segment so the color flips
   exactly at the baseline (teal/fill above, red/fill below). New `SeriesKind::Baseline` (kind 5);
   baseline price defaults to the visible-range midpoint or `set_series_baseline(id, price)`. Façade
@@ -375,7 +375,7 @@ Progress is appended here as phases land (newest last).
   places each on its series' scale/pane (above the high − gap, below the low + gap, or in-bar mid),
   gated to the visible index range, emitting filled triangles (disc/square/arrow) into the pane's
   MSAA tri group. Boundary is a JSON array (`set_series_markers`); the façade `JSON.stringify`s it
-  (added `serde` derive to `aion_wasm`). Verified in-browser: all four shapes render at the correct
+  (added `serde` derive to `origin_wasm`). Verified in-browser: all four shapes render at the correct
   positions/colors (pink circle above, green square below, blue arrowUp above, orange arrowDown
   below, purple in-bar), `set_markers([])` clears them, no console errors. (Marker `text` label is
   carried but not yet drawn — deferred to a later 2D-overlay increment.)
@@ -415,7 +415,7 @@ Progress is appended here as phases land (newest last).
   clustered at x≈108/232/348 — matching the expected label centers 116/232/348 — and drop to 0
   after `set_markers([])`. No console errors. **Series markers are now feature-complete (shapes +
   text); Phase B and its polish pass are done.**
-- 2026-07-14 — **Phase D2 begun: Canvas2D executor for the Prim IR** (`aion_render::canvas2d`). A
+- 2026-07-14 — **Phase D2 begun: Canvas2D executor for the Prim IR** (`origin_render::canvas2d`). A
   pure, gpu/dom-free translator from the `Prim` draw-list IR into `CanvasRenderingContext2D`-style
   calls, issued against an abstract `Canvas2d` target trait (concrete web-sys + native impls land
   later — browsers without WebGPU, and the golden/SSR render path). The crisp-rect subset
@@ -425,11 +425,11 @@ Progress is appended here as phases land (newest last).
   gradient), `Circle`, `RoundRect`, and `Background` map onto native path/gradient calls; `Text` is
   reserved (drawn by the 2D text path, not this executor). 8 unit tests via a recording target
   assert the emitted command stream for every prim (render crate 37→45 tests). Next D2 increments:
-  concrete web-sys target in `aion_wasm` behind a WebGPU-absent fallback, and refactoring the live
+  concrete web-sys target in `origin_wasm` behind a WebGPU-absent fallback, and refactoring the live
   line/area/marker builders to emit the high-level `Polyline`/`AreaFill`/`Circle` prims (they
   currently tessellate straight to wgpu tri-meshes) so the fallback can render them too.
-- 2026-07-14 — **Phase D2 increment 2 + D1 groundwork: native `aion_native` rasterizer target.**
-  New `aion_native` crate implements the `Canvas2d` trait on `tiny_skia` (pure-Rust CPU rasterizer,
+- 2026-07-14 — **Phase D2 increment 2 + D1 groundwork: native `origin_native` rasterizer target.**
+  New `origin_native` crate implements the `Canvas2d` trait on `tiny_skia` (pure-Rust CPU rasterizer,
   no system deps): solid + vertical-gradient fills, path stroke with dash, arc tessellation, PNG
   encode, and straight-RGBA pixel readout. `render_prims(w,h,bg,prims,points)` rasterizes a prim
   layer to a `Pixmap`. This is the off-GPU deterministic render path the roadmap wants — the
@@ -442,15 +442,15 @@ Progress is appended here as phases land (newest last).
   rect-exact / AA-tolerant thresholds), and the web-sys `Canvas2d` target for in-browser fallback.
 - 2026-07-14 — **Phase D1: golden-image regression harness.** `diff_pixmaps(a, b, tolerance)`
   reports differing-pixel count / max channel delta / fraction; the reference scene moved into
-  `aion_native::scene::demo_scene()` so the example renderer and the harness render byte-identical
+  `origin_native::scene::demo_scene()` so the example renderer and the harness render byte-identical
   output. A committed golden PNG (`tests/goldens/scene.png`) plus an integration test
   (`tests/golden.rs`) that re-renders and asserts <0.1% drift (per-channel tolerance 2, so a
   tiny-skia patch bump won't spuriously fail), with a negative-control test proving the diff
   actually detects a changed scene. Regenerate deliberately via the `scene` example. This is the
   regression net the roadmap wants across A–C; reference PNGs drop in as more goldens once a
   headless-Chromium pipeline exists. Workspace 146 tests green (native 3 unit + 2 golden). Next:
-  web-sys `Canvas2d` target + WebGPU-absent fallback wiring in `aion_wasm`.
-- 2026-07-14 — **Phase D2 increment 3: web-sys `Canvas2d` target (`aion_wasm::canvas2d_target`).**
+  web-sys `Canvas2d` target + WebGPU-absent fallback wiring in `origin_wasm`.
+- 2026-07-14 — **Phase D2 increment 3: web-sys `Canvas2d` target (`origin_wasm::canvas2d_target`).**
   `WasmCanvas2d` implements the executor's `Canvas2d` trait over a real `CanvasRenderingContext2d`
   (solid + `createLinearGradient` fills preserving alpha via `rgba()`, dashed strokes via
   `setLineDash`, arcs, paths) — the in-browser fallback backend for machines without WebGPU. Added
@@ -466,7 +466,7 @@ Progress is appended here as phases land (newest last).
   line/area builder (`build_line_prims`) now emits high-level `AreaFill` + `Polyline` + `Circle`
   (point-marker) prims into the pane's shared `prims` list, pushing **device-space** points into a
   per-pane pool — instead of tessellating straight to wgpu tri-meshes. A new
-  `aion_render_wgpu::geom_prims_to_tris` walks those prims and tessellates them back into the tri
+  `origin_render_wgpu::geom_prims_to_tris` walks those prims and tessellates them back into the tri
   buffers for the GPU (reusing the same `build_area_fill`/`build_line_stroke`/`build_disc` helpers
   with identity pixel ratios, since the pool is already scaled — so wgpu output is byte-identical).
   Both backends now consume one prim list: the Canvas2D fallback executor already renders
@@ -535,7 +535,7 @@ Progress is appended here as phases land (newest last).
   frame points, and builds that frame in 0.41 ms. Full OHLC conflation and the 1M-bar gate remain.
 - 2026-07-17 — **D3 streaming hot-path increment.** Tail indicator updates no longer clone the
   entire source time/value columns before calculating SMA/EMA/Bollinger tails; full clones remain
-  only on intentional full recomputes. With `AION_BARS=1000000`, the release benchmark reports
+  only on intentional full recomputes. With `ORIGIN_BARS=1000000`, the release benchmark reports
   1M-bar install in 200.45 ms, 1,000 SMA updates in 80.97 µs/update, 0.95 ms per retained frame,
   and 3,200 conflated line points. The remaining performance gate is full OHLC conflation and
   repeatable pan/zoom/crosshair measurements at 1M points.
@@ -544,13 +544,13 @@ Progress is appended here as phases land (newest last).
   while histograms keep the greatest-magnitude source sample and its original color
   classification. This happens in the headless `ChartEngine` frame producer, so every backend
   receives the same bounded frame. Unit tests cover aggregate semantics and the unchanged
-  normal-spacing path. With `AION_BARS=1000000` in an optimized build, install is 204.58 ms,
+  normal-spacing path. With `ORIGIN_BARS=1000000` in an optimized build, install is 204.58 ms,
   1,000 SMA updates average 82.44 µs/update, and retained frames average 0.82 ms. Isolated frames
   contain 3,200 line points, 4,826 candlestick primitives, 1,626 bar primitives, or 1,626
   histogram primitives and build in 3.92 ms / 0.64 ms / 0.27 ms / 0.22 ms respectively. The
   remaining D3 gate is a repeatable interaction benchmark for pan, zoom, and crosshair movement.
 - 2026-07-17 — **D3 interaction benchmark increment.** Added the optimized `interaction_perf`
-  harness with percentile reporting. At `AION_BARS=1000000`, a single-series headless frame
+  harness with percentile reporting. At `ORIGIN_BARS=1000000`, a single-series headless frame
   averages 479.5 µs for pan, 514.6 µs for zoom, and 206.3 µs for crosshair movement (p95: 1.60 ms,
   1.72 ms, and 397.7 µs). A forced 10-series × 50,000-visible-bar fixture at 0.08 CSS px/bar
   averages 3.62 ms pan, 3.13 ms zoom, and 3.11 ms crosshair (p95: 4.29 ms, 3.30 ms, 3.33 ms).
@@ -609,12 +609,12 @@ Progress is appended here as phases land (newest last).
   plus native parity now passes 3/3; the next D1 gap is the reference library and axis/text matrix.
 - 2026-07-18 — **D1 pinned reference begun.** The browser harness now installs Lightweight
   Charts 5.2.0 exactly, renders the same deterministic 1,000-bar fixture through its public API,
-  proves two reference captures are byte-stable, and measures Aion against reference after the same Chromium
+  proves two reference captures are byte-stable, and measures Origin against reference after the same Chromium
   compositor. The first honest baseline is 3.41% perceptual difference for the full frame, with
   separate pane (3.25%), price-axis (7.68%), and time-axis (2.16%) results. Versioned ceilings make
   regressions fail without misrepresenting the current result as parity. The next D1 work is to
   reduce those gaps and expand the matrix across DPR, spacing, theme, markers, and overlays.
-- 2026-07-18 — **First reference-measured axis correction.** Aion's Canvas2D axis adapter now applies
+- 2026-07-18 — **First reference-measured axis correction.** Origin's Canvas2D axis adapter now applies
   the reference's actual-glyph-bounds vertical midpoint correction to price labels and its stable `Apr0`
   sample correction to centered time labels. Price-axis perceptual difference fell from 7.68% to
   6.92% and mean channel error from 7.68 to 5.85; time-axis output held at 2.16%. The full-frame
@@ -623,14 +623,14 @@ Progress is appended here as phases land (newest last).
   `time_scale().apply_options({ bar_spacing, right_offset })` backed by headless `ChartEngine`
   state, then established seven regional reference cases across DPR 1/1.25/2/3, spacing 0.5/6/50, and
   light/dark themes. The matrix exposed that hidden series still contributed to autoscale and that
-  Aion shrank its price axis eagerly after a range narrowed. Hidden series are now excluded at the
+  Origin shrank its price axis eagerly after a range narrowed. Hidden series are now excluded at the
   authoritative engine autoscale layer, while the browser layout follows the reference's grow-fast/
   shrink-only-on-full-layout rule. In the spacing-50 case, axis width, visible logical range, and
   price extent now match reference; full-frame difference fell from 10.26% to 1.15%, pane difference
   from 10.52% to 0.88%, and price-axis difference from 11.68% to 5.45%. At DPR 1/spacing 6 the pane
   is byte-identical. Every case has a checked-in measured baseline and explicit regression ceiling.
 - 2026-07-18 — **D1 reference marker/overlay feature matrix and marker correction.** Added shared marker
-  and volume data modules consumed through the public Aion and reference 5.2 APIs, plus a no-feature
+  and volume data modules consumed through the public Origin and reference 5.2 APIs, plus a no-feature
   control at DPR 1.5 / spacing 6 so feature cost is measurable independently of existing raster
   differences. The gate exposed five engine defects: fixed-size markers, midpoint-anchored `inBar`
   markers instead of close anchoring, incorrect text offsets, triangle-only arrows, and markers
@@ -704,9 +704,9 @@ Progress is appended here as phases land (newest last).
   decomposition, frame conflation, and the wasm render path degrade gracefully instead of killing
   the wasm instance. (3) Lint enforcement: rustfmt normalization, `[workspace.lints]` (unsafe
   forbidden), clippy clean on native + wasm32, eslint on the package. (4) The four oversized
-  files were split mechanically — `aion_engine/lib.rs` → indicators/price-scale/series-query/tests
+  files were split mechanically — `origin_engine/lib.rs` → indicators/price-scale/series-query/tests
   modules, `frame.rs` → a `frame/` directory (axis, conflation, crosshair, series_geometry),
-  `aion_wasm/chart.rs` → `chart/{inner_api,inner_render}`, and the package `index.ts` →
+  `origin_wasm/chart.rs` → `chart/{inner_api,inner_render}`, and the package `index.ts` →
   types/impl/gestures. (5) GitHub Actions CI: fmt + clippy + workspace tests (goldens included),
   package lint/build/typecheck, and the Playwright runtime/parity suite in Chromium. All 190 Rust
   tests and the seven-case browser matrix stayed green throughout.
@@ -808,8 +808,8 @@ Progress is appended here as phases land (newest last).
   hide. All ten browser gates green.
 
 - 2026-07-21 — **Performance gate: both production targets PASS.** The roadmap's two perf targets
-  are now measured by a dedicated headless harness (`crates/aion_native/examples/perf_gate.rs`,
-  deterministic fixtures, warm-up, report-only with `AION_PERF_STRICT=1` as an opt-in hard gate).
+  are now measured by a dedicated headless harness (`crates/origin_native/examples/perf_gate.rs`,
+  deterministic fixtures, warm-up, report-only with `ORIGIN_PERF_STRICT=1` as an opt-in hard gate).
   On the dev machine: **Target A** — `build_frame` at 10 series × 50k bars = **2.37 ms** against
   the 16.67 ms 60fps budget (~7× headroom, viewport conflation doing its job); **Target B** —
   1,000,000-bar `set_series_data` = **245.3 ms** against the 300 ms budget (~18% headroom; the
@@ -890,8 +890,8 @@ Progress is appended here as phases land (newest last).
   full prepublish chain (clean → wasm build → bundle → types → pack smoke) and reports a valid
   13-file, 362 kB tarball with public access. Fixed a dry-run leak (`npm_config_dry_run`
   propagated into the pack smoke test's inner `npm pack`). Remaining for v0.1.0: create the
-  `@aion` npm org, add `NPM_TOKEN` to repo secrets, push tag `v0.1.0` — the CI publish job does
-  the rest; then verify `bun add @aion/charts` (primary) and `npm i` in fresh consumers.
+  `@origin` npm org, add `NPM_TOKEN` to repo secrets, push tag `v0.1.0` — the CI publish job does
+  the rest; then verify `bun add @origin/charts` (primary) and `npm i` in fresh consumers.
 
 ## 11. Revised execution order
 

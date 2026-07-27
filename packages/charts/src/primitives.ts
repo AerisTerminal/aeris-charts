@@ -1,5 +1,5 @@
 /**
- * Pane primitives (plugin platform Phase C-a) — Aion's take on the reference charting library v5's
+ * Pane primitives (plugin platform Phase C-a) — Origin's take on the reference charting library v5's
  * `IPanePrimitive` (reference model/ipane-primitive.ts, api/pane-api.ts `PaneApi.attachPrimitive`).
  *
  * Locked design divergence (docs/PLUGIN_PLATFORM_DESIGN.md §3, A-first hybrid): a primitive
@@ -104,7 +104,7 @@ export interface primitive_pane_view {
 }
 
 /**
- * A primitive's hit-test result (reference `PrimitiveHoveredItem`, reduced to Aion's arbitration
+ * A primitive's hit-test result (reference `PrimitiveHoveredItem`, reduced to Origin's arbitration
  * model: the host owns z-ordering and series-vs-primitive precedence, so the reference's `distance`,
  * `hitTestPriority`, `itemType`, and `isBackground` fields are not modeled — within a layer,
  * the first hit in paint order wins).
@@ -126,7 +126,7 @@ export interface primitive_hit_result {
  * A boxed axis label descriptor (cf. reference `ISeriesPrimitiveAxisView`). `coordinate` is media px
  * from the pane's top edge (price axis) or the pane's left edge (time axis). `background_color`
  * (or `color` as a shorthand) fills the box; `text_color` defaults to the background's reference
- * contrast pick. Extension over reference: reference exposes axis views only on series primitives; Aion
+ * contrast pick. Extension over reference: reference exposes axis views only on series primitives; Origin
  * accepts them on pane primitives too (painted on the pane's right scale / the time strip).
  */
 export interface primitive_axis_label {

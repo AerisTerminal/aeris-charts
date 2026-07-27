@@ -1,11 +1,11 @@
-# Aion Charts — Plugin & Primitives Platform (Design)
+# Origin Charts — Plugin & Primitives Platform (Design)
 
 Status: **design for review — no code yet.** Companion to [ARCHITECTURE.md](ARCHITECTURE.md) and
 [RENDERING_SPEC.md](RENDERING_SPEC.md). Tracks roadmap Phase C (extensibility).
 
 Goal: match the reference charting library v5's headline extensibility — **series primitives**, **pane
 primitives**, and **custom series** — so third-party drawings (trend lines, position tools,
-annotations, custom bar styles) can be attached to a chart, while preserving Aion's dual-backend
+annotations, custom bar styles) can be attached to a chart, while preserving Origin's dual-backend
 (WebGPU + Canvas2D) rendering and headless engine.
 
 ---
@@ -23,8 +23,8 @@ annotations, custom bar styles) can be attached to a chart, while preserving Aio
 | `hitTest(x, y)` | Cursor interaction / custom cursors. |
 
 reference primitives paint by calling arbitrary Canvas2D methods on `target`. **That is the crux of the
-port** (see §3): Aion does not paint from a retained 2D context — it builds a backend-neutral
-[`Prim`](../crates/aion_render/src/draw_list.rs) IR consumed by *either* the WebGPU or the Canvas2D
+port** (see §3): Origin does not paint from a retained 2D context — it builds a backend-neutral
+[`Prim`](../crates/origin_render/src/draw_list.rs) IR consumed by *either* the WebGPU or the Canvas2D
 backend.
 
 ---

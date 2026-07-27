@@ -1,21 +1,21 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/aion_core",
-    "crates/aion_indicators",
-    "crates/aion_engine",
-    "crates/aion_render",
-    "crates/aion_render_wgpu",
-    "crates/aion_wasm",
-    "crates/aion_native",
+    "crates/origin_core",
+    "crates/origin_indicators",
+    "crates/origin_engine",
+    "crates/origin_render",
+    "crates/origin_render_wgpu",
+    "crates/origin_wasm",
+    "crates/origin_native",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
-authors = ["Aion Charts"]
-repository = "https://github.com/TradeAion/Aion_charts"
+license = "LicenseRef-Proprietary"
+authors = ["Origin Charts"]
+repository = "https://github.com/TradeAion/Origin_charts"
 
 # Shared lint policy; every crate opts in via `[lints] workspace = true`.
 # CI enforces clippy with `-D warnings` on top of this.

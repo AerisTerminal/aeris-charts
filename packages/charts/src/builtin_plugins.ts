@@ -1,10 +1,10 @@
 /**
- * Built-in plugins (plugin platform Phase 3.5) — Aion's ports of the reference charting library v5's own
+ * Built-in plugins (plugin platform Phase 3.5) — Origin's ports of the reference charting library v5's own
  * plugin surface, re-expressed on the primitive platform (primitives.ts):
  *
  * - {@link create_series_markers} mirrors the reference's `createSeriesMarkers` (plugins/series-markers):
  *   a series primitive whose pane view records the exact geometry the engine's built-in
- *   marker builder emits (crates/aion_engine/src/frame/series_geometry.rs `build_markers_frame`,
+ *   marker builder emits (crates/origin_engine/src/frame/series_geometry.rs `build_markers_frame`,
  *   ported below with `Math.fround` discipline so the decoded prims are bit-identical), with
  *   marker text painted through the overlay-text hook (the engine's own marker text path is
  *   the overlay too — frame/axis.rs `append_marker_labels`).
@@ -60,7 +60,7 @@ export interface series_markers_handle {
   detach(): void;
 }
 
-// The engine's marker sizing buckets (crates/aion_engine/src/frame/mod.rs), ported so plugin
+// The engine's marker sizing buckets (crates/origin_engine/src/frame/mod.rs), ported so plugin
 // markers resolve to the same pixel sizes as engine markers at every bar spacing.
 function ceiled_odd(value: number): number {
   const ceiled = Math.ceil(value);
@@ -131,7 +131,7 @@ function normalize_markers(markers: readonly series_marker[]): normalized_marker
           ? "in_bar"
           : "above",
     shape: marker.shape ?? "circle",
-    // The engine's marker fallback color (aion_wasm inner_api.rs `set_series_markers`).
+    // The engine's marker fallback color (origin_wasm inner_api.rs `set_series_markers`).
     color: marker.color === undefined || marker.color === "" ? "#2196f3" : marker.color,
     text: marker.text ?? "",
   }));
@@ -521,7 +521,7 @@ interface watermark_line {
  * const watermark = create_text_watermark(chart.panes()[0], {
  *   horzAlign: "center",
  *   vertAlign: "center",
- *   lines: [{ text: "AION", color: "rgba(41, 98, 255, 0.2)", fontSize: 64, fontStyle: "bold" }],
+ *   lines: [{ text: "ORIGIN", color: "rgba(41, 98, 255, 0.2)", fontSize: 64, fontStyle: "bold" }],
  * });
  * watermark.detach();
  * ```

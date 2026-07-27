@@ -32,7 +32,7 @@ async function settle_frames(page) {
 // rect, and a later rect covering an earlier text — both inside ONE view, so paint order is the
 // only thing that can show), a direct-on-pane pink run (the over-series + cache probes), and a
 // right-aligned run. All positions are integer bitmap px so the raster phase is deterministic.
-// Unique rasterizations: AION OVER + AION UNDER + AION CACHE + RIGHT = 4 (the doubled AION
+// Unique rasterizations: ORIGIN OVER + ORIGIN UNDER + ORIGIN CACHE + RIGHT = 4 (the doubled ORIGIN
 // CACHE call shares one cache key). Colors are inlined: the factory is serialized into the page.
 function text_primitive_factory() {
   return {
@@ -44,13 +44,13 @@ function text_primitive_factory() {
           const y = ctx.pane_top + 60;
           // (c1) text ABOVE the rect painted just before it (same view).
           ctx.rect(x, y, 220, 44, "#2962ff");
-          ctx.text(x + 10, y + 22, "AION OVER", { color: "#ffffff", size: 26, bold: true });
+          ctx.text(x + 10, y + 22, "ORIGIN OVER", { color: "#ffffff", size: 26, bold: true });
           // (c2) this text is COVERED by the rect painted after it (same view).
-          ctx.text(x + 10, y + 78, "AION UNDER", { color: "#ffffff", size: 26, bold: true });
+          ctx.text(x + 10, y + 78, "ORIGIN UNDER", { color: "#ffffff", size: 26, bold: true });
           ctx.rect(x, y + 56, 220, 44, "#2962ff");
           // (a)/(d) pink run straight on the pane; recorded twice — one rasterization.
-          ctx.text(x + 10, y + 136, "AION CACHE", { color: "#c2185b", size: 24 });
-          ctx.text(x + 10, y + 136, "AION CACHE", { color: "#c2185b", size: 24 });
+          ctx.text(x + 10, y + 136, "ORIGIN CACHE", { color: "#c2185b", size: 24 });
+          ctx.text(x + 10, y + 136, "ORIGIN CACHE", { color: "#c2185b", size: 24 });
           // align probe.
           ctx.text(x + 460, y + 136, "RIGHT", { color: "#1e88e5", size: 24, align: "right" });
         },
@@ -162,7 +162,7 @@ test("prim text paints on both backends, is pixel-identical, z-orders, caches, a
   );
   expect(cache_diff, "CACHE band must change where the pink text draws").toBeGreaterThan(0);
 
-  // (a) Content probes at the text bounds: the white glyphs of "AION OVER" land exactly inside
+  // (a) Content probes at the text bounds: the white glyphs of "ORIGIN OVER" land exactly inside
   // the browser-measured ink box (same font spec the host builds: 700 26px <layout family>),
   // and nowhere else inside the blue band.
   const bounds = await page.evaluate(([size, weight]) => {
@@ -170,7 +170,7 @@ test("prim text paints on both backends, is pixel-identical, z-orders, caches, a
     const measure = document.createElement("canvas").getContext("2d");
     measure.font = `${weight} ${size}px ${layout.fontFamily}`;
     measure.textBaseline = "middle";
-    const m = measure.measureText("AION OVER");
+    const m = measure.measureText("ORIGIN OVER");
     return {
       abl: m.actualBoundingBoxLeft,
       abr: m.actualBoundingBoxRight,
@@ -231,7 +231,7 @@ test("prim text paints on both backends, is pixel-identical, z-orders, caches, a
   // same pattern the hit-testing specs rely on), so prime the hover path before probing.
   await page.mouse.move(500, 300);
   await settle_frames(page);
-  const hover_bitmap_x = OVER_ANCHOR.x + 30; // inside the measured "AION OVER" ink
+  const hover_bitmap_x = OVER_ANCHOR.x + 30; // inside the measured "ORIGIN OVER" ink
   await page.mouse.move(hover_bitmap_x / pixel_ratio, (OVER_ANCHOR.y + 1) / pixel_ratio);
   await settle_frames(page);
   const canvas_hover = PNG.sync.read(await page.screenshot({ animations: "disabled", fullPage: false }));
@@ -284,7 +284,7 @@ test("prim text paints on both backends, is pixel-identical, z-orders, caches, a
   // font/AA (Canvas2D `fillText` direct; WebGPU via the offscreen-atlas quad), so glyph shapes
   // and placement are identical — nothing is shifted by a whole pixel. The measured strict
   // residual is confined to per-channel ±1/255 rounding on AA edge pixels (the documented
-  // sp=0 premultiplied-blend class, blend.rs; the doubled AION CACHE call blends twice, so
+  // sp=0 premultiplied-blend class, blend.rs; the doubled ORIGIN CACHE call blends twice, so
   // its AA edges carry the residual twice). Measured on this fixture: 162 strict-diff px
   // (30 for a single draw of the same runs), EVERY differing channel exactly ±1.
   const text_region = { x: OVER_BAND.x - 4, y: OVER_BAND.y - 4, w: CACHE_BAND.w + 8, h: CACHE_BAND.y + CACHE_BAND.h - OVER_BAND.y + 8 };
@@ -309,7 +309,7 @@ test("prim text paints on both backends, is pixel-identical, z-orders, caches, a
   }
   expect(frame_diff, "all cross-backend diffs must be confined to the text AA edges").toBe(text_analysis.count);
 
-  // (d) Cache: the four unique runs rasterized once; the doubled AION CACHE call shared one
+  // (d) Cache: the four unique runs rasterized once; the doubled ORIGIN CACHE call shared one
   // entry; further frames hit the cache (no re-rasterization).
   const stats = await page.evaluate(() => JSON.parse(window.__chart.wasm.text_cache_debug()));
   expect(stats.rasterizations, "4 unique runs → 4 rasterizations (duplicate shares one entry)").toBe(4);

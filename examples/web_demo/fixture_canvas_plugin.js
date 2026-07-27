@@ -1,26 +1,26 @@
 /**
- * Port of the reference's plugin-examples `vertical-line` plugin to the Aion canvas-primitive
+ * Port of the reference's plugin-examples `vertical-line` plugin to the Origin canvas-primitive
  * contract (plugin platform Phase C-e — the Canvas2D escape hatch). Source:
  * tmp/refsrc/plugin-examples/src/plugins/vertical-line/vertical-line.ts plus
  * src/helpers/dimensions/positions.ts.
  *
  * Verbatim-ness: the renderer (`VertLinePaneRenderer.draw`) and the `positionsLine` helper are
  * character-for-character the reference's — the proof that a reference plugin painting with raw
- * canvas calls through `CanvasRenderingTarget2D` drops onto Aion's `canvas_render_target`
+ * canvas calls through `CanvasRenderingTarget2D` drops onto Origin's `canvas_render_target`
  * unchanged. The view/primitive classes keep the reference structure 1:1; the only adaptations
  * are the host seams the reference leaves to lightweight-charts:
- * - `chart.timeScale().timeToCoordinate(t)` → Aion's `chart.time_scale().time_to_coordinate(t)`
+ * - `chart.timeScale().timeToCoordinate(t)` → Origin's `chart.time_scale().time_to_coordinate(t)`
  *   (safe to call from the canvas hooks: the pass runs after the engine frame, not mid-render);
  * - the reference's `paneViews()` returns views whose `renderer()` hands an
- *   `IPrimitivePaneRenderer` to the host, which calls its `draw(target)`; Aion's
+ *   `IPrimitivePaneRenderer` to the host, which calls its `draw(target)`; Origin's
  *   `canvas_pane_view.renderer(target)` IS that call, so the adapter at the bottom delegates
  *   (`view.renderer().draw(target)`);
- * - the reference attaches to a series and adds a time-axis label view; the Aion canvas
+ * - the reference attaches to a series and adds a time-axis label view; the Origin canvas
  *   primitive is pane-bound and raw-canvas only (no axis views — the Prim-command primitives
  *   carry those), so `VertLineTimeAxisView` is dropped (`showLabel` defaults off upstream).
- * - zOrder: the reference view doesn't implement it (default 'normal'); Aion's
+ * - zOrder: the reference view doesn't implement it (default 'normal'); Origin's
  *   `canvas_pane_view.z_order` defaults to "normal" the same way, so the adapter omits it.
- * - the reference paints on the PANE widget's canvas (pane-origin coordinates); Aion's plugin
+ * - the reference paints on the PANE widget's canvas (pane-origin coordinates); Origin's plugin
  *   canvas is whole-chart, so the verbatim bitmap-x math lands exactly while the pane's left
  *   edge is the chart's left edge (no left price axis — the canvas layer's documented
  *   whole-chart limit; the demo's left-scale fixture does not enable this plugin).
@@ -108,7 +108,7 @@ export class VertLine {
 }
 
 /**
- * The Aion `canvas_primitive` adapter: the reference classes above stay untouched; only the
+ * The Origin `canvas_primitive` adapter: the reference classes above stay untouched; only the
  * view→host seam maps (`paneViews()` → `pane_views()`, `view.renderer().draw(target)` →
  * `renderer(target)`). Attach with `pane.attach_canvas_primitive(vert_line_canvas_primitive(...))`.
  */

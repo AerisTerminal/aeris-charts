@@ -66,7 +66,7 @@ test("main demo splits into independent charts, drags dividers, meters, caps, an
   }
 
   // The divider is visible and draggable (col-resize), and the drag resizes the cells.
-  const divider = page.locator(".aion-grid-divider >> nth=0");
+  const divider = page.locator(".origin-grid-divider >> nth=0");
   await expect(divider).toHaveCSS("cursor", "col-resize");
   const widths = () => page.evaluate(() => window.__grid.cells().map((c) => c.element.getBoundingClientRect().width));
   const before = await widths();
@@ -90,7 +90,7 @@ test("main demo splits into independent charts, drags dividers, meters, caps, an
   await page.click("#split_v");
   await page.waitForFunction(() => document.querySelectorAll("#chart_container canvas").length === 12);
   await wait_cell_charts(page);
-  await expect(page.locator(".aion-grid-divider >> nth=1")).toHaveCSS("cursor", "row-resize");
+  await expect(page.locator(".origin-grid-divider >> nth=1")).toHaveCSS("cursor", "row-resize");
   let usage = await page.evaluate(() => window.__grid.usage());
   expect(usage.chart_count).toBe(3);
   expect(usage.split_count).toBe(2);
@@ -186,7 +186,7 @@ test("divider drags never disturb a cell's candle spacing (even with interaction
   const left_before = await probe(0);
   const right_before = await probe(1);
 
-  const divider = page.locator(".aion-grid-divider >> nth=0");
+  const divider = page.locator(".origin-grid-divider >> nth=0");
   const box = await divider.boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
@@ -212,7 +212,7 @@ test("the divider keeps its 1px line under a global border-box reset", async ({ 
   await page.click("#split_h");
   await page.waitForFunction(() => document.querySelectorAll("#chart_container canvas").length === 8);
   await wait_cell_charts(page);
-  const divider = page.locator(".aion-grid-divider >> nth=0");
+  const divider = page.locator(".origin-grid-divider >> nth=0");
   const box = await divider.boundingBox();
   expect(box.width).toBeGreaterThanOrEqual(5); // the full hit area
 
@@ -241,7 +241,7 @@ test("split dividers follow the axis border token (theme and explicit changes)",
   await wait_cell_charts(page);
 
   const divider_rgb = () =>
-    page.locator(".aion-grid-divider >> nth=0").evaluate((el) => {
+    page.locator(".origin-grid-divider >> nth=0").evaluate((el) => {
       // The line color is the solid inner strip's background.
       const inner = el.firstElementChild;
       return inner ? getComputedStyle(inner).backgroundColor : "";
@@ -312,7 +312,7 @@ test("shortcut splits come up seeded (the on_cell_added hook fires)", async ({ p
   await page.keyboard.press("Control+h");
   await page.waitForFunction(() => document.querySelectorAll("#chart_container canvas").length === 8);
   await wait_cell_charts(page);
-  // Both cells render candles — the shortcut path runs the same seeding hook as the button.
+  // Both cells render candles ï¿½ the shortcut path runs the same seeding hook as the button.
   const shots = await cell_shots(page);
   for (const shot of shots) {
     const green = count_color(shot, [38, 166, 154]);
@@ -326,7 +326,7 @@ test("the shortcut registry accepts combo overrides", async ({ page }) => {
   await wait_grid(page);
   // A scratch grid with the vertical split re-keyed: ctrl+shift+x, default ctrl+v disabled.
   await page.evaluate(async () => {
-    const mod = await import("/dist/aion_charts.js");
+    const mod = await import("/dist/origin_charts.js");
     const host = document.createElement("div");
     host.style.cssText = "position:fixed;left:0;top:0;width:640px;height:400px;z-index:50;background:white;";
     host.id = "scratch_grid";

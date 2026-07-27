@@ -1,0 +1,43 @@
+[package]
+name = "origin_wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "wasm-bindgen host shell: canvas surface, data ingestion, gestures, RAF plumbing"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+origin_core = { path = "../origin_core" }
+origin_engine = { path = "../origin_engine" }
+origin_render = { path = "../origin_render" }
+origin_render_wgpu = { path = "../origin_render_wgpu" }
+
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "Element",
+    "Window",
+    "CanvasRenderingContext2d",
+    "CanvasGradient",
+    "CssStyleDeclaration",
+    "DomRect",
+    "TextMetrics",
+    "ResizeObserver",
+    "ResizeObserverEntry",
+    "ResizeObserverSize",
+    "ResizeObserverOptions",
+    "ResizeObserverBoxOptions",
+    "console",
+] }
+wgpu = { version = "25", default-features = false, features = ["webgpu", "wgsl"] }
+console_error_panic_hook = "0.1"
+
+[lints]
+workspace = true

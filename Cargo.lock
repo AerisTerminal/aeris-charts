@@ -9,76 +9,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
-name = "aion_core"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "aion_engine"
-version = "0.1.0"
-dependencies = [
- "aion_core",
- "aion_indicators",
- "aion_render",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "aion_indicators"
-version = "0.1.0"
-
-[[package]]
-name = "aion_native"
-version = "0.1.0"
-dependencies = [
- "aion_core",
- "aion_engine",
- "aion_render",
- "serde",
- "serde_json",
- "tiny-skia",
-]
-
-[[package]]
-name = "aion_render"
-version = "0.1.0"
-dependencies = [
- "aion_core",
-]
-
-[[package]]
-name = "aion_render_wgpu"
-version = "0.1.0"
-dependencies = [
- "aion_engine",
- "aion_render",
- "bytemuck",
- "wgpu",
-]
-
-[[package]]
-name = "aion_wasm"
-version = "0.1.0"
-dependencies = [
- "aion_core",
- "aion_engine",
- "aion_render",
- "aion_render_wgpu",
- "console_error_panic_hook",
- "js-sys",
- "serde",
- "serde_json",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
- "wgpu",
-]
-
-[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -428,6 +358,76 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+
+[[package]]
+name = "origin_core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "origin_engine"
+version = "0.1.0"
+dependencies = [
+ "origin_core",
+ "origin_indicators",
+ "origin_render",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "origin_indicators"
+version = "0.1.0"
+
+[[package]]
+name = "origin_native"
+version = "0.1.0"
+dependencies = [
+ "origin_core",
+ "origin_engine",
+ "origin_render",
+ "serde",
+ "serde_json",
+ "tiny-skia",
+]
+
+[[package]]
+name = "origin_render"
+version = "0.1.0"
+dependencies = [
+ "origin_core",
+]
+
+[[package]]
+name = "origin_render_wgpu"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "origin_engine",
+ "origin_render",
+ "wgpu",
+]
+
+[[package]]
+name = "origin_wasm"
+version = "0.1.0"
+dependencies = [
+ "console_error_panic_hook",
+ "js-sys",
+ "origin_core",
+ "origin_engine",
+ "origin_render",
+ "origin_render_wgpu",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "wgpu",
+]
 
 [[package]]
 name = "parking_lot"

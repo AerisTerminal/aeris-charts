@@ -1,12 +1,12 @@
 /**
- * Port of the reference's plugin-examples `rounded-candles-series` to the Aion custom-series contract
+ * Port of the reference's plugin-examples `rounded-candles-series` to the Origin custom-series contract
  * (plugin platform Phase C-c). Source: tmp/refsrc/plugin-examples/src/plugins/
  * rounded-candles-series/{rounded-candles-series.ts,renderer.ts} plus the dimension helpers in
  * src/helpers/dimensions/{positions,candles,crosshair-width}.ts.
  *
  * The draw body mirrors the reference's `_drawImpl` 1:1: the same up/down rule (close vs the PREVIOUS
  * close — the example's own rule), the same crisp-position math, the same media-px `radius`
- * used as a bitmap radius. The only adaptation is the coordinate space: Aion's render context
+ * used as a bitmap radius. The only adaptation is the coordinate space: Origin's render context
  * carries absolute BITMAP px (item x and `price_to_y` outputs), where the reference's renderer receives
  * pane-media coordinates and scales by `horizontal/verticalPixelRatio` inside its
  * `useBitmapCoordinateSpace` scope — so the helpers below run at pixelRatio 1, with widths
@@ -70,7 +70,7 @@ function gridAndCrosshairMediaWidth(horizontalPixelRatio) {
 }
 
 /**
- * The reference `RoundedCandleSeries` pane view as an Aion `custom_series_pane_view`.
+ * The reference `RoundedCandleSeries` pane view as an Origin `custom_series_pane_view`.
  * `overrides` matches the reference's `RoundedCandleSeriesOptions` rendering options (they stay
  * plugin-side here, like every plugin rendering option); `hooks.on_render` is a demo/test
  * observability hook receiving each frame's visible items.
@@ -125,7 +125,7 @@ export function rounded_candles_pane_view(overrides = {}, hooks = {}) {
       }
       // _drawCandles: "we want this in media width therefore using 1" (reference comment), then
       // positionsLine scales by the ratio — exactly Math.round(mediaWidth * ctx.dpr) here.
-      // reference falls back to fillRect when the canvas lacks roundRect; Aion's analogue for a
+      // reference falls back to fillRect when the canvas lacks roundRect; Origin's analogue for a
       // zero radius is `rect` (a zero-radius roundRect is a plain rect, and the crisp quad
       // family keeps the backends pixel-identical — the rounded path renders when radius > 0).
       const bodyBitmapWidth = Math.round(candlestickWidth(ctx.bar_spacing, 1) * ctx.dpr);

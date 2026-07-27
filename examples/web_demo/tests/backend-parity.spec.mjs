@@ -10,7 +10,7 @@ const reference_baseline = JSON.parse(readFileSync(new URL("../fixtures/d1/refer
 const reference_matrix = JSON.parse(readFileSync(new URL("../fixtures/d1/reference-matrix.json", import.meta.url), "utf8"));
 const reference_features = JSON.parse(readFileSync(new URL("../fixtures/d1/reference-features.json", import.meta.url), "utf8"));
 const repository_root = fileURLToPath(new URL("../../..", import.meta.url));
-const test_port = Number.parseInt(process.env.AION_TEST_PORT ?? "4174", 10);
+const test_port = Number.parseInt(process.env.ORIGIN_TEST_PORT ?? "4174", 10);
 const test_base_url = `http://127.0.0.1:${test_port}`;
 
 test.beforeEach(async ({ page }) => {
@@ -36,8 +36,8 @@ async function capture_presented_frame(page, backend, extra_query = "") {
 
 function render_native_fixture(output) {
   const args = process.platform === "win32"
-    ? ["+stable-x86_64-pc-windows-msvc", "run", "-p", "aion_native", "--example", "parity_fixture", "--", output]
-    : ["run", "-p", "aion_native", "--example", "parity_fixture", "--", output];
+    ? ["+stable-x86_64-pc-windows-msvc", "run", "-p", "origin_native", "--example", "parity_fixture", "--", output]
+    : ["run", "-p", "origin_native", "--example", "parity_fixture", "--", output];
   const result = spawnSync("cargo", args, { cwd: repository_root, encoding: "utf8" });
   expect(result.status, `native fixture failed\n${result.stdout}\n${result.stderr}`).toBe(0);
 }
@@ -110,26 +110,26 @@ function changed_footprint(base, feature) {
   return { pixels, bounds: pixels === 0 ? null : { min_x, min_y, max_x, max_y } };
 }
 
-function regional_fidelity_report(aion, reference, pixel_ratio, price_axis_width = fixture.price_axis_width) {
-  expect([aion.width, aion.height]).toEqual([reference.width, reference.height]);
+function regional_fidelity_report(origin, reference, pixel_ratio, price_axis_width = fixture.price_axis_width) {
+  expect([origin.width, origin.height]).toEqual([reference.width, reference.height]);
   const pane_width = Math.round((fixture.css_width - price_axis_width) * pixel_ratio);
   const pane_height = Math.round((fixture.css_height - fixture.time_axis_height) * pixel_ratio);
   const regions = {
-    full: [aion, reference],
-    pane: [crop_png(aion, 0, 0, pane_width, pane_height), crop_png(reference, 0, 0, pane_width, pane_height)],
+    full: [origin, reference],
+    pane: [crop_png(origin, 0, 0, pane_width, pane_height), crop_png(reference, 0, 0, pane_width, pane_height)],
     price_axis: [
-      crop_png(aion, pane_width, 0, aion.width - pane_width, pane_height),
+      crop_png(origin, pane_width, 0, origin.width - pane_width, pane_height),
       crop_png(reference, pane_width, 0, reference.width - pane_width, pane_height),
     ],
     time_axis: [
-      crop_png(aion, 0, pane_height, pane_width, aion.height - pane_height),
+      crop_png(origin, 0, pane_height, pane_width, origin.height - pane_height),
       crop_png(reference, 0, pane_height, pane_width, reference.height - pane_height),
     ],
   };
   const report = {};
   const visuals = {};
-  for (const [name, [aion_region, reference_region]] of Object.entries(regions)) {
-    const stats = image_stats(aion_region, reference_region);
+  for (const [name, [origin_region, reference_region]] of Object.entries(regions)) {
+    const stats = image_stats(origin_region, reference_region);
     report[name] = {
       total_pixels: stats.total_pixels,
       different_pixels: stats.different_pixels,
@@ -517,7 +517,7 @@ test("public time and price scale handles are engine-owned and reference-compati
 
   await page.goto("/?runtimeTest=presentedFrame&backend=canvas2d&leftScale=1&dpr=1");
   await wait_for_chart(page);
-  const aion_left = await page.evaluate(() => {
+  const origin_left = await page.evaluate(() => {
     const chart = window.__chart;
     const series = window.__main;
     const source_price = window.__data[900].close;
@@ -532,10 +532,10 @@ test("public time and price scale handles are engine-owned and reference-compati
       source_price,
     };
   });
-  expect(aion_left.left_width).toBeGreaterThan(0);
-  expect(aion_left.right_width).toBe(0);
-  expect(aion_left.pane_width + aion_left.left_width).toBe(fixture.css_width);
-  expect(aion_left.roundtrip).toBeCloseTo(aion_left.source_price, 9);
+  expect(origin_left.left_width).toBeGreaterThan(0);
+  expect(origin_left.right_width).toBe(0);
+  expect(origin_left.pane_width + origin_left.left_width).toBe(fixture.css_width);
+  expect(origin_left.roundtrip).toBeCloseTo(origin_left.source_price, 9);
 
   await page.goto("/reference.html?leftScale=1");
   await page.waitForFunction(() => document.documentElement.dataset.ready === "true");
@@ -549,19 +549,19 @@ test("public time and price scale handles are engine-owned and reference-compati
       coordinate: series.priceToCoordinate(source_price),
       logical_range: chart.timeScale().getVisibleLogicalRange(),
     };
-  }, aion_left.source_price);
-  expect(aion_left.left_width).toBe(reference_left.left_width);
-  expect(aion_left.right_width).toBe(reference_left.right_width);
-  expect(aion_left.pane_width).toBe(reference_left.pane_width);
-  expect(aion_left.range).toEqual(reference_left.range);
-  expect(aion_left.coordinate).toBeCloseTo(reference_left.coordinate, 7);
-  expect(aion_left.logical_range).toEqual(reference_left.logical_range);
+  }, origin_left.source_price);
+  expect(origin_left.left_width).toBe(reference_left.left_width);
+  expect(origin_left.right_width).toBe(reference_left.right_width);
+  expect(origin_left.pane_width).toBe(reference_left.pane_width);
+  expect(origin_left.range).toEqual(reference_left.range);
+  expect(origin_left.coordinate).toBeCloseTo(reference_left.coordinate, 7);
+  expect(origin_left.logical_range).toEqual(reference_left.logical_range);
 });
 
-test("reference 5.2 reference is deterministic and reports Aion fidelity", async ({ page }, test_info) => {
+test("reference 5.2 reference is deterministic and reports Origin fidelity", async ({ page }, test_info) => {
   await page.goto("/?runtimeTest=presentedFrame&backend=canvas2d");
   await wait_for_chart(page);
-  const aion = PNG.sync.read(await page.screenshot({ animations: "disabled", fullPage: false }));
+  const origin = PNG.sync.read(await page.screenshot({ animations: "disabled", fullPage: false }));
 
   await page.goto("/reference.html");
   await page.waitForFunction(() => document.documentElement.dataset.ready === "true");
@@ -573,27 +573,27 @@ test("reference 5.2 reference is deterministic and reports Aion fidelity", async
   const reference = PNG.sync.read(reference_first);
 
   // Comparing presented pages puts both libraries through the same Chromium compositor and avoids
-  // the unequal public screenshot resolutions (Aion is device-pixel-sized; reference is CSS-sized).
+  // the unequal public screenshot resolutions (Origin is device-pixel-sized; reference is CSS-sized).
   const expected_size = [
     Math.round(fixture.css_width * fixture.pixel_ratio),
     Math.round(fixture.css_height * fixture.pixel_ratio),
   ];
-  expect([aion.width, aion.height]).toEqual(expected_size);
+  expect([origin.width, origin.height]).toEqual(expected_size);
   expect([reference.width, reference.height]).toEqual(expected_size);
 
-  const { report, visuals } = regional_fidelity_report(aion, reference, fixture.pixel_ratio);
-  await test_info.attach("aion.png", { body: PNG.sync.write(aion), contentType: "image/png" });
+  const { report, visuals } = regional_fidelity_report(origin, reference, fixture.pixel_ratio);
+  await test_info.attach("origin.png", { body: PNG.sync.write(origin), contentType: "image/png" });
   await test_info.attach("reference-5.2.0.png", { body: PNG.sync.write(reference), contentType: "image/png" });
-  await test_info.attach("aion-reference-diff.png", { body: PNG.sync.write(visuals.full), contentType: "image/png" });
-  console.log(`Aion/reference 5.2 fidelity report: ${JSON.stringify(report)}`);
-  await test_info.attach("aion-reference-report.json", {
+  await test_info.attach("origin-reference-diff.png", { body: PNG.sync.write(visuals.full), contentType: "image/png" });
+  console.log(`Origin/reference 5.2 fidelity report: ${JSON.stringify(report)}`);
+  await test_info.attach("origin-reference-report.json", {
     body: Buffer.from(JSON.stringify({ fixture: fixture.name, ref_version: "5.2.0", regions: report }, null, 2)),
     contentType: "application/json",
   });
 
   // This gate currently establishes a reproducible upstream reference and makes divergence
   // visible. The explicit ceilings prevent fidelity regressions and are lowered region-by-region
-  // as Aion closes each measured gap; they are intentionally not represented as pixel parity.
+  // as Origin closes each measured gap; they are intentionally not represented as pixel parity.
   expect(reference_baseline.fixture).toBe(fixture.name);
   expect(reference_baseline.ref_version).toBe("5.2.0");
   for (const [name, ceiling] of Object.entries(reference_baseline.maximum_perceptual_difference)) {
@@ -622,15 +622,15 @@ test("reference spacing, DPR, and theme matrix reports regional fidelity", async
     });
     await matrix_page.goto(`${test_base_url}/?${query}`);
     await wait_for_chart(matrix_page);
-    const aion_spacing = Number(await matrix_page.getAttribute("html", "data-bar-spacing"));
-    expect(aion_spacing).toBeCloseTo(entry.spacing, 9);
-    const aion_range = JSON.parse(await matrix_page.getAttribute("html", "data-visible-logical-range"));
-    const aion_axis_width = Number(await matrix_page.getAttribute("html", "data-price-axis-width"));
-    const aion_price_extent = await matrix_page.evaluate(() => [
+    const origin_spacing = Number(await matrix_page.getAttribute("html", "data-bar-spacing"));
+    expect(origin_spacing).toBeCloseTo(entry.spacing, 9);
+    const origin_range = JSON.parse(await matrix_page.getAttribute("html", "data-visible-logical-range"));
+    const origin_axis_width = Number(await matrix_page.getAttribute("html", "data-price-axis-width"));
+    const origin_price_extent = await matrix_page.evaluate(() => [
       window.__chart.coordinate_to_price(0),
       window.__chart.coordinate_to_price(window.__chart.wasm.pane_height(0) - 1),
     ]);
-    const aion = PNG.sync.read(await matrix_page.screenshot({ animations: "disabled", fullPage: false }));
+    const origin = PNG.sync.read(await matrix_page.screenshot({ animations: "disabled", fullPage: false }));
 
     await matrix_page.goto(`${test_base_url}/reference.html?${query}`);
     await matrix_page.waitForFunction(() => document.documentElement.dataset.ready === "true");
@@ -639,27 +639,27 @@ test("reference spacing, DPR, and theme matrix reports regional fidelity", async
     expect(reference_spacing).toBeCloseTo(entry.spacing, 9);
     const reference_range = JSON.parse(await matrix_page.getAttribute("html", "data-visible-logical-range"));
     const reference_axis_width = Number(await matrix_page.getAttribute("html", "data-price-axis-width"));
-    expect(aion_axis_width).toBe(reference_axis_width);
+    expect(origin_axis_width).toBe(reference_axis_width);
     const reference_price_extent = await matrix_page.evaluate(() => [
       window.__reference.series.coordinateToPrice(0),
       window.__reference.series.coordinateToPrice(window.__reference.chart.panes()[0].getHeight() - 1),
     ]);
     const reference = PNG.sync.read(await matrix_page.screenshot({ animations: "disabled", fullPage: false }));
-    expect([aion.width, aion.height]).toEqual([
+    expect([origin.width, origin.height]).toEqual([
       Math.round(fixture.css_width * entry.dpr),
       Math.round(fixture.css_height * entry.dpr),
     ]);
-    const { report, visuals } = regional_fidelity_report(aion, reference, entry.dpr, aion_axis_width);
+    const { report, visuals } = regional_fidelity_report(origin, reference, entry.dpr, origin_axis_width);
     matrix[entry.name] = report;
-    console.log(`${entry.name}: axis ${aion_axis_width}px, ranges Aion ${JSON.stringify(aion_range)} reference ${JSON.stringify(reference_range)}, price extents Aion ${JSON.stringify(aion_price_extent)} reference ${JSON.stringify(reference_price_extent)}; ${JSON.stringify(report)}`);
+    console.log(`${entry.name}: axis ${origin_axis_width}px, ranges Origin ${JSON.stringify(origin_range)} reference ${JSON.stringify(reference_range)}, price extents Origin ${JSON.stringify(origin_price_extent)} reference ${JSON.stringify(reference_price_extent)}; ${JSON.stringify(report)}`);
     if (entry.spacing === 50) {
-      await test_info.attach(`${entry.name}-aion.png`, { body: PNG.sync.write(aion), contentType: "image/png" });
+      await test_info.attach(`${entry.name}-origin.png`, { body: PNG.sync.write(origin), contentType: "image/png" });
       await test_info.attach(`${entry.name}-reference.png`, { body: PNG.sync.write(reference), contentType: "image/png" });
       await test_info.attach(`${entry.name}-diff.png`, { body: PNG.sync.write(visuals.full), contentType: "image/png" });
     }
     await context.close();
   }
-  await test_info.attach("aion-reference-matrix.json", {
+  await test_info.attach("origin-reference-matrix.json", {
     body: Buffer.from(JSON.stringify({ ref_version: "5.2.0", cases: matrix }, null, 2)),
     contentType: "application/json",
   });
@@ -694,12 +694,12 @@ test("reference marker and overlay-volume fixtures report regional fidelity", as
     await feature_page.goto(`${test_base_url}/?${query}`);
     await wait_for_chart(feature_page);
     const axis_width = Number(await feature_page.getAttribute("html", "data-price-axis-width"));
-    const aion_range = JSON.parse(await feature_page.getAttribute("html", "data-visible-logical-range"));
-    const aion_price_extent = await feature_page.evaluate(() => [
+    const origin_range = JSON.parse(await feature_page.getAttribute("html", "data-visible-logical-range"));
+    const origin_price_extent = await feature_page.evaluate(() => [
       window.__chart.coordinate_to_price(0),
       window.__chart.coordinate_to_price(window.__chart.wasm.pane_height(0) - 1),
     ]);
-    const aion = PNG.sync.read(await feature_page.screenshot({ animations: "disabled", fullPage: false }));
+    const origin = PNG.sync.read(await feature_page.screenshot({ animations: "disabled", fullPage: false }));
 
     await feature_page.goto(`${test_base_url}/reference.html?${query}`);
     await feature_page.waitForFunction(() => document.documentElement.dataset.ready === "true");
@@ -710,16 +710,16 @@ test("reference marker and overlay-volume fixtures report regional fidelity", as
       window.__reference.series.coordinateToPrice(window.__reference.chart.panes()[0].getHeight() - 1),
     ]);
     expect(axis_width).toBe(reference_axis_width);
-    expect(aion_range).toEqual(reference_range);
-    expect(aion_price_extent[0]).toBeCloseTo(reference_price_extent[0], 9);
-    expect(aion_price_extent[1]).toBeCloseTo(reference_price_extent[1], 9);
+    expect(origin_range).toEqual(reference_range);
+    expect(origin_price_extent[0]).toBeCloseTo(reference_price_extent[0], 9);
+    expect(origin_price_extent[1]).toBeCloseTo(reference_price_extent[1], 9);
     const reference = PNG.sync.read(await feature_page.screenshot({ animations: "disabled", fullPage: false }));
-    const { report, visuals } = regional_fidelity_report(aion, reference, fixture.pixel_ratio, axis_width);
-    captures[feature] = { aion, reference };
-    console.log(`${feature} ranges: Aion ${JSON.stringify(aion_range)} reference ${JSON.stringify(reference_range)}, price extents Aion ${JSON.stringify(aion_price_extent)} reference ${JSON.stringify(reference_price_extent)}`);
+    const { report, visuals } = regional_fidelity_report(origin, reference, fixture.pixel_ratio, axis_width);
+    captures[feature] = { origin, reference };
+    console.log(`${feature} ranges: Origin ${JSON.stringify(origin_range)} reference ${JSON.stringify(reference_range)}, price extents Origin ${JSON.stringify(origin_price_extent)} reference ${JSON.stringify(reference_price_extent)}`);
     feature_reports[feature] = report;
     console.log(`${feature}: ${JSON.stringify(report)}`);
-    await test_info.attach(`${feature}-aion.png`, { body: PNG.sync.write(aion), contentType: "image/png" });
+    await test_info.attach(`${feature}-origin.png`, { body: PNG.sync.write(origin), contentType: "image/png" });
     await test_info.attach(`${feature}-reference.png`, { body: PNG.sync.write(reference), contentType: "image/png" });
     await test_info.attach(`${feature}-diff.png`, { body: PNG.sync.write(visuals.full), contentType: "image/png" });
     await context.close();
@@ -727,12 +727,12 @@ test("reference marker and overlay-volume fixtures report regional fidelity", as
   const footprints = {};
   for (const feature of ["markers", "volume"]) {
     footprints[feature] = {
-      aion: changed_footprint(captures.base.aion, captures[feature].aion),
+      origin: changed_footprint(captures.base.origin, captures[feature].origin),
       reference: changed_footprint(captures.base.reference, captures[feature].reference),
     };
   }
   console.log(`feature footprints: ${JSON.stringify(footprints)}`);
-  await test_info.attach("aion-reference-features.json", {
+  await test_info.attach("origin-reference-features.json", {
     body: Buffer.from(JSON.stringify({ ref_version: "5.2.0", features: feature_reports, footprints }, null, 2)),
     contentType: "application/json",
   });

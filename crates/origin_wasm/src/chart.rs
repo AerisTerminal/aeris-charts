@@ -1,0 +1,1935 @@
+//! The chart object exported to JS.
+//!
+//! Hybrid rendering, mirroring the reference charting library's per-cell canvas layout:
+//! - the **pane** (grid, series, crosshair lines) is drawn with WebGPU or the shared Canvas2D
+//!   fallback;
+//! - the **axes** (borders, tick labels, crosshair axis labels) are drawn natively on a
+//!   stacked Canvas2D overlay via web-sys, so axis text is the browser's own `fillText`.
+//!
+//! Both canvases are full chart size and share the same rect; the WebGPU pass is scissored to
+//! the pane region (axis strips are left as the white clear color) and the 2D overlay is
+//! transparent except over the axis strips. All layout/formatting logic stays in Rust; the
+//! overlay context is just a drawing backend.
+//!
+//! Multiple series share one time axis via [`DataLayer`] (the merged time-point list). Each
+//! series maps its data onto merged indices; a series absent at an index is whitespace there.
+
+mod custom_series;
+mod inner_api;
+mod inner_render;
+mod primitives;
+mod text_runs;
+
+use custom_series::CustomSeriesEntry;
+use text_runs::TextRunStore;
+
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::sync::{
+    atomic::{AtomicBool, AtomicU32, Ordering},
+    Arc,
+};
+
+use js_sys::Float64Array;
+use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
+use web_sys::CanvasRenderingContext2d;
+
+use crate::axis_policy::negotiated_axis_width;
+use crate::backend_policy::{surface_error_action, SurfaceErrorAction};
+use origin_core::model::data_layer::SeriesId;
+use origin_core::model::data_validation::sanitize_ohlc;
+use origin_core::model::plot_list::{MismatchDirection, PlotValueIndex};
+use origin_core::options::{ChartOptions, WatermarkOptions};
+use origin_core::scale::price_scale_core::PriceScaleMode;
+use origin_engine::{
+    crosshair_mode_from_u8, line_style_from_u8, marker_pos, marker_shape, AxisFrame, AxisLabel,
+    AxisLabelCorners, AxisTextAlign, AxisTextMidpoint, ChartEngine, DrawingKind, DrawingModifiers,
+    DrawingPoint, Marker, Pane, PriceFormatterFn, PriceScaleTarget, PrimitiveAutoscaleContribution,
+    SeriesKind, TickMarkFormatterFn, TimeFormatterFn,
+};
+use origin_render::canvas2d::{execute as execute_canvas2d, Canvas2d, Viewport as CanvasViewport};
+use origin_render::color::Color;
+use origin_render::draw_list::LineType;
+use origin_render_wgpu::{
+    prims_to_group, render_frame, DrawGroup, LabelAtlas, MsaaTarget, QuadRenderer, TexQuadRenderer,
+    TriRenderer, SAMPLE_COUNT,
+};
+
+#[wasm_bindgen(inline_js = r#"
+export function notify_origin_backend_loss(runtimeId) {
+    window.dispatchEvent(new CustomEvent('origin-chart-backend-lost', { detail: runtimeId }));
+}
+"#)]
+extern "C" {
+    fn notify_origin_backend_loss(runtime_id: u32);
+}
+
+static NEXT_RUNTIME_ID: AtomicU32 = AtomicU32::new(1);
+
+// the reference charting library default palette (RENDERING_SPEC.md §2.5, §7, §8, §15)
+// Axis palette (as CSS color strings for the 2D overlay)
+const BORDER_CSS: &str = "#2B2B43";
+// TradingView-style volume: translucent green on up bars, red on down bars.
+
+// Crosshair marker (line/area) — line-series.ts defaults.
+
+/// JSON shape accepted from the JS boundary for `set_series_markers`.
+#[derive(serde::Deserialize)]
+struct MarkerInput {
+    time: f64,
+    #[serde(default)]
+    position: String,
+    #[serde(default)]
+    shape: String,
+    #[serde(default)]
+    color: String,
+    #[serde(default)]
+    text: String,
+}
+
+fn price_scale_mode_from_u8(mode: u8) -> PriceScaleMode {
+    match mode {
+        1 => PriceScaleMode::Logarithmic,
+        2 => PriceScaleMode::Percentage,
+        3 => PriceScaleMode::IndexedTo100,
+        _ => PriceScaleMode::Normal,
+    }
+}
+
+fn price_scale_mode_to_u8(mode: PriceScaleMode) -> u8 {
+    match mode {
+        PriceScaleMode::Normal => 0,
+        PriceScaleMode::Logarithmic => 1,
+        PriceScaleMode::Percentage => 2,
+        PriceScaleMode::IndexedTo100 => 3,
+    }
+}
+
+fn price_scale_target_from_u8(target: u8) -> PriceScaleTarget {
+    match target {
+        1 => PriceScaleTarget::Left,
+        2 => PriceScaleTarget::Overlay,
+        _ => PriceScaleTarget::Right,
+    }
+}
+
+fn price_scale_target_to_u8(target: PriceScaleTarget) -> u8 {
+    match target {
+        PriceScaleTarget::Right => 0,
+        PriceScaleTarget::Left => 1,
+        PriceScaleTarget::Overlay => 2,
+    }
+}
+
+fn mismatch_direction_from_i8(direction: i8) -> MismatchDirection {
+    match direction {
+        -1 => MismatchDirection::NearestLeft,
+        1 => MismatchDirection::NearestRight,
+        _ => MismatchDirection::None,
+    }
+}
+
+/// Height (css px) of the separator between stacked panes.
+const PANE_SEPARATOR: f64 = 1.0;
+
+struct Gfx {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+    quad_renderer: QuadRenderer,
+    tri_renderer: TriRenderer,
+    msaa: MsaaTarget,
+    /// Label atlas the host's text runs pack into. The atlas owns the texture the tex
+    /// renderer's bind group references, so it must stay alive for the renderer's lifetime.
+    atlas: LabelAtlas,
+    tex_renderer: TexQuadRenderer,
+    device_lost: Arc<AtomicBool>,
+}
+
+enum PaneRenderOutcome {
+    Presented,
+    Timeout,
+    Fallback(String),
+    Canvas2d,
+}
+
+struct ChartInner {
+    gfx: Option<Gfx>,
+    gpu_pane: web_sys::HtmlCanvasElement,
+    fallback_pane: web_sys::HtmlCanvasElement,
+    pane_ctx: CanvasRenderingContext2d,
+    axis_ctx: CanvasRenderingContext2d,
+    bitmap_w: u32,
+    bitmap_h: u32,
+    engine: ChartEngine,
+    frame: origin_engine::ChartFrame,
+    axis_frame: AxisFrame,
+    gpu_groups: Vec<DrawGroup>,
+    /// Pane-primitive registry (plugin platform Phase C-a): host-retained JS plugin objects,
+    /// drawn into the pane layers during `render`. Ids are never reused within a chart.
+    primitives: Vec<PanePrimitiveEntry>,
+    /// Series-primitive registry (plugin platform Phase C-b): same retained-object model as
+    /// the pane registry, but each entry is bound to an owning series — its views resolve
+    /// against that series' price scale, and removing the series auto-detaches them.
+    /// Shares `next_primitive_id` with the pane registry so ids stay unique within a chart.
+    series_primitives: Vec<SeriesPrimitiveEntry>,
+    next_primitive_id: u32,
+    /// Custom-series registry (plugin platform Phase C-c): one retained pane-view plugin
+    /// object plus its raw items per custom series, aligned with the engine's time-only
+    /// rows. Removing the series drops the entry (firing the view's `destroy` hook).
+    custom_series: Vec<CustomSeriesEntry>,
+    /// Overlay text draws collected from the primitives' `text_views` hooks during the
+    /// primitive passes (plugin platform Phase 3.5), painted on the axis overlay in the
+    /// engine watermark's slot by `draw_axes_2d`. Cleared at the top of every render.
+    primitive_texts: Vec<PrimitiveOverlayText>,
+    /// Browser-rasterized text-run store for `Prim::Text` on the WebGPU backend (offscreen
+    /// canvas + atlas cache). `None` only if the offscreen context could not be created —
+    /// the Canvas2D backend draws text directly and never consults this.
+    text_runs: Option<TextRunStore>,
+    /// Host-pinned clock (UTC seconds) for the candle-close countdown labels. `None` = the
+    /// render path feeds the browser's system time every frame; `set_now_seconds` pins a value
+    /// (the package's 1s countdown timer), which then drives every render until replaced.
+    now_override: Option<f64>,
+}
+
+/// One in-pane overlay text draw registered by a primitive's `text_views` hook (plugin
+/// platform Phase 3.5 — the text answer to `Prim::Text` no-oping on both backends). Painted
+/// on the Canvas2D axis overlay in media coordinates, in the same slot as the engine's
+/// watermark (below the axis chrome, above the pane). `font` is a fully-resolved CSS font
+/// shorthand; `align`/`baseline` are canvas `textAlign`/`textBaseline` keywords.
+pub(super) struct PrimitiveOverlayText {
+    pub(super) text: String,
+    pub(super) x: f64,
+    pub(super) y: f64,
+    pub(super) color: String,
+    pub(super) font: String,
+    pub(super) align: String,
+    pub(super) baseline: String,
+}
+
+/// One attached pane primitive (reference `IPanePrimitive`, adapted to a plain JS object by the TS
+/// package): the pane index it draws on plus the retained object itself.
+struct PanePrimitiveEntry {
+    id: u32,
+    pane: u32,
+    obj: js_sys::Object,
+}
+
+/// One attached series primitive (reference `ISeriesPrimitive`, Phase C-b): the owning series id
+/// plus the retained object. The pane/scale binding is re-resolved from the series each frame,
+/// so the views follow the series across pane moves and scale rebinding.
+struct SeriesPrimitiveEntry {
+    id: u32,
+    series: u32,
+    obj: js_sys::Object,
+}
+impl std::ops::Deref for ChartInner {
+    type Target = ChartEngine;
+
+    fn deref(&self) -> &Self::Target {
+        &self.engine
+    }
+}
+
+impl std::ops::DerefMut for ChartInner {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.engine
+    }
+}
+
+/// Keeps the `ResizeObserver` and its callback alive for the chart's lifetime.
+struct ResizeBinding {
+    observer: web_sys::ResizeObserver,
+    _callback: Closure<dyn FnMut(js_sys::Array)>,
+}
+
+impl Drop for ResizeBinding {
+    fn drop(&mut self) {
+        self.observer.disconnect();
+    }
+}
+
+/// The chart handle exported to JS. Wraps [`ChartInner`] in `Rc<RefCell<..>>` so an
+/// engine-owned `ResizeObserver` callback can mutate it, and holds the canvas elements so
+/// the engine can size their backing stores itself. Public methods delegate to the inner.
+#[wasm_bindgen]
+pub struct OriginChart {
+    inner: Rc<RefCell<ChartInner>>,
+    runtime_id: u32,
+    gpu_pane: web_sys::HtmlCanvasElement,
+    fallback_pane: web_sys::HtmlCanvasElement,
+    overlay: web_sys::HtmlCanvasElement,
+    _resize: Option<ResizeBinding>,
+}
+
+/// Reads the exact physical-pixel size of a `ResizeObserverEntry`'s device-pixel content box.
+/// This is the crisp-rendering crux: `round(cssSize * devicePixelRatio)` only approximates the
+/// element's true physical footprint, so at fractional ratios (e.g. 150% scaling) the backing
+/// store no longer maps 1:1 to device pixels and the compositor resamples the bitmap — soft,
+/// "thicker" 1px wicks. `devicePixelContentBoxSize` is the exact integer count. Returns `None`
+/// when the browser lacks the API (Safari < 16.4), so the caller can fall back to the approx.
+fn device_pixel_box(entry: &web_sys::ResizeObserverEntry) -> Option<(f64, f64)> {
+    // Read the property reflectively: on WebKit it is absent, and the typed getter would yield an
+    // `undefined` that panics when indexed. Reflect returns a plain `undefined` JsValue instead,
+    // which is not an `Array`, so we cleanly fall back to `None`.
+    let value = js_sys::Reflect::get(entry, &"devicePixelContentBoxSize".into()).ok()?;
+    let arr = value.dyn_ref::<js_sys::Array>()?;
+    let first = arr.get(0);
+    if first.is_undefined() {
+        return None;
+    }
+    let size = first.dyn_into::<web_sys::ResizeObserverSize>().ok()?;
+    Some((size.inline_size(), size.block_size()))
+}
+
+/// Whether this engine exposes `ResizeObserverEntry.devicePixelContentBoxSize` (Chromium/Firefox,
+/// not Safari/WebKit). Observing with the `device-pixel-content-box` option *throws* on engines
+/// that lack it, so we feature-detect and fall back to a plain content-box observation there.
+fn supports_device_pixel_content_box() -> bool {
+    let Some(window) = web_sys::window() else {
+        return false;
+    };
+    let Ok(ctor) = js_sys::Reflect::get(&window, &"ResizeObserverEntry".into()) else {
+        return false;
+    };
+    if ctor.is_undefined() {
+        return false;
+    }
+    let Ok(proto) = js_sys::Reflect::get(&ctor, &"prototype".into()) else {
+        return false;
+    };
+    js_sys::Reflect::has(&proto, &"devicePixelContentBoxSize".into()).unwrap_or(false)
+}
+
+fn set_backend_visibility(
+    gpu_pane: &web_sys::HtmlCanvasElement,
+    fallback_pane: &web_sys::HtmlCanvasElement,
+    use_webgpu: bool,
+) {
+    let _ = gpu_pane
+        .style()
+        .set_property("visibility", if use_webgpu { "visible" } else { "hidden" });
+    let _ = fallback_pane
+        .style()
+        .set_property("visibility", if use_webgpu { "hidden" } else { "visible" });
+}
+
+/// Sizes all three canvases to `(bw, bh)` device pixels while pinning their CSS box to the real
+/// displayed size, then resizes + repaints the engine. Shared by the initial bind and every
+/// observer callback.
+#[allow(clippy::too_many_arguments)] // three canvases + the full size/DPR tuple
+fn apply_device_size(
+    inner: &Rc<RefCell<ChartInner>>,
+    gpu_pane: &web_sys::HtmlCanvasElement,
+    fallback_pane: &web_sys::HtmlCanvasElement,
+    overlay: &web_sys::HtmlCanvasElement,
+    css_w: f64,
+    css_h: f64,
+    bw: f64,
+    bh: f64,
+) {
+    let (bw_u, bh_u) = (bw.max(1.0) as u32, bh.max(1.0) as u32);
+    for c in [gpu_pane, fallback_pane, overlay] {
+        c.set_width(bw_u);
+        c.set_height(bh_u);
+        let style = c.style();
+        let _ = style.set_property("width", &format!("{css_w}px"));
+        let _ = style.set_property("height", &format!("{css_h}px"));
+    }
+    // Exact effective ratio -> the engine's internal round(css*dpr) lands back on (bw, bh),
+    // so surface, canvas backing store and physical pixels all agree.
+    let dpr = bw / css_w.max(1.0);
+    let mut c = inner.borrow_mut();
+    c.resize(css_w.max(1.0), css_h.max(1.0), dpr);
+    let _ = c.render();
+}
+
+/// Creates a chart bound to dedicated WebGPU and Canvas2D pane canvases plus an axis/text overlay.
+/// All three must be full chart size with bitmap size = css size * dpr, already set by the caller.
+/// Call [`OriginChart::enable_auto_resize`] to have the engine own sizing from then on.
+#[allow(clippy::too_many_arguments)] // public JS entry point: three canvases + size/DPR/backend
+#[wasm_bindgen]
+pub async fn create_chart(
+    gpu_pane_canvas: web_sys::HtmlCanvasElement,
+    fallback_pane_canvas: web_sys::HtmlCanvasElement,
+    overlay_canvas: web_sys::HtmlCanvasElement,
+    css_width: f64,
+    css_height: f64,
+    dpr: f64,
+    force_canvas2d: bool,
+    simulate_adapter_failure: bool,
+    force_fallback_adapter: bool,
+) -> Result<OriginChart, JsValue> {
+    console_error_panic_hook::set_once();
+
+    // Keep handles to all canvas elements so the engine can own device-pixel resizing
+    // (create_surface takes the pane canvas by value; the clone is just a JS reference).
+    let gpu_pane_el = gpu_pane_canvas.clone();
+    let fallback_pane_el = fallback_pane_canvas.clone();
+    let overlay_el = overlay_canvas.clone();
+
+    let axis_ctx = overlay_canvas
+        .get_context("2d")?
+        .ok_or_else(|| JsValue::from_str("no 2d context"))?
+        .dyn_into::<CanvasRenderingContext2d>()?;
+
+    let bitmap_w = (css_width * dpr).round().max(1.0) as u32;
+    let bitmap_h = (css_height * dpr).round().max(1.0) as u32;
+    let runtime_id = NEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed);
+    // A canvas cannot change context type after WebGPU has claimed it. Keep a dedicated 2D pane
+    // warm from construction so a device loss can switch backends without replacing DOM nodes or
+    // rebuilding chart state.
+    let pane_ctx = fallback_pane_el
+        .get_context("2d")?
+        .ok_or_else(|| JsValue::from_str("no 2d pane context"))?
+        .dyn_into::<CanvasRenderingContext2d>()?;
+    let gfx = if force_canvas2d {
+        None
+    } else {
+        match try_create_gfx(
+            gpu_pane_canvas,
+            css_width,
+            css_height,
+            dpr,
+            runtime_id,
+            simulate_adapter_failure,
+            force_fallback_adapter,
+        )
+        .await
+        {
+            Ok(gfx) => Some(gfx),
+            Err(error) => {
+                web_sys::console::warn_1(
+                    &format!("origin: WebGPU unavailable; using Canvas2D fallback ({error:?})")
+                        .into(),
+                );
+                None
+            }
+        }
+    };
+    set_backend_visibility(&gpu_pane_el, &fallback_pane_el, gfx.is_some());
+
+    let mut inner = ChartInner {
+        gfx,
+        gpu_pane: gpu_pane_el.clone(),
+        fallback_pane: fallback_pane_el.clone(),
+        pane_ctx,
+        axis_ctx,
+        bitmap_w,
+        bitmap_h,
+        engine: ChartEngine::new(css_width, css_height, dpr),
+        frame: origin_engine::ChartFrame::default(),
+        axis_frame: AxisFrame::default(),
+        gpu_groups: Vec::new(),
+        primitives: Vec::new(),
+        series_primitives: Vec::new(),
+        next_primitive_id: 1,
+        custom_series: Vec::new(),
+        primitive_texts: Vec::new(),
+        now_override: None,
+        text_runs: match TextRunStore::new() {
+            Ok(store) => Some(store),
+            Err(error) => {
+                web_sys::console::warn_1(
+                    &format!(
+                        "origin: text-run rasterizer unavailable ({error:?}); WebGPU text disabled"
+                    )
+                    .into(),
+                );
+                None
+            }
+        },
+    };
+    // Drawing-label hit boxes measure through the same axis canvas the engine's own labels use
+    // (drawings.rs `TextMeasureFn` — the host-injected formatter-hook pattern, so the engine
+    // stays headless). The font spec matches the `Prim::Text` rasterizer exactly.
+    let measure_ctx = inner.axis_ctx.clone();
+    inner.engine.set_text_measure(Some(Box::new(
+        move |text: &str, size: f64, family: &str, weight: u16, italic: bool| {
+            measure_ctx.set_font(&origin_render::draw_list::text_font_spec(
+                size as f32,
+                family,
+                weight,
+                italic,
+            ));
+            measure_ctx
+                .measure_text(text)
+                .map(|m| m.width())
+                .unwrap_or(0.0)
+        },
+    )));
+
+    Ok(OriginChart {
+        inner: Rc::new(RefCell::new(inner)),
+        runtime_id,
+        gpu_pane: gpu_pane_el,
+        fallback_pane: fallback_pane_el,
+        overlay: overlay_el,
+        _resize: None,
+    })
+}
+
+/// Public JS surface. Sizing is engine-owned once [`enable_auto_resize`] is called; the rest
+/// delegate straight through to the inner chart.
+#[wasm_bindgen]
+impl OriginChart {
+    /// Binds the engine to `container`, sizing both canvases to the container's exact
+    /// device-pixel content box (crisp at any devicePixelRatio, fractional included) and
+    /// re-rendering on every size/DPR change. After this, the embedder never sizes canvases.
+    pub fn enable_auto_resize(&mut self, container: web_sys::HtmlElement) -> Result<(), JsValue> {
+        let inner = self.inner.clone();
+        let gpu_pane = self.gpu_pane.clone();
+        let fallback_pane = self.fallback_pane.clone();
+        let overlay = self.overlay.clone();
+        let container_cb = container.clone();
+
+        let callback = Closure::wrap(Box::new(move |entries: js_sys::Array| {
+            let rect = container_cb.get_bounding_client_rect();
+            let (css_w, css_h) = (rect.width().max(1.0), rect.height().max(1.0));
+            let dpr = web_sys::window()
+                .map(|w| w.device_pixel_ratio())
+                .unwrap_or(1.0);
+            // Prefer the exact device-pixel content box; fall back to round(css*dpr).
+            let device = entries
+                .get(0)
+                .dyn_into::<web_sys::ResizeObserverEntry>()
+                .ok()
+                .and_then(|e| device_pixel_box(&e));
+            let (bw, bh) = match device {
+                Some((dw, dh)) => {
+                    // Bogus-report guard: at dpr != 1 the device box must exceed the CSS box.
+                    // When it comes back equal (some engines/emulators report CSS px here), the
+                    // report is untrustworthy — use round(css*dpr) instead of downscaling to
+                    // a blurry dpr-1 bitmap.
+                    if dpr > 1.0 && (dw - css_w).abs() <= 1.0 && (dh - css_h).abs() <= 1.0 {
+                        ((css_w * dpr).round(), (css_h * dpr).round())
+                    } else {
+                        (dw, dh)
+                    }
+                }
+                None => ((css_w * dpr).round(), (css_h * dpr).round()),
+            };
+            apply_device_size(
+                &inner,
+                &gpu_pane,
+                &fallback_pane,
+                &overlay,
+                css_w,
+                css_h,
+                bw,
+                bh,
+            );
+        }) as Box<dyn FnMut(js_sys::Array)>);
+
+        let observer = web_sys::ResizeObserver::new(callback.as_ref().unchecked_ref())?;
+        // Prefer the device-pixel-content-box (fires on DPR changes and is crisp at fractional
+        // ratios). Safari/WebKit lacks it and *throws* if asked, so fall back to a plain content-box
+        // observation there — the callback already degrades to round(css*dpr) when the exact box is
+        // unavailable.
+        if supports_device_pixel_content_box() {
+            let opts = web_sys::ResizeObserverOptions::new();
+            opts.set_box(web_sys::ResizeObserverBoxOptions::DevicePixelContentBox);
+            observer.observe_with_options(&container, &opts);
+        } else {
+            observer.observe(&container);
+        }
+
+        // Size once now so the first paint is correct even before the observer first fires.
+        let rect = container.get_bounding_client_rect();
+        let (css_w, css_h) = (rect.width().max(1.0), rect.height().max(1.0));
+        let dpr = web_sys::window()
+            .map(|w| w.device_pixel_ratio())
+            .unwrap_or(1.0);
+        apply_device_size(
+            &self.inner,
+            &self.gpu_pane,
+            &self.fallback_pane,
+            &self.overlay,
+            css_w,
+            css_h,
+            (css_w * dpr).round(),
+            (css_h * dpr).round(),
+        );
+
+        self._resize = Some(ResizeBinding {
+            observer,
+            _callback: callback,
+        });
+        Ok(())
+    }
+
+    /// Adds a series and returns its id. `kind`: 0 candles, 1 bars, 2 line, 3 area, 4 histogram.
+    pub fn add_series(&mut self, kind: u8) -> u32 {
+        self.inner.borrow_mut().add_series(kind)
+    }
+
+    /// Remove a series (and any indicators derived from it). Returns true if a live series
+    /// was removed; any id may be removed (reference `removeSeries`) — "primary series" consumers
+    /// fall back to the first visible non-removed series.
+    pub fn remove_series(&mut self, id: u32) -> bool {
+        self.inner.borrow_mut().remove_series(id)
+    }
+
+    /// `remove_series` reporting every tombstoned id (the series plus derived indicator
+    /// outputs) for the host's per-series removal events; empty = nothing removed.
+    pub fn remove_series_tracked(&mut self, id: u32) -> Vec<u32> {
+        self.inner.borrow_mut().remove_series_tracked(id)
+    }
+
+    /// JSON lineage of an indicator output series (`{"kind","period","deviation","source",
+    /// "output_index"}`), or `null` for a plain/source series — platform chip chrome backing.
+    pub fn series_indicator_info_json(&self, id: u32) -> String {
+        self.inner.borrow().series_indicator_info_json(id)
+    }
+
+    /// reference v5.2 `ISeriesApi.pop(count)`: remove the last `count` data points (count clamps
+    /// to the data length; per-point colors shift along). Returns the new data length.
+    pub fn series_pop(&mut self, id: u32, count: u32) -> u32 {
+        self.inner.borrow_mut().series_pop(id, count)
+    }
+
+    /// reference `ISeriesApi.lastValueData(globalLast)`: JSON `{"value","formatted","time"}` of
+    /// the last (`global_last` true) or last visible (false) non-whitespace bar, the value
+    /// formatted with the series' price format. "" when there is no such bar.
+    pub fn series_last_value_data(&self, id: u32, global_last: bool) -> String {
+        self.inner.borrow().series_last_value_data(id, global_last)
+    }
+
+    /// Format a value with the series' resolved price format (custom fn → built-ins → chart
+    /// formatter fallback), backing the TS `series.priceFormatter()`.
+    pub fn series_format_price(&self, id: u32, value: f64) -> String {
+        self.inner.borrow().series_format_price(id, value)
+    }
+
+    /// Series ids in current render order (topmost LAST) as a JSON array — reference
+    /// `chart.seriesOrder()` backing.
+    pub fn series_order_json(&self) -> String {
+        self.inner.borrow().series_order_json()
+    }
+
+    /// reference `chart.setSeriesOrder`: reorder which series paints on top. Every live series id
+    /// must be present exactly once, else the call is rejected (false, no state change).
+    pub fn set_series_order(&mut self, ids: Vec<u32>) -> bool {
+        self.inner.borrow_mut().set_series_order(ids)
+    }
+
+    /// Add a Rust-native simple moving-average line derived from `source_id`.
+    pub fn add_sma(&mut self, source_id: u32, period: u32) -> u32 {
+        self.inner.borrow_mut().add_sma(source_id, period)
+    }
+
+    /// Add a Rust-native exponential moving-average line derived from `source_id`.
+    pub fn add_ema(&mut self, source_id: u32, period: u32) -> u32 {
+        self.inner.borrow_mut().add_ema(source_id, period)
+    }
+
+    /// Add upper, middle, and lower Bollinger-band lines. Returns an empty array for invalid input.
+    pub fn add_bollinger(&mut self, source_id: u32, period: u32, deviation: f64) -> Vec<u32> {
+        self.inner
+            .borrow_mut()
+            .add_bollinger(source_id, period, deviation)
+    }
+
+    /// Add a Wilder RSI line in its own oscillator pane (30/70 band lines + channel fill).
+    pub fn add_rsi(&mut self, source_id: u32, period: u32) -> u32 {
+        self.inner.borrow_mut().add_rsi(source_id, period)
+    }
+
+    /// Add MACD line, signal line, and histogram (four-state colors) in their own pane.
+    pub fn add_macd(&mut self, source_id: u32, fast: u32, slow: u32, signal: u32) -> Vec<u32> {
+        self.inner
+            .borrow_mut()
+            .add_macd(source_id, fast, slow, signal)
+    }
+
+    /// Add Stochastic %K and %D lines in their own pane (20/80 band lines + channel fill).
+    pub fn add_stochastic(&mut self, source_id: u32, k_period: u32, d_period: u32) -> Vec<u32> {
+        self.inner
+            .borrow_mut()
+            .add_stochastic(source_id, k_period, d_period)
+    }
+
+    /// Add a Wilder ATR line in its own oscillator pane.
+    pub fn add_atr(&mut self, source_id: u32, period: u32) -> u32 {
+        self.inner.borrow_mut().add_atr(source_id, period)
+    }
+
+    /// Add a session-anchored VWAP line on the source's pane (`volume_source` -1 = unit weights).
+    pub fn add_vwap(&mut self, source_id: u32, volume_source: i32) -> u32 {
+        self.inner.borrow_mut().add_vwap(source_id, volume_source)
+    }
+
+    /// Add a weighted moving-average line on the source's pane.
+    pub fn add_wma(&mut self, source_id: u32, period: u32) -> u32 {
+        self.inner.borrow_mut().add_wma(source_id, period)
+    }
+
+    /// Sets the main series' data (series 0). `times` are ascending UTC seconds.
+    pub fn set_data(
+        &mut self,
+        times: &[f64],
+        open: &[f64],
+        high: &[f64],
+        low: &[f64],
+        close: &[f64],
+    ) {
+        self.inner
+            .borrow_mut()
+            .set_data(times, open, high, low, close);
+    }
+
+    /// Sets a series' data by id.
+    pub fn set_series_data(
+        &mut self,
+        id: u32,
+        times: &[f64],
+        open: &[f64],
+        high: &[f64],
+        low: &[f64],
+        close: &[f64],
+    ) {
+        self.inner
+            .borrow_mut()
+            .set_series_data(id, times, open, high, low, close);
+    }
+
+    /// Typed-array ingestion path: wasm-bindgen passes the JS views as externrefs and the engine
+    /// takes one owned copy, avoiding the temporary slice copy generated for `&[f64]` methods.
+    pub fn set_series_data_typed(
+        &mut self,
+        id: u32,
+        times: &Float64Array,
+        open: &Float64Array,
+        high: &Float64Array,
+        low: &Float64Array,
+        close: &Float64Array,
+    ) {
+        self.inner
+            .borrow_mut()
+            .set_series_data_typed(id, times, open, high, low, close);
+    }
+
+    /// Streaming update of the main series (append new time or replace last).
+    pub fn update_bar(&mut self, time: f64, open: f64, high: f64, low: f64, close: f64) {
+        self.inner
+            .borrow_mut()
+            .update_bar(time, open, high, low, close);
+    }
+
+    /// Streaming update of an arbitrary series by id (append new time or replace last).
+    pub fn update_series_bar(
+        &mut self,
+        series_id: u32,
+        time: f64,
+        open: f64,
+        high: f64,
+        low: f64,
+        close: f64,
+    ) {
+        self.inner
+            .borrow_mut()
+            .update_series_bar(series_id, time, open, high, low, close);
+    }
+
+    /// Per-data-point color overrides (reference data-item colors). Each channel is a `Uint32Array`
+    /// of packed RGBA values — `0xRRGGBBAA` (e.g. opaque red = `0xFF0000FF`, half-alpha green
+    /// = `0x00FF0080`) — or `undefined`/`null`/empty for absent. Within a present channel, a
+    /// `0` entry means "no override at this row" (a fully transparent color is not renderable,
+    /// so 0 is reserved as the absent marker). Channels: `body` = candle/bar body, line/area
+    /// stroke + point marker, histogram column; `wick`/`border` = candlestick parts. Lengths
+    /// must equal the series' row count or the whole call is rejected (console warning, no
+    /// partial state). `set_series_data` resets all point colors for the series — call this
+    /// right after it.
+    pub fn set_series_point_colors(
+        &mut self,
+        id: u32,
+        body: Option<Vec<u32>>,
+        wick: Option<Vec<u32>>,
+        border: Option<Vec<u32>>,
+    ) {
+        self.inner
+            .borrow_mut()
+            .set_series_point_colors(id, body, wick, border);
+    }
+
+    /// Streaming update like [`update_series_bar`] that also sets the target bar's three
+    /// per-point color channels (`undefined` = no custom color for that channel; packed RGBA
+    /// `0xRRGGBBAA` as in [`set_series_point_colors`]). Append-new-time vs replace-last
+    /// semantics mirror the plain update.
+    #[allow(clippy::too_many_arguments)] // mirrors update_series_bar plus the three reference color slots
+    pub fn update_series_bar_styled(
+        &mut self,
+        id: u32,
+        time: f64,
+        open: f64,
+        high: f64,
+        low: f64,
+        close: f64,
+        body: Option<u32>,
+        wick: Option<u32>,
+        border: Option<u32>,
+    ) {
+        self.inner
+            .borrow_mut()
+            .update_series_bar_styled(id, time, open, high, low, close, body, wick, border);
+    }
+
+    /// Apply a per-series `priceFormat` (reference PriceFormat) as JSON:
+    /// `{"type":"price"|"volume"|"percent", "precision"?, "min_move"?}` or
+    /// `{"type":"custom", "min_move"?}` (keeps a formatter installed via
+    /// [`set_series_price_formatter`]; switching to a non-custom type clears it). Malformed
+    /// JSON or an unknown type/id is ignored with a console warning.
+    pub fn series_apply_price_format_json(&mut self, id: u32, json: &str) {
+        self.inner
+            .borrow_mut()
+            .series_apply_price_format_json(id, json);
+    }
+
+    /// reference `priceFormat: {type:"custom", formatter}`: install the series' custom formatter fn
+    /// `(price: number) => string`. A throw or non-string result falls back to the built-in
+    /// price formatter. The fn is cleared by applying a non-custom `priceFormat` type.
+    pub fn set_series_price_formatter(&mut self, id: u32, formatter: js_sys::Function) {
+        self.inner
+            .borrow_mut()
+            .set_series_price_formatter(id, formatter);
+    }
+
+    /// Sets a series' line/area color (overrides the kind default).
+    pub fn set_series_color(&mut self, id: u32, r: u8, g: u8, b: u8) {
+        self.inner.borrow_mut().set_series_color(id, r, g, b);
+    }
+
+    /// Sets a series' line/area/histogram stroke color from a CSS string, preserving alpha
+    /// (the r/g/b `set_series_color` form is opaque-only). Unparseable strings are ignored.
+    pub fn set_series_color_css(&mut self, id: u32, css: &str) {
+        self.inner.borrow_mut().set_series_color_css(id, css);
+    }
+
+    /// Toggle a series while preserving its data and derived-indicator binding.
+    pub fn set_series_visible(&mut self, id: u32, visible: bool) {
+        self.inner.borrow_mut().set_series_visible(id, visible);
+    }
+
+    /// Set candlestick/bar up & down body colors as CSS strings (empty string = keep default).
+    pub fn set_series_updown_colors(&mut self, id: u32, up: &str, down: &str) {
+        self.inner
+            .borrow_mut()
+            .set_series_updown_colors(id, up, down);
+    }
+
+    /// Set candlestick wick colors per direction. `undefined` = keep current, `""` = clear the
+    /// override (follow the direction's body color), a CSS color = pin it.
+    pub fn set_series_wick_colors(&mut self, id: u32, up: Option<String>, down: Option<String>) {
+        self.inner.borrow_mut().set_series_wick_colors(id, up, down);
+    }
+
+    /// Set candlestick border colors per direction; same keep/clear/pin contract as the wicks.
+    pub fn set_series_border_colors(&mut self, id: u32, up: Option<String>, down: Option<String>) {
+        self.inner
+            .borrow_mut()
+            .set_series_border_colors(id, up, down);
+    }
+
+    /// Toggle candlestick wick visibility (default visible).
+    pub fn set_series_wick_visible(&mut self, id: u32, visible: bool) {
+        self.inner.borrow_mut().set_series_wick_visible(id, visible);
+    }
+
+    /// Toggle candlestick body-border visibility (default visible).
+    pub fn set_series_border_visible(&mut self, id: u32, visible: bool) {
+        self.inner
+            .borrow_mut()
+            .set_series_border_visible(id, visible);
+    }
+
+    /// Set a line/area series' stroke width (css px).
+    pub fn set_series_line_width(&mut self, id: u32, width: f64) {
+        self.inner.borrow_mut().set_series_line_width(id, width);
+    }
+
+    /// Set an area series' fill gradient colors (top at the line, bottom at the base; CSS strings).
+    pub fn set_series_area_colors(&mut self, id: u32, top: &str, bottom: &str) {
+        self.inner
+            .borrow_mut()
+            .set_series_area_colors(id, top, bottom);
+    }
+
+    /// Color a histogram (volume) by the main price series' up/down direction per bar
+    /// (TradingView-style volume).
+    pub fn set_series_histogram_updown(&mut self, id: u32, enabled: bool) {
+        self.inner
+            .borrow_mut()
+            .set_series_histogram_updown(id, enabled);
+    }
+
+    /// Set a line/area series' join type: 0 = simple, 1 = stepped, 2 = curved. Call `render()`
+    /// after (roadmap Phase B3).
+    pub fn set_series_line_type(&mut self, id: u32, line_type: u8) {
+        self.inner.borrow_mut().set_series_line_type(id, line_type);
+    }
+
+    /// Toggle per-point disc markers on a line/area series. Call `render()` after (Phase B3).
+    pub fn set_series_point_markers(&mut self, id: u32, visible: bool) {
+        self.inner
+            .borrow_mut()
+            .set_series_point_markers(id, visible);
+    }
+
+    /// Set a Baseline series' baseline price (`NaN` = auto). Call `render()` after (Phase B3).
+    pub fn set_series_baseline(&mut self, id: u32, price: f64) {
+        self.inner.borrow_mut().set_series_baseline(id, price);
+    }
+
+    /// Toggle the pulsing last-price ring on a series (roadmap Phase B3).
+    pub fn set_series_last_price_animation(&mut self, id: u32, enabled: bool) {
+        self.inner
+            .borrow_mut()
+            .set_series_last_price_animation(id, enabled);
+    }
+
+    /// Add a horizontal price line to a series; returns its id. `style`: 0 solid, 1 dotted, 2
+    /// dashed, 3 large-dashed, 4 sparse-dotted. Call `render()` after (roadmap Phase B4).
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_price_line(
+        &mut self,
+        series_id: u32,
+        price: f64,
+        r: u8,
+        g: u8,
+        b: u8,
+        width: u32,
+        style: u8,
+        title: &str,
+    ) -> u32 {
+        self.inner
+            .borrow_mut()
+            .create_price_line(series_id, price, r, g, b, width, style, title)
+    }
+    /// Remove a price line by id. Call `render()` after (roadmap Phase B4).
+    pub fn remove_price_line(&mut self, id: u32) {
+        self.inner.borrow_mut().remove_price_line(id);
+    }
+
+    /// Merge a JSON options patch into an existing price line (reference `IPriceLine.applyOptions`;
+    /// snake_case keys, camelCase aliases accepted). Call `render()` after.
+    pub fn price_line_apply_options(&mut self, id: u32, json: &str) {
+        self.inner.borrow_mut().price_line_apply_options(id, json);
+    }
+
+    /// The price line's full options as a snake_case JSON string (reference `IPriceLine.options`;
+    /// "" for an unknown id).
+    pub fn price_line_options_json(&self, id: u32) -> String {
+        self.inner.borrow().price_line_options_json(id)
+    }
+
+    /// Replace a series' markers from a JSON array. Call `render()` after (roadmap Phase B4).
+    pub fn set_series_markers(&mut self, series_id: u32, json: &str) {
+        self.inner.borrow_mut().set_series_markers(series_id, json);
+    }
+    /// Toggle marker pixel margins in price-scale autoscaling (enabled by default, as in reference).
+    pub fn set_series_markers_auto_scale(&mut self, series_id: u32, enabled: bool) {
+        self.inner
+            .borrow_mut()
+            .set_series_markers_auto_scale(series_id, enabled);
+    }
+    /// Whether any series wants the last-price pulse (host uses this to run/stop its rAF loop).
+    pub fn wants_animation(&self) -> bool {
+        self.inner.borrow().wants_animation()
+    }
+    /// Set the host animation clock (ms). Call before `render()` in the rAF loop (Phase B3).
+    pub fn set_animation_time(&mut self, t_ms: f64) {
+        self.inner.borrow_mut().set_animation_time(t_ms);
+    }
+
+    /// Pin the countdown clock (UTC seconds). Until the first pin the render path feeds the
+    /// browser's system time every frame; the package's countdown timer pins once per second.
+    pub fn set_now_seconds(&mut self, now: f64) {
+        self.inner.borrow_mut().now_override = if now.is_finite() { Some(now) } else { None };
+    }
+
+    /// Move a series to the bottom-band overlay (volume) price scale with the given fractional
+    /// margins (top/bottom of pane height). Call `render()` after (roadmap Phase B2).
+    pub fn set_series_overlay(&mut self, id: u32, top: f64, bottom: f64) {
+        self.inner.borrow_mut().set_series_overlay(id, top, bottom);
+    }
+
+    /// Move a series into stacked pane `pane_index` (0 = top/price pane), creating panes as needed;
+    /// `stretch_factor` sizes a newly-created pane relative to the others. Call `render()` after
+    /// (roadmap Phase B1).
+    pub fn set_series_pane(&mut self, id: u32, pane_index: usize, stretch_factor: f64) {
+        self.inner
+            .borrow_mut()
+            .set_series_pane(id, pane_index, stretch_factor);
+    }
+
+    /// Number of stacked panes.
+    pub fn pane_count(&self) -> usize {
+        self.inner.borrow().pane_count()
+    }
+    /// CSS Y of each pane boundary (for the host to hit-test separators).
+    pub fn pane_separator_ys(&self) -> Vec<f64> {
+        self.inner.borrow().pane_separator_ys()
+    }
+    /// JSON `{left, top, width, height}` of pane `i`'s content area in CSS px relative to the
+    /// chart container — the anchor for platform-rendered per-pane chrome (indicator chips).
+    pub fn pane_geometry_json(&self, i: usize) -> String {
+        self.inner.borrow().pane_geometry_json(i)
+    }
+
+    /// Drag the separator below pane `i` by `delta_css`. Call `render()` after (roadmap Phase B1).
+    pub fn drag_pane_separator(&mut self, i: usize, delta_css: f64) {
+        self.inner.borrow_mut().drag_pane_separator(i, delta_css);
+    }
+    /// CSS height of pane `i` from the last layout pass (0 if out of range).
+    pub fn pane_height(&self, i: usize) -> f64 {
+        self.inner.borrow().pane_height(i)
+    }
+    /// Relative stretch factor of pane `i` (1 if out of range).
+    pub fn pane_stretch(&self, i: usize) -> f64 {
+        self.inner.borrow().pane_stretch(i)
+    }
+    /// Set pane `i`'s stretch factor (relative height weight). Call `render()` after.
+    pub fn set_pane_stretch(&mut self, i: usize, factor: f64) {
+        self.inner.borrow_mut().set_pane_stretch(i, factor);
+    }
+    /// Resize pane `i` to `height_css` px, taking the difference from its neighbour. Render after.
+    pub fn set_pane_height(&mut self, i: usize, height_css: f64) {
+        self.inner.borrow_mut().set_pane_height(i, height_css);
+    }
+
+    /// reference v5 `chart.addPane(preserveEmptyPane)`: append a pane and return its index.
+    pub fn add_pane(&mut self, preserve_empty: bool) -> u32 {
+        self.inner.borrow_mut().add_pane(preserve_empty)
+    }
+
+    /// reference `chart.removePane`: refuses the last remaining pane and stale indices (false).
+    /// The pane's series become pane-less (they keep data but render/scale nowhere until
+    /// re-assigned); panes below shift one index up. Call `render()` after.
+    pub fn remove_pane(&mut self, index: u32) -> bool {
+        self.inner.borrow_mut().remove_pane(index)
+    }
+
+    /// reference `chart.swapPanes`: the two panes trade places — series assignments, stretch
+    /// factors, scales, and preserve flags ride along. Call `render()` after.
+    pub fn swap_panes(&mut self, first: u32, second: u32) -> bool {
+        self.inner.borrow_mut().swap_panes(first, second)
+    }
+
+    /// reference `IPaneApi.moveTo`: relocate the pane (with its series) to a new index. False for
+    /// a stale index. Call `render()` after.
+    pub fn pane_move_to(&mut self, index: u32, target: u32) -> bool {
+        self.inner.borrow_mut().pane_move_to(index, target)
+    }
+
+    /// reference `IPaneApi.preserveEmptyPane` (false for a stale index).
+    pub fn pane_preserve_empty(&self, index: u32) -> bool {
+        self.inner.borrow().pane_preserve_empty(index)
+    }
+
+    /// reference `IPaneApi.setPreserveEmptyPane`: an empty pane collapses on the next series
+    /// removal/move-out unless this flag holds it open.
+    pub fn pane_set_preserve_empty(&mut self, index: u32, flag: bool) {
+        self.inner.borrow_mut().pane_set_preserve_empty(index, flag);
+    }
+
+    /// reference `IPaneApi.getSeries`: the pane's live series ids in render order (bottom first).
+    pub fn pane_series_ids(&self, index: u32) -> Vec<u32> {
+        self.inner.borrow().pane_series_ids(index)
+    }
+
+    /// Attach a pane primitive (reference `IPaneApi.attachPrimitive`, plugin platform Phase C-a):
+    /// a plain JS object with optional `attached`/`detached`/`update_all_views`/`pane_views`/
+    /// `price_axis_views`/`time_axis_views` hooks. Its `pane_views()` renderers record Prim
+    /// commands through a host-built draw context instead of touching a canvas, so the output
+    /// feeds both backends identically. Returns the primitive id (0 = rejected), used by
+    /// [`detach_pane_primitive`]. Call `render()` after.
+    pub fn attach_pane_primitive(&mut self, pane: u32, primitive: js_sys::Object) -> u32 {
+        self.inner
+            .borrow_mut()
+            .attach_pane_primitive(pane, primitive)
+    }
+
+    /// Detach a pane primitive by id (reference `IPaneApi.detachPrimitive`): fires its `detached`
+    /// hook and drops the retained JS object. False for an unknown id. Call `render()` after.
+    pub fn detach_pane_primitive(&mut self, id: u32) -> bool {
+        self.inner.borrow_mut().detach_pane_primitive(id)
+    }
+
+    /// Attach a series primitive (reference `ISeriesApi.attachPrimitive`, plugin platform Phase C-b):
+    /// a plain JS object like [`attach_pane_primitive`] plus an optional `autoscale_info(from,
+    /// to)` hook merged into the owning series' price-scale range. Its `pane_views()` renderers
+    /// get the same command-recording context, except `price_to_y(price)` is bound to the
+    /// owning series' scale. Returns the primitive id (0 = rejected), used by
+    /// [`detach_series_primitive`]. Call `render()` after.
+    pub fn attach_series_primitive(&mut self, series_id: u32, primitive: js_sys::Object) -> u32 {
+        self.inner
+            .borrow_mut()
+            .attach_series_primitive(series_id, primitive)
+    }
+
+    /// Detach a series primitive by id (reference `ISeriesApi.detachPrimitive`): fires its `detached`
+    /// hook and drops the retained JS object. False for an unknown id. Removing the owning
+    /// series auto-detaches all its primitives. Call `render()` after.
+    pub fn detach_series_primitive(&mut self, id: u32) -> bool {
+        self.inner.borrow_mut().detach_series_primitive(id)
+    }
+
+    /// Add a custom series (plugin platform Phase C-c; reference `IChartApi.addCustomSeries`): a
+    /// user-defined series type whose pane view (`price_value_builder`, `is_whitespace?`,
+    /// `render`, plus optional `default_options`/`destroy`) renders each bar through the
+    /// command-recording draw context, so its output is pixel-identical on both backends.
+    /// `adopt_primary` converts the engine's construction-time series 0 (the TS package's
+    /// first-series adoption, mirroring `add_series`). Returns the series id (u32::MAX =
+    /// rejected). Call `render()` after.
+    pub fn add_custom_series(&mut self, pane_view: js_sys::Object, adopt_primary: bool) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_custom_series(pane_view, adopt_primary)
+    }
+
+    /// Replace a custom series' items (reference `ISeriesApi.setData`): a JS array of `{time, ...}`
+    /// objects (times in UTC seconds). The raw items are stored host-side verbatim; their
+    /// times enter the engine as whitespace-style rows. Call `render()` after.
+    pub fn set_custom_series_data(&mut self, id: u32, items: js_sys::Array) {
+        self.inner.borrow_mut().set_custom_series_data(id, items);
+    }
+
+    /// Streaming update of a custom series (reference `ISeriesApi.update`): append a new time or
+    /// replace the item at an existing one. Call `render()` after.
+    pub fn update_custom_series_item(&mut self, id: u32, item: JsValue) {
+        self.inner.borrow_mut().update_custom_series_item(id, item);
+    }
+
+    /// The custom series' raw items aligned with the engine rows (post-sanitize order),
+    /// backing the TS `series.data()` (`null` for an unknown id).
+    pub fn custom_series_data(&self, id: u32) -> JsValue {
+        self.inner.borrow().custom_series_data(id)
+    }
+
+    /// The custom item at a logical index (the engine plot's mismatch-direction search),
+    /// backing the TS `series.data_by_index` (`null` off the data or for an unknown id).
+    pub fn custom_series_data_by_index(&self, id: u32, index: f64, mismatch: i8) -> JsValue {
+        self.inner
+            .borrow()
+            .custom_series_data_by_index(id, index, mismatch)
+    }
+
+    /// Merge a snake_case JSON patch of price-scale options into one pane scale (reference
+    /// `priceScale.applyOptions`; unknown keys ignored). Keys: `mode`, `auto_scale`,
+    /// `invert_scale`, `scale_margins`, `align_labels`, `ticks_visible`, `entire_text_only`,
+    /// `minimum_width`, `text_color` (`""`/`null` = follow `layout.textColor`).
+    pub fn price_scale_apply_options_json(&mut self, pane: u32, target: u8, json: &str) {
+        self.inner
+            .borrow_mut()
+            .price_scale_apply_options_json(pane, target, json);
+    }
+
+    /// One pane scale's full options as a snake_case JSON string (reference `priceScale.options()`;
+    /// "" for an unknown pane/target).
+    pub fn price_scale_options_json(&self, pane: u32, target: u8) -> String {
+        self.inner.borrow().price_scale_options_json(pane, target)
+    }
+
+    /// 0 = candlestick, 1 = OHLC bars, 2 = line, 3 = area, 4 = histogram (sets the main series).
+    pub fn set_series_type(&mut self, kind: u8) {
+        self.inner.borrow_mut().set_series_type(kind);
+    }
+
+    pub fn set_time_visible(&mut self, visible: bool) {
+        self.inner.borrow_mut().set_time_visible(visible);
+    }
+
+    /// reference `timeScale.visible` (default true): reserve/paint the whole time-axis strip. When
+    /// false the strip collapses to zero height. Distinct from `set_time_visible`, which only
+    /// governs label content.
+    pub fn set_time_axis_visible(&mut self, visible: bool) {
+        self.inner.borrow_mut().set_time_axis_visible(visible);
+    }
+
+    /// reference `timeScale.ticksVisible` (default false): tick marks beside the time-axis labels.
+    pub fn set_time_ticks_visible(&mut self, visible: bool) {
+        self.inner.borrow_mut().set_time_ticks_visible(visible);
+    }
+
+    /// reference `timeScale.minimumHeight` (CSS px; 0 = the 28px auto height): floor for the
+    /// time-axis strip height.
+    pub fn set_time_axis_minimum_height(&mut self, height: f64) {
+        self.inner.borrow_mut().set_time_axis_minimum_height(height);
+    }
+
+    /// reference `timeScale.tickMarkMaxCharacterLength` (default 8; 0 restores it): tick-label
+    /// width cap in characters, driving tick density.
+    pub fn set_tick_mark_max_character_length(&mut self, n: u32) {
+        self.inner
+            .borrow_mut()
+            .set_tick_mark_max_character_length(n);
+    }
+
+    /// Set the hovered pane separator for the `layout.panes.separatorHoverColor` band
+    /// (reference pane-separator.ts hover handle; -1 = none). Call `render()` to repaint.
+    pub fn set_separator_hover(&mut self, index: i32) {
+        self.inner.borrow_mut().set_separator_hover(index);
+    }
+
+    /// reference `timeScale.secondsVisible`: include seconds in time labels.
+    pub fn set_seconds_visible(&mut self, visible: bool) {
+        self.inner.borrow_mut().set_seconds_visible(visible);
+    }
+
+    /// reference `timeScale.minBarSpacing` (CSS px).
+    pub fn set_min_bar_spacing(&mut self, spacing: f64) {
+        self.inner.borrow_mut().set_min_bar_spacing(spacing);
+    }
+
+    /// reference `timeScale.maxBarSpacing` (CSS px; 0 restores the default half-width cap).
+    pub fn set_max_bar_spacing(&mut self, spacing: f64) {
+        self.inner.borrow_mut().set_max_bar_spacing(spacing);
+    }
+
+    /// reference `timeScale().applyOptions({ barSpacing })`: write the option and apply it live.
+    pub fn apply_bar_spacing_option(&mut self, spacing: f64) {
+        self.inner.borrow_mut().apply_bar_spacing_option(spacing);
+    }
+
+    /// reference `timeScale().applyOptions({ rightOffset })`: write the option and apply it live.
+    pub fn apply_right_offset_option(&mut self, offset: f64) {
+        self.inner.borrow_mut().apply_right_offset_option(offset);
+    }
+
+    /// reference `timeScale.rightOffsetPixels` (px): pin the right offset in pixels, converting to a
+    /// bar offset via the current bar spacing exactly like reference time-scale.ts.
+    pub fn set_right_offset_pixels(&mut self, pixels: f64) {
+        self.inner.borrow_mut().set_right_offset_pixels(pixels);
+    }
+
+    /// reference `timeScale.fixLeftEdge`.
+    pub fn set_fix_left_edge(&mut self, fix: bool) {
+        self.inner.borrow_mut().set_fix_left_edge(fix);
+    }
+
+    /// reference `timeScale.fixRightEdge`.
+    pub fn set_fix_right_edge(&mut self, fix: bool) {
+        self.inner.borrow_mut().set_fix_right_edge(fix);
+    }
+
+    /// reference `timeScale.lockVisibleTimeRangeOnResize`.
+    pub fn set_lock_visible_time_range_on_resize(&mut self, lock: bool) {
+        self.inner
+            .borrow_mut()
+            .set_lock_visible_time_range_on_resize(lock);
+    }
+
+    /// reference `timeScale.rightBarStaysOnScroll`.
+    pub fn set_right_bar_stays_on_scroll(&mut self, stays: bool) {
+        self.inner.borrow_mut().set_right_bar_stays_on_scroll(stays);
+    }
+
+    /// reference `timeScale.shiftVisibleRangeOnNewBar` (default true): when the last bar is
+    /// visible, the view follows newly appended bars; scrolled back, the same bars stay.
+    pub fn set_shift_visible_range_on_new_bar(&mut self, shift: bool) {
+        self.inner
+            .borrow_mut()
+            .set_shift_visible_range_on_new_bar(shift);
+    }
+
+    /// reference `timeScale.allowShiftVisibleRangeOnWhitespaceReplacement` (default false): also
+    /// follow when the new bar replaces an existing whitespace time point.
+    pub fn set_allow_shift_visible_range_on_whitespace_replacement(&mut self, allow: bool) {
+        self.inner
+            .borrow_mut()
+            .set_allow_shift_visible_range_on_whitespace_replacement(allow);
+    }
+
+    /// reference `timeScale.allowBoldLabels` (default true): bold the major time tick labels.
+    pub fn set_allow_bold_labels(&mut self, allow: bool) {
+        self.inner.borrow_mut().set_allow_bold_labels(allow);
+    }
+
+    /// reference `localization.dateFormat` (default `dd MMM \'yy`): the crosshair time-label
+    /// pattern. Tokens: `dd`/`d`, `MM`/`M`/`MMM`/`MMMM`, `yy`/`yyyy`, `'…'` quoted literals.
+    pub fn set_date_format(&mut self, pattern: &str) {
+        self.inner.borrow_mut().set_date_format(pattern);
+    }
+
+    /// reference `localization.locale`: regenerate the engine's month-name tables from
+    /// `Intl.DateTimeFormat` for this locale (drives the `MMM`/`MMMM` date-format tokens and
+    /// the month tick labels). Unsupported tags warn and keep the current tables.
+    pub fn set_locale(&mut self, locale: &str) {
+        self.inner.borrow_mut().set_locale(locale);
+    }
+
+    /// Push the host's "all scaling and scrolling disabled" aggregate (reference
+    /// `_isAllScalingAndScrollingDisabled`): forces fix-edge semantics on the time scale.
+    pub fn set_interaction_disabled(&mut self, disabled: bool) {
+        self.inner.borrow_mut().set_interaction_disabled(disabled);
+    }
+
+    /// reference `localization.priceFormatter`: `(price: number) => string`. Pass `null` to clear.
+    pub fn set_price_formatter(&mut self, f: Option<js_sys::Function>) {
+        self.inner.borrow_mut().set_price_formatter(f);
+    }
+
+    /// reference `timeScale.tickMarkFormatter`: `(timeSeconds, tickMarkType) => string`. `null` clears.
+    pub fn set_tick_mark_formatter(&mut self, f: Option<js_sys::Function>) {
+        self.inner.borrow_mut().set_tick_mark_formatter(f);
+    }
+
+    /// reference `localization.timeFormatter`: `(timeSeconds: number) => string`. Pass `null` to clear.
+    pub fn set_time_formatter(&mut self, f: Option<js_sys::Function>) {
+        self.inner.borrow_mut().set_time_formatter(f);
+    }
+
+    /// 0 = normal, 1 = magnet (reference default), 2 = hidden, 3 = magnet OHLC.
+    pub fn set_crosshair_mode(&mut self, mode: u8) {
+        self.inner.borrow_mut().set_crosshair_mode(mode);
+    }
+
+    /// Deep-merge a JSON options patch (reference `applyOptions` semantics) — e.g.
+    /// `{"grid":{"vertLines":{"color":"#334"}},"layout":{"background":{"color":"#111"}}}`.
+    /// Malformed JSON is ignored with a console warning. Call `render()` after (roadmap Phase A2).
+    pub fn apply_options(&mut self, patch_json: &str) {
+        self.inner.borrow_mut().apply_options(patch_json);
+    }
+
+    /// Current (deep-merged) chart options as a JSON string.
+    pub fn options_json(&self) -> String {
+        self.inner.borrow().options_json()
+    }
+
+    /// A series' current options as a snake_case JSON string (TS `series_options` field
+    /// names; "" for an unknown/removed id).
+    pub fn series_options_json(&self, id: u32) -> String {
+        self.inner.borrow().series_options_json(id)
+    }
+
+    /// Merge a snake_case JSON patch of series style options (reference `series.applyOptions`;
+    /// unknown keys are ignored gracefully). Call `render()` after.
+    pub fn series_apply_options_json(&mut self, id: u32, json: &str) {
+        self.inner.borrow_mut().series_apply_options_json(id, json);
+    }
+
+    /// All time-scale options as a snake_case JSON string (`bar_spacing`, `right_offset`,
+    /// `min_bar_spacing`, `max_bar_spacing`, `right_offset_pixels`, `time_visible`,
+    /// `seconds_visible`, `fix_left_edge`, `fix_right_edge`,
+    /// `lock_visible_time_range_on_resize`, `right_bar_stays_on_scroll`,
+    /// `shift_visible_range_on_new_bar`,
+    /// `allow_shift_visible_range_on_whitespace_replacement`).
+    pub fn time_scale_options_json(&self) -> String {
+        self.inner.borrow().time_scale_options_json()
+    }
+
+    /// Manual resize (still available for embedders not using `enable_auto_resize`, and for tests).
+    pub fn resize(&mut self, css_width: f64, css_height: f64, dpr: f64) {
+        self.inner.borrow_mut().resize(css_width, css_height, dpr);
+    }
+
+    pub fn zoom(&mut self, x_css: f64, scale: f64) {
+        self.inner.borrow_mut().zoom(x_css, scale);
+    }
+    pub fn scroll_start(&mut self, x_css: f64) {
+        self.inner.borrow_mut().scroll_start(x_css);
+    }
+    pub fn scroll_move(&mut self, x_css: f64) {
+        self.inner.borrow_mut().scroll_move(x_css);
+    }
+    pub fn scroll_end(&mut self) {
+        self.inner.borrow_mut().scroll_end();
+    }
+
+    // --- engine-owned interaction models (the TS recognizer forwards samples; all formulas
+    // live in the engine — see origin_engine::interaction) ---
+
+    /// reference wheel zoom increment: `sign(deltaY) * min(1, |deltaY|)`.
+    pub fn wheel_zoom_scale(&self, delta_y: f64) -> f64 {
+        self.inner.borrow().wheel_zoom_scale(delta_y)
+    }
+    /// reference pinch zoom increment: the scale-ratio delta ×5.
+    pub fn pinch_zoom_scale(&self, scale_delta: f64) -> f64 {
+        self.inner.borrow().pinch_zoom_scale(scale_delta)
+    }
+    /// reference wheel scroll delta: `deltaX * -80` px.
+    pub fn wheel_scroll_delta(&self, delta_x: f64) -> f64 {
+        self.inner.borrow().wheel_scroll_delta(delta_x)
+    }
+
+    /// Open a kinetic sampling session alongside the drag (`enabled = false` = no coast).
+    pub fn kinetic_begin_sampling(&mut self, enabled: bool, x_css: f64, now_ms: f64) {
+        self.inner
+            .borrow_mut()
+            .kinetic_begin_sampling(enabled, x_css, now_ms);
+    }
+    pub fn kinetic_add_sample(&mut self, x_css: f64, now_ms: f64) {
+        self.inner.borrow_mut().kinetic_add_sample(x_css, now_ms);
+    }
+    /// The drag was released: whether a momentum coast engaged (drive `kinetic_position`
+    /// per frame instead of ending the scroll session).
+    pub fn kinetic_release(&mut self, x_css: f64, now_ms: f64) -> bool {
+        self.inner.borrow_mut().kinetic_release(x_css, now_ms)
+    }
+    /// The coast's pointer position at `now_ms` (NaN when no coast is running).
+    pub fn kinetic_position(&self, now_ms: f64) -> f64 {
+        self.inner.borrow().kinetic_position(now_ms)
+    }
+    pub fn kinetic_finished(&self, now_ms: f64) -> bool {
+        self.inner.borrow().kinetic_finished(now_ms)
+    }
+    pub fn kinetic_stop(&mut self) {
+        self.inner.borrow_mut().kinetic_stop();
+    }
+
+    /// Axis drag-to-scale (reference pressedMouseMove on the axis widgets).
+    pub fn time_axis_start_scale(&mut self, x_css: f64) {
+        self.inner.borrow_mut().time_axis_start_scale(x_css);
+    }
+    pub fn time_axis_scale_to(&mut self, x_css: f64) {
+        self.inner.borrow_mut().time_axis_scale_to(x_css);
+    }
+    pub fn time_axis_end_scale(&mut self) {
+        self.inner.borrow_mut().time_axis_end_scale();
+    }
+    /// Whether a price-axis drag can scale this scale (false in percentage/indexed modes).
+    pub fn price_axis_scalable(&self, pane: usize, target: u8) -> bool {
+        self.inner.borrow().price_axis_scalable(pane, target)
+    }
+    pub fn price_axis_start_scale(&mut self, pane: usize, target: u8, y_css: f64) {
+        self.inner
+            .borrow_mut()
+            .price_axis_start_scale(pane, target, y_css);
+    }
+    pub fn price_axis_scale_to(&mut self, pane: usize, target: u8, y_css: f64) {
+        self.inner
+            .borrow_mut()
+            .price_axis_scale_to(pane, target, y_css);
+    }
+    pub fn price_axis_end_scale(&mut self, pane: usize, target: u8) {
+        self.inner.borrow_mut().price_axis_end_scale(pane, target);
+    }
+    /// Vertical price pan (reference `startScrollPrice`/`scrollPriceTo`).
+    pub fn price_axis_start_scroll(&mut self, pane: usize, target: u8, y_css: f64) {
+        self.inner
+            .borrow_mut()
+            .price_axis_start_scroll(pane, target, y_css);
+    }
+    pub fn price_axis_scroll_to(&mut self, pane: usize, target: u8, y_css: f64) {
+        self.inner
+            .borrow_mut()
+            .price_axis_scroll_to(pane, target, y_css);
+    }
+    pub fn price_axis_end_scroll(&mut self, pane: usize, target: u8) {
+        self.inner.borrow_mut().price_axis_end_scroll(pane, target);
+    }
+
+    /// Eased scroll-to-position (the engine owns the cubic ease-out and applies each tick).
+    pub fn start_scroll_animation(&mut self, target: f64, duration_ms: f64, now_ms: f64) {
+        self.inner
+            .borrow_mut()
+            .start_scroll_animation(target, duration_ms, now_ms);
+    }
+    /// Apply the eased position for `now_ms`; NaN when finished/none (stop scheduling).
+    pub fn scroll_animation_tick(&mut self, now_ms: f64) -> f64 {
+        self.inner.borrow_mut().scroll_animation_tick(now_ms)
+    }
+    pub fn cancel_scroll_animation(&mut self) {
+        self.inner.borrow_mut().cancel_scroll_animation();
+    }
+    /// Index of the stacked pane containing content-y `y` (engine-owned pane bounds).
+    pub fn pane_index_at_y(&self, y_css: f64) -> usize {
+        self.inner.borrow().pane_index_at_y(y_css)
+    }
+    pub fn fit_content(&mut self) {
+        self.inner.borrow_mut().fit_content();
+    }
+    pub fn set_bar_spacing(&mut self, spacing: f64) {
+        self.inner.borrow_mut().set_bar_spacing(spacing);
+    }
+    pub fn set_right_offset(&mut self, offset: f64) {
+        self.inner.borrow_mut().set_right_offset(offset);
+    }
+    pub fn set_crosshair(&mut self, x_css: f64, y_css: f64) {
+        self.inner.borrow_mut().set_crosshair(x_css, y_css);
+    }
+    /// TradingView's Ctrl-held magnet: the gesture layer forwards the live modifier state; a
+    /// Normal-mode crosshair then snaps to the hovered bar's OHLC on the next `render()`.
+    pub fn set_crosshair_ohlc_magnet(&mut self, enabled: bool) {
+        self.inner.borrow_mut().engine.crosshair_ohlc_magnet = enabled;
+    }
+
+    /// Whether the OHLC crosshair magnet is currently engaged.
+    pub fn crosshair_ohlc_magnet(&self) -> bool {
+        self.inner.borrow().engine.crosshair_ohlc_magnet
+    }
+    pub fn clear_crosshair(&mut self) {
+        self.inner.borrow_mut().clear_crosshair();
+    }
+    /// Hover hit testing (plugin platform Phase C-d): the primitive object and/or series
+    /// under pane-relative CSS px `(x_css, y_css)` as a JSON
+    /// `{"series_id":number|null,"object_id":string|null,"cursor":string|null}` (see the
+    /// inner method for the reference arbitration). Also refreshes the engine's hovered series
+    /// for the `hoveredSeriesOnTop` z-bump, so call `render()` afterwards.
+    pub fn hover_at(&mut self, x_css: f64, y_css: f64) -> String {
+        self.inner.borrow_mut().hover_at(x_css, y_css)
+    }
+    /// Release the hovered series (cursor left the chart): the `hoveredSeriesOnTop` z-bump
+    /// lets go on the next `render()`.
+    pub fn clear_hover(&mut self) {
+        self.inner.borrow_mut().engine.set_hovered_series(None);
+    }
+    /// TradingView-style click-to-select: the host's click pipeline sets the series under the
+    /// click (`None` on empty pane space); while set, the frame build paints anchor points on
+    /// its drawn data points (theme-derived fill, accent-blue border). Call `render()`
+    /// afterwards.
+    pub fn set_selected_series(&mut self, id: Option<u32>) {
+        self.inner
+            .borrow_mut()
+            .engine
+            .set_selected_series(id.map(|id| id as usize));
+    }
+
+    // --- drawing tools (engine-owned drawing objects; origin_engine drawings.rs) ---
+    // Kinds: 0 trend_line, 1 horizontal_line, 2 horizontal_ray, 3 vertical_line, 4 rectangle,
+    // 5 text. All coordinates are pane-relative CSS px (x from the pane's left, y from the
+    // chart's top — the crosshair's space). Call `render()` after mutations.
+
+    /// Add a drawing to `pane` from a JSON `[{logical, price}, ...]` anchor array and an
+    /// optional options patch ("" = defaults). Returns the drawing id (> 0), or 0 when the
+    /// engine rejects it (unknown kind, stale pane, wrong anchor count, non-finite anchors).
+    pub fn add_drawing(
+        &mut self,
+        kind: u8,
+        pane: usize,
+        points_json: &str,
+        options_json: &str,
+    ) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_drawing(kind, pane, points_json, options_json)
+    }
+    /// Merge an options patch into the drawing (reference `applyOptions` merge semantics).
+    pub fn drawing_apply_options(&mut self, id: u32, options_json: &str) -> bool {
+        self.inner
+            .borrow_mut()
+            .drawing_apply_options(id, options_json)
+    }
+    /// Replace the drawing's anchors from a JSON `[{logical, price}, ...]` array.
+    pub fn drawing_set_points(&mut self, id: u32, points_json: &str) -> bool {
+        self.inner.borrow_mut().drawing_set_points(id, points_json)
+    }
+    /// The drawing's options as snake_case JSON ("" for an unknown id).
+    pub fn drawing_options_json(&self, id: u32) -> String {
+        self.inner.borrow().drawing_options_json(id)
+    }
+    /// The drawing's anchors as a JSON `[{logical, price}, ...]` array ("" for an unknown id).
+    pub fn drawing_points_json(&self, id: u32) -> String {
+        self.inner.borrow().drawing_points_json(id)
+    }
+    /// One anchor's CSS-px position `[x, y]` in overlay space (empty when it cannot convert).
+    pub fn drawing_point_to_coordinate(&self, id: u32, index: usize) -> Vec<f64> {
+        self.inner.borrow().drawing_point_to_coordinate(id, index)
+    }
+    /// Every drawing as a JSON array in z-order (`{id, kind, pane_index, points, ...options}`).
+    pub fn drawings_json(&self) -> String {
+        self.inner.borrow().drawings_json()
+    }
+    pub fn remove_drawing(&mut self, id: u32) -> bool {
+        self.inner.borrow_mut().remove_drawing(id)
+    }
+    /// Remove every drawing (the demo's "clear all").
+    pub fn clear_drawings(&mut self) {
+        self.inner.borrow_mut().clear_drawings();
+    }
+    /// Click-to-select arbitration: selects the drawing under the point (clears on a miss) and
+    /// reports whether one was hit, so the host skips its series-selection path.
+    pub fn select_drawing_at(&mut self, x_css: f64, y_css: f64) -> bool {
+        self.inner.borrow_mut().select_drawing_at(x_css, y_css)
+    }
+    pub fn set_selected_drawing(&mut self, id: Option<u32>) {
+        self.inner.borrow_mut().set_selected_drawing(id);
+    }
+    /// Mark the text drawing the host's typing-mode editor currently owns: its
+    /// placeholder/label is suppressed in the next `render()` so the editor's preview is the
+    /// only visual for it. Clear (`undefined`) when the editor closes.
+    pub fn set_editing_drawing(&mut self, id: Option<u32>) {
+        self.inner.borrow_mut().engine.set_editing_drawing(id);
+    }
+    pub fn selected_drawing(&self) -> Option<u32> {
+        self.inner.borrow().selected_drawing()
+    }
+    /// Delete/Backspace: remove the selected drawing. False while nothing is selected.
+    pub fn remove_selected_drawing(&mut self) -> bool {
+        self.inner.borrow_mut().remove_selected_drawing()
+    }
+    /// Press routing for the gesture layer: opens an anchor/body drag on the drawing under the
+    /// point (false = the host falls through to pan/scroll). A successful grab selects the
+    /// drawing (TradingView parity).
+    pub fn drawing_drag_start_at(&mut self, x_css: f64, y_css: f64) -> bool {
+        self.inner.borrow_mut().drawing_drag_start_at(x_css, y_css)
+    }
+    pub fn drawing_drag_to(&mut self, x_css: f64, y_css: f64, magnet: bool, straighten: bool) {
+        self.inner
+            .borrow_mut()
+            .drawing_drag_to(x_css, y_css, magnet, straighten);
+    }
+    pub fn drawing_drag_end(&mut self) {
+        self.inner.borrow_mut().drawing_drag_end();
+    }
+    pub fn drawing_drag_active(&self) -> bool {
+        self.inner.borrow().drawing_drag_active()
+    }
+    /// Arm interactive creation of a tool kind ("" options = defaults): the next clicks place
+    /// anchors through `drawing_create_click`, moves preview through `drawing_create_move`.
+    pub fn drawing_create_begin(&mut self, kind: u8, options_json: &str) -> bool {
+        self.inner
+            .borrow_mut()
+            .drawing_create_begin(kind, options_json)
+    }
+    /// Place the next creation anchor: 0 unarmed, -1 pending more anchors, > 0 the committed
+    /// drawing's id (left selected, TradingView-style). `magnet` snaps the anchor to the nearest
+    /// bar's OHLC; `straighten` constrains a second anchor to 0°/45°/90° (a rectangle to a
+    /// square).
+    pub fn drawing_create_click(
+        &mut self,
+        x_css: f64,
+        y_css: f64,
+        magnet: bool,
+        straighten: bool,
+    ) -> i64 {
+        self.inner
+            .borrow_mut()
+            .drawing_create_click(x_css, y_css, magnet, straighten)
+    }
+    pub fn drawing_create_move(&mut self, x_css: f64, y_css: f64, magnet: bool, straighten: bool) {
+        self.inner
+            .borrow_mut()
+            .drawing_create_move(x_css, y_css, magnet, straighten);
+    }
+    pub fn drawing_create_cancel(&mut self) {
+        self.inner.borrow_mut().drawing_create_cancel();
+    }
+    pub fn drawing_create_active(&self) -> bool {
+        self.inner.borrow().drawing_create_active()
+    }
+
+    // --- freehand brush (press-drag-release capture; engine owns decimation/simplification) ---
+
+    /// Begin a brush stroke (pointer-down with the brush tool armed; "" options = defaults).
+    /// False off the panes/data.
+    pub fn brush_create_start(&mut self, options_json: &str, x_css: f64, y_css: f64) -> bool {
+        self.inner
+            .borrow_mut()
+            .brush_create_start(options_json, x_css, y_css)
+    }
+    /// Capture the next stroke point from a pointer move (engine-decimated by distance).
+    pub fn brush_create_add(&mut self, x_css: f64, y_css: f64) {
+        self.inner.borrow_mut().brush_create_add(x_css, y_css);
+    }
+    /// Commit the stroke (pointer-up): RDP-simplified into a smooth curved path and stored as
+    /// the selected drawing. 0 = degenerate stroke discarded (a click without a drag).
+    pub fn brush_create_end(&mut self) -> u32 {
+        self.inner.borrow_mut().brush_create_end()
+    }
+    pub fn brush_create_cancel(&mut self) {
+        self.inner.borrow_mut().brush_create_cancel();
+    }
+    pub fn brush_create_active(&self) -> bool {
+        self.inner.borrow().brush_create_active()
+    }
+    /// TradingView-style reset view: default bar spacing/right offset plus autoscale restored
+    /// on every pane's price scales; the next `render()` recalculates the visible ranges.
+    pub fn reset_view(&mut self) {
+        self.inner.borrow_mut().engine.reset_view();
+    }
+    /// reference `chart.setCrosshairPosition(price, time, series)`: position the crosshair at a
+    /// data point with no DOM event — `time` must resolve exactly to a bar (false
+    /// otherwise); x is that bar's coordinate and y the price mapped through the given
+    /// series' price scale. A following `render()` shows it.
+    pub fn set_crosshair_position(&mut self, price: f64, time: f64, series_id: u32) -> bool {
+        self.inner
+            .borrow_mut()
+            .set_crosshair_position(price, time, series_id)
+    }
+    /// reference `chart.clearCrosshairPosition`: clear the crosshair along with any saved origin,
+    /// so later scale changes cannot resurrect it.
+    pub fn clear_crosshair_position(&mut self) {
+        self.inner.borrow_mut().clear_crosshair_position();
+    }
+    pub fn bar_spacing(&self) -> f64 {
+        self.inner.borrow().bar_spacing()
+    }
+    pub fn right_offset(&self) -> f64 {
+        self.inner.borrow().right_offset()
+    }
+    pub fn scroll_position(&self) -> f64 {
+        self.inner.borrow().scroll_position()
+    }
+    pub fn scroll_to_position(&mut self, position: f64) {
+        self.inner.borrow_mut().scroll_to_position(position);
+    }
+    pub fn scroll_to_real_time(&mut self) {
+        self.inner.borrow_mut().scroll_to_real_time();
+    }
+    pub fn reset_time_scale(&mut self) {
+        self.inner.borrow_mut().reset_time_scale();
+    }
+    pub fn time_scale_width(&self) -> f64 {
+        self.inner.borrow().time_scale_width()
+    }
+    pub fn time_scale_height(&self) -> f64 {
+        self.inner.borrow().time_scale_height()
+    }
+    pub fn price_scale_width(&self, pane: usize, target: u8) -> f64 {
+        self.inner.borrow().price_scale_width(pane, target)
+    }
+    pub fn price_scale_visible_range(&self, pane: usize, target: u8) -> Vec<f64> {
+        self.inner.borrow().price_scale_visible_range(pane, target)
+    }
+    pub fn set_price_scale_visible_range(&mut self, pane: usize, target: u8, from: f64, to: f64) {
+        self.inner
+            .borrow_mut()
+            .set_price_scale_visible_range(pane, target, from, to);
+    }
+    pub fn price_scale_auto_scale(&self, pane: usize, target: u8) -> Option<bool> {
+        self.inner.borrow().price_scale_auto_scale(pane, target)
+    }
+    pub fn set_price_scale_auto_scale(&mut self, pane: usize, target: u8, enabled: bool) {
+        self.inner
+            .borrow_mut()
+            .set_price_scale_auto_scale(pane, target, enabled);
+    }
+    pub fn price_scale_inverted(&self, pane: usize, target: u8) -> Option<bool> {
+        self.inner.borrow().price_scale_inverted(pane, target)
+    }
+    pub fn set_price_scale_inverted(&mut self, pane: usize, target: u8, inverted: bool) {
+        self.inner
+            .borrow_mut()
+            .set_price_scale_inverted(pane, target, inverted);
+    }
+    pub fn price_scale_margins(&self, pane: usize, target: u8) -> Vec<f64> {
+        self.inner.borrow().price_scale_margins(pane, target)
+    }
+    pub fn set_price_scale_margins(&mut self, pane: usize, target: u8, top: f64, bottom: f64) {
+        self.inner
+            .borrow_mut()
+            .set_price_scale_margins(pane, target, top, bottom);
+    }
+    pub fn price_scale_mode(&self, pane: usize, target: u8) -> Option<u8> {
+        self.inner.borrow().price_scale_mode(pane, target)
+    }
+    pub fn set_price_scale_mode(&mut self, pane: usize, target: u8, mode: u8) {
+        self.inner
+            .borrow_mut()
+            .set_price_scale_mode(pane, target, mode);
+    }
+    pub fn series_pane_index(&self, id: u32) -> Option<usize> {
+        self.inner.borrow().series_pane_index(id)
+    }
+    pub fn series_is_overlay(&self, id: u32) -> Option<bool> {
+        self.inner.borrow().series_is_overlay(id)
+    }
+    pub fn series_price_scale_id(&self, id: u32) -> Option<u8> {
+        self.inner.borrow().series_price_scale_id(id)
+    }
+    pub fn set_series_price_scale(&mut self, id: u32, target: u8) {
+        self.inner.borrow_mut().set_series_price_scale(id, target);
+    }
+    pub fn series_price_to_coordinate(&self, id: u32, price: f64) -> Option<f64> {
+        self.inner.borrow().series_price_to_coordinate(id, price)
+    }
+    pub fn series_coordinate_to_price(&self, id: u32, coordinate: f64) -> Option<f64> {
+        self.inner
+            .borrow()
+            .series_coordinate_to_price(id, coordinate)
+    }
+    pub fn series_kind(&self, id: u32) -> Option<u8> {
+        self.inner.borrow().series_kind(id)
+    }
+    pub fn series_data_by_index(&self, id: u32, index: f64, mismatch: i8) -> Vec<f64> {
+        self.inner
+            .borrow()
+            .series_data_by_index(id, index, mismatch)
+    }
+    pub fn series_data(&self, id: u32) -> Vec<f64> {
+        self.inner.borrow().series_data(id)
+    }
+    pub fn series_bars_in_logical_range(&self, id: u32, from: f64, to: f64) -> Vec<f64> {
+        self.inner
+            .borrow()
+            .series_bars_in_logical_range(id, from, to)
+    }
+    pub fn price_axis_width(&self) -> f64 {
+        self.inner.borrow().price_axis_width()
+    }
+    pub fn pane_left(&self) -> f64 {
+        self.inner.borrow().pane_left()
+    }
+
+    // --- coordinate & logical-range API (roadmap Phase A4) ---
+
+    /// Y (CSS px) for a price, or `undefined` if the price scale has no range yet.
+    pub fn price_to_coordinate(&self, price: f64) -> Option<f64> {
+        self.inner.borrow().price_to_coordinate(price)
+    }
+    /// Price for a Y (CSS px), or `undefined` if the price scale has no range yet.
+    pub fn coordinate_to_price(&self, y_css: f64) -> Option<f64> {
+        self.inner.borrow().coordinate_to_price(y_css)
+    }
+    /// X (CSS px) for a UTC-seconds timestamp on a data point, else `undefined`.
+    pub fn time_to_coordinate(&self, time: f64) -> Option<f64> {
+        self.inner.borrow().time_to_coordinate(time)
+    }
+    /// UTC seconds of the data point nearest X (CSS px), or `undefined` off-chart.
+    pub fn coordinate_to_time(&self, x_css: f64) -> Option<f64> {
+        self.inner.borrow().coordinate_to_time(x_css)
+    }
+    /// Integer logical (bar) index owning X (CSS px), or `undefined` if there is no data.
+    pub fn coordinate_to_logical(&self, x_css: f64) -> Option<f64> {
+        self.inner.borrow().coordinate_to_logical(x_css)
+    }
+    /// X (CSS px) for an integer logical index.
+    pub fn logical_to_coordinate(&self, logical: f64) -> Option<f64> {
+        self.inner.borrow().logical_to_coordinate(logical)
+    }
+    /// Logical index for a UTC-seconds timestamp. `find_nearest` follows reference lower-bound rules.
+    pub fn time_to_index(&self, time: f64, find_nearest: bool) -> Option<i64> {
+        self.inner.borrow().time_to_index(time, find_nearest)
+    }
+    /// Per-series OHLC at the bar under X (CSS px) as a flat `[id, o, h, l, c, ...]` Float64Array
+    /// (see the inner method); empty off-chart. Backs crosshair/click `seriesData`.
+    pub fn hover_data(&self, x_css: f64) -> Vec<f64> {
+        self.inner.borrow().hover_data(x_css)
+    }
+    /// Visible window in logical (bar) units as a `[from, to]` Float64Array (empty if no data).
+    pub fn visible_logical_range(&self) -> Vec<f64> {
+        self.inner.borrow().visible_logical_range()
+    }
+    /// Set the visible window in logical (bar) units; call `render()` after.
+    pub fn set_visible_logical_range(&mut self, from: f64, to: f64) {
+        self.inner.borrow_mut().set_visible_logical_range(from, to);
+    }
+    /// Visible window as a `[from_time, to_time]` Float64Array of UTC seconds (empty if no data).
+    pub fn visible_time_range(&self) -> Vec<f64> {
+        self.inner.borrow().visible_time_range()
+    }
+    /// Set the visible window to bracket `[from_time, to_time]` UTC seconds; call `render()` after.
+    pub fn set_visible_time_range(&mut self, from_time: f64, to_time: f64) {
+        self.inner
+            .borrow_mut()
+            .set_visible_time_range(from_time, to_time);
+    }
+
+    pub fn render(&mut self) -> Result<(), JsValue> {
+        self.inner.borrow_mut().render()
+    }
+
+    /// Paint the retained backend-neutral frame into the warm Canvas2D pane without changing the
+    /// active onscreen backend. The TypeScript package uses this to implement its synchronous,
+    /// deterministic composed screenshot API even while WebGPU is active.
+    #[doc(hidden)]
+    pub fn render_canvas2d_snapshot(&self) -> Result<(), JsValue> {
+        self.inner.borrow().render_canvas2d()
+    }
+
+    /// Reports the active pane backend for diagnostics and runtime-matrix tests.
+    pub fn backend_kind(&self) -> String {
+        self.inner.borrow().backend_kind()
+    }
+
+    /// Internal id used by the package shell to route device-loss notifications to this chart.
+    #[doc(hidden)]
+    pub fn backend_runtime_id(&self) -> u32 {
+        self.runtime_id
+    }
+
+    /// Deterministic browser-matrix hook. This is intentionally absent from the public TypeScript
+    /// chart API; it marks the current device as lost so the next render exercises real failover.
+    #[doc(hidden)]
+    pub fn simulate_device_loss_for_test(&mut self) {
+        if let Some(gfx) = self.inner.borrow().gfx.as_ref() {
+            gfx.device_lost.store(true, Ordering::Release);
+            notify_origin_backend_loss(self.runtime_id);
+        }
+    }
+
+    /// Test-only instrumentation for the `Prim::Text` texture cache: `{"entries":n,
+    /// "rasterizations":n}` — identical text runs must rasterize once. Absent from the public
+    /// TypeScript API (reached as `chart.wasm.text_cache_debug()` in the browser specs).
+    #[doc(hidden)]
+    pub fn text_cache_debug(&self) -> String {
+        self.inner.borrow().text_runs.as_ref().map_or(
+            "{\"entries\":0,\"rasterizations\":0}".to_string(),
+            |store| store.debug_stats(),
+        )
+    }
+}
+
+impl ChartInner {
+    // --- rendering ---
+}
+
+/// Attempt to initialize WebGPU. A failure is recoverable because the same chart frame can be
+/// executed by the Canvas2D backend.
+async fn try_create_gfx(
+    pane_canvas: web_sys::HtmlCanvasElement,
+    css_width: f64,
+    css_height: f64,
+    dpr: f64,
+    runtime_id: u32,
+    simulate_adapter_failure: bool,
+    force_fallback_adapter: bool,
+) -> Result<Gfx, JsValue> {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let surface = instance
+        .create_surface(wgpu::SurfaceTarget::Canvas(pane_canvas))
+        .map_err(|e| JsValue::from_str(&format!("create_surface failed: {e}")))?;
+    if simulate_adapter_failure {
+        return Err(JsValue::from_str(
+            "request_adapter failed: deterministic runtime-matrix injection",
+        ));
+    }
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: Some(&surface),
+            force_fallback_adapter,
+        })
+        .await
+        .map_err(|e| JsValue::from_str(&format!("request_adapter failed: {e}")))?;
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor::default())
+        .await
+        .map_err(|e| JsValue::from_str(&format!("request_device failed: {e}")))?;
+    let device_lost = Arc::new(AtomicBool::new(false));
+    let lost_flag = Arc::clone(&device_lost);
+    device.set_device_lost_callback(move |reason, _message| {
+        // `Destroyed` is the expected callback when resources are intentionally dropped during an
+        // already-completed fallback. Only an unknown/driver loss needs to initiate recovery.
+        if reason == wgpu::DeviceLostReason::Unknown {
+            lost_flag.store(true, Ordering::Release);
+            notify_origin_backend_loss(runtime_id);
+        }
+    });
+    let bitmap_w = (css_width * dpr).round().max(1.0) as u32;
+    let bitmap_h = (css_height * dpr).round().max(1.0) as u32;
+    let config = surface
+        .get_default_config(&adapter, bitmap_w, bitmap_h)
+        .ok_or_else(|| JsValue::from_str("surface not supported by adapter"))?;
+    surface.configure(&device, &config);
+    let quad_renderer = QuadRenderer::new(&device, config.format, SAMPLE_COUNT);
+    let atlas = LabelAtlas::new(&device);
+    let tex_renderer = TexQuadRenderer::new(&device, config.format, atlas.view(), SAMPLE_COUNT);
+    let tri_renderer = TriRenderer::new(&device, config.format, SAMPLE_COUNT);
+    let msaa = MsaaTarget::new(&device, config.format, bitmap_w, bitmap_h);
+    Ok(Gfx {
+        device,
+        queue,
+        surface,
+        config,
+        quad_renderer,
+        tri_renderer,
+        msaa,
+        atlas,
+        tex_renderer,
+        device_lost,
+    })
+}

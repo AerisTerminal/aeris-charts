@@ -1,6 +1,6 @@
-# Aion Charts browser demo and parity gate
+# Origin Charts browser demo and parity gate
 
-The demo imports the built `@aion/charts` distribution from `dist/`; it does not contain a second
+The demo imports the built `@origin/charts` distribution from `dist/`; it does not contain a second
 chart model or renderer.
 
 ## Build
@@ -37,7 +37,7 @@ SwiftShader WebGPU adapter. It fails if automatic mode falls back to Canvas2D. T
    fixture proves that the left strip reserves layout space and matches the reference's width, range, series
    coordinate, round-trip conversion and logical window while the right strip is disabled.
 5. Pinned reference 5.2.0 renders that fixture twice to prove its reference capture is
-   deterministic, then Aion is compared with it after the same Chromium compositor. Full-frame,
+   deterministic, then Origin is compared with it after the same Chromium compositor. Full-frame,
    pane, price-axis, and time-axis differences have separate versioned regression ceilings. This
    is a measured fidelity gate, not yet a cross-library pixel-parity claim.
 6. A seven-case reference matrix covers DPR 1/1.25/2/3, explicit bar spacings 0.5/6/50, and light/dark

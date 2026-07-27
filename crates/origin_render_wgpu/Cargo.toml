@@ -1,0 +1,17 @@
+[package]
+name = "origin_render_wgpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WebGPU backend for origin_render draw lists (pipelines, glyph atlas, batching)"
+
+[dependencies]
+origin_render = { path = "../origin_render" }
+wgpu = { version = "25", default-features = false, features = ["webgpu", "wgsl"] }
+bytemuck = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+origin_engine = { path = "../origin_engine" }
+
+[lints]
+workspace = true

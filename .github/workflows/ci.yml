@@ -28,11 +28,11 @@ jobs:
       - name: clippy (native, all targets)
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: clippy (wasm32)
-        run: cargo clippy -p aion_wasm --target wasm32-unknown-unknown -- -D warnings
+        run: cargo clippy -p origin_wasm --target wasm32-unknown-unknown -- -D warnings
       - name: tests (includes golden-image regression)
         run: cargo test --workspace
-      - name: perf gate (report-only; AION_PERF_STRICT=1 makes it a hard gate)
-        run: cargo run -p aion_native --example perf_gate --release
+      - name: perf gate (report-only; ORIGIN_PERF_STRICT=1 makes it a hard gate)
+        run: cargo run -p origin_native --example perf_gate --release
 
   package:
     name: TypeScript package (lint, typecheck, build)
@@ -82,7 +82,7 @@ jobs:
         with:
           node-version: 22
           registry-url: https://npm.pkg.github.com
-          scope: "@tradeaion"
+          scope: "@origin"
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
       - name: Install package deps
@@ -114,7 +114,7 @@ jobs:
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
       - name: Build wasm for the demo
-        run: wasm-pack build crates/aion_wasm --target web --out-dir ../../examples/web_demo/pkg
+        run: wasm-pack build crates/origin_wasm --target web --out-dir ../../examples/web_demo/pkg
       - name: Install demo deps
         working-directory: examples/web_demo
         run: npm ci

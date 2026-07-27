@@ -9,7 +9,7 @@ const LABEL = [239, 83,80]; // #ef5350 — the deterministic final DOWN bar's la
 const CHIP = LABEL; // the title chip shares the main label color by default
 const ROW = 17; // 12px font + 2*2.5 padding
 
-const test_port = Number.parseInt(process.env.AION_TEST_PORT ?? "4174", 10);
+const test_port = Number.parseInt(process.env.ORIGIN_TEST_PORT ?? "4174", 10);
 const test_base_url = `http://127.0.0.1:${test_port}`;
 
 async function wait_for_chart(page) {
@@ -181,7 +181,7 @@ function region_diff(a, b, box) {
 }
 
 test("countdown_timer_needed gates on visibility and data (pure timer logic)", async () => {
-  const { countdown_timer_needed } = await import("../dist/aion_charts.js");
+  const { countdown_timer_needed } = await import("../dist/origin_charts.js");
   expect(countdown_timer_needed([])).toBe(false);
   expect(countdown_timer_needed([{ countdown_visible: true, has_data: true }])).toBe(true);
   expect(countdown_timer_needed([{ countdown_visible: true, has_data: false }])).toBe(false);
@@ -191,7 +191,7 @@ test("countdown_timer_needed gates on visibility and data (pure timer logic)", a
 
 test("last-value cluster paints chip, price, and countdown rows; the chip matches the label color", async ({ browser }) => {
   const { context, page } = await open_cluster_page(browser, {
-    title: "AION",
+    title: "ORIGIN",
     title_visible: true,
     countdown_visible: true,
   });
@@ -230,7 +230,7 @@ test("last-value cluster paints chip, price, and countdown rows; the chip matche
 
 test("cluster parts toggle independently", async ({ browser }) => {
   const { context, page } = await open_cluster_page(browser, {
-    title: "AION",
+    title: "ORIGIN",
     title_visible: true,
     countdown_visible: true,
   });
@@ -279,7 +279,7 @@ test("cluster parts toggle independently", async ({ browser }) => {
 
 test("countdown row ticks with the 1s interval timer", async ({ browser }) => {
   const { context, page } = await open_cluster_page(browser, {
-    title: "AION",
+    title: "ORIGIN",
     title_visible: true,
     countdown_visible: true,
   });
@@ -309,7 +309,7 @@ test("price and countdown chips share an exact edge at any DPR (no attachment ga
       const close = last.close - 2;
       window.__cluster_close = close;
       window.__main.update({ time: now, open: last.close, high: last.close + 0.6, low: close - 0.6, close });
-      window.__main.apply_options({ title: "AION", title_visible: true, countdown_visible: true, price_line_visible: false });
+      window.__main.apply_options({ title: "ORIGIN", title_visible: true, countdown_visible: true, price_line_visible: false });
     });
     await page.waitForTimeout(300);
     const shot = PNG.sync.read(await page.screenshot());
@@ -334,7 +334,7 @@ test("price and countdown chips share an exact edge at any DPR (no attachment ga
 
 test("cluster rounds its axis-facing corners and keeps the chart-facing side sharp", async ({ browser }) => {
   const { context, page } = await open_cluster_page(browser, {
-    title: "AION",
+    title: "ORIGIN",
     title_visible: true,
     countdown_visible: true,
   });

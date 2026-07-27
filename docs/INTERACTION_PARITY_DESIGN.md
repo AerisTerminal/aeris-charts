@@ -1,18 +1,18 @@
-# Aion Charts — Interaction & Accessibility Parity (Design)
+# Origin Charts — Interaction & Accessibility Parity (Design)
 
 Status: **implemented — engine-owned.** Companion to [ARCHITECTURE.md](ARCHITECTURE.md).
 Covers the three interaction gaps vs the reference charting library: **axis drag-to-scale**, **touch behavior**
 (kinetic scroll + tracking mode), and **accessibility**.
 
 > **Update (implementation landed):** the interaction MODELS all live in the engine
-> (`aion_engine::interaction`, plus `aion_core::KineticAnimation` and the scale cores'
+> (`origin_engine::interaction`, plus `origin_core::KineticAnimation` and the scale cores'
 > `start_scale`/`scale_to`/`start_scroll`/`scroll_to`): axis drag-to-scale, vertical price pan,
 > kinetic coast (§3a **option B** — the JS loop was never kept), wheel/pinch zoom increments,
 > and the eased scroll-to-position animation (cubic ease-out engine-side). The TS gesture
 > recognizer ([`packages/charts/src/gestures.ts`](../packages/charts/src/gestures.ts)) only
 > classifies events, resolves ownership/config, and forwards normalized samples over the wasm
 > boundary while scheduling the animation frames. Headless tests pin the physics in
-> `aion_engine::interaction::tests` and `aion_core::model::kinetic_animation::tests`; browser
+> `origin_engine::interaction::tests` and `origin_core::model::kinetic_animation::tests`; browser
 > coverage is `examples/web_demo/tests/interaction-models.spec.mjs`.
 
 All interaction lives in the TS gesture recognizer
@@ -91,7 +91,7 @@ reference coasts after a flick. Two implementations:
   from the existing animation tick. More faithful and headless-testable, but larger.
 
 ~~Recommend **A first** (fast, cancellable, `prefers-reduced-motion`-aware), leaving B as an upgrade.~~
-**Landed as B:** `aion_core::model::kinetic_animation::KineticAnimation` is the faithful px-domain
+**Landed as B:** `origin_core::model::kinetic_animation::KineticAnimation` is the faithful px-domain
 port; the engine samples during the drag and the host drives the coast from its RAF loop
 (`kinetic_begin_sampling`/`kinetic_add_sample`/`kinetic_release`/`kinetic_position`), so the
 physics are headless-tested. New option `kinetic_scroll: boolean | { touch, mouse }` (reference
@@ -142,13 +142,13 @@ Each phase adds a Playwright interaction test (synthetic pointer/touch/keyboard 
 option surfaces, TS type + `resolved_gestures` coverage. ~~None require engine changes; kinetic can be
 upgraded to the engine-side model (3a-B) later if we want headless physics tests.~~ The models were
 subsequently moved engine-side (header note): the physics are pinned headlessly in
-`aion_engine::interaction::tests` / `aion_core::model::kinetic_animation::tests` and in the browser
+`origin_engine::interaction::tests` / `origin_core::model::kinetic_animation::tests` and in the browser
 by `examples/web_demo/tests/interaction-models.spec.mjs`.
 
 ## 6. Decisions for you
 
 1. **Kinetic**: ~~JS loop first (recommended) or go straight to the engine-side model?~~ **Resolved:
-   engine-side model (3a-B)** — `aion_core::KineticAnimation` + the engine's kinetic session API.
+   engine-side model (3a-B)** — `origin_core::KineticAnimation` + the engine's kinetic session API.
 2. **Touch crosshair**: adopt the reference's long-press tracking mode (recommended for parity), or keep our
    simpler "drag shows crosshair"?
 3. **Accessibility scope**: minimal (ARIA label + focusable + keyboard pan/zoom) or also the
