@@ -74,6 +74,22 @@ impl PriceRange {
         self.min_value = center + min_delta;
     }
 
+    /// Scale by `coeff` keeping `point` fixed (price-axis wheel zoom: the price under the
+    /// cursor stays put while the range expands/contracts around it).
+    pub fn scale_around_point(&mut self, point: f64, coeff: f64) {
+        if !coeff.is_finite() || !point.is_finite() || coeff <= 0.0 {
+            return;
+        }
+        let delta = self.max_value - self.min_value;
+        if delta == 0.0 {
+            return;
+        }
+        let min_delta = (self.min_value - point) * coeff;
+        let max_delta = (self.max_value - point) * coeff;
+        self.min_value = point + min_delta;
+        self.max_value = point + max_delta;
+    }
+
     pub fn shift(&mut self, delta: f64) {
         if !delta.is_finite() {
             return;

@@ -1,6 +1,6 @@
 {
   "name": "@tradeaion/charts",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "type": "module",
   "description": "Origin Charts public TypeScript API (snake_case)",
   "license": "SEE LICENSE IN LICENSE",

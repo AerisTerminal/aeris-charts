@@ -165,6 +165,23 @@ impl ChartEngine {
         }
     }
 
+    /// TradingView-style wheel zoom on a price axis (the reference has no price-axis wheel;
+    /// the time axis wheel is `_onMousewheel` → `zoomTime`). `scale` is the same normalized
+    /// increment the time-axis wheel consumes (`wheel_zoom_scale`), converted to a per-notch
+    /// range factor: 10% per full notch, anchored at the cursor's price.
+    pub fn price_axis_wheel_zoom(
+        &mut self,
+        pane: usize,
+        target: PriceScaleTarget,
+        y: f64,
+        scale: f64,
+    ) {
+        let factor = (1.0 - scale * 0.1).clamp(0.05, 20.0);
+        if let Some(price_scale) = self.price_scale_for_mut(pane, target) {
+            price_scale.zoom(y, factor);
+        }
+    }
+
     // --- vertical price pan ---
 
     /// reference chart-model.ts `startScrollPrice`: no-ops while the scale is in autoscale.

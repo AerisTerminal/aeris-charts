@@ -1783,7 +1783,10 @@ fn last_value_cluster_rows_toggle_independently() {
     assert!((cd_x - price_x).abs() < 1e-9, "same left edge");
     assert!((cd_w - price_w).abs() < 1e-9, "same width");
     assert_eq!(chip_h, price_h);
-    assert_eq!(price_h, cd_h);
+    // TradingView-style countdown row: tighter vertical padding (1.5px vs the price row's
+    // 2.5px), so the countdown text sits ~4 css px under the price text.
+    assert_eq!(price_h, 12.0 + 2.5 * 2.0);
+    assert_eq!(cd_h, 12.0 + 1.5 * 2.0);
     // Title and price texts share the contrast-pick color; the countdown text is slightly
     // muted against the chip (TradingView-style).
     assert_eq!(chip.color, LINE.contrast_text());
@@ -1978,22 +1981,23 @@ fn axis_width_negotiation_covers_the_widest_cluster_row() {
     let measure = |t: &str| t.len() as f64 * 7.0;
     let mut chart = countdown_chart();
     let plain = chart.optimal_price_axis_width_for(PriceScaleTarget::Right, measure);
-    // Tick + price texts are 5 chars here; the plain strip covers the widest label (15px
-    // structural: 1 border + 5 tick + 5 inner pad + 1 outer pad + 3 offset).
-    assert_eq!(plain, 50.0);
+    // Tick + price texts are 5 chars here; the reference's worst-case crosshair sample
+    // ("9.11"/"12.89") is also 5 chars or less, so the plain strip covers the widest label
+    // (exact reference structural: 1 border + 5 tick + 5 inner + 5 outer + 5 offset).
+    assert_eq!(plain, 56.0);
 
     // A long countdown row ("23:59:59", 8 chars) widens the strip. next_close = 240 + 60.
     chart.series[0].countdown_visible = true;
     chart.now_override = Some(300.0 - 86399.0);
     let with_countdown = chart.optimal_price_axis_width_for(PriceScaleTarget::Right, measure);
-    assert_eq!(with_countdown, 72.0); // 71 snapped up to even
+    assert_eq!(with_countdown, 78.0); // 77 snapped up to even
     assert!(with_countdown > plain);
 
     // The title chip lives OUTSIDE the strip (pane side), so it never widens the axis.
     chart.now_override = Some(250.0); // "00:50" — same 5 chars as the price
     chart.series[0].title = "NDQ".to_string();
     let with_cluster = chart.optimal_price_axis_width_for(PriceScaleTarget::Right, measure);
-    assert_eq!(with_cluster, 50.0, "outside chip must not widen the strip");
+    assert_eq!(with_cluster, 56.0, "outside chip must not widen the strip");
 }
 
 #[test]
@@ -2022,9 +2026,9 @@ fn last_value_cluster_overlap_resolution_uses_the_total_height() {
     let labels = chart
         .build_axis_frame(80.0, |t| t.len() as f64 * 7.0)
         .labels;
-    // Two colliding two-row clusters: the overlap pass pushes them two full rows apart
-    // (measured between the price rows, which share each cluster's layout).
-    let row_height = 12.0 + 2.5 * 2.0;
+    // Two colliding two-row clusters: the overlap pass pushes them apart by each cluster's
+    // total height (price row + the tighter countdown row), measured between the price rows.
+    let cluster_height = (12.0 + 2.5 * 2.0) + (12.0 + 1.5 * 2.0);
     let mut price_ys: Vec<f64> = labels
         .iter()
         .filter(|l| l.background.is_some() && l.text == "12.50")
@@ -2034,8 +2038,8 @@ fn last_value_cluster_overlap_resolution_uses_the_total_height() {
     assert_eq!(price_ys.len(), 2);
     let gap = price_ys[1] - price_ys[0];
     assert!(
-        (gap - 2.0 * row_height).abs() < 1e-9,
-        "two-row clusters must be pushed two box heights apart, got {gap}"
+        (gap - cluster_height).abs() < 1e-9,
+        "two-row clusters must be pushed a cluster height apart, got {gap}"
     );
 }
 

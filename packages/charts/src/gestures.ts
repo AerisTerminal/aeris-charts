@@ -354,8 +354,22 @@ export function install_gestures(chart: chart_impl): () => void {
     if (!do_zoom && !do_scroll) return; // let the page scroll
     if (e.cancelable) e.preventDefault();
     if (do_zoom) {
-      // reference `_onMousewheel`: the normalized delta becomes the zoom increment (engine).
-      wasm.zoom(e.offsetX - wasm.pane_left(), wasm.wheel_zoom_scale(delta_y));
+      const pane_left = wasm.pane_left();
+      const pane_w = wasm.time_scale_width();
+      const x = e.offsetX;
+      if (x < pane_left || x > pane_left + pane_w) {
+        // TradingView-style price-axis wheel zoom (the reference has no price wheel; the time
+        // axis wheel is `_onMousewheel` → `zoomTime`): anchored at the cursor's price.
+        wasm.price_axis_wheel_zoom(
+          wasm.pane_index_at_y(e.offsetY),
+          x < pane_left ? 1 : 0,
+          e.offsetY,
+          wasm.wheel_zoom_scale(delta_y),
+        );
+      } else {
+        // reference `_onMousewheel`: the normalized delta becomes the zoom increment (engine).
+        wasm.zoom(x - pane_left, wasm.wheel_zoom_scale(delta_y));
+      }
     }
     if (do_scroll) {
       // reference `scrollChart(deltaX * -80)`: "80 is a made up coefficient, and minus is for the

@@ -1444,6 +1444,16 @@ impl OriginChart {
     pub fn price_axis_end_scale(&mut self, pane: usize, target: u8) {
         self.inner.borrow_mut().price_axis_end_scale(pane, target);
     }
+    /// TradingView-style wheel zoom on the price axis: `scale` is the normalized wheel
+    /// increment (`wheel_zoom_scale`); anchored at the cursor's price. Call `render()` after.
+    pub fn price_axis_wheel_zoom(&mut self, pane: usize, target: u8, y_css: f64, scale: f64) {
+        self.inner.borrow_mut().engine.price_axis_wheel_zoom(
+            pane,
+            price_scale_target_from_u8(target),
+            y_css,
+            scale,
+        );
+    }
     /// Vertical price pan (reference `startScrollPrice`/`scrollPriceTo`).
     pub fn price_axis_start_scroll(&mut self, pane: usize, target: u8, y_css: f64) {
         self.inner

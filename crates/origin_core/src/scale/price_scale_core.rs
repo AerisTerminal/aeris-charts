@@ -532,6 +532,30 @@ impl PriceScaleCore {
         self.price_range_snapshot = None;
     }
 
+    // --- wheel zoom (TradingView-style; the reference has no price-axis wheel) ---
+
+    /// Zoom the range by `factor` anchored at the price under pane-local coordinate `y`
+    /// (that price stays fixed on screen). Mirrors the drag-to-scale guards: percentage and
+    /// indexed-to-100 modes no-op, and an empty scale has nothing to zoom. Disables autoscale,
+    /// like any manual range edit.
+    pub fn zoom(&mut self, y: f64, factor: f64) {
+        if self.is_percentage() || self.is_indexed_to_100() {
+            return;
+        }
+        if self.is_empty() {
+            return;
+        }
+        let Some(range) = self.price_range else {
+            return;
+        };
+        // base_value is only read by the percentage/indexed modes, which bail above.
+        let anchor = self.coordinate_to_price(y, 0.0);
+        self.options.auto_scale = false;
+        let mut new_range = range;
+        new_range.scale_around_point(anchor, factor);
+        self.price_range = Some(new_range);
+    }
+
     // --- axis-drag scroll ---
 
     pub fn start_scroll(&mut self, x: f64) {
@@ -766,6 +790,35 @@ mod tests {
             let back = s.coordinate_to_price(y, p);
             assert!((back - p).abs() < 1e-9, "p={p} y={y} back={back}");
         }
+    }
+
+    #[test]
+    fn wheel_zoom_keeps_the_cursor_price_fixed() {
+        let mut s = scale_with_range(300.0, 12.5, 87.5);
+        let anchor_price = 55.5;
+        let anchor_y = s.price_to_coordinate(anchor_price, 0.0);
+        // Zoom in (factor < 1 shrinks the range) and out again: the anchored price must stay
+        // at the same coordinate, and autoscale drops like any manual range edit.
+        s.zoom(anchor_y, 0.9);
+        assert!(!s.options.auto_scale);
+        let range_in = s.price_range().unwrap();
+        assert!((range_in.length() - 75.0 * 0.9).abs() < 1e-9);
+        assert!((s.coordinate_to_price(anchor_y, 0.0) - anchor_price).abs() < 1e-9);
+        s.zoom(anchor_y, 1.0 / 0.9);
+        let range_back = s.price_range().unwrap();
+        assert!((range_back.length() - 75.0).abs() < 1e-8);
+        assert!((range_back.min_value() - 12.5).abs() < 1e-8);
+        assert!((s.coordinate_to_price(anchor_y, 0.0) - anchor_price).abs() < 1e-9);
+    }
+
+    #[test]
+    fn wheel_zoom_no_ops_like_drag_to_scale() {
+        // Percentage mode: no zoom (mirrors the drag-to-scale guard).
+        let mut s = scale_with_range(300.0, 12.5, 87.5);
+        s.options.mode = PriceScaleMode::Percentage;
+        s.zoom(100.0, 0.9);
+        assert!((s.price_range().unwrap().length() - 75.0).abs() < 1e-9);
+        assert!(s.options.auto_scale);
     }
 
     #[test]

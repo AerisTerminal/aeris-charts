@@ -2,11 +2,6 @@
 
 use super::*;
 
-/// Gap left between a last-value chip and its strip's outer edge when the host's negotiated
-/// strip width is known (TradingView-style: chips cover the scale, a ~3 css px margin remains).
-/// Shared by the plain single-box path and `append_last_value_cluster` so both stretch equally.
-pub(super) const CHIP_STRIP_EDGE_GAP: f64 = 3.0;
-
 /// A last-value label candidate before axis overlap resolution (reference IPriceAxisView state:
 /// the original `coordinate` plus the render coordinate the overlap pass adjusts). `align`
 /// is the owning scale's `alignLabels` — a scale with it off leaves its labels at their raw
@@ -546,11 +541,10 @@ impl ChartEngine {
         const AXIS_BORDER_SIZE: f64 = 1.0;
         const AXIS_TICK_LENGTH: f64 = 5.0;
         const PRICE_PADDING_INNER: f64 = 5.0;
-        // TradingView-tight outer margin (a deliberate divergence from the reference's 5+5):
-        // the widest label ends ~4 css px before the strip's outer edge, so last-value chips
-        // hug the scale instead of floating with a dead zone beside them.
-        const PRICE_PADDING_OUTER: f64 = 1.0;
-        const PRICE_LABEL_OFFSET: f64 = 3.0;
+        // Exact reference constants (price-axis-widget.ts `optimalWidth`):
+        // borderSize + tickLength + paddingInner + paddingOuter + LabelOffset + maxTextWidth.
+        const PRICE_PADDING_OUTER: f64 = 5.0;
+        const PRICE_LABEL_OFFSET: f64 = 5.0;
         const PRICE_DEFAULT_TEXT_WIDTH: f64 = 34.0;
 
         let frame = self.build_axis_frame_impl(80.0, &measure, false);
@@ -558,7 +552,7 @@ impl ChartEngine {
             PriceScaleTarget::Left => AxisTextAlign::Right,
             PriceScaleTarget::Right | PriceScaleTarget::Overlay => AxisTextAlign::Left,
         };
-        let max_text_width = frame
+        let mut max_text_width = frame
             .labels
             .iter()
             .filter(|label| label.align == wanted_align)
@@ -566,6 +560,49 @@ impl ChartEngine {
             // so the negotiated strip covers the chip + price row as one unit.
             .map(|label| measure(&label.text) + label.measure_extra)
             .fold(0.0_f64, f64::max);
+        // reference optimalWidth reserves room for the crosshair label via a STATIC worst-case
+        // sample (never the live label): the top/bottom prices snapped outward with a
+        // 0.11111111111111 fractional tail, formatted by the label source's own formatter.
+        if self.crosshair_mode != CrosshairMode::Hidden
+            && self.options.get().crosshair.horz_line.label_visible
+        {
+            for (pi, pane) in self.panes.iter().enumerate() {
+                let scale = pane_scale(pane, target);
+                if scale.is_empty() {
+                    continue;
+                }
+                let Some((from, _)) = self.visible_range_for_frame() else {
+                    continue;
+                };
+                let series = self
+                    .series
+                    .iter()
+                    .find(|series| series.pane_index == pi && !series.overlay && series.visible);
+                let Some(base_value) =
+                    series.and_then(|series| self.series_base_value(series.id, from))
+                else {
+                    continue;
+                };
+                let top_value = scale.coordinate_to_price(1.0, base_value);
+                let bottom_value = scale.coordinate_to_price(pane.height - 2.0, base_value);
+                let low = top_value.min(bottom_value).floor() + 0.111_111_111_111_11;
+                let high = top_value.max(bottom_value).ceil() - 0.111_111_111_111_11;
+                for sample in [low, high] {
+                    let text = match series {
+                        Some(series) => self.format_series_value(
+                            series,
+                            scale,
+                            scale.price_to_logical_value(sample, base_value),
+                        ),
+                        None => self.format_scale_value(
+                            scale,
+                            scale.price_to_logical_value(sample, base_value),
+                        ),
+                    };
+                    max_text_width = max_text_width.max(measure(&text));
+                }
+            }
+        }
         let text_width = if max_text_width > 0.0 {
             max_text_width
         } else {
@@ -856,6 +893,10 @@ impl ChartEngine {
             return;
         };
         let row_height = self.options.get().layout.font_size + 2.5 * 2.0;
+        // TradingView-style countdown row: tighter vertical padding than a price row
+        // (1.5px vs 2.5px), so the countdown text sits ~4 css px under the price text
+        // instead of a full row pitch away.
+        let countdown_row_height = self.options.get().layout.font_size + 1.5 * 2.0;
         let mut right: Vec<LastValueLabel> = Vec::new();
         let mut left: Vec<LastValueLabel> = Vec::new();
         for (pi, pane) in self.panes.iter().enumerate() {
@@ -947,7 +988,11 @@ impl ChartEngine {
                 } else {
                     0.0
                 };
-                let countdown_height = if countdown.is_some() { row_height } else { 0.0 };
+                let countdown_height = if countdown.is_some() {
+                    countdown_row_height
+                } else {
+                    0.0
+                };
                 group.push(LastValueLabel {
                     price_text: show_price.then_some(text),
                     title,
@@ -973,42 +1018,9 @@ impl ChartEngine {
             (right, PriceScaleTarget::Right),
             (left, PriceScaleTarget::Left),
         ] {
-            // The negotiated strip width the host laid out for this side (0 when unknown, e.g.
-            // native/headless builds): chips stretch to cover it minus a small outer-edge gap,
-            // TradingView-style, instead of floating content-wide with a dead zone beside them.
-            let strip_w = match target {
-                PriceScaleTarget::Left => self.left_axis_w,
-                _ => self.axis_w,
-            };
-            // One chip width per scale: every price chip on the strip — a plain price-only
-            // box (indicator outputs) or a cluster's inner price/countdown box (the main
-            // series) — spans the widest label's box, so all chips line up exactly.
-            let shared_box_w = group
-                .iter()
-                .map(|label| {
-                    let text_w = label
-                        .price_text
-                        .as_deref()
-                        .map(&measure)
-                        .unwrap_or(0.0)
-                        .max(label.countdown.as_deref().map(&measure).unwrap_or(0.0));
-                    if label.title.is_none() && label.countdown.is_none() {
-                        // Plain single-box need: 1px edge + 10px text inset + 1px right pad.
-                        1.0 + 5.0 + 5.0 + text_w + 1.0
-                    } else {
-                        // Cluster inner need: same inset/pad so both paths agree on one width.
-                        1.0 + 5.0 + 5.0 + text_w + 1.0
-                    }
-                })
-                .fold(0.0_f64, f64::max);
-            // Chip boxes cover the strip except a small gap at its OUTER edge (2-3 css px).
-            let stretch = |content_w: f64| {
-                if strip_w > 0.0 {
-                    (strip_w - CHIP_STRIP_EDGE_GAP).max(content_w)
-                } else {
-                    content_w
-                }
-            };
+            // Reference geometry (price-axis-view-renderer.ts `_calculateGeometry`): every boxed
+            // label is its own content-sized box — borderSize + paddingInner + paddingOuter +
+            // tickLength on the text — no cross-label width sharing.
             for label in group {
                 // Plain single-box label (no chip, no countdown): the reference-shaped emission,
                 // byte-identical to pre-cluster behavior.
@@ -1016,7 +1028,7 @@ impl ChartEngine {
                     let Some(text) = label.price_text else {
                         continue;
                     };
-                    let width = stretch(shared_box_w.max(1.0 + 5.0 + 5.0 + 1.0 + measure(&text)));
+                    let width = 1.0 + 5.0 + 5.0 + 5.0 + measure(&text);
                     let (x, align, background_x) = if target == PriceScaleTarget::Left {
                         (
                             self.pane_left - 10.0,
@@ -1051,13 +1063,7 @@ impl ChartEngine {
                     });
                     continue;
                 }
-                self.append_last_value_cluster(
-                    labels,
-                    &label,
-                    target,
-                    measure,
-                    stretch(shared_box_w),
-                );
+                self.append_last_value_cluster(labels, &label, target, measure);
             }
         }
     }
@@ -1075,7 +1081,6 @@ impl ChartEngine {
         label: &LastValueLabel,
         target: PriceScaleTarget,
         measure: &F,
-        shared_inner_w: f64,
     ) where
         F: Fn(&str) -> f64,
     {
@@ -1103,14 +1108,14 @@ impl ChartEngine {
         // gap before the border), while the price chip and the countdown chip live inside the
         // strip, share ONE width (the wider of the two texts), and stack flush. Both rows' text
         // starts at the exact same x as the tick labels (tick length + inner padding from the
-        // border) — the pixel-perfect left edge TradingView aligns every scale text to.
+        // border), and the box carries the reference's full outer padding — the same right edge
+        // every scale text ends at.
         const GAP: f64 = 1.0;
         const TEXT_INSET: f64 = 5.0 + 5.0;
-        const RIGHT_PAD: f64 = 2.0;
+        const RIGHT_PAD: f64 = 5.0;
         let inner_text_w = price_w.max(countdown_w);
-        // The scale-shared chip width (the widest box on the strip) so every cluster's inner
-        // chips match the other series' price chips exactly; never narrower than its own text.
-        let inner_w = shared_inner_w.max(1.0 + TEXT_INSET + inner_text_w + RIGHT_PAD);
+        // Reference box: borderSize + paddingInner + paddingOuter + tickLength + text.
+        let inner_w = 1.0 + TEXT_INSET + inner_text_w + RIGHT_PAD;
         let border_x = if right_strip {
             self.pane_left + self.pane_w
         } else {
