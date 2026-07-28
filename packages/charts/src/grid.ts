@@ -136,23 +136,54 @@ export async function create_chart_grid(
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   let divider_color: string | null = options.divider_color ?? null;
 
+  /** Parse `#rgb`/`#rrggbb`/`rgb()`/`rgba()` to `[r,g,b]`, or `null` when unparseable. */
+  const parse_rgb = (color: string): [number, number, number] | null => {
+    const c = color.trim().toLowerCase();
+    const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/.exec(c);
+    if (hex !== null) {
+      const raw = hex[1] as string;
+      const h = raw.length === 3 ? raw.split("").map((x) => x + x).join("") : raw;
+      return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+    }
+    const rgb = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(c);
+    return rgb === null ? null : [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])];
+  };
+
   /** The divider line color: the pinned value, or the first chart's axis border color when
    *  following (default) — the divider is axis chrome and tracks the same token. A theme that
-   *  hides the axis border (transparent/empty `borderColor`) must NOT cascade into an invisible
-   *  divider: the follow mode treats those as unset and falls back to the default hairline. */
+   *  hides the axis border must NOT cascade into an invisible divider: follow mode treats
+   *  transparent/empty borders AND borders visually identical to the chart background as
+   *  unset, falling back to the default hairline. */
   const resolve_divider_color = (): string => {
     if (divider_color !== null) return divider_color;
     const first = cells.values().next().value as cell_record | undefined;
-    const border = (
-      first?.chart.options() as { rightPriceScale?: { borderColor?: string } } | undefined
-    )?.rightPriceScale?.borderColor;
+    const options = first?.chart.options() as
+      | { rightPriceScale?: { borderColor?: string }; layout?: { background?: { color?: string } } }
+      | undefined;
+    const border = options?.rightPriceScale?.borderColor;
     if (border === undefined) return "#d6dcde";
     const trimmed = border.trim().toLowerCase();
     const invisible =
       trimmed === "" ||
       trimmed === "transparent" ||
       /^rgba\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*,\s*0(?:\.0+)?\s*\)$/.test(trimmed);
-    return invisible ? "#d6dcde" : border;
+    if (invisible) return "#d6dcde";
+    // White-on-white (and near-equivalents): a border matching the background hides the
+    // divider exactly like transparency would.
+    const border_rgb = parse_rgb(border);
+    const bg_rgb = parse_rgb(options?.layout?.background?.color ?? "");
+    if (
+      border_rgb !== null &&
+      bg_rgb !== null &&
+      Math.max(
+        Math.abs(border_rgb[0] - bg_rgb[0]),
+        Math.abs(border_rgb[1] - bg_rgb[1]),
+        Math.abs(border_rgb[2] - bg_rgb[2]),
+      ) <= 8
+    ) {
+      return "#d6dcde";
+    }
+    return border;
   };
 
   const usage = (): grid_usage => JSON.parse(workspace.usage_json(now_seconds())) as grid_usage;
