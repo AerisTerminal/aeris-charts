@@ -1074,7 +1074,27 @@ impl ChartEngine {
                 // A custom series draws host-side: the engine has no geometry to anchor to.
                 SeriesKind::Custom => Vec::new(),
             };
-            for (cx, cy) in anchors {
+            // TradingView shows anchors as a sparse selection HINT — a handful of discs across
+            // the pane, never one per bar. Decimate the drawn set to one anchor per
+            // MIN_ANCHOR_GAP css px (first and last always kept so the range reads selected
+            // end to end).
+            const MIN_ANCHOR_GAP: f32 = 96.0;
+            let last_anchor = anchors.last().copied();
+            let mut sparse: Vec<(f32, f32)> = Vec::with_capacity(anchors.len() / 4 + 2);
+            for anchor in anchors {
+                if sparse
+                    .last()
+                    .is_none_or(|&(last_x, _)| (anchor.0 - last_x).abs() >= MIN_ANCHOR_GAP)
+                {
+                    sparse.push(anchor);
+                }
+            }
+            if let (Some(last), Some(&kept_last)) = (last_anchor, sparse.last()) {
+                if last != kept_last && (last.0 - kept_last.0).abs() >= MIN_ANCHOR_GAP / 2.0 {
+                    sparse.push(last);
+                }
+            }
+            for (cx, cy) in sparse {
                 // The crosshair-marks disc idiom: the border is a larger filled disc underneath.
                 out.push(Prim::Circle {
                     cx,

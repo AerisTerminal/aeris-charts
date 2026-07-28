@@ -1978,21 +1978,39 @@ fn axis_width_negotiation_covers_the_widest_cluster_row() {
     let measure = |t: &str| t.len() as f64 * 7.0;
     let mut chart = countdown_chart();
     let plain = chart.optimal_price_axis_width_for(PriceScaleTarget::Right, measure);
-    // Tick + price texts are 5 chars here; the plain strip covers the widest label.
-    assert_eq!(plain, 56.0);
+    // Tick + price texts are 5 chars here; the plain strip covers the widest label (15px
+    // structural: 1 border + 5 tick + 5 inner pad + 1 outer pad + 3 offset).
+    assert_eq!(plain, 50.0);
 
     // A long countdown row ("23:59:59", 8 chars) widens the strip. next_close = 240 + 60.
     chart.series[0].countdown_visible = true;
     chart.now_override = Some(300.0 - 86399.0);
     let with_countdown = chart.optimal_price_axis_width_for(PriceScaleTarget::Right, measure);
-    assert_eq!(with_countdown, 78.0); // 77 snapped up to even
+    assert_eq!(with_countdown, 72.0); // 71 snapped up to even
     assert!(with_countdown > plain);
 
     // The title chip lives OUTSIDE the strip (pane side), so it never widens the axis.
     chart.now_override = Some(250.0); // "00:50" — same 5 chars as the price
     chart.series[0].title = "NDQ".to_string();
     let with_cluster = chart.optimal_price_axis_width_for(PriceScaleTarget::Right, measure);
-    assert_eq!(with_cluster, 56.0, "outside chip must not widen the strip");
+    assert_eq!(with_cluster, 50.0, "outside chip must not widen the strip");
+}
+
+#[test]
+fn axis_width_negotiation_ignores_the_transient_crosshair_label() {
+    let measure = |t: &str| t.len() as f64 * 7.0;
+    let mut chart = countdown_chart();
+    let base = chart.optimal_price_axis_width_for(PriceScaleTarget::Right, measure);
+    // A crosshair at a wide price (its label is much longer than any tick) must NOT widen the
+    // strip: it is transient chrome, and the grow-fast/shrink-lazy policy would pin the
+    // inflated width forever, leaving a permanent dead zone beside the last-value chips.
+    chart.crosshair = Some((400.0, 250.0));
+    let with_crosshair = chart.optimal_price_axis_width_for(PriceScaleTarget::Right, measure);
+    assert_eq!(
+        with_crosshair, base,
+        "crosshair label must not inflate the strip"
+    );
+    chart.crosshair = None;
 }
 
 #[test]
@@ -2084,4 +2102,43 @@ fn selection_anchors_paint_theme_derived_discs_on_the_selected_series() {
     // Deselecting (an empty-pane click) removes the anchors.
     chart.set_selected_series(None);
     assert!(frame_discs(&mut chart).is_empty());
+}
+
+#[test]
+fn selection_anchors_decimate_to_a_sparse_hint_at_tight_spacing() {
+    // 200 bars across an 800 css px pane (4 px/bar): TradingView-style anchors are a selection
+    // HINT, not one disc per bar — one per 96 css px, first and last always kept.
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let n = 200;
+    let times: Vec<f64> = (0..n).map(|i| (i * 60) as f64).collect();
+    let opens: Vec<f64> = (0..n).map(|i| 10.0 + (i as f64 * 0.05).sin()).collect();
+    let highs: Vec<f64> = opens.iter().map(|o| o + 0.5).collect();
+    let lows: Vec<f64> = opens.iter().map(|o| o - 0.5).collect();
+    let closes: Vec<f64> = opens.iter().map(|o| o + 0.2).collect();
+    chart
+        .set_series_data(0, &times, &opens, &highs, &lows, &closes)
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    chart.set_selected_series(Some(0));
+    let discs = frame_discs(&mut chart);
+    let blue = Color::rgb(0x29, 0x62, 0xff);
+    let borders: Vec<_> = discs.iter().copied().filter(|d| d.2 == blue).collect();
+    // 800 px at one anchor per >=96 px: far fewer than the 200 bars, first and last kept.
+    assert!(
+        borders.len() <= 11,
+        "anchors must decimate (got {})",
+        borders.len()
+    );
+    assert!(
+        borders.len() >= 7,
+        "the pane still reads selected (got {})",
+        borders.len()
+    );
+    let xs: Vec<f32> = borders.iter().map(|d| d.0).collect();
+    assert!(
+        xs.windows(2).all(|w| w[1] - w[0] >= 96.0 - 1e-3),
+        "kept anchors respect the 96 px gap: {xs:?}"
+    );
+    chart.set_selected_series(None);
 }

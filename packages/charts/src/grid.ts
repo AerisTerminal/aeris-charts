@@ -62,8 +62,9 @@ export interface chart_grid_options {
    *  explicit border changes); an explicit string pins it. */
   divider_color?: string | null;
   /** Split shortcuts: `true` uses the engine defaults (shortcuts.ts `DEFAULT_SHORTCUTS`), an
-   *  object overrides individual combos (e.g. `{ "grid.split_vertical": "ctrl+shift+x" }`).
-   *  Default `false` (no shortcuts). Keys never fire while typing in a field. */
+   *  object overrides individual combos (e.g. `{ "grid.split_vertical": "ctrl+shift+x" }`),
+   *  `false` disables. Default `true` — splitting is native grid behavior; platforms re-key
+   *  rather than enable. Keys never fire while typing in a field. */
   shortcuts?: boolean | Partial<Record<shortcut_action, string>>;
   /** Fired for every cell created by a split (button or shortcut path): the platform's hook
    *  to seed/configure the fresh chart (data, theme, chrome). */
@@ -136,14 +137,22 @@ export async function create_chart_grid(
   let divider_color: string | null = options.divider_color ?? null;
 
   /** The divider line color: the pinned value, or the first chart's axis border color when
-   *  following (default) — the divider is axis chrome and tracks the same token. */
+   *  following (default) — the divider is axis chrome and tracks the same token. A theme that
+   *  hides the axis border (transparent/empty `borderColor`) must NOT cascade into an invisible
+   *  divider: the follow mode treats those as unset and falls back to the default hairline. */
   const resolve_divider_color = (): string => {
     if (divider_color !== null) return divider_color;
     const first = cells.values().next().value as cell_record | undefined;
     const border = (
       first?.chart.options() as { rightPriceScale?: { borderColor?: string } } | undefined
     )?.rightPriceScale?.borderColor;
-    return border ?? "#d6dcde";
+    if (border === undefined) return "#d6dcde";
+    const trimmed = border.trim().toLowerCase();
+    const invisible =
+      trimmed === "" ||
+      trimmed === "transparent" ||
+      /^rgba\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*,\s*0(?:\.0+)?\s*\)$/.test(trimmed);
+    return invisible ? "#d6dcde" : border;
   };
 
   const usage = (): grid_usage => JSON.parse(workspace.usage_json(now_seconds())) as grid_usage;
@@ -398,7 +407,7 @@ export async function create_chart_grid(
   /** Install the split shortcuts from the registry (shortcuts.ts): defaults, with any
    *  platform overrides merged in. */
   const detach_shortcuts =
-    options.shortcuts === undefined || options.shortcuts === false
+    options.shortcuts === false
       ? null
       : install_shortcuts(
           (["grid.split_horizontal", "grid.split_vertical"] as const).map((action) => ({
