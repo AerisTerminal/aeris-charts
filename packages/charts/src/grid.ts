@@ -136,54 +136,15 @@ export async function create_chart_grid(
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   let divider_color: string | null = options.divider_color ?? null;
 
-  /** Parse `#rgb`/`#rrggbb`/`rgb()`/`rgba()` to `[r,g,b]`, or `null` when unparseable. */
-  const parse_rgb = (color: string): [number, number, number] | null => {
-    const c = color.trim().toLowerCase();
-    const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/.exec(c);
-    if (hex !== null) {
-      const raw = hex[1] as string;
-      const h = raw.length === 3 ? raw.split("").map((x) => x + x).join("") : raw;
-      return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
-    }
-    const rgb = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(c);
-    return rgb === null ? null : [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])];
-  };
-
   /** The divider line color: the pinned value, or the first chart's axis border color when
-   *  following (default) — the divider is axis chrome and tracks the same token. A theme that
-   *  hides the axis border must NOT cascade into an invisible divider: follow mode treats
-   *  transparent/empty borders AND borders visually identical to the chart background as
-   *  unset, falling back to the default hairline. */
+   *  following (default) — the divider is axis chrome and tracks the same token. */
   const resolve_divider_color = (): string => {
     if (divider_color !== null) return divider_color;
     const first = cells.values().next().value as cell_record | undefined;
-    const options = first?.chart.options() as
-      | { rightPriceScale?: { borderColor?: string }; layout?: { background?: { color?: string } } }
-      | undefined;
-    const border = options?.rightPriceScale?.borderColor;
-    if (border === undefined) return "#d6dcde";
-    const trimmed = border.trim().toLowerCase();
-    const invisible =
-      trimmed === "" ||
-      trimmed === "transparent" ||
-      /^rgba\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*,\s*0(?:\.0+)?\s*\)$/.test(trimmed);
-    if (invisible) return "#d6dcde";
-    // White-on-white (and near-equivalents): a border matching the background hides the
-    // divider exactly like transparency would.
-    const border_rgb = parse_rgb(border);
-    const bg_rgb = parse_rgb(options?.layout?.background?.color ?? "");
-    if (
-      border_rgb !== null &&
-      bg_rgb !== null &&
-      Math.max(
-        Math.abs(border_rgb[0] - bg_rgb[0]),
-        Math.abs(border_rgb[1] - bg_rgb[1]),
-        Math.abs(border_rgb[2] - bg_rgb[2]),
-      ) <= 8
-    ) {
-      return "#d6dcde";
-    }
-    return border;
+    const border = (
+      first?.chart.options() as { rightPriceScale?: { borderColor?: string } } | undefined
+    )?.rightPriceScale?.borderColor;
+    return border ?? "#d6dcde";
   };
 
   const usage = (): grid_usage => JSON.parse(workspace.usage_json(now_seconds())) as grid_usage;
@@ -336,10 +297,25 @@ export async function create_chart_grid(
   /** Mirror the engine's layout tree into the DOM, reusing cell slots by id (chart DOM/state
    *  is never rebuilt — only the split wrappers are). */
   const reconcile = () => {
+    // Maximized: mount ONLY the maximized slot at the container root, bypassing every split
+    // wrapper (flexing the slot alone can never expand it past its ancestors' ratios — the
+    // "maximized" cell would stay trapped in its quadrant while hidden cells left blank
+    // holes). The other slots stay detached until restore.
+    if (maximized_id !== null) {
+      const record = cells.get(maximized_id);
+      if (record !== undefined) {
+        container.replaceChildren(record.slot);
+        record.slot.style.display = "";
+        record.slot.style.flex = "1 1 100%";
+        return;
+      }
+      maximized_id = null; // the maximized cell was removed; fall through to the tree build
+    }
     const build = (node: layout_node): HTMLElement => {
       if (node.kind === "cell") {
         const record = cells.get(node.id as number);
         if (!record) throw new Error(`origin grid: engine cell ${node.id} has no chart`);
+        record.slot.style.display = "";
         return record.slot;
       }
       const horizontal = node.direction === "horizontal";
@@ -359,37 +335,19 @@ export async function create_chart_grid(
     // The split wrappers (and their dividers) are rebuilt wholesale; cell slots are reused.
     dividers.clear();
     container.replaceChildren(build(layout));
-    apply_maximize();
   };
 
   /** The maximized cell id (full container), or `null` in the normal layout. */
   let maximized_id: number | null = null;
-  /** Apply the maximize state: the maximized cell takes the container; the other cells and the
-   *  dividers hide (`display:none`). The maximized slot also gets an explicit `1 1 100%` flex —
-   *  its ratio weight would otherwise cap it at exactly its share: with a flex-grow sum < 1 the
-   *  spec distributes free space UN-normalized, so a 0.5-weight slot stays at 50% even alone. */
-  const apply_maximize = () => {
-    for (const record of cells.values()) {
-      const on = maximized_id === null || record.id === maximized_id;
-      record.slot.style.display = on ? "" : "none";
-      if (maximized_id !== null && record.id === maximized_id) {
-        record.slot.style.flex = "1 1 100%";
-      }
-    }
-    container.querySelectorAll(".origin-grid-divider").forEach((el) => {
-      (el as HTMLElement).style.display = maximized_id === null ? "" : "none";
-    });
-  };
-  /** Set (or clear) the maximized cell; clearing rebuilds the layout so the engine's split
-   *  ratios win their flex weights back (the maximize override replaced them). */
+  /** Set (or clear) the maximized cell; clearing resets the slot's flex override and rebuilds
+   *  the layout so the engine's split ratios win their flex weights back. */
   const set_maximized = (id: number | null) => {
-    maximized_id = id;
-    if (maximized_id === null) {
-      for (const record of cells.values()) record.slot.style.flex = "";
-      reconcile(); // re-derives the ratio weights; its tail reapplies the (now-clear) state
-      return;
+    if (maximized_id !== null) {
+      const previous = cells.get(maximized_id);
+      if (previous !== undefined) previous.slot.style.flex = "";
     }
-    apply_maximize();
+    maximized_id = id;
+    reconcile();
   };
   /** Ctrl/Cmd+click semantics: maximize the cell, or restore when it's already maximized. */
   const toggle_maximize = (id: number) => {
@@ -401,6 +359,9 @@ export async function create_chart_grid(
     if (options.on_split_request?.(next_count) === false) return null;
     const new_id = Number(workspace.split(cell.id, direction, now_seconds()));
     if (new_id < 0) return null; // engine cap (paywall tier) or unknown cell
+    // A split drops the maximize state first: the new cell must be ATTACHED to measure its
+    // host, and a maximized view mounts only the maximized slot (a detached host reads 0×0).
+    if (maximized_id !== null) set_maximized(null);
     const created = await add_chart(new_id);
     reconcile();
     // One hook for every split path (button or shortcut): the platform seeds the fresh cell.

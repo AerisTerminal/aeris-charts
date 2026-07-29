@@ -525,6 +525,13 @@ impl OriginChart {
 
         let callback = Closure::wrap(Box::new(move |entries: js_sys::Array| {
             let rect = container_cb.get_bounding_client_rect();
+            // A hidden or detached host (a grid-maximize off-slot, `display:none`, an
+            // unmounted cell) reports ~0x0: keep the last good size instead of following.
+            // Collapsing through 1px forces the bar spacing to its minimum, and the scale
+            // does not restore it — the chart comes back scrolled into empty whitespace.
+            if rect.width() < 2.0 || rect.height() < 2.0 {
+                return;
+            }
             let (css_w, css_h) = (rect.width().max(1.0), rect.height().max(1.0));
             let dpr = web_sys::window()
                 .map(|w| w.device_pixel_ratio())
@@ -1443,6 +1450,16 @@ impl OriginChart {
     }
     pub fn price_axis_end_scale(&mut self, pane: usize, target: u8) {
         self.inner.borrow_mut().price_axis_end_scale(pane, target);
+    }
+    /// TradingView-style bid/ask quotes: push the current values for a series (NaN clears that
+    /// side). Lines and chips render while the series' `bid_ask_visible` option holds. Call
+    /// `render()` after.
+    pub fn set_series_bid_ask(&mut self, id: usize, bid: f64, ask: f64) {
+        self.inner.borrow_mut().engine.set_bid_ask(
+            id,
+            (bid.is_finite()).then_some(bid),
+            (ask.is_finite()).then_some(ask),
+        );
     }
     /// TradingView-style wheel zoom on the price axis: `scale` is the normalized wheel
     /// increment (`wheel_zoom_scale`); anchored at the cursor's price. Call `render()` after.

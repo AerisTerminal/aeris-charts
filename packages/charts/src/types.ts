@@ -565,6 +565,20 @@ export interface series_options {
   price_line_color?: string;
   /** Price line style, a `LINE_STYLE_TO_U8` value (reference `priceLineStyle`, default 1 Dotted). */
   price_line_style?: number;
+  /**
+   * TradingView-style bid/ask lines + "Bid"/"Ask" axis chips (default `false` — platforms opt
+   * in). Push the live quotes with {@link series_api.set_bid_ask}; each side with a value
+   * draws a line across the pane and a title chip on the scale.
+   */
+  bid_ask_visible?: boolean;
+  /** Bid line/chip color (default `"#2962ff"`). */
+  bid_color?: string;
+  /** Ask line/chip color (default `"#f23645"`). */
+  ask_color?: string;
+  /** Bid/ask line width in CSS px (default 1, mirrors `price_line_width`). */
+  bid_ask_line_width?: number;
+  /** Bid/ask line style, a `LINE_STYLE_TO_U8` value (default 1 Dotted, mirrors `price_line_style`). */
+  bid_ask_line_style?: number;
   /** Line stroke style 0-4, a `LINE_STYLE_TO_U8` value (reference `lineStyle`, default 0 Solid). */
   line_style?: number;
   /** Draw the line itself on line/area/baseline series (reference `lineVisible`, default `true`). */
@@ -813,6 +827,11 @@ export interface series_api {
   set_data_typed(columns: ohlc_columns): void;
   /** Append a new point or replace the last one (streaming). */
   update(point: series_data): void;
+  /**
+   * Push the current bid/ask quotes (TradingView-style; render with `bid_ask_visible: true`).
+   * Pass `null` to hide a side.
+   */
+  set_bid_ask(bid: number | null, ask: number | null): void;
   /**
    * Remove `count` data items from the end of the series (reference `ISeriesApi.pop`, default
    * `count: 1`). Divergence: reference returns the removed items; here the engine drops them and the

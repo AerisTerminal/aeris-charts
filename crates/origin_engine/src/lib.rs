@@ -348,6 +348,22 @@ pub struct SeriesEntry {
     pub price_line_color: Option<String>,
     /// reference `priceLineStyle` (default 1 = Dotted; the reference LineStyle numbering).
     pub price_line_style: u8,
+    /// TradingView-style bid/ask lines + axis chips (default OFF — platforms opt in). Values
+    /// are pushed by the host via `set_bid_ask`; when visible, each side with a value draws a
+    /// horizontal line across the pane and a "Bid"/"Ask"-titled chip on the series' scale.
+    pub bid_ask_visible: bool,
+    /// Current bid price (`None` hides the bid side).
+    pub bid: Option<f64>,
+    /// Current ask price (`None` hides the ask side).
+    pub ask: Option<f64>,
+    /// Bid line/chip color (default `#2962ff`). Stored verbatim; parsed at render time.
+    pub bid_color: String,
+    /// Ask line/chip color (default `#f23645`). Stored verbatim; parsed at render time.
+    pub ask_color: String,
+    /// Bid/ask line width in CSS px (default 1, mirrors `price_line_width`).
+    pub bid_ask_line_width: f64,
+    /// Bid/ask line style (default 1 = Dotted, mirrors `price_line_style`).
+    pub bid_ask_line_style: u8,
     /// reference line/area/baseline `lineStyle` (default 0 = Solid; reference LineStyle numbering).
     pub line_style: u8,
     /// reference `lineVisible` (default true): hides the line stroke; an area keeps its fill and a
@@ -448,6 +464,13 @@ impl SeriesEntry {
             price_line_width: 1.0,
             price_line_color: None,
             price_line_style: 1,
+            bid_ask_visible: false,
+            bid: None,
+            ask: None,
+            bid_color: "#2962ff".to_string(),
+            ask_color: "#f23645".to_string(),
+            bid_ask_line_width: 1.0,
+            bid_ask_line_style: 1,
             line_style: 0,
             line_visible: true,
             point_markers_radius: None,
@@ -1367,6 +1390,15 @@ impl ChartEngine {
     /// reference `timeScale.secondsVisible`: include seconds when `time_visible` is set.
     pub fn set_seconds_visible(&mut self, visible: bool) {
         self.seconds_visible = visible;
+    }
+
+    /// TradingView-style bid/ask: push the current quotes for a series. `None` hides that
+    /// side. Lines and chips render only while the series' `bid_ask_visible` option holds.
+    pub fn set_bid_ask(&mut self, id: SeriesId, bid: Option<f64>, ask: Option<f64>) {
+        if let Some(series) = self.series.iter_mut().find(|s| s.id == id && !s.removed) {
+            series.bid = bid.filter(|v| v.is_finite());
+            series.ask = ask.filter(|v| v.is_finite());
+        }
     }
 
     /// reference `timeScale.minBarSpacing`.

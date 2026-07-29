@@ -216,6 +216,7 @@
       <label title="TradingView-style title chip in the last-value cluster (darker shade of the label color, left of the price)"><input type="checkbox" id="title_chip_toggle" checked> title chip</label>
       <label>title <input type="text" id="series_title" value="ORIGIN" size="6"></label>
       <label title="TradingView-style candle-close countdown stacked below the price in the last-value cluster"><input type="checkbox" id="countdown_toggle"> countdown</label>
+      <label title="TradingView-style bid/ask lines + Bid/Ask axis chips (default off). Enable to stream synthetic quotes around the last price so the lines and chips move live"><input type="checkbox" id="bid_ask_toggle"> bid/ask</label>
     </div>
 
     <!-- price/time axis cosmetics: border (reference borderColor/borderVisible) + text (textColor) -->
@@ -370,7 +371,14 @@ if (parity_fixture !== null) {
 window.__chart = chart; // debug/test handle
 
 const data = generate_data(parity_fixture?.bar_count ?? 1000, parity_fixture ?? {});
-const main = chart.add_series("candlestick", requested_left_scale ? { priceScaleId: "left" } : undefined);
+// Seed the series title on a clean demo load so the title chip renders immediately (the
+// engine default "" suppresses it). Fixture/purity runs (?feature/?runtimeTest/params) keep
+// the empty title so their pixel baselines stay untouched.
+const pristine_demo = query.toString() === "";
+const main = chart.add_series("candlestick", {
+  ...(requested_left_scale ? { priceScaleId: "left" } : {}),
+  ...(pristine_demo ? { title: document.getElementById("series_title").value } : {}),
+});
 main.set_data(data);
 if (grid !== null) {
   // The root cell's primary series under the same handle the split cells get, so the toolbar's
@@ -862,6 +870,31 @@ function apply_series_chrome() {
 document.getElementById("title_chip_toggle").addEventListener("change", apply_series_chrome);
 document.getElementById("series_title").addEventListener("input", apply_series_chrome);
 document.getElementById("countdown_toggle").addEventListener("change", apply_series_chrome);
+
+// TradingView-style bid/ask (engine default off): enabling streams synthetic quotes around the
+// last price (a small random-walk mid with a fixed spread) so the Bid/Ask chips and lines move.
+let bid_ask_timer = null;
+let bid_ask_mid = null;
+function push_bid_ask_quote() {
+  const last = active_series().last_value_data(true);
+  const base = last?.value ?? last?.close ?? bid_ask_mid ?? 100;
+  if (bid_ask_mid === null) bid_ask_mid = base;
+  bid_ask_mid += bid_ask_mid * (Math.random() - 0.5) * 0.001; // ±0.05% walk
+  const spread = Math.max(bid_ask_mid * 0.0004, 0.01); // 4 bps
+  active_series().set_bid_ask(bid_ask_mid - spread / 2, bid_ask_mid + spread / 2);
+}
+document.getElementById("bid_ask_toggle").addEventListener("change", (e) => {
+  if (e.target.checked) {
+    active_series().apply_options({ bid_ask_visible: true });
+    push_bid_ask_quote();
+    bid_ask_timer = setInterval(push_bid_ask_quote, 600);
+  } else {
+    clearInterval(bid_ask_timer);
+    bid_ask_timer = null;
+    bid_ask_mid = null;
+    active_series().apply_options({ bid_ask_visible: false });
+  }
+});
 
 document.getElementById("up_color").addEventListener("input", () => active_series().apply_options({ up_color: document.getElementById("up_color").value }));
 document.getElementById("down_color").addEventListener("input", () => active_series().apply_options({ down_color: document.getElementById("down_color").value }));

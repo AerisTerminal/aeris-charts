@@ -613,6 +613,85 @@ fn price_line_family_renders_per_series_with_reference_defaults() {
 }
 
 #[test]
+fn bid_ask_lines_and_chips_render_only_when_enabled_with_values() {
+    let mut chart = two_identical_line_series();
+    let hlines = |chart: &mut ChartEngine| {
+        chart.build_frame().panes[0]
+            .main
+            .iter()
+            .filter_map(|p| match p {
+                Prim::HLine { y, color, .. } => Some((*y, *color)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    // Default OFF: pushing quotes alone renders nothing. (Quotes are inside the fixture's
+    // 10-12.5 scale range; out-of-range quotes are clipped by design.)
+    chart.set_bid_ask(0, Some(11.0), Some(12.0));
+    let blue = Color::rgb(0x29, 0x62, 0xff);
+    let red = Color::rgb(0xf2, 0x36, 0x45);
+    assert!(!hlines(&mut chart)
+        .iter()
+        .any(|&(_, c)| c == blue || c == red));
+    // Enable: one line per side, on the quotes' coordinates (zero shift with an exact-range scale).
+    chart.series_apply_options_json(0, r##"{"bid_ask_visible": true}"##);
+    let lines = hlines(&mut chart);
+    let scale = &chart.panes[0].price_scale;
+    let bid_y = scale.price_to_coordinate(11.0, 0.0).round() as i32;
+    let ask_y = scale.price_to_coordinate(12.0, 0.0).round() as i32;
+    assert!(
+        lines.iter().any(|&(y, c)| y == bid_y && c == blue),
+        "bid line: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|&(y, c)| y == ask_y && c == red),
+        "ask line: {lines:?}"
+    );
+    // Axis chips: "Bid"/"Ask" title chips + price chips centered on the quotes.
+    chart.now_override = Some(250.0);
+    let labels = boxed_labels(&mut chart);
+    let side_chip = |side: &str| {
+        labels
+            .iter()
+            .find(|l| l.text == side)
+            .unwrap_or_else(|| panic!("{side} title chip missing: {labels:?}"))
+    };
+    let bid_chip = side_chip("Bid");
+    let ask_chip = side_chip("Ask");
+    assert!(
+        (bid_chip.y - bid_y as f64).abs() < 1.0,
+        "bid chip centers on the quote"
+    );
+    assert!(
+        (ask_chip.y - ask_y as f64).abs() < 1.0,
+        "ask chip centers on the quote"
+    );
+    assert!(labels.iter().any(|l| l.text == "11.00"));
+    assert!(labels.iter().any(|l| l.text == "12.00"));
+    // One side cleared via the options JSON: only the ask line + chips remain.
+    assert!(chart.series_apply_options_json(0, r##"{"bid": null}"##));
+    assert!(!hlines(&mut chart).iter().any(|&(_, c)| c == blue));
+    assert!(hlines(&mut chart).iter().any(|&(_, c)| c == red));
+    // Custom colors reach the frame verbatim-parsed; disabling hides everything.
+    assert!(chart.series_apply_options_json(0, r##"{"ask_color": "#112233"}"##));
+    assert!(hlines(&mut chart)
+        .iter()
+        .any(|&(_, c)| c == Color::rgb(0x11, 0x22, 0x33)));
+    chart.series_apply_options_json(0, r##"{"bid_ask_visible": false}"##);
+    assert!(!hlines(&mut chart)
+        .iter()
+        .any(|&(_, c)| c == Color::rgb(0x11, 0x22, 0x33)));
+    // Options surface round-trips the full configuration.
+    let options: serde_json::Value =
+        serde_json::from_str(&chart.series_options_json(0).unwrap()).unwrap();
+    assert_eq!(options["bid_ask_visible"], false);
+    assert_eq!(options["bid_color"], "#2962ff");
+    assert_eq!(options["ask_color"], "#112233");
+    assert_eq!(options["bid"], serde_json::Value::Null);
+    assert_eq!(options["ask"], 12.0);
+}
+
+#[test]
 fn price_line_color_css_string_parses_at_render_time() {
     let mut chart = two_identical_line_series();
     // Uppercase hex is stored verbatim (options() returns it as-is) and parsed only when the
@@ -1803,7 +1882,8 @@ fn last_value_cluster_rows_toggle_independently() {
     assert_eq!(countdown.color, muted);
 
     // Price off, title + countdown on: only the outside title chip and the inside countdown
-    // chip render — no empty price box.
+    // chip render — no empty price box, and the title chip ATTACHES to the countdown row
+    // (same top edge, same height) instead of leaving a blank row in the strip.
     chart.series[0].last_value_visible = false;
     let labels = boxed_labels(&mut chart);
     assert_eq!(labels.len(), 2);
@@ -1813,6 +1893,22 @@ fn last_value_cluster_rows_toggle_independently() {
     assert!(
         labels.iter().all(|l| !l.text.is_empty()),
         "no empty price box when the price text is off"
+    );
+    let chip = labels.iter().find(|l| l.text == "NDQ").unwrap();
+    let countdown = labels.iter().find(|l| l.text == "00:50").unwrap();
+    let Some((_, chip_y, _, chip_h, _)) = chip.background else {
+        panic!("chip is boxed")
+    };
+    let Some((_, cd_y, _, cd_h, _)) = countdown.background else {
+        panic!("countdown is boxed")
+    };
+    assert_eq!(
+        chip_y, cd_y,
+        "title chip shares the countdown row's top edge"
+    );
+    assert_eq!(
+        chip_h, cd_h,
+        "title chip matches the countdown row's height"
     );
 
     // Title off, price + countdown on: no chip; the price area spans the top row's full width.
@@ -2015,6 +2111,28 @@ fn axis_width_negotiation_ignores_the_transient_crosshair_label() {
         "crosshair label must not inflate the strip"
     );
     chart.crosshair = None;
+}
+
+#[test]
+fn countdown_only_cluster_centers_on_the_value_coordinate() {
+    let mut chart = countdown_chart();
+    chart.now_override = Some(250.0);
+    chart.series[0].last_value_visible = false;
+    chart.series[0].title_visible = false;
+    chart.series[0].countdown_visible = true;
+    let labels = boxed_labels(&mut chart);
+    assert_eq!(labels.len(), 1, "countdown-only cluster is one chip");
+    let chip = &labels[0];
+    assert_eq!(chip.text, "00:50");
+    // No top row to hang from: the single countdown chip centers on the value coordinate
+    // (previously it hung BELOW the line by half the countdown row).
+    let scale = &chart.panes[0].price_scale;
+    let expected_y = scale.price_to_coordinate(12.5, 10.0);
+    assert!(
+        (chip.y - expected_y).abs() < 1e-9,
+        "countdown-only chip must center on the value: y={} expected={expected_y}",
+        chip.y
+    );
 }
 
 #[test]

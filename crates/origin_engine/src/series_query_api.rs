@@ -209,6 +209,13 @@ impl ChartEngine {
         insert("price_line_width", s.price_line_width.into());
         insert("price_line_color", verbatim(&s.price_line_color).into());
         insert("price_line_style", s.price_line_style.into());
+        insert("bid_ask_visible", s.bid_ask_visible.into());
+        insert("bid_color", s.bid_color.clone().into());
+        insert("ask_color", s.ask_color.clone().into());
+        insert("bid_ask_line_width", s.bid_ask_line_width.into());
+        insert("bid_ask_line_style", s.bid_ask_line_style.into());
+        insert("bid", s.bid.map_or(serde_json::Value::Null, Into::into));
+        insert("ask", s.ask.map_or(serde_json::Value::Null, Into::into));
         insert("last_price_animation", s.last_price_animation.into());
         insert("visible", s.visible.into());
         insert("price_scale_id", price_scale_id.into());
@@ -298,6 +305,57 @@ impl ChartEngine {
                         s.price_line_style = v;
                     }
                 }
+                "bid_ask_visible" => {
+                    if let Some(v) = value.as_bool() {
+                        s.bid_ask_visible = v;
+                    }
+                }
+                // Verbatim CSS like the part colors: any string stored as-is (`""` restores
+                // the default at render time); renderer parses, falling back when invalid.
+                "bid_color" => {
+                    if let Some(v) = value.as_str() {
+                        s.bid_color = if v.is_empty() {
+                            "#2962ff".to_string()
+                        } else {
+                            v.to_string()
+                        };
+                    }
+                }
+                "ask_color" => {
+                    if let Some(v) = value.as_str() {
+                        s.ask_color = if v.is_empty() {
+                            "#f23645".to_string()
+                        } else {
+                            v.to_string()
+                        };
+                    }
+                }
+                "bid_ask_line_width" => {
+                    if let Some(v) = positive(value) {
+                        s.bid_ask_line_width = v;
+                    }
+                }
+                "bid_ask_line_style" => {
+                    if let Some(v) = u8_bounded(value, 4) {
+                        s.bid_ask_line_style = v;
+                    }
+                }
+                "bid" => match value {
+                    serde_json::Value::Null => s.bid = None,
+                    value => {
+                        if let Some(v) = finite(value) {
+                            s.bid = Some(v);
+                        }
+                    }
+                },
+                "ask" => match value {
+                    serde_json::Value::Null => s.ask = None,
+                    value => {
+                        if let Some(v) = finite(value) {
+                            s.ask = Some(v);
+                        }
+                    }
+                },
                 "line_style" => {
                     if let Some(v) = u8_bounded(value, 4) {
                         s.line_style = v;

@@ -357,7 +357,9 @@ test("Ctrl+click maximizes a cell to full container and restores", async ({ page
 
   const widths = () => page.evaluate(() => window.__grid.cells().map((c) => {
     const r = c.element.getBoundingClientRect();
-    return { display: c.element.style.display, width: r.width };
+    // Hidden = detached from the container (the grid mounts only the maximized slot; a
+    // detached slot never collapses its chart through a 0-size resize).
+    return { attached: c.element.isConnected, width: r.width };
   }));
   const before = await widths();
   expect(before[1].width).toBeGreaterThan(100);
@@ -371,8 +373,8 @@ test("Ctrl+click maximizes a cell to full container and restores", async ({ page
   await page.mouse.click(point.x, point.y);
   await page.keyboard.up("Control");
   const maximized = await widths();
-  expect(maximized[0].display).toBe("none");
-  expect(maximized[1].display).toBe("");
+  expect(maximized[0].attached).toBe(false);
+  expect(maximized[1].attached).toBe(true);
   expect(maximized[1].width).toBeGreaterThan(before[1].width + before[0].width - 20);
   expect(await page.evaluate(() => window.__grid.maximized_cell()?.id ?? null)).toBe(2);
 
@@ -381,8 +383,8 @@ test("Ctrl+click maximizes a cell to full container and restores", async ({ page
   await page.mouse.click(point.x, point.y);
   await page.keyboard.up("Control");
   const restored = await widths();
-  expect(restored[0].display).toBe("");
-  expect(restored[1].display).toBe("");
+  expect(restored[0].attached).toBe(true);
+  expect(restored[1].attached).toBe(true);
   expect(restored[1].width).toBeLessThan(restored[0].width + 20);
   expect(await page.evaluate(() => window.__grid.maximized_cell())).toBeNull();
 });

@@ -983,15 +983,21 @@ impl ChartEngine {
                 } else {
                     (&mut right, pane.price_scale.options().align_labels)
                 };
-                let top_height = if show_price || title.is_some() {
-                    row_height
-                } else {
-                    0.0
-                };
+                // The top row exists only for the price TEXT: when the price chip is off, the
+                // title chip attaches to the countdown row instead of leaving a phantom blank
+                // row in the strip (and the cluster centers on the value, no shift).
+                let top_height = if show_price { row_height } else { 0.0 };
                 let countdown_height = if countdown.is_some() {
                     countdown_row_height
                 } else {
                     0.0
+                };
+                // A title-only cluster (price off, countdown off) still gets one row so the
+                // outside chip has somewhere to live, centered on the value.
+                let height = if top_height + countdown_height > 0.0 {
+                    top_height + countdown_height
+                } else {
+                    row_height
                 };
                 group.push(LastValueLabel {
                     price_text: show_price.then_some(text),
@@ -999,15 +1005,71 @@ impl ChartEngine {
                     countdown,
                     group_id: series.id as u32,
                     // The price row stays centered on the value coordinate; the countdown row
-                    // hangs below, so the cluster center shifts down by half the countdown row.
-                    y: y + countdown_height / 2.0,
-                    height: top_height + countdown_height,
+                    // hangs below, so a FULL cluster's center shifts down by half the countdown
+                    // row. Without a price row the cluster centers on the value directly.
+                    y: y + if top_height > 0.0 {
+                        countdown_height / 2.0
+                    } else {
+                        0.0
+                    },
+                    height,
                     top_height,
                     // Chip backgrounds follow the series color but always paint solid: a
                     // translucent bar/line color must not bleed through the chips.
                     color: color.solid(),
                     align,
                 });
+                // TradingView-style bid/ask chips (`bid_ask_visible`, default off): one
+                // title+price cluster per side with a live quote, centered on the quote's
+                // coordinate. Their attach groups are offset far from any series id so the
+                // chips never chain into the main cluster (or each other) when adjacent.
+                if series.bid_ask_visible {
+                    let sides = [
+                        (
+                            "Bid",
+                            series.bid,
+                            series.bid_color.as_str(),
+                            Color::rgb(0x29, 0x62, 0xff),
+                            1u32,
+                        ),
+                        (
+                            "Ask",
+                            series.ask,
+                            series.ask_color.as_str(),
+                            Color::rgb(0xf2, 0x36, 0x45),
+                            2u32,
+                        ),
+                    ];
+                    for (side, value, css, fallback, side_offset) in sides {
+                        let Some(quote) = value else {
+                            continue;
+                        };
+                        let Some(base_value) = self.series_base_value(series.id, from) else {
+                            continue;
+                        };
+                        let quote_y = scale.price_to_coordinate(quote, base_value);
+                        if quote_y < 0.0 || quote_y > self.pane_h {
+                            continue;
+                        }
+                        let quote_text = self.format_series_value(
+                            series,
+                            scale,
+                            scale.price_to_logical_value(quote, base_value),
+                        );
+                        let side_color = Color::parse_css(css).unwrap_or(fallback).solid();
+                        group.push(LastValueLabel {
+                            price_text: Some(quote_text),
+                            title: Some(side.to_string()),
+                            countdown: None,
+                            group_id: (1u32 << 30) + series.id as u32 * 4 + side_offset,
+                            y: quote_y,
+                            height: row_height,
+                            top_height: row_height,
+                            color: side_color,
+                            align,
+                        });
+                    }
+                }
             }
         }
         // reference aligns labels per price-axis widget; the engine has one strip per side. Scales
@@ -1163,10 +1225,12 @@ impl ChartEngine {
             } else {
                 border_x + GAP
             };
+            // Without a price row the chip attaches to the cluster's single inside row (the
+            // countdown row, or the title-only row) — never a phantom blank top row.
             let chip_row_h = if label.top_height > 0.0 {
                 label.top_height
             } else {
-                label.height
+                label.height - label.top_height
             };
             labels.push(AxisLabel {
                 text: title.clone(),

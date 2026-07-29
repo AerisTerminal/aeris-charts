@@ -750,6 +750,7 @@ impl ChartEngine {
                     hpr,
                     vpr,
                 );
+                self.build_bid_ask_lines_frame(pi, from, &mut out.main, pane_w_px as i32, hpr, vpr);
                 if pi == 0 {
                     self.build_last_pulse_frame(&mut out.main, hpr, vpr);
                 }

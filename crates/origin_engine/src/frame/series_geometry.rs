@@ -919,6 +919,59 @@ impl ChartEngine {
         }
     }
 
+    /// TradingView-style bid/ask lines (default OFF, `bid_ask_visible`): one horizontal line
+    /// per side with a live value, on the series' own price scale, colored by the side's
+    /// pinned CSS color (bid `#2962ff` / ask `#f23645` defaults).
+    pub(super) fn build_bid_ask_lines_frame(
+        &self,
+        pane_index: usize,
+        from: i64,
+        out: &mut Vec<Prim>,
+        width: i32,
+        hpr: f64,
+        vpr: f64,
+    ) {
+        let pane = &self.panes[pane_index];
+        for series in &self.series {
+            if !series.visible || !series.bid_ask_visible || series.pane_index != pane_index {
+                continue;
+            }
+            let scale = pane_scale(pane, series_scale_target(series));
+            if scale.is_empty() {
+                continue;
+            }
+            let Some(base_value) = self.series_base_value(series.id, from) else {
+                continue;
+            };
+            let sides = [
+                (
+                    series.bid,
+                    series.bid_color.as_str(),
+                    Color::rgb(0x29, 0x62, 0xff),
+                ),
+                (
+                    series.ask,
+                    series.ask_color.as_str(),
+                    Color::rgb(0xf2, 0x36, 0x45),
+                ),
+            ];
+            for (value, css, fallback) in sides {
+                let Some(price) = value else {
+                    continue;
+                };
+                let color = Color::parse_css(css).unwrap_or(fallback);
+                out.push(Prim::HLine {
+                    y: (scale.price_to_coordinate(price, base_value) * vpr).round() as i32,
+                    x0: 0,
+                    x1: width,
+                    width: 1f64.max((series.bid_ask_line_width * hpr).floor()) as i32,
+                    style: crate::line_style_from_u8(series.bid_ask_line_style),
+                    color,
+                });
+            }
+        }
+    }
+
     pub(super) fn build_last_pulse_frame(&self, out: &mut Vec<Prim>, hpr: f64, vpr: f64) {
         // The pulse anchors on the primary series (the reference's single last-price animation source);
         // with id 0 tombstoned it falls back to the first visible, non-removed series.

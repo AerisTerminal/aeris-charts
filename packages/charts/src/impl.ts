@@ -80,6 +80,11 @@ const SERIES_JSON_OPTION_KEYS = [
   "price_line_width",
   "price_line_color",
   "price_line_style",
+  "bid_ask_visible",
+  "bid_color",
+  "ask_color",
+  "bid_ask_line_width",
+  "bid_ask_line_style",
   "line_style",
   "line_visible",
   "point_markers_radius",
@@ -436,6 +441,13 @@ class series_impl implements series_api {
       this.chart.wasm.series_apply_options_json(this.id, JSON.stringify(json_patch));
     }
     this.chart.sync_countdown_timer();
+    this.chart.repaint();
+  }
+
+  /** Push the current bid/ask quotes (`bid_ask_visible` renders them); `null` hides a side. */
+  set_bid_ask(bid: number | null, ask: number | null): void {
+    this.assert_live();
+    this.chart.wasm.set_series_bid_ask(this.id, bid ?? Number.NaN, ask ?? Number.NaN);
     this.chart.repaint();
   }
 
