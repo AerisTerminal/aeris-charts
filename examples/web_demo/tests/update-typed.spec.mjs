@@ -13,6 +13,33 @@ async function wait_chart(page) {
   }));
 }
 
+/** Summarize CDP's sampled allocation tree, attributing descendants to package call stacks. */
+function sampled_allocations(profile) {
+  let total_bytes = 0;
+  let package_bytes = 0;
+  const by_function = new Map();
+  const visit = (node, package_stack = false) => {
+    const frame = node.callFrame ?? {};
+    const in_package = package_stack || frame.url?.includes("/dist/origin_charts.js") === true;
+    const bytes = node.selfSize ?? 0;
+    total_bytes += bytes;
+    if (in_package) {
+      package_bytes += bytes;
+      const name = frame.functionName || "(anonymous)";
+      by_function.set(name, (by_function.get(name) ?? 0) + bytes);
+    }
+    for (const child of node.children ?? []) visit(child, in_package);
+  };
+  visit(profile.head);
+  return {
+    total_bytes,
+    package_bytes,
+    top_package_functions: [...by_function.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8),
+  };
+}
+
 test.beforeEach(async ({ page }) => {
   page.on("pageerror", (error) => console.log(`[browser:pageerror] ${error.message}`));
   await page.goto("/");
@@ -183,6 +210,13 @@ test("the batch is repaired like set_data_typed: sorted, deduped last-wins, non-
 
 test("appending 1M points in batches allocates no per-point JS objects", async ({ page }) => {
   test.setTimeout(300_000);
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("HeapProfiler.enable");
+  await cdp.send("HeapProfiler.startSampling", {
+    samplingInterval: 4096,
+    includeObjectsCollectedByMajorGC: true,
+    includeObjectsCollectedByMinorGC: true,
+  });
   const result = await page.evaluate(async () => {
     const series = window.__chart.add_series("line", { visible: false });
     // Start past every other series' last timestamp. Appending at the *global* tip is the
@@ -236,6 +270,9 @@ test("appending 1M points in batches allocates no per-point JS objects", async (
       expected_last_value: last_value,
     };
   });
+  const { profile } = await cdp.send("HeapProfiler.stopSampling");
+  const allocations = sampled_allocations(profile);
+  await cdp.send("HeapProfiler.disable");
 
   expect(result.last.time).toBe(result.expected_last_time);
   expect(result.last.value).toBeCloseTo(result.expected_last_value, 10);
@@ -244,6 +281,11 @@ test("appending 1M points in batches allocates no per-point JS objects", async (
     + `(${(result.points / (result.elapsed_ms / 1000) / 1e6).toFixed(2)} M pts/s), `
     + `JS heap growth ${result.heap_growth_bytes} B, engine memory ${result.engine_memory_bytes} B`,
   );
+  console.log(`update_typed CDP sampled allocations: ${JSON.stringify(allocations)}`);
+  // Sampling records allocations even when GC frees them before the end-of-run heap snapshot.
+  // A per-point wrapper would allocate tens of MB across 1M points; package-attributed churn must
+  // remain bounded by batches/calls instead.
+  expect(allocations.package_bytes).toBeLessThan(4 * 1024 * 1024);
   if (result.heap_available) {
     // 1M per-point JS objects would be tens of megabytes. A few hundred KB of incidental churn
     // (the loop's own bookkeeping, GC timing) is expected; 8 MB is a generous ceiling that a

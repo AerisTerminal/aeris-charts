@@ -14,12 +14,32 @@
 use origin_render::draw_list::{text_font_spec, Prim};
 use origin_render_wgpu::{LabelAtlas, TexQuadInstance, ATLAS_SIZE};
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
+use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, OffscreenCanvas};
 
 use crate::text_cache::{frac_bits, left_edge, place_run, CachedRun, TextRunCache, TextRunKey};
 
+enum RasterCanvas {
+    Html(HtmlCanvasElement),
+    Offscreen(OffscreenCanvas),
+}
+
+impl RasterCanvas {
+    fn set_size(&self, width: u32, height: u32) {
+        match self {
+            Self::Html(canvas) => {
+                canvas.set_width(width);
+                canvas.set_height(height);
+            }
+            Self::Offscreen(canvas) => {
+                canvas.set_width(width);
+                canvas.set_height(height);
+            }
+        }
+    }
+}
+
 pub(super) struct TextRunStore {
-    canvas: HtmlCanvasElement,
+    canvas: RasterCanvas,
     ctx: CanvasRenderingContext2d,
     cache: TextRunCache,
     /// Monotonic atlas key (the atlas's own string map is unused; the cache is keyed richer).
@@ -38,12 +58,28 @@ impl TextRunStore {
             .get_context("2d")?
             .ok_or_else(|| JsValue::from_str("no 2d text-raster context"))?
             .dyn_into::<CanvasRenderingContext2d>()?;
-        Ok(Self {
+        Ok(Self::from_parts(RasterCanvas::Html(canvas), ctx))
+    }
+
+    /// Worker-safe text rasterizer. `OffscreenCanvasRenderingContext2D` implements the same 2D
+    /// methods used here; the unchecked cast only selects web-sys's shared method bindings and
+    /// does not reinterpret memory.
+    pub(super) fn new_offscreen() -> Result<Self, JsValue> {
+        let canvas = OffscreenCanvas::new(1, 1)?;
+        let ctx = canvas
+            .get_context("2d")?
+            .ok_or_else(|| JsValue::from_str("no offscreen 2d text-raster context"))?
+            .unchecked_into::<CanvasRenderingContext2d>();
+        Ok(Self::from_parts(RasterCanvas::Offscreen(canvas), ctx))
+    }
+
+    fn from_parts(canvas: RasterCanvas, ctx: CanvasRenderingContext2d) -> Self {
+        Self {
             canvas,
             ctx,
             cache: TextRunCache::default(),
             next_slot_key: 0,
-        })
+        }
     }
 
     /// Resolve one prim to its atlas quad, rasterizing on a cache miss. `None` for non-text
@@ -134,8 +170,7 @@ impl TextRunStore {
             return None;
         }
         // Resizing resets all context state — re-establish the exact draw state.
-        self.canvas.set_width(placement.w);
-        self.canvas.set_height(placement.h);
+        self.canvas.set_size(placement.w, placement.h);
         self.ctx.set_font(&key.font);
         self.ctx.set_text_align(key.align.canvas_keyword());
         self.ctx.set_text_baseline("middle");

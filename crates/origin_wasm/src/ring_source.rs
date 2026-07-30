@@ -94,22 +94,34 @@ impl std::fmt::Display for LayoutError {
 }
 
 /// One contiguous run of ring slots to read: `count` rows starting at ring slot `slot`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RingSegment {
     pub slot: usize,
     pub count: usize,
 }
 
-/// What one drain should read.
+/// What one drain should read. The segment storage is inline because planning runs once per bound
+/// ring per frame; even the wrap case must not allocate.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DrainPlan {
-    /// Up to two runs (a wrap splits the window at the end of the ring), in **oldest-first** order
-    /// so the rows apply in ascending time.
-    pub segments: Vec<RingSegment>,
+    segments: [RingSegment; 2],
+    segment_count: usize,
     /// Rows the producer overwrote before this drain could read them.
     pub lost_rows: usize,
-    /// The cursor value this plan consumed up to; becomes the new `consumed`.
+    /// The cursor value this plan consumed up to; becomes the new `consumed` only after a stable
+    /// copy has been verified.
     pub consumed_to: i32,
+}
+
+impl DrainPlan {
+    /// Up to two runs (a wrap splits the window), in oldest-first order.
+    pub fn segments(&self) -> &[RingSegment] {
+        &self.segments[..self.segment_count]
+    }
+
+    pub fn rows(&self) -> usize {
+        self.segments().iter().map(|segment| segment.count).sum()
+    }
 }
 
 impl RingLayout {
@@ -176,7 +188,8 @@ impl RingLayout {
         let available = cursor.wrapping_sub(consumed);
         if available <= 0 {
             return DrainPlan {
-                segments: Vec::new(),
+                segments: [RingSegment::default(); 2],
+                segment_count: 0,
                 lost_rows: 0,
                 consumed_to: cursor,
             };
@@ -192,20 +205,24 @@ impl RingLayout {
         let start_count = cursor.wrapping_sub(take as i32);
         // `rem_euclid` keeps the slot correct for a cursor that has wrapped into the negatives.
         let start_slot = (start_count as i64).rem_euclid(self.capacity as i64) as usize;
-        let mut segments = Vec::with_capacity(2);
         let first = take.min(self.capacity - start_slot);
-        segments.push(RingSegment {
+        let mut segments = [RingSegment::default(); 2];
+        segments[0] = RingSegment {
             slot: start_slot,
             count: first,
-        });
-        if take > first {
-            segments.push(RingSegment {
+        };
+        let segment_count = if take > first {
+            segments[1] = RingSegment {
                 slot: 0,
                 count: take - first,
-            });
-        }
+            };
+            2
+        } else {
+            1
+        };
         DrainPlan {
             segments,
+            segment_count,
             lost_rows,
             consumed_to: cursor,
         }
@@ -298,7 +315,7 @@ mod tests {
     fn an_idle_producer_yields_no_reads() {
         let l = layout(16);
         let plan = l.plan_drain(7, 7);
-        assert!(plan.segments.is_empty());
+        assert!(plan.segments().is_empty());
         assert_eq!(plan.lost_rows, 0);
         assert_eq!(plan.consumed_to, 7);
     }
@@ -307,7 +324,7 @@ mod tests {
     fn a_contiguous_window_is_one_segment() {
         let l = layout(16);
         let plan = l.plan_drain(2, 6);
-        assert_eq!(plan.segments, vec![RingSegment { slot: 2, count: 4 }]);
+        assert_eq!(plan.segments(), vec![RingSegment { slot: 2, count: 4 }]);
         assert_eq!(plan.lost_rows, 0);
         assert_eq!(plan.consumed_to, 6);
     }
@@ -318,7 +335,7 @@ mod tests {
         // Rows 14,15 then 0,1 — the older pair must come first so times stay ascending.
         let plan = l.plan_drain(14, 18);
         assert_eq!(
-            plan.segments,
+            plan.segments(),
             vec![
                 RingSegment { slot: 14, count: 2 },
                 RingSegment { slot: 0, count: 2 },
@@ -331,7 +348,7 @@ mod tests {
     fn a_window_ending_exactly_at_the_wrap_stays_one_segment() {
         let l = layout(16);
         let plan = l.plan_drain(12, 16);
-        assert_eq!(plan.segments, vec![RingSegment { slot: 12, count: 4 }]);
+        assert_eq!(plan.segments(), vec![RingSegment { slot: 12, count: 4 }]);
     }
 
     #[test]
@@ -340,11 +357,11 @@ mod tests {
         // The producer wrote 40 rows since the last drain into a 16-row ring: 24 are gone.
         let plan = l.plan_drain(0, 40);
         assert_eq!(plan.lost_rows, 24);
-        let taken: usize = plan.segments.iter().map(|s| s.count).sum();
+        let taken: usize = plan.segments().iter().map(|s| s.count).sum();
         assert_eq!(taken, 16, "exactly the newest capacity rows");
         // Newest 16 rows are counts 24..40, i.e. slots 8..16 then 0..8.
         assert_eq!(
-            plan.segments,
+            plan.segments(),
             vec![
                 RingSegment { slot: 8, count: 8 },
                 RingSegment { slot: 0, count: 8 },
@@ -358,7 +375,7 @@ mod tests {
         let l = layout(16);
         let plan = l.plan_drain(0, 16);
         assert_eq!(plan.lost_rows, 0);
-        assert_eq!(plan.segments, vec![RingSegment { slot: 0, count: 16 }]);
+        assert_eq!(plan.segments(), vec![RingSegment { slot: 0, count: 16 }]);
     }
 
     #[test]
@@ -368,12 +385,12 @@ mod tests {
         let consumed = i32::MAX - 1;
         let cursor = i32::MAX.wrapping_add(2); // == i32::MIN + 1
         let plan = l.plan_drain(consumed, cursor);
-        let taken: usize = plan.segments.iter().map(|s| s.count).sum();
+        let taken: usize = plan.segments().iter().map(|s| s.count).sum();
         assert_eq!(taken, 3, "three rows spanning the overflow");
         assert_eq!(plan.lost_rows, 0);
         assert_eq!(plan.consumed_to, cursor);
         // Slots stay in range across the negative cursor values.
-        for segment in &plan.segments {
+        for segment in plan.segments() {
             assert!(segment.slot < l.capacity);
             assert!(segment.slot + segment.count <= l.capacity);
         }
@@ -384,7 +401,7 @@ mod tests {
         let l = layout(16);
         // A cursor that went backwards (worker restarted with a fresh buffer view).
         let plan = l.plan_drain(100, 3);
-        assert!(plan.segments.is_empty());
+        assert!(plan.segments().is_empty());
         // Resynchronize on the reset value rather than stalling forever.
         assert_eq!(plan.consumed_to, 3);
     }
@@ -395,10 +412,10 @@ mod tests {
         for consumed in -20i32..40 {
             for advance in 0i32..30 {
                 let plan = l.plan_drain(consumed, consumed.wrapping_add(advance));
-                let taken: usize = plan.segments.iter().map(|s| s.count).sum();
+                let taken: usize = plan.segments().iter().map(|s| s.count).sum();
                 assert!(taken <= l.capacity);
                 assert_eq!(taken + plan.lost_rows, advance.max(0) as usize);
-                for segment in &plan.segments {
+                for segment in plan.segments() {
                     assert!(
                         segment.slot + segment.count <= l.capacity,
                         "segment {segment:?} leaves a {}-row ring",

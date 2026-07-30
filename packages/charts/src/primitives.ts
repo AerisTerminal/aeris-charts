@@ -138,15 +138,16 @@ export interface primitive_axis_label {
 }
 
 /**
- * An in-pane overlay text draw registered through {@link pane_primitive.text_views} /
- * {@link series_primitive.text_views} (plugin platform Phase 3.5). Painted on the Canvas2D
- * axis overlay in the engine watermark's slot: below the axis chrome, above the pane,
- * identical on both backends. For text at a specific layer position between the engine's own
- * prims (e.g. above the crosshair or behind the series), use
- * {@link primitive_draw_context.text} instead — this hook always shares the watermark slot.
+ * An in-pane compatibility text draw registered through {@link pane_primitive.text_views} /
+ * {@link series_primitive.text_views} (plugin platform Phase 3.5). It is painted through the
+ * Canvas2D compatibility overlay on both live backends and clipped strictly to its owning pane,
+ * so it cannot cover price/time-axis chrome. For text at a specific layer position between the
+ * engine's own primitives (for example above the crosshair or behind the series), use
+ * {@link primitive_draw_context.text} instead.
  *
  * `x`/`y` are absolute bitmap px (the draw context's coordinate space); the host converts to
- * the overlay's media space with the frame's exact pixel ratios. `color` is any CSS color
+ * the overlay's media space with the frame's exact pixel ratios and applies the owning-pane clip.
+ * `color` is any CSS color
  * (alpha preserved). `font` is a full CSS font shorthand and wins over `size`/`font_family`/
  * `bold`; without it the host composes `{bold } {size}px {family}` defaulting to the chart's
  * `layout.fontSize`/`layout.fontFamily` — the same string the engine's own axis labels use.
@@ -204,9 +205,9 @@ export interface pane_primitive {
   /** Boxed labels on the time strip. */
   time_axis_views?(): primitive_axis_label[];
   /**
-   * In-pane overlay text draws (Phase 3.5; see {@link primitive_text_view}), painted on the
-   * axis overlay in the watermark's slot each frame. Called after `pane_views` in the same
-   * render pass, so geometry cached by the view renderers is fresh.
+   * In-pane compatibility text draws (Phase 3.5; see {@link primitive_text_view}), painted on
+   * the Canvas2D compatibility overlay and clipped to the owning pane. Called after `pane_views`
+   * in the same render pass, so geometry cached by the view renderers is fresh.
    */
   text_views?(info: primitive_text_context): primitive_text_view[];
   /**
@@ -292,9 +293,9 @@ export interface series_primitive {
   /** Boxed labels on the time strip. */
   time_axis_views?(): primitive_axis_label[];
   /**
-   * In-pane overlay text draws (Phase 3.5; see {@link primitive_text_view}), painted on the
-   * axis overlay in the watermark's slot each frame. Called after `pane_views` in the same
-   * render pass, so geometry cached by the view renderers is fresh. A hidden series paints no
+   * In-pane compatibility text draws (Phase 3.5; see {@link primitive_text_view}), painted on
+   * the Canvas2D compatibility overlay and clipped to the owning pane. Called after `pane_views`
+   * in the same render pass, so geometry cached by the view renderers is fresh. A hidden series paints no
    * text (its views and autoscale are gated the same way).
    */
   text_views?(info: primitive_text_context): primitive_text_view[];

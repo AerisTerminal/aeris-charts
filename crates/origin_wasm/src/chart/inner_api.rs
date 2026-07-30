@@ -292,6 +292,8 @@ impl ChartInner {
 
     /// Drain every bound ring for this frame. See the wasm-facing wrapper for the `out` layout.
     pub fn drain_ring_sources(&mut self, out: &mut [f64]) -> u32 {
+        let clock = self.clock.clone();
+        let started = clock.as_ref().map(|clock| clock.now());
         // Destructure once so each ring's `&mut` and the engine's `&mut` are disjoint borrows.
         let Self {
             rings,
@@ -300,11 +302,13 @@ impl ChartInner {
             ..
         } = self;
         let mut total = 0u32;
+        let mut had_work = false;
         let mut pairs = 0usize;
         let mut lost = 0u32;
         for ring in rings.iter_mut() {
             let series_id = ring.series_id;
             let outcome = ring.drain(engine);
+            had_work |= outcome.had_work;
             lost += outcome.lost_rows;
             if outcome.rows == 0 {
                 continue;
@@ -325,6 +329,11 @@ impl ChartInner {
             // Surfaced on `frame_stats().ring_overruns` rather than as a console warning: an
             // overrun under load would otherwise flood the console at frame rate.
             telemetry.count_ring_overruns(lost);
+        }
+        if had_work {
+            if let (Some(clock), Some(start)) = (clock.as_ref(), started) {
+                telemetry.add_pending_ingest_ms(clock.now() - start);
+            }
         }
         total
     }

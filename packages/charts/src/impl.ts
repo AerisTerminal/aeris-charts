@@ -1099,6 +1099,7 @@ class series_primitive_handle_impl implements series_primitive_handle {
 /** One registered canvas primitive (Phase C-e) in the package-side registry. */
 interface canvas_primitive_entry {
   primitive: canvas_primitive;
+  pane_index: number;
   detached: boolean;
 }
 
@@ -1457,11 +1458,9 @@ export class chart_impl implements chart_api {
 
   /**
    * Canvas primitives (plugin platform Phase C-e): after the engine frame, paint every
-   * attached canvas primitive onto the plugin overlay. The canvas is package-owned host DOM —
-   * no wasm involvement — so ordering with the axis chrome is compositor-level: the plugin
-   * canvas sits above the pane canvases and below the axis/input overlay. Its backing store
-   * tracks the engine-sized overlay's (bitmap = css * dpr at every size/DPR change), and
-   * assigning `width`/`height` clears, so a resize never leaves stale pixels behind.
+   * attached canvas primitive onto the package-owned DOM canvas. The canvas remains above pane
+   * content for plugin z-order, but each renderer is clipped to its owning engine pane so it cannot
+   * cover the shared price/time-axis chrome now rendered by WebGPU/Canvas2D.
    */
   private run_canvas_primitives(): void {
     if (this.removed) return;
@@ -1481,8 +1480,8 @@ export class chart_impl implements chart_api {
     );
     // update_all_views before the frame's views (like C-a); views bucket by z_order so all
     // `normal` views paint before all `top` views (attach order within a pass).
-    const normal: canvas_pane_view["renderer"][] = [];
-    const top: canvas_pane_view["renderer"][] = [];
+    const normal: { renderer: canvas_pane_view["renderer"]; pane_index: number }[] = [];
+    const top: { renderer: canvas_pane_view["renderer"]; pane_index: number }[] = [];
     for (const entry of this.canvas_primitives) {
       const primitive = entry.primitive;
       try {
@@ -1498,21 +1497,40 @@ export class chart_impl implements chart_api {
         continue;
       }
       for (const view of views ?? []) {
-        (view.z_order === "top" ? top : normal).push(view.renderer);
+        (view.z_order === "top" ? top : normal).push({
+          renderer: view.renderer,
+          pane_index: entry.pane_index,
+        });
       }
     }
-    for (const renderer of [...normal, ...top]) {
+    const hpr = rect.width > 0 ? canvas.width / rect.width : 1;
+    const vpr = rect.height > 0 ? canvas.height / rect.height : 1;
+    for (const { renderer, pane_index } of [...normal, ...top]) {
+      // Canvas primitives are pane-scoped. Keep their DOM layer above pane content while clipping
+      // it to the owning engine pane, so the shared GPU/Canvas axis strips remain top-layer chrome.
+      const geometry = JSON.parse(this.wasm.pane_geometry_json(pane_index)) as Partial<pane_geometry>;
+      const left = (geometry.left ?? 0) * hpr;
+      const top_px = (geometry.top ?? 0) * vpr;
+      const width = (geometry.width ?? 0) * hpr;
+      const height = (geometry.height ?? 0) * vpr;
+      if (width <= 0 || height <= 0) continue;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(left, top_px, width, height);
+      ctx.clip();
       try {
         renderer(target);
       } catch (error) {
         console.warn(`origin: canvas primitive renderer threw — ${error}`);
+      } finally {
+        ctx.restore();
       }
     }
   }
 
   /** Register a canvas primitive (Phase C-e) on behalf of `pane_impl`. */
   attach_canvas_primitive(pane_index: number, primitive: canvas_primitive): canvas_primitive_handle {
-    const entry: canvas_primitive_entry = { primitive, detached: false };
+    const entry: canvas_primitive_entry = { primitive, pane_index, detached: false };
     this.canvas_primitives.push(entry);
     try {
       primitive.attached?.({ pane_index });
@@ -2602,7 +2620,7 @@ export class chart_impl implements chart_api {
       this.wasm.clear_crosshair();
       this.wasm.render();
     }
-    this.wasm.render_canvas2d_snapshot();
+    this.wasm.render_canvas2d_snapshot(add_top_layer);
     const output = document.createElement("canvas");
     output.width = this.overlay.width;
     output.height = this.overlay.height;
@@ -2615,6 +2633,12 @@ export class chart_impl implements chart_api {
     ctx.drawImage(this.plugin_canvas, 0, 0);
     if (add_top_layer) {
       ctx.drawImage(this.overlay, 0, 0);
+    }
+    // `render_canvas2d_snapshot(false)` executes into the warm fallback surface. When Canvas2D is
+    // the live backend that surface is visible, so restore its full shared chrome after copying the
+    // requested pane-only bitmap. (On WebGPU this simply keeps the warm fallback current.)
+    if (!add_top_layer) {
+      this.wasm.render_canvas2d_snapshot(true);
     }
     if (restore !== null) {
       this.wasm.set_crosshair(restore.x, restore.y);

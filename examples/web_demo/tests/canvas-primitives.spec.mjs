@@ -96,6 +96,14 @@ test("canvas primitive paints on WebGPU and Canvas2D, and detach restores the ba
       crop_png(attached, 0, 0, pane_width, pane_height),
     );
     expect(pane_diff, `pane region must change where the canvas primitive draws (${backend})`).toBeGreaterThan(0);
+    expect(count_different(
+      crop_png(baseline, pane_width, 0, baseline.width - pane_width, pane_height),
+      crop_png(attached, pane_width, 0, attached.width - pane_width, pane_height),
+    ), `canvas primitive must not cover the price axis (${backend})`).toBe(0);
+    expect(count_different(
+      crop_png(baseline, 0, pane_height, pane_width, baseline.height - pane_height),
+      crop_png(attached, 0, pane_height, pane_width, attached.height - pane_height),
+    ), `canvas primitive must not cover the time axis (${backend})`).toBe(0);
 
     await set_vert_line(page, false);
     expect(await page.evaluate(() => window.__vert_line_active())).toBe(false);

@@ -46,11 +46,25 @@ test("reports plausible last-frame telemetry on the WebGPU backend", async ({ pa
   expect(stats.memory_bytes % 65536).toBe(0);
   expect(stats.dropped_frames).toBeGreaterThanOrEqual(0);
   expect(stats.ring_overruns).toBe(0);
-  // The Item 4 baseline, asserted rather than asserted-by-comment: on the WebGPU backend the engine
-  // still issues Canvas2D paint ops every frame, for the axis chrome and crosshair labels. This is
-  // the number that has to reach 0 for Item 4 to be done, so it is pinned as non-zero today.
-  expect(stats.canvas2d_ops, "no Canvas2D axis work on a WebGPU frame — has Item 4 landed?")
-    .toBeGreaterThan(0);
+  // Engine-owned chrome, watermark, and crosshair labels are part of the shared render frame.
+  // With no plugin `text_views` escape hatch attached, a WebGPU frame must not paint either
+  // visible Canvas2D surface.
+  expect(stats.canvas2d_ops, "WebGPU must issue zero visible Canvas2D paint operations").toBe(0);
+
+  // Exercise changing price/time crosshair labels rather than accepting a static warmed frame.
+  // Every move produces a distinct axis frame and must retain the zero-op guarantee.
+  const moving_crosshair_ops = await page.evaluate(async () => {
+    let maximum = 0;
+    for (let i = 0; i < 24; i += 1) {
+      const row = window.__data[500 + i * 7];
+      window.__chart.set_crosshair_position(row.close, row.time, window.__main);
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      maximum = Math.max(maximum, window.__chart.frame_stats().canvas2d_ops);
+    }
+    window.__chart.clear_crosshair_position();
+    return maximum;
+  });
+  expect(moving_crosshair_ops, "moving crosshair chrome must stay on WebGPU").toBe(0);
 });
 
 test("reports plausible last-frame telemetry on the Canvas2D fallback", async ({ page }) => {
@@ -153,4 +167,62 @@ test("reading frame_stats costs a negligible fraction of a frame", async ({ page
   if (STRICT) {
     expect(drift.polled.median / drift.unpolled.median, detail).toBeLessThan(1.25);
   }
+});
+
+
+test("continuous crosshair stays within the 8 ms CPU budget on 50k bars", async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto("/");
+  await wait_chart(page);
+  expect(await page.evaluate(() => window.__chart.backend())).toBe("webgpu");
+
+  const result = await page.evaluate(() => {
+    const bars = 50_000;
+    const times = new Float64Array(bars);
+    const open = new Float64Array(bars);
+    const high = new Float64Array(bars);
+    const low = new Float64Array(bars);
+    const close = new Float64Array(bars);
+    let price = 100;
+    for (let i = 0; i < bars; i += 1) {
+      const next = price + Math.sin(i * 0.017) * 0.8;
+      times[i] = 1_577_836_800 + i * 60;
+      open[i] = price;
+      high[i] = Math.max(price, next) + 0.4;
+      low[i] = Math.min(price, next) - 0.4;
+      close[i] = next;
+      price = next;
+    }
+    window.__main.set_data_typed({ times, open, high, low, close });
+    window.__chart.time_scale().fit_content();
+    window.__chart.render();
+
+    const cpu = [];
+    const wall = [];
+    const before = JSON.parse(window.__chart.wasm.text_cache_debug()).rasterizations;
+    let maximum_canvas2d_ops = 0;
+    for (let i = 0; i < 180; i += 1) {
+      const index = 15_000 + ((i * 137) % 20_000);
+      const started = performance.now();
+      window.__chart.set_crosshair_position(close[index], times[index], window.__main);
+      wall.push(performance.now() - started);
+      const stats = window.__chart.frame_stats();
+      cpu.push(stats.cpu_ms);
+      maximum_canvas2d_ops = Math.max(maximum_canvas2d_ops, stats.canvas2d_ops);
+    }
+    const percentile = (values, p) => {
+      values.sort((a, b) => a - b);
+      return values[Math.floor((values.length - 1) * p)];
+    };
+    return {
+      cpu_p99_ms: percentile(cpu, 0.99),
+      wall_p99_ms: percentile(wall, 0.99),
+      maximum_canvas2d_ops,
+      text_rasterizations: JSON.parse(window.__chart.wasm.text_cache_debug()).rasterizations - before,
+    };
+  });
+
+  console.log(`50k continuous crosshair: ${JSON.stringify(result)}`);
+  expect(result.maximum_canvas2d_ops).toBe(0);
+  expect(result.cpu_p99_ms, JSON.stringify(result)).toBeLessThan(8);
 });

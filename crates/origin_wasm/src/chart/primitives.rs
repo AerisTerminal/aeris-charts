@@ -570,17 +570,13 @@ impl ChartInner {
         layer.extend(decoded.prims);
     }
 
-    /// Collect a primitive's `text_views(info)` overlay text draws (plugin platform Phase
-    /// 3.5) into `self.primitive_texts` for `draw_axes_2d` to paint in the engine watermark's
-    /// slot (below the axis chrome, above the pane). This is the in-pane text answer to
-    /// `Prim::Text` no-oping on both backends: the overlay is the one canvas that can draw
-    /// glyphs today, and it is shared by both backends, so plugin text stays
-    /// backend-identical. The hook receives an `info` object with the pane's bitmap
-    /// dimensions, the frame's exact pixel ratios, and the layout font — state a plugin
-    /// cannot read mid-render otherwise (chart APIs are off-limits from render hooks).
-    /// Descriptors carry absolute bitmap-px coordinates (the draw context's space), converted
-    /// here to the overlay's media space with the frame ratios. Shared by the pane- and
-    /// series-primitive passes.
+    /// Collect a primitive's `text_views(info)` draws (plugin platform Phase 3.5) into the legacy
+    /// Canvas2D compatibility overlay. Each descriptor keeps its owning pane clip: the overlay is
+    /// composited above the backend surface, but plugin text cannot cover price/time-axis chrome.
+    /// The hook receives the pane's bitmap dimensions, exact pixel ratios, and layout font — state
+    /// a plugin cannot read mid-render otherwise (chart APIs are off-limits from render hooks).
+    /// Descriptors carry absolute bitmap-px coordinates, converted here to media space with the
+    /// frame ratios. Shared by the pane- and series-primitive passes.
     fn append_primitive_text_views(
         &mut self,
         obj: &js_sys::Object,
@@ -650,6 +646,12 @@ impl ChartInner {
                 text,
                 x: x / hpr,
                 y: y / vpr,
+                clip: [
+                    f64::from(pane_left_px) / hpr,
+                    f64::from(pane_top_px) / vpr,
+                    f64::from(pane_w_px) / hpr,
+                    f64::from(pane_h_px) / vpr,
+                ],
                 color: non_empty_string("color").unwrap_or_else(|| layout.text_color.clone()),
                 font,
                 align: keyword("align", &["left", "center", "right"], "left"),

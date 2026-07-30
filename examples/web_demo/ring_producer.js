@@ -2,13 +2,16 @@
 //
 // Stands in for the consumer's real market-data worker: it writes fixed-stride OHLC rows into a
 // `SharedArrayBuffer` ring and publishes a monotonic row count through an `Int32` cursor. The
-// ordering here is the contract the engine relies on — **row bytes first, cursor second** — so that
-// every row below the published count is complete.
+// ordering here is a per-slot seqlock: mark the row as being written, fill its channels, publish
+// that slot's completed logical count, then advance the global cursor.
 
 /** @type {{f64: Float64Array, i32: Int32Array, layout: object, count: number, time: number} | null} */
 let state = null;
 /** Handle of the running paced loop, or null. */
 let timer = null;
+let run_start_count = 0;
+let run_started_ms = 0;
+let run_rate = 0;
 
 function write_row(price) {
   const { layout, f64, i32, count } = state;
@@ -16,17 +19,25 @@ function write_row(price) {
   const slot = count % layout.capacity;
   const base = layout.data_offset + slot * layout.row_stride;
   const at = (byte_offset) => (base + byte_offset) / 8;
+  const next_count = count + 1;
+  // Mark this slot unstable before overwriting any channel. The completed value is the same i32
+  // logical count later published through the global cursor; its complement can never be mistaken
+  // for that generation, including across i32 overflow.
+  if (layout.sequence_offset !== undefined) {
+    Atomics.store(i32, (base + layout.sequence_offset) / 4, ~next_count);
+  }
   const next = price + Math.sin(state.time * 1e-3) * 0.5;
   f64[at(layout.time_offset)] = state.time;
   f64[at(layout.open_offset)] = price;
   f64[at(layout.high_offset)] = Math.max(price, next) + 0.3;
   f64[at(layout.low_offset)] = Math.min(price, next) - 0.3;
   f64[at(layout.close_offset)] = next;
-  state.count += 1;
+  state.count = next_count;
   state.time += 1;
-  // Publish only after the row's bytes are in place. The engine's `Atomics.load` of this value is
-  // the other half of the handshake.
-  Atomics.store(i32, layout.write_cursor_offset / 4, state.count);
+  if (layout.sequence_offset !== undefined) {
+    Atomics.store(i32, (base + layout.sequence_offset) / 4, next_count);
+  }
+  Atomics.store(i32, layout.write_cursor_offset / 4, next_count);
 }
 
 function write_batch(rows) {
@@ -58,29 +69,31 @@ self.onmessage = (event) => {
       break;
     }
     case "start": {
-      // Paced production: `rows_per_second` spread over ~1 ms ticks. The fractional remainder is
-      // carried in `debt` rather than rounded per tick — rounding up to one row per tick would
-      // floor the achievable rate at ~1000 rows/s, which silently turns a "100 rows/s" arm into a
-      // 1000 rows/s one and destroys the low end of a rate sweep.
-      const per_tick = message.rows_per_second / 1000;
-      let debt = 0;
+      // Pace against elapsed wall time rather than assuming setTimeout(1) really fires every 1ms.
+      // Worker timers are commonly clamped/coalesced; catching up to the elapsed-time target makes
+      // the measured 50k/s arm actually produce 50k/s on those browsers.
+      run_start_count = state.count;
+      run_started_ms = performance.now();
+      run_rate = message.rows_per_second;
       const tick = () => {
-        debt += per_tick;
-        const rows = Math.floor(debt);
-        if (rows > 0) {
-          debt -= rows;
-          write_batch(rows);
-        }
+        const target = Math.floor((performance.now() - run_started_ms) * run_rate / 1000);
+        const produced = state.count - run_start_count;
+        if (target > produced) write_batch(target - produced);
         timer = setTimeout(tick, 1);
       };
       tick();
-      self.postMessage({ type: "started", per_tick });
+      self.postMessage({ type: "started", rows_per_second: run_rate });
       break;
     }
     case "stop": {
       if (timer !== null) clearTimeout(timer);
       timer = null;
-      self.postMessage({ type: "stopped", written: state === null ? 0 : state.count });
+      self.postMessage({
+        type: "stopped",
+        written: state === null ? 0 : state.count,
+        session_written: state === null ? 0 : state.count - run_start_count,
+        elapsed_ms: performance.now() - run_started_ms,
+      });
       break;
     }
     default:

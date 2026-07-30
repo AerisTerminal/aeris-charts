@@ -25,8 +25,11 @@ npm run test:browser
 The Playwright project uses full Chromium in new-headless mode and explicitly selects Dawn's
 SwiftShader WebGPU adapter. It fails if automatic mode falls back to Canvas2D. The suite verifies:
 
-1. `chart.take_screenshot()` is pixel-identical for a live WebGPU chart and a forced Canvas2D chart.
-2. External PNG captures of the actually presented WebGPU and Canvas2D frames are pixel-identical.
+1. Public screenshots use the shared Canvas2D snapshot path on both live backends and preserve
+   `take_screenshot(add_top_layer)` semantics.
+2. External PNG captures of the actually presented WebGPU and Canvas2D frames use the same
+   backend-neutral primitive stream. The gate permits only bounded fractional-DPR antialiasing
+   residuals and separately requires zero marker/overlay ordering mismatches.
 3. The raw browser Canvas2D pane and native tiny-skia pane consume the shared JSON fixture and are
    pixel-identical before browser compositor scaling.
 4. Public time-scale scrolling/reset/index/coordinate/dimension methods and chart/series price-
@@ -47,14 +50,19 @@ SwiftShader WebGPU adapter. It fails if automatic mode falls back to Canvas2D. T
    DPR 1.5 / spacing 6. A no-feature control separates existing candle/axis raster differences
    from feature-specific differences. Default marker autoscale is enabled in both libraries and
    the gate asserts identical visible ranges, price extents, and price-axis widths.
+8. `offscreen-worker.spec.mjs` exercises the worker-only constructor on WebGPU and forced Canvas2D,
+   including typed data, explicit resize, relayed pointer/wheel/key input, telemetry, and continued
+   presentation while the main thread is synchronously blocked.
 
 The current reference baseline differs perceptually in 3.368% of the full frame: 3.254% in the pane,
 6.818% in the price-axis region, and 2.083% in the time-axis region. Exact RGBA differences are
 reported too, but are not used as the cross-library threshold because their Canvas2D
 antialiasing differs. At DPR 1 / spacing 6 the pane is byte-identical, both axis regions are
-perceptually identical, and the time axis is also byte-identical. Axis text is rasterized in media
-coordinates like the reference library, while the headless frame chooses price-label midpoint correction, stable
-crosshair-time correction, and bold maximum-weight time ticks.
+perceptually identical, and the time axis is also byte-identical. Axis, crosshair, and watermark
+geometry now comes from one backend-neutral primitive stream. WebGPU executes it in a final
+unscissored pass and Canvas2D executes the same primitives; fractional-DPR glyph and rounded-edge
+antialiasing may differ within the explicit live-backend ceilings rather than by draw order or
+geometry.
 The wide-spacing case initially exposed two real engine defects—invisible series affecting
 autoscale and eager price-axis shrinking. After fixing them, its full-frame perceptual difference
 fell from 10.26% to 1.15% and its pane difference from 10.52% to 0.88%.

@@ -22,6 +22,7 @@ export * from "./primitives.js";
 export * from "./canvas_plugins.js";
 export * from "./custom_series.js";
 export * from "./builtin_plugins.js";
+export * from "./offscreen.js";
 export * from "./shortcuts.js";
 export * from "./grid.js";
 import { chart_impl } from "./impl.js";

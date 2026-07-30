@@ -1,7 +1,7 @@
 //! `ChartInner` rendering: WebGPU/Canvas2D pane execution, axis overlay painting, backend
 //! failover, and browser text measurement.
 
-use origin_render::draw_list::Prim;
+use origin_render::draw_list::{IRect, Prim, TextAlign};
 
 use super::*;
 
@@ -80,6 +80,9 @@ impl ChartInner {
         // Custom series (Phase C-c): plugin renders splice into each pane's `main` layer at
         // the series' paint-order marks (same command-recording model).
         self.run_custom_series();
+        // Axis labels contributed by primitives are now complete; convert the whole top layer once
+        // and feed it to whichever backend executes this frame.
+        self.build_axis_prims();
 
         if self
             .gfx
@@ -104,9 +107,10 @@ impl ChartInner {
 
         let pane_outcome = if self.gfx.is_some() {
             let engine_frame = &self.frame;
+            let pane_count = engine_frame.panes.len();
             self.gpu_groups
-                .resize_with(engine_frame.panes.len(), DrawGroup::default);
-            self.gpu_groups.truncate(engine_frame.panes.len());
+                .resize_with(pane_count + 1, DrawGroup::default);
+            self.gpu_groups.truncate(pane_count + 1);
             let Some(gfx) = self.gfx.as_mut() else {
                 return Err(JsValue::from_str("WebGPU state disappeared mid-render"));
             };
@@ -114,7 +118,12 @@ impl ChartInner {
             let renderers = Rc::clone(&gfx.renderers);
             let text_runs = &mut self.text_runs;
             let mut atlas = shared.atlas.borrow_mut();
-            for (group, pane_frame) in self.gpu_groups.iter_mut().zip(&engine_frame.panes) {
+            for (group, pane_frame) in self
+                .gpu_groups
+                .iter_mut()
+                .take(pane_count)
+                .zip(&engine_frame.panes)
+            {
                 group.scissor = Some(pane_frame.scissor);
                 group.clear();
                 // Convert the shared frame only at the WebGPU backend boundary. The builder
@@ -149,6 +158,19 @@ impl ChartInner {
                     &mut resolve_text,
                 );
             }
+            // Final unscissored top-layer group: watermark, axis chrome and axis/crosshair labels.
+            // It is submitted in this same pass after every pane group, so no engine Canvas2D paint
+            // follows a WebGPU frame.
+            let axis_group = &mut self.gpu_groups[pane_count];
+            axis_group.scissor = None;
+            axis_group.clear();
+            let queue = &shared.queue;
+            let mut resolve_text = |prim: &Prim| {
+                text_runs
+                    .as_mut()
+                    .and_then(|runs| runs.resolve(&mut atlas, queue, prim))
+            };
+            prims_to_group(&self.axis_prims, &[], axis_group, &mut resolve_text);
             let groups = &self.gpu_groups[..];
             gfx.msaa.ensure(
                 &shared.device,
@@ -233,7 +255,7 @@ impl ChartInner {
             PaneRenderOutcome::Canvas2d => self.render_canvas2d()?,
         }
 
-        self.draw_axes_2d(&self.axis_frame)?;
+        self.paint_primitive_text_overlay()?;
         self.telemetry.count_presented();
         Ok(())
     }
@@ -251,8 +273,284 @@ impl ChartInner {
         })
     }
 
-    // ---- Canvas2D axis overlay ----
+    // ---- Shared axis/top-layer frame ----
 
+    /// Convert the engine-owned [`AxisFrame`] plus watermark into backend-neutral bitmap-space
+    /// primitives. Both backends execute this exact list, while WebGPU includes it in the same
+    /// submitted render pass as the pane groups.
+    fn build_axis_prims(&mut self) {
+        let mut prims = std::mem::take(&mut self.axis_prims);
+        prims.clear();
+        let dpr = self.dpr;
+        let bitmap_w = self.bitmap_w as f64;
+        let pane_left = self.pane_left;
+        let pane_w = self.pane_w;
+        let pane_h = self.pane_h;
+        let axis_frame = self.axis_frame.clone();
+        let options = self.opts();
+        let layout = options.layout.clone();
+        let left_scale = options.left_price_scale.clone();
+        let right_scale = options.right_price_scale.clone();
+        let time_scale = options.time_scale.clone();
+        let watermark = options.watermark.clone();
+        let border_w = 1f64.max(dpr.floor()) as i32;
+        let parse = |css: &str, fallback: Color| Color::parse_css(css).unwrap_or(fallback);
+        let fallback = Color::parse_css(BORDER_CSS).unwrap_or(Color::rgb(0x2b, 0x2b, 0x43));
+        let left_border = parse(&left_scale.border_color, fallback);
+        let right_border = parse(&right_scale.border_color, fallback);
+        let time_border = parse(&time_scale.border_color, fallback);
+        // Watermark occupies the old overlay's first slot, below chrome and labels.
+        if watermark.visible && !watermark.text.is_empty() {
+            let (x, align) = match watermark.horz_align.as_str() {
+                "left" => (pane_left, TextAlign::Left),
+                "right" => (pane_left + pane_w, TextAlign::Right),
+                _ => (pane_left + pane_w / 2.0, TextAlign::Center),
+            };
+            let y = match watermark.vert_align.as_str() {
+                "top" => watermark.font_size / 2.0,
+                "bottom" => pane_h - watermark.font_size / 2.0,
+                _ => pane_h / 2.0,
+            };
+            prims.push(Prim::Text {
+                x: (x * dpr) as f32,
+                y: (y * dpr) as f32,
+                text: watermark.text,
+                color: parse(&watermark.color, Color::rgb(0, 0, 0)),
+                size: (watermark.font_size * dpr) as f32,
+                family: watermark.font_family,
+                align,
+                weight: if watermark.font_style.contains("bold") {
+                    700
+                } else {
+                    400
+                },
+                italic: watermark.font_style.contains("italic"),
+            });
+        }
+
+        {
+            let mut rect = |x: f64, y: f64, w: f64, h: f64, color: Color| {
+                let x0 = x.round() as i32;
+                let y0 = y.round() as i32;
+                let x1 = (x + w).round() as i32;
+                let y1 = (y + h).round() as i32;
+                if x1 > x0 && y1 > y0 {
+                    prims.push(Prim::Rect {
+                        rect: IRect {
+                            x: x0,
+                            y: y0,
+                            w: x1 - x0,
+                            h: y1 - y0,
+                        },
+                        color,
+                    });
+                }
+            };
+
+            if self.left_axis_w > 0.0 && left_scale.border_visible {
+                rect(
+                    (pane_left * dpr).round() - f64::from(border_w),
+                    0.0,
+                    f64::from(border_w),
+                    (pane_h * dpr).round(),
+                    left_border,
+                );
+            }
+            if self.axis_w > 0.0 && right_scale.border_visible {
+                rect(
+                    ((pane_left + pane_w) * dpr).round(),
+                    0.0,
+                    f64::from(border_w),
+                    (pane_h * dpr).round(),
+                    right_border,
+                );
+            }
+            if time_scale.border_visible && self.engine.time_axis_visible {
+                rect(
+                    0.0,
+                    (pane_h * dpr).round(),
+                    bitmap_w,
+                    f64::from(border_w),
+                    time_border,
+                );
+            }
+
+            let tick_len = (5.0 * dpr).round();
+            let tick_off = (dpr * 0.5).floor();
+            for tick in &axis_frame.price_ticks {
+                let (enabled, color, x) = if tick.left {
+                    (
+                        left_scale.border_visible,
+                        left_border,
+                        ((pane_left - 5.0) * dpr).round(),
+                    )
+                } else {
+                    (
+                        right_scale.border_visible,
+                        right_border,
+                        ((pane_left + pane_w) * dpr).round(),
+                    )
+                };
+                if enabled {
+                    rect(
+                        x,
+                        (tick.y * dpr).round() - tick_off,
+                        tick_len,
+                        f64::from(border_w),
+                        color,
+                    );
+                }
+            }
+            if time_scale.border_visible
+                && self.engine.time_ticks_visible
+                && self.engine.time_axis_visible
+            {
+                let y0 = (pane_h * dpr).round();
+                for x in &axis_frame.time_ticks {
+                    rect(
+                        (x * dpr).round() - tick_off,
+                        y0,
+                        f64::from(border_w),
+                        tick_len,
+                        time_border,
+                    );
+                }
+            }
+
+            let separator_color = parse(&layout.panes.separator_color, right_border);
+            for separator in &axis_frame.separators {
+                rect(
+                    (pane_left * dpr).round(),
+                    (separator * dpr).round(),
+                    (pane_w * dpr).round(),
+                    (PANE_SEPARATOR * dpr).max(f64::from(border_w)),
+                    separator_color,
+                );
+            }
+            if let Some(separator) = axis_frame
+                .separator_hover
+                .and_then(|index| axis_frame.separators.get(index))
+            {
+                rect(
+                    0.0,
+                    ((separator - 4.0) * dpr).round(),
+                    bitmap_w,
+                    (9.0 * dpr).round(),
+                    parse(&layout.panes.separator_hover_color, separator_color),
+                );
+            }
+        }
+
+        // Plain ticks first, then each boxed label's background and text in frame order.
+        let append_text = |label: &AxisLabel, prims: &mut Vec<Prim>| {
+            let metrics_text = match label.midpoint {
+                AxisTextMidpoint::None => None,
+                AxisTextMidpoint::Label => Some(label.text.as_str()),
+                AxisTextMidpoint::StableTime => Some("Apr0"),
+            };
+            let correction = metrics_text
+                .and_then(|text| self.axis_ctx.measure_text(text).ok())
+                .map(|metrics| {
+                    (metrics.actual_bounding_box_ascent() - metrics.actual_bounding_box_descent())
+                        / 2.0
+                })
+                .unwrap_or(0.0);
+            prims.push(Prim::Text {
+                x: (label.x * dpr) as f32,
+                y: ((label.y + correction) * dpr) as f32,
+                text: label.text.clone(),
+                color: label.color,
+                size: (layout.font_size * dpr) as f32,
+                family: layout.font_family.clone(),
+                align: match label.align {
+                    AxisTextAlign::Left => TextAlign::Left,
+                    AxisTextAlign::Right => TextAlign::Right,
+                    AxisTextAlign::Center => TextAlign::Center,
+                },
+                weight: if label.bold { 700 } else { 400 },
+                italic: false,
+            });
+        };
+        for label in axis_frame
+            .labels
+            .iter()
+            .filter(|label| label.background.is_none())
+        {
+            append_text(label, &mut prims);
+        }
+        let mut last_attach: Option<(u32, f64)> = None;
+        for label in axis_frame
+            .labels
+            .iter()
+            .filter(|label| label.background.is_some())
+        {
+            if let Some((x, y, w, h, color)) = label.background {
+                let bx = (x * dpr).round();
+                let by = match (label.attach_group, last_attach) {
+                    (Some(group), Some((previous, bottom))) if group == previous => bottom,
+                    _ => (y * dpr).round(),
+                };
+                let bw = ((x + w) * dpr).round() - bx;
+                let bh = ((y + h) * dpr).round() - by;
+                last_attach = label.attach_group.map(|group| (group, by + bh));
+                if label.background_corners.is_empty() {
+                    prims.push(Prim::Rect {
+                        rect: IRect {
+                            x: bx as i32,
+                            y: by as i32,
+                            w: bw as i32,
+                            h: bh as i32,
+                        },
+                        color,
+                    });
+                } else {
+                    let corners = label.background_corners;
+                    let radius = (2.0 * dpr) as f32;
+                    prims.push(Prim::RoundRect {
+                        x: bx as f32,
+                        y: by as f32,
+                        w: bw as f32,
+                        h: bh as f32,
+                        radii: [
+                            if corners.top_left { radius } else { 0.0 },
+                            if corners.top_right { radius } else { 0.0 },
+                            if corners.bottom_right { radius } else { 0.0 },
+                            if corners.bottom_left { radius } else { 0.0 },
+                        ],
+                        fill: color,
+                        border_width: 0.0,
+                        border_color: Color::rgba(0, 0, 0, 0),
+                    });
+                }
+            } else {
+                last_attach = None;
+            }
+            append_text(label, &mut prims);
+        }
+        self.axis_prims = prims;
+    }
+
+    // ---- Legacy Canvas2D plugin-text escape hatch ----
+
+    fn paint_primitive_text_overlay(&mut self) -> Result<(), JsValue> {
+        if self.primitive_texts.is_empty() {
+            if self.overlay_had_plugin_text {
+                self.axis_ctx
+                    .clear_rect(0.0, 0.0, self.bitmap_w as f64, self.bitmap_h as f64);
+                self.overlay_had_plugin_text = false;
+                self.telemetry.add_canvas2d_ops(1);
+            }
+            return Ok(());
+        }
+        self.axis_ctx
+            .clear_rect(0.0, 0.0, self.bitmap_w as f64, self.bitmap_h as f64);
+        let ops = 1 + self.draw_primitive_overlay_texts(self.dpr)?;
+        self.overlay_had_plugin_text = true;
+        self.telemetry.add_canvas2d_ops(ops);
+        Ok(())
+    }
+
+    #[allow(dead_code)]
     fn draw_axes_2d(&self, axis_frame: &AxisFrame) -> Result<(), JsValue> {
         let ctx = &self.axis_ctx;
         let dpr = self.dpr;
@@ -405,6 +703,7 @@ impl ChartInner {
     /// Paint the `watermark` label onto the overlay, anchored inside the pane per `horzAlign`/
     /// `vertAlign`. Drawn in media coordinates (context scaled by DPR) like the axis labels; the
     /// CSS color string is passed through verbatim so alpha is preserved.
+    #[allow(dead_code)]
     fn draw_watermark(&self, wm: &WatermarkOptions, dpr: f64) -> Result<u32, JsValue> {
         if !wm.visible || wm.text.is_empty() {
             return Ok(0);
@@ -456,11 +755,17 @@ impl ChartInner {
         let mut ops = 0;
         let mut draw_result = Ok(0);
         for text in &self.primitive_texts {
+            ctx.save();
+            ctx.begin_path();
+            ctx.rect(text.clip[0], text.clip[1], text.clip[2], text.clip[3]);
+            ctx.clip();
             ctx.set_font(&text.font);
             ctx.set_fill_style_str(&text.color);
             ctx.set_text_align(&text.align);
             ctx.set_text_baseline(&text.baseline);
-            if let Err(error) = ctx.fill_text(&text.text, text.x, text.y).map(|_| ()) {
+            let result = ctx.fill_text(&text.text, text.x, text.y).map(|_| ());
+            ctx.restore();
+            if let Err(error) = result {
                 draw_result = Err(error);
                 break;
             }
@@ -471,6 +776,7 @@ impl ChartInner {
         draw_result
     }
 
+    #[allow(dead_code)]
     fn draw_axis_labels(
         &self,
         axis_frame: &AxisFrame,
@@ -542,6 +848,7 @@ impl ChartInner {
     /// Draws label glyphs in media-coordinate space: the context is scaled by DPR while the font
     /// stays at the configured CSS px size. Using an independently hinted size*dpr bitmap font is
     /// observably different at fractional DPR even when every logical coordinate is identical.
+    #[allow(dead_code)]
     fn draw_axis_label_texts<'l>(
         &self,
         labels: impl Iterator<Item = &'l AxisLabel>,
@@ -596,13 +903,21 @@ impl ChartInner {
     /// Permanently switch this chart instance to its already-initialized Canvas2D pane.
     fn activate_canvas2d(&mut self, reason: &str) {
         if self.gfx.take().is_some() {
-            set_backend_visibility(&self.gpu_pane, &self.fallback_pane, false);
+            set_backend_visibility(self.gpu_pane.as_ref(), self.fallback_pane.as_ref(), false);
             web_sys::console::warn_1(&format!("origin: {reason}; continuing with Canvas2D").into());
         }
     }
 
     /// Execute the exact same retained frame consumed by WebGPU through Canvas2D.
     pub(super) fn render_canvas2d(&self) -> Result<(), JsValue> {
+        self.render_canvas2d_with_axis(true)
+    }
+
+    /// Execute the retained pane frame through Canvas2D, optionally including the shared
+    /// watermark/axis top layer. Screenshot capture passes `false` to preserve the established
+    /// `take_screenshot(add_top_layer = false)` behavior now that axes no longer live on the
+    /// transparent overlay canvas.
+    pub(super) fn render_canvas2d_with_axis(&self, include_axis: bool) -> Result<(), JsValue> {
         let ctx = &self.pane_ctx;
         let width = self.bitmap_w as f64;
         let height = self.bitmap_h as f64;
@@ -624,6 +939,9 @@ impl ChartInner {
             execute_canvas2d(&pane.top_prims, &pane.points, &mut target, viewport);
             target.restore();
         }
+        if include_axis {
+            execute_canvas2d(&self.axis_prims, &[], &mut target, viewport);
+        }
         // The `clear_rect` + background `fill_rect` above, plus every executed prim.
         self.telemetry.add_canvas2d_ops(2 + target.ops());
         Ok(())
@@ -634,6 +952,7 @@ impl ChartInner {
 /// radius): the path is built manually from lines and quadratic arcs — corners flagged in
 /// `corners` get `radius`, the rest stay sharp. The radius clamps to half the box so thin
 /// boxes keep a well-formed path. Coordinates are bitmap px (the axis context is unscaled here).
+#[allow(dead_code)]
 fn fill_boxed_label_background(
     ctx: &CanvasRenderingContext2d,
     x: f64,

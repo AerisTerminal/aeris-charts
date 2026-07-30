@@ -1202,6 +1202,34 @@ impl ChartEngine {
         self.update_series_bar_styled(id, time, values, [None; 3])
     }
 
+    /// Apply an allocation-free batch of ordered streaming rows and synchronize shared chart state
+    /// once. Used by the SharedArrayBuffer drain: row validation and append/replace semantics are
+    /// identical to [`update_series_bar`], while time-scale and indicator work is amortized across
+    /// the frame's batch.
+    pub fn update_series_bars<I>(&mut self, id: SeriesId, rows: I) -> usize
+    where
+        I: IntoIterator<Item = (f64, [f64; 4])>,
+    {
+        if self.is_series_removed(id) {
+            return 0;
+        }
+        let mut accepted = 0usize;
+        for (time, values) in rows {
+            let Some((time, values)) = sanitize_point(time, values) else {
+                continue;
+            };
+            self.data.update_styled(id, time, values, [None; 3]);
+            accepted += 1;
+        }
+        if accepted == 0 {
+            return 0;
+        }
+        self.enforce_series_cap(id);
+        self.sync_time_points();
+        self.recompute_indicators();
+        accepted
+    }
+
     /// [`update_series_bar`] plus the target bar's per-point color channels (reference
     /// `series.update` with data-item colors; `None` = no custom color for that channel).
     /// Mirrors the plain update's semantics exactly: append-new-time vs replace-last.

@@ -57,14 +57,26 @@ pub struct FrameTelemetry {
     /// Ring-source producer overruns since chart create (see `set_ring_source`). Stays 0 while
     /// no series has a ring bound — the slot is part of the wire layout either way.
     ring_overruns: Cell<u32>,
+    /// Ring-source drain time waiting to be attributed to the render immediately following it.
+    /// Draining is triggered by the package's frame tick just before `render`, so keeping this
+    /// separate closes the telemetry boundary without changing the public frame loop.
+    pending_ingest_ms: Cell<f64>,
     /// Set by the first `frame_stats()` read; arms the WebGPU timestamp path.
     stats_requested: Cell<bool>,
 }
 
 impl FrameTelemetry {
-    /// Record the CPU cost of the frame that just finished encoding.
-    pub fn set_cpu_ms(&self, ms: f64) {
-        self.last_cpu_ms.set(ms);
+    /// Record the render portion plus any ring ingestion performed immediately before it.
+    pub fn set_cpu_ms(&self, render_ms: f64) {
+        self.last_cpu_ms
+            .set(render_ms + self.pending_ingest_ms.replace(0.0));
+    }
+
+    /// Attribute a successful ring drain to the next rendered frame. Only drains that delivered
+    /// rows call this, so an idle bound ring cannot accumulate time indefinitely.
+    pub fn add_pending_ingest_ms(&self, ms: f64) {
+        self.pending_ingest_ms
+            .set(self.pending_ingest_ms.get() + ms.max(0.0));
     }
 
     pub fn set_draw_calls(&self, calls: u32) {
@@ -183,6 +195,24 @@ mod tests {
         assert_eq!(out[slot::DROPPED_FRAMES], 1.0);
         assert_eq!(out[slot::CANVAS2D_OPS], 2.0);
         assert_eq!(out[slot::GPU_MS], 2.0);
+    }
+
+    #[test]
+    fn ring_ingest_time_is_charged_once_to_the_next_frame() {
+        let telemetry = FrameTelemetry::default();
+        telemetry.add_pending_ingest_ms(1.25);
+        telemetry.set_cpu_ms(2.0);
+        let mut out = [0.0; FRAME_STATS_LEN];
+        telemetry.write_into(&mut out, None);
+        assert_eq!(out[slot::CPU_MS], 3.25);
+
+        telemetry.set_cpu_ms(2.0);
+        telemetry.write_into(&mut out, None);
+        assert_eq!(
+            out[slot::CPU_MS],
+            2.0,
+            "pending ingest must be consumed once"
+        );
     }
 
     /// A short buffer must not panic at the JS boundary (a stale façade could pass one).

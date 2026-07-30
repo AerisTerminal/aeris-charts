@@ -86,11 +86,75 @@ The package is ESM-only and ships two artifacts side by side in `dist/`: `index.
   ```
 - **Plain static hosting / `<script type="module">`**: works as-is.
 
+## Worker rendering with `OffscreenCanvas`
+
+For rendering in a dedicated worker, transfer **two** canvases and call the additive
+`create_offscreen_chart` entry point. A canvas cannot switch context type after WebGPU claims it, so
+the second surface keeps Canvas2D fallback warm without rebuilding chart state.
+
+```ts
+// main.ts
+const gpu_element = document.querySelector<HTMLCanvasElement>("#chart-gpu")!;
+const fallback_element = document.querySelector<HTMLCanvasElement>("#chart-fallback")!;
+const gpu_canvas = gpu_element.transferControlToOffscreen();
+const fallback_canvas = fallback_element.transferControlToOffscreen();
+
+const show_backend = (backend: "webgpu" | "canvas2d") => {
+  gpu_element.style.visibility = backend === "webgpu" ? "visible" : "hidden";
+  fallback_element.style.visibility = backend === "canvas2d" ? "visible" : "hidden";
+};
+worker.onmessage = ({ data }) => {
+  if (data.type === "ready" || data.type === "backend_change") show_backend(data.backend);
+};
+
+worker.postMessage(
+  { type: "init", gpu_canvas, fallback_canvas, width: 900, height: 500, dpr: devicePixelRatio },
+  [gpu_canvas, fallback_canvas],
+);
+```
+
+```ts
+// chart.worker.ts
+import { create_offscreen_chart } from "@tradeaion/charts";
+
+self.onmessage = async ({ data }) => {
+  if (data.type !== "init") return;
+  const chart = await create_offscreen_chart(data.gpu_canvas, data.fallback_canvas, {
+    width: data.width,
+    height: data.height,
+    dpr: data.dpr,
+  });
+  chart.subscribe_backend_change((backend) => {
+    self.postMessage({ type: "backend_change", backend });
+  });
+  chart.add_series("candlestick");
+  self.postMessage({ type: "ready", backend: chart.backend() });
+};
+```
+
+Keep both HTML canvases stacked. Use the initial `chart.backend()` report and every
+`subscribe_backend_change` notification to display the active surface, including a runtime
+WebGPU-to-Canvas2D device-loss fallback. The subscription returns an unsubscribe function.
+
+The worker API provides typed data updates, explicit `resize`, options, frame statistics, visible
+logical range, and normalized `inject_pointer_event`, `inject_wheel_event`, and `inject_key_event`
+methods. Relay coordinates in full-chart CSS pixels. Workers cannot infer element size or DPR, so
+send changes from the main thread and call `resize(width, height, dpr)`. Worker options reject
+DOM-only settings rather than silently ignoring them: `autoSize`, localization, gesture/kinetic/
+tracking options, and `layout.panes.enableResize` remain available only through `create_chart`.
+
+The worker façade deliberately excludes DOM-only facilities such as `ResizeObserver`, accessibility,
+HTML/canvas plugins, DOM event listeners, and synchronous screenshots. Use `create_chart` when those
+features are required.
+
 ## Runtime requirements
 
-Browser only (DOM + `fetch` of the wasm asset; WebGPU optional — falls back to Canvas2D).
-Importing the module in Node/SSR is safe (side-effect-free); calling `create_chart` requires a
-browser environment.
+Browser runtime with `fetch` for the wasm asset. Use `create_chart` in a DOM `Window`, or
+`create_offscreen_chart` in a dedicated worker with `OffscreenCanvas`. WebGPU is optional in both
+paths and falls back to the supplied Canvas2D surface.
+
+Importing the module in Node/SSR is safe (side-effect-free), but constructing either chart requires a
+browser implementation of the corresponding canvas APIs.
 
 ## License
 

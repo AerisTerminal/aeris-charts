@@ -1,15 +1,16 @@
 //! The chart object exported to JS.
 //!
-//! Hybrid rendering, mirroring the reference charting library's per-cell canvas layout:
-//! - the **pane** (grid, series, crosshair lines) is drawn with WebGPU or the shared Canvas2D
-//!   fallback;
-//! - the **axes** (borders, tick labels, crosshair axis labels) are drawn natively on a
-//!   stacked Canvas2D overlay via web-sys, so axis text is the browser's own `fillText`.
+//! Shared-frame rendering for the browser host:
+//! - pane geometry and engine chrome (watermark, axes, and crosshair labels) are emitted as
+//!   backend-neutral primitives;
+//! - WebGPU consumes every engine primitive in one render pass, with a final unscissored top-layer
+//!   group, while Canvas2D executes the same retained frame as the fallback and screenshot path;
+//! - the transparent DOM overlay remains an input surface and a compatibility escape hatch only
+//!   for plugin `text_views` that cannot yet enter the shared frame.
 //!
-//! Both canvases are full chart size and share the same rect; the WebGPU pass is scissored to
-//! the pane region (axis strips are left as the white clear color) and the 2D overlay is
-//! transparent except over the axis strips. All layout/formatting logic stays in Rust; the
-//! overlay context is just a drawing backend.
+//! Axis text is browser-rasterized into the shared WebGPU atlas. At fractional DPR, browser font
+//! hinting and WebGPU's 4x-MSAA rounded-label coverage can leave bounded antialiasing differences
+//! from direct Canvas2D; all geometry, placement, colors, and paint order stay shared.
 //!
 //! Multiple series share one time axis via [`DataLayer`] (the merged time-point list). Each
 //! series maps its data onto merged indices; a series absent at an index is whitespace there.
@@ -53,7 +54,7 @@ use origin_engine::{
 };
 use origin_render::canvas2d::{execute as execute_canvas2d, Canvas2d, Viewport as CanvasViewport};
 use origin_render::color::Color;
-use origin_render::draw_list::LineType;
+use origin_render::draw_list::{LineType, Prim};
 use origin_render_wgpu::{
     prims_to_group, render_frame, DrawGroup, GpuTimer, LabelAtlas, MsaaTarget, QuadRenderer,
     TexQuadRenderer, TriRenderer, SAMPLE_COUNT,
@@ -61,7 +62,7 @@ use origin_render_wgpu::{
 
 #[wasm_bindgen(inline_js = r#"
 export function notify_origin_backend_loss(runtimeId) {
-    window.dispatchEvent(new CustomEvent('origin-chart-backend-lost', { detail: runtimeId }));
+    globalThis.dispatchEvent(new CustomEvent('origin-chart-backend-lost', { detail: runtimeId }));
 }
 "#)]
 extern "C" {
@@ -202,8 +203,8 @@ enum PaneRenderOutcome {
 
 struct ChartInner {
     gfx: Option<Gfx>,
-    gpu_pane: web_sys::HtmlCanvasElement,
-    fallback_pane: web_sys::HtmlCanvasElement,
+    gpu_pane: Option<web_sys::HtmlCanvasElement>,
+    fallback_pane: Option<web_sys::HtmlCanvasElement>,
     pane_ctx: CanvasRenderingContext2d,
     axis_ctx: CanvasRenderingContext2d,
     bitmap_w: u32,
@@ -211,6 +212,9 @@ struct ChartInner {
     engine: ChartEngine,
     frame: origin_engine::ChartFrame,
     axis_frame: AxisFrame,
+    /// Backend-neutral top-layer primitives: watermark, axis chrome, ticks, and all axis/crosshair
+    /// labels. WebGPU appends this as an unscissored draw group; Canvas2D executes the same list.
+    axis_prims: Vec<Prim>,
     gpu_groups: Vec<DrawGroup>,
     /// Pane-primitive registry (plugin platform Phase C-a): host-retained JS plugin objects,
     /// drawn into the pane layers during `render`. Ids are never reused within a chart.
@@ -225,10 +229,13 @@ struct ChartInner {
     /// object plus its raw items per custom series, aligned with the engine's time-only
     /// rows. Removing the series drops the entry (firing the view's `destroy` hook).
     custom_series: Vec<CustomSeriesEntry>,
-    /// Overlay text draws collected from the primitives' `text_views` hooks during the
-    /// primitive passes (plugin platform Phase 3.5), painted on the axis overlay in the
-    /// engine watermark's slot by `draw_axes_2d`. Cleared at the top of every render.
+    /// Overlay text draws collected from primitives' `text_views` hooks during primitive passes.
+    /// The legacy Canvas2D compatibility overlay sits above the backend surface, so every draw is
+    /// clipped to its owning pane and cannot cover shared price/time-axis chrome.
     primitive_texts: Vec<PrimitiveOverlayText>,
+    /// Whether the transparent input overlay contains plugin text from the previous frame. Normal
+    /// WebGPU frames never touch this Canvas2D surface; it is cleared only on plugin detach.
+    overlay_had_plugin_text: bool,
     /// Browser-rasterized text-run store for `Prim::Text` on the WebGPU backend (offscreen
     /// canvas + atlas cache). `None` only if the offscreen context could not be created —
     /// the Canvas2D backend draws text directly and never consults this.
@@ -248,14 +255,16 @@ struct ChartInner {
 }
 
 /// One in-pane overlay text draw registered by a primitive's `text_views` hook (plugin
-/// platform Phase 3.5 — the text answer to `Prim::Text` no-oping on both backends). Painted
-/// on the Canvas2D axis overlay in media coordinates, in the same slot as the engine's
-/// watermark (below the axis chrome, above the pane). `font` is a fully-resolved CSS font
-/// shorthand; `align`/`baseline` are canvas `textAlign`/`textBaseline` keywords.
+/// platform Phase 3.5). Painted through the legacy Canvas2D compatibility overlay and clipped to
+/// its owning pane, so it remains above pane geometry without reaching shared axis chrome. `font`
+/// is a fully-resolved CSS font shorthand; `align`/`baseline` are canvas keywords.
 pub(super) struct PrimitiveOverlayText {
     pub(super) text: String,
     pub(super) x: f64,
     pub(super) y: f64,
+    /// Owning pane in media coordinates. The compatibility overlay sits above the backend canvas,
+    /// so clipping is what preserves the historical guarantee that plugin text cannot cover axes.
+    pub(super) clip: [f64; 4],
     pub(super) color: String,
     pub(super) font: String,
     pub(super) align: String,
@@ -311,9 +320,9 @@ impl Drop for ResizeBinding {
 pub struct OriginChart {
     inner: Rc<RefCell<ChartInner>>,
     runtime_id: u32,
-    gpu_pane: web_sys::HtmlCanvasElement,
-    fallback_pane: web_sys::HtmlCanvasElement,
-    overlay: web_sys::HtmlCanvasElement,
+    gpu_pane: Option<web_sys::HtmlCanvasElement>,
+    fallback_pane: Option<web_sys::HtmlCanvasElement>,
+    overlay: Option<web_sys::HtmlCanvasElement>,
     _resize: Option<ResizeBinding>,
 }
 
@@ -357,10 +366,13 @@ fn supports_device_pixel_content_box() -> bool {
 }
 
 fn set_backend_visibility(
-    gpu_pane: &web_sys::HtmlCanvasElement,
-    fallback_pane: &web_sys::HtmlCanvasElement,
+    gpu_pane: Option<&web_sys::HtmlCanvasElement>,
+    fallback_pane: Option<&web_sys::HtmlCanvasElement>,
     use_webgpu: bool,
 ) {
+    let Some((gpu_pane, fallback_pane)) = gpu_pane.zip(fallback_pane) else {
+        return;
+    };
     let _ = gpu_pane
         .style()
         .set_property("visibility", if use_webgpu { "visible" } else { "hidden" });
@@ -442,7 +454,7 @@ pub async fn create_chart(
         None
     } else {
         match try_create_gfx(
-            gpu_pane_canvas,
+            wgpu::SurfaceTarget::Canvas(gpu_pane_canvas),
             css_width,
             css_height,
             dpr,
@@ -462,12 +474,12 @@ pub async fn create_chart(
             }
         }
     };
-    set_backend_visibility(&gpu_pane_el, &fallback_pane_el, gfx.is_some());
+    set_backend_visibility(Some(&gpu_pane_el), Some(&fallback_pane_el), gfx.is_some());
 
     let mut inner = ChartInner {
         gfx,
-        gpu_pane: gpu_pane_el.clone(),
-        fallback_pane: fallback_pane_el.clone(),
+        gpu_pane: Some(gpu_pane_el.clone()),
+        fallback_pane: Some(fallback_pane_el.clone()),
         pane_ctx,
         axis_ctx,
         bitmap_w,
@@ -475,12 +487,14 @@ pub async fn create_chart(
         engine: ChartEngine::new(css_width, css_height, dpr),
         frame: origin_engine::ChartFrame::default(),
         axis_frame: AxisFrame::default(),
+        axis_prims: Vec::new(),
         gpu_groups: Vec::new(),
         primitives: Vec::new(),
         series_primitives: Vec::new(),
         next_primitive_id: 1,
         custom_series: Vec::new(),
         primitive_texts: Vec::new(),
+        overlay_had_plugin_text: false,
         now_override: None,
         rings: Vec::new(),
         telemetry: FrameTelemetry::default(),
@@ -520,9 +534,137 @@ pub async fn create_chart(
     Ok(OriginChart {
         inner: Rc::new(RefCell::new(inner)),
         runtime_id,
-        gpu_pane: gpu_pane_el,
-        fallback_pane: fallback_pane_el,
-        overlay: overlay_el,
+        gpu_pane: Some(gpu_pane_el),
+        fallback_pane: Some(fallback_pane_el),
+        overlay: Some(overlay_el),
+        _resize: None,
+    })
+}
+
+/// Creates a worker-safe chart over transferred offscreen canvases. The first canvas is reserved
+/// for WebGPU and the second remains a warm Canvas2D fallback because a canvas cannot switch context
+/// types after creation. Width, height, and DPR are explicit; workers have no layout box to infer.
+#[allow(clippy::too_many_arguments)]
+#[wasm_bindgen]
+pub async fn create_offscreen_chart(
+    gpu_pane_canvas: web_sys::OffscreenCanvas,
+    fallback_pane_canvas: web_sys::OffscreenCanvas,
+    css_width: f64,
+    css_height: f64,
+    dpr: f64,
+    force_canvas2d: bool,
+    simulate_adapter_failure: bool,
+    force_fallback_adapter: bool,
+) -> Result<OriginChart, JsValue> {
+    console_error_panic_hook::set_once();
+    let css_width = css_width.max(1.0);
+    let css_height = css_height.max(1.0);
+    let dpr = dpr.max(f64::EPSILON);
+    let bitmap_w = (css_width * dpr).round().max(1.0) as u32;
+    let bitmap_h = (css_height * dpr).round().max(1.0) as u32;
+    for canvas in [&gpu_pane_canvas, &fallback_pane_canvas] {
+        canvas.set_width(bitmap_w);
+        canvas.set_height(bitmap_h);
+    }
+
+    // OffscreenCanvasRenderingContext2D exposes the same methods used by the shared executor.
+    // web-sys models it as a separate nominal type, so select the compatible method bindings.
+    let pane_ctx = fallback_pane_canvas
+        .get_context("2d")?
+        .ok_or_else(|| JsValue::from_str("no offscreen 2d pane context"))?
+        .unchecked_into::<CanvasRenderingContext2d>();
+    let measure_canvas = web_sys::OffscreenCanvas::new(bitmap_w, bitmap_h)?;
+    let axis_ctx = measure_canvas
+        .get_context("2d")?
+        .ok_or_else(|| JsValue::from_str("no offscreen 2d measurement context"))?
+        .unchecked_into::<CanvasRenderingContext2d>();
+
+    let runtime_id = NEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed);
+    let gfx = if force_canvas2d {
+        None
+    } else {
+        match try_create_gfx(
+            wgpu::SurfaceTarget::OffscreenCanvas(gpu_pane_canvas),
+            css_width,
+            css_height,
+            dpr,
+            runtime_id,
+            simulate_adapter_failure,
+            force_fallback_adapter,
+        )
+        .await
+        {
+            Ok(gfx) => Some(gfx),
+            Err(error) => {
+                web_sys::console::warn_1(
+                    &format!(
+                        "origin: worker WebGPU unavailable; using OffscreenCanvas 2D ({error:?})"
+                    )
+                    .into(),
+                );
+                None
+            }
+        }
+    };
+
+    let mut inner = ChartInner {
+        gfx,
+        gpu_pane: None,
+        fallback_pane: None,
+        pane_ctx,
+        axis_ctx,
+        bitmap_w,
+        bitmap_h,
+        engine: ChartEngine::new(css_width, css_height, dpr),
+        frame: origin_engine::ChartFrame::default(),
+        axis_frame: AxisFrame::default(),
+        axis_prims: Vec::new(),
+        gpu_groups: Vec::new(),
+        primitives: Vec::new(),
+        series_primitives: Vec::new(),
+        next_primitive_id: 1,
+        custom_series: Vec::new(),
+        primitive_texts: Vec::new(),
+        overlay_had_plugin_text: false,
+        text_runs: match TextRunStore::new_offscreen() {
+            Ok(store) => Some(store),
+            Err(error) => {
+                web_sys::console::warn_1(
+                    &format!(
+                        "origin: offscreen text-run rasterizer unavailable ({error:?}); WebGPU text disabled"
+                    )
+                    .into(),
+                );
+                None
+            }
+        },
+        now_override: None,
+        rings: Vec::new(),
+        telemetry: FrameTelemetry::default(),
+        clock: crate::telemetry::performance(),
+    };
+    let measure_ctx = inner.axis_ctx.clone();
+    inner.engine.set_text_measure(Some(Box::new(
+        move |text: &str, size: f64, family: &str, weight: u16, italic: bool| {
+            measure_ctx.set_font(&origin_render::draw_list::text_font_spec(
+                size as f32,
+                family,
+                weight,
+                italic,
+            ));
+            measure_ctx
+                .measure_text(text)
+                .map(|metrics| metrics.width())
+                .unwrap_or(0.0)
+        },
+    )));
+
+    Ok(OriginChart {
+        inner: Rc::new(RefCell::new(inner)),
+        runtime_id,
+        gpu_pane: None,
+        fallback_pane: None,
+        overlay: None,
         _resize: None,
     })
 }
@@ -536,9 +678,18 @@ impl OriginChart {
     /// re-rendering on every size/DPR change. After this, the embedder never sizes canvases.
     pub fn enable_auto_resize(&mut self, container: web_sys::HtmlElement) -> Result<(), JsValue> {
         let inner = self.inner.clone();
-        let gpu_pane = self.gpu_pane.clone();
-        let fallback_pane = self.fallback_pane.clone();
-        let overlay = self.overlay.clone();
+        let gpu_pane = self
+            .gpu_pane
+            .clone()
+            .ok_or_else(|| JsValue::from_str("auto resize is unavailable for OffscreenCanvas"))?;
+        let fallback_pane = self
+            .fallback_pane
+            .clone()
+            .ok_or_else(|| JsValue::from_str("auto resize is unavailable for OffscreenCanvas"))?;
+        let overlay = self
+            .overlay
+            .clone()
+            .ok_or_else(|| JsValue::from_str("auto resize is unavailable for OffscreenCanvas"))?;
         let container_cb = container.clone();
 
         let callback = Closure::wrap(Box::new(move |entries: js_sys::Array| {
@@ -607,9 +758,11 @@ impl OriginChart {
             .unwrap_or(1.0);
         apply_device_size(
             &self.inner,
-            &self.gpu_pane,
-            &self.fallback_pane,
-            &self.overlay,
+            self.gpu_pane.as_ref().expect("HTML canvas checked above"),
+            self.fallback_pane
+                .as_ref()
+                .expect("HTML canvas checked above"),
+            self.overlay.as_ref().expect("HTML canvas checked above"),
             css_w,
             css_h,
             (css_w * dpr).round(),
@@ -1977,8 +2130,8 @@ impl OriginChart {
     /// active onscreen backend. The TypeScript package uses this to implement its synchronous,
     /// deterministic composed screenshot API even while WebGPU is active.
     #[doc(hidden)]
-    pub fn render_canvas2d_snapshot(&self) -> Result<(), JsValue> {
-        self.inner.borrow().render_canvas2d()
+    pub fn render_canvas2d_snapshot(&self, include_axis: bool) -> Result<(), JsValue> {
+        self.inner.borrow().render_canvas2d_with_axis(include_axis)
     }
 
     /// Reports the active pane backend for diagnostics and runtime-matrix tests.
@@ -2162,7 +2315,7 @@ async fn create_shared_gpu(
 /// page-wide shared context (`shared_gpu`); only the surface, its config, and the MSAA target
 /// are per chart.
 async fn try_create_gfx(
-    pane_canvas: web_sys::HtmlCanvasElement,
+    surface_target: wgpu::SurfaceTarget<'static>,
     css_width: f64,
     css_height: f64,
     dpr: f64,
@@ -2178,7 +2331,7 @@ async fn try_create_gfx(
     let shared = shared_gpu(runtime_id, force_fallback_adapter).await?;
     let surface = shared
         .instance
-        .create_surface(wgpu::SurfaceTarget::Canvas(pane_canvas))
+        .create_surface(surface_target)
         .map_err(|e| JsValue::from_str(&format!("create_surface failed: {e}")))?;
     let bitmap_w = (css_width * dpr).round().max(1.0) as u32;
     let bitmap_h = (css_height * dpr).round().max(1.0) as u32;

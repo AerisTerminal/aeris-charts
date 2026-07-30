@@ -168,12 +168,27 @@ export interface ring_source_layout {
    * Byte offset of an `Int32` monotonic write cursor — the count of rows the producer has **ever**
    * written, not a ring slot. Must be 4-byte aligned. The engine reads it with `Atomics.load`.
    *
-   * The producer's contract: write the row's bytes **first**, then publish the incremented count
-   * with `Atomics.store`. The engine reads the cursor and then reads only rows strictly below it,
-   * so a row is never read half-written as long as that order holds. The cursor may overflow
-   * `Int32`; the engine handles the wrap.
+   * The producer's base contract: write the row's bytes **first**, then publish the incremented
+   * count with `Atomics.store`. The cursor may overflow `Int32`; the engine handles the wrap.
    */
   write_cursor_offset: number;
+  /**
+   * Optional byte offset, within every row, of an aligned `Int32` sequence word. Set this for a
+   * producer that can wrap while the engine is draining; it upgrades the base cursor handshake to
+   * a per-slot seqlock and guarantees the engine never accepts a torn generation.
+   *
+   * For logical row count `next = previous_cursor + 1`, the producer must:
+   * 1. `Atomics.store(sequence, ~next)` before touching the row;
+   * 2. write all `f64` channels;
+   * 3. `Atomics.store(sequence, next)`;
+   * 4. `Atomics.store(write_cursor, next)`.
+   *
+   * The engine checks every selected slot before and after its bulk copy and retries a frame when
+   * a sequence changed. Omit only for backwards compatibility with producers that cannot lap the
+   * consumer during a copy; a double cursor check still rejects fully-published overlap, but cannot
+   * detect a producer currently midway through an unpublished overwrite.
+   */
+  sequence_offset?: number;
 }
 
 /** Inclusive logical (bar-index) range. */
@@ -967,16 +982,15 @@ export interface series_api {
    * Bind a `SharedArrayBuffer` ring that the engine drains **once per frame**, or pass `null` to
    * unbind and return to explicit {@link update}/{@link update_typed} calls.
    *
-   * This decouples tick rate from frame rate structurally rather than by convention: with a ring
-   * bound, a producer running at 5 rows/sec and one running at 50,000 rows/sec both cost the engine
-   * one atomic cursor load plus one bulk copy of whatever accumulated. There is **no engine call
-   * per tick** — the host never has to decide when to flush, and no `requestAnimationFrame`
-   * coalescing of its own is needed.
+   * This decouples tick delivery from engine calls structurally rather than by convention: there
+   * is **no engine call per tick** and the host never decides when to flush. Total frame CPU still
+   * includes applying every delivered row and is reported by {@link frame_stats.cpu_ms}; use an
+   * appropriate capacity and {@link series_options.max_points} for sustained high-rate streams.
    *
    * Rows are not materialized as JS values. Each drain copies the contiguous run(s) of new row
-   * bytes straight into engine memory (at most two `TypedArray.set` calls per frame — a ring wrap
-   * splits the window) and parses them there, with a staging buffer sized once at bind time. No
-   * allocation happens per row or per frame.
+   * bytes straight into engine memory (at most two `TypedArray.set` calls per attempt — a ring wrap
+   * splits the window) and parses them there, with a staging buffer sized once at bind time. Drain
+   * planning and copying allocate nothing per row or frame.
    *
    * Rows apply in ring order, each appending or replacing the series' last point exactly as
    * {@link update} would; a non-finite row is dropped. Unlike {@link update_typed} there is no
@@ -984,10 +998,10 @@ export interface series_api {
    * ascending time.
    *
    * **Producer overrun.** If the producer wrote more than `capacity` rows between two drains, the
-   * oldest of them have already been overwritten. The engine then renders the newest `capacity`
-   * rows — never a torn window of mixed-age slots — and adds the shortfall to
-   * {@link frame_stats.ring_overruns}. Watch that counter to size `capacity` against the
-   * producer's burst rate.
+   * oldest of them have already been overwritten. The engine then targets the newest `capacity`
+   * rows and adds the shortfall to {@link frame_stats.ring_overruns}. With
+   * {@link ring_source_layout.sequence_offset}, every selected slot is validated before and after
+   * copying, so a concurrent wrap is retried instead of rendering a torn mixed-generation window.
    *
    * Binding starts from the producer's current cursor, so it picks up new rows rather than
    * replaying whatever is already sitting in the ring. Binding a second ring to the same series

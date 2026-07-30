@@ -44,6 +44,14 @@ function count_different(a, b) {
   });
 }
 
+function max_channel_delta(a, b) {
+  let max_delta = 0;
+  for (let i = 0; i < a.data.length; i += 1) {
+    max_delta = Math.max(max_delta, Math.abs(a.data[i] - b.data[i]));
+  }
+  return max_delta;
+}
+
 // (a) The custom series (the ported reference rounded-candles plugin example) records the same Prim
 // commands once per frame, so WebGPU and Canvas2D present pixel-identical frames with it active.
 // Bar spacing 3 puts the example's `radius` rule at 0, so its bodies emit crisp quad-family
@@ -70,12 +78,21 @@ test("custom series paints identically on both backends with the plugin active",
   expect(await page.evaluate(() => window.__chart.backend())).toBe("webgpu");
   expect(await page.evaluate(() => window.__custom_series_active())).toBe(true);
   const gpu_active = PNG.sync.read(await page.screenshot({ animations: "disabled", fullPage: false }));
+  const pane_backend_diff = count_different(
+    crop_png(gpu_active, 0, 0, pane_width, pane_height),
+    crop_png(canvas_active, 0, 0, pane_width, pane_height),
+  );
+  expect(pane_backend_diff, "the custom series' owning pane must remain pixel-identical").toBe(0);
+
+  // Shared axis text uses identical geometry and bounded backend-specific AA at fractional DPR.
   const backend_diff = count_different(gpu_active, canvas_active);
-  if (backend_diff !== 0) {
+  const backend_max_delta = max_channel_delta(gpu_active, canvas_active);
+  if (backend_diff > 5_000 || backend_max_delta > 64) {
     await test_info.attach("webgpu.png", { body: PNG.sync.write(gpu_active), contentType: "image/png" });
     await test_info.attach("canvas2d.png", { body: PNG.sync.write(canvas_active), contentType: "image/png" });
   }
-  expect(backend_diff).toBe(0);
+  expect(backend_diff, "full-frame differences must stay confined to bounded AA edges").toBeLessThanOrEqual(5_000);
+  expect(backend_max_delta).toBeLessThanOrEqual(64);
 });
 
 // (b) Autoscale: the custom series' `price_value_builder` values drive its price scale through
