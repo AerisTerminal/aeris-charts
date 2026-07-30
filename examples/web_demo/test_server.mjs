@@ -33,6 +33,12 @@ const server = createServer(async (request, response) => {
     response.writeHead(200, {
       "cache-control": "no-store",
       "content-type": mime_types.get(extname(filename)) ?? "application/octet-stream",
+      // Cross-origin isolation, which is what makes `SharedArrayBuffer` available at all — the
+      // ring-source specs need it. Everything the demo loads is same-origin, so `require-corp`
+      // costs nothing here. A consumer serving the engine must set the same pair to use
+      // `series_api.set_ring_source`.
+      "cross-origin-opener-policy": "same-origin",
+      "cross-origin-embedder-policy": "require-corp",
     });
     response.end(body);
   } catch {

@@ -32,6 +32,10 @@ impl ChartInner {
         if !dropped.is_empty() {
             self.detach_orphaned_series_primitives();
             self.drop_orphaned_custom_series();
+            // A removed series must not keep the engine holding views over its ring's shared
+            // buffer, or a `remove_series` would leak the whole buffer for the chart's lifetime.
+            let removed: Vec<SeriesId> = dropped.iter().map(|id| *id as SeriesId).collect();
+            self.rings.retain(|r| !removed.contains(&r.series_id));
         }
         dropped.into_iter().map(|id| id as u32).collect()
     }
@@ -252,6 +256,77 @@ impl ChartInner {
                 [s.open[row], s.high[row], s.low[row], s.close[row]],
             );
         }
+    }
+
+    /// Bind a ring source to a series (consumer Item 3), replacing any ring already bound to it.
+    /// Returns `""` on success, else the reason the layout was rejected.
+    pub fn set_ring_source(
+        &mut self,
+        series_id: u32,
+        bytes: js_sys::Uint8Array,
+        cursor_view: js_sys::Int32Array,
+        layout_json: &str,
+    ) -> String {
+        if !self.series.iter().any(|s| s.id == series_id as SeriesId) {
+            return "unknown or removed series id".into();
+        }
+        let layout: super::RingLayoutInput = match serde_json::from_str(layout_json) {
+            Ok(layout) => layout,
+            Err(e) => return format!("malformed ring_source_layout: {e}"),
+        };
+        match super::BoundRing::new(series_id as SeriesId, bytes, cursor_view, &layout) {
+            Ok(ring) => {
+                self.clear_ring_source(series_id);
+                self.rings.push(ring);
+                String::new()
+            }
+            Err(reason) => reason,
+        }
+    }
+
+    /// Unbind a series' ring, dropping the engine's views over the shared buffer so the buffer can
+    /// be collected once the host releases it too.
+    pub fn clear_ring_source(&mut self, series_id: u32) {
+        self.rings.retain(|r| r.series_id != series_id as SeriesId);
+    }
+
+    /// Drain every bound ring for this frame. See the wasm-facing wrapper for the `out` layout.
+    pub fn drain_ring_sources(&mut self, out: &mut [f64]) -> u32 {
+        // Destructure once so each ring's `&mut` and the engine's `&mut` are disjoint borrows.
+        let Self {
+            rings,
+            engine,
+            telemetry,
+            ..
+        } = self;
+        let mut total = 0u32;
+        let mut pairs = 0usize;
+        let mut lost = 0u32;
+        for ring in rings.iter_mut() {
+            let series_id = ring.series_id;
+            let outcome = ring.drain(engine);
+            lost += outcome.lost_rows;
+            if outcome.rows == 0 {
+                continue;
+            }
+            total += outcome.rows;
+            // `[pair_count, id, rows, ...]` — stop reporting if the caller's scratch is short, but
+            // keep draining so no ring stalls behind a mis-sized buffer.
+            if (pairs + 1) * 2 < out.len() {
+                out[1 + pairs * 2] = series_id as f64;
+                out[2 + pairs * 2] = f64::from(outcome.rows);
+                pairs += 1;
+            }
+        }
+        if !out.is_empty() {
+            out[0] = pairs as f64;
+        }
+        if lost > 0 {
+            // Surfaced on `frame_stats().ring_overruns` rather than as a console warning: an
+            // overrun under load would otherwise flood the console at frame rate.
+            telemetry.count_ring_overruns(lost);
+        }
+        total
     }
 
     /// Streaming update of the main series (append new time or replace last).

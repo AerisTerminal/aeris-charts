@@ -26,6 +26,10 @@ mod text_cache;
 // too so the record/encoding tests run outside the browser.
 #[cfg(any(target_arch = "wasm32", test))]
 mod telemetry;
+// Pure ring-buffer layout/drain math for `series_api.set_ring_source`; compiled for the host
+// target too, because wrap, overrun and cursor-overflow are the cases worth testing off-browser.
+#[cfg(any(target_arch = "wasm32", test))]
+mod ring_source;
 
 #[cfg(target_arch = "wasm32")]
 mod canvas2d_target;

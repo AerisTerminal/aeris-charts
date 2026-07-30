@@ -18,9 +18,11 @@ mod custom_series;
 mod inner_api;
 mod inner_render;
 mod primitives;
+mod ring;
 mod text_runs;
 
 use custom_series::CustomSeriesEntry;
+use ring::{BoundRing, RingLayoutInput};
 use text_runs::TextRunStore;
 
 use std::cell::RefCell;
@@ -235,6 +237,9 @@ struct ChartInner {
     /// render path feeds the browser's system time every frame; `set_now_seconds` pins a value
     /// (the package's 1s countdown timer), which then drives every render until replaced.
     now_override: Option<f64>,
+    /// `SharedArrayBuffer` ring data sources (`series_api.set_ring_source`), at most one per
+    /// series, drained once per frame tick by `drain_ring_sources`.
+    rings: Vec<BoundRing>,
     /// Rolling last-frame telemetry behind `chart_api.frame_stats()`.
     telemetry: FrameTelemetry,
     /// The page's high-resolution clock, resolved once (`None` = no `performance` global, so
@@ -477,6 +482,7 @@ pub async fn create_chart(
         custom_series: Vec::new(),
         primitive_texts: Vec::new(),
         now_override: None,
+        rings: Vec::new(),
         telemetry: FrameTelemetry::default(),
         clock: crate::telemetry::performance(),
         text_runs: match TextRunStore::new() {
@@ -783,6 +789,44 @@ impl OriginChart {
         self.inner
             .borrow_mut()
             .update_series_bars_typed(id, times, open, high, low, close);
+    }
+
+    /// Bind a `SharedArrayBuffer` ring as a series' data source. `bytes` and `cursor_view` must be
+    /// views over the same buffer (the façade builds both); `layout_json` is the public
+    /// `ring_source_layout`. Replaces any ring already bound to this series. Returns `""` on
+    /// success, else a message describing why the layout was rejected.
+    pub fn set_ring_source(
+        &mut self,
+        series_id: u32,
+        bytes: js_sys::Uint8Array,
+        cursor_view: js_sys::Int32Array,
+        layout_json: &str,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .set_ring_source(series_id, bytes, cursor_view, layout_json)
+    }
+
+    /// Unbind a series' ring source, releasing the engine's views over the shared buffer. A series
+    /// with no ring bound is a no-op.
+    pub fn clear_ring_source(&mut self, series_id: u32) {
+        self.inner.borrow_mut().clear_ring_source(series_id);
+    }
+
+    /// Drain every bound ring once. Called by the façade on its frame tick, so the per-tick rate of
+    /// the producer never reaches the engine as a call.
+    ///
+    /// Writes `[pair_count, series_id, rows, series_id, rows, ...]` into `out` for the series that
+    /// received rows, and returns the total row count so the caller can skip a repaint when nothing
+    /// arrived. `out` should hold `1 + 2 * ring_count` slots; rings beyond that still drain, they
+    /// just are not reported.
+    pub fn drain_ring_sources(&mut self, out: &mut [f64]) -> u32 {
+        self.inner.borrow_mut().drain_ring_sources(out)
+    }
+
+    /// Number of bound ring sources — the façade sizes its report scratch from this.
+    pub fn ring_source_count(&self) -> u32 {
+        self.inner.borrow().rings.len() as u32
     }
 
     /// Streaming update of the main series (append new time or replace last).

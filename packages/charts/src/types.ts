@@ -141,6 +141,41 @@ export interface frame_stats {
   ring_overruns: number;
 }
 
+/**
+ * Byte layout of a `SharedArrayBuffer` ring bound with {@link series_api.set_ring_source}. Every
+ * offset is in **bytes**, relative to the start of the buffer except the per-channel offsets, which
+ * are relative to the start of a row.
+ *
+ * The channel offsets are independent, so a row may be a packed `f64[5]`, a wider struct with the
+ * price channels next to unrelated fields, or a single-value layout where all four price offsets
+ * point at the same 8 bytes.
+ */
+export interface ring_source_layout {
+  /** Byte offset of the first row. */
+  data_offset: number;
+  /** Bytes per row. Must be at least the end of the furthest channel. */
+  row_stride: number;
+  /** Maximum rows the ring holds before wrapping. */
+  capacity: number;
+  /** Byte offsets, within a row, of each `f64` channel. `time` is UTC seconds, as in
+   *  {@link ohlc_columns}. */
+  time_offset: number;
+  open_offset: number;
+  high_offset: number;
+  low_offset: number;
+  close_offset: number;
+  /**
+   * Byte offset of an `Int32` monotonic write cursor — the count of rows the producer has **ever**
+   * written, not a ring slot. Must be 4-byte aligned. The engine reads it with `Atomics.load`.
+   *
+   * The producer's contract: write the row's bytes **first**, then publish the incremented count
+   * with `Atomics.store`. The engine reads the cursor and then reads only rows strictly below it,
+   * so a row is never read half-written as long as that order holds. The cursor may overflow
+   * `Int32`; the engine handles the wrap.
+   */
+  write_cursor_offset: number;
+}
+
 /** Inclusive logical (bar-index) range. */
 export interface logical_range {
   from: number;
@@ -928,6 +963,50 @@ export interface series_api {
    * guarantee this shares.
    */
   update_typed(columns: ohlc_columns): void;
+  /**
+   * Bind a `SharedArrayBuffer` ring that the engine drains **once per frame**, or pass `null` to
+   * unbind and return to explicit {@link update}/{@link update_typed} calls.
+   *
+   * This decouples tick rate from frame rate structurally rather than by convention: with a ring
+   * bound, a producer running at 5 rows/sec and one running at 50,000 rows/sec both cost the engine
+   * one atomic cursor load plus one bulk copy of whatever accumulated. There is **no engine call
+   * per tick** — the host never has to decide when to flush, and no `requestAnimationFrame`
+   * coalescing of its own is needed.
+   *
+   * Rows are not materialized as JS values. Each drain copies the contiguous run(s) of new row
+   * bytes straight into engine memory (at most two `TypedArray.set` calls per frame — a ring wrap
+   * splits the window) and parses them there, with a staging buffer sized once at bind time. No
+   * allocation happens per row or per frame.
+   *
+   * Rows apply in ring order, each appending or replacing the series' last point exactly as
+   * {@link update} would; a non-finite row is dropped. Unlike {@link update_typed} there is no
+   * per-batch sort or dedupe — a ring is a stream, and its producer is expected to write in
+   * ascending time.
+   *
+   * **Producer overrun.** If the producer wrote more than `capacity` rows between two drains, the
+   * oldest of them have already been overwritten. The engine then renders the newest `capacity`
+   * rows — never a torn window of mixed-age slots — and adds the shortfall to
+   * {@link frame_stats.ring_overruns}. Watch that counter to size `capacity` against the
+   * producer's burst rate.
+   *
+   * Binding starts from the producer's current cursor, so it picks up new rows rather than
+   * replaying whatever is already sitting in the ring. Binding a second ring to the same series
+   * replaces the first. `set_ring_source(null)` releases the engine's views over the buffer, as
+   * does removing the series.
+   *
+   * The cost model of {@link update_typed} applies to the drained rows as well: rows at or past the
+   * chart's last timestamp take the engine's single-append fast path, while a row landing before it
+   * costs a reindex of the shared time axis. On a chart with several series, keep the ring-fed one at
+   * the global tip.
+   *
+   * Composes with {@link series_options.max_points}: a ring-fed series with a cap holds its window
+   * and plateaus in memory, which is the shape a long live session wants.
+   *
+   * Requires the page to be cross-origin isolated, since that is what makes `SharedArrayBuffer`
+   * available at all. Throws if the layout is unusable (a channel that overruns `row_stride`, a
+   * misaligned cursor, a ring that does not fit the buffer, zero capacity).
+   */
+  set_ring_source(buffer: SharedArrayBuffer | null, layout?: ring_source_layout): void;
   /**
    * Push the current bid/ask quotes (TradingView-style; render with `bid_ask_visible: true`).
    * Pass `null` to hide a side.

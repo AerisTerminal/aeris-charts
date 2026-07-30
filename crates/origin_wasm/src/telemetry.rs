@@ -56,7 +56,7 @@ pub struct FrameTelemetry {
     presented_frames: Cell<u32>,
     /// Ring-source producer overruns since chart create (see `set_ring_source`). Stays 0 while
     /// no series has a ring bound — the slot is part of the wire layout either way.
-    pub ring_overruns: Cell<u32>,
+    ring_overruns: Cell<u32>,
     /// Set by the first `frame_stats()` read; arms the WebGPU timestamp path.
     stats_requested: Cell<bool>,
 }
@@ -90,6 +90,12 @@ impl FrameTelemetry {
     pub fn count_dropped(&self) {
         self.dropped_frames
             .set(self.dropped_frames.get().saturating_add(1));
+    }
+
+    /// Count `n` rows a ring producer overwrote before a drain could read them.
+    pub fn count_ring_overruns(&self, n: u32) {
+        self.ring_overruns
+            .set(self.ring_overruns.get().saturating_add(n));
     }
 
     /// True once the host has read `frame_stats()` at least once — the gate for arming GPU

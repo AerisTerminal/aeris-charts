@@ -18,7 +18,8 @@ import type {
   handle_scale_options, handle_scroll_options, indicator_info, kinetic_scroll_options,
   last_value_data, localization_options, logical_range,
   mismatch_direction, mouse_event_handler, mouse_event_params, ohlc_columns, ohlc_data, options_change_handler, pane_api, pane_geometry, price_line_api, price_line_options,
-  price_range, price_scale_api, price_scale_options, series_api, series_change_handler, series_data, series_kind,
+  price_range, price_scale_api, price_scale_options, ring_source_layout,
+  series_api, series_change_handler, series_data, series_kind,
   series_marker, series_marker_options, series_options, single_value_data, size_change_handler, time, time_range,
   time_scale_api, time_scale_options, tracking_mode_options, visible_logical_range_handler, visible_time_range_handler,
 } from "./types.js";
@@ -289,6 +290,16 @@ class series_impl implements series_api {
     this.removed = true;
     this.data_changed_subs.clear();
   }
+
+  /**
+   * Fire this series' `data_changed` after a ring drain delivered rows to it. Scope is `"update"`:
+   * a drain appends or replace-lasts, exactly like `update`/`update_typed`. Called by the chart's
+   * drain loop, which already owns the repaint, so this only notifies.
+   */
+  emit_ring_data_changed(): void {
+    if (this.removed) return;
+    for (const handler of this.data_changed_subs) handler("update");
+  }
   protected assert_live(): void {
     if (this.removed) throw new Error("origin: this series has been removed from the chart");
   }
@@ -341,6 +352,34 @@ class series_impl implements series_api {
     if (this.chart.countdown_series_present) this.chart.sync_countdown_timer();
     this.chart.schedule_repaint();
     for (const handler of this.data_changed_subs) handler("update");
+  }
+
+  /**
+   * Bind (or with `null`, unbind) a `SharedArrayBuffer` ring the engine drains on its own frame
+   * tick. The two typed-array views are built here, once, and handed to the engine — it holds them
+   * for the lifetime of the binding so no view is constructed per frame.
+   */
+  set_ring_source(buffer: SharedArrayBuffer | null, layout?: ring_source_layout): void {
+    this.assert_live();
+    if (buffer === null) {
+      this.chart.wasm.clear_ring_source(this.id);
+      this.chart.sync_ring_drain_loop();
+      return;
+    }
+    if (layout === undefined) {
+      throw new Error("origin: set_ring_source requires a layout when a buffer is given");
+    }
+    // A plain ArrayBuffer would work for the reads but defeats the point (the producer is a worker),
+    // and `Atomics.load` on non-shared memory is a footgun rather than an error. Reject it here
+    // where the message can say why.
+    if (typeof SharedArrayBuffer !== "undefined" && !(buffer instanceof SharedArrayBuffer)) {
+      throw new Error("origin: set_ring_source expects a SharedArrayBuffer (is the page cross-origin isolated?)");
+    }
+    const reason = this.chart.wasm.set_ring_source(
+      this.id, new Uint8Array(buffer), new Int32Array(buffer), JSON.stringify(layout),
+    );
+    if (reason !== "") throw new Error(`origin: set_ring_source rejected — ${reason}`);
+    this.chart.sync_ring_drain_loop();
   }
 
   update(point: series_data): void {
@@ -718,6 +757,11 @@ class custom_series_impl extends series_impl {
   update_typed(): void {
     // Same reason as `set_data_typed`: no OHLC columns to append.
     console.warn("origin: update_typed() does not apply to a custom series");
+  }
+
+  set_ring_source(): void {
+    // A ring carries OHLC rows; a custom series' values live in its host-side pane view.
+    console.warn("origin: set_ring_source() does not apply to a custom series");
   }
 
   /** The raw items aligned with the engine rows (sorted, last-wins deduped). */
@@ -1253,6 +1297,10 @@ export class chart_impl implements chart_api {
   private interacting = false;
   /** Pending rAF handle for a coalesced repaint; `null` when no repaint is scheduled. */
   private repaint_raf: number | null = null;
+  /** Pending rAF handle for the ring-drain loop; `null` while no ring source is bound. */
+  private ring_raf: number | null = null;
+  /** Reused `[pair_count, series_id, rows, ...]` report from `drain_ring_sources`. */
+  private ring_report: Float64Array | null = null;
   /**
    * Reusable transfer buffer for `frame_stats()`. Sized by the engine itself so an engine that
    * appends a slot needs no matching bundle change, and allocated once per chart so a host
@@ -1335,6 +1383,61 @@ export class chart_impl implements chart_api {
       this.repaint();
     });
   }
+
+  /**
+   * Start or stop the ring-drain frame loop to match the number of bound ring sources.
+   *
+   * The engine has no clock of its own — the package owns the frame loop — so a bound ring needs
+   * something to tick it. While at least one ring is bound this runs one `requestAnimationFrame`
+   * loop for the whole chart (not per series), and it stops as soon as the last ring unbinds, so a
+   * chart with no rings pays nothing.
+   *
+   * Called on every bind/unbind rather than tracking a count: `ring_source_count()` is the engine's
+   * own answer, which cannot drift from it.
+   */
+  sync_ring_drain_loop(): void {
+    const rings = this.removed ? 0 : this.wasm.ring_source_count();
+    if (rings === 0) {
+      if (this.ring_raf !== null) {
+        cancelAnimationFrame(this.ring_raf);
+        this.ring_raf = null;
+      }
+      this.ring_report = null;
+      return;
+    }
+    // `[pair_count, series_id, rows, ...]` — resized only when the ring count grows.
+    const slots = 1 + rings * 2;
+    if (this.ring_report === null || this.ring_report.length < slots) {
+      this.ring_report = new Float64Array(slots);
+    }
+    if (this.ring_raf === null) this.ring_raf = requestAnimationFrame(this.ring_tick);
+  }
+
+  /**
+   * One frame's ring drain. This is the whole per-frame cost of a ring source when the producer is
+   * idle: one engine call that does an atomic load per ring. A repaint and `data_changed` only
+   * happen when rows actually arrived, so a bound-but-quiet ring does not force the chart to
+   * re-render at frame rate.
+   */
+  private readonly ring_tick = (): void => {
+    this.ring_raf = null;
+    if (this.removed) return;
+    const report = this.ring_report;
+    if (report === null) return;
+    const rows = this.wasm.drain_ring_sources(report);
+    if (rows > 0) {
+      this.repaint();
+      // Notify per series that actually received rows, using the engine's own report rather than
+      // the set of bound rings — a quiet ring must not emit a spurious data change.
+      const pairs = report[0] as number;
+      for (let i = 0; i < pairs; i += 1) {
+        const series = this.series_by_id.get(report[1 + i * 2] as number);
+        series?.emit_ring_data_changed();
+      }
+      if (this.countdown_series_present) this.sync_countdown_timer();
+    }
+    this.ring_raf = requestAnimationFrame(this.ring_tick);
+  };
 
   /** Repaint unless torn down. Named distinctly from the public `render` for internal use. */
   repaint(): void {
@@ -1622,6 +1725,9 @@ export class chart_impl implements chart_api {
       this.emit_series_change(this.series_removed_subs, handle, pane_of.get(id) ?? 0);
     }
     this.sync_countdown_timer();
+    // The engine drops a removed series' ring with it, so the drain loop may now have nothing left
+    // to do.
+    this.sync_ring_drain_loop();
     this.repaint();
   }
 
@@ -2528,6 +2634,13 @@ export class chart_impl implements chart_api {
       cancelAnimationFrame(this.repaint_raf);
       this.repaint_raf = null;
     }
+    // Stop the ring-drain loop and drop its report buffer; the engine's views over any bound
+    // shared buffer go with the chart itself.
+    if (this.ring_raf !== null) {
+      cancelAnimationFrame(this.ring_raf);
+      this.ring_raf = null;
+    }
+    this.ring_report = null;
     this.close_text_editor(false);
     this.stop_animation();
     this.stop_countdown_timer();
