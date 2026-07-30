@@ -46,6 +46,11 @@ test("reports plausible last-frame telemetry on the WebGPU backend", async ({ pa
   expect(stats.memory_bytes % 65536).toBe(0);
   expect(stats.dropped_frames).toBeGreaterThanOrEqual(0);
   expect(stats.ring_overruns).toBe(0);
+  // The Item 4 baseline, asserted rather than asserted-by-comment: on the WebGPU backend the engine
+  // still issues Canvas2D paint ops every frame, for the axis chrome and crosshair labels. This is
+  // the number that has to reach 0 for Item 4 to be done, so it is pinned as non-zero today.
+  expect(stats.canvas2d_ops, "no Canvas2D axis work on a WebGPU frame — has Item 4 landed?")
+    .toBeGreaterThan(0);
 });
 
 test("reports plausible last-frame telemetry on the Canvas2D fallback", async ({ page }) => {
