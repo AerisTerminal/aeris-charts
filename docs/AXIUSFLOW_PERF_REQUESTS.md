@@ -508,12 +508,22 @@ reads 0. Verified by checking out `67c05ae`, rebuilding, and re-running: same fo
 They are consistent with the CI note that this job's pixel thresholds are calibrated to a specific
 SwiftShader/Dawn build. **No new failures.**
 
-New browser specs added by this PR, all passing: `frame-stats.spec.mjs` (5), `update-typed.spec.mjs`
-(5), `retention.spec.mjs` (5), `ring-source.spec.mjs` (8), `engine-bench.spec.mjs` (1, report-only).
+Final full-suite run: **112 passed, 4 failed (all four pre-existing), 1 skipped.**
 
-One of those is deliberately slow: the retention plateau spec simulates 32 hours of one-bar-per-second
-streaming and takes ~6 minutes. It is the only way to distinguish a plateau from linear growth, so it
-is worth its runtime, but it is worth knowing about before it surprises someone.
+New browser specs added by this PR, all passing: `frame-stats.spec.mjs` (5), `update-typed.spec.mjs`
+(5), `retention.spec.mjs` (5), `ring-source.spec.mjs` (8). Plus `engine-bench.spec.mjs`, the Item 7
+measuring instrument, which is the skipped one.
+
+Two things worth knowing about the new specs:
+
+- **The retention plateau spec takes ~6 minutes**, simulating 32 hours of one-bar-per-second streaming.
+  That is the only way to distinguish a plateau from linear growth, so it earns its runtime — but it
+  should not surprise anyone.
+- **`engine-bench.spec.mjs` is opt-in behind `ORIGIN_BENCH=1`.** It installs 1M bars five times over,
+  growing wasm linear memory to ~300 MB; since linear memory never shrinks, that residue was measured
+  starving the *next* spec's page init past a 30s timeout when the benchmark ran as part of the default
+  suite. It is a measuring instrument rather than a gate, so gating it is the right shape anyway. Run
+  it with `ORIGIN_BENCH=1 npx playwright test tests/engine-bench.spec.mjs`.
 
 ## Non-goals
 
