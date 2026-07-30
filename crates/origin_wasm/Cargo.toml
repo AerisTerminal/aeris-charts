@@ -30,6 +30,9 @@ web-sys = { version = "0.3", features = [
     "CssStyleDeclaration",
     "DomRect",
     "TextMetrics",
+    # `frame_stats().cpu_ms` clock (telemetry.rs); resolved off the global so it also works in a
+    # worker, hence `Performance` rather than `Window::performance` alone.
+    "Performance",
     "ResizeObserver",
     "ResizeObserverEntry",
     "ResizeObserverSize",

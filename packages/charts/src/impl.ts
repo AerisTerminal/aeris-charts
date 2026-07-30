@@ -14,6 +14,7 @@ import type { custom_series_item, custom_series_pane_view } from "./custom_serie
 import type {
   bars_info, chart_api, chart_options, data_changed_handler, dbl_click_handler,
   deep_partial, drawing_api, drawing_info, drawing_kind, drawing_options, drawing_point,
+  frame_stats,
   handle_scale_options, handle_scroll_options, indicator_info, kinetic_scroll_options,
   last_value_data, localization_options, logical_range,
   mismatch_direction, mouse_event_handler, mouse_event_params, ohlc_columns, ohlc_data, options_change_handler, pane_api, pane_geometry, price_line_api, price_line_options,
@@ -119,6 +120,22 @@ const PRICE_SCALE_JSON_OPTION_KEYS = [
 
 /** Engine kind ordinal → public kind name (index-aligned with `KIND_TO_U8`). */
 const KIND_NAMES = ["candlestick", "bar", "line", "area", "histogram", "baseline", "custom"] as const;
+
+/**
+ * Slot layout of the `frame_stats_into` f64 buffer. Must match `crate::telemetry::slot` in
+ * `origin_wasm` exactly — append only, never reorder (the engine and the package version
+ * together, but a stale bundle against a newer .wasm must still read the same slots).
+ */
+const FRAME_STATS_SLOT = {
+  cpu_ms: 0,
+  gpu_ms: 1,
+  draw_calls: 2,
+  dropped_frames: 3,
+  presented_frames: 4,
+  memory_bytes: 5,
+  canvas2d_ops: 6,
+  ring_overruns: 7,
+} as const;
 
 /**
  * Convert a `time` input to the engine's UTC-seconds form. Business days and `"YYYY-MM-DD"` strings
@@ -1203,6 +1220,14 @@ export class chart_impl implements chart_api {
   private interacting = false;
   /** Pending rAF handle for a coalesced repaint; `null` when no repaint is scheduled. */
   private repaint_raf: number | null = null;
+  /**
+   * Reusable transfer buffer for `frame_stats()`. Sized by the engine itself so an engine that
+   * appends a slot needs no matching bundle change, and allocated once per chart so a host
+   * polling telemetry every frame adds no JS-heap allocation of its own (the acceptance bar is
+   * that reading stats for 60s does not itself raise `cpu_ms`). Each read still copies these
+   * few dozen bytes across the wasm boundary — fixed size, no growth.
+   */
+  private readonly stats_scratch = new Float64Array(OriginChart.frame_stats_len());
 
   /** The gesture recognizer marks pointer/touch activity (down = true, all-up = false). */
   set_interacting(active: boolean): void {
@@ -2323,6 +2348,30 @@ export class chart_impl implements chart_api {
 
   backend(): "webgpu" | "canvas2d" {
     return this.wasm.backend_kind() as "webgpu" | "canvas2d";
+  }
+
+  /**
+   * Read the engine's last-frame record into the per-chart scratch array and shape it as
+   * `frame_stats`. The scratch array is the whole point: the engine writes f64 slots in place,
+   * so a host polling this every frame for minutes never grows the JS heap and never triggers a
+   * GC pause that would itself corrupt the measurement.
+   */
+  frame_stats(): frame_stats {
+    const out = this.stats_scratch;
+    this.wasm.frame_stats_into(out);
+    const gpu = out[FRAME_STATS_SLOT.gpu_ms] as number;
+    return {
+      cpu_ms: out[FRAME_STATS_SLOT.cpu_ms] as number,
+      // NaN is the engine's encoding for "unavailable" (no WebGPU / no timestamp-query / no
+      // readback resolved yet) — see the `frame_stats.gpu_ms` docs.
+      gpu_ms: Number.isNaN(gpu) ? null : gpu,
+      draw_calls: out[FRAME_STATS_SLOT.draw_calls] as number,
+      dropped_frames: out[FRAME_STATS_SLOT.dropped_frames] as number,
+      presented_frames: out[FRAME_STATS_SLOT.presented_frames] as number,
+      memory_bytes: out[FRAME_STATS_SLOT.memory_bytes] as number,
+      canvas2d_ops: out[FRAME_STATS_SLOT.canvas2d_ops] as number,
+      ring_overruns: out[FRAME_STATS_SLOT.ring_overruns] as number,
+    };
   }
 
   time_scale(): time_scale_api {

@@ -18,11 +18,20 @@ fn css(c: Color) -> String {
 /// primitive rather than aborting the frame.
 pub struct WasmCanvas2d<'a> {
     ctx: &'a CanvasRenderingContext2d,
+    /// Paint ops issued through this target — the ones that put pixels on the canvas
+    /// (`fillRect`/`stroke`/`fill`/`fillText`), not state setters or path building. Reported as
+    /// part of `frame_stats().canvas2d_ops`.
+    ops: u32,
 }
 
 impl<'a> WasmCanvas2d<'a> {
     pub fn new(ctx: &'a CanvasRenderingContext2d) -> Self {
-        Self { ctx }
+        Self { ctx, ops: 0 }
+    }
+
+    /// Paint ops issued since construction.
+    pub fn ops(&self) -> u32 {
+        self.ops
     }
 }
 
@@ -71,6 +80,7 @@ impl Canvas2d for WasmCanvas2d<'_> {
     }
 
     fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        self.ops += 1;
         self.ctx.fill_rect(x as f64, y as f64, w as f64, h as f64);
     }
 
@@ -92,9 +102,11 @@ impl Canvas2d for WasmCanvas2d<'_> {
             .arc(cx as f64, cy as f64, r as f64, start as f64, end as f64);
     }
     fn stroke(&mut self) {
+        self.ops += 1;
         self.ctx.stroke();
     }
     fn fill(&mut self) {
+        self.ops += 1;
         self.ctx.fill();
     }
 
@@ -112,6 +124,7 @@ impl Canvas2d for WasmCanvas2d<'_> {
         self.ctx.set_text_align(align.canvas_keyword());
         // House convention (axis labels): y is the vertical center of the run.
         self.ctx.set_text_baseline("middle");
+        self.ops += 1;
         let _ = self.ctx.fill_text(text, x as f64, y as f64);
     }
 }

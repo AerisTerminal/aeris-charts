@@ -37,6 +37,7 @@ use web_sys::CanvasRenderingContext2d;
 
 use crate::axis_policy::negotiated_axis_width;
 use crate::backend_policy::{surface_error_action, SurfaceErrorAction};
+use crate::telemetry::{FrameTelemetry, FRAME_STATS_LEN};
 use origin_core::model::data_layer::SeriesId;
 use origin_core::model::data_validation::sanitize_ohlc;
 use origin_core::model::plot_list::{MismatchDirection, PlotValueIndex};
@@ -52,8 +53,8 @@ use origin_render::canvas2d::{execute as execute_canvas2d, Canvas2d, Viewport as
 use origin_render::color::Color;
 use origin_render::draw_list::LineType;
 use origin_render_wgpu::{
-    prims_to_group, render_frame, DrawGroup, LabelAtlas, MsaaTarget, QuadRenderer, TexQuadRenderer,
-    TriRenderer, SAMPLE_COUNT,
+    prims_to_group, render_frame, DrawGroup, GpuTimer, LabelAtlas, MsaaTarget, QuadRenderer,
+    TexQuadRenderer, TriRenderer, SAMPLE_COUNT,
 };
 
 #[wasm_bindgen(inline_js = r#"
@@ -184,6 +185,10 @@ struct Gfx {
     config: wgpu::SurfaceConfiguration,
     msaa: MsaaTarget,
     device_lost: Arc<AtomicBool>,
+    /// GPU pass timing for `frame_stats().gpu_ms`. Created lazily on the first frame after the
+    /// host reads `frame_stats()` (telemetry.rs: nobody pays for a query set they never read),
+    /// and stays `None` forever on a device without `timestamp-query`.
+    timer: Option<GpuTimer>,
 }
 
 enum PaneRenderOutcome {
@@ -230,6 +235,11 @@ struct ChartInner {
     /// render path feeds the browser's system time every frame; `set_now_seconds` pins a value
     /// (the package's 1s countdown timer), which then drives every render until replaced.
     now_override: Option<f64>,
+    /// Rolling last-frame telemetry behind `chart_api.frame_stats()`.
+    telemetry: FrameTelemetry,
+    /// The page's high-resolution clock, resolved once (`None` = no `performance` global, so
+    /// `frame_stats().cpu_ms` stays 0 rather than costing a failed lookup per frame).
+    clock: Option<web_sys::Performance>,
 }
 
 /// One in-pane overlay text draw registered by a primitive's `text_views` hook (plugin
@@ -467,6 +477,8 @@ pub async fn create_chart(
         custom_series: Vec::new(),
         primitive_texts: Vec::new(),
         now_override: None,
+        telemetry: FrameTelemetry::default(),
+        clock: crate::telemetry::performance(),
         text_runs: match TextRunStore::new() {
             Ok(store) => Some(store),
             Err(error) => {
@@ -1900,6 +1912,26 @@ impl OriginChart {
         self.inner.borrow().backend_kind()
     }
 
+    /// Number of `f64` slots [`Self::frame_stats_into`] writes. The façade allocates one scratch
+    /// array of this length per chart and reuses it, so reading stats never allocates.
+    pub fn frame_stats_len() -> usize {
+        FRAME_STATS_LEN
+    }
+
+    /// Fill `out` with the last frame's telemetry (see `crate::telemetry::slot` for the layout).
+    /// Writes in place rather than returning a fresh array so a host polling every frame stays
+    /// allocation-free. The first call also arms WebGPU timestamp collection, so `gpu_ms` turns
+    /// non-null from the *next* presented frame on a device with `timestamp-query`.
+    pub fn frame_stats_into(&self, out: &mut [f64]) {
+        let inner = self.inner.borrow();
+        let gpu_ms = inner
+            .gfx
+            .as_ref()
+            .and_then(|gfx| gfx.timer.as_ref())
+            .and_then(GpuTimer::last_ms);
+        inner.telemetry.write_into(out, gpu_ms);
+    }
+
     /// Internal id used by the package shell to route device-loss notifications to this chart.
     #[doc(hidden)]
     pub fn backend_runtime_id(&self) -> u32 {
@@ -2019,8 +2051,15 @@ async fn create_shared_gpu(
         })
         .await
         .map_err(|e| format!("request_adapter failed: {e}"))?;
+    // `timestamp-query` powers `frame_stats().gpu_ms`. It is strictly optional: request it only
+    // when the adapter advertises it, so a device lacking the feature (or a browser that has not
+    // shipped it) still creates a chart — `gpu_ms` then reports `null` (frame_stats docs).
+    let optional_features = adapter.features() & wgpu::Features::TIMESTAMP_QUERY;
     let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor::default())
+        .request_device(&wgpu::DeviceDescriptor {
+            required_features: optional_features,
+            ..Default::default()
+        })
         .await
         .map_err(|e| format!("request_device failed: {e}"))?;
     let device_lost = Arc::new(AtomicBool::new(false));
@@ -2083,5 +2122,6 @@ async fn try_create_gfx(
         config,
         msaa,
         device_lost,
+        timer: None,
     })
 }

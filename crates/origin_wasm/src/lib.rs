@@ -22,6 +22,10 @@ mod custom_align;
 // target too so the LRU/placement tests run outside the browser.
 #[cfg(any(target_arch = "wasm32", test))]
 mod text_cache;
+// Rolling last-frame telemetry behind `chart_api.frame_stats()`; compiled for the host target
+// too so the record/encoding tests run outside the browser.
+#[cfg(any(target_arch = "wasm32", test))]
+mod telemetry;
 
 #[cfg(target_arch = "wasm32")]
 mod canvas2d_target;

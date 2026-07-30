@@ -16,6 +16,19 @@ impl ChartInner {
     }
 
     pub fn render(&mut self) -> Result<(), JsValue> {
+        // `frame_stats().cpu_ms` covers this whole function: layout, axis-frame construction,
+        // engine frame build, plugin passes, and command encoding — the host-side CPU cost of
+        // producing a frame. Two clock reads per frame; the record itself is fixed-size.
+        let frame_start = self.clock.as_ref().map(|clock| clock.now());
+        self.telemetry.reset_canvas2d_ops();
+        let outcome = self.render_inner();
+        if let (Some(clock), Some(start)) = (self.clock.as_ref(), frame_start) {
+            self.telemetry.set_cpu_ms(clock.now() - start);
+        }
+        outcome
+    }
+
+    fn render_inner(&mut self) -> Result<(), JsValue> {
         // Series primitives (plugin platform Phase C-b): pull this frame's autoscale
         // contributions from the plugin hooks before any layout/autoscale pass runs, so the
         // axis-width negotiation, axis frame, and pane frame all see the merged ranges.
@@ -78,6 +91,17 @@ impl ChartInner {
 
         let bg = Color::parse_css(&self.opts().layout.background.color)
             .unwrap_or(Color::rgb(0xff, 0xff, 0xff));
+        // Arm GPU timestamp collection on the first frame after the host reads `frame_stats()`.
+        // `GpuTimer::new` is a feature-flag check plus (once) a query set, so an unsupported
+        // device just keeps answering `None` and `gpu_ms` stays null.
+        if self.telemetry.stats_requested() {
+            if let Some(gfx) = self.gfx.as_mut() {
+                if gfx.timer.is_none() {
+                    gfx.timer = GpuTimer::new(&gfx.shared.device, &gfx.shared.queue);
+                }
+            }
+        }
+
         let pane_outcome = if self.gfx.is_some() {
             let engine_frame = &self.frame;
             self.gpu_groups
@@ -167,7 +191,7 @@ impl ChartInner {
                         b: bg.b() as f64 / 255.0,
                         a: 1.0,
                     };
-                    render_frame(
+                    let draw_calls = render_frame(
                         &shared.device,
                         &shared.queue,
                         gfx.msaa.view(),
@@ -179,7 +203,9 @@ impl ChartInner {
                         &renderers.tex,
                         &renderers.tri,
                         groups,
+                        gfx.timer.as_ref(),
                     );
+                    self.telemetry.set_draw_calls(draw_calls);
                     frame.present();
                     PaneRenderOutcome::Presented
                 }
@@ -196,6 +222,8 @@ impl ChartInner {
             PaneRenderOutcome::Presented => {}
             PaneRenderOutcome::Timeout => {
                 // Keep the last complete frame. The next animation/input repaint retries.
+                // This is exactly `frame_stats().dropped_frames`: encoded but never presented.
+                self.telemetry.count_dropped();
                 return Ok(());
             }
             PaneRenderOutcome::Fallback(reason) => {
@@ -206,6 +234,7 @@ impl ChartInner {
         }
 
         self.draw_axes_2d(&self.axis_frame)?;
+        self.telemetry.count_presented();
         Ok(())
     }
 
@@ -233,15 +262,19 @@ impl ChartInner {
         let pane_w = self.pane_w;
         let pane_h = self.pane_h;
 
+        // Every op below is tallied into `frame_stats().canvas2d_ops` — the metric that proves
+        // (Item 4) the WebGPU path issues no Canvas2D work per frame. Accumulated locally and
+        // published once so the counting itself costs one `Cell` write per frame.
+        let mut ops = 1u32; // the clear_rect
         ctx.clear_rect(0.0, 0.0, bitmap_w, bitmap_h);
         let border_w = 1f64.max(dpr.floor());
 
         let options = self.opts();
         // Watermark paints first so it sits below the axis borders, labels, and crosshair chrome.
-        self.draw_watermark(&options.watermark, dpr)?;
+        ops += self.draw_watermark(&options.watermark, dpr)?;
         // The primitives' `text_views` overlay draws share the watermark's slot (Phase 3.5):
         // in-pane plugin text, below the axis chrome, identical on both backends.
-        self.draw_primitive_overlay_texts(dpr)?;
+        ops += self.draw_primitive_overlay_texts(dpr)?;
 
         // Axis borders come from the options store (reference `borderColor`/`borderVisible` per strip);
         // an unparseable color falls back to the reference default.
@@ -264,6 +297,7 @@ impl ChartInner {
                 border_w,
                 (pane_h * dpr).round(),
             );
+            ops += 1;
         }
         if self.axis_w > 0.0 && options.right_price_scale.border_visible {
             ctx.set_fill_style_str(&right_border);
@@ -273,10 +307,12 @@ impl ChartInner {
                 border_w,
                 (pane_h * dpr).round(),
             );
+            ops += 1;
         }
         if options.time_scale.border_visible && self.engine.time_axis_visible {
             ctx.set_fill_style_str(&time_border);
             ctx.fill_rect(0.0, (pane_h * dpr).round(), bitmap_w, border_w);
+            ops += 1;
         }
 
         // reference price-axis-widget.ts `_drawTickMarks`: 5 css px stubs from the pane edge into
@@ -301,6 +337,7 @@ impl ChartInner {
             };
             ctx.set_fill_style_str(color);
             ctx.fill_rect(x, (tick.y * dpr).round() - tick_off, tick_len, tick_h);
+            ops += 1;
         }
 
         // reference time-axis-widget.ts `_drawTickMarks`: 5 css px stubs down from the top of the
@@ -313,6 +350,7 @@ impl ChartInner {
             let y0 = (pane_h * dpr).round();
             for x in &axis_frame.time_ticks {
                 ctx.fill_rect((x * dpr).round() - tick_off, y0, tick_h, tick_len);
+                ops += 1;
             }
         }
 
@@ -334,6 +372,7 @@ impl ChartInner {
                 (pane_w * dpr).round(),
                 (PANE_SEPARATOR * dpr).max(border_w),
             );
+            ops += 1;
         }
 
         // reference pane-separator.ts hover handle (`top: -4px; height: 9px; width: 100%` over the
@@ -350,23 +389,25 @@ impl ChartInner {
                 bitmap_w,
                 (9.0 * dpr).round(),
             );
+            ops += 1;
         }
 
-        self.draw_axis_labels(
+        ops += self.draw_axis_labels(
             axis_frame,
             dpr,
             &options.layout.font_family,
             options.layout.font_size,
         )?;
+        self.telemetry.add_canvas2d_ops(ops);
         Ok(())
     }
 
     /// Paint the `watermark` label onto the overlay, anchored inside the pane per `horzAlign`/
     /// `vertAlign`. Drawn in media coordinates (context scaled by DPR) like the axis labels; the
     /// CSS color string is passed through verbatim so alpha is preserved.
-    fn draw_watermark(&self, wm: &WatermarkOptions, dpr: f64) -> Result<(), JsValue> {
+    fn draw_watermark(&self, wm: &WatermarkOptions, dpr: f64) -> Result<u32, JsValue> {
         if !wm.visible || wm.text.is_empty() {
-            return Ok(());
+            return Ok(0);
         }
         let ctx = &self.axis_ctx;
         ctx.save();
@@ -393,7 +434,7 @@ impl ChartInner {
         };
         ctx.set_text_align(align);
         ctx.set_text_baseline(baseline);
-        let result = ctx.fill_text(&wm.text, x, y).map(|_| ());
+        let result = ctx.fill_text(&wm.text, x, y).map(|_| 1);
         ctx.restore();
         result
     }
@@ -402,9 +443,9 @@ impl ChartInner {
     /// coordinates (context scaled by DPR) like the axis labels. Each draw carries its own
     /// fully-resolved font, color, and canvas alignment keywords; colors pass through verbatim
     /// so alpha is preserved (same rule as the watermark).
-    fn draw_primitive_overlay_texts(&self, dpr: f64) -> Result<(), JsValue> {
+    fn draw_primitive_overlay_texts(&self, dpr: f64) -> Result<u32, JsValue> {
         if self.primitive_texts.is_empty() {
-            return Ok(());
+            return Ok(0);
         }
         let ctx = &self.axis_ctx;
         ctx.save();
@@ -412,7 +453,8 @@ impl ChartInner {
             ctx.restore();
             return Err(error);
         }
-        let mut draw_result = Ok(());
+        let mut ops = 0;
+        let mut draw_result = Ok(0);
         for text in &self.primitive_texts {
             ctx.set_font(&text.font);
             ctx.set_fill_style_str(&text.color);
@@ -422,6 +464,8 @@ impl ChartInner {
                 draw_result = Err(error);
                 break;
             }
+            ops += 1;
+            draw_result = Ok(ops);
         }
         ctx.restore();
         draw_result
@@ -433,7 +477,7 @@ impl ChartInner {
         dpr: f64,
         font_family: &str,
         font_size: f64,
-    ) -> Result<(), JsValue> {
+    ) -> Result<u32, JsValue> {
         let ctx = &self.axis_ctx;
 
         // Z-order matters: boxed labels (last value, price lines, crosshair) must fully cover any
@@ -441,7 +485,7 @@ impl ChartInner {
         // background and text as one unit in view order. Painting all backgrounds first and all
         // texts second lets tick glyphs bleed onto the boxes, so paint in two ordered layers:
         // plain tick text first, then each boxed label's background + text.
-        self.draw_axis_label_texts(
+        let mut ops = self.draw_axis_label_texts(
             axis_frame.labels.iter().filter(|l| l.background.is_none()),
             dpr,
             font_family,
@@ -470,6 +514,7 @@ impl ChartInner {
                 let bw = ((x + w) * dpr).round() - bx;
                 let bh = ((y + h) * dpr).round() - by;
                 last_attach = label.attach_group.map(|group| (group, by + bh));
+                ops += 1;
                 if label.background_corners.is_empty() {
                     ctx.fill_rect(bx, by, bw, bh);
                 } else {
@@ -488,9 +533,10 @@ impl ChartInner {
             } else {
                 last_attach = None;
             }
-            self.draw_axis_label_texts(std::iter::once(label), dpr, font_family, font_size)?;
+            ops +=
+                self.draw_axis_label_texts(std::iter::once(label), dpr, font_family, font_size)?;
         }
-        Ok(())
+        Ok(ops)
     }
 
     /// Draws label glyphs in media-coordinate space: the context is scaled by DPR while the font
@@ -502,7 +548,7 @@ impl ChartInner {
         dpr: f64,
         font_family: &str,
         font_size: f64,
-    ) -> Result<(), JsValue> {
+    ) -> Result<u32, JsValue> {
         let ctx = &self.axis_ctx;
         ctx.save();
         if let Err(error) = ctx.scale(dpr, dpr) {
@@ -510,7 +556,8 @@ impl ChartInner {
             return Err(error);
         }
         ctx.set_text_baseline("middle");
-        let mut draw_result = Ok(());
+        let mut ops = 0;
+        let mut draw_result = Ok(0);
         for label in labels {
             ctx.set_font(&if label.bold {
                 format!("bold {font_size}px {font_family}")
@@ -539,6 +586,8 @@ impl ChartInner {
                 draw_result = Err(error);
                 break;
             }
+            ops += 1;
+            draw_result = Ok(ops);
         }
         ctx.restore();
         draw_result
@@ -575,6 +624,8 @@ impl ChartInner {
             execute_canvas2d(&pane.top_prims, &pane.points, &mut target, viewport);
             target.restore();
         }
+        // The `clear_rect` + background `fill_rect` above, plus every executed prim.
+        self.telemetry.add_canvas2d_ops(2 + target.ops());
         Ok(())
     }
 }

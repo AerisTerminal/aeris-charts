@@ -16,6 +16,7 @@ use wgpu::util::DeviceExt;
 
 use origin_render::draw_list::Prim;
 
+use crate::gpu_timer::{FrameTimestamps, GpuTimer};
 use crate::quad_executor::prim_to_instances;
 use crate::quad_pipeline::{QuadInstance, QuadRenderer};
 use crate::tex_quad_pipeline::{TexQuadInstance, TexQuadRenderer};
@@ -199,6 +200,9 @@ struct GroupBuffers {
     tex: Option<wgpu::Buffer>,
 }
 
+/// Encode and submit one frame. Returns the number of draw calls issued, which the host
+/// surfaces as `frame_stats().draw_calls`. `timer` opts into GPU-side pass timing when the
+/// device supports `timestamp-query`; `None` skips the timestamp plumbing entirely.
 #[allow(clippy::too_many_arguments)]
 pub fn render_frame(
     device: &wgpu::Device,
@@ -212,7 +216,10 @@ pub fn render_frame(
     tex: &TexQuadRenderer,
     tri: &TriRenderer,
     groups: &[DrawGroup],
-) {
+    timer: Option<&GpuTimer>,
+) -> u32 {
+    let timestamps = FrameTimestamps::new(timer);
+    let mut draw_calls = 0u32;
     quad.write_globals(queue, width_px, height_px);
     tex.write_globals(queue, width_px, height_px);
     tri.write_globals(queue, width_px, height_px);
@@ -251,7 +258,7 @@ pub fn render_frame(
                 },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes: timestamps.pass_writes(),
             occlusion_query_set: None,
         });
 
@@ -275,16 +282,19 @@ pub fn render_frame(
                     RunPipeline::Tri => {
                         if let Some(b) = &bufs.tris {
                             tri.draw(&mut pass, b, run.first, run.count);
+                            draw_calls += 1;
                         }
                     }
                     RunPipeline::Quad => {
                         if let Some(b) = &bufs.quads {
                             quad.draw(&mut pass, b, run.first, run.count);
+                            draw_calls += 1;
                         }
                     }
                     RunPipeline::TexQuad => {
                         if let Some(b) = &bufs.tex {
                             tex.draw(&mut pass, b, run.first, run.count);
+                            draw_calls += 1;
                         }
                     }
                 }
@@ -299,10 +309,14 @@ pub fn render_frame(
             {
                 if let Some(b) = &bufs.tex {
                     tex.draw(&mut pass, b, 0, group.tex_quads.len() as u32);
+                    draw_calls += 1;
                 }
             }
         }
     }
 
+    timestamps.resolve_into_staging(&mut encoder);
     queue.submit(Some(encoder.finish()));
+    timestamps.begin_readback();
+    draw_calls
 }

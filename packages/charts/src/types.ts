@@ -97,6 +97,46 @@ export interface ohlc_columns {
   close: Float64Array;
 }
 
+/**
+ * Last-frame render telemetry, read with {@link chart_api.frame_stats}.
+ *
+ * Every field describes the **most recent frame** except `dropped_frames` and
+ * `presented_frames`, which are lifetime counters since chart create. The engine keeps a single
+ * fixed-size record — there is no history buffer — and the façade reuses one scratch array per
+ * chart, so polling every frame allocates nothing and costs two `performance.now()` reads
+ * inside the engine.
+ */
+export interface frame_stats {
+  /** CPU time in ms for the last frame: layout, axis-frame construction, engine frame build,
+   *  plugin passes, and command encoding. */
+  cpu_ms: number;
+  /** GPU time in ms for the last frame via WebGPU timestamp queries; `null` on `canvas2d`, on a
+   *  device without the `timestamp-query` feature, or before the first readback resolves.
+   *  Collection is armed by the first `frame_stats()` call, so expect one or two `null` reads
+   *  after chart create even where the feature is available. Readback is asynchronous, so this
+   *  is the most recently *resolved* frame rather than strictly the last presented one. */
+  gpu_ms: number | null;
+  /** Draw calls issued for the last frame. WebGPU: render-pass draw calls. Canvas2D: paint ops
+   *  issued by the pane executor (the nearest equivalent). */
+  draw_calls: number;
+  /** Frames the engine began but did not present, since chart create (surface acquisition
+   *  failed or timed out, so the previous frame stayed on screen). */
+  dropped_frames: number;
+  /** Frames presented since chart create, on whichever backend was active. */
+  presented_frames: number;
+  /** Wasm linear memory currently reserved, in bytes. Never shrinks — see the series retention
+   *  notes on {@link series_options.max_points}. */
+  memory_bytes: number;
+  /** Canvas2D paint ops the **engine** issued for the last frame: the axis/crosshair overlay,
+   *  plus the pane executor on the Canvas2D backend. Excludes plugin canvas primitives, which
+   *  are package-side (see `canvas_plugins`). Extension beyond the consumer's requested shape:
+   *  it is how "the WebGPU path does no per-frame Canvas2D work" is asserted. */
+  canvas2d_ops: number;
+  /** Producer overruns observed across all ring sources since chart create
+   *  (see {@link series_api.set_ring_source}); 0 while no ring is bound. */
+  ring_overruns: number;
+}
+
 /** Inclusive logical (bar-index) range. */
 export interface logical_range {
   from: number;
@@ -1005,6 +1045,15 @@ export interface pane_api {
 export interface chart_api {
   /** Active pane backend: `webgpu` when available, otherwise the shared `canvas2d` fallback. */
   backend(): "webgpu" | "canvas2d";
+  /**
+   * Render telemetry for the last frame — the surface for holding a frame-time budget and
+   * detecting regressions. Cheap enough to poll every frame: the returned object is freshly
+   * built but the underlying transfer reuses one scratch array per chart, and the engine's
+   * collection is a fixed-size record rather than a retained history.
+   *
+   * The first call arms WebGPU GPU-time collection; see {@link frame_stats.gpu_ms}.
+   */
+  frame_stats(): frame_stats;
   add_series(kind: series_kind, options?: Partial<series_options>): series_api;
   /**
    * Add a custom series (plugin platform Phase C-c; reference `IChartApi.addCustomSeries`): a
