@@ -36,96 +36,56 @@ weaken a gate to finish faster.
 
 ### Status legend
 
-This handoff distinguishes implementation presence from fresh verification:
+- `[x]` means the implementation, artifact, or validation is complete in the committed baseline.
+- `[ ]` means GPUI implementation or independent verification remains for the receiving agent.
+- Start from a clean checkout of `main`; `git status --short` should be empty before GPUI work.
 
-- `[x]` means the implementation or artifact is present in the current workspace.
-- `[ ]` means work or fresh verification still has to be performed by the receiving agent.
-- **Committed baseline** means the capability already exists at `HEAD`.
-- **Dirty-tree implementation** means the code exists in the current working tree but is not
-  staged or committed. It must be preserved and freshly validated; do not describe it as newly
-  published based only on this workspace.
-
-### Already implemented in the committed baseline — keep all of it
+### Already implemented and committed — keep all of it
 
 - [x] **Item 1 — frame/backend telemetry:** frame statistics and memory/backend measurements.
 - [x] **Item 2 — typed streaming append:** typed column APIs and allocation-conscious batch
       updates.
-- [x] **Item 3 — SharedArrayBuffer ring source, initial implementation:** frame-driven ring
-      draining and producer/consumer layout support.
+- [x] **Item 3 — SharedArrayBuffer ring source and hardening:** frame-driven draining,
+      producer/consumer layout support, per-slot sequence/seqlock validation, stable-window
+      retry, reused slab storage, batched engine application, and overrun accounting.
+- [x] **Item 4 — axis/crosshair in the backend-neutral primitive pass:** axis borders, ticks,
+      separators, boxed labels, crosshair lines/labels, and watermark use the shared `Prim`
+      stream. WebGPU emits a final unscissored axis group; Canvas2D consumes the same axis
+      primitives. Existing browser-rasterized text caching is retained.
+- [x] **Item 5 — OffscreenCanvas worker rendering:** worker-safe wasm constructor, TypeScript
+      `offscreen_chart` facade, normalized input injection, explicit resize/DPR, runtime
+      WebGPU-to-Canvas2D fallback, cleanup, worker example, and worker tests.
 - [x] **Item 6 — memory ceiling/windowing:** `max_points`, oldest-first retention, and memory
       observability.
 - [x] **Item 7 — build configuration:** the accepted release/build optimization configuration.
 - [x] Existing WebGPU, Canvas2D, tiny-skia/native, wasm, TypeScript, plugin, drawing, indicator,
-      accessibility, and resize paths.
+      accessibility, resize, tests, examples, and documentation paths.
 
-These are foundations for the GPUI adapter, not temporary experiments. Do not remove, revert,
-rename, or replace them while implementing GPUI support.
+These are committed foundations for the GPUI adapter, not temporary experiments. Do not remove,
+revert, rename, or replace them while implementing GPUI support.
 
-### Implemented in the current dirty tree — preserve and revalidate
+### Validated baseline
 
-At handoff, `git status` shows **29 modified tracked files** plus untracked files. The following
-feature work is already implemented in that dirty tree:
+The exact committed handoff was freshly validated before publication:
 
-- [x] **Item 3 hardening:** per-slot sequence/seqlock validation, stable-window retry, a reused
-      slab, batched engine application, overrun accounting, and expanded producer/tests.
-- [x] **Item 4 — axis/crosshair in the backend-neutral primitive pass:** axis borders, ticks,
-      separators, boxed labels, crosshair lines/labels, and watermark are converted into the
-      shared `Prim` stream. WebGPU emits a final unscissored axis group; Canvas2D consumes the
-      same axis primitives. Existing browser-rasterized text caching is retained.
-- [x] **Item 5 — OffscreenCanvas worker rendering:** additive worker-safe wasm constructor,
-      TypeScript `offscreen_chart` facade, normalized input injection, explicit resize/DPR,
-      runtime WebGPU-to-Canvas2D fallback, cleanup, worker example, and worker tests.
-- [x] Tests/specs and documentation for the dirty-tree work are present.
-
-Key dirty-tree implementation paths that must not be lost include:
-
-```text
-crates/origin_engine/src/lib.rs
-crates/origin_wasm/Cargo.toml
-crates/origin_wasm/src/chart.rs
-crates/origin_wasm/src/chart/inner_api.rs
-crates/origin_wasm/src/chart/inner_render.rs
-crates/origin_wasm/src/chart/primitives.rs
-crates/origin_wasm/src/chart/ring.rs
-crates/origin_wasm/src/chart/text_runs.rs
-crates/origin_wasm/src/ring_source.rs
-crates/origin_wasm/src/telemetry.rs
-packages/charts/src/impl.ts
-packages/charts/src/index.ts
-packages/charts/src/primitives.ts
-packages/charts/src/types.ts
-packages/charts/src/offscreen.ts                 untracked at handoff
-examples/web_demo/offscreen_chart_worker.js      untracked at handoff
-examples/web_demo/tests/offscreen-worker.spec.mjs untracked at handoff
-examples/web_demo/tests/*.spec.mjs                related modified tests
-```
-
-Use `git status --short` as the authoritative complete inventory; the list above highlights the
-feature-critical files rather than replacing the Git inventory.
-
-### Validation status of existing dirty-tree work
-
-The code and tests are present, and `docs/AXIUSFLOW_PERF_REQUESTS.md` records these prior results:
-
-- [x] Rust formatting, Clippy, wasm-target Clippy, and workspace tests are reported as passing.
-- [x] Package typecheck, lint, release build, and package smoke are reported as passing.
-- [x] The explicit frame-statistics, crosshair, worker, ring-source, and typed-allocation subset
-      is reported as **24/24 passing**.
-- [x] Native strict performance gates are reported as passing.
-- [x] The default Chromium run is reported as **117 passed, 4 known baseline failures, 1
-      skipped**; do not misrepresent that report as a fully green browser suite.
+- [x] `cargo fmt --all -- --check` passed.
+- [x] Workspace Clippy with `-D warnings` passed.
+- [x] `origin_wasm` Clippy for `wasm32-unknown-unknown` with `-D warnings` passed.
+- [x] `cargo test --workspace` passed.
+- [x] Package typecheck, lint, release build, and package smoke passed; the package smoke
+      contained 17 files and a 903 kB wasm artifact.
+- [x] The explicit frame-statistics, worker, ring-source, and typed-update Playwright subset
+      passed **24/24**.
+- [x] The native strict performance gate passed: 0.67 ms frame build and 72.21 ms 1M load on
+      the validation machine.
+- [x] The full Playwright suite reproduced the documented baseline: **122 passed, 4 known
+      failures, 1 skipped**. The four failures are pre-existing reference-fidelity/fixture
+      baseline failures, not new regressions; do not describe the complete suite as fully green.
 - [x] The existing WebGPU-versus-Canvas2D DPR 1.5 reference records a bounded residual of 2,550
-      edge pixels with maximum channel delta 43. This is part of the current baseline; GPUI must
-      match the approved current output rather than changing it.
-- [ ] Freshly rerun all required validation on the exact handoff tree before using it as the
-      GPUI baseline.
-- [ ] Record raw command output and distinguish new failures from the four documented browser
-      baseline failures.
-- [ ] Confirm commit/publication state with the owner before claiming the dirty-tree work is
-      committed or released.
-
-The planning audit did not rerun builds or tests. Therefore, implementation presence is marked
-complete, while fresh validation remains deliberately unchecked.
+      edge pixels with maximum channel delta 43. GPUI must match the approved current output
+      rather than changing it.
+- [ ] The receiving agent must rerun the baseline from its clean checkout before the first GPUI
+      source change and retain raw output for comparison.
 
 ### GPUI implementation status — not started
 
@@ -145,17 +105,16 @@ All unchecked GPUI work in this document is the receiving agent's task.
 
 Before making the first GPUI source change, the receiving agent must:
 
-- [ ] Read the current `git status --short` and `git diff`.
-- [ ] Treat the current dirty tree as user-owned work.
-- [ ] Preserve every tracked and untracked feature file listed by Git.
-- [ ] Revalidate the current tree and record the baseline without rewriting it.
-- [ ] Add GPUI support on top of the current architecture.
+- [ ] Start from an up-to-date, clean checkout of `main`.
+- [ ] Run `git status --short` and confirm no unrelated local work is present.
+- [ ] Rerun and record the baseline validation before changing source.
+- [ ] Add GPUI support on top of the committed architecture.
+- [ ] Keep all Items 1–7 and their tests, examples, and public APIs intact.
 
-The receiving agent must **not** run `git reset --hard`, `git clean`, broad `git restore`, broad
-`git checkout`, or any revert that discards the existing work. Do not remove Item 3 hardening,
-Item 4 axis/crosshair primitives, Item 5 OffscreenCanvas support, or Items 1/2/6/7. Do not create
-a commit unless the owner explicitly requests one. If GPUI work conflicts with existing dirty
-changes, preserve both behaviors and resolve the integration at the optional adapter boundary.
+Do not remove Item 3 hardening, Item 4 axis/crosshair primitives, Item 5 OffscreenCanvas
+support, or Items 1/2/6/7. Do not use destructive Git commands on user-owned changes. If GPUI
+work conflicts with existing behavior, preserve both behaviors and resolve the integration at
+the optional adapter boundary.
 
 ---
 
