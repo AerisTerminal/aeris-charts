@@ -491,6 +491,30 @@ offscreen path was touched.
 
 ---
 
+## Test suite state
+
+Rust: `cargo fmt --check`, `cargo clippy --workspace --all-targets` and
+`cargo clippy -p origin_wasm --target wasm32-unknown-unknown` are clean with zero warnings, and the
+whole workspace test suite passes, including the golden-image regression. New coverage: 13 unit tests
+on the ring drain arithmetic, 5 on the telemetry record, 4 on `max_points` retention in the engine,
+and 1 on `DataLayer::trim_front`.
+
+TypeScript: `tsc --noEmit` and `oxlint` clean.
+
+Browser (Chromium, WebGPU on SwiftShader): **four specs fail, and all four fail identically on the
+pre-PR commit** — three `backend-parity` fidelity comparisons against the reference library, and one
+`prim-text` probe whose fixture assertion (`fixture must have series pixels under the pink text`)
+reads 0. Verified by checking out `67c05ae`, rebuilding, and re-running: same four, same assertions.
+They are consistent with the CI note that this job's pixel thresholds are calibrated to a specific
+SwiftShader/Dawn build. **No new failures.**
+
+New browser specs added by this PR, all passing: `frame-stats.spec.mjs` (5), `update-typed.spec.mjs`
+(5), `retention.spec.mjs` (5), `ring-source.spec.mjs` (8), `engine-bench.spec.mjs` (1, report-only).
+
+One of those is deliberately slow: the retention plateau spec simulates 32 hours of one-bar-per-second
+streaming and takes ~6 minutes. It is the only way to distinguish a plateau from linear growth, so it
+is worth its runtime, but it is worth knowing about before it surprises someone.
+
 ## Non-goals
 
 None of the following were undertaken: no change premised on sub-millisecond wire latency, no
