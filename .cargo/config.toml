@@ -1,0 +1,14 @@
+# wasm32 build flags for the published engine artifact.
+#
+# `+simd128` turns on WebAssembly fixed-width SIMD for every wasm32 build (release and dev, so a
+# debug session never diverges from what ships). The engine is math-heavy — matrix transforms,
+# R-tree hit tests, autoscale passes over long series — and LLVM auto-vectorizes those loops once
+# the feature is available. It is set here rather than as a CI `RUSTFLAGS` env var so the flag is
+# part of the checked-in build definition and applies identically to local builds, `wasm-pack`,
+# and the release pipeline.
+#
+# Baseline support: SIMD128 shipped in Chrome/Edge 91, Firefox 89, and Safari 16.4, and is part of
+# the WebAssembly 2.0 fixed-width SIMD proposal. Every browser that can run the WebGPU path is
+# well past that, and the Canvas2D fallback target set is too.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+simd128"]

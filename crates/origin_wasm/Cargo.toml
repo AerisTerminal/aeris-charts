@@ -46,8 +46,17 @@ console_error_panic_hook = "0.1"
 [lints]
 workspace = true
 
-# wasm-pack runs wasm-opt at -Oz on release builds (binaryen from the wasm-pack cache).
-# Size beats the last few percent of wasm throughput here: the engine hot loops are
-# already headless-gated at 5x the 60fps budget, and download size is a product metric.
+# wasm-pack runs wasm-opt on release builds (binaryen from the wasm-pack cache).
+#
+# `--enable-simd` is required, not optional: `.cargo/config.toml` builds wasm32 with
+# `+simd128`, so the module contains v128 instructions and wasm-opt refuses to read it
+# without the matching feature flag.
+#
+# Optimization level: `-Oz` stays. Measured on this artifact against `-O4` (4 build variants,
+# 3 interleaved browser benchmark rounds each — docs/AXIUSFLOW_PERF_REQUESTS.md Item 7): `-O4`
+# costs +21 KB raw / +3 KB gzipped and buys nothing resolvable above the harness noise floor on
+# 1M-bar installs, 50k-bar frame builds, or 10k-drawing hit tests. Size is a product metric and
+# the hot loops are already gated at 5x the 60fps budget. Revisit with a workload where the
+# codegen difference is actually visible.
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ["-Oz", "--enable-mutable-globals", "--enable-nontrapping-float-to-int", "--enable-bulk-memory", "--enable-sign-ext"]
+wasm-opt = ["-Oz", "--enable-mutable-globals", "--enable-nontrapping-float-to-int", "--enable-bulk-memory", "--enable-sign-ext", "--enable-simd"]
