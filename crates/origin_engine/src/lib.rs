@@ -108,6 +108,12 @@ pub const DEFAULT_LINE_COLOR: Color = Color::rgb(0x21, 0x96, 0xf3);
 /// it is engine policy rather than a browser/demo constant.
 pub const TIME_AXIS_HEIGHT: f64 = 28.0;
 
+/// Hysteresis for `max_points` eviction: a series over its ceiling is trimmed back to
+/// `max_points - max_points / CAP_TRIM_MARGIN_DIVISOR`, so the O(total) trim runs once per that
+/// many appends instead of once per append. 32 keeps the post-trim floor within ~3% of the cap
+/// (a 28,800-point 8-hour window trims every 900 bars) while making the amortized cost constant.
+pub const CAP_TRIM_MARGIN_DIVISOR: usize = 32;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SeriesKind {
     Candlestick,
@@ -425,6 +431,10 @@ pub struct SeriesEntry {
     /// anchor, the last-value label, and the built-in last-price line). Refreshed per frame by
     /// the host before any layout/frame pass consumes them; unused by other kinds.
     pub custom_frame: CustomSeriesFrameValues,
+    /// Retention ceiling: the series holds at most this many rows, oldest evicted first.
+    /// `None` (the default) is unbounded — a series grows for as long as the host appends to it.
+    /// See [`ChartEngine::set_series_max_points`] for the eviction schedule.
+    pub max_points: Option<usize>,
 }
 
 impl SeriesEntry {
@@ -494,6 +504,7 @@ impl SeriesEntry {
             markers_auto_scale: true,
             removed: false,
             custom_frame: CustomSeriesFrameValues::default(),
+            max_points: None,
         }
     }
 }
@@ -1208,6 +1219,13 @@ impl ChartEngine {
             return false;
         };
         self.data.update_styled(id, time, values, colors);
+        // Retention (`max_points`): usually a no-op flag check, and an O(total) trim once every
+        // `margin` appends. Runs before `sync_time_points` so the scale sees the final row set.
+        if self.enforce_series_cap(id) {
+            self.sync_time_points();
+            self.recompute_indicators();
+            return true;
+        }
         self.sync_time_points();
         self.update_indicators_after_source_update(id, time);
         true
@@ -1264,6 +1282,9 @@ impl ChartEngine {
             .data
             .set_point_colors(id, [Some(body), Some(wick), Some(border)]);
         debug_assert!(installed, "sanitized channels are aligned by construction");
+        // Retention (`max_points`): trim after the colors land so the eviction shifts rows and
+        // color channels together.
+        self.enforce_series_cap(id);
         self.sync_time_points();
         self.recompute_indicators();
         Ok(report)
@@ -1295,6 +1316,9 @@ impl ChartEngine {
             sanitized.low,
             sanitized.close,
         );
+        // Retention (`max_points`): a full install can exceed the ceiling; trim before the scale
+        // and the indicators index the rows. The report still describes the caller's input.
+        self.enforce_series_cap(id);
         self.sync_time_points();
         self.recompute_indicators();
         Ok(report)
@@ -1315,8 +1339,72 @@ impl ChartEngine {
             return;
         }
         self.data.set_data(id, times, open, high, low, close);
+        // A full install can land more rows than the retention ceiling allows; trim before the
+        // scale and the indicators see the row set, so nothing downstream indexes evicted rows.
+        self.enforce_series_cap(id);
         self.sync_time_points();
         self.recompute_indicators();
+    }
+
+    /// Set a series' retention ceiling: at most `max_points` rows, oldest evicted first. `None`
+    /// restores the default unbounded behavior. Applied immediately to the series' current rows.
+    ///
+    /// **Eviction schedule.** Trimming is `O(total rows)` (a row shift plus a rebuild of the shared
+    /// time axis), so evicting on every append would make a long streaming session quadratic.
+    /// Instead the engine trims with hysteresis: once the row count exceeds `max_points` it drops
+    /// back to `max_points - margin`, where `margin` is [`CAP_TRIM_MARGIN_DIVISOR`]-th of the cap.
+    /// `max_points` is therefore a **hard ceiling** — the series never holds more — while the
+    /// floor right after a trim is `max_points - margin`. Amortized cost per appended point is
+    /// constant.
+    ///
+    /// An unknown or removed id is ignored.
+    pub fn set_series_max_points(&mut self, id: SeriesId, max_points: Option<usize>) -> bool {
+        if self.is_series_removed(id) {
+            return false;
+        }
+        let Some(entry) = self.series.iter_mut().find(|s| s.id == id) else {
+            return false;
+        };
+        entry.max_points = max_points;
+        if self.enforce_series_cap(id) {
+            self.sync_time_points();
+            self.recompute_indicators();
+        }
+        true
+    }
+
+    /// This series' retention ceiling (`None` = unbounded).
+    pub fn series_max_points(&self, id: SeriesId) -> Option<usize> {
+        self.series
+            .iter()
+            .find(|s| s.id == id)
+            .and_then(|s| s.max_points)
+    }
+
+    /// Evict oldest rows if the series is over its ceiling. Returns whether anything was dropped,
+    /// so callers can skip the follow-up scale/indicator sync in the overwhelmingly common case
+    /// where nothing needed evicting.
+    fn enforce_series_cap(&mut self, id: SeriesId) -> bool {
+        let Some(max_points) = self
+            .series
+            .iter()
+            .find(|s| s.id == id)
+            .and_then(|s| s.max_points)
+        else {
+            return false;
+        };
+        let rows = self
+            .data
+            .series_data(id)
+            .map_or(0, |(times, _)| times.len());
+        if rows <= max_points {
+            return false;
+        }
+        // Trim past the ceiling by the hysteresis margin so the next `margin` appends are free.
+        // A cap of 0 means "hold nothing"; guard the divisor rather than special-casing it.
+        let margin = (max_points / CAP_TRIM_MARGIN_DIVISOR).min(max_points);
+        self.data.trim_front(id, max_points - margin);
+        true
     }
 
     /// Fit the horizontal scale to the current union of series timestamps.

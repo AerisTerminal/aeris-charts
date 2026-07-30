@@ -3523,3 +3523,103 @@ fn separator_hover_mirrors_into_the_axis_frame() {
     let frame = chart.build_axis_frame(80.0, |text| text.len() as f64 * 6.0);
     assert_eq!(frame.separator_hover, None);
 }
+
+// --- retention (`max_points`) ------------------------------------------------------------------
+
+/// A series' current row count, straight from the data layer.
+fn row_count(chart: &ChartEngine, id: SeriesId) -> usize {
+    chart
+        .data
+        .series_data(id)
+        .map_or(0, |(times, _)| times.len())
+}
+
+#[test]
+fn series_are_unbounded_by_default() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    install_bars(&mut chart, 10);
+    assert_eq!(chart.series_max_points(0), None);
+    for i in 11..=2_000 {
+        chart.update_series_bar(0, i as f64, [1.0, 1.0, 1.0, 1.0]);
+    }
+    assert_eq!(row_count(&chart, 0), 2_000, "no cap = no eviction");
+}
+
+#[test]
+fn max_points_is_a_hard_ceiling_and_evicts_oldest_first() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    install_bars(&mut chart, 500);
+    // Applying a cap trims the existing rows immediately.
+    assert!(chart.set_series_max_points(0, Some(128)));
+    assert_eq!(chart.series_max_points(0), Some(128));
+    let after_apply = row_count(&chart, 0);
+    assert!(
+        after_apply <= 128,
+        "over the ceiling after apply: {after_apply}"
+    );
+
+    // The newest rows are the survivors: the last installed time was 500.
+    let (times, _) = chart.data.series_data(0).unwrap();
+    assert_eq!(*times.last().unwrap(), 500);
+    assert_eq!(times.len(), after_apply);
+    assert_eq!(*times.first().unwrap(), 500 - after_apply as i64 + 1);
+
+    // Streaming past the ceiling never exceeds it, and the floor stays within the documented
+    // hysteresis margin.
+    let floor = 128 - 128 / CAP_TRIM_MARGIN_DIVISOR;
+    for i in 501..=3_000 {
+        chart.update_series_bar(0, i as f64, [1.0, 1.0, 1.0, 1.0]);
+        let rows = row_count(&chart, 0);
+        assert!(rows <= 128, "exceeded the ceiling at t={i}: {rows}");
+        assert!(rows >= floor, "trimmed below the margin at t={i}: {rows}");
+    }
+    // The window tracks the tip.
+    let (times, _) = chart.data.series_data(0).unwrap();
+    assert_eq!(*times.last().unwrap(), 3_000);
+}
+
+#[test]
+fn max_points_trims_a_full_install_before_the_scale_sees_it() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    assert!(chart.set_series_max_points(0, Some(50)));
+    install_bars(&mut chart, 1_000);
+    let rows = row_count(&chart, 0);
+    assert!(rows <= 50, "install ignored the ceiling: {rows}");
+    // The time scale's point count matches the retained rows, not the installed ones — an evicted
+    // row must never remain addressable through the shared axis.
+    assert_eq!(chart.data.merged_times().len(), rows);
+    assert_eq!(chart.time_scale.base_index(), rows as i64 - 1);
+}
+
+#[test]
+fn clearing_max_points_restores_unbounded_growth() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    install_bars(&mut chart, 100);
+    assert!(chart.set_series_max_points(0, Some(32)));
+    assert!(row_count(&chart, 0) <= 32);
+    assert!(chart.set_series_max_points(0, None));
+    for i in 101..=400 {
+        chart.update_series_bar(0, i as f64, [1.0, 1.0, 1.0, 1.0]);
+    }
+    // The already-evicted rows do not come back; growth simply resumes.
+    assert_eq!(chart.series_max_points(0), None);
+    assert!(row_count(&chart, 0) > 32);
+}
+
+#[test]
+fn a_cap_on_one_series_leaves_the_others_alone() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    install_bars(&mut chart, 200);
+    let other = chart.add_series(SeriesKind::Line);
+    let times: Vec<f64> = (1..=200).map(|i| i as f64).collect();
+    let values: Vec<f64> = (0..200).map(|i| 50.0 + i as f64).collect();
+    chart
+        .set_series_data(other, &times, &values, &values, &values, &values)
+        .unwrap();
+
+    assert!(chart.set_series_max_points(0, Some(20)));
+    assert!(row_count(&chart, 0) <= 20);
+    assert_eq!(row_count(&chart, other), 200, "uncapped series untouched");
+    // The shared axis keeps every time the uncapped series still occupies.
+    assert_eq!(chart.data.merged_times().len(), 200);
+}

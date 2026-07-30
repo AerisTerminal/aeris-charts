@@ -528,6 +528,26 @@ export interface chart_options {
 
 /** Options accepted when adding a series. */
 export interface series_options {
+  /**
+   * Retention ceiling: the series holds at most this many data points, evicting the **oldest**
+   * first. Omit (or pass `0`) for the default, which is **unbounded** — a series grows for as long
+   * as the host appends to it, and wasm linear memory never shrinks, so an open-ended live session
+   * with no cap grows monotonically. Set this to make memory flat over a long session; watch it
+   * with {@link frame_stats.memory_bytes}.
+   *
+   * `max_points` is a hard ceiling — the series never holds more. Eviction is amortized rather
+   * than per-point, because trimming rebuilds the shared time axis: once the count exceeds
+   * `max_points` the engine trims back to `max_points - max_points / 32`, so the count sits in
+   * `[max_points - max_points / 32, max_points]` and the cost per appended point stays constant.
+   * `data()` reflects the retained rows, so it can return slightly fewer than `max_points`.
+   *
+   * Eviction is per series, and only affects the shared time axis where the evicted timestamps
+   * were not also held by another series. Applying a cap trims the series' existing points
+   * immediately; a full `set_data`/`set_data_typed` install is trimmed to the ceiling too.
+   *
+   * Note this is a *point* count, not a time window: the retained span depends on the bar interval.
+   */
+  max_points: number;
   /** Overrides the kind default color (line/area/histogram). */
   color: string;
   /** Candlestick/bar up (close ≥ open) body color. Any CSS color the engine parses. */

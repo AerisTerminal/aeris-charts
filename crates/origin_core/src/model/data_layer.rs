@@ -327,6 +327,35 @@ impl DataLayer {
         keep
     }
 
+    /// Drop the **oldest** rows of a series until at most `keep` remain (the eviction half of the
+    /// `max_points` retention policy; [`pop`] is its newest-first counterpart). Per-point color
+    /// channels shift in lockstep with their rows, and the merged time points are rebuilt so times
+    /// no series occupies anymore leave the shared axis. Returns the new row count.
+    ///
+    /// Cost is `O(total rows)` — the row shift plus a merged rebuild and reindex — so callers must
+    /// not run this once per appended point. The engine trims with hysteresis for exactly that
+    /// reason (see `ChartEngine::enforce_series_cap`).
+    pub fn trim_front(&mut self, id: SeriesId, keep: usize) -> usize {
+        let len = self.series[id].times.len();
+        if len <= keep {
+            return len;
+        }
+        let drop = len - keep;
+        let s = &mut self.series[id];
+        s.times.drain(..drop);
+        for col in &mut s.values {
+            col.drain(..drop);
+        }
+        for channel in &mut s.point_colors {
+            if !channel.is_empty() {
+                channel.drain(..drop);
+            }
+        }
+        self.rebuild_merged();
+        self.reindex_all();
+        keep
+    }
+
     fn rebuild_merged(&mut self) {
         let total: usize = self.series.iter().map(|s| s.times.len()).sum();
         let mut all = Vec::with_capacity(total);
@@ -586,6 +615,36 @@ mod tests {
         // shared times 3,4 survive through B
         assert_eq!(dl.merged_times(), &[1, 2, 3, 4]);
         assert_eq!(dl.pop(a, 5), 0);
+        assert_eq!(dl.merged_times(), &[3, 4]);
+    }
+
+    #[test]
+    fn trim_front_evicts_oldest_rows_colors_and_merged_times() {
+        let mut dl = DataLayer::new();
+        let a = dl.add_series();
+        let b = dl.add_series();
+        set(&mut dl, a, &[1, 2, 3, 4], &[10.0, 20.0, 30.0, 40.0]);
+        set(&mut dl, b, &[3, 4], &[90.0, 95.0]);
+        assert!(dl.set_point_colors(a, [Some(vec![11, 22, 33, 44]), None, None]));
+
+        // Keeping at least the row count is a no-op.
+        assert_eq!(dl.trim_front(a, 4), 4);
+        assert_eq!(dl.trim_front(a, 9), 4);
+        assert_eq!(dl.merged_times(), &[1, 2, 3, 4]);
+
+        // Oldest-first: rows 1,2 leave; the surviving colors are those of rows 3,4.
+        assert_eq!(dl.trim_front(a, 2), 2);
+        assert_eq!(dl.plot(a).indices(), &[0, 1]);
+        assert_eq!(dl.point_color(a, PointColorChannel::Body, 0), Some(33));
+        assert_eq!(dl.point_color(a, PointColorChannel::Body, 1), Some(44));
+        // Times 1,2 belonged to A alone, so they leave the shared axis; 3,4 survive through both.
+        assert_eq!(dl.merged_times(), &[3, 4]);
+        assert_eq!(dl.series_data(a).unwrap().1[3], &[30.0, 40.0]);
+        // B is untouched by A's eviction.
+        assert_eq!(dl.series_data(b).unwrap().0, &[3, 4]);
+
+        assert_eq!(dl.trim_front(a, 0), 0);
+        assert!(!dl.has_point_colors(a));
         assert_eq!(dl.merged_times(), &[3, 4]);
     }
 

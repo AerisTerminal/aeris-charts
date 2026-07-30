@@ -388,6 +388,16 @@ class series_impl implements series_api {
 
   apply_options(options: Partial<series_options>): void {
     this.assert_live();
+    if (options.max_points !== undefined) {
+      // 0 (and anything below 1) clears the cap back to unbounded, matching the option's docs.
+      this.chart.wasm.set_series_max_points(this.id, options.max_points);
+      // Applying a cap may evict points, so this is a full-range data change even though it
+      // arrived as an option. Emitted unconditionally rather than only when rows actually left:
+      // over-notifying is safe (handlers re-read), and this is a configuration call, not a hot
+      // path, so it is not worth a round trip to find out.
+      this.chart.repaint();
+      for (const handler of this.data_changed_subs) handler("full");
+    }
     if (options.color !== undefined) {
       // CSS string passed through verbatim so the engine keeps any alpha channel.
       this.chart.wasm.set_series_color_css(this.id, options.color);

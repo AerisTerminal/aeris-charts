@@ -392,6 +392,26 @@ impl ChartInner {
         self.engine.set_series_visible(id as SeriesId, visible);
     }
 
+    /// Retention ceiling for a series: at most `max_points` rows, oldest evicted first. A
+    /// non-positive or non-finite value clears the cap (unbounded, the default).
+    pub fn set_series_max_points(&mut self, id: u32, max_points: Option<f64>) {
+        let cap = max_points
+            .filter(|n| n.is_finite() && *n >= 1.0)
+            .map(|n| n as usize);
+        if !self.engine.set_series_max_points(id as SeriesId, cap) {
+            web_sys::console::warn_1(
+                &"origin: set_series_max_points ignored (unknown or removed series id)".into(),
+            );
+        }
+    }
+
+    /// This series' retention ceiling, or `None` when unbounded.
+    pub fn series_max_points(&self, id: u32) -> Option<f64> {
+        self.engine
+            .series_max_points(id as SeriesId)
+            .map(|n| n as f64)
+    }
+
     /// Set candlestick/bar up & down body colors, stored verbatim (reference `options()` returns
     /// the applied string). `""` clears the override back to the reference default palette; the
     /// strings are parsed at render time.

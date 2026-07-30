@@ -886,6 +886,19 @@ impl OriginChart {
         self.inner.borrow_mut().set_series_visible(id, visible);
     }
 
+    /// Retention ceiling for a series (`series_options.max_points`): at most this many rows, oldest
+    /// evicted first. `undefined`/`null`/`0` clears the cap back to unbounded.
+    pub fn set_series_max_points(&mut self, id: u32, max_points: Option<f64>) {
+        self.inner
+            .borrow_mut()
+            .set_series_max_points(id, max_points);
+    }
+
+    /// This series' retention ceiling, or `undefined` when unbounded.
+    pub fn series_max_points(&self, id: u32) -> Option<f64> {
+        self.inner.borrow().series_max_points(id)
+    }
+
     /// Set candlestick/bar up & down body colors as CSS strings (empty string = keep default).
     pub fn set_series_updown_colors(&mut self, id: u32, up: &str, down: &str) {
         self.inner
