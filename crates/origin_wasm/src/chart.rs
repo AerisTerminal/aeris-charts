@@ -38,7 +38,6 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::CanvasRenderingContext2d;
 
-use crate::axis_policy::negotiated_axis_width;
 use crate::backend_policy::{surface_error_action, SurfaceErrorAction};
 use crate::telemetry::{FrameTelemetry, FRAME_STATS_LEN};
 use origin_core::model::data_layer::SeriesId;

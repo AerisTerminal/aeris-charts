@@ -1,6 +1,7 @@
 //! `ChartInner` model/state API: series, panes, scales, coordinates, ranges. These are the
 //! working halves of the thin `#[wasm_bindgen] impl OriginChart` delegations in `chart.rs`.
 
+use super::inner_render::measure_text_ctx;
 use super::*;
 
 impl ChartInner {
@@ -730,22 +731,10 @@ impl ChartInner {
     }
 
     /// Drag the separator below pane `i` by `delta_css` (positive grows pane `i`, shrinks `i+1`),
-    /// keeping both at least a minimum height. Freezes current heights as stretch factors so the
-    /// other panes hold their size, then re-lays out (roadmap Phase B1).
+    /// keeping both at least a minimum height. Shared engine policy freezes current heights as
+    /// stretch factors so browser and native hosts resize panes identically.
     pub fn drag_pane_separator(&mut self, i: usize, delta_css: f64) {
-        if i + 1 >= self.panes.len() {
-            return;
-        }
-        const MIN_PANE_H: f64 = 24.0;
-        for p in &mut self.panes {
-            p.stretch_factor = p.height.max(1.0);
-        }
-        let top = self.panes[i].height;
-        let bot = self.panes[i + 1].height;
-        let new_top = (top + delta_css).clamp(MIN_PANE_H, (top + bot - MIN_PANE_H).max(MIN_PANE_H));
-        let actual = new_top - top;
-        self.panes[i].stretch_factor = new_top;
-        self.panes[i + 1].stretch_factor = bot - actual;
+        self.engine.drag_pane_separator(i, delta_css);
     }
 
     /// CSS height of pane `i` from the last layout pass.
@@ -1337,73 +1326,19 @@ impl ChartInner {
         self.recompute_layout(true);
     }
 
-    /// Negotiates the price-axis width against its labels and sets the time-scale width /
-    /// price-scale height accordingly. Idempotent; called on resize, data change, and render.
-    /// (The axis labels depend only on the price range, so one refinement pass converges.)
+    /// Negotiates the price-axis width against its labels and sets the time-scale width / price
+    /// scale height. The shared engine policy owns all geometry; this browser host supplies only
+    /// Canvas text widths.
     pub(super) fn recompute_layout(&mut self, allow_axis_shrink: bool) {
-        // The reserved time-axis strip is reference `timeScale.visible` (0 when hidden) floored at
-        // `timeScale.minimumHeight` — distinct from `timeVisible`, which is label semantics.
-        let content_h = (self.css_height - self.engine.time_axis_height()).max(1.0);
-        self.engine.layout_panes(content_h);
-        let options = self.opts();
-        let measured_axis_w = if options.right_price_scale.visible {
-            self.compute_price_axis_width(PriceScaleTarget::Right)
-        } else {
-            0.0
-        };
-        let measured_left_axis_w = if options.left_price_scale.visible {
-            self.compute_price_axis_width(PriceScaleTarget::Left)
-        } else {
-            0.0
-        };
-        let mut axis_w = if options.right_price_scale.visible {
-            negotiated_axis_width(self.axis_w, measured_axis_w, allow_axis_shrink)
-        } else {
-            0.0
-        };
-        let mut left_axis_w = if options.left_price_scale.visible {
-            negotiated_axis_width(self.left_axis_w, measured_left_axis_w, allow_axis_shrink)
-        } else {
-            0.0
-        };
-        for _ in 0..2 {
-            let pane_w = (self.css_width - left_axis_w - axis_w).max(1.0);
-            self.pane_left = left_axis_w;
-            self.left_axis_w = left_axis_w;
-            self.axis_w = axis_w;
-            self.time_scale.set_width(pane_w);
-            self.engine.autoscale_visible();
-            let measured_new_w = if options.right_price_scale.visible {
-                self.compute_price_axis_width(PriceScaleTarget::Right)
-            } else {
-                0.0
-            };
-            let measured_new_left_w = if options.left_price_scale.visible {
-                self.compute_price_axis_width(PriceScaleTarget::Left)
-            } else {
-                0.0
-            };
-            let new_w = if options.right_price_scale.visible {
-                negotiated_axis_width(axis_w, measured_new_w, allow_axis_shrink)
-            } else {
-                0.0
-            };
-            let new_left_w = if options.left_price_scale.visible {
-                negotiated_axis_width(left_axis_w, measured_new_left_w, allow_axis_shrink)
-            } else {
-                0.0
-            };
-            if new_w == axis_w && new_left_w == left_axis_w {
-                break;
-            }
-            axis_w = new_w;
-            left_axis_w = new_left_w;
-        }
-        self.pane_left = left_axis_w;
-        self.left_axis_w = left_axis_w;
-        self.pane_w = (self.css_width - left_axis_w - axis_w).max(1.0);
-        self.pane_h = content_h;
-        self.axis_w = axis_w;
+        let axis_ctx = self.axis_ctx.clone();
+        let dpr = self.dpr;
+        let layout = self.opts().layout;
+        let font_size = layout.font_size;
+        let font_family = layout.font_family;
+        self.engine
+            .recompute_layout_with_measure(allow_axis_shrink, |text| {
+                measure_text_ctx(&axis_ctx, dpr, &font_family, font_size, text)
+            });
     }
 
     // --- gestures ---

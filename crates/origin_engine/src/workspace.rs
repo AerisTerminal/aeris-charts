@@ -22,28 +22,35 @@ pub enum SplitDirection {
     Vertical,
 }
 
-/// One workspace tree node: a leaf chart cell, or a split of two subtrees. The split's `ratio`
-/// is the `a` subtree's share of the space (0..1, default 0.5); dragging the divider between
-/// two adjacent cells adjusts it via [`Workspace::resize_between`].
+/// Immutable snapshot of a workspace tree: either a chart cell or a split of two subtrees.
+/// The split's `ratio` is the `a` subtree's share of the space (0..1, default 0.5); dragging
+/// the divider between two adjacent cells adjusts it via [`Workspace::resize_between`].
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
-enum Node {
+pub enum WorkspaceLayout {
+    /// A leaf containing one chart cell.
     Cell {
+        /// Stable workspace cell identifier.
         id: u64,
     },
+    /// A directional split containing two child layouts.
     Split {
+        /// Direction in which the child layouts are arranged.
         direction: SplitDirection,
+        /// Fraction of the available space assigned to `a`.
         ratio: f64,
-        a: Box<Node>,
-        b: Box<Node>,
+        /// First child subtree.
+        a: Box<WorkspaceLayout>,
+        /// Second child subtree.
+        b: Box<WorkspaceLayout>,
     },
 }
 
-impl Node {
+impl WorkspaceLayout {
     fn cell_ids(&self, out: &mut Vec<u64>) {
         match self {
-            Node::Cell { id } => out.push(*id),
-            Node::Split { a, b, .. } => {
+            WorkspaceLayout::Cell { id } => out.push(*id),
+            WorkspaceLayout::Split { a, b, .. } => {
                 a.cell_ids(out);
                 b.cell_ids(out);
             }
@@ -52,15 +59,15 @@ impl Node {
 
     fn first_leaf(&self) -> u64 {
         match self {
-            Node::Cell { id } => *id,
-            Node::Split { a, .. } => a.first_leaf(),
+            WorkspaceLayout::Cell { id } => *id,
+            WorkspaceLayout::Split { a, .. } => a.first_leaf(),
         }
     }
 
     fn last_leaf(&self) -> u64 {
         match self {
-            Node::Cell { id } => *id,
-            Node::Split { b, .. } => b.last_leaf(),
+            WorkspaceLayout::Cell { id } => *id,
+            WorkspaceLayout::Split { b, .. } => b.last_leaf(),
         }
     }
 }
@@ -95,7 +102,7 @@ pub struct CellUsage {
 /// The split-grid model: an authoritative binary tree plus metering state. Times are
 /// host-injected seconds (the engine stays headless/clock-free).
 pub struct Workspace {
-    root: Node,
+    root: WorkspaceLayout,
     created_at: BTreeMap<u64, f64>,
     next_id: u64,
     split_count: u64,
@@ -107,7 +114,7 @@ impl Workspace {
     /// A workspace holding a single chart cell.
     pub fn new(now: f64) -> Self {
         Self {
-            root: Node::Cell { id: 1 },
+            root: WorkspaceLayout::Cell { id: 1 },
             created_at: BTreeMap::from([(1, now)]),
             next_id: 2,
             split_count: 0,
@@ -206,26 +213,32 @@ impl Workspace {
         }
     }
 
+    /// A cloned typed snapshot of the current workspace layout.
+    pub fn layout(&self) -> WorkspaceLayout {
+        self.root.clone()
+    }
+
     /// The layout tree as JSON (cells by id, splits with direction) for host DOM placement.
+    /// This preserves the serialized shape of [`Workspace::layout`].
     pub fn layout_json(&self) -> String {
         serde_json::to_string(&self.root).unwrap_or_else(|_| "{}".to_string())
     }
 }
 
 /// Replace leaf `id` with a split of `[id, new_id]`; returns whether the leaf existed.
-fn split_node(node: &mut Node, id: u64, direction: SplitDirection, new_id: u64) -> bool {
+fn split_node(node: &mut WorkspaceLayout, id: u64, direction: SplitDirection, new_id: u64) -> bool {
     match node {
-        Node::Cell { id: cell } if *cell == id => {
-            *node = Node::Split {
+        WorkspaceLayout::Cell { id: cell } if *cell == id => {
+            *node = WorkspaceLayout::Split {
                 direction,
                 ratio: 0.5,
-                a: Box::new(Node::Cell { id }),
-                b: Box::new(Node::Cell { id: new_id }),
+                a: Box::new(WorkspaceLayout::Cell { id }),
+                b: Box::new(WorkspaceLayout::Cell { id: new_id }),
             };
             true
         }
-        Node::Cell { .. } => false,
-        Node::Split { a, b, .. } => {
+        WorkspaceLayout::Cell { .. } => false,
+        WorkspaceLayout::Split { a, b, .. } => {
             split_node(a, id, direction, new_id) || split_node(b, id, direction, new_id)
         }
     }
@@ -233,8 +246,13 @@ fn split_node(node: &mut Node, id: u64, direction: SplitDirection, new_id: u64) 
 
 /// Adjust the ratio of the split node whose `a` subtree's last leaf is `left_id` and whose
 /// `b` subtree's first leaf is `right_id`; clamped to [0.05, 0.95] so neither side collapses.
-fn resize_between_node(node: &mut Node, left_id: u64, right_id: u64, delta_ratio: f64) -> bool {
-    let Node::Split { a, b, ratio, .. } = node else {
+fn resize_between_node(
+    node: &mut WorkspaceLayout,
+    left_id: u64,
+    right_id: u64,
+    delta_ratio: f64,
+) -> bool {
+    let WorkspaceLayout::Split { a, b, ratio, .. } = node else {
         return false;
     };
     if a.last_leaf() == left_id && b.first_leaf() == right_id {
@@ -248,18 +266,18 @@ fn resize_between_node(node: &mut Node, left_id: u64, right_id: u64, delta_ratio
 /// Remove leaf `id`, collapsing its parent split in place (the sibling subtree absorbs the
 /// freed slot — at the root this replaces the whole tree with the sibling). Returns whether
 /// the leaf existed.
-fn remove_node(node: &mut Node, id: u64) -> bool {
-    let Node::Split { a, b, .. } = node else {
+fn remove_node(node: &mut WorkspaceLayout, id: u64) -> bool {
+    let WorkspaceLayout::Split { a, b, .. } = node else {
         return false;
     };
-    if matches!(**a, Node::Cell { id: cell } if cell == id) {
+    if matches!(**a, WorkspaceLayout::Cell { id: cell } if cell == id) {
         // The split node collapses: the b subtree absorbs the freed slot.
-        let absorbed = std::mem::replace(b, Box::new(Node::Cell { id: u64::MAX }));
+        let absorbed = std::mem::replace(b, Box::new(WorkspaceLayout::Cell { id: u64::MAX }));
         *node = *absorbed;
         return true;
     }
-    if matches!(**b, Node::Cell { id: cell } if cell == id) {
-        let absorbed = std::mem::replace(a, Box::new(Node::Cell { id: u64::MAX }));
+    if matches!(**b, WorkspaceLayout::Cell { id: cell } if cell == id) {
+        let absorbed = std::mem::replace(a, Box::new(WorkspaceLayout::Cell { id: u64::MAX }));
         *node = *absorbed;
         return true;
     }
@@ -292,6 +310,51 @@ mod tests {
         assert!((age(1) - 30.0).abs() < 1e-9);
         assert!((age(2) - 20.0).abs() < 1e-9);
         assert!((age(third) - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn typed_layout_snapshot_tracks_splits_resizes_and_removals() {
+        let mut ws = Workspace::new(0.0);
+        assert_eq!(ws.layout(), WorkspaceLayout::Cell { id: 1 });
+
+        let second = ws.split(1, SplitDirection::Horizontal, 1.0).unwrap();
+        assert_eq!(
+            ws.layout(),
+            WorkspaceLayout::Split {
+                direction: SplitDirection::Horizontal,
+                ratio: 0.5,
+                a: Box::new(WorkspaceLayout::Cell { id: 1 }),
+                b: Box::new(WorkspaceLayout::Cell { id: second }),
+            }
+        );
+
+        ws.resize_between(1, second, 0.25).unwrap();
+        let third = ws.split(second, SplitDirection::Vertical, 2.0).unwrap();
+        assert_eq!(
+            ws.layout(),
+            WorkspaceLayout::Split {
+                direction: SplitDirection::Horizontal,
+                ratio: 0.75,
+                a: Box::new(WorkspaceLayout::Cell { id: 1 }),
+                b: Box::new(WorkspaceLayout::Split {
+                    direction: SplitDirection::Vertical,
+                    ratio: 0.5,
+                    a: Box::new(WorkspaceLayout::Cell { id: second }),
+                    b: Box::new(WorkspaceLayout::Cell { id: third }),
+                }),
+            }
+        );
+
+        ws.remove(second).unwrap();
+        assert_eq!(
+            ws.layout(),
+            WorkspaceLayout::Split {
+                direction: SplitDirection::Horizontal,
+                ratio: 0.75,
+                a: Box::new(WorkspaceLayout::Cell { id: 1 }),
+                b: Box::new(WorkspaceLayout::Cell { id: third }),
+            }
+        );
     }
 
     #[test]

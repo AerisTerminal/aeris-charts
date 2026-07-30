@@ -6,6 +6,7 @@ members = [
     "crates/origin_engine",
     "crates/origin_render",
     "crates/origin_render_wgpu",
+    "crates/origin_render_gpui",
     "crates/origin_wasm",
     "crates/origin_native",
 ]

@@ -1,0 +1,56 @@
+[package]
+name = "origin_render_gpui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Optional GPUI executor for the Prim IR: lowers Origin's backend-neutral frame into GPUI scene primitives"
+
+# GPUI itself is OPTIONAL and off by default, so `cargo build/test --workspace` never compiles it
+# (GPUI_PLAN.md §11 "Normal non-GPUI builds do not compile GPUI"). Everything except the thin
+# `backend` module — the whole Prim lowering, snapping, cache, and metrics layer — is
+# GPUI-free and unit-testable without a window or a GPU.
+[features]
+default = []
+gpui-backend = ["dep:gpui"]
+
+[dependencies]
+origin_core = { path = "../origin_core" }
+origin_engine = { path = "../origin_engine" }
+origin_render = { path = "../origin_render" }
+
+# Official Zed publication of GPUI (crates.io `gpui`, published by zed-industries from
+# https://github.com/zed-industries/zed). Pinned exactly; GPUI is pre-1.0 (GPUI_PLAN.md §3.4).
+#
+# `default-features = false` keeps the Linux/macOS wayland/x11/font-kit/blade paths out of the
+# graph, so Windows resolves cleanly to GPUI's D3D11 + DirectWrite backend.
+#
+# `windows-manifest` is NOT optional on Windows: GPUI imports `comctl32!TaskDialogIndirect`, which
+# only resolves under a comctl32 v6 activation context. That context comes from the application
+# manifest this feature embeds. Without it the executable fails to load at all
+# (STATUS_ENTRYPOINT_NOT_FOUND, 0xC0000139) before `main` runs.
+gpui = { version = "=0.2.2", optional = true, default-features = false, features = [
+    "windows-manifest",
+] }
+
+# The pixel-parity harness diffs GPUI's real output against Origin's existing native rasterizer.
+[dev-dependencies]
+origin_native = { path = "../origin_native" }
+sha2 = "=0.10.9"
+tiny-skia = "0.11"
+
+[lints]
+workspace = true
+
+# The probe needs a real GPUI window, so it only builds with the backend feature. Without this,
+# `cargo build --workspace` would try to compile it (and GPUI) unconditionally.
+[[example]]
+name = "gpui_probe"
+required-features = ["gpui-backend"]
+
+[[example]]
+name = "pixel_parity"
+required-features = ["gpui-backend"]
+
+[[example]]
+name = "gpui_pane_capture"
+required-features = ["gpui-backend"]

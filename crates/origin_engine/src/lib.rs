@@ -5,9 +5,11 @@
 //! frame produced from this state. During the architecture recovery, frame construction is being
 //! migrated here incrementally from `origin_wasm`.
 
+mod axis_primitives;
 mod drawings;
 mod frame;
 mod hit_test;
+mod host_layout;
 mod indicators;
 mod interaction;
 mod price_line_api;
@@ -32,7 +34,7 @@ pub use interaction::{
     pinch_zoom_scale, wheel_zoom_scale, ScrollAnimation, KINETIC_DUMPING, KINETIC_MAX_SPEED,
     KINETIC_MIN_MOVE, KINETIC_MIN_SPEED, PINCH_ZOOM_INTENSITY, WHEEL_SCROLL_PX_PER_DELTA,
 };
-pub use workspace::{SplitDirection, Workspace, WorkspaceError, WorkspaceUsage};
+pub use workspace::{SplitDirection, Workspace, WorkspaceError, WorkspaceLayout, WorkspaceUsage};
 
 use origin_core::format::price_formatter::PriceFormatter;
 use origin_core::format::time_formatter::{MonthNames, DEFAULT_DATE_FORMAT};
@@ -1501,6 +1503,29 @@ impl ChartEngine {
     /// into the next axis frame; hosts repaint to show the band.
     pub fn set_separator_hover(&mut self, index: Option<usize>) {
         self.separator_hover = index;
+    }
+
+    /// Drag the separator below pane `index` by `delta_css` logical pixels. Positive deltas grow
+    /// the pane above and shrink the pane below. Current heights become stretch factors first so
+    /// unaffected panes hold their size; both adjacent panes retain the reference 24px minimum.
+    pub fn drag_pane_separator(&mut self, index: usize, delta_css: f64) {
+        if index + 1 >= self.panes.len() || !delta_css.is_finite() {
+            return;
+        }
+        const MIN_PANE_HEIGHT: f64 = 24.0;
+        for pane in &mut self.panes {
+            pane.stretch_factor = pane.height.max(1.0);
+        }
+        let top = self.panes[index].height;
+        let bottom = self.panes[index + 1].height;
+        let combined = top + bottom;
+        let new_top = (top + delta_css).clamp(
+            MIN_PANE_HEIGHT,
+            (combined - MIN_PANE_HEIGHT).max(MIN_PANE_HEIGHT),
+        );
+        let applied = new_top - top;
+        self.panes[index].stretch_factor = new_top;
+        self.panes[index + 1].stretch_factor = bottom - applied;
     }
 
     /// reference `timeScale.secondsVisible`: include seconds when `time_visible` is set.

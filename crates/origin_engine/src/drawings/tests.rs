@@ -759,6 +759,39 @@ fn creation_flow_commits_after_the_kinds_anchor_count() {
 }
 
 #[test]
+fn live_options_update_pending_drawing_without_losing_anchors() {
+    let mut chart = settled_chart();
+    assert!(!chart.drawing_create_apply_options(r##"{"width":4.0}"##));
+    assert!(chart.drawing_create_begin(
+        DrawingKind::TrendLine,
+        Some(r##"{"color":"#ff0000","width":2.0}"##),
+    ));
+    let first = (x_at(&chart, 2.0), y_at(&chart, 10.5));
+    assert_eq!(
+        chart.drawing_create_click(first.0, first.1, DrawingModifiers::default()),
+        -1
+    );
+    let points_before = chart.pending_drawing().unwrap().drawing.points.clone();
+    let preview_before = chart.pending_drawing().unwrap().preview;
+
+    assert!(!chart.drawing_create_apply_options("{"));
+    assert!(chart.drawing_create_apply_options(r##"{"width":4.0,"style":"dashed"}"##));
+    let pending = chart.pending_drawing().unwrap();
+    assert_eq!(pending.drawing.points, points_before);
+    assert_eq!(pending.preview, preview_before);
+    assert_eq!(pending.drawing.color, "#ff0000");
+    assert_eq!(pending.drawing.width, 4.0);
+    assert_eq!(pending.drawing.style, LineStyle::Dashed);
+
+    let second = (x_at(&chart, 7.0), y_at(&chart, 12.5));
+    let id = chart.drawing_create_click(second.0, second.1, DrawingModifiers::default());
+    let drawing = chart.drawing(id as DrawingId).unwrap();
+    assert_eq!(drawing.points[0], points_before[0]);
+    assert_eq!(drawing.color, "#ff0000");
+    assert_eq!(drawing.width, 4.0);
+}
+
+#[test]
 fn one_anchor_kinds_commit_on_the_first_click() {
     let mut chart = settled_chart();
     assert!(chart.drawing_create_begin(DrawingKind::HorizontalLine, None));
@@ -1315,6 +1348,32 @@ fn brush_capture_decimates_input_and_simplifies_on_commit() {
     assert!((points[0].price - 10.0).abs() < 1e-6);
     // The stroke is left selected (TradingView parity).
     assert_eq!(chart.selected_drawing(), Some(id));
+}
+
+#[test]
+fn live_options_update_brush_without_losing_captured_points() {
+    let mut chart = settled_chart();
+    let start = (x_at(&chart, 2.0), y_at(&chart, 10.0));
+    assert!(chart.brush_create_start(
+        Some(r##"{"color":"#123456","width":2.0}"##),
+        start.0,
+        start.1,
+    ));
+    chart.brush_create_add(x_at(&chart, 4.0), y_at(&chart, 11.0));
+    let points_before = chart.brush_capture().unwrap().points.clone();
+
+    assert!(chart.drawing_create_apply_options(r##"{"width":5.0,"style":"dotted"}"##));
+    let capture = chart.brush_capture().unwrap();
+    assert_eq!(capture.points, points_before);
+    assert_eq!(capture.options.color, "#123456");
+    assert_eq!(capture.options.width, 5.0);
+    assert_eq!(capture.options.style, LineStyle::Dotted);
+
+    let id = chart.brush_create_end();
+    let drawing = chart.drawing(id).unwrap();
+    assert_eq!(drawing.color, "#123456");
+    assert_eq!(drawing.width, 5.0);
+    assert!(drawing.points.len() >= 2);
 }
 
 #[test]

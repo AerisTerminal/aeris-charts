@@ -407,7 +407,7 @@ fn distance_to_segment(x: f64, y: f64, x1: f64, y1: f64, x2: f64, y2: f64) -> f6
 /// `add_drawing`/creation. Snake_case keys are canonical (matching the TS `drawing_options`);
 /// the reference camelCase forms are accepted as aliases. Every field is optional — absent keys
 /// keep their current values (reference merge semantics).
-#[derive(serde::Deserialize, Default)]
+#[derive(Clone, serde::Deserialize, Default)]
 pub(crate) struct DrawingPatch {
     color: Option<String>,
     width: Option<f64>,
@@ -1577,6 +1577,27 @@ impl ChartEngine {
             pending.drawing.pane_index = pane;
             pending.preview = Some(point);
         }
+    }
+
+    /// Merge a JSON options patch into every active drawing-creation mode.
+    ///
+    /// Absent keys retain their current values, and placed anchors, preview state, and captured
+    /// brush points are left untouched. Returns `false` when `json` is malformed or neither a
+    /// pending anchored drawing nor a brush capture is active.
+    pub fn drawing_create_apply_options(&mut self, json: &str) -> bool {
+        let Ok(patch) = serde_json::from_str::<DrawingPatch>(json) else {
+            return false;
+        };
+        match (&mut self.pending_drawing, &mut self.brush_capture) {
+            (Some(pending), Some(capture)) => {
+                pending.drawing.apply_patch(patch.clone());
+                capture.options.apply_patch(patch);
+            }
+            (Some(pending), None) => pending.drawing.apply_patch(patch),
+            (None, Some(capture)) => capture.options.apply_patch(patch),
+            (None, None) => return false,
+        }
+        true
     }
 
     /// Abandon the in-progress creation (Escape / tool disarm).

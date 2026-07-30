@@ -5,8 +5,6 @@
 //! the exported gesture methods; rendering happens on demand via `render()`.
 
 #[cfg(any(target_arch = "wasm32", test))]
-mod axis_policy;
-#[cfg(any(target_arch = "wasm32", test))]
 mod backend_policy;
 #[cfg(any(target_arch = "wasm32", test))]
 mod color_policy;
