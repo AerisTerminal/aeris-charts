@@ -106,14 +106,14 @@ The integration demo forwards GPUI events into engine-owned behavior rather than
 
 Implemented host policy includes:
 
-- pane, axis, separator, drawing-body, drawing-anchor, and directional-resize cursors;
+- pane, axis, separator, drawing-body, drawing-anchor, and directional-resize cursors, plus the browser's pointing-hand click affordance whenever the refreshed engine hit test is over a selectable candle/series;
 - pointer-exit cleanup for crosshair, hovered series, modifier magnet, scroll/scale sessions, separator state, drawing drags, and brush capture;
 - Ctrl/Cmd OHLC crosshair magnet while a drawing tool is armed, plus Shift straightening;
 - 5px Manhattan click slop, distinct click selection, persistent drag pan, normalized Windows wheel input, vertical manual-scale price pan, axis drag scaling, double-click resets, and browser-aligned keyboard controls;
 - GPUI-shaped drawing-label measurement for hit geometry;
 - browser-grid workspace behavior: a 5px drag target consuming 1px of layout, an axis-color hairline absolutely snapped from its painted bounds to an integer physical-pixel span, live ratio preview with engine persistence on release, Ctrl/Cmd+H/V split shortcuts, and Ctrl/Cmd+click maximize/restore;
 - complementary flex bases for split children, nested owning-split measurement in the browser grid's total coordinate space, no demo-only active-cell outlines, and root-routed release cleanup where GPUI pointer capture is unavailable;
-- one always-visible wrapping toolbar with Web-style bordered caption groups, one workspace-level root legend whose parent observes root-chart notifications for fresh pointer-driven OHLC text, browser-equivalent root-versus-active control routing, and clean distinctly seeded hourly assets (1,000 bars for the root and 300 bars per split); toolbar splits activate the new cell while shortcut splits preserve the current active cell;
+- one always-visible wrapping toolbar with Web-style bordered caption groups, pointing-hand hover affordances, mouse-down pressed feedback, selected toggle/tool/type states, relevance-dimmed style controls, stable group-scoped IDs, and Tab plus Enter/Space activation with a visible focus border; one workspace-level root legend whose parent observes root-chart notifications for fresh pointer-driven OHLC text; browser-equivalent root-versus-active control routing; and clean distinctly seeded hourly assets (1,000 bars for the root and 300 bars per split); toolbar splits activate the new cell while shortcut splits preserve the current active cell;
 - one authoritative engine `WorkspaceLayout` snapshot, primary-cell protection, independent chart engines per split cell, cap/usage reporting, and synchronized ratios/IDs;
 - bounded interactive metrics and one live append per elapsed-time epoch; finite mode retains all samples and its 60-frame cadence for benchmark repeatability.
 
@@ -133,13 +133,14 @@ Implemented host policy includes:
 | Price line, last value, title chip/text, countdown, bid/ask | Supported cycles | Series-specific controls follow the active Web-grid cell |
 | Axis borders/text/separators and shell divider color | Supported | Web-equivalent root-chart routing; divider follows the root axis token |
 | Watermark text/color/size, axis scaling, kinetic, reset | Supported cycles | Browser-equivalent root-chart routing; mouse kinetic default remains off |
+| Application control affordances | Supported | Pointing-hand hover cursor, pressed and selected visuals, relevance-disabled styling, stable IDs, visible keyboard focus, and Tab/Enter/Space operation; native OS input delivery is code-reviewed rather than event-driver automated |
 | OHLC legend and click status | Supported | Single root-chart overlay; retained parent observation propagates root pointer notifications. Native pointer-driven text changes are code-reviewed, not automated by an OS input driver |
 | Browser plugin fixtures | Visual approximations only | No JavaScript plugin-object ABI, lifecycle, hit views, or callbacks |
 | Touch gestures | Not implemented in this desktop demo | Shared engine math exists; native touch arbitration remains host work |
 | Inline drawing text editor | Not implemented | Text drawing and template label cycles work; no free-form editor widget |
 | Accessibility/callback bridges | Not implemented | Application integration responsibility |
 
-The previously validated persistent process launched at DPR 1.5; a replacement smoke is required after the browser-grid application-parity correction. There is no automated OS screenshot/input driver in this workspace. Divider geometry, routing, shortcut activation semantics, maximize guards, and release persistence are supported by focused code review and pure state/layout tests; the persistent-window check is only an application startup/render smoke, not automated native mouse/keyboard-event evidence. Visual button-by-button inspection is therefore not claimed.
+The corrected isolated-target persistent process is running at DPR 1.5 with a 1280×402.7 logical chart region after a verified one-time handoff from the previous persistent terminal. There is no automated OS screenshot/input driver in this workspace. Divider geometry, routing, shortcut activation semantics, maximize guards, and release persistence are supported by focused code review and pure state/layout tests; the persistent-window check is only an application startup/render smoke, not automated native mouse/keyboard-event evidence. Visual button-by-button inspection is therefore not claimed.
 
 ## 5. WebGPU-versus-GPUI pixel evidence
 
@@ -191,9 +192,9 @@ Release, 1600×900 at DPR 1.5, 200 iterations per source fixture:
 prims / ops       : 1534 / 2386
 quads / paths     : 2354 / 3
 text runs         : 27 painted, 0 dropped
-adapter total     : p50 0.392 ms, p99 0.799 ms
-plan build        : p50 0.024 ms, p99 0.105 ms
-GPUI submission   : p50 0.366 ms, p99 0.755 ms
+adapter total     : p50 0.479 ms, p99 0.802 ms
+plan build        : p50 0.024 ms, p99 0.094 ms
+GPUI submission   : p50 0.449 ms, p99 0.779 ms
 text shape cache  : 27 hits, 0 misses
 ```
 
@@ -224,8 +225,8 @@ build_frame (10 × 50K bars): 0.67 ms / 16.67 ms budget — PASS
 | unofficial/git-source scans | PASS; no matches |
 | strict native `perf_gate` | PASS |
 | release `plan_bench` | PASS at 10K/100K/1M |
-| finite corrected 120-frame release GPUI probe | PASS, exact frame-budget exit, p99 0.799 ms, zero drops |
-| persistent normal-target interactive GPUI smoke | PASS, corrected replacement running at DPR 1.5 with a 1280×402.7 logical chart region; no startup/layout errors; no automated screenshot/input-driver evidence |
+| finite corrected 120-frame release GPUI probe | PASS, exact frame-budget exit, p99 0.802 ms, zero drops |
+| persistent isolated-target interactive GPUI smoke | PASS, corrected candidate `target\interaction-validation\release\examples\gpui_probe.exe` running at DPR 1.5 with a 1280×402.7 logical chart region; previous persistent terminal stopped once after candidate verification; no startup/layout errors; no automated screenshot/input-driver evidence |
 | `pixel_parity` at tolerance zero | PASS crisp gate; diagnostic values reproduced |
 | `npm run test:gpui-webgpu` | PASS, fresh wasm/JS/types build plus six-case matrix |
 | fractional-DPR resize regression | PASS |
@@ -236,7 +237,7 @@ build_frame (10 × 50K bars): 0.67 ms / 16.67 ms budget — PASS
 1. **Full-frame differential evidence:** the canonical matrix is pane-only. A matching browser/GPUI fixture that captures real axes, time labels, the LI chip, maximized resize, and interaction states is still required.
 2. **Physical DPR matrix:** real GPUI capture is DPR 1.5 on this Windows display. Other DPRs have draw-stream and coordinate coverage but require OS-scale workers for physical captures.
 3. **JavaScript plugin-object ABI:** native fixture controls are visual approximations. They do not accept browser plugin objects or reproduce attachment/detachment callbacks, JS hit-test/axis-view contracts, and custom-series lifecycle.
-4. **Native widget equivalence:** the GPUI toolbar follows the Web demo's wrapping group layout and exposes its functional setting families, but compact native cycles/toggles do not provide arbitrary HTML color, text, number, select, or range values. An inline drawing text editor remains absent.
+4. **Native widget equivalence:** the GPUI toolbar follows the Web demo's wrapping group layout and exposes its functional setting families, including native hover/press/selection/focus affordances, but compact native cycles/toggles do not provide arbitrary HTML color, text, number, select, or range values or complete per-control HTML `title` tooltip coverage. An inline drawing text editor remains absent.
 5. **Touch/accessibility/application callbacks:** native touch arbitration, accessibility announcements, and public subscription bridges remain application-host responsibilities.
 6. **Marker rasterization residual:** the bounded 1,176-pixel residual remains; exact values are retained.
 7. **Volume overlay:** host-owned overlay margin policy is not represented in the primary pane matrix.

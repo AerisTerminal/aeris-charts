@@ -1203,6 +1203,8 @@ impl Probe {
             CursorStyle::ResizeUpDown
         } else if let Some(cursor) = drawing_cursor {
             cursor
+        } else if self.engine.hovered_series().is_some() {
+            CursorStyle::PointingHand
         } else {
             CursorStyle::Crosshair
         };
@@ -1261,15 +1263,17 @@ impl Probe {
     }
 
     fn update_pointer_feedback(&mut self, chart_x: f64, pane_x: f64, y: f64) {
-        self.update_cursor(chart_x, y);
         let over_separator = self.gesture_config.panes_resize && self.separator_at(y).is_some();
         if matches!(self.drag, Some(DragMode::PaneSeparator { .. })) || over_separator {
             self.engine.crosshair = None;
             self.engine.set_hovered_series(None);
             self.dirty = true;
         } else {
+            // Match the browser host: refresh the hit-test first, then derive the cursor from the
+            // same move so a candle/series immediately exposes its click affordance.
             self.update_crosshair(pane_x, y);
         }
+        self.update_cursor(chart_x, y);
     }
 
     fn update_crosshair_modifier(&mut self, control: bool, platform: bool) {
@@ -1968,7 +1972,7 @@ fn split_flex_ratios(ratio: f64) -> (f32, f32) {
     (first, 1.0 - first)
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum DemoAction {
     Series(SeriesKind),
     CandleBodyColor,
@@ -2185,8 +2189,21 @@ impl InteractiveDemo {
         );
     }
 
-    fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let modifiers = event.keystroke.modifiers;
+        if event.keystroke.key == "tab"
+            && !modifiers.control
+            && !modifiers.platform
+            && !modifiers.alt
+        {
+            if modifiers.shift {
+                window.focus_prev();
+            } else {
+                window.focus_next();
+            }
+            cx.stop_propagation();
+            return;
+        }
         if !(modifiers.control || modifiers.platform) || modifiers.shift || modifiers.alt {
             return;
         }
@@ -2471,6 +2488,144 @@ impl InteractiveDemo {
         cx.notify();
     }
 
+    fn action_selected(&self, action: DemoAction, cx: &Context<Self>) -> bool {
+        let active = self.active_chart();
+        let root = self.root_chart();
+        match action {
+            DemoAction::Series(kind) => active.as_ref().is_some_and(|chart| {
+                chart
+                    .read(cx)
+                    .engine
+                    .series
+                    .first()
+                    .is_some_and(|series| series.kind == kind)
+            }),
+            DemoAction::CandleWicksVisible => active
+                .as_ref()
+                .is_some_and(|chart| chart.read(cx).engine.series[0].wick_visible.unwrap_or(true)),
+            DemoAction::CandleBordersVisible => active.as_ref().is_some_and(|chart| {
+                chart.read(cx).engine.series[0]
+                    .border_visible
+                    .unwrap_or(true)
+            }),
+            DemoAction::Sma => root
+                .as_ref()
+                .is_some_and(|chart| chart.read(cx).sma_id.is_some()),
+            DemoAction::Volume => root
+                .as_ref()
+                .is_some_and(|chart| chart.read(cx).volume_id.is_some()),
+            DemoAction::Rsi => root
+                .as_ref()
+                .is_some_and(|chart| chart.read(cx).rsi_id.is_some()),
+            DemoAction::Cap => self.max_index != 0,
+            DemoAction::Drawing(kind) => root
+                .as_ref()
+                .is_some_and(|chart| chart.read(cx).armed_tool == Some(kind)),
+            DemoAction::DrawingItalic => root
+                .as_ref()
+                .is_some_and(|chart| chart.read(cx).drawing_template.text_italic),
+            DemoAction::CrosshairLabels => root.as_ref().is_some_and(|chart| {
+                chart
+                    .read(cx)
+                    .engine
+                    .options
+                    .get()
+                    .crosshair
+                    .vert_line
+                    .label_visible
+            }),
+            DemoAction::Theme => self.theme == DemoTheme::Dark,
+            DemoAction::Grid => root
+                .as_ref()
+                .is_some_and(|chart| chart.read(cx).engine.options.get().grid.vert_lines.visible),
+            DemoAction::GridColor => root
+                .as_ref()
+                .is_some_and(|chart| chart.read(cx).style_pins.grid_color.is_some()),
+            DemoAction::PriceLine => active
+                .as_ref()
+                .is_some_and(|chart| chart.read(cx).engine.series[0].price_line_visible),
+            DemoAction::LastValue => active
+                .as_ref()
+                .is_some_and(|chart| chart.read(cx).engine.series[0].last_value_visible),
+            DemoAction::TitleVisible => active
+                .as_ref()
+                .is_some_and(|chart| chart.read(cx).engine.series[0].title_visible),
+            DemoAction::Countdown => active
+                .as_ref()
+                .is_some_and(|chart| chart.read(cx).engine.series[0].countdown_visible),
+            DemoAction::BidAsk => active
+                .as_ref()
+                .is_some_and(|chart| chart.read(cx).engine.series[0].bid_ask_visible),
+            DemoAction::AxisBorders => root.as_ref().is_some_and(|chart| {
+                chart
+                    .read(cx)
+                    .engine
+                    .options
+                    .get()
+                    .time_scale
+                    .border_visible
+            }),
+            DemoAction::AxisBorderColor => root
+                .as_ref()
+                .is_some_and(|chart| chart.read(cx).style_pins.axis_border_color.is_some()),
+            DemoAction::AxisText => root
+                .as_ref()
+                .is_some_and(|chart| chart.read(cx).style_pins.text_color.is_some()),
+            DemoAction::Separator => root
+                .as_ref()
+                .is_some_and(|chart| chart.read(cx).style_pins.separator_color.is_some()),
+            DemoAction::Watermark => root
+                .as_ref()
+                .is_some_and(|chart| chart.read(cx).engine.options.get().watermark.visible),
+            DemoAction::AxisScaling => root
+                .as_ref()
+                .is_some_and(|chart| chart.read(cx).gesture_config.axis_scale_price),
+            DemoAction::Kinetic => root
+                .as_ref()
+                .is_some_and(|chart| chart.read(cx).gesture_config.kinetic_mouse),
+            DemoAction::Fixture(index) => root.as_ref().is_some_and(|chart| {
+                let fixtures = chart.read(cx).fixtures;
+                match index {
+                    0 => fixtures.day_bands,
+                    1 => fixtures.position_band,
+                    2 => fixtures.autoscale_band,
+                    3 => fixtures.rounded_candles,
+                    4 => fixtures.markers,
+                    5 => fixtures.plugin_watermark,
+                    _ => fixtures.vertical_line,
+                }
+            }),
+            _ => false,
+        }
+    }
+
+    fn action_enabled(&self, action: DemoAction, cx: &Context<Self>) -> bool {
+        let kind = self.active_chart().and_then(|chart| {
+            chart
+                .read(cx)
+                .engine
+                .series
+                .first()
+                .map(|series| series.kind)
+        });
+        match action {
+            DemoAction::CandleBodyColor
+            | DemoAction::CandleWickColor
+            | DemoAction::CandleBorderColor
+            | DemoAction::CandleWicksVisible
+            | DemoAction::CandleBordersVisible
+            | DemoAction::CandlePartsReset => {
+                matches!(kind, Some(SeriesKind::Candlestick | SeriesKind::Bar))
+            }
+            DemoAction::LineColor | DemoAction::LineWidth => matches!(
+                kind,
+                Some(SeriesKind::Line | SeriesKind::Area | SeriesKind::Baseline)
+            ),
+            DemoAction::AreaColor => kind == Some(SeriesKind::Area),
+            _ => true,
+        }
+    }
+
     fn button(
         &self,
         label: &'static str,
@@ -2478,38 +2633,55 @@ impl InteractiveDemo {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let entity = cx.entity();
-        div()
+        let selected = self.action_selected(action, cx);
+        let enabled = self.action_enabled(action, cx);
+        let background = if selected {
+            0x2962ff
+        } else if self.theme == DemoTheme::Dark {
+            0x16191f
+        } else {
+            0xffffff
+        };
+        let foreground = if selected || self.theme == DemoTheme::Dark {
+            0xfafafa
+        } else {
+            0x191919
+        };
+        let border = if selected {
+            0x2962ff
+        } else if self.theme == DemoTheme::Dark {
+            0x2b2f38
+        } else {
+            0xd0d3da
+        };
+        let control = div()
             .id(label)
             .px_2()
             .py_1()
             .rounded_md()
             .border_1()
-            .border_color(rgb(if self.theme == DemoTheme::Dark {
-                0x2b2f38
-            } else {
-                0xd0d3da
-            }))
-            .bg(rgb(if self.theme == DemoTheme::Dark {
-                0x16191f
-            } else {
-                0xffffff
-            }))
-            .text_color(rgb(if self.theme == DemoTheme::Dark {
-                0xfafafa
-            } else {
-                0x191919
-            }))
-            .cursor_pointer()
+            .border_color(rgb(border))
+            .bg(rgb(background))
+            .text_color(rgb(foreground))
+            .child(label);
+        if !enabled {
+            return control.opacity(0.45).into_any_element();
+        }
+        control
+            .cursor(CursorStyle::PointingHand)
             .hover(|style| style.bg(rgb(0x2962ff)).text_color(rgb(0xffffff)))
-            .on_mouse_up(MouseButton::Left, move |_, _, app| {
+            .active(|style| style.bg(rgb(0x1849b8)).text_color(rgb(0xffffff)))
+            .tab_index(0)
+            .focus(|style| style.border_color(rgb(0xff9800)))
+            .on_click(move |_, _, app| {
                 entity.update(app, |demo, cx| demo.apply_action(action, cx));
             })
-            .child(label)
             .into_any_element()
     }
 
     fn group(&self, caption: &'static str, controls: Vec<AnyElement>) -> AnyElement {
         div()
+            .id(caption)
             .relative()
             .flex()
             .flex_wrap()
@@ -3007,6 +3179,9 @@ impl Render for InteractiveDemo {
             })
             .child(
                 div()
+                    .id("interactive-toolbar")
+                    .tab_group()
+                    .tab_stop(false)
                     .flex()
                     .flex_wrap()
                     .items_center()
