@@ -768,6 +768,23 @@ impl OriginChart {
             .set_series_data_typed(id, times, open, high, low, close);
     }
 
+    /// Columnar streaming append: a batch of points in `set_series_data_typed`'s column layout,
+    /// appended (or replacing the series' last point) in one call. The streaming counterpart to
+    /// `set_series_data_typed` — no per-point JS object crosses the boundary.
+    pub fn update_series_bars_typed(
+        &mut self,
+        id: u32,
+        times: &Float64Array,
+        open: &Float64Array,
+        high: &Float64Array,
+        low: &Float64Array,
+        close: &Float64Array,
+    ) {
+        self.inner
+            .borrow_mut()
+            .update_series_bars_typed(id, times, open, high, low, close);
+    }
+
     /// Streaming update of the main series (append new time or replace last).
     pub fn update_bar(&mut self, time: f64, open: f64, high: f64, low: f64, close: f64) {
         self.inner

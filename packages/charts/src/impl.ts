@@ -325,6 +325,24 @@ class series_impl implements series_api {
     for (const handler of this.data_changed_subs) handler("full");
   }
 
+  /**
+   * Columnar streaming fast path: the batch goes straight to the engine as five typed arrays,
+   * so a feed running at tens of thousands of ticks per second allocates no per-point JS object
+   * at the boundary. One `data_changed("update")` per call regardless of batch size — the
+   * notification describes the call, not the rows, exactly as it does for `update`.
+   */
+  update_typed(columns: ohlc_columns): void {
+    this.assert_live();
+    this.chart.wasm.update_series_bars_typed(
+      this.id, columns.times, columns.open, columns.high, columns.low, columns.close,
+    );
+    // Same post-update bookkeeping as `update`: data arriving on a countdown-enabled series can
+    // start the timer, and repaints coalesce onto the next frame rather than painting per batch.
+    if (this.chart.countdown_series_present) this.chart.sync_countdown_timer();
+    this.chart.schedule_repaint();
+    for (const handler of this.data_changed_subs) handler("update");
+  }
+
   update(point: series_data): void {
     this.assert_live();
     // A whitespace point (`{time}` only) streams as an all-NaN bar; the engine keeps the slot.
@@ -685,6 +703,11 @@ class custom_series_impl extends series_impl {
   set_data_typed(): void {
     // A custom series carries raw plugin items aligned by time, not OHLC columns.
     console.warn("origin: set_data_typed() does not apply to a custom series");
+  }
+
+  update_typed(): void {
+    // Same reason as `set_data_typed`: no OHLC columns to append.
+    console.warn("origin: update_typed() does not apply to a custom series");
   }
 
   /** The raw items aligned with the engine rows (sorted, last-wins deduped). */
