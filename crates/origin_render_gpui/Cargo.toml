@@ -18,22 +18,24 @@ origin_core = { path = "../origin_core" }
 origin_engine = { path = "../origin_engine" }
 origin_render = { path = "../origin_render" }
 
-# Official Zed publication of GPUI (crates.io `gpui`, published by zed-industries from
-# https://github.com/zed-industries/zed). Pinned exactly; GPUI is pre-1.0 (GPUI_PLAN.md §3.4).
+# GPUI is sourced from Zed because Origin and Axiusflow intentionally track the current pre-1.0
+# API. The workspace lockfile records the reviewed immutable commit; upgrades are explicit lockfile
+# changes and must pass the complete GPUI parity suite (GPUI_PLAN.md §3.4).
 #
-# `default-features = false` keeps the Linux/macOS wayland/x11/font-kit/blade paths out of the
-# graph, so Windows resolves cleanly to GPUI's D3D11 + DirectWrite backend.
+# `default-features = false` keeps unrelated platform feature paths out of the graph, so Windows
+# resolves cleanly to GPUI's native backend.
 #
 # `windows-manifest` is NOT optional on Windows: GPUI imports `comctl32!TaskDialogIndirect`, which
 # only resolves under a comctl32 v6 activation context. That context comes from the application
 # manifest this feature embeds. Without it the executable fails to load at all
 # (STATUS_ENTRYPOINT_NOT_FOUND, 0xC0000139) before `main` runs.
-gpui = { version = "=0.2.2", optional = true, default-features = false, features = [
+gpui = { git = "https://github.com/zed-industries/zed", version = "=0.2.2", optional = true, default-features = false, features = [
     "windows-manifest",
 ] }
 
 # The pixel-parity harness diffs GPUI's real output against Origin's existing native rasterizer.
 [dev-dependencies]
+gpui_platform = { git = "https://github.com/zed-industries/zed", default-features = false }
 origin_native = { path = "../origin_native" }
 sha2 = "=0.10.9"
 tiny-skia = "0.11"

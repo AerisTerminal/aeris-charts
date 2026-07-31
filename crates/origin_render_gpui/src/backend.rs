@@ -714,7 +714,11 @@ fn paint_text(
     let line_height = px(cached.ascent + cached.descent);
     let origin = point(px(left), px(baseline - cached.ascent));
 
-    if cached.line.paint(origin, line_height, window, cx).is_ok() {
+    if cached
+        .line
+        .paint(origin, line_height, gpui::TextAlign::Left, None, window, cx)
+        .is_ok()
+    {
         metrics.glyph_runs_painted += 1;
     } else {
         metrics.dropped_prims += 1;

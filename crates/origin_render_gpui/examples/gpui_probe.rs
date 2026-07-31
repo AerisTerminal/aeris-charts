@@ -23,11 +23,12 @@ use std::{
 };
 
 use gpui::{
-    canvas, div, prelude::*, px, relative, rgb, size, AnyElement, App, Application, Bounds,
-    Context, CursorStyle, Entity, FocusHandle, Focusable, KeyDownEvent, ModifiersChangedEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Render, ScrollWheelEvent,
-    Subscription, Window, WindowBounds, WindowOptions,
+    canvas, div, prelude::*, px, relative, rgb, size, AnyElement, App, Bounds, Context,
+    CursorStyle, Entity, FocusHandle, Focusable, KeyDownEvent, ModifiersChangedEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Render, ScrollWheelEvent, Subscription, Window,
+    WindowBounds, WindowOptions,
 };
+use gpui_platform::application;
 use origin_engine::{
     crosshair_mode_from_u8, marker_pos, marker_shape, ChartEngine, ChartFrame, DrawingKind,
     DrawingModifiers, DrawingPoint, Marker, PriceScaleTarget, PrimitiveAutoscaleContribution,
@@ -1000,9 +1001,8 @@ impl Probe {
         let expected_w_px = (self.engine.pane_w * self.engine.dpr).round() as u32;
         let expected_h_px = (content_h * self.engine.dpr).round() as u32;
         assert!(
-            (self.engine.pane_left + self.engine.pane_w + self.engine.axis_w
-                - f64::from(width))
-            .abs()
+            (self.engine.pane_left + self.engine.pane_w + self.engine.axis_w - f64::from(width))
+                .abs()
                 < 0.01
                 && (self.frame.width - self.engine.pane_left - self.engine.pane_w).abs() < 0.01
                 && (self.frame.height - content_h).abs() < 0.01,
@@ -1336,7 +1336,7 @@ impl Probe {
         cx: &mut Context<Self>,
     ) {
         if let Some(focus) = &self.focus_handle {
-            window.focus(focus);
+            window.focus(focus, cx);
         }
         self.cancel_kinetic_scroll();
         // Recover defensively from a stale scroll snapshot left by an interrupted host gesture.
@@ -2197,9 +2197,9 @@ impl InteractiveDemo {
             && !modifiers.alt
         {
             if modifiers.shift {
-                window.focus_prev();
+                window.focus_prev(cx);
             } else {
-                window.focus_next();
+                window.focus_next(cx);
             }
             cx.stop_propagation();
             return;
@@ -2896,7 +2896,7 @@ impl InteractiveDemo {
                             div()
                                 .h_full()
                                 .flex_basis(relative(first_ratio))
-                                .flex_shrink()
+                                .flex_shrink(1.0)
                                 .child(first),
                         )
                         .child(divider)
@@ -2904,7 +2904,7 @@ impl InteractiveDemo {
                             div()
                                 .h_full()
                                 .flex_basis(relative(second_ratio))
-                                .flex_shrink()
+                                .flex_shrink(1.0)
                                 .child(second),
                         )
                         .into_any_element(),
@@ -2914,7 +2914,7 @@ impl InteractiveDemo {
                             div()
                                 .w_full()
                                 .flex_basis(relative(first_ratio))
-                                .flex_shrink()
+                                .flex_shrink(1.0)
                                 .child(first),
                         )
                         .child(divider)
@@ -2922,7 +2922,7 @@ impl InteractiveDemo {
                             div()
                                 .w_full()
                                 .flex_basis(relative(second_ratio))
-                                .flex_shrink()
+                                .flex_shrink(1.0)
                                 .child(second),
                         )
                         .into_any_element(),
@@ -2939,7 +2939,7 @@ impl Render for InteractiveDemo {
                 .root_chart()
                 .and_then(|chart| chart.read(cx).focus_handle.clone())
             {
-                window.focus(&focus);
+                window.focus(&focus, cx);
                 self.focus_initialized = true;
             }
         }
@@ -3261,7 +3261,7 @@ fn main() {
             500usize
         });
 
-    Application::new().run(move |cx: &mut App| {
+    application().run(move |cx: &mut App| {
         let interactive = budget.is_none();
         let bounds = Bounds::centered(
             None,

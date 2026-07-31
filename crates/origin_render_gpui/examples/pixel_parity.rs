@@ -25,9 +25,10 @@ use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
 
 use gpui::{
-    canvas, div, prelude::*, px, size, App, Application, Bounds, Context, Entity, Render, Window,
-    WindowBounds, WindowOptions,
+    canvas, div, prelude::*, px, size, App, Bounds, Context, Entity, Render, Window, WindowBounds,
+    WindowOptions,
 };
+use gpui_platform::application;
 use origin_render_gpui::fixtures::{self, Fixture};
 use origin_render_gpui::{GpuiChartRenderer, OriginViewport};
 use sha2::{Digest, Sha256};
@@ -411,7 +412,7 @@ fn main() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
 
-    Application::new().run(move |cx: &mut App| {
+    application().run(move |cx: &mut App| {
         // The window's client area must be exactly the fixture's logical size, so the captured
         // pixels are exactly the surface the adapter painted.
         let bounds = Bounds::centered(

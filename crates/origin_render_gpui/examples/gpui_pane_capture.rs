@@ -14,9 +14,10 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use gpui::{
-    canvas, div, prelude::*, px, size, App, Application, Bounds, Context, Entity, Render, Window,
-    WindowBounds, WindowOptions,
+    canvas, div, prelude::*, px, size, App, Bounds, Context, Entity, Render, Window, WindowBounds,
+    WindowOptions,
 };
+use gpui_platform::application;
 use origin_engine::ChartFrame;
 use origin_render_gpui::{GpuiChartRenderer, OriginViewport, PreparedOriginFrame};
 
@@ -376,7 +377,7 @@ fn main() {
     let pane_width = (fixture.css_width - fixture.price_axis_width) as f32;
     let pane_height = (fixture.css_height - fixture.time_axis_height) as f32;
     let window_title = format!("{WINDOW_TITLE_PREFIX}-{}", std::process::id());
-    Application::new().run(move |cx: &mut App| {
+    application().run(move |cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(pane_width), px(pane_height)), cx);
         cx.open_window(
             WindowOptions {
