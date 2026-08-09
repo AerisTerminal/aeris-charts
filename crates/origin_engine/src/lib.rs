@@ -46,7 +46,8 @@ use origin_core::model::magnet::CrosshairMode;
 use origin_core::model::plot_list::{MismatchDirection, PlotValueIndex};
 use origin_core::model::price_range::PriceRange;
 use origin_core::model::range::{LogicalRange, StrictRange};
-use origin_core::options::ChartOptionsStore;
+pub use origin_core::options::ChartTheme;
+use origin_core::options::{chart_theme_patch, ChartOptionsStore};
 use origin_core::scale::price_scale_core::{
     PriceScaleCore, PriceScaleCoreOptions, PriceScaleMargins, PriceScaleMode,
 };
@@ -1709,6 +1710,13 @@ impl ChartEngine {
         self.route_price_scale_patch(&patch);
         self.route_localization_patch(&patch);
         Ok(())
+    }
+
+    /// Switch all chart cosmetics using Origin's canonical style-token source.
+    pub fn set_theme(&mut self, theme: ChartTheme) {
+        let patch = chart_theme_patch(theme);
+        self.options.apply(&patch);
+        self.route_price_scale_patch(&patch);
     }
 
     /// Route the behavioral keys of a `timeScale` options patch to the core scale (reference

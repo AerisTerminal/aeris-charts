@@ -25,9 +25,66 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::style::{
-    DEFAULT_AXIS_TEXT_CSS, DEFAULT_BORDER_CSS, DEFAULT_CROSSHAIR_CSS, DEFAULT_SEPARATOR_HOVER_CSS,
-    DEFAULT_SURFACE_CSS,
+    DARK_AXIS_TEXT_CSS, DARK_BORDER_CSS, DARK_CROSSHAIR_CSS, DARK_SEPARATOR_HOVER_CSS,
+    DARK_SURFACE_CSS, DEFAULT_AXIS_TEXT_CSS, DEFAULT_BORDER_CSS, DEFAULT_CROSSHAIR_CSS,
+    DEFAULT_SEPARATOR_HOVER_CSS, DEFAULT_SURFACE_CSS, LIGHT_AXIS_TEXT_CSS, LIGHT_BORDER_CSS,
+    LIGHT_CROSSHAIR_CSS, LIGHT_SEPARATOR_HOVER_CSS, LIGHT_SURFACE_CSS,
 };
+
+/// Origin-owned application color mode. Hosts select a mode; Origin resolves every chart color
+/// from its canonical style token source.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChartTheme {
+    Light,
+    Dark,
+}
+
+/// Complete cosmetic patch for one canonical Origin theme.
+#[must_use]
+pub fn chart_theme_patch(theme: ChartTheme) -> Value {
+    let (surface, border, axis_text, crosshair, separator_hover) = match theme {
+        ChartTheme::Light => (
+            LIGHT_SURFACE_CSS,
+            LIGHT_BORDER_CSS,
+            LIGHT_AXIS_TEXT_CSS,
+            LIGHT_CROSSHAIR_CSS,
+            LIGHT_SEPARATOR_HOVER_CSS,
+        ),
+        ChartTheme::Dark => (
+            DARK_SURFACE_CSS,
+            DARK_BORDER_CSS,
+            DARK_AXIS_TEXT_CSS,
+            DARK_CROSSHAIR_CSS,
+            DARK_SEPARATOR_HOVER_CSS,
+        ),
+    };
+    serde_json::json!({
+        "layout": {
+            "background": {
+                "type": "solid",
+                "color": surface,
+                "topColor": surface,
+                "bottomColor": surface
+            },
+            "textColor": axis_text,
+            "panes": {
+                "separatorColor": border,
+                "separatorHoverColor": separator_hover
+            }
+        },
+        "grid": {
+            "vertLines": { "color": border },
+            "horzLines": { "color": border }
+        },
+        "crosshair": {
+            "vertLine": { "color": crosshair, "labelBackgroundColor": crosshair },
+            "horzLine": { "color": crosshair, "labelBackgroundColor": crosshair }
+        },
+        "leftPriceScale": { "borderColor": border, "textColor": axis_text },
+        "rightPriceScale": { "borderColor": border, "textColor": axis_text },
+        "timeScale": { "borderColor": border }
+    })
+}
 
 /// `LineStyle`, numeric wire form (0 Solid, 1 Dotted = sparse, 2 Dashed = large). Values 3/4
 /// (the reference's LargeDashed/SparseDotted) are retired and fold into 2/1 at the engine edge.
@@ -490,6 +547,34 @@ mod tests {
         assert_eq!(o.watermark.font_size, 48.0);
         assert_eq!(o.watermark.horz_align, "center");
         assert_eq!(o.watermark.vert_align, "center");
+    }
+
+    #[test]
+    fn canonical_theme_patch_switches_every_chart_chrome_role() {
+        let mut store = ChartOptionsStore::new();
+        store.apply(&chart_theme_patch(ChartTheme::Light));
+        let light = store.get();
+        assert_eq!(light.layout.background.color, LIGHT_SURFACE_CSS);
+        assert_eq!(light.layout.text_color, LIGHT_AXIS_TEXT_CSS);
+        assert_eq!(light.grid.vert_lines.color, LIGHT_BORDER_CSS);
+        assert_eq!(light.crosshair.vert_line.color, LIGHT_CROSSHAIR_CSS);
+        assert_eq!(light.right_price_scale.border_color, LIGHT_BORDER_CSS);
+        assert_eq!(
+            light.right_price_scale.text_color.as_deref(),
+            Some(LIGHT_AXIS_TEXT_CSS)
+        );
+
+        store.apply(&chart_theme_patch(ChartTheme::Dark));
+        let dark = store.get();
+        assert_eq!(dark.layout.background.color, DARK_SURFACE_CSS);
+        assert_eq!(dark.layout.text_color, DARK_AXIS_TEXT_CSS);
+        assert_eq!(dark.grid.vert_lines.color, DARK_BORDER_CSS);
+        assert_eq!(dark.crosshair.vert_line.color, DARK_CROSSHAIR_CSS);
+        assert_eq!(dark.right_price_scale.border_color, DARK_BORDER_CSS);
+        assert_eq!(
+            dark.right_price_scale.text_color.as_deref(),
+            Some(DARK_AXIS_TEXT_CSS)
+        );
     }
 
     #[test]

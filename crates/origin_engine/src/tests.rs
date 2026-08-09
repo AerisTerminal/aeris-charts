@@ -3636,3 +3636,23 @@ fn a_cap_on_one_series_leaves_the_others_alone() {
     // The shared axis keeps every time the uncapped series still occupies.
     assert_eq!(chart.data.merged_times().len(), 200);
 }
+
+#[test]
+fn theme_switch_uses_origin_tokens_without_replacing_market_data() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    install_bars(&mut chart, 20);
+
+    chart.set_theme(ChartTheme::Light);
+    let light = chart.options.get();
+    assert_eq!(light.layout.background.color, "#ffffff");
+    assert_eq!(light.layout.text_color, "#0a0a0a");
+    assert_eq!(light.right_price_scale.border_color, "#f5f5f5");
+    assert_eq!(row_count(&chart, 0), 20);
+
+    chart.set_theme(ChartTheme::Dark);
+    let dark = chart.options.get();
+    assert_eq!(dark.layout.background.color, "#0c0c0c");
+    assert_eq!(dark.layout.text_color, "#f5f5f5");
+    assert_eq!(dark.right_price_scale.border_color, "#1e1e1e");
+    assert_eq!(row_count(&chart, 0), 20);
+}
