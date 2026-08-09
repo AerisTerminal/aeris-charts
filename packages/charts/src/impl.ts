@@ -38,7 +38,9 @@ let init_promise: Promise<unknown> | null = null;
  */
 export function ensure_init(wasm_url?: string | URL): Promise<unknown> {
   if (init_promise === null) {
-    init_promise = wasm_url !== undefined ? init(wasm_url) : init();
+    const initializing = wasm_url !== undefined ? init(wasm_url) : init();
+    init_promise = initializing;
+    return initializing;
   }
   return init_promise;
 }

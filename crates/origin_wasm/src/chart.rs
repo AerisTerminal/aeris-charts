@@ -72,7 +72,6 @@ static NEXT_RUNTIME_ID: AtomicU32 = AtomicU32::new(1);
 
 // the reference charting library default palette (RENDERING_SPEC.md §2.5, §7, §8, §15)
 // Axis palette (as CSS color strings for the 2D overlay)
-const BORDER_CSS: &str = "#2B2B43";
 // TradingView-style volume: translucent green on up bars, red on down bars.
 
 // Crosshair marker (line/area) — line-series.ts defaults.

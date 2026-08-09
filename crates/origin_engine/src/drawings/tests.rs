@@ -1096,7 +1096,16 @@ fn straighten_squares_a_rectangle_on_placement_and_drag() {
 fn crosshair_hline_y(chart: &mut ChartEngine) -> Option<i32> {
     let frame = chart.build_frame();
     frame.panes[0].main.iter().find_map(|prim| match prim {
-        Prim::HLine { y, color, .. } if *color == Color::rgb(0x95, 0x98, 0xa1) => Some(*y),
+        Prim::HLine { y, color, .. }
+            if *color
+                == Color::rgb(
+                    origin_core::style::DEFAULT_CROSSHAIR_RGB.0,
+                    origin_core::style::DEFAULT_CROSSHAIR_RGB.1,
+                    origin_core::style::DEFAULT_CROSSHAIR_RGB.2,
+                ) =>
+        {
+            Some(*y)
+        }
         _ => None,
     })
 }

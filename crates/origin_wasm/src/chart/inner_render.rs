@@ -327,7 +327,8 @@ impl ChartInner {
 
         // Axis borders come from the options store (reference `borderColor`/`borderVisible` per strip);
         // an unparseable color falls back to the reference default.
-        let fallback = Color::parse_css(BORDER_CSS).unwrap_or(Color::rgb(0x2b, 0x2b, 0x43));
+        let border = origin_core::style::DEFAULT_BORDER_RGB;
+        let fallback = Color::rgb(border.0, border.1, border.2);
         let left_border = Color::parse_css(&options.left_price_scale.border_color)
             .unwrap_or(fallback)
             .to_hex();

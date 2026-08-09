@@ -1,0 +1,20 @@
+{
+  "default_theme": "dark",
+  "light": {
+    "surface": "#ffffff",
+    "border": "#f5f5f5",
+    "axis_text": "#0a0a0a",
+    "crosshair": "#9598a1"
+  },
+  "dark": {
+    "surface": "#0c0c0c",
+    "border": "#1e1e1e",
+    "axis_text": "#f5f5f5",
+    "crosshair": "#2e2e2e"
+  },
+  "market": {
+    "up": "#089981",
+    "down": "#f7525f",
+    "volume_alpha": 128
+  }
+}

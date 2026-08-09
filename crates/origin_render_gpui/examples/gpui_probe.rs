@@ -40,18 +40,6 @@ use origin_render_gpui::{
     backend::measure_text, GpuiChartRenderer, GpuiFrameMetrics, OriginViewport, PreparedOriginFrame,
 };
 
-const LIGHT_THEME: &str = r##"{
-  "layout":{"background":{"type":"solid","color":"#ffffff"},"textColor":"#0a0a0a","panes":{"separatorColor":"#f5f5f5"}},
-  "leftPriceScale":{"borderColor":"#f5f5f5"},"rightPriceScale":{"borderColor":"#f5f5f5"},
-  "timeScale":{"borderColor":"#f5f5f5"},
-  "grid":{"vertLines":{"color":"#f5f5f5"},"horzLines":{"color":"#f5f5f5"}}
-}"##;
-const DARK_THEME: &str = r##"{
-  "layout":{"background":{"type":"solid","color":"#0a0a0a"},"textColor":"#fafafa","panes":{"separatorColor":"#16191f"}},
-  "leftPriceScale":{"borderColor":"#16191f"},"rightPriceScale":{"borderColor":"#16191f"},
-  "timeScale":{"borderColor":"#16191f"},
-  "grid":{"vertLines":{"color":"#16191f"},"horzLines":{"color":"#16191f"}}
-}"##;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DemoTheme {
     Light,
@@ -59,18 +47,36 @@ enum DemoTheme {
 }
 
 impl DemoTheme {
-    fn patch(self) -> &'static str {
+    fn surface(self) -> &'static str {
         match self {
-            Self::Light => LIGHT_THEME,
-            Self::Dark => DARK_THEME,
+            Self::Light => origin_core::style::LIGHT_SURFACE_CSS,
+            Self::Dark => origin_core::style::DARK_SURFACE_CSS,
         }
+    }
+
+    fn crosshair(self) -> &'static str {
+        match self {
+            Self::Light => origin_core::style::LIGHT_CROSSHAIR_CSS,
+            Self::Dark => origin_core::style::DARK_CROSSHAIR_CSS,
+        }
+    }
+
+    fn patch(self) -> String {
+        let surface = self.surface();
+        let border = theme_border(self);
+        let text = theme_text(self);
+        let crosshair = self.crosshair();
+        format!(
+            r#"{{"layout":{{"background":{{"type":"solid","color":"{surface}"}},"textColor":"{text}","panes":{{"separatorColor":"{border}"}}}},"leftPriceScale":{{"borderColor":"{border}"}},"rightPriceScale":{{"borderColor":"{border}"}},"timeScale":{{"borderColor":"{border}"}},"grid":{{"vertLines":{{"color":"{border}"}},"horzLines":{{"color":"{border}"}}}},"crosshair":{{"vertLine":{{"color":"{crosshair}","labelBackgroundColor":"{crosshair}"}},"horzLine":{{"color":"{crosshair}","labelBackgroundColor":"{crosshair}"}}}}}}"#
+        )
     }
 }
 
 fn apply_package_theme(engine: &mut ChartEngine, theme: DemoTheme) {
+    let patch = theme.patch();
     engine
         .options
-        .apply_str(theme.patch())
+        .apply_str(&patch)
         .expect("built-in GPUI package theme is valid JSON");
 }
 
@@ -119,15 +125,15 @@ impl StylePins {
 
 fn theme_border(theme: DemoTheme) -> &'static str {
     match theme {
-        DemoTheme::Light => "#f5f5f5",
-        DemoTheme::Dark => "#16191f",
+        DemoTheme::Light => origin_core::style::LIGHT_BORDER_CSS,
+        DemoTheme::Dark => origin_core::style::DARK_BORDER_CSS,
     }
 }
 
 fn theme_text(theme: DemoTheme) -> &'static str {
     match theme {
-        DemoTheme::Light => "#0a0a0a",
-        DemoTheme::Dark => "#fafafa",
+        DemoTheme::Light => origin_core::style::LIGHT_AXIS_TEXT_CSS,
+        DemoTheme::Dark => origin_core::style::DARK_AXIS_TEXT_CSS,
     }
 }
 
@@ -1790,12 +1796,13 @@ fn paint_probe(probe: &mut Probe, bounds: Bounds<gpui::Pixels>, window: &mut Win
 
     // Disjoint field borrows: the adapter reads `frame` while mutating `renderer`.
     let Probe {
+        engine,
         renderer,
         frame,
         axis,
         ..
     } = probe;
-    let prepared = PreparedOriginFrame::new(frame).with_axis(axis, &[]);
+    let prepared = PreparedOriginFrame::from_engine(frame, engine).with_axis(axis, &[]);
     match renderer.paint_frame(&prepared, viewport, scale_factor, window, cx) {
         Ok(metrics) => probe.record_frame_metrics(metrics),
         Err(e) => eprintln!("origin probe: frame skipped: {e}"),
@@ -2256,9 +2263,23 @@ impl InteractiveDemo {
             DemoAction::Series(kind) => self.update_active(cx, |p| p.set_series_kind(kind)),
             DemoAction::CandleBodyColor => self.update_active(cx, |p| {
                 let s = &mut p.engine.series[0];
-                let alternate = s.up_color.as_deref() == Some("#26a69a");
-                s.up_color = Some(if alternate { "#2962ff" } else { "#26a69a" }.into());
-                s.down_color = Some(if alternate { "#ff9800" } else { "#ef5350" }.into());
+                let alternate = s.up_color.as_deref() == Some(origin_core::style::MARKET_UP_CSS);
+                s.up_color = Some(
+                    if alternate {
+                        "#2962ff"
+                    } else {
+                        origin_core::style::MARKET_UP_CSS
+                    }
+                    .into(),
+                );
+                s.down_color = Some(
+                    if alternate {
+                        "#ff9800"
+                    } else {
+                        origin_core::style::MARKET_DOWN_CSS
+                    }
+                    .into(),
+                );
             }),
             DemoAction::CandleWickColor => self.update_active(cx, |p| {
                 let s = &mut p.engine.series[0];
@@ -2374,7 +2395,11 @@ impl InteractiveDemo {
             }),
             DemoAction::CrosshairColor => self.update_root(cx, |p| {
                 let current = p.engine.options.get().crosshair.vert_line.color;
-                let color = if current == "#9598a1" { "#2962ff" } else { "#9598a1" };
+                let color = if current == origin_core::style::DEFAULT_CROSSHAIR_CSS {
+                    "#2962ff"
+                } else {
+                    origin_core::style::DEFAULT_CROSSHAIR_CSS
+                };
                 p.engine.options.apply_str(&format!(r#"{{"crosshair":{{"vertLine":{{"color":"{color}"}},"horzLine":{{"color":"{color}"}}}}}}"#)).unwrap();
             }),
             DemoAction::CrosshairWidth => self.update_root(cx, |p| {
@@ -2388,7 +2413,11 @@ impl InteractiveDemo {
             }),
             DemoAction::CrosshairLabelBackground => self.update_root(cx, |p| {
                 let current = p.engine.options.get().crosshair.vert_line.label_background_color;
-                let color = if current == "#131722" { "#2962ff" } else { "#131722" };
+                let color = if current == origin_core::style::DEFAULT_CROSSHAIR_CSS {
+                    "#2962ff"
+                } else {
+                    origin_core::style::DEFAULT_CROSSHAIR_CSS
+                };
                 p.engine.options.apply_str(&format!(r#"{{"crosshair":{{"vertLine":{{"labelBackgroundColor":"{color}"}},"horzLine":{{"labelBackgroundColor":"{color}"}}}}}}"#)).unwrap();
             }),
             DemoAction::CrosshairLabels => self.update_root(cx, |p| {
@@ -3383,10 +3412,9 @@ mod tests {
 
     fn assert_theme(engine: &ChartEngine, theme: DemoTheme) {
         let options = engine.options.get();
-        let (background, border, text) = match theme {
-            DemoTheme::Light => ("#ffffff", "#f5f5f5", "#0a0a0a"),
-            DemoTheme::Dark => ("#0a0a0a", "#16191f", "#fafafa"),
-        };
+        let background = theme.surface();
+        let border = theme_border(theme);
+        let text = theme_text(theme);
         assert_eq!(options.layout.background.color, background);
         assert_eq!(options.layout.text_color, text);
         assert_eq!(options.left_price_scale.border_color, border);
@@ -3395,6 +3423,11 @@ mod tests {
         assert_eq!(options.grid.vert_lines.color, border);
         assert_eq!(options.grid.horz_lines.color, border);
         assert_eq!(options.layout.panes.separator_color, border);
+        assert_eq!(options.crosshair.vert_line.color, theme.crosshair());
+        assert_eq!(
+            options.crosshair.horz_line.label_background_color,
+            theme.crosshair()
+        );
     }
 
     #[test]
@@ -3560,15 +3593,21 @@ mod semantic_regressions {
         probe.toggle_text_color_pin(DemoTheme::Dark);
         assert_eq!(
             probe.engine.options.get().time_scale.border_color,
-            "#16191f"
+            origin_core::style::DARK_BORDER_CSS
         );
-        assert_eq!(probe.engine.options.get().layout.text_color, "#fafafa");
+        assert_eq!(
+            probe.engine.options.get().layout.text_color,
+            origin_core::style::DARK_AXIS_TEXT_CSS
+        );
         probe.apply_theme(DemoTheme::Light);
         assert_eq!(
             probe.engine.options.get().time_scale.border_color,
-            "#f5f5f5"
+            origin_core::style::LIGHT_BORDER_CSS
         );
-        assert_eq!(probe.engine.options.get().layout.text_color, "#0a0a0a");
+        assert_eq!(
+            probe.engine.options.get().layout.text_color,
+            origin_core::style::LIGHT_AXIS_TEXT_CSS
+        );
     }
 
     #[test]

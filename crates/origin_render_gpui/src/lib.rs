@@ -62,7 +62,8 @@ pub mod text;
 #[cfg(feature = "gpui-backend")]
 pub mod backend;
 
-use origin_engine::ChartFrame;
+use origin_engine::{ChartEngine, ChartFrame};
+use origin_render::color::Color;
 use origin_render::draw_list::Prim;
 
 pub use executor::ExecutorOptions;
@@ -87,15 +88,40 @@ pub struct PreparedOriginFrame<'a> {
     pub axis_prims: &'a [Prim],
     /// Point pool referenced by `axis_prims` (the WebGPU host passes an empty pool).
     pub axis_points: &'a [[f32; 2]],
+    /// Origin-owned paint covering the complete chart surface before pane content.
+    pub background: Paint,
 }
 
 impl<'a> PreparedOriginFrame<'a> {
     /// A frame with no axis layer — the pane content only.
     pub fn new(frame: &'a ChartFrame) -> Self {
+        let background = origin_core::style::DEFAULT_SURFACE_RGB;
         Self {
             frame,
             axis_prims: &[],
             axis_points: &[],
+            background: Paint::Solid(Color::rgb(background.0, background.1, background.2)),
+        }
+    }
+
+    /// A frame whose complete surface paint is resolved from its owning engine options.
+    pub fn from_engine(frame: &'a ChartFrame, engine: &ChartEngine) -> Self {
+        let options = engine.options.get().layout.background;
+        let fallback = origin_core::style::DEFAULT_SURFACE_RGB;
+        let fallback = Color::rgb(fallback.0, fallback.1, fallback.2);
+        let background = if matches!(options.kind.as_str(), "gradient" | "vertical_gradient") {
+            Paint::VGradient {
+                top: Color::parse_css(&options.top_color).unwrap_or(fallback),
+                bottom: Color::parse_css(&options.bottom_color).unwrap_or(fallback),
+            }
+        } else {
+            Paint::Solid(Color::parse_css(&options.color).unwrap_or(fallback))
+        };
+        Self {
+            frame,
+            axis_prims: &[],
+            axis_points: &[],
+            background,
         }
     }
 
@@ -262,6 +288,7 @@ impl GpuiChartRenderer {
         let mut metrics = GpuiFrameMetrics::default();
         self.plan.clear();
         self.text.reset_counters();
+
         executor::execute_layer(
             prims,
             points,
@@ -371,6 +398,30 @@ mod tests {
             pixel_ratio,
             panes,
         }
+    }
+
+    #[test]
+    fn prepared_frame_resolves_surface_paint_from_origin_options() {
+        let mut engine = ChartEngine::new(200.0, 100.0, 1.0);
+        let frame = ChartFrame::default();
+        assert_eq!(
+            PreparedOriginFrame::from_engine(&frame, &engine).background,
+            Paint::Solid(Color::rgb(0x0c, 0x0c, 0x0c))
+        );
+
+        engine
+            .options
+            .apply_str(
+                r##"{"layout":{"background":{"type":"gradient","topColor":"#010203","bottomColor":"#040506"}}}"##,
+            )
+            .unwrap();
+        assert_eq!(
+            PreparedOriginFrame::from_engine(&frame, &engine).background,
+            Paint::VGradient {
+                top: Color::rgb(1, 2, 3),
+                bottom: Color::rgb(4, 5, 6),
+            }
+        );
     }
 
     fn pane(scissor: [u32; 4], main: Vec<Prim>) -> FramePane {

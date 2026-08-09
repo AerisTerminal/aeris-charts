@@ -5,7 +5,7 @@
 import { create_offscreen_chart as wasm_create_offscreen_chart, OriginChart } from "../pkg/origin_wasm.js";
 
 import { ensure_init } from "./impl.js";
-import { theme_options } from "./theme.js";
+import { default_theme_name, theme_options } from "./theme.js";
 import { KIND_TO_U8 } from "./types.js";
 import type {
   chart_options,
@@ -414,7 +414,7 @@ export async function create_offscreen_chart(
     false,
     init.force_fallback_adapter === true,
   );
-  wasm.apply_options(JSON.stringify(theme_options(theme ?? "light")));
+  wasm.apply_options(JSON.stringify(theme_options(theme ?? default_theme_name)));
   if (Object.keys(engine_options).length > 0) {
     wasm.apply_options(JSON.stringify(engine_options));
   }

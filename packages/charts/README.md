@@ -44,10 +44,10 @@ import { create_chart } from "@tradeaion/charts";
 
 // Async: WebGPU backend acquisition (the one deliberate divergence from the reference's sync createChart).
 const chart = await create_chart(document.getElementById("chart"), {
-  layout: { background: { type: "solid", color: "#ffffff" }, textColor: "#191919" },
+  autoSize: true,
 });
 
-const series = chart.add_series("candlestick", { up_color: "#26a69a", down_color: "#ef5350" });
+const series = chart.add_series("candlestick");
 series.set_data([
   { time: "2026-01-01", open: 100, high: 104, low: 99, close: 103 },
   { time: "2026-01-02", open: 103, high: 106, low: 102, close: 105 },

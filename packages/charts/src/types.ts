@@ -570,7 +570,8 @@ export interface chart_options {
   backend: "auto" | "canvas2d";
   /**
    * Default style preset from `theme.ts` (the package's style settings file), applied at
-   * creation *under* any explicit options. Default `"light"`. Package-level only — never
+   * creation *under* any explicit options. The default comes from Origin's canonical style
+   * tokens. Package-level only — never
    * forwarded to the engine.
    */
   theme: "light" | "dark";

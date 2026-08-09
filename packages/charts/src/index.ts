@@ -27,7 +27,7 @@ export * from "./shortcuts.js";
 export * from "./grid.js";
 import { chart_impl } from "./impl.js";
 import { ensure_init } from "./impl.js";
-import { theme_options } from "./theme.js";
+import { default_theme_name, theme_options } from "./theme.js";
 import type { chart_api, chart_options, deep_partial, localization_options, tracking_mode_options } from "./types.js";
 
 /** Pure countdown-timer predicate (unit-tested without a chart). */
@@ -135,7 +135,7 @@ export async function create_chart(
     engine_options = { ...rest, layout: { ...(rest.layout as object), panes: panes_rest } };
     panes_resize = enableResize;
   }
-  wasm.apply_options(JSON.stringify(theme_options(theme ?? "light")));
+  wasm.apply_options(JSON.stringify(theme_options(theme ?? default_theme_name)));
   if (Object.keys(engine_options).length > 0) {
     wasm.apply_options(JSON.stringify(engine_options));
   }

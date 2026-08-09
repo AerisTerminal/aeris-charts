@@ -1068,23 +1068,23 @@ fn baseline_quadrant_options_flow_into_fills_and_strokes() {
     assert!(frame.panes[0].main.iter().any(|p| matches!(
         p,
         Prim::AreaFill { gradient, .. }
-            if gradient.top == Color::rgba(0x26, 0xa6, 0x9a, 71)
-                && gradient.bottom == Color::rgba(0x26, 0xa6, 0x9a, 13)
+            if gradient.top == BASELINE_TOP_FILL1
+                && gradient.bottom == BASELINE_TOP_FILL2
     )));
     assert!(frame.panes[0].main.iter().any(|p| matches!(
         p,
         Prim::AreaFill { gradient, .. }
-            if gradient.top == Color::rgba(0xef, 0x53, 0x50, 13)
-                && gradient.bottom == Color::rgba(0xef, 0x53, 0x50, 71)
+            if gradient.top == BASELINE_BOTTOM_FILL1
+                && gradient.bottom == BASELINE_BOTTOM_FILL2
     )));
     // One continuous solid stroke per quadrant in the reference line colors.
     assert!(frame.panes[0].main.iter().any(|p| matches!(
         p,
-        Prim::Polyline { color, .. } if *color == Color::rgb(0x26, 0xa6, 0x9a)
+        Prim::Polyline { color, .. } if *color == BASELINE_TOP_LINE
     )));
     assert!(frame.panes[0].main.iter().any(|p| matches!(
         p,
-        Prim::Polyline { color, .. } if *color == Color::rgb(0xef, 0x53, 0x50)
+        Prim::Polyline { color, .. } if *color == BASELINE_BOTTOM_LINE
     )));
 
     // Per-quadrant options: custom colors/widths, and a dashed quadrant style splits runs.
@@ -1110,7 +1110,7 @@ fn baseline_quadrant_options_flow_into_fills_and_strokes() {
         .filter(|p| {
             matches!(
                 p,
-                Prim::Polyline { color, .. } if *color == Color::rgb(0xef, 0x53, 0x50)
+                Prim::Polyline { color, .. } if *color == BASELINE_BOTTOM_LINE
             )
         })
         .count();
@@ -1256,6 +1256,75 @@ fn ohlc_chart(kind: SeriesKind, bars: usize) -> ChartEngine {
 }
 
 #[test]
+fn canonical_style_reaches_the_backend_neutral_frame() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times = [1.0, 2.0];
+    let open = [10.0, 12.0];
+    let high = [12.0, 13.0];
+    let low = [9.0, 10.0];
+    let close = [11.0, 11.0];
+    chart
+        .set_series_data(0, &times, &open, &high, &low, &close)
+        .unwrap();
+    let volume = chart.add_series(SeriesKind::Histogram);
+    chart
+        .set_series_data(
+            volume,
+            &times,
+            &[100.0, 120.0],
+            &[100.0, 120.0],
+            &[100.0, 120.0],
+            &[100.0, 120.0],
+        )
+        .unwrap();
+    chart.series[volume].histogram_updown = true;
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    chart.crosshair = Some((chart.time_scale.index_to_coordinate(0), 200.0));
+
+    let frame = chart.build_frame();
+    let prims = &frame.panes[0].main;
+    assert!(prims.iter().any(|prim| matches!(
+        prim,
+        Prim::Rect { color, .. } | Prim::RectFrame { color, .. } if *color == UP
+    )));
+    assert!(prims.iter().any(|prim| matches!(
+        prim,
+        Prim::Rect { color, .. } | Prim::RectFrame { color, .. } if *color == DOWN
+    )));
+    assert!(prims
+        .iter()
+        .any(|prim| matches!(prim, Prim::Rect { color, .. } if *color == VOLUME_UP)));
+    assert!(prims
+        .iter()
+        .any(|prim| matches!(prim, Prim::Rect { color, .. } if *color == VOLUME_DOWN)));
+    assert!(prims.iter().any(|prim| matches!(
+        prim,
+        Prim::HLine { color, .. } | Prim::VLine { color, .. } if *color == CROSSHAIR_COLOR
+    )));
+
+    let axis_frame = chart.build_axis_frame(40.0, |text| text.len() as f64 * 7.0);
+    let mut axis_prims = Vec::new();
+    chart.build_axis_primitives_into(&axis_frame, &mut axis_prims, |_| 0.0);
+    let border = Color::rgb(
+        origin_core::style::DEFAULT_BORDER_RGB.0,
+        origin_core::style::DEFAULT_BORDER_RGB.1,
+        origin_core::style::DEFAULT_BORDER_RGB.2,
+    );
+    let axis_text = Color::rgb(
+        origin_core::style::DEFAULT_AXIS_TEXT_RGB.0,
+        origin_core::style::DEFAULT_AXIS_TEXT_RGB.1,
+        origin_core::style::DEFAULT_AXIS_TEXT_RGB.2,
+    );
+    assert!(axis_prims
+        .iter()
+        .any(|prim| matches!(prim, Prim::Rect { color, .. } if *color == border)));
+    assert!(axis_prims
+        .iter()
+        .any(|prim| matches!(prim, Prim::Text { color, .. } if *color == axis_text)));
+}
+
+#[test]
 fn candlestick_per_point_colors_override_each_channel() {
     let mut chart = ohlc_chart(SeriesKind::Candlestick, 4);
     // Bar 1 (rising): custom body/wick/border. Bar 2 keeps the series resolution.
@@ -1277,7 +1346,7 @@ fn candlestick_per_point_colors_override_each_channel() {
     assert!(has(POINT_GREEN), "custom wick color drawn");
     assert!(has(POINT_BLUE), "custom border color drawn");
     // The uncolored bars keep the reference up-color resolution.
-    assert!(has(0x26A69AFF), "series up color still drawn");
+    assert!(has(UP.0), "series up color still drawn");
 }
 
 #[test]
@@ -2207,20 +2276,22 @@ fn selection_anchors_paint_theme_derived_discs_on_the_selected_series() {
     assert_eq!(fills.len(), 5);
     assert!(borders.iter().all(|d| (d.1 - 4.0).abs() < 1e-4));
     assert!(fills.iter().all(|d| (d.1 - 2.5).abs() < 1e-4));
-    // Light background (default): white fills, each paired with a border disc at the same x.
-    assert!(fills.iter().all(|d| d.2 == Color::rgb(0xff, 0xff, 0xff)));
+    // Origin defaults dark: black fills, each paired with a border disc at the same x.
+    assert!(fills.iter().all(|d| d.2 == Color::rgb(0, 0, 0)));
     for fill in &fills {
         assert!(borders.iter().any(|b| (b.0 - fill.0).abs() < 1e-4));
     }
-    // Dark background: the fill tracks the background luminance to black, blue border stays.
+    // Light background: the fill tracks the background luminance to white, blue border stays.
     chart
-        .apply_options(r##"{"layout":{"background":{"color":"#0d0d0d"}}}"##)
+        .apply_options(r##"{"layout":{"background":{"color":"#ffffff"}}}"##)
         .unwrap();
-    let dark: Vec<_> = frame_discs(&mut chart);
-    let dark_fills: Vec<_> = dark.iter().copied().filter(|d| d.2 != BLUE).collect();
-    assert_eq!(dark.iter().filter(|d| d.2 == BLUE).count(), 5);
-    assert_eq!(dark_fills.len(), 5);
-    assert!(dark_fills.iter().all(|d| d.2 == Color::rgb(0, 0, 0)));
+    let light: Vec<_> = frame_discs(&mut chart);
+    let light_fills: Vec<_> = light.iter().copied().filter(|d| d.2 != BLUE).collect();
+    assert_eq!(light.iter().filter(|d| d.2 == BLUE).count(), 5);
+    assert_eq!(light_fills.len(), 5);
+    assert!(light_fills
+        .iter()
+        .all(|d| d.2 == Color::rgb(0xff, 0xff, 0xff)));
     // Deselecting (an empty-pane click) removes the anchors.
     chart.set_selected_series(None);
     assert!(frame_discs(&mut chart).is_empty());

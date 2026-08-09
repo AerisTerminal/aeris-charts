@@ -23,6 +23,13 @@ trajectory toward a full TradingView-class charting platform.
 
 Naming convention: **snake_case everywhere**, including the public TS API.
 
+## Styling
+
+[`packages/charts/src/style_tokens.json`](packages/charts/src/style_tokens.json) is the only
+built-in palette source. The TypeScript package reads it directly and `origin_core` generates
+the Rust constants from the same file, so Canvas2D, WebGPU, and GPUI receive identical surface,
+axis, crosshair, candle, and volume colors from the shared engine frame.
+
 ## Install
 
 The package is published privately to **GitHub Packages** (not the public npm registry).

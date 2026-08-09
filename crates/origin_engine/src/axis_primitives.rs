@@ -38,7 +38,11 @@ impl ChartEngine {
         let watermark = options.watermark;
         let border_w = 1f64.max(dpr.floor()) as i32;
         let parse = |css: &str, fallback: Color| Color::parse_css(css).unwrap_or(fallback);
-        let fallback = Color::parse_css("#2B2B43").unwrap_or(Color::rgb(0x2b, 0x2b, 0x43));
+        let fallback = Color::rgb(
+            origin_core::style::DEFAULT_BORDER_RGB.0,
+            origin_core::style::DEFAULT_BORDER_RGB.1,
+            origin_core::style::DEFAULT_BORDER_RGB.2,
+        );
         let left_border = parse(&left_scale.border_color, fallback);
         let right_border = parse(&right_scale.border_color, fallback);
         let time_border = parse(&time_scale.border_color, fallback);

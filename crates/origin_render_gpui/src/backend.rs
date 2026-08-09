@@ -324,6 +324,11 @@ impl GpuiChartRenderer {
         let mut metrics = self.plan_frame(prepared, scale_factor)?;
         let started = std::time::Instant::now();
         self.shaped_text.reset_counters();
+        let background_bounds = Bounds {
+            origin: point(px(viewport.origin_x), px(viewport.origin_y)),
+            size: size(px(viewport.width), px(viewport.height)),
+        };
+        window.paint_quad(fill(background_bounds, to_background(prepared.background)));
         // Move the plan out so the borrow checker allows both caches alongside it; the allocation
         // returns to `self` before the method ends, so nothing is reallocated.
         let plan = std::mem::take(&mut self.plan);

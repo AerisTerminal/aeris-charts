@@ -1087,7 +1087,7 @@ fn macd_outputs_are_line_line_histogram_with_four_state_colors() {
     // Every installed histogram row carries one of the four palette colors.
     let rows = chart.data.series_data(ids[2]).unwrap().1[3].len();
     assert!(rows > 0);
-    const PALETTE: [u32; 4] = [0x26a69aff, 0x26a69a80, 0xef5350ff, 0xef535080];
+    const PALETTE: [u32; 4] = [0x089981ff, 0x08998180, 0xf7525fff, 0xf7525f80];
     for r in 0..rows {
         let color = chart
             .data
@@ -2763,7 +2763,16 @@ fn magnet_treats_whitespace_as_no_bar() {
     // apart from the built-in last-price line by the crosshair grey — both are Dashed now.)
     let crosshair_hline_y = |frame: &ChartFrame| {
         frame.panes[0].main.iter().find_map(|p| match p {
-            Prim::HLine { y, color, .. } if *color == Color::rgb(0x95, 0x98, 0xa1) => Some(*y),
+            Prim::HLine { y, color, .. }
+                if *color
+                    == Color::rgb(
+                        origin_core::style::DEFAULT_CROSSHAIR_RGB.0,
+                        origin_core::style::DEFAULT_CROSSHAIR_RGB.1,
+                        origin_core::style::DEFAULT_CROSSHAIR_RGB.2,
+                    ) =>
+            {
+                Some(*y)
+            }
             _ => None,
         })
     };
@@ -3165,8 +3174,12 @@ fn unparseable_verbatim_colors_fall_back_at_render_time() {
     chart.series[0].up_color = Some("rebeccapurple".to_string()); // stored, unparseable
     chart.time_scale.set_width(800.0);
     chart.fit_content();
-    // the up bars render with the reference default UP color (0x26a69a), not the stored string
-    let up = Color::rgb(0x26, 0xa6, 0x9a);
+    // The up bars render with Origin's canonical default, not the stored string.
+    let up = Color::rgb(
+        origin_core::style::MARKET_UP_RGB.0,
+        origin_core::style::MARKET_UP_RGB.1,
+        origin_core::style::MARKET_UP_RGB.2,
+    );
     let frame = chart.build_frame();
     assert!(frame.panes[0]
         .main

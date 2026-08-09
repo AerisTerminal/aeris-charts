@@ -58,10 +58,20 @@ const BAND_LEVEL_COLOR: Color = Color::rgb(0x78, 0x7B, 0x86);
 
 /// MACD histogram four-state palette: strong when moving away from zero, weak when falling
 /// back toward it (TradingView-style). Packed `0xRRGGBBAA`.
-const MACD_UP: u32 = 0x26a69aff;
-const MACD_UP_WEAK: u32 = 0x26a69a80;
-const MACD_DOWN: u32 = 0xef5350ff;
-const MACD_DOWN_WEAK: u32 = 0xef535080;
+const MACD_UP: u32 = rgb_u32(origin_core::style::MARKET_UP_RGB, 0xff);
+const MACD_UP_WEAK: u32 = rgb_u32(
+    origin_core::style::MARKET_UP_RGB,
+    origin_core::style::MARKET_VOLUME_ALPHA,
+);
+const MACD_DOWN: u32 = rgb_u32(origin_core::style::MARKET_DOWN_RGB, 0xff);
+const MACD_DOWN_WEAK: u32 = rgb_u32(
+    origin_core::style::MARKET_DOWN_RGB,
+    origin_core::style::MARKET_VOLUME_ALPHA,
+);
+
+const fn rgb_u32(rgb: (u8, u8, u8), alpha: u8) -> u32 {
+    (rgb.0 as u32) << 24 | (rgb.1 as u32) << 16 | (rgb.2 as u32) << 8 | alpha as u32
+}
 
 /// An indicator output series' lineage: which binding it belongs to (kind + params), the
 /// source series it derives from, and which output slot it is (Bollinger: 0 = upper,

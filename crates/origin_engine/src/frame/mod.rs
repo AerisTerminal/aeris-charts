@@ -14,6 +14,9 @@ use origin_core::model::magnet::{magnet_snap_coordinate, CrosshairMode};
 use origin_core::model::plot_list::{MismatchDirection, PlotList, PlotValueIndex};
 use origin_core::model::price_range::PriceRange;
 use origin_core::scale::price_scale_core::{PriceScaleCore, PriceScaleMode};
+use origin_core::style::{
+    DEFAULT_CROSSHAIR_RGB, MARKET_DOWN_RGB, MARKET_UP_RGB, MARKET_VOLUME_ALPHA,
+};
 use origin_render::bars::{build_bars, BarItem, BarsParams};
 use origin_render::candles::{build_candles, CandleItem, CandlesParams};
 use origin_render::color::Color;
@@ -36,29 +39,51 @@ mod tests;
 
 use conflation::{visible_histogram_rows, visible_line_rows, visible_ohlc};
 
-const UP: Color = Color::rgb(0x26, 0xa6, 0x9a);
-const DOWN: Color = Color::rgb(0xef, 0x53, 0x50);
+const UP: Color = Color::rgb(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2);
+const DOWN: Color = Color::rgb(MARKET_DOWN_RGB.0, MARKET_DOWN_RGB.1, MARKET_DOWN_RGB.2);
 const GRID: Color = Color::rgb(0xd6, 0xdc, 0xde);
 const LINE: Color = Color::rgb(0x21, 0x96, 0xf3);
 const AREA_LINE: Color = Color::rgb(0x33, 0xd7, 0x78);
 const AREA_TOP: Color = Color::rgba(0x2e, 0xdc, 0x87, 102);
 const AREA_BOTTOM: Color = Color::rgba(0x28, 0xdd, 0x64, 0);
-const HISTOGRAM: Color = Color::rgba(0x26, 0xa6, 0x9a, 0x80);
-const VOLUME_UP: Color = Color::rgba(0x26, 0xa6, 0x9a, 0x80);
-const VOLUME_DOWN: Color = Color::rgba(0xef, 0x53, 0x50, 0x80);
-const BASELINE_TOP_LINE: Color = Color::rgb(0x26, 0xa6, 0x9a);
-const BASELINE_BOTTOM_LINE: Color = Color::rgb(0xef, 0x53, 0x50);
+const HISTOGRAM: Color = Color::rgba(
+    MARKET_UP_RGB.0,
+    MARKET_UP_RGB.1,
+    MARKET_UP_RGB.2,
+    MARKET_VOLUME_ALPHA,
+);
+const VOLUME_UP: Color = Color::rgba(
+    MARKET_UP_RGB.0,
+    MARKET_UP_RGB.1,
+    MARKET_UP_RGB.2,
+    MARKET_VOLUME_ALPHA,
+);
+const VOLUME_DOWN: Color = Color::rgba(
+    MARKET_DOWN_RGB.0,
+    MARKET_DOWN_RGB.1,
+    MARKET_DOWN_RGB.2,
+    MARKET_VOLUME_ALPHA,
+);
+const BASELINE_TOP_LINE: Color = UP;
+const BASELINE_BOTTOM_LINE: Color = DOWN;
 /// reference baseline quadrant fill defaults (model/series/baseline-series.ts): two-stop gradients
 /// from the line to the baseline. Alphas are the CSS 0..1 values quantized to bytes
 /// (0.28 -> 71, 0.05 -> 13, matching `Color::parse_css`).
-const BASELINE_TOP_FILL1: Color = Color::rgba(0x26, 0xa6, 0x9a, 71);
-const BASELINE_TOP_FILL2: Color = Color::rgba(0x26, 0xa6, 0x9a, 13);
-const BASELINE_BOTTOM_FILL1: Color = Color::rgba(0xef, 0x53, 0x50, 13);
-const BASELINE_BOTTOM_FILL2: Color = Color::rgba(0xef, 0x53, 0x50, 71);
+const BASELINE_TOP_FILL1: Color =
+    Color::rgba(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2, 71);
+const BASELINE_TOP_FILL2: Color =
+    Color::rgba(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2, 13);
+const BASELINE_BOTTOM_FILL1: Color =
+    Color::rgba(MARKET_DOWN_RGB.0, MARKET_DOWN_RGB.1, MARKET_DOWN_RGB.2, 13);
+const BASELINE_BOTTOM_FILL2: Color =
+    Color::rgba(MARKET_DOWN_RGB.0, MARKET_DOWN_RGB.1, MARKET_DOWN_RGB.2, 71);
 pub(crate) const LINE_WIDTH: f64 = 3.0;
-const CROSSHAIR_COLOR: Color = Color::rgb(0x95, 0x98, 0xa1);
-/// reference crosshair label background default (`#131722`); fallback when the option is unparseable.
-const CROSSHAIR_LABEL_BG: Color = Color::rgb(0x13, 0x17, 0x22);
+const CROSSHAIR_COLOR: Color = Color::rgb(
+    DEFAULT_CROSSHAIR_RGB.0,
+    DEFAULT_CROSSHAIR_RGB.1,
+    DEFAULT_CROSSHAIR_RGB.2,
+);
+const CROSSHAIR_LABEL_BG: Color = CROSSHAIR_COLOR;
 
 fn ceiled_odd(value: f64) -> f64 {
     let ceiled = value.ceil() as i64;
@@ -808,7 +833,11 @@ impl ChartEngine {
         if background.kind != "gradient" && background.kind != "vertical_gradient" {
             return None;
         }
-        let fallback = Color::rgb(0xff, 0xff, 0xff);
+        let fallback = Color::rgb(
+            origin_core::style::DEFAULT_SURFACE_RGB.0,
+            origin_core::style::DEFAULT_SURFACE_RGB.1,
+            origin_core::style::DEFAULT_SURFACE_RGB.2,
+        );
         Some(Prim::Background {
             rect: [x as f32, y as f32, w as f32, h as f32],
             gradient: Gradient {
