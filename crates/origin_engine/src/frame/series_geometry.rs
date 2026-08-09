@@ -1070,9 +1070,10 @@ impl ChartEngine {
                 continue;
             };
             let plot = self.data.plot(series.id);
+            let fallback = origin_core::style::DEFAULT_SURFACE_RGB;
             let background = css_color(
                 &self.options.get().layout.background.color,
-                Color::rgb(0xff, 0xff, 0xff),
+                Color::rgb(fallback.0, fallback.1, fallback.2),
             );
             let fill = if background.luminance() > 160.0 {
                 Color::rgb(0xff, 0xff, 0xff)

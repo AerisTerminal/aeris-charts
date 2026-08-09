@@ -523,6 +523,8 @@ export interface chart_options {
     attributionLogo: boolean;
     panes: {
       separatorColor: string;
+      /** Hover band for an interactive pane separator. */
+      separatorHoverColor: string;
       /**
        * Allow dragging pane separators to resize panes (reference `layout.panes.enableResize`,
        * default `true`). Package-level: drives the separator drag and its hover cursor; it is

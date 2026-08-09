@@ -368,8 +368,13 @@ impl ChartEngine {
             ..AxisFrame::default()
         };
         let visible = self.visible_range_for_frame();
-        let layout_text_color = Color::parse_css(&self.options.get().layout.text_color)
-            .unwrap_or(Color::rgb(0x19, 0x19, 0x19));
+        let default_axis_text = origin_core::style::DEFAULT_AXIS_TEXT_RGB;
+        let layout_text_color =
+            Color::parse_css(&self.options.get().layout.text_color).unwrap_or(Color::rgb(
+                default_axis_text.0,
+                default_axis_text.1,
+                default_axis_text.2,
+            ));
         // Per-scale label color (reference `textColor`): the scale's own color when set, else the
         // layout text color (price-axis-widget.ts:569).
         let scale_text_color = |scale: &PriceScaleCore| {

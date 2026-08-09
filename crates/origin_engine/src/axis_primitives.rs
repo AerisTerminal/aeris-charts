@@ -49,6 +49,7 @@ impl ChartEngine {
 
         // Watermark is below chrome and labels, matching the browser host's old overlay slot.
         if watermark.visible && !watermark.text.is_empty() {
+            let default_text = origin_core::style::DEFAULT_AXIS_TEXT_RGB;
             let (x, align) = match watermark.horz_align.as_str() {
                 "left" => (pane_left, TextAlign::Left),
                 "right" => (pane_left + pane_w, TextAlign::Right),
@@ -63,7 +64,10 @@ impl ChartEngine {
                 x: (x * dpr) as f32,
                 y: (y * dpr) as f32,
                 text: watermark.text,
-                color: parse(&watermark.color, Color::rgb(0, 0, 0)),
+                color: parse(
+                    &watermark.color,
+                    Color::rgb(default_text.0, default_text.1, default_text.2),
+                ),
                 size: (watermark.font_size * dpr) as f32,
                 family: watermark.font_family,
                 align,

@@ -15,7 +15,7 @@ use origin_core::model::plot_list::{MismatchDirection, PlotList, PlotValueIndex}
 use origin_core::model::price_range::PriceRange;
 use origin_core::scale::price_scale_core::{PriceScaleCore, PriceScaleMode};
 use origin_core::style::{
-    DEFAULT_CROSSHAIR_RGB, MARKET_DOWN_RGB, MARKET_UP_RGB, MARKET_VOLUME_ALPHA,
+    DEFAULT_BORDER_RGB, DEFAULT_CROSSHAIR_RGB, MARKET_DOWN_RGB, MARKET_UP_RGB, MARKET_VOLUME_ALPHA,
 };
 use origin_render::bars::{build_bars, BarItem, BarsParams};
 use origin_render::candles::{build_candles, CandleItem, CandlesParams};
@@ -41,7 +41,11 @@ use conflation::{visible_histogram_rows, visible_line_rows, visible_ohlc};
 
 const UP: Color = Color::rgb(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2);
 const DOWN: Color = Color::rgb(MARKET_DOWN_RGB.0, MARKET_DOWN_RGB.1, MARKET_DOWN_RGB.2);
-const GRID: Color = Color::rgb(0xd6, 0xdc, 0xde);
+const GRID: Color = Color::rgb(
+    DEFAULT_BORDER_RGB.0,
+    DEFAULT_BORDER_RGB.1,
+    DEFAULT_BORDER_RGB.2,
+);
 const LINE: Color = Color::rgb(0x21, 0x96, 0xf3);
 const AREA_LINE: Color = Color::rgb(0x33, 0xd7, 0x78);
 const AREA_TOP: Color = Color::rgba(0x2e, 0xdc, 0x87, 102);

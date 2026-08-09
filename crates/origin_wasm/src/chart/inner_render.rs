@@ -92,8 +92,7 @@ impl ChartInner {
             self.activate_canvas2d("WebGPU device was lost");
         }
 
-        let bg = Color::parse_css(&self.opts().layout.background.color)
-            .unwrap_or(Color::rgb(0xff, 0xff, 0xff));
+        let bg = resolved_surface_color(&self.opts().layout.background.color);
         // Arm GPU timestamp collection on the first frame after the host reads `frame_stats()`.
         // `GpuTimer::new` is a feature-flag check plus (once) a query set, so an unsupported
         // device just keeps answering `None` and `gpu_ms` stays null.
@@ -697,6 +696,25 @@ impl ChartInner {
         // The `clear_rect` + background `fill_rect` above, plus every executed prim.
         self.telemetry.add_canvas2d_ops(2 + target.ops());
         Ok(())
+    }
+}
+
+fn resolved_surface_color(css: &str) -> Color {
+    let fallback = origin_core::style::DEFAULT_SURFACE_RGB;
+    Color::parse_css(css).unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2))
+}
+
+#[cfg(test)]
+mod style_tests {
+    use super::*;
+
+    #[test]
+    fn malformed_surface_css_falls_back_to_the_canonical_origin_surface() {
+        let expected = origin_core::style::DEFAULT_SURFACE_RGB;
+        assert_eq!(
+            resolved_surface_color("not-a-color"),
+            Color::rgb(expected.0, expected.1, expected.2)
+        );
     }
 }
 

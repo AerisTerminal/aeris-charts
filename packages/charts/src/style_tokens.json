@@ -4,13 +4,15 @@
     "surface": "#ffffff",
     "border": "#f5f5f5",
     "axis_text": "#0a0a0a",
-    "crosshair": "#9598a1"
+    "crosshair": "#9598a1",
+    "separator_hover": "rgba(149, 152, 161, 0.2)"
   },
   "dark": {
     "surface": "#0c0c0c",
     "border": "#1e1e1e",
     "axis_text": "#f5f5f5",
-    "crosshair": "#2e2e2e"
+    "crosshair": "#2e2e2e",
+    "separator_hover": "rgba(46, 46, 46, 0.2)"
   },
   "market": {
     "up": "#089981",

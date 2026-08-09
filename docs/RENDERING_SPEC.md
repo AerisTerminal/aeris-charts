@@ -244,7 +244,7 @@ Horizontal/vertical 1-px-class lines get the classic half-pixel correction:
 ## 8. Crosshair — `crosshair-renderer.ts`, `crosshair.ts`, `magnet.ts`
 
 - Lines: `x = round(mediaX * hpr)`, width `floor(lineWidth * hpr)` (option width 1..4, default 1),
-  default color `#9598A1`, style LargeDashed, drawn full width/height of the pane **on the top canvas layer**.
+  default color `#2e2e2e`, style LargeDashed, drawn full width/height of the pane **on the top canvas layer**.
 - Vertical line spans all panes; horizontal only on the pane under the cursor.
 - Position: `index = coordinateToIndex(x)` clamped to visible strict range; crosshair x snaps to
   `indexToCoordinate(index)` (bar center), i.e. **snapping to bars is index-quantized**.
@@ -252,7 +252,7 @@ Horizontal/vertical 1-px-class lines get the classic half-pixel correction:
   (Close) — or (O,H,L,C) in MagnetOHLC mode — in *pixel* space, and snaps `y`/price to it.
   In Magnet mode the horizontal line/price is locked to series values; Normal mode follows the mouse.
 - Crosshair marker (on line/area series): radius 4px circle + 2px stroke (crosshairMarkerRadius default 4).
-- Axis labels: see §10 geometry; label background default `#131722`.
+- Axis labels: see §10 geometry; label background default `#2e2e2e`.
 
 ## 9. Price axis ticks — `price-tick-mark-builder.ts`, `price-tick-span-calculator.ts`
 
@@ -395,8 +395,8 @@ speed over last 4 touch positions; position `p(t) = p0 + v * (γ^t - 1)/ln γ`; 
 - Line: color `#2196f3`, width 3, `crosshairMarkerVisible: true`, radius 4, `lineType: Simple`,
   pointMarkers off, lastPriceAnimation Disabled.
 - Chart: barSpacing 6, rightOffset 0, minBarSpacing 0.5; layout font 12px
-  `-apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif`; text `#191919`,
-  background `#FFFFFF`.
+  `-apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif`; default dark
+  text `#f5f5f5`, background `#0c0c0c`, and border/grid `#1e1e1e`.
 - Last-value label color: series color; text contrast color computed (generateContrastColors).
 
 ## 16. Hit testing

@@ -50,6 +50,10 @@ fn emit_color(output: &mut String, name: &str, css: &str) {
     ));
 }
 
+fn emit_css(output: &mut String, name: &str, css: &str) {
+    output.push_str(&format!("pub const {name}_CSS: &str = \"{css}\";\n"));
+}
+
 fn main() {
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest dir"));
     let tokens_path = manifest_dir.join("../../packages/charts/src/style_tokens.json");
@@ -83,6 +87,11 @@ fn main() {
                 required_string(&tokens, &[theme, field]),
             );
         }
+        emit_css(
+            &mut output,
+            &format!("{prefix}_SEPARATOR_HOVER"),
+            required_string(&tokens, &[theme, "separator_hover"]),
+        );
     }
     emit_color(
         &mut output,
@@ -108,6 +117,9 @@ fn main() {
             "pub const DEFAULT_{suffix}_RGB: (u8, u8, u8) = {default_prefix}_{suffix}_RGB;\n"
         ));
     }
+    output.push_str(&format!(
+        "pub const DEFAULT_SEPARATOR_HOVER_CSS: &str = {default_prefix}_SEPARATOR_HOVER_CSS;\n"
+    ));
 
     let output_path = Path::new(&env::var_os("OUT_DIR").expect("out dir")).join("style_tokens.rs");
     fs::write(&output_path, output)

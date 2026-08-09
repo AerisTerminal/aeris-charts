@@ -76,10 +76,14 @@ impl Capture {
 
         let mut engine = origin_native::engine_scene::parity_engine();
         if theme == "dark" {
+            let surface = origin_core::style::DARK_SURFACE_CSS;
+            let text = origin_core::style::DARK_AXIS_TEXT_CSS;
+            let border = origin_core::style::DARK_BORDER_CSS;
+            let options = format!(
+                r#"{{"layout":{{"background":{{"type":"solid","color":"{surface}"}},"textColor":"{text}"}},"grid":{{"vertLines":{{"color":"{border}"}},"horzLines":{{"color":"{border}"}}}}}}"#
+            );
             engine
-                .apply_options(
-                    r##"{"layout":{"background":{"type":"solid","color":"#131722"},"textColor":"#D1D4DC"},"grid":{"vertLines":{"color":"#2B2B43"},"horzLines":{"color":"#2B2B43"}}}"##,
-                )
+                .apply_options(&options)
                 .expect("the built-in dark fixture options are valid");
         }
         if let Some(spacing) = spacing {

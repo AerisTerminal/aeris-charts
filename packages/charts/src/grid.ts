@@ -17,6 +17,7 @@ import { create_chart } from "./index.js";
 import { ensure_init } from "./impl.js";
 import { DEFAULT_SHORTCUTS, install_shortcuts } from "./shortcuts.js";
 import type { shortcut_action } from "./shortcuts.js";
+import { default_theme_name, theme_palette } from "./theme.js";
 import type { chart_api, chart_options, deep_partial } from "./types.js";
 
 /** `horizontal` places the two charts side by side; `vertical` stacks them. */
@@ -144,7 +145,7 @@ export async function create_chart_grid(
     const border = (
       first?.chart.options() as { rightPriceScale?: { borderColor?: string } } | undefined
     )?.rightPriceScale?.borderColor;
-    return border ?? "#d6dcde";
+    return border ?? theme_palette(default_theme_name).border;
   };
 
   const usage = (): grid_usage => JSON.parse(workspace.usage_json(now_seconds())) as grid_usage;

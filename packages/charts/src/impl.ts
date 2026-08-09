@@ -24,6 +24,7 @@ import type {
   time_scale_api, time_scale_options, tracking_mode_options, visible_logical_range_handler, visible_time_range_handler,
 } from "./types.js";
 import { DRAWING_KIND_TO_U8, KIND_TO_U8, LINE_STYLE_TO_U8, LINE_TYPE_TO_U8 } from "./types.js";
+import { default_theme_name, theme_palette } from "./theme.js";
 
 // ---------------------------------------------------------------------------------------------
 // Implementation
@@ -2206,7 +2207,8 @@ export class chart_impl implements chart_api {
     wrap.style.zIndex = "10";
     wrap.style.border = "2px solid #2962ff";
     wrap.style.borderRadius = "0";
-    wrap.style.background = options.box_color || layout.background?.color || "#ffffff";
+    const default_palette = theme_palette(default_theme_name);
+    wrap.style.background = options.box_color || layout.background?.color || default_palette.background;
     wrap.style.padding = "4px";
 
     // The "Add text" preview (bold, muted, ≥ 12px): hidden as soon as the user types.
@@ -2228,7 +2230,7 @@ export class chart_impl implements chart_api {
     editor.textContent = options.text;
     editor.style.font = font;
     editor.style.lineHeight = "normal"; // the font's own ascent+descent center (see above)
-    editor.style.color = options.text_color || layout.textColor || "#0a0a0a";
+    editor.style.color = options.text_color || layout.textColor || default_palette.text;
     editor.style.background = "transparent";
     editor.style.border = "none";
     editor.style.outline = "none";

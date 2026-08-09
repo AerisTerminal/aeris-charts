@@ -19,6 +19,8 @@ export interface chart_theme {
   text: string;
   /** Crosshair lines and label background. */
   crosshair: string;
+  /** Pane separator hover band. Defaults to the crosshair color for custom palettes. */
+  separator_hover?: string;
 }
 
 export const light_theme: chart_theme = {
@@ -27,6 +29,7 @@ export const light_theme: chart_theme = {
   grid: style_tokens.light.border,
   text: style_tokens.light.axis_text,
   crosshair: style_tokens.light.crosshair,
+  separator_hover: style_tokens.light.separator_hover,
 };
 
 export const dark_theme: chart_theme = {
@@ -35,6 +38,7 @@ export const dark_theme: chart_theme = {
   grid: style_tokens.dark.border,
   text: style_tokens.dark.axis_text,
   crosshair: style_tokens.dark.crosshair,
+  separator_hover: style_tokens.dark.separator_hover,
 };
 
 export type theme_name = "light" | "dark";
@@ -52,6 +56,10 @@ export function theme_options(theme: theme_name | chart_theme): deep_partial<cha
     layout: {
       background: { type: "solid", color: palette.background },
       textColor: palette.text,
+      panes: {
+        separatorColor: palette.border,
+        separatorHoverColor: palette.separator_hover ?? palette.crosshair,
+      },
     },
     leftPriceScale: { borderColor: palette.border },
     rightPriceScale: { borderColor: palette.border },

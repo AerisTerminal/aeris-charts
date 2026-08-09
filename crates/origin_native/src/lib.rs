@@ -390,8 +390,12 @@ pub fn render_engine(chart: &mut ChartEngine) -> TinySkiaCanvas {
         }
     }
     let options = chart.options.get();
-    let background =
-        Color::parse_css(&options.layout.background.color).unwrap_or(Color::rgb(0xff, 0xff, 0xff));
+    let default_surface = origin_core::style::DEFAULT_SURFACE_RGB;
+    let background = Color::parse_css(&options.layout.background.color).unwrap_or(Color::rgb(
+        default_surface.0,
+        default_surface.1,
+        default_surface.2,
+    ));
     render_prims(
         (frame.width * frame.pixel_ratio).round().max(1.0) as u32,
         (frame.height * frame.pixel_ratio).round().max(1.0) as u32,
@@ -637,5 +641,21 @@ mod tests {
             .filter(|px| px[0..3] != [0xff, 0xff, 0xff])
             .count();
         assert!(non_background > 0);
+    }
+
+    #[test]
+    fn malformed_surface_css_falls_back_to_the_canonical_origin_surface() {
+        let mut chart = ChartEngine::new(1.0, 1.0, 1.0);
+        chart
+            .options
+            .apply_str(r#"{"layout":{"background":{"color":"not-a-color"}}}"#)
+            .unwrap();
+
+        let canvas = render_engine(&mut chart);
+        let expected = origin_core::style::DEFAULT_SURFACE_RGB;
+        assert_eq!(
+            canvas.pixel_rgba(0, 0),
+            [expected.0, expected.1, expected.2, 0xff]
+        );
     }
 }

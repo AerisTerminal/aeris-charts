@@ -25,7 +25,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::style::{
-    DEFAULT_AXIS_TEXT_CSS, DEFAULT_BORDER_CSS, DEFAULT_CROSSHAIR_CSS, DEFAULT_SURFACE_CSS,
+    DEFAULT_AXIS_TEXT_CSS, DEFAULT_BORDER_CSS, DEFAULT_CROSSHAIR_CSS, DEFAULT_SEPARATOR_HOVER_CSS,
+    DEFAULT_SURFACE_CSS,
 };
 
 /// `LineStyle`, numeric wire form (0 Solid, 1 Dotted = sparse, 2 Dashed = large). Values 3/4
@@ -101,8 +102,7 @@ pub struct PanesOptions {
     /// divider always matches the axis chrome and tracks its theme; an explicit value pins it.
     #[serde(rename = "separatorColor")]
     pub separator_color: String,
-    /// reference `panes.separatorHoverColor` (default `rgba(178, 181, 189, 0.2)`): the hover band
-    /// painted over a separator by the gesture layer.
+    /// Hover band painted over a separator by the gesture layer.
     #[serde(rename = "separatorHoverColor")]
     pub separator_hover_color: String,
 }
@@ -111,7 +111,7 @@ impl Default for PanesOptions {
     fn default() -> Self {
         Self {
             separator_color: String::new(),
-            separator_hover_color: "rgba(178, 181, 189, 0.2)".into(),
+            separator_hover_color: DEFAULT_SEPARATOR_HOVER_CSS.into(),
         }
     }
 }

@@ -28,10 +28,15 @@ use super::*;
 use crate::prim_decode::decode_commands;
 use origin_core::model::plot_list::PlotValueIndex;
 use origin_core::scale::price_scale_core::PriceScaleCore;
+use origin_core::style::{DEFAULT_AXIS_TEXT_RGB, DEFAULT_CROSSHAIR_RGB};
 
 /// Fallback background for a primitive axis label with no color given — the reference crosshair
 /// label default (frame/mod.rs `PRIMITIVE_LABEL_BG`).
-const PRIMITIVE_LABEL_BG: Color = Color::rgb(0x13, 0x17, 0x22);
+const PRIMITIVE_LABEL_BG: Color = Color::rgb(
+    DEFAULT_CROSSHAIR_RGB.0,
+    DEFAULT_CROSSHAIR_RGB.1,
+    DEFAULT_CROSSHAIR_RGB.2,
+);
 
 #[wasm_bindgen(inline_js = r#"
 // One draw context per renderer call. The converter fns arrive ready-made from Rust (they close
@@ -491,7 +496,11 @@ impl ChartInner {
         crate::prim_decode::TextDefaults {
             family: layout.font_family,
             size: (layout.font_size * self.dpr) as f32,
-            color: Color::parse_css(&layout.text_color).unwrap_or(Color::rgb(0, 0, 0)),
+            color: Color::parse_css(&layout.text_color).unwrap_or(Color::rgb(
+                DEFAULT_AXIS_TEXT_RGB.0,
+                DEFAULT_AXIS_TEXT_RGB.1,
+                DEFAULT_AXIS_TEXT_RGB.2,
+            )),
         }
     }
 

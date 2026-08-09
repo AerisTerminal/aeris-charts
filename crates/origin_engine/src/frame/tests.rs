@@ -1325,6 +1325,39 @@ fn canonical_style_reaches_the_backend_neutral_frame() {
 }
 
 #[test]
+fn malformed_grid_and_axis_css_fall_back_to_canonical_style() {
+    let mut chart = ohlc_chart(SeriesKind::Candlestick, 4);
+    chart
+        .apply_options(
+            r#"{"layout":{"textColor":"not-a-color"},"grid":{"vertLines":{"color":"bad","visible":true},"horzLines":{"color":"bad","visible":true}}}"#,
+        )
+        .unwrap();
+
+    let border = Color::rgb(
+        origin_core::style::DEFAULT_BORDER_RGB.0,
+        origin_core::style::DEFAULT_BORDER_RGB.1,
+        origin_core::style::DEFAULT_BORDER_RGB.2,
+    );
+    let frame = chart.build_frame();
+    assert!(frame.panes[0]
+        .under
+        .iter()
+        .any(|prim| matches!(prim, Prim::HLine { color, .. } | Prim::VLine { color, .. } if *color == border)));
+
+    let axis_text = Color::rgb(
+        origin_core::style::DEFAULT_AXIS_TEXT_RGB.0,
+        origin_core::style::DEFAULT_AXIS_TEXT_RGB.1,
+        origin_core::style::DEFAULT_AXIS_TEXT_RGB.2,
+    );
+    let axis_frame = chart.build_axis_frame(40.0, |text| text.len() as f64 * 7.0);
+    let mut axis_prims = Vec::new();
+    chart.build_axis_primitives_into(&axis_frame, &mut axis_prims, |_| 0.0);
+    assert!(axis_prims
+        .iter()
+        .any(|prim| matches!(prim, Prim::Text { color, .. } if *color == axis_text)));
+}
+
+#[test]
 fn candlestick_per_point_colors_override_each_channel() {
     let mut chart = ohlc_chart(SeriesKind::Candlestick, 4);
     // Bar 1 (rising): custom body/wick/border. Bar 2 keeps the series resolution.

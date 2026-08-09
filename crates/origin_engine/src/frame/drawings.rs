@@ -325,7 +325,10 @@ impl ChartEngine {
             .as_deref()
             .and_then(Color::parse_css)
             .or_else(|| Color::parse_css(&layout.text_color))
-            .unwrap_or(Color::rgb(0, 0, 0));
+            .unwrap_or_else(|| {
+                let fallback = origin_core::style::DEFAULT_AXIS_TEXT_RGB;
+                Color::rgb(fallback.0, fallback.1, fallback.2)
+            });
         // The placeholder is muted (TradingView's prompt): the resolved text color at half alpha.
         let color = if placeholder {
             Color::rgba(color.r(), color.g(), color.b(), color.a() / 2)
@@ -396,8 +399,9 @@ impl ChartEngine {
     /// The anchor-handle fill for the current theme (white on light backgrounds, black on dark —
     /// the series selection anchors' luminance rule, series_geometry.rs).
     fn anchor_fill(&self) -> Color {
+        let fallback = origin_core::style::DEFAULT_SURFACE_RGB;
         let background = Color::parse_css(&self.options.get().layout.background.color)
-            .unwrap_or(Color::rgb(0xff, 0xff, 0xff));
+            .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2));
         if background.luminance() > 160.0 {
             Color::rgb(0xff, 0xff, 0xff)
         } else {

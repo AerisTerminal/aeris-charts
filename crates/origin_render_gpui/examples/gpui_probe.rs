@@ -1832,8 +1832,9 @@ impl Render for Probe {
         // A solid Origin layout background emits no `Prim`: each host clears its own surface from
         // the layout options (as WebGPU does). The probe is a GPUI host, so it must do the same;
         // otherwise GPUI's default transparent/black client clear shows through.
+        let fallback = origin_core::style::DEFAULT_SURFACE_RGB;
         let background = Color::parse_css(&self.engine.options.get().layout.background.color)
-            .unwrap_or(Color::rgb(0xff, 0xff, 0xff));
+            .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2));
         let background = origin_render_gpui::backend::to_hsla(background);
 
         let focus = self

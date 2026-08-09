@@ -422,6 +422,15 @@ mod tests {
                 bottom: Color::rgb(4, 5, 6),
             }
         );
+
+        engine
+            .options
+            .apply_str(r#"{"layout":{"background":{"type":"solid","color":"not-a-color"}}}"#)
+            .unwrap();
+        assert_eq!(
+            PreparedOriginFrame::from_engine(&frame, &engine).background,
+            Paint::Solid(Color::rgb(0x0c, 0x0c, 0x0c))
+        );
     }
 
     fn pane(scissor: [u32; 4], main: Vec<Prim>) -> FramePane {
