@@ -1,7 +1,7 @@
 # Capture the client area of a window by exact title to a PNG.
 #
 # Used by `examples/parity_capture.rs` to obtain the pixels official GPUI actually rasterized, so
-# they can be diffed against Origin's existing backends (GPUI_PLAN.md §3.3 / §9 Phase 4).
+# they can be diffed against Origin's existing backends.
 #
 # Why PrintWindow rather than BitBlt from the window DC: GPUI presents a hardware-composed
 # D3D11/DXGI swapchain, and a plain BitBlt of such a window usually yields black. PrintWindow with

@@ -1,8 +1,7 @@
 //! origin_render — backend-agnostic draw-list IR and rendering math.
 //!
-//! Views in `origin_core` (once wired) emit [`draw_list::DrawList`]s; backends
-//! (`origin_render_wgpu`, and later a Canvas2D fallback executor) consume them.
-//! Pixel math is specified in `docs/RENDERING_SPEC.md`.
+//! The headless engine emits [`draw_list::DrawList`]s; GPUI, WebGPU, Canvas2D, and native
+//! executors consume the same ordered primitive stream.
 
 pub mod bar_width;
 pub mod bars;

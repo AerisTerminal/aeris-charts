@@ -1,4 +1,4 @@
-//! Cache and memory stability under a sustained update replay (GPUI_PLAN.md §9 Phase 5).
+//! Cache and memory stability under a sustained update replay.
 //!
 //! The gate is "no unbounded cache, atlas, geometry, or allocation growth". The way that fails in
 //! practice is not a leak but a *plateau that never arrives*: a scratch buffer that regrows, a plan

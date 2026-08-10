@@ -1,5 +1,5 @@
 //! OHLC bar geometry builder. Port of `src/renderers/bars-renderer.ts`
-//! (RENDERING_SPEC.md §3).
+//! using the shared bitmap-space snapping rules.
 
 use crate::bar_width::optimal_bar_width;
 use crate::color::Color;

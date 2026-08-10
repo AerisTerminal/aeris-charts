@@ -102,7 +102,7 @@ impl ChartEngine {
         let vert = css_color(&grid.vert_lines.color, GRID);
         let horz = css_color(&grid.horz_lines.color, GRID);
         // reference lineStyle (0 solid … 4 sparse-dotted); the backends expand dash patterns into
-        // segment rects identically (RENDERING_SPEC.md §6).
+        // segment rects identically.
         let vert_style = crate::line_style_from_u8(grid.vert_lines.style);
         let horz_style = crate::line_style_from_u8(grid.horz_lines.style);
         let lw = 1f64.max(hpr.floor()) as i32;

@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn integral_spans() {
-        // hand-traced from the algorithm (see RENDERING_SPEC.md §9):
+        // hand-traced from the algorithm:
         // base=100, dividers [2, 2.5, 2], high-low=100 -> start=100
         // maxTickSpan=5: 100/2=50 /2.5=20 /2=10 /2=5, 5 >= 12.5? no -> 5
         let calc = PriceTickSpanCalculator::new(100, vec![2.0, 2.5, 2.0]);

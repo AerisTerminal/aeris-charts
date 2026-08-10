@@ -6,7 +6,7 @@ license.workspace = true
 description = "Optional GPUI executor for the Prim IR: lowers Origin's backend-neutral frame into GPUI scene primitives"
 
 # GPUI itself is OPTIONAL and off by default, so `cargo build/test --workspace` never compiles it
-# (GPUI_PLAN.md §11 "Normal non-GPUI builds do not compile GPUI"). Everything except the thin
+# Normal non-GPUI builds do not compile GPUI. Everything except the thin
 # `backend` module — the whole Prim lowering, snapping, cache, and metrics layer — is
 # GPUI-free and unit-testable without a window or a GPU.
 [features]
@@ -20,7 +20,7 @@ origin_render = { path = "../origin_render" }
 
 # GPUI is sourced from Zed because Origin and Axiusflow intentionally track the current pre-1.0
 # API. The workspace lockfile records the reviewed immutable commit; upgrades are explicit lockfile
-# changes and must pass the complete GPUI parity suite (GPUI_PLAN.md §3.4).
+# changes and must pass the complete GPUI parity suite.
 #
 # `default-features = false` keeps unrelated platform feature paths out of the graph, so Windows
 # resolves cleanly to GPUI's native backend.

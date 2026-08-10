@@ -1,4 +1,4 @@
-//! Scene-construction benchmark for `origin_render_gpui` (GPUI_PLAN.md §9 Phase 5).
+//! Scene-construction benchmark for `origin_render_gpui`.
 //!
 //! Measures the adapter's lowering pass — `Prim` stream to [`ScenePlan`] — which is the
 //! "GPUI scene-construction overhead" the performance gate bounds. It deliberately needs **no**
@@ -25,7 +25,7 @@ const CSS_W: f64 = 1600.0;
 const CSS_H: f64 = 900.0;
 const DPR: f64 = 1.5;
 
-/// The performance target from GPUI_PLAN.md §9 Phase 5.
+/// The scene-construction performance target.
 const P99_BUDGET_MS: f64 = 2.0;
 
 struct Fixture {

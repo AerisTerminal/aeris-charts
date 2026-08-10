@@ -2,7 +2,7 @@
  * Pane primitives (plugin platform Phase C-a) — Origin's take on the reference charting library v5's
  * `IPanePrimitive` (reference model/ipane-primitive.ts, api/pane-api.ts `PaneApi.attachPrimitive`).
  *
- * Locked design divergence (docs/PLUGIN_PLATFORM_DESIGN.md §3, A-first hybrid): a primitive
+ * Locked design divergence: a primitive
  * never touches a canvas. Its view renderers record backend-neutral draw commands through the
  * context below; the host folds them into the same `Prim` IR the WebGPU and Canvas2D backends
  * both consume, so plugin output is pixel-identical across backends and z-orders between the

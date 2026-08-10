@@ -1,6 +1,6 @@
 /**
  * Canvas primitives (plugin platform Phase C-e) — the Canvas2D escape hatch, Option B of
- * docs/PLUGIN_PLATFORM_DESIGN.md §3. Where the Prim-command primitives (`primitives.ts`,
+ * The canvas callback path complements the Prim-command primitives (`primitives.ts`,
  * Phases C-a/C-b) record backend-neutral draw commands, a canvas primitive paints with
  * arbitrary Canvas2D calls through a {@link canvas_render_target} — a mirror of the
  * reference's `CanvasRenderingTarget2D` (fancy-canvas canvas-rendering-target.ts) — so

@@ -1,7 +1,7 @@
 //! Adapter timing and count metrics.
 //!
-//! Deliberately free of GPUI types (GPUI_PLAN.md §6.3: "return backend metrics without leaking
-//! GPUI types back into the engine") so a host can log or assert on them without linking GPUI.
+//! Deliberately free of GPUI types so a host can log or assert on backend metrics without linking
+//! GPUI or leaking GPUI types back into the engine.
 
 /// What one `paint_frame` call emitted, and how long it took.
 ///

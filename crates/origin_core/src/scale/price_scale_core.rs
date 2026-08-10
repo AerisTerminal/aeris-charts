@@ -374,7 +374,7 @@ impl PriceScaleCore {
         }
     }
 
-    // --- coordinate conversion (RENDERING_SPEC.md §1.2) ---
+    // --- coordinate conversion ---
     //
     // Note on log mode: the stored price range is already in log space, so
     // `logical_to_coordinate` applies `to_log` to its input (matching reference where
@@ -482,7 +482,7 @@ impl PriceScaleCore {
         }
     }
 
-    // --- axis-drag scale (RENDERING_SPEC.md §1.2) ---
+    // --- axis-drag scale ---
 
     pub fn start_scale(&mut self, x: f64) {
         if self.is_percentage() || self.is_indexed_to_100() {
@@ -662,7 +662,7 @@ impl PriceScaleCore {
         self.price_range = Some(price_range);
     }
 
-    // --- tick marks (port of PriceTickMarkBuilder, RENDERING_SPEC.md §9) ---
+    // --- tick marks (port of PriceTickMarkBuilder) ---
 
     fn tick_mark_height(&self) -> f64 {
         (self.options.font_size * self.options.tick_mark_density).ceil()

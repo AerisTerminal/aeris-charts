@@ -1,5 +1,5 @@
 //! Line / area / baseline geometry builder. Port of `walk-line.ts` + `line-renderer.ts` +
-//! `area-renderer-base.ts` (RENDERING_SPEC.md §5).
+//! `area-renderer-base.ts`.
 //!
 //! Unlike the integer-rect series, lines are anti-aliased: points stay as floats in bitmap
 //! space and are emitted as CPU-tessellated triangles. The stroke is a series of quads (one
@@ -155,7 +155,7 @@ impl StrokeMesh {
     }
 }
 
-/// Number of straight segments a curved interval is tessellated into (RENDERING_SPEC.md §5).
+/// Number of straight segments used to tessellate a curved interval.
 const CURVE_SEGMENTS: usize = 16;
 
 /// Catmull-Rom interpolation of one scalar channel at parameter `t` (0..1).
@@ -355,7 +355,7 @@ pub fn build_area_fill(
 /// Builds a **baseline** series: a line whose portions above `baseline_y` (media px) use
 /// `top_line`/`top_fill` and portions below use `bottom_line`/`bottom_fill`, with an area fill to
 /// the baseline. Segments crossing the baseline are split at the crossing so the color flips
-/// exactly there (port of `baseline-renderer-*.ts`, RENDERING_SPEC.md §5). Smaller y = higher
+/// exactly there (port of `baseline-renderer-*.ts`). Smaller y = higher
 /// price = "above".
 #[allow(clippy::too_many_arguments)]
 pub fn build_baseline(
@@ -446,7 +446,7 @@ pub fn build_baseline(
 }
 
 /// Tessellates a filled disc (triangle fan) at `center` with `radius`, all in bitmap px.
-/// Used for the crosshair marker on line/area series (RENDERING_SPEC.md §8).
+/// Used for the crosshair marker on line and area series.
 pub fn build_disc(center: [f32; 2], radius: f32, color: Color, out: &mut Vec<LineVertex>) {
     const SEGMENTS: usize = 24;
     let rgba = color_to_rgba(color);

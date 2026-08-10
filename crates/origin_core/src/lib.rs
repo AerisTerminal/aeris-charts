@@ -1,9 +1,7 @@
 //! origin_core — platform-free chart model.
 //!
-//! Faithful port of the the reference charting library model layer. Every formula is documented in
-//! `docs/RENDERING_SPEC.md` with references to the original TypeScript source. All model math is
-//! `f64` (matching JavaScript semantics); conversion to `f32` happens only at draw-list encoding
-//! time in `origin_render_wgpu`.
+//! Faithful port of the reference charting library model layer. All model math is `f64` (matching
+//! JavaScript semantics); conversion to backend coordinate formats happens at render encoding.
 
 pub mod format;
 pub mod helpers;

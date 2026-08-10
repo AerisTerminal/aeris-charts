@@ -3,7 +3,7 @@
 //! plugin-examples (trend-line.ts, rectangle-drawing-tool.ts, vertical-line.ts, anchored-text.ts),
 //! but with all state, hit-testing, and anchor-dragging math living headless here: hosts only
 //! forward gestures and render the frame, exactly like the interaction-model split
-//! (ARCHITECTURE.md §6.2).
+//! at the headless engine boundary.
 //!
 //! Anchor model: a drawing is defined by 1 or 2 [`DrawingPoint`]s in `{logical, price}` space
 //! (fractional logical bar index + price — the time scale's interpolation space, so an anchor

@@ -1,5 +1,5 @@
 //! Histogram (volume-style column) geometry builder. Port of
-//! `src/renderers/histogram-renderer.ts` (RENDERING_SPEC.md §4), including the
+//! `src/renderers/histogram-renderer.ts`, including the
 //! gap-alignment and min-width equalization passes.
 
 use crate::color::Color;

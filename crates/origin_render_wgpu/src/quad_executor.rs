@@ -5,7 +5,7 @@
 //! pixels `c - w/2 ..= c - w/2 + w - 1` (the half-pixel translate in
 //! `strokeInPixel`/`drawVerticalLine` makes odd widths symmetric around `c`).
 //! Dashed styles are expanded into segment rects with the reference dash patterns
-//! (RENDERING_SPEC.md §6), phase starting at the path start like Canvas2D.
+//! with phase starting at the path start like Canvas2D.
 
 use origin_render::color::Color;
 use origin_render::draw_list::{IRect, LineStyle, Prim};

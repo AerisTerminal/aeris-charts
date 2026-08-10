@@ -1,7 +1,7 @@
 //! Draw-list IR consumed by rendering backends.
 //!
 //! Two coordinate flavors, mirroring the Canvas2D split the reference charting library relies on
-//! (see RENDERING_SPEC.md preamble):
+//! shared by every executor:
 //! - integer **bitmap** rects (`Rect`, `RectFrame`, `HLine`, `VLine`) — crisp, no AA;
 //! - float bitmap-space geometry (`Polyline`, `AreaFill`, `RoundRect`, `Circle`, `Text`) — AA'd.
 
@@ -23,7 +23,7 @@ pub enum LineStyle {
 }
 
 impl LineStyle {
-    /// Dash pattern in bitmap px for a given line width (RENDERING_SPEC.md §6, adjusted):
+    /// Dash pattern in bitmap px for a given line width:
     /// `Dotted` is the SPARSE pattern and `Dashed` the LARGE one — the reference's normal
     /// dotted `[w, w]` and dashed `[2w, 2w]` patterns do not exist in this engine (dots too
     /// close / dashes too short), and neither do its `LargeDashed`/`SparseDotted` variants.

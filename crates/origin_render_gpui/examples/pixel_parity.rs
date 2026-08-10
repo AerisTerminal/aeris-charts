@@ -1,5 +1,5 @@
 //! Pixel-parity harness: diff what **official GPUI actually rasterized** against Origin's existing
-//! `origin_native` rasterizer, fixture by fixture (GPUI_PLAN.md §3.3, §9 Phase 4).
+//! `origin_native` rasterizer, fixture by fixture.
 //!
 //! GPUI owns presentation through `PlatformWindow::draw(&Scene)` and exposes no framebuffer readback,
 //! so the pixels are obtained by capturing the probe window's client area through DWM

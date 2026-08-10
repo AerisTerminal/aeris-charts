@@ -1,4 +1,4 @@
-//! Interaction models the engine owns outright (ARCHITECTURE.md §6.2): hosts forward
+//! Interaction models the engine owns outright: hosts forward
 //! normalized pointer/wheel samples and schedule frames; every formula lives here so the
 //! native headless harness exercises the exact code the browser runs.
 //!

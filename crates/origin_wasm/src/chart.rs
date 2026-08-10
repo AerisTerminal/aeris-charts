@@ -70,7 +70,7 @@ extern "C" {
 
 static NEXT_RUNTIME_ID: AtomicU32 = AtomicU32::new(1);
 
-// the reference charting library default palette (RENDERING_SPEC.md §2.5, §7, §8, §15)
+// the reference charting library default palette
 // Axis palette (as CSS color strings for the 2D overlay)
 // TradingView-style volume: translucent green on up bars, red on down bars.
 
@@ -143,7 +143,7 @@ struct FormatRenderers {
     tex: TexQuadRenderer,
 }
 
-/// One GPU context shared by every chart instance in the page (ARCHITECTURE.md §6.5):
+/// One GPU context shared by every chart instance in the page:
 /// a single adapter/device/queue, one label atlas (glyphs cached across charts), and a
 /// per-format renderer cache. Per-chart state is only the surface, its config, and the
 /// size-dependent MSAA target. wasm32 is single-threaded, so `Rc`/`RefCell` suffice.

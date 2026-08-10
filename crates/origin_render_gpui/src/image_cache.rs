@@ -5,8 +5,7 @@
 //! different pixels and GPUI serves the stale tile; mint a fresh id every frame and the atlas grows
 //! without bound. This module owns that contract for Origin.
 //!
-//! It is reserved for the Stage 3 text path (GPUI_PLAN.md §8: "use an Origin-owned cached text
-//! atlas/image path for chart text if that can restore identity") and is available to any future
+//! It is reserved for an Origin-owned cached text or image path and is available to any future
 //! prim that needs raster data. It is not part of the current GPUI-native text path. The module is
 //! GPUI-free, so the id policy and eviction are testable without a window.
 

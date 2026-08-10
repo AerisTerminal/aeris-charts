@@ -819,7 +819,7 @@ mod tests {
 
     #[test]
     fn every_prim_variant_lowers_to_at_least_one_op() {
-        // Guards GPUI_PLAN.md §2 "Every current `Prim` variant has a GPUI implementation": if a
+        // Guards the invariant that every current `Prim` variant has a GPUI implementation: if a
         // variant is added to the IR, this fails until it is mapped here.
         let points = vec![
             [0.0f32, 0.0],

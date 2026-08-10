@@ -1,6 +1,6 @@
 //! Time tick-mark weights and mark selection.
 //! Ports of `src/model/horz-scale-behavior-time/time-scale-point-weight-generator.ts`
-//! and `src/model/tick-marks.ts` (RENDERING_SPEC.md §11).
+//! and `src/model/tick-marks.ts`.
 //!
 //! Weights are assigned per point by comparing consecutive UTC timestamps: the largest
 //! calendar/time boundary crossed between neighbors determines the weight. Mark selection

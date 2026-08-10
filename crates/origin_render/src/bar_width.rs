@@ -1,5 +1,5 @@
 //! Optimal bar/candle widths. Port of `src/renderers/optimal-bar-width.ts`.
-//! See RENDERING_SPEC.md §2.1, §3.
+//! Shared bar-width and pixel-snapping rules.
 
 use std::f64::consts::PI;
 
@@ -28,7 +28,7 @@ pub fn optimal_candlestick_width(bar_spacing: f64, pixel_ratio: f64) -> i32 {
     (pixel_ratio.floor().max(optimal)) as i32
 }
 
-/// Crosshair-symmetry parity correction (RENDERING_SPEC.md §2.1): grid/crosshair line width is
+/// Crosshair-symmetry parity correction: grid/crosshair line width is
 /// `floor(pixel_ratio)` clamped to 1 device px (the engines' `max(1, floor)` line rule); candle
 /// width parity must match it so the crosshair centers on candles at any ratio, sub-1 included.
 pub fn apply_crosshair_parity(mut bar_width: i32, pixel_ratio: f64) -> i32 {

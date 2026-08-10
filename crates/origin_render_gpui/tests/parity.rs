@@ -2,8 +2,8 @@
 //!
 //! # What this proves, and what it does not
 //!
-//! It does **not** compare rasterized pixels — that needs a GPU readback GPUI does not expose (see
-//! `docs/GPUI_IMPLEMENTATION_REPORT.md`). What it does compare is the *draw stream*: for every
+//! It does **not** compare rasterized pixels because GPUI exposes no GPU readback. It compares the
+//! *draw stream*: for every
 //! primitive, the exact geometry and color each backend is asked to fill.
 //!
 //! For the crisp-rect subset (`Rect`, `RectFrame`, `HLine`, `VLine`, `Background`) that is a
@@ -730,7 +730,7 @@ fn planning_is_deterministic_for_an_unchanged_frame() {
 
 #[test]
 fn odd_even_and_fractional_viewport_geometry_stays_draw_call_identical() {
-    // GPUI_PLAN.md §10 "odd/even viewport sizes", "fractional pane sizes", "small and large chart
+    // Covers odd/even viewport sizes, fractional pane sizes, and small and large chart
     // bounds". Odd sizes at a fractional DPR are where half-pixel rounding diverges if a backend
     // recomputes geometry instead of consuming the engine's.
     let sizes = [

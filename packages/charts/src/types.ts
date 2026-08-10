@@ -1185,7 +1185,7 @@ export interface pane_api {
    * Attach a canvas primitive (plugin platform Phase C-e — the Canvas2D escape hatch) and
    * repaint. The primitive paints with arbitrary Canvas2D calls on the plugin overlay canvas
    * through a reference-style `CanvasRenderingTarget2D` mirror, so reference plugin renderers
-   * port near-verbatim. Locked limits (docs/PLUGIN_PLATFORM_DESIGN.md §3 Option B): plugin
+   * port near-verbatim. Plugin limits remain explicit: plugin
    * content is Canvas2D-only, always above the whole pane (no pane scissor, no z-ordering
    * between engine layers — `normal`/`top` only order among canvas views) and below the axis
    * chrome/crosshair. Divergence: reference returns `void`; here the returned handle detaches.

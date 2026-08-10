@@ -1,5 +1,5 @@
 //! Candlestick geometry builder. Port of `src/renderers/candlesticks-renderer.ts`
-//! (RENDERING_SPEC.md §2). Produces integer bitmap-space rects; a backend turns them into
+//! Produces integer bitmap-space rects; a backend turns them into
 //! instanced quads. Draw order: wicks -> borders -> bodies.
 
 use crate::bar_width::{apply_crosshair_parity, optimal_candlestick_width};

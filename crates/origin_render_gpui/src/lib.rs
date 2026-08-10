@@ -269,7 +269,7 @@ impl GpuiChartRenderer {
 
     /// Drop every cached resource.
     ///
-    /// Explicit rather than inferred (GPUI_PLAN.md §6.3: "make resource invalidation explicit").
+    /// Explicit rather than inferred so resource invalidation remains deterministic.
     /// Call when something the cache keys cannot observe changes: a registered font set, a theme
     /// swap that re-resolves font families, or a DPR change.
     pub fn invalidate_caches(&mut self) {

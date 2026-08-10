@@ -154,7 +154,7 @@ impl TimeScaleCore {
         }
     }
 
-    // --- coordinate conversion (RENDERING_SPEC.md §1.1) ---
+    // --- coordinate conversion ---
 
     pub fn index_to_coordinate(&self, index: TimePointIndex) -> Coordinate {
         self.logical_to_coordinate(index as f64)
@@ -462,7 +462,7 @@ impl TimeScaleCore {
         self.correct_bar_spacing();
     }
 
-    // --- zoom (RENDERING_SPEC.md §1.1) ---
+    // --- zoom ---
 
     /// `scale` is in 1/10 parts of the current bar spacing; negative zooms out.
     pub fn zoom(&mut self, zoom_point: Coordinate, scale: f64) {

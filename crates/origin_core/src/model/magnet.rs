@@ -1,4 +1,4 @@
-//! Crosshair magnet. Port of `src/model/magnet.ts` (RENDERING_SPEC.md §8).
+//! Crosshair magnet, ported from `src/model/magnet.ts`.
 //!
 //! In Magnet mode the crosshair's horizontal line snaps to the close price of the bar under
 //! the cursor; in MagnetOHLC it snaps to whichever of open/high/low/close is nearest the

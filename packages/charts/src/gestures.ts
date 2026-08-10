@@ -2,7 +2,7 @@
  * Pointer/wheel/keyboard gesture recognizer wired onto the axis/input overlay canvas.
  *
  * The recognizer (event classification, slop, ownership, tracking mode) lives here per
- * ARCHITECTURE.md §6.2, but every interaction MODEL is engine-owned (`origin_engine::interaction`)
+ * browser event translation lives here, but every interaction model is engine-owned (`origin_engine::interaction`)
  * and driven through the wasm handle: pan/scroll sessions, axis drag-to-scale, vertical price
  * pan, kinetic (momentum) coast, wheel/pinch zoom increments, and eased scroll animations —
  * the headless native harness runs the exact same code.

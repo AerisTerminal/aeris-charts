@@ -153,7 +153,7 @@ pub struct MeshVertex {
 /// One lowered frame: the ordered ops plus the shared vertex pool their meshes index.
 ///
 /// Reused across frames via [`ScenePlan::clear`] so steady-state painting does not reallocate
-/// (GPUI_PLAN.md §9 Phase 5).
+/// for stable steady-state memory.
 #[derive(Clone, Debug, Default)]
 pub struct ScenePlan {
     pub ops: Vec<SceneOp>,

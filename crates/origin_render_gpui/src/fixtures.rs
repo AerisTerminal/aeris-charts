@@ -2,7 +2,7 @@
 //!
 //! These exist so the *same* `Prim` list can be rendered by official GPUI (through
 //! [`crate::backend`]) and by `origin_native`'s tiny-skia rasterizer, and the two rasterizations
-//! compared pixel for pixel (GPUI_PLAN.md §3.3, §9 Phase 4).
+//! compared pixel for pixel.
 //!
 //! Every fixture is built parametrically from a device-pixel-ratio so the *same* logical scene can
 //! be emitted at any DPR: the engine bakes the DPR into `Prim` coordinates, so a fixture must too.

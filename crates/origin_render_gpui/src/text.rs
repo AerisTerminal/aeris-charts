@@ -1,6 +1,6 @@
 //! Text measurement, placement, and cache integration for the GPUI executor.
 //!
-//! # Stage 1 — the current behavior this must reproduce (GPUI_PLAN.md §8)
+//! # Current behavior this must reproduce
 //!
 //! Recorded from `origin_render::draw_list`, `origin_render::canvas2d`, `origin_wasm::text_cache`
 //! and `origin_native`, which are the shipping text paths:
@@ -40,7 +40,7 @@ use crate::scene::TextRun;
 
 /// Default capacity, in runs. A chart frame has label-scale text (axis ticks, crosshair labels,
 /// chips, watermark) — a few dozen distinct runs — so 512 never thrashes a realistic frame while
-/// still bounding memory (GPUI_PLAN.md §9 Phase 5: "bounded memory").
+/// while still bounding memory.
 pub const TEXT_CACHE_CAPACITY: usize = 512;
 
 /// f32 bits of the subpixel fraction of `v`.

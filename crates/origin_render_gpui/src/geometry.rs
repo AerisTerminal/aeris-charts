@@ -7,7 +7,7 @@
 //!   (`build_line_stroke`/`build_area_fill`/`build_disc`), so GPUI draws the same triangles the
 //!   WebGPU backend does.
 //!
-//! GPUI_PLAN.md §7 rule 3: "Use Origin's coordinate, bar-width, and snapping calculations."
+//! Uses Origin's coordinate, bar-width, and snapping calculations.
 
 use origin_render::color::Color;
 use origin_render::draw_list::{IRect, LineStyle, LineType};
