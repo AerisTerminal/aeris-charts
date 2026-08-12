@@ -102,9 +102,9 @@ Changes to geometry, snapping, scales, interactions, or execution require the na
 
 Lower layers never import a host API to bypass their boundary. The headless path is `nucleuscharts_core` and `nucleuscharts_indicators` into `nucleuscharts_engine`, then `nucleuscharts_render`; GPUI, WebGPU, native, and WASM/browser code sit at execution boundaries. Avoid new crates, traits, and feature flags unless they enforce a real current dependency or platform boundary.
 
-## Repository documentation rule
+## Repository documentation
 
-The only Markdown files allowed are the root-level `README.md`, `ARCHITECTURE.md`, and `AGENTS.md`. Keep the README focused on product orientation and contributor setup. Do not create plans, reports, reviews, roadmaps, temporary Markdown, package READMEs, or duplicate architecture documents. Put durable architecture here, executable behavior in code and tests, and transient work notes outside the repository.
+Markdown documentation may live at the root or beside the component it explains when it has a durable repository purpose. Keep the root README focused on product orientation and contributor setup, and keep architectural ownership and data flow in this file. Do not commit transient work notes, generated reports, or duplicate documentation.
 
 ## Verification
 

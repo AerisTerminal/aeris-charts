@@ -23,15 +23,9 @@ If a requested mechanism would materially harm correctness, visual parity, perfo
 
 Use callers, measurements, tests, pinned dependency source, official platform behavior, or established constraints as evidence. Difficulty is never a reason to ship a fragile substitute. Simplicity means the least complexity that completely meets the requirement, not the easiest incomplete result.
 
-## Markdown rule
+## Documentation hygiene
 
-Exactly three Markdown files may exist:
-
-- `ARCHITECTURE.md`
-- `AGENTS.md`
-- `README.md`
-
-Do not create any other `.md` file, including temporary plans, reports, reviews, generated output, package READMEs, or nested agent files. If a tool creates one during work, remove it before committing.
+Markdown documentation may be added when it has a durable repository purpose. Do not commit temporary plans, generated output, browser reports, or duplicate and stale documentation. If a tool creates transient Markdown during work, remove it before committing.
 
 Keep `ARCHITECTURE.md` synchronized with the code. Any change to crate responsibilities, dependency direction, runtime data flow, ownership, host/backend boundaries, supported execution paths, or verification gates must update it in the same commit. Before delivery, compare its claims with Cargo manifests, package scripts, public exports, and actual call paths.
 
@@ -72,7 +66,7 @@ Ponytail removes accidental complexity. It must not simplify away render parity,
 4. Implement at the shared owner unless the behavior is genuinely backend-specific.
 5. Verify parity and performance in proportion to the risk.
 6. Update `ARCHITECTURE.md` in the same commit when any architectural claim changed.
-7. Confirm exactly the three allowed Markdown files exist.
+7. Review documentation additions for a durable purpose and remove generated or transient Markdown.
 
 A passing unit test that bypasses the real host or executor path is not sufficient runtime evidence.
 
@@ -103,7 +97,7 @@ npm run typecheck
 npm run test:pack
 ```
 
-Run Playwright for browser-facing changes and GPUI parity/replay checks for GPUI executor changes. Documentation-only changes may skip code gates, but still require diff, link/path, architecture-consistency, and three-Markdown-file checks.
+Run Playwright for browser-facing changes and GPUI parity/replay checks for GPUI executor changes. Documentation-only changes may skip code gates, but still require diff, link/path, architecture-consistency, and documentation-hygiene checks.
 
 When complete, review the diff, commit once with a structured message describing the outcome and verification, push `main` to `github` without force, and report remaining manual verification honestly.
 
