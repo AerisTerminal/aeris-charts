@@ -19,11 +19,11 @@ async function wait_for_chart(page) {
   }));
 }
 
-// Pixel probes run at dpr 1 (2px radius = 2 bitmap px; CSS px = bitmap px).
-async function open_cluster_page(browser, options) {
+// Geometry probes default to DPR 1; alignment coverage overrides it when needed.
+async function open_cluster_page(browser, options, deviceScaleFactor = 1) {
   const context = await browser.newContext({
     viewport: { width: 1280, height: 720 },
-    deviceScaleFactor: 1,
+    deviceScaleFactor,
     colorScheme: "light",
   });
   const page = await context.newPage();
@@ -38,7 +38,7 @@ async function open_cluster_page(browser, options) {
     const close = last.close - 2;
     window.__cluster_close = close;
     window.__main.update({ time: now, open: last.close, high: last.close + 0.6, low: close - 0.6, close });
-    window.__main.apply_options({ price_line_visible: false, ...opts });
+    window.__main.apply_options({ down_color: "#ef5350", price_line_visible: false, ...opts });
   }, options);
   await page.evaluate(() => new Promise((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(resolve));
@@ -170,6 +170,53 @@ function count_where(png, box, predicate) {
 const count_color = (png, box, color) => count_where(png, box, (c) => near(c, color));
 const is_white = (c) => c[0] > 240 && c[1] > 240 && c[2] > 240;
 
+function white_ink_center(png, box) {
+  let top = Infinity;
+  let bottom = -Infinity;
+  for (let y = box.top; y < box.bottom; y += 1) {
+    for (let x = box.left; x < box.right; x += 1) {
+      if (is_white(px(png, x, y))) {
+        top = Math.min(top, y);
+        bottom = Math.max(bottom, y);
+      }
+    }
+  }
+  expect(top, "label must contain white glyph ink").toBeLessThan(Infinity);
+  return (top + bottom) / 2;
+}
+
+function expect_white_ink_centered(png, box, tolerance = 1) {
+  const box_center = (box.top + box.bottom - 1) / 2;
+  expect(Math.abs(white_ink_center(png, box) - box_center)).toBeLessThanOrEqual(tolerance);
+}
+
+function color_bands(png, color) {
+  const rows = [];
+  for (let y = 0; y < png.height; y += 1) {
+    let left = png.width;
+    let right = -1;
+    for (let x = 0; x < png.width; x += 1) {
+      if (near(px(png, x, y), color)) {
+        left = Math.min(left, x);
+        right = x;
+      }
+    }
+    if (right >= 0) rows.push({ y, left, right });
+  }
+  const bands = [];
+  for (const row of rows) {
+    const last = bands[bands.length - 1];
+    if (last && row.y === last.bottom) {
+      last.bottom += 1;
+      last.left = Math.min(last.left, row.left);
+      last.right = Math.max(last.right, row.right + 1);
+    } else {
+      bands.push({ left: row.left, right: row.right + 1, top: row.y, bottom: row.y + 1 });
+    }
+  }
+  return bands;
+}
+
 function region_diff(a, b, box) {
   let diff = 0;
   for (let y = box.top; y < box.bottom; y += 1) {
@@ -213,6 +260,8 @@ test("last-value cluster paints chip, price, and countdown rows; the chip matche
   expect(near(chip_pixel, CHIP), `chip pixel ${chip_pixel}`).toBe(true);
   expect(near(price_pixel, LABEL), `price pixel ${price_pixel}`).toBe(true);
   expect(dist(chip_pixel, price_pixel)).toBeLessThanOrEqual(12); // matching colors by default
+  expect_white_ink_centered(on, { ...chip, bottom: chip.top + ROW });
+  expect_white_ink_centered(on, { ...box, bottom: box.top + ROW });
   // The countdown row sits below the top row, in the main label color, spanning the full width.
   expect(near(px(on, box.left + 3, box.bottom - 3), LABEL)).toBe(true);
   expect(near(px(on, box.right - 4, box.bottom - 3), LABEL)).toBe(true);
@@ -225,6 +274,29 @@ test("last-value cluster paints chip, price, and countdown rows; the chip matche
   const plain = find_cluster(off, anchor.pane_w);
   expect(plain.top).toBeGreaterThanOrEqual(0);
   expect(plain.bottom - plain.top).toBeLessThanOrEqual(ROW + 3);
+  await context.close();
+});
+
+test("crosshair price and time glyphs stay centered in their label boxes", async ({ browser }) => {
+  const { context, page } = await open_cluster_page(browser, {
+    last_value_visible: false,
+    title_visible: false,
+    countdown_visible: false,
+  }, 1.25);
+  await page.evaluate(() => window.__chart.apply_options({
+    crosshair: {
+      horzLine: { labelBackgroundColor: "#ff00ff" },
+      vertLine: { labelBackgroundColor: "#ff00ff" },
+    },
+  }));
+  await page.waitForTimeout(600);
+  const canvas = await page.locator("#chart_container canvas").last().boundingBox();
+  await page.mouse.move(canvas.x + canvas.width / 2, canvas.y + canvas.height / 2);
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const shot = await capture(page);
+  const labels = color_bands(shot, [255, 0, 255]).filter((box) => box.bottom - box.top >= 12);
+  expect(labels).toHaveLength(2);
+  for (const label of labels) expect_white_ink_centered(shot, label, 2);
   await context.close();
 });
 

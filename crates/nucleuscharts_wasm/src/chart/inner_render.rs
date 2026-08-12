@@ -276,6 +276,7 @@ impl ChartInner {
             layout.font_size * dpr,
             layout.font_family
         ));
+        axis_ctx.set_text_baseline("middle");
         self.engine
             .build_axis_primitives_into(&self.axis_frame, &mut self.axis_prims, |text| {
                 axis_ctx
