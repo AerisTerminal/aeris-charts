@@ -131,10 +131,9 @@ pub(crate) fn push_vertices(
 /// Reusable tessellation buffers, owned by the renderer and cleared (never freed) per prim.
 ///
 /// Nucleus's tessellators write into caller-provided `Vec`s. Allocating those fresh per prim made
-/// scene construction allocation-bound: a single dense polyline grows a ~1.5 MB `StrokeMesh` from
-/// empty every frame, and the doubling reallocations copy roughly twice that. Measured on the
-/// standard dense fixture, hoisting these buffers out of the per-frame path is the difference
-/// between ~1.0 ms and ~0.6 ms of scene-construction time, with quad emission itself at 0.04 ms.
+/// scene construction allocation-bound: a single dense polyline grows a large `StrokeMesh` from
+/// empty every frame, and doubling reallocations copy its contents. Retaining these buffers avoids
+/// that repeated allocation while keeping the produced geometry unchanged.
 ///
 /// Buffers are separate fields rather than one arena so the tessellators can borrow the input and
 /// output halves disjointly.

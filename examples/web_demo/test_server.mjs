@@ -4,6 +4,7 @@ import { extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(fileURLToPath(new URL(".", import.meta.url)));
+const benchmark_root = resolve(root, "..", "..", "benchmarks");
 const port = Number.parseInt(process.env.NUCLEUSCHARTS_TEST_PORT ?? "4174", 10);
 const mime_types = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -23,8 +24,11 @@ const server = createServer(async (request, response) => {
       return;
     }
     const relative = decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname);
-    const filename = resolve(root, `.${relative}`);
-    if (filename !== root && !filename.startsWith(`${root}${sep}`)) {
+    const is_benchmark = relative.startsWith("/benchmarks/");
+    const serving_root = is_benchmark ? benchmark_root : root;
+    const serving_relative = is_benchmark ? relative.slice("/benchmarks".length) : relative;
+    const filename = resolve(serving_root, `.${serving_relative}`);
+    if (filename !== serving_root && !filename.startsWith(`${serving_root}${sep}`)) {
       response.writeHead(403).end("forbidden");
       return;
     }

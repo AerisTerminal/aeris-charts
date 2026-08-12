@@ -1,0 +1,5 @@
+{
+  "policy_version": 1,
+  "baseline": "explicit_previous_release",
+  "thresholds": {}
+}

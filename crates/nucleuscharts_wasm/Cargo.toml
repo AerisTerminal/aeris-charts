@@ -55,11 +55,8 @@ workspace = true
 # `+simd128`, so the module contains v128 instructions and wasm-opt refuses to read it
 # without the matching feature flag.
 #
-# Optimization level: `-Oz` stays. Measured on this artifact against `-O4` (4 build variants,
-# Three interleaved browser benchmark rounds found `-O4` within the harness noise floor.
-# costs +21 KB raw / +3 KB gzipped and buys nothing resolvable above the harness noise floor on
-# 1M-bar installs, 50k-bar frame builds, or 10k-drawing hit tests. Size is a product metric and
-# the hot loops are already gated at 5x the 60fps budget. Revisit with a workload where the
-# codegen difference is actually visible.
+# Optimization level: `-Oz` stays because package size is a product metric. Evaluate any future
+# change with the versioned release artifact and browser scenarios under `benchmarks/`, preserving
+# the tradeoff as raw evidence instead of a handwritten performance claim.
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = ["-Oz", "--enable-mutable-globals", "--enable-nontrapping-float-to-int", "--enable-bulk-memory", "--enable-sign-ext", "--enable-simd"]

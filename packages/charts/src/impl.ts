@@ -322,8 +322,8 @@ class series_impl implements series_api {
 
   /**
    * Columnar fast path: already-packed typed arrays go straight to the engine, skipping
-   * the per-object JS packing of `set_data` (measured at ~0.5 µs/bar — dominant cost of
-   * bulk installs from feed handlers that hold columnar data). `times` are UTC seconds
+   * the per-object JS packing of `set_data`, which is avoidable work for feed handlers that
+   * already hold columnar data. `times` are UTC seconds
    * (the engine's time unit, see `time_to_utc_seconds`); single-value series repeat
    * their value across all four price channels. Per-point colors are not carried —
    * apply them after with the usual options/colors path. The engine's sort/dedupe/

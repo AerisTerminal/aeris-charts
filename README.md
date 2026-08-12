@@ -1,6 +1,6 @@
 # Nucleus Charts
 
-Nucleus Charts is a high-performance financial chart engine built in Rust. One deterministic chart model powers WebGPU, Canvas2D, GPUI, and native rendering for browser and desktop hosts.
+Nucleus Charts is a financial chart engine built in Rust. One deterministic chart model powers WebGPU, Canvas2D, GPUI, and native rendering for browser and desktop hosts.
 
 The project includes professional chart interactions, drawings, technical indicators, multiple panes and scales, custom series, primitives, shared-memory market-data input, and backend parity tooling.
 
@@ -68,6 +68,10 @@ npm run test:pack
 ```
 
 The complete verification gates are documented in [AGENTS.md](AGENTS.md) and enforced by CI.
+
+## Performance evidence
+
+Reproducible release-package benchmarks live in [`benchmarks/`](benchmarks/README.md). The harness records deterministic workloads, raw samples, statistical summaries, build and machine provenance, capability limits, package sizes, browser CPU/GPU timing, memory, lifecycle, scaling, and soak behavior. Shared CI results are diagnostics; only clean runs from the controlled benchmark environment may produce public claims or release baselines.
 
 ## License
 

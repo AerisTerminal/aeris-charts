@@ -971,7 +971,7 @@ export interface series_api {
    *
    * Cost for the streaming shape — every row at or past the chart's last timestamp — is linear in
    * the batch and independent of series length, because each row takes the engine's single-append
-   * fast path. Measured: 1M points in 1000-row batches at ~3.4M points/sec, with flat JS heap. A
+   * fast path. A
    * row that lands *before* the last timestamp is a mid-history insert and costs a reindex of the
    * shared time axis, exactly as the same row would through {@link update}; a batch of those is
    * therefore linear in the batch times the series length, not a bulk reindex. Use

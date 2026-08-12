@@ -13,7 +13,7 @@ import { test, expect } from "@playwright/test";
 //
 // Opt-in via NUCLEUSCHARTS_BENCH=1, and skipped otherwise. Two reasons, both deliberate: it is a measuring
 // instrument rather than a regression test, and it installs 1M bars five times over, which grows wasm
-// linear memory to ~300 MB. Linear memory never shrinks, and that residue was measured starving the
+// substantial linear memory. Linear memory never shrinks, and that residue was observed starving the
 // *next* spec's page init past a 30s timeout when this ran as part of the default suite.
 
 const ENABLED = process.env.NUCLEUSCHARTS_BENCH === "1";

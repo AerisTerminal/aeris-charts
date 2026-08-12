@@ -2,7 +2,7 @@
   "name": "@nucleuscharts/financial",
   "version": "0.8.12",
   "type": "module",
-  "description": "High-performance financial charting SDK powered by Rust, WebAssembly, and WebGPU.",
+  "description": "Financial charting SDK powered by Rust, WebAssembly, and WebGPU.",
   "license": "SEE LICENSE IN LICENSE",
   "author": "NucleusCharts",
   "repository": {

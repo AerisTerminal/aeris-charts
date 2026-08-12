@@ -469,9 +469,9 @@ fn paint_range(
                 border_color,
             } => {
                 // Batch a run of identically-filled plain opaque quads into one GPUI Path.
-                // GPUI charges ~1.3-1.7 us per `paint_quad` (a bounds-tree insert plus storing the
-                // primitive twice), so a chart's thousands of grid lines, wicks and bodies dominate
-                // submission cost. See `batchable_run` for why this cannot change the output.
+                // Each `paint_quad` inserts into the bounds tree and stores the primitive. Collapse
+                // long homogeneous runs to keep submission work bounded; see `batchable_run` for
+                // why this cannot change the output.
                 let run = batchable_run(plan, i, end);
                 if run >= QUAD_BATCH_THRESHOLD {
                     if let Some(path) = build_quad_run_path(plan, i, i + run, transform) {
