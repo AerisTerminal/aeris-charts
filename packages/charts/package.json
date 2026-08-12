@@ -1,27 +1,31 @@
 {
-  "name": "@axiusflow-app/charts",
+  "name": "@axiusflowhq/charts",
   "version": "0.8.12",
   "type": "module",
-  "description": "Axiusflow Charts public TypeScript API (snake_case)",
+  "description": "High-performance financial charting SDK powered by Rust, WebAssembly, and WebGPU.",
   "license": "SEE LICENSE IN LICENSE",
   "author": "Axiusflow",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Axiusflow-app/Axiusflow_Charts.git",
+    "url": "git+https://github.com/Axiusflowhq/Axiusflow_Charts.git",
     "directory": "packages/charts"
   },
   "bugs": {
-    "url": "https://github.com/Axiusflow-app/Axiusflow_Charts/issues"
+    "url": "https://github.com/Axiusflowhq/Axiusflow_Charts/issues"
   },
-  "homepage": "https://github.com/Axiusflow-app/Axiusflow_Charts#readme",
+  "homepage": "https://github.com/Axiusflowhq/Axiusflow_Charts#readme",
   "keywords": [
-    "chart",
+    "axiusflow",
     "charts",
+    "charting",
     "trading",
+    "financial-charts",
     "candlestick",
     "finance",
+    "market-data",
     "webgpu",
     "wasm",
+    "webassembly",
     "rust"
   ],
   "engines": {
