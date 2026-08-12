@@ -1,17 +1,19 @@
 {
-  "name": "@tradeaion/charts",
-  "version": "0.8.11",
+  "name": "@axiusflow-app/charts",
+  "version": "0.8.12",
   "type": "module",
-  "description": "Origin Charts public TypeScript API (snake_case)",
+  "description": "Axiusflow Charts public TypeScript API (snake_case)",
   "license": "SEE LICENSE IN LICENSE",
-  "author": "TradeAion",
+  "author": "Axiusflow",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TradeAion/Origin_charts.git",
+    "url": "git+https://github.com/Axiusflow-app/Axiusflow_Charts.git",
     "directory": "packages/charts"
   },
-  "bugs": "https://github.com/TradeAion/Origin_charts/issues",
-  "homepage": "https://github.com/TradeAion/Origin_charts#readme",
+  "bugs": {
+    "url": "https://github.com/Axiusflow-app/Axiusflow_Charts/issues"
+  },
+  "homepage": "https://github.com/Axiusflow-app/Axiusflow_Charts#readme",
   "keywords": [
     "chart",
     "charts",
