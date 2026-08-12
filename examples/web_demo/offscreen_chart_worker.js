@@ -1,4 +1,4 @@
-import { create_offscreen_chart } from "./dist/origin_charts.js";
+import { create_offscreen_chart } from "./dist/nucleuscharts_financial.js";
 
 let chart = null;
 let gpu_canvas = null;

@@ -1,5 +1,5 @@
 /**
- * Pane primitives (plugin platform Phase C-a) — Origin's take on the reference charting library v5's
+ * Pane primitives (plugin platform Phase C-a) — Nucleus's take on the reference charting library v5's
  * `IPanePrimitive` (reference model/ipane-primitive.ts, api/pane-api.ts `PaneApi.attachPrimitive`).
  *
  * Locked design divergence: a primitive
@@ -17,8 +17,8 @@ export type primitive_line_style = 0 | 1 | 2 | 3 | 4;
 
 /**
  * Draw context handed to a {@link primitive_pane_view} renderer. All coordinates are absolute
- * bitmap px of the whole chart (x from its left edge, y from its top — pane origins included),
- * the same space the engines' geometry uses; `pane_left`/`pane_top` give the pane's origin and
+ * bitmap px of the whole chart (x from its left edge, y from its top — pane offsets included),
+ * the same space the engines' geometry uses; `pane_left`/`pane_top` give the pane's offset and
  * `dpr` the nominal device pixel ratio. The converters resolve against the settled post-layout
  * scales (the pane's right price scale by default) and return `null` when a value falls off the
  * scale — mirroring the reference's `timeToCoordinate`/`priceToCoordinate` nullability.
@@ -30,9 +30,9 @@ export interface primitive_draw_context {
   readonly pane_width: number;
   /** Pane bitmap height in px. */
   readonly pane_height: number;
-  /** Pane origin x in absolute bitmap px (0 unless a left price axis is visible). */
+  /** Pane offset x in absolute bitmap px (0 unless a left price axis is visible). */
   readonly pane_left: number;
-  /** Pane origin y in absolute bitmap px. */
+  /** Pane offset y in absolute bitmap px. */
   readonly pane_top: number;
   /** The chart's nominal device pixel ratio. */
   readonly dpr: number;
@@ -104,7 +104,7 @@ export interface primitive_pane_view {
 }
 
 /**
- * A primitive's hit-test result (reference `PrimitiveHoveredItem`, reduced to Origin's arbitration
+ * A primitive's hit-test result (reference `PrimitiveHoveredItem`, reduced to Nucleus's arbitration
  * model: the host owns z-ordering and series-vs-primitive precedence, so the reference's `distance`,
  * `hitTestPriority`, `itemType`, and `isBackground` fields are not modeled — within a layer,
  * the first hit in paint order wins).
@@ -126,7 +126,7 @@ export interface primitive_hit_result {
  * A boxed axis label descriptor (cf. reference `ISeriesPrimitiveAxisView`). `coordinate` is media px
  * from the pane's top edge (price axis) or the pane's left edge (time axis). `background_color`
  * (or `color` as a shorthand) fills the box; `text_color` defaults to the background's reference
- * contrast pick. Extension over reference: reference exposes axis views only on series primitives; Origin
+ * contrast pick. Extension over reference: reference exposes axis views only on series primitives; Nucleus
  * accepts them on pane primitives too (painted on the pane's right scale / the time strip).
  */
 export interface primitive_axis_label {

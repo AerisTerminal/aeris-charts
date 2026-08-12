@@ -1,8 +1,8 @@
-# Origin Charts Architecture
+# Nucleus Charts Architecture
 
 ## Purpose
 
-Origin Charts is a high-performance financial chart engine. It provides chart state, interaction behavior, drawing tools, indicators, frame construction, and multiple rendering backends for Axiusflow and browser hosts.
+Nucleus Charts is a high-performance financial chart engine. It provides chart state, interaction behavior, drawing tools, indicators, frame construction, and multiple rendering backends for Axiusflow and browser hosts.
 
 The engine is backend-neutral and host-neutral. One canonical state must produce equivalent frames across GPUI, WebGPU, Canvas2D, and native test rendering. Performance, visual parity, deterministic behavior, and bounded resource use are product requirements.
 
@@ -12,58 +12,58 @@ Source code, tests, and measured release behavior are the implementation truth. 
 
 ```text
 Host API and market data
-    -> origin_core validation, data, scales, and options
-    -> origin_engine chart state and interaction
-    -> ChartFrame and origin_render DrawList
+    -> nucleuscharts_core validation, data, scales, and options
+    -> nucleuscharts_engine chart state and interaction
+    -> ChartFrame and nucleuscharts_render DrawList
     -> GPUI | WebGPU | Canvas2D | tiny-skia executor
     -> pixels and frame metrics
 ```
 
-Browser hosts enter through `packages/charts`, which translates the public TypeScript API into typed arrays and WebAssembly calls. Native Rust hosts use `origin_engine` directly and select a renderer. Rendering backends consume prepared frame data; they do not own chart semantics.
+Browser hosts enter through `packages/charts`, which translates the public TypeScript API into typed arrays and WebAssembly calls. Native Rust hosts use `nucleuscharts_engine` directly and select a renderer. Rendering backends consume prepared frame data; they do not own chart semantics.
 
 ## Crate boundaries
 
-### `origin_core`
+### `nucleuscharts_core`
 
 Platform-free chart fundamentals: validated data, plot lists, ranges, options, formatting, price scales, time scales, tick marks, and shared math. Media-space calculations remain `f64`; conversion to backend coordinate formats happens at rendering boundaries.
 
-`origin_core` must not depend on a window system, browser, GPU, or host application.
+`nucleuscharts_core` must not depend on a window system, browser, GPU, or host application.
 
-### `origin_indicators`
+### `nucleuscharts_indicators`
 
 Pure technical-indicator calculations over numeric slices. Warm-up gaps are explicit. This crate does not know about charts, panes, rendering, WebAssembly, or GPUI.
 
-### `origin_engine`
+### `nucleuscharts_engine`
 
 The headless owner of chart behavior and mutable chart state. It owns series, panes, scales, workspace layout, drawings, hit testing, interaction models, indicator bindings, price lines, and frame construction.
 
 Hosts send input and data to the engine. The engine returns query results and a prepared `ChartFrame`. Host-specific gesture recognition may translate operating-system events, but zoom, scroll, kinetic motion, snapping, selection, and drawing semantics belong here.
 
-### `origin_render`
+### `nucleuscharts_render`
 
 Backend-neutral drawing primitives, colors, geometry, bar-width rules, and the ordered `DrawList`. This is the contract shared by every renderer. Pixel snapping, primitive ordering, clipping intent, and geometry must be decided before backend execution whenever possible.
 
-### `origin_render_gpui`
+### `nucleuscharts_render_gpui`
 
 The native GPUI executor. It converts the prepared primitive stream into GPUI scene operations and owns GPUI-specific text, image caches, geometry conversion, backend metrics, and fixtures. It must not fork chart behavior or recalculate engine geometry.
 
-### `origin_render_wgpu`
+### `nucleuscharts_render_wgpu`
 
 The WebGPU executor. It owns quad, triangle, textured-label, atlas, blend, multisample, scissor, and GPU timing resources. GPU objects are reused across frames and rebuilt only when their actual invalidation inputs change.
 
-### `origin_wasm`
+### `nucleuscharts_wasm`
 
 The browser boundary. It exposes the engine through `wasm-bindgen`, decodes typed input, selects WebGPU or Canvas2D policy, executes browser frames, handles shared ring input, text measurement, workspace APIs, and browser telemetry.
 
 The browser boundary translates data and platform events. It must not become a second chart engine.
 
-### `origin_native`
+### `nucleuscharts_native`
 
 The headless native executor and verification support. It uses tiny-skia for deterministic raster output, golden comparisons, examples, and release performance gates. It is evidence infrastructure, not a competing product model.
 
 ## TypeScript package
 
-`packages/charts` is the public browser API. It owns WebAssembly initialization, TypeScript chart handles, DOM canvas lifecycle, resize observation, browser event translation, gesture recognition, host callbacks, themes, shortcuts, offscreen support, and grid helpers.
+`packages/charts` publishes the `@nucleuscharts/financial` browser API. It owns WebAssembly initialization, TypeScript chart handles, DOM canvas lifecycle, resize observation, browser event translation, gesture recognition, host callbacks, themes, shortcuts, offscreen support, and grid helpers.
 
 The package uses `snake_case` publicly. Data crosses into WebAssembly in typed columns or bounded shared-ring layouts rather than per-point object calls on hot paths. `examples/web_demo` is an integration and parity test host, not part of the library architecture.
 
@@ -100,7 +100,7 @@ Changes to geometry, snapping, scales, interactions, or execution require the na
 
 ## Dependency direction
 
-Lower layers never import a host API to bypass their boundary. The headless path is `origin_core` and `origin_indicators` into `origin_engine`, then `origin_render`; GPUI, WebGPU, native, and WASM/browser code sit at execution boundaries. Avoid new crates, traits, and feature flags unless they enforce a real current dependency or platform boundary.
+Lower layers never import a host API to bypass their boundary. The headless path is `nucleuscharts_core` and `nucleuscharts_indicators` into `nucleuscharts_engine`, then `nucleuscharts_render`; GPUI, WebGPU, native, and WASM/browser code sit at execution boundaries. Avoid new crates, traits, and feature flags unless they enforce a real current dependency or platform boundary.
 
 ## Repository documentation rule
 
@@ -113,9 +113,9 @@ The standard gates mirror CI:
 ```text
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo clippy -p origin_wasm --target wasm32-unknown-unknown -- -D warnings
+cargo clippy -p nucleuscharts_wasm --target wasm32-unknown-unknown -- -D warnings
 cargo test --workspace
-cargo run -p origin_native --example perf_gate --release
+cargo run -p nucleuscharts_native --example perf_gate --release
 
 cd packages/charts
 npm ci

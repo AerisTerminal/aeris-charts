@@ -1,22 +1,22 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/origin_core",
-    "crates/origin_indicators",
-    "crates/origin_engine",
-    "crates/origin_render",
-    "crates/origin_render_wgpu",
-    "crates/origin_render_gpui",
-    "crates/origin_wasm",
-    "crates/origin_native",
+    "crates/nucleuscharts_core",
+    "crates/nucleuscharts_indicators",
+    "crates/nucleuscharts_engine",
+    "crates/nucleuscharts_render",
+    "crates/nucleuscharts_render_wgpu",
+    "crates/nucleuscharts_render_gpui",
+    "crates/nucleuscharts_wasm",
+    "crates/nucleuscharts_native",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "LicenseRef-Proprietary"
-authors = ["Origin Charts"]
-repository = "https://github.com/TradeAion/Origin_charts"
+authors = ["NucleusCharts"]
+repository = "https://github.com/NucleusCharts/financial-charts"
 
 # Shared lint policy; every crate opts in via `[lints] workspace = true`.
 # CI enforces clippy with `-D warnings` on top of this.

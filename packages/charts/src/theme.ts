@@ -1,5 +1,5 @@
 /**
- * Origin's public theme mapping.
+ * Nucleus's public theme mapping.
  *
  * `style_tokens.json` is the only palette source. The Rust engine compiles the same file into
  * its defaults, so WebGPU, Canvas2D, GPUI, and the TypeScript package cannot drift.

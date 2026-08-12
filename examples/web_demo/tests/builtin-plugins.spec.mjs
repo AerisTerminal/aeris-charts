@@ -100,7 +100,7 @@ test("plugin markers render pixel-identical to engine markers", async ({ page },
 // is not achievable with markers on either form: the engine's WebGPU pass tessellates AA
 // shapes (circle/triangle/round-rect) and rasterizes them through its 4xMSAA target, whose
 // edge coverage differs from Canvas2D's analytic AA by 1-2 steps on AA edges (the paint-order
-// half of the original gap — tessellated markers painting before the quad bucket, under the
+// half of the source gap — tessellated markers painting before the quad bucket, under the
 // candle wicks — is fixed: both backends now execute the frame's prim order). Both effects
 // pre-date the plugin platform and reproduce identically with the engine's own markers
 // (measured with the overlapping fixture: 275 px before the ordering fix, 204 px of pure

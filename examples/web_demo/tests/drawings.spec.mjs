@@ -1019,14 +1019,14 @@ test("changing style mid-edit never wipes the typed text; font size control appl
 
   await page.click("#drawings_group [data-tool='text']");
   await page.mouse.click(p.x + offset.left, p.y + offset.top);
-  const editor = page.locator("#chart_container #origin-text-input");
+  const editor = page.locator("#chart_container #nucleuscharts-text-input");
   await expect(editor).toBeVisible();
   await editor.fill("keep me");
   // Change the weight like a real user (focusing the toolbar input blurs the editor, which
   // commits the text first; the change then applies the style) — the text must survive.
   await page.evaluate(() => document.getElementById("drawing_weight").focus());
   await page.selectOption("#drawing_weight", "700");
-  await expect(page.locator("#chart_container #origin-text-editor")).toHaveCount(0);
+  await expect(page.locator("#chart_container #nucleuscharts-text-editor")).toHaveCount(0);
   const options = await page.evaluate(() => window.__chart.drawings()[0].options());
   expect(options.text).toBe("keep me");
   expect(options.text_weight).toBe(700);
@@ -1115,11 +1115,11 @@ test("text tool: press places and opens typing mode; typing replaces the preview
   // Typing mode: the editing chrome is a square, thick blue-bordered box with a focused input
   // and the bold muted "Add text" preview (and nothing else — the engine's own placeholder is
   // suppressed while editing).
-  const wrap = page.locator("#chart_container #origin-text-editor");
+  const wrap = page.locator("#chart_container #nucleuscharts-text-editor");
   await expect(wrap).toBeVisible();
-  const editor = wrap.locator("#origin-text-input");
+  const editor = wrap.locator("#nucleuscharts-text-input");
   await expect(editor).toBeFocused();
-  const preview = wrap.locator("#origin-text-preview");
+  const preview = wrap.locator("#nucleuscharts-text-preview");
   await expect(preview).toHaveText("Add text");
   expect(await wrap.evaluate((el) => getComputedStyle(el).borderRadius)).toBe("0px");
   expect(await wrap.evaluate((el) => getComputedStyle(el).border)).toContain("2px");
@@ -1138,7 +1138,7 @@ test("text tool: press places and opens typing mode; typing replaces the preview
   await page.keyboard.press("Enter");
   await settle_frames(page);
   // Committed: the chrome is gone, the drawing carries the text.
-  await expect(page.locator("#chart_container #origin-text-editor")).toHaveCount(0);
+  await expect(page.locator("#chart_container #nucleuscharts-text-editor")).toHaveCount(0);
   const list = await drawings(page);
   expect(list).toHaveLength(1);
   expect((await page.evaluate(() => window.__chart.drawings()[0].options())).text).toBe("engine label");
@@ -1148,23 +1148,23 @@ test("text tool: Escape cancels the edit; clicking the label reopens typing mode
   await goto_fixture(page);
   const s = await anchor_spots(page);
   await page.evaluate(({ l0, p_mid }) => {
-    window.__chart.add_drawing("text", [{ logical: l0, price: p_mid }], { text: "original" });
+    window.__chart.add_drawing("text", [{ logical: l0, price: p_mid }], { text: "source" });
   }, s);
   await settle_frames(page);
   // Click the label: typing mode opens, prefilled.
   const p = await spot(page, s.l0, s.p_mid);
   await page.mouse.click(p.x, p.y);
-  const editor = page.locator("#chart_container #origin-text-input");
+  const editor = page.locator("#chart_container #nucleuscharts-text-input");
   await expect(editor).toBeVisible();
-  await expect(editor).toHaveText("original");
+  await expect(editor).toHaveText("source");
   // The preview is hidden for a non-empty edit.
-  await expect(page.locator("#origin-text-preview")).toBeHidden();
+  await expect(page.locator("#nucleuscharts-text-preview")).toBeHidden();
   // Escape discards the edit.
   await editor.fill("discarded");
   await page.keyboard.press("Escape");
   await settle_frames(page);
-  await expect(page.locator("#chart_container #origin-text-editor")).toHaveCount(0);
-  expect((await page.evaluate(() => window.__chart.drawings()[0].options())).text).toBe("original");
+  await expect(page.locator("#chart_container #nucleuscharts-text-editor")).toHaveCount(0);
+  expect((await page.evaluate(() => window.__chart.drawings()[0].options())).text).toBe("source");
 });
 
 test("empty text shows the muted placeholder, and clicking it opens typing mode", async ({ page }) => {
@@ -1185,7 +1185,7 @@ test("empty text shows the muted placeholder, and clicking it opens typing mode"
     "placeholder paints",
   ).toBeGreaterThan(30);
   await page.mouse.click(p.x, p.y);
-  const editor = page.locator("#chart_container #origin-text-input");
+  const editor = page.locator("#chart_container #nucleuscharts-text-input");
   await expect(editor).toBeVisible();
   await expect(editor).toHaveText("");
   // While editing, the engine's placeholder is suppressed: the region's muted-text pixels drop
@@ -1222,7 +1222,7 @@ test("text drawing moves freely in both directions with a body drag", async ({ p
   // Clicking the label afterwards still opens typing mode (movement does not eat the click).
   const moved_p = { x: p.x + 45, y: p.y - 25 };
   await page.mouse.click(moved_p.x, moved_p.y);
-  await expect(page.locator("#chart_container #origin-text-input")).toBeVisible();
+  await expect(page.locator("#chart_container #nucleuscharts-text-input")).toBeVisible();
   await page.keyboard.press("Escape");
 });
 
@@ -1235,10 +1235,10 @@ test("the editor tracks its anchor through wheel zoom and scroll (no displacemen
   await settle_frames(page);
   const p = await spot(page, s.l0, s.p_mid);
   await page.mouse.click(p.x, p.y);
-  const editor = page.locator("#chart_container #origin-text-input");
+  const editor = page.locator("#chart_container #nucleuscharts-text-input");
   await expect(editor).toBeVisible();
   const text_center = () => page.evaluate(() => {
-    const editor = document.querySelector("#origin-text-input");
+    const editor = document.querySelector("#nucleuscharts-text-input");
     const range = document.createRange();
     range.selectNodeContents(editor);
     const r = range.getBoundingClientRect();
@@ -1280,11 +1280,11 @@ test("typing mode keeps the text pixel-anchored (no shift, same size) as it grow
   await settle_frames(page);
   const p = await spot(page, s.l0, s.p_mid);
   await page.mouse.click(p.x, p.y);
-  const editor = page.locator("#chart_container #origin-text-input");
+  const editor = page.locator("#chart_container #nucleuscharts-text-input");
   await expect(editor).toBeVisible();
   // The editable's REAL text rect (Range) vs the engine anchor — the calibration's contract.
   const metrics = () => page.evaluate(() => {
-    const editor = document.querySelector("#origin-text-input");
+    const editor = document.querySelector("#nucleuscharts-text-input");
     const range = document.createRange();
     range.selectNodeContents(editor);
     const r = range.getBoundingClientRect();

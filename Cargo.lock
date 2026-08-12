@@ -3069,6 +3069,92 @@ dependencies = [
 ]
 
 [[package]]
+name = "nucleuscharts_core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "nucleuscharts_engine"
+version = "0.1.0"
+dependencies = [
+ "nucleuscharts_core",
+ "nucleuscharts_indicators",
+ "nucleuscharts_render",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "nucleuscharts_indicators"
+version = "0.1.0"
+
+[[package]]
+name = "nucleuscharts_native"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "nucleuscharts_core",
+ "nucleuscharts_engine",
+ "nucleuscharts_render",
+ "serde",
+ "serde_json",
+ "tiny-skia",
+]
+
+[[package]]
+name = "nucleuscharts_render"
+version = "0.1.0"
+dependencies = [
+ "nucleuscharts_core",
+]
+
+[[package]]
+name = "nucleuscharts_render_gpui"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "gpui_platform",
+ "nucleuscharts_core",
+ "nucleuscharts_engine",
+ "nucleuscharts_native",
+ "nucleuscharts_render",
+ "sha2",
+ "tiny-skia",
+]
+
+[[package]]
+name = "nucleuscharts_render_wgpu"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "nucleuscharts_engine",
+ "nucleuscharts_render",
+ "wgpu 25.0.2",
+]
+
+[[package]]
+name = "nucleuscharts_wasm"
+version = "0.1.0"
+dependencies = [
+ "console_error_panic_hook",
+ "futures-channel",
+ "js-sys",
+ "nucleuscharts_core",
+ "nucleuscharts_engine",
+ "nucleuscharts_render",
+ "nucleuscharts_render_wgpu",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "wgpu 25.0.2",
+]
+
+[[package]]
 name = "num"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3454,92 +3540,6 @@ checksum = "9aa2b01e1d916879f73a53d01d1d6cee68adbb31d6d9177a8cfce093cced1d50"
 dependencies = [
  "futures-core",
  "pin-project-lite",
-]
-
-[[package]]
-name = "origin_core"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "origin_engine"
-version = "0.1.0"
-dependencies = [
- "origin_core",
- "origin_indicators",
- "origin_render",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "origin_indicators"
-version = "0.1.0"
-
-[[package]]
-name = "origin_native"
-version = "0.1.0"
-dependencies = [
- "ab_glyph",
- "origin_core",
- "origin_engine",
- "origin_render",
- "serde",
- "serde_json",
- "tiny-skia",
-]
-
-[[package]]
-name = "origin_render"
-version = "0.1.0"
-dependencies = [
- "origin_core",
-]
-
-[[package]]
-name = "origin_render_gpui"
-version = "0.1.0"
-dependencies = [
- "gpui",
- "gpui_platform",
- "origin_core",
- "origin_engine",
- "origin_native",
- "origin_render",
- "sha2",
- "tiny-skia",
-]
-
-[[package]]
-name = "origin_render_wgpu"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "origin_engine",
- "origin_render",
- "wgpu 25.0.2",
-]
-
-[[package]]
-name = "origin_wasm"
-version = "0.1.0"
-dependencies = [
- "console_error_panic_hook",
- "futures-channel",
- "js-sys",
- "origin_core",
- "origin_engine",
- "origin_render",
- "origin_render_wgpu",
- "serde",
- "serde_json",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
- "wgpu 25.0.2",
 ]
 
 [[package]]

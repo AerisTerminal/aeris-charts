@@ -1,5 +1,5 @@
 /**
- * Public data, option, and handle types for `@tradeaion/charts` (snake_case). Extracted from
+ * Public data, option, and handle types for `@nucleuscharts/financial` (snake_case). Extracted from
  * `index.ts`.
  */
 
@@ -378,7 +378,7 @@ export interface price_scale_options {
    */
   text_color?: string;
   /**
-   * Origin extension (TradingView-style, default true): draw round-figure tick labels in the bold
+   * Nucleus extension (TradingView-style, default true): draw round-figure tick labels in the bold
    * font — multiples of step×10 on uniform ticks, exact powers of ten on log ticks.
    */
   bold_round_labels?: boolean;
@@ -396,7 +396,7 @@ export type deep_partial<T> = { [K in keyof T]?: deep_partial<T[K]> };
 export interface grid_line_options {
   color: string;
   style: number;
-  /** Show the grid lines (Origin default `false` — charts ship grid-free). */
+  /** Show the grid lines (Nucleus default `false` — charts ship grid-free). */
   visible: boolean;
 }
 
@@ -499,7 +499,7 @@ export interface chart_price_scale_options {
   minimumWidth?: number;
   /** Price scale text color (reference `textColor`); when unset, the scale follows `layout.textColor`. */
   textColor?: string;
-  /** Bold round-figure tick labels (Origin extension, TradingView-style, default `true`). */
+  /** Bold round-figure tick labels (Nucleus extension, TradingView-style, default `true`). */
   boldRoundLabels?: boolean;
 }
 
@@ -541,7 +541,7 @@ export interface chart_options {
   timeScale: { borderVisible: boolean; borderColor: string };
   /**
    * Large text label painted inside the pane (reference v4 `watermark`). `color` is any CSS color
-   * (include alpha for a faint mark; the default is fully transparent). Origin draws it on the shared
+   * (include alpha for a faint mark; the default is fully transparent). Nucleus draws it on the shared
    * overlay above the series — a deliberate divergence needed to stay pixel-identical across the
    * WebGPU and Canvas2D backends.
    */
@@ -572,7 +572,7 @@ export interface chart_options {
   backend: "auto" | "canvas2d";
   /**
    * Default style preset from `theme.ts` (the package's style settings file), applied at
-   * creation *under* any explicit options. The default comes from Origin's canonical style
+   * creation *under* any explicit options. The default comes from Nucleus's canonical style
    * tokens. Package-level only — never
    * forwarded to the engine.
    */
@@ -815,7 +815,7 @@ export const KIND_TO_U8: Record<series_kind, number> = {
 };
 
 // ---------------------------------------------------------------------------------------------
-// Drawing tools (engine-owned drawing objects; origin_engine drawings.rs)
+// Drawing tools (engine-owned drawing objects; nucleuscharts_engine drawings.rs)
 // ---------------------------------------------------------------------------------------------
 
 /**

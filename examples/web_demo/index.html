@@ -6,7 +6,7 @@
      scale it down to the device, squishing the UI and adding a fractional CSS scale on top
      of the canvas bitmap. user-scalable=no stops native pinch-zoom fighting the chart. -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-<title>Origin Charts — @origin/charts demo</title>
+<title>Nucleus Charts — @nucleuscharts/financial demo</title>
 <style>
   html, body { margin: 0; height: 100%; background: #fff; font-family: -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif; }
   #wrap { display: flex; flex-direction: column; height: 100%; }
@@ -51,7 +51,7 @@
 <body>
 <div id="wrap">
   <div id="bar">
-    <span class="brand">@origin/charts</span>
+    <span class="brand">@nucleuscharts/financial</span>
 
     <div class="group" id="type_group" data-caption="Series">
       <label><input type="radio" name="series" value="candlestick" checked> candles</label>
@@ -214,7 +214,7 @@
       </label>
       <label><input type="checkbox" id="last_value_toggle" checked> last value</label>
       <label title="TradingView-style title chip in the last-value cluster (darker shade of the label color, left of the price)"><input type="checkbox" id="title_chip_toggle" checked> title chip</label>
-      <label>title <input type="text" id="series_title" value="ORIGIN" size="6"></label>
+      <label>title <input type="text" id="series_title" value="NUCLEUS" size="6"></label>
       <label title="TradingView-style candle-close countdown stacked below the price in the last-value cluster"><input type="checkbox" id="countdown_toggle"> countdown</label>
       <label title="TradingView-style bid/ask lines + Bid/Ask axis chips (default off). Enable to stream synthetic quotes around the last price so the lines and chips move live"><input type="checkbox" id="bid_ask_toggle"> bid/ask</label>
     </div>
@@ -230,7 +230,7 @@
     <!-- watermark (reference v4 shape) -->
     <div class="group" id="watermark_group" data-caption="Watermark">
       <label><input type="checkbox" id="wm_visible"> show</label>
-      <label>text <input type="text" id="wm_text" value="ORIGIN" size="6"></label>
+      <label>text <input type="text" id="wm_text" value="NUCLEUS" size="6"></label>
       <label>color <input type="color" id="wm_color" value="#b0b8c4"></label>
       <label>size <input type="range" id="wm_size" min="16" max="160" step="4" value="72"><span id="wm_size_val">72</span></label>
     </div>
@@ -251,9 +251,9 @@
   </div>
 </div>
 <script type="module">
-// Built from the real package distribution. The demo build copies @origin/charts' published
+// Built from the real package distribution. The demo build copies @nucleuscharts/financial' published
 // artifacts; it does not compile or wire an engine of its own.
-import { create_chart, create_chart_grid, create_series_markers, create_text_watermark, theme_options, theme_palette } from "./dist/origin_charts.js";
+import { create_chart, create_chart_grid, create_series_markers, create_text_watermark, theme_options, theme_palette } from "./dist/nucleuscharts_financial.js";
 import { generate_fixture_data } from "./fixture_data.js";
 import { fixture_theme } from "./fixture_styles.js";
 import { marker_fixture, volume_fixture } from "./fixture_features.js";
@@ -327,7 +327,7 @@ if (parity_fixture !== null) {
     horzLines: { color: palette.grid },
   };
   // Keep the cross-library fidelity gate pinned to the reference's axis-border default; the package
-  // theme palette (theme.ts) must not leak into the comparison. `boldRoundLabels` is an Origin-only
+  // theme palette (theme.ts) must not leak into the comparison. `boldRoundLabels` is a Nucleus-only
   // extension (default on) with no reference counterpart, so the comparison disables it too.
   chart_options.timeScale = { borderColor: "#2B2B43" };
   chart_options.leftPriceScale = { ...(chart_options.leftPriceScale ?? {}), borderColor: "#2B2B43", boldRoundLabels: false };
@@ -636,7 +636,7 @@ function set_plugin_watermark(on) {
   if (on && plugin_watermark_handle === null) {
     plugin_watermark_handle = create_text_watermark(chart.panes()[0], {
       lines: [
-        { text: "ORIGIN", color: "rgba(41, 98, 255, 0.16)", fontSize: 72, fontStyle: "bold" },
+        { text: "NUCLEUS", color: "rgba(41, 98, 255, 0.16)", fontSize: 72, fontStyle: "bold" },
         { text: "plugin watermark", color: "rgba(41, 98, 255, 0.30)", fontSize: 24, fontFamily: "monospace" },
       ],
     });
@@ -1201,7 +1201,7 @@ chart.subscribe_crosshair_move((params) => {
   legend.textContent = `O ${fmt(bar.open)}  H ${fmt(bar.high)}  L ${fmt(bar.low)}  C ${fmt(bar.close)}` + tag;
 });
 chart.subscribe_click((params) => {
-  if (params.time !== null) console.log("origin click @", new Date(params.time * 1000).toISOString());
+  if (params.time !== null) console.log("nucleuscharts click @", new Date(params.time * 1000).toISOString());
 });
 
 if (runtime_test === "backendParity") {

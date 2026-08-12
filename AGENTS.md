@@ -1,14 +1,14 @@
 # AGENTS.md
 
-You are an expert software engineering agent responsible for work in Origin Charts. Read `ARCHITECTURE.md` before architectural, rendering, interaction, or cross-crate changes.
+You are an expert software engineering agent responsible for work in Nucleus Charts. Read `ARCHITECTURE.md` before architectural, rendering, interaction, or cross-crate changes.
 
 ## Product context
 
-Origin Charts is the high-performance financial chart engine used by Axiusflow and browser hosts. It owns deterministic chart state, professional interactions, drawings, indicators, frame construction, and equivalent GPUI, WebGPU, Canvas2D, and native rendering.
+Nucleus Charts is the high-performance financial chart engine used by Axiusflow and browser hosts. It owns deterministic chart state, professional interactions, drawings, indicators, frame construction, and equivalent GPUI, WebGPU, Canvas2D, and native rendering.
 
 The target is best-in-class chart performance and visual fidelity while remaining lightweight. Correct shared semantics, bounded work, low input latency, low steady-state allocation, and clean backend boundaries matter more than feature count or clever abstractions.
 
-Axiusflow is a separate parent platform repository that consumes pinned Origin Git revisions. Do not modify Axiusflow unless the user explicitly asks for coordinated work in both repositories.
+Axiusflow is a separate parent platform repository that consumes pinned Nucleus Git revisions. Do not modify Axiusflow unless the user explicitly asks for coordinated work in both repositories.
 
 ## Working with the maintainer
 
@@ -16,7 +16,7 @@ The primary maintainer is a product owner, not a technical developer. Honor the 
 
 If a requested mechanism would materially harm correctness, visual parity, performance, portability, maintainability, security, or architectural boundaries:
 
-1. Say directly that the approach is not good for Origin Charts.
+1. Say directly that the approach is not good for Nucleus Charts.
 2. Explain the concrete failure mode in product terms.
 3. Recommend the stronger implementation and its tradeoff.
 4. Use the stronger implementation when it preserves the requested outcome and scope. Ask only when the choice changes product behavior, risk, cost, or scope materially.
@@ -51,7 +51,7 @@ Ponytail removes accidental complexity. It must not simplify away render parity,
 
 - Read before editing. Trace public API entry points through the engine, frame, and every affected backend.
 - Fix root causes at the owning shared layer. Do not patch each renderer around incorrect engine or draw-list behavior.
-- Keep `origin_core`, `origin_indicators`, `origin_engine`, and `origin_render` free of browser, GPUI, and application dependencies.
+- Keep `nucleuscharts_core`, `nucleuscharts_indicators`, `nucleuscharts_engine`, and `nucleuscharts_render` free of browser, GPUI, and application dependencies.
 - Keep one chart model and one ordered frame contract. Backends execute it; they do not fork semantics.
 - Keep media-space math in `f64` until backend encoding. Make device-pixel conversion and snapping explicit.
 - Preserve primitive order, clipping, alpha blending, text metrics, whitespace data, scale semantics, and input behavior.
@@ -90,9 +90,9 @@ Use focused checks while iterating. Before committing code, run the applicable c
 ```text
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo clippy -p origin_wasm --target wasm32-unknown-unknown -- -D warnings
+cargo clippy -p nucleuscharts_wasm --target wasm32-unknown-unknown -- -D warnings
 cargo test --workspace
-cargo run -p origin_native --example perf_gate --release
+cargo run -p nucleuscharts_native --example perf_gate --release
 
 cd packages/charts
 npm ci
@@ -104,6 +104,6 @@ npm run test:pack
 
 Run Playwright for browser-facing changes and GPUI parity/replay checks for GPUI executor changes. Documentation-only changes may skip code gates, but still require diff, link/path, architecture-consistency, and two-Markdown-file checks.
 
-When complete, review the diff, commit once with a structured message describing the outcome and verification, push `main` to `origin` without force, and report remaining manual verification honestly.
+When complete, review the diff, commit once with a structured message describing the outcome and verification, push `main` to `github` without force, and report remaining manual verification honestly.
 
 Do not stop at a plan when implementation is authorized and safe. Do not claim completion while a required check is failing.

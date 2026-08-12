@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import pixelmatch from "pixelmatch";
 import { PNG } from "pngjs";
 
-const enabled = process.env.ORIGIN_RUN_GPUI_WEBGPU_MATRIX === "1";
+const enabled = process.env.NUCLEUSCHARTS_RUN_GPUI_WEBGPU_MATRIX === "1";
 const fixture = JSON.parse(readFileSync(new URL("../fixtures/d1/candles.json", import.meta.url), "utf8"));
 const repository_root = fileURLToPath(new URL("../../..", import.meta.url));
 const matrix_cases = [
@@ -113,7 +113,7 @@ function capture_gpui(output, metadata, matrix_case) {
     "run",
     "--release",
     "-p",
-    "origin_render_gpui",
+    "nucleuscharts_render_gpui",
     "--features",
     "gpui-backend",
     "--example",
@@ -121,13 +121,13 @@ function capture_gpui(output, metadata, matrix_case) {
   ];
   const env = {
     ...process.env,
-    ORIGIN_GPUI_CAPTURE_OUT: output,
-    ORIGIN_GPUI_CAPTURE_METADATA: metadata,
-    ORIGIN_GPUI_THEME: matrix_case.theme,
-    ORIGIN_GPUI_FEATURE: matrix_case.feature,
+    NUCLEUSCHARTS_GPUI_CAPTURE_OUT: output,
+    NUCLEUSCHARTS_GPUI_CAPTURE_METADATA: metadata,
+    NUCLEUSCHARTS_GPUI_THEME: matrix_case.theme,
+    NUCLEUSCHARTS_GPUI_FEATURE: matrix_case.feature,
   };
-  delete env.ORIGIN_GPUI_BAR_SPACING;
-  if (matrix_case.spacing !== null) env.ORIGIN_GPUI_BAR_SPACING = String(matrix_case.spacing);
+  delete env.NUCLEUSCHARTS_GPUI_BAR_SPACING;
+  if (matrix_case.spacing !== null) env.NUCLEUSCHARTS_GPUI_BAR_SPACING = String(matrix_case.spacing);
   const result = spawnSync("cargo", args, {
     cwd: repository_root,
     encoding: "utf8",

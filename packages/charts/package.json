@@ -1,21 +1,21 @@
 {
-  "name": "@axiusflowhq/charts",
+  "name": "@nucleuscharts/financial",
   "version": "0.8.12",
   "type": "module",
   "description": "High-performance financial charting SDK powered by Rust, WebAssembly, and WebGPU.",
   "license": "SEE LICENSE IN LICENSE",
-  "author": "Axiusflow",
+  "author": "NucleusCharts",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Axiusflowhq/Axiusflow_Charts.git",
+    "url": "git+https://github.com/NucleusCharts/financial-charts.git",
     "directory": "packages/charts"
   },
   "bugs": {
-    "url": "https://github.com/Axiusflowhq/Axiusflow_Charts/issues"
+    "url": "https://github.com/NucleusCharts/financial-charts/issues"
   },
-  "homepage": "https://github.com/Axiusflowhq/Axiusflow_Charts#readme",
+  "homepage": "https://github.com/NucleusCharts/financial-charts#readme",
   "keywords": [
-    "axiusflow",
+    "nucleuscharts",
     "charts",
     "charting",
     "trading",
@@ -49,11 +49,12 @@
   "sideEffects": false,
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "check:namespace": "node scripts/namespace_guard.mjs",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true});require('fs').rmSync('pkg',{recursive:true,force:true})\"",
-    "build:wasm": "wasm-pack build ../../crates/origin_wasm --target web --out-dir ../../packages/charts/pkg",
+    "build:wasm": "wasm-pack build ../../crates/nucleuscharts_wasm --target web --out-dir ../../packages/charts/pkg",
     "build:js": "esbuild src/index.ts --bundle --format=esm --sourcemap --outfile=dist/index.js",
     "build:types": "tsc --declaration --emitDeclarationOnly --outDir dist --noEmit false",
-    "build:copy-wasm": "node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});fs.copyFileSync('pkg/origin_wasm_bg.wasm','dist/origin_wasm_bg.wasm')\"",
+    "build:copy-wasm": "node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});fs.copyFileSync('pkg/nucleuscharts_wasm_bg.wasm','dist/nucleuscharts_wasm_bg.wasm')\"",
     "build": "npm run build:wasm && npm run build:js && npm run build:types && npm run build:copy-wasm",
     "lint": "oxlint src",
     "test:pack": "node scripts/pack_smoke.mjs",

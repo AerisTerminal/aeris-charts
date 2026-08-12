@@ -1,0 +1,19 @@
+[package]
+name = "nucleuscharts_render_wgpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "WebGPU backend for nucleuscharts_render draw lists (pipelines, glyph atlas, batching)"
+
+[dependencies]
+nucleuscharts_render = { path = "../nucleuscharts_render" }
+wgpu = { version = "25", default-features = false, features = ["webgpu", "wgsl"] }
+bytemuck = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+nucleuscharts_engine = { path = "../nucleuscharts_engine" }
+
+[lints]
+workspace = true

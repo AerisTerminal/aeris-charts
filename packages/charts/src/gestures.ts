@@ -2,7 +2,7 @@
  * Pointer/wheel/keyboard gesture recognizer wired onto the axis/input overlay canvas.
  *
  * The recognizer (event classification, slop, ownership, tracking mode) lives here per
- * browser event translation lives here, but every interaction model is engine-owned (`origin_engine::interaction`)
+ * browser event translation lives here, but every interaction model is engine-owned (`nucleuscharts_engine::interaction`)
  * and driven through the wasm handle: pan/scroll sessions, axis drag-to-scale, vertical price
  * pan, kinetic (momentum) coast, wheel/pinch zoom increments, and eased scroll animations —
  * the headless native harness runs the exact same code.
@@ -38,7 +38,7 @@ export function install_gestures(chart: chart_impl): () => void {
   let sep_drag: { index: number; last_y: number } | null = null;
   let sep_hover = -1; // separator index last reported via set_separator_hover (-1 = none)
   let axis_drag: AxisDrag | null = null;
-  let press_origin: { x: number; y: number } | null = null;
+  let press_start: { x: number; y: number } | null = null;
   let moved = false; // mouse press moved past the click slop (reference _cancelClick)
   // Engine-owned drawing drag (anchor re-anchor or body move) started by a pane press on a
   // drawing (drawings.rs); mutually exclusive with a pan `dragging` session.
@@ -405,7 +405,7 @@ export function install_gestures(chart: chart_impl): () => void {
     // Any active pointer pauses the countdown timer (no mid-gesture repaint/lag).
     if (pointers.size === 1) chart.set_interacting(true);
     if (pointers.size !== 1) return;
-    press_origin = p;
+    press_start = p;
     moved = false;
     const region = arm_press(p);
     if (region !== "pane") return;
@@ -484,9 +484,9 @@ export function install_gestures(chart: chart_impl): () => void {
     }
 
     if (pointers.has(e.pointerId)) pointers.set(e.pointerId, p);
-    if (pointers.size > 0 && press_origin !== null && !moved) {
+    if (pointers.size > 0 && press_start !== null && !moved) {
       // reference CancelClickManhattanDistance = 5 (Manhattan).
-      moved = Math.abs(p.x - press_origin.x) + Math.abs(p.y - press_origin.y) >= SLOP_MANHATTAN;
+      moved = Math.abs(p.x - press_start.x) + Math.abs(p.y - press_start.y) >= SLOP_MANHATTAN;
     }
 
     if (brush_drawing) {
@@ -773,7 +773,7 @@ export function install_gestures(chart: chart_impl): () => void {
     const p = local_xy(touch);
     active_touch_id = touch.identifier;
     touch_start = { x: touch.clientX, y: touch.clientY };
-    press_origin = p;
+    press_start = p;
     touch_region = region_of(p);
     touch_moved = false;
     touch_released = false;
@@ -804,14 +804,14 @@ export function install_gestures(chart: chart_impl): () => void {
   /** reference `longTapEvent`: enter tracking mode — crosshair at the press point, no panning. */
   const on_longpress = () => {
     longpress_timer = null;
-    if (touch_moved || touch_released || active_touch_id === null || press_origin === null) return;
+    if (touch_moved || touch_released || active_touch_id === null || press_start === null) return;
     long_tap_active = true;
     if (!touch_tracking) {
       touch_tracking = true;
       exit_tracking_on_next_try = false;
-      track_point = press_origin;
-      init_crosshair = press_origin;
-      set_crosshair(press_origin.x, press_origin.y);
+      track_point = press_start;
+      init_crosshair = press_start;
+      set_crosshair(press_start.x, press_start.y);
       chart.repaint();
     }
   };

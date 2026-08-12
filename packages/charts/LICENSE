@@ -1,11 +1,11 @@
-ORIGIN CHARTS PROPRIETARY LICENSE
+NUCLEUS CHARTS PROPRIETARY LICENSE
 
-Copyright (c) 2026 TradeAion. All rights reserved.
+Copyright (c) 2026 NucleusCharts. All rights reserved.
 
-This license governs the Origin Charts charting engine and all associated
+This license governs the Nucleus Charts charting engine and all associated
 source code, compiled artifacts (including JavaScript, WebAssembly, and
 Rust crates), documentation, and example code (collectively, the
-"Software") distributed in this repository and in the @tradeaion/charts
+"Software") distributed in this repository and in the @nucleuscharts/financial
 package.
 
 1. NO FREE USE. The Software is commercial, proprietary software. No
@@ -13,7 +13,7 @@ package.
    license. Any use, reproduction, modification, adaptation, public
    display, public performance, sublicensing, distribution, or creation
    of derivative works of the Software, in whole or in part, requires a
-   separate written commercial license agreement with TradeAion
+   separate written commercial license agreement with NucleusCharts
    ("Commercial License").
 
 2. LIMITED EVALUATION RIGHT. Solely for the purpose of evaluating whether
@@ -40,16 +40,16 @@ package.
 
 6. PATENT DEFENSIVE TERMINATION. If you or any entity you control
    institute, or actively participate in, patent litigation against
-   TradeAion alleging that the Software infringes any patent, any and all
+   NucleusCharts alleging that the Software infringes any patent, any and all
    rights granted to you under this license and under any Commercial
    License terminate immediately.
 
 7. TRADEMARKS. This license does not grant any right to use the names
-   "TradeAion", "Origin Charts", "Origin", or any associated logos or
+   "NucleusCharts", "Nucleus Charts", "Nucleus", or any associated logos or
    marks, except as required for truthful attribution in notices
    permitted by a Commercial License.
 
-8. RESERVATION OF RIGHTS. TradeAion retains all right, title, and
+8. RESERVATION OF RIGHTS. NucleusCharts retains all right, title, and
    interest in and to the Software, including all copyrights, patents,
    trade secrets, and other intellectual property rights. Any rights not
    expressly granted are reserved.
@@ -63,7 +63,7 @@ package.
     WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND
     NONINFRINGEMENT.
 
-11. LIMITATION OF LIABILITY. IN NO EVENT SHALL TRADEAION BE LIABLE FOR
+11. LIMITATION OF LIABILITY. IN NO EVENT SHALL NUCLEUSCHARTS BE LIABLE FOR
     ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF
     CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION
     WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -71,6 +71,6 @@ package.
 COMMERCIAL LICENSING
 
 To purchase a Commercial License (per-seat, per-product, OEM/embedded,
-or white-label), contact TradeAion through the project repository:
+or white-label), contact NucleusCharts through the project repository:
 
-    https://github.com/TradeAion/Origin_charts
+    https://github.com/NucleusCharts/financial-charts

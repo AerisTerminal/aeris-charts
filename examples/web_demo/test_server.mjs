@@ -4,7 +4,7 @@ import { extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(fileURLToPath(new URL(".", import.meta.url)));
-const port = Number.parseInt(process.env.ORIGIN_TEST_PORT ?? "4174", 10);
+const port = Number.parseInt(process.env.NUCLEUSCHARTS_TEST_PORT ?? "4174", 10);
 const mime_types = new Map([
   [".html", "text/html; charset=utf-8"],
   [".css", "text/css; charset=utf-8"],
@@ -47,7 +47,7 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
-  console.log(`Origin browser-test server listening on http://127.0.0.1:${port}`);
+  console.log(`Nucleus browser-test server listening on http://127.0.0.1:${port}`);
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {

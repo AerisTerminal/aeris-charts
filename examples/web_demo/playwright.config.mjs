@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const port = Number.parseInt(process.env.ORIGIN_TEST_PORT ?? "4174", 10);
+const port = Number.parseInt(process.env.NUCLEUSCHARTS_TEST_PORT ?? "4174", 10);
 
 export default defineConfig({
   testDir: "./tests",

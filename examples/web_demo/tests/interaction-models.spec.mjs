@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-// Engine-owned interaction models (`origin_engine::interaction`): the TypeScript
+// Engine-owned interaction models (`nucleuscharts_engine::interaction`): the TypeScript
 // recognizer only classifies events and forwards samples — the axis drag-to-scale, vertical
 // price pan, wheel/pinch zoom increments, kinetic coast, and eased scroll animations all
 // compute in Rust. These specs drive the real gestures in the browser and assert the same

@@ -1,4 +1,4 @@
-/** Generate the deterministic OHLC fixture shared by Origin, reference, and the native renderer. */
+/** Generate the deterministic OHLC fixture shared by Nucleus, reference, and the native renderer. */
 export function generate_fixture_data(fixture) {
   const out = [];
   let seed = fixture.seed;

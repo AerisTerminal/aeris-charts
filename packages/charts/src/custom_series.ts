@@ -1,5 +1,5 @@
 /**
- * Custom series (plugin platform Phase C-c) — Origin's take on the reference charting library v5's
+ * Custom series (plugin platform Phase C-c) — Nucleus's take on the reference charting library v5's
  * `addCustomSeries`/`ICustomSeriesPaneView` (reference api/chart-api.ts, model/icustom-series.ts).
  *
  * A custom series is a user-defined series TYPE: the engine owns its time mapping (its data
@@ -30,7 +30,7 @@ export type custom_series_item = { time: time } & Record<string, unknown>;
 /**
  * The context handed to {@link custom_series_pane_view.render} once per frame. It carries the
  * pane-primitive draw context's fields and command recorders (absolute bitmap px of the whole
- * chart, pane origins included), minus the horizontal converters — visible items arrive with
+ * chart, pane offsets included), minus the horizontal converters — visible items arrive with
  * their bar-center x already resolved, matching how reference hands its renderer `bars` with x
  * coordinates. The context is valid only for the duration of the synchronous `render` call.
  */
@@ -40,7 +40,7 @@ export interface custom_series_render_context
    * The VISIBLE, non-whitespace items of this series, in ascending time order. `x` is the
    * item's bar-center in absolute bitmap px (the reference's `CustomBarItemData.x`, except absolute and
    * in bitmap rather than pane-media px, like every converter on this context); `item` is the
-   * raw data item as given to `set_data`/`update` (the reference's `originalData`).
+   * raw data item as given to `set_data`/`update` (the reference's `source data`).
    */
   // oxlint-disable-next-line typescript/no-explicit-any -- plugin-defined item shape (reference `CustomData`)
   readonly items: readonly { x: number; item: any }[];

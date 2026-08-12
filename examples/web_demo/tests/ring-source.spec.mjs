@@ -127,8 +127,8 @@ test("rows a worker writes appear in the series with no per-tick engine call", a
     let update_calls = 0;
     let drain_calls = 0;
     for (const name of ["update_series_bar_styled", "update_series_bars_typed"]) {
-      const original = wasm[name].bind(wasm);
-      wasm[name] = (...args) => { update_calls += 1; return original(...args); };
+      const source = wasm[name].bind(wasm);
+      wasm[name] = (...args) => { update_calls += 1; return source(...args); };
     }
     const drain = wasm.drain_ring_sources.bind(wasm);
     wasm.drain_ring_sources = (...args) => { drain_calls += 1; return drain(...args); };
