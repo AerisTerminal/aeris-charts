@@ -11,6 +11,43 @@ async function wait_grid(page) {
   }));
 }
 
+test("demo chrome and controls follow the chart theme", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+
+  const theme_state = () => page.evaluate(() => ({
+    root: document.documentElement.dataset.theme,
+    control: document.getElementById("theme_select").value,
+    surface: getComputedStyle(document.documentElement).getPropertyValue("--demo-surface").trim(),
+    header: getComputedStyle(document.getElementById("bar")).backgroundColor,
+    chart: window.__chart.options().layout.background.color,
+    border_control: document.getElementById("axis_border_color").value,
+    crosshair_control: document.getElementById("cross_color").value,
+  }));
+
+  expect(await theme_state()).toEqual({
+    root: "dark",
+    control: "dark",
+    surface: "#0c0c0c",
+    header: "rgb(12, 12, 12)",
+    chart: "#0c0c0c",
+    border_control: "#1e1e1e",
+    crosshair_control: "#2e2e2e",
+  });
+
+  await page.selectOption("#theme_select", "light");
+  await wait_grid(page);
+  expect(await theme_state()).toEqual({
+    root: "light",
+    control: "light",
+    surface: "#ffffff",
+    header: "rgb(255, 255, 255)",
+    chart: "#ffffff",
+    border_control: "#f5f5f5",
+    crosshair_control: "#9598a1",
+  });
+});
+
 /** Every cell's chart handle has resolved (a split rebuilds the layout once the chart is in). */
 async function wait_cell_charts(page) {
   await page.waitForFunction(() => window.__grid.cells().every((c) => !!c.chart));
@@ -249,15 +286,15 @@ test("split dividers follow the axis border token (theme and explicit changes)",
   const border_hex = () => page.evaluate(() => window.__chart.options().rightPriceScale.borderColor);
   const to_rgb = (hex) => `rgb(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(", ")})`;
 
-  // Default: the divider paints in the axis border color (light theme border).
+  // Default: the divider paints in the active theme's axis border color.
   expect(await divider_rgb()).toBe(to_rgb(await border_hex()));
 
   // Theme switch: the border token changes and the divider tracks it.
-  await page.selectOption("#theme_select", "dark");
+  await page.selectOption("#theme_select", "light");
   await wait_grid(page);
-  const dark_border = await border_hex();
-  expect(dark_border.toLowerCase()).toBe("#16191f");
-  expect(await divider_rgb()).toBe(to_rgb(dark_border));
+  const light_border = await border_hex();
+  expect(light_border.toLowerCase()).toBe("#f5f5f5");
+  expect(await divider_rgb()).toBe(to_rgb(light_border));
 
   // An explicit axis border change re-resolves the divider too.
   await page.locator("#axis_border_color").evaluate((el) => {

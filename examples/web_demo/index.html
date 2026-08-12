@@ -8,49 +8,62 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <title>Nucleus Charts — @nucleuscharts/financial demo</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #fff; font-family: -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif; }
+  :root {
+    color-scheme: light;
+    --demo-surface: #fff;
+    --demo-panel: #f7f8fa;
+    --demo-control: #fff;
+    --demo-text: #191919;
+    --demo-muted: #787b86;
+    --demo-border: #e0e3eb;
+    --demo-control-border: #d0d3da;
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --demo-panel: #121212;
+    --demo-control: #181818;
+    --demo-muted: #a3a7b1;
+    --demo-control-border: #303030;
+  }
+  html, body { margin: 0; height: 100%; background: var(--demo-surface); color: var(--demo-text); font-family: -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif; }
   #wrap { display: flex; flex-direction: column; height: 100%; }
-  #bar { padding: 6px 12px; font-size: 13px; color: #191919; border-bottom: 1px solid #e0e3eb;
-         display: flex; gap: 4px 10px; align-items: stretch; flex-wrap: wrap; }
+  #bar { padding: 8px 10px; font-size: 12px; color: var(--demo-text); background: var(--demo-surface);
+         border-bottom: 1px solid var(--demo-border); display: flex; gap: 7px; align-items: stretch;
+         align-content: flex-start; flex-wrap: wrap; }
   #bar .group { position: relative; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
-                padding: 10px 10px 4px; margin-top: 2px; border: 1px solid #e0e3eb; border-radius: 6px; }
+                padding: 10px 9px 5px; margin-top: 3px; background: var(--demo-panel);
+                border: 1px solid var(--demo-border); border-radius: 6px; }
   /* The flex display above would otherwise beat the UA [hidden] rule (specificity) — the style
      groups toggle via the `hidden` attribute, so it must win here. */
   #bar .group[hidden] { display: none; }
   #bar .group::before { content: attr(data-caption); position: absolute; top: -8px; left: 8px;
-                padding: 0 5px; background: #fff; font-size: 9.5px; font-weight: 600; letter-spacing: 0.07em;
-                text-transform: uppercase; color: #787b86; }
+                padding: 0 5px; background: var(--demo-surface); font-size: 9.5px; font-weight: 600; letter-spacing: 0.07em;
+                text-transform: uppercase; color: var(--demo-muted); }
   #bar label { display: inline-flex; gap: 4px; align-items: center; white-space: nowrap; }
-  #bar input[type="color"] { width: 24px; height: 20px; padding: 0; border: 1px solid #d0d3da; border-radius: 3px; background: none; cursor: pointer; }
+  #bar button, #bar select, #bar input[type="text"], #bar input[type="number"] {
+    min-height: 23px; box-sizing: border-box; background: var(--demo-control); color: var(--demo-text);
+    border: 1px solid var(--demo-control-border); border-radius: 4px;
+  }
+  #bar button { padding: 2px 8px; cursor: pointer; }
+  #bar button:hover { border-color: #26a69a; }
+  #bar button:focus-visible, #bar select:focus-visible, #bar input:focus-visible { outline: 2px solid #26a69a; outline-offset: 1px; }
+  #bar input[type="color"] { width: 24px; height: 21px; padding: 0; border: 1px solid var(--demo-control-border); border-radius: 4px; background: var(--demo-control); cursor: pointer; }
   #bar input[type="range"] { width: 72px; vertical-align: middle; }
-  #bar .brand { align-self: center; background:#26a69a; color:#fff; padding:2px 6px; border-radius:3px; font-weight: bold; }
-  #bar .hint { color: #787b86; font-size: 11px; }
-  #status { align-self: center; margin-left: auto; color: #787b86; }
+  #bar .brand { align-self: center; background:#26a69a; color:#fff; padding:4px 7px; border-radius:4px; font-weight: 700; }
+  #bar .hint { color: var(--demo-muted); font-size: 11px; }
+  #status { align-self: center; margin-left: auto; color: var(--demo-muted); font-variant-numeric: tabular-nums; }
   /* The library creates and manages the canvases inside this container. */
   #chart_wrap { flex: 1; position: relative; min-height: 0; }
   #chart_container { position: absolute; inset: 0; touch-action: none; overscroll-behavior: none; }
   /* crosshair-move legend (top-left, over the pane) driven by subscribe_crosshair_move */
-  #legend { position: absolute; top: 8px; left: 8px; z-index: 3; font-size: 12px; color: #191919;
-            background: rgba(255,255,255,0.7); padding: 3px 7px; border-radius: 3px; pointer-events: none;
+  #legend { position: absolute; top: 8px; left: 8px; z-index: 3; font-size: 12px; color: var(--demo-text);
+            background: color-mix(in srgb, var(--demo-surface) 72%, transparent); padding: 3px 7px; border-radius: 3px; pointer-events: none;
             font-variant-numeric: tabular-nums; }
-  /* Page chrome follows the chart theme (synced by sync_page_theme below). */
-  body[data-theme="dark"] { background: #0a0a0a; }
-  body[data-theme="dark"] #bar { background: #0a0a0a; color: #e5e7eb; border-bottom-color: #23262e; }
-  body[data-theme="dark"] #bar .group { border-color: #23262e; }
-  body[data-theme="dark"] #bar .group::before { background: #0a0a0a; color: #9aa0ac; }
-  body[data-theme="dark"] #bar label { color: #e5e7eb; }
-  body[data-theme="dark"] #bar select,
-  body[data-theme="dark"] #bar input[type="text"] { background: #16191f; color: #e5e7eb; border: 1px solid #2b2f38; border-radius: 3px; }
-  body[data-theme="dark"] #bar button { background: #16191f; color: #e5e7eb; border: 1px solid #2b2f38; border-radius: 3px; cursor: pointer; }
-  body[data-theme="dark"] #bar input[type="color"] { border-color: #2b2f38; background: #16191f; }
-  body[data-theme="dark"] #bar .hint { color: #9aa0ac; }
-  body[data-theme="dark"] #status { color: #9aa0ac; }
-  body[data-theme="dark"] #legend { color: #e5e7eb; background: rgba(10,10,10,0.7); }
 </style>
 </head>
 <body>
 <div id="wrap">
-  <div id="bar">
+  <header id="bar">
     <span class="brand">@nucleuscharts/financial</span>
 
     <div class="group" id="type_group" data-caption="Series">
@@ -244,7 +257,7 @@
     </div>
 
     <span id="status"></span>
-  </div>
+  </header>
   <div id="chart_wrap">
     <div id="chart_container"></div>
     <div id="legend">O — H — L — C —</div>
@@ -253,7 +266,7 @@
 <script type="module">
 // Built from the real package distribution. The demo build copies @nucleuscharts/financial' published
 // artifacts; it does not compile or wire an engine of its own.
-import { create_chart, create_chart_grid, create_series_markers, create_text_watermark, theme_options, theme_palette } from "./dist/nucleuscharts_financial.js";
+import { create_chart, create_chart_grid, create_series_markers, create_text_watermark, default_theme_name, theme_options, theme_palette } from "./dist/nucleuscharts_financial.js";
 import { generate_fixture_data } from "./fixture_data.js";
 import { fixture_theme } from "./fixture_styles.js";
 import { marker_fixture, volume_fixture } from "./fixture_features.js";
@@ -292,7 +305,13 @@ const requested_backend = query.get("backend");
 const runtime_test = query.get("runtimeTest");
 const requested_spacing = Number.parseFloat(query.get("spacing") ?? "");
 const requested_dpr = Number.parseFloat(query.get("dpr") ?? "");
-const requested_theme = query.get("theme") ?? "light";
+const theme_param = query.get("theme");
+// Runtime fixtures retain their historical light default. The real demo follows the package's
+// canonical default, so chart, toolbar, and control values cannot drift when that default changes.
+const requested_theme = theme_param === "light" || theme_param === "dark"
+  ? theme_param
+  : runtime_test === null ? default_theme_name : "light";
+sync_page_theme(requested_theme);
 const requested_feature = query.get("feature");
 const requested_left_scale = query.get("leftScale") === "1";
 const parity_fixture = runtime_test === null
@@ -308,6 +327,7 @@ if (runtime_test === "presentedFrame" || runtime_test === "backendParity") {
 }
 const chart_options = {
   autoSize: parity_fixture === null,
+  theme: requested_theme,
   // The backend-parity gate must begin on the ordinary automatic path; the second chart is forced
   // to Canvas2D by the separate runtime-test consumer.
   backend: runtime_test === "backendParity" ? "auto" : requested_backend === "canvas2d" ? "canvas2d" : "auto",
@@ -841,7 +861,14 @@ function sync_active_toolbar() {
 // (renders sparse), 2 dashed (renders large) — the reference's normal dot/dash patterns are
 // intentionally absent.
 // Follow-or-pin: until the user pins a custom color, grid/axis colors track the theme tokens.
-const theme_color_touched = { grid: false, axis_border: false, axis_text: false, separator: false };
+const theme_color_touched = {
+  grid: false,
+  axis_border: false,
+  axis_text: false,
+  separator: false,
+  crosshair_line: false,
+  crosshair_label: false,
+};
 function apply_grid_style() {
   const color = document.getElementById("grid_color").value;
   const style = Number(document.getElementById("grid_style").value);
@@ -1069,13 +1096,19 @@ function apply_crosshair_style() {
     },
   });
 }
-document.getElementById("cross_color").addEventListener("input", apply_crosshair_style);
+document.getElementById("cross_color").addEventListener("input", () => {
+  theme_color_touched.crosshair_line = true;
+  apply_crosshair_style();
+});
 document.getElementById("cross_width").addEventListener("input", (e) => {
   document.getElementById("cross_width_val").textContent = e.target.value;
   apply_crosshair_style();
 });
 document.getElementById("cross_style").addEventListener("change", apply_crosshair_style);
-document.getElementById("cross_label_bg").addEventListener("input", apply_crosshair_style);
+document.getElementById("cross_label_bg").addEventListener("input", () => {
+  theme_color_touched.crosshair_label = true;
+  apply_crosshair_style();
+});
 document.getElementById("cross_label_visible").addEventListener("change", apply_crosshair_style);
 
 function apply_font() {
@@ -1152,7 +1185,11 @@ apply_interaction();
 // tokens onto the chart options live (background + axis borders + axis text), then the pickers
 // are synced so the controls reflect the active palette. The page chrome follows too.
 function sync_page_theme(theme) {
-  document.body.dataset.theme = theme;
+  const palette = theme_palette(theme);
+  document.documentElement.dataset.theme = theme;
+  document.documentElement.style.setProperty("--demo-surface", palette.background);
+  document.documentElement.style.setProperty("--demo-border", palette.border);
+  document.documentElement.style.setProperty("--demo-text", palette.text);
   document.getElementById("theme_select").value = theme;
 }
 document.getElementById("theme_select").addEventListener("change", (e) => {
@@ -1173,21 +1210,25 @@ document.getElementById("theme_select").addEventListener("change", (e) => {
   chart.apply_options({ layout: { textColor: palette.text } });
   if (!theme_color_touched.grid) document.getElementById("grid_color").value = palette.grid;
   apply_grid_style();
+  if (!theme_color_touched.crosshair_line) document.getElementById("cross_color").value = palette.crosshair;
+  if (!theme_color_touched.crosshair_label) document.getElementById("cross_label_bg").value = palette.crosshair;
+  apply_crosshair_style();
   sync_page_theme(e.target.value);
 });
-// Honor ?theme= on first load: apply the chart theme and sync the pickers (parity fixtures pin
-// their own palette and must not be touched).
-if (requested_theme !== "light" && parity_fixture === null) {
+// The chart was created with `requested_theme`; mirror that palette into the demo controls.
+// Parity fixtures pin their own controls and rendering state.
+if (parity_fixture === null) {
   const palette = theme_palette(requested_theme);
-  chart.apply_options(theme_options(requested_theme));
   document.getElementById("axis_border_color").value = palette.border;
   apply_axis_border();
   document.getElementById("pane_separator_color").value = palette.border;
   document.getElementById("axis_text_color").value = palette.text;
   document.getElementById("grid_color").value = palette.grid;
   apply_grid_style();
+  document.getElementById("cross_color").value = palette.crosshair;
+  document.getElementById("cross_label_bg").value = palette.crosshair;
+  apply_crosshair_style();
 }
-sync_page_theme(requested_theme);
 sync_style_visibility("candlestick");
 
 // crosshair-move subscription → OHLC legend (the public event API); a hovered primitive
