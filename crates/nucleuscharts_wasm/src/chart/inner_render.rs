@@ -266,15 +266,27 @@ impl ChartInner {
     /// Canvas text ink metric.
     fn build_axis_prims(&mut self) {
         let axis_ctx = &self.axis_ctx;
+        let layout = self.opts().layout.clone();
+        let dpr = self.dpr;
+        // `measure_text_ctx` leaves the measurement canvas in bitmap-font space. Axis primitive
+        // placement is expressed in logical pixels until the engine performs the single DPR
+        // conversion, so normalize the browser's bitmap ink metrics before returning them.
+        axis_ctx.set_font(&format!(
+            "{}px {}",
+            layout.font_size * dpr,
+            layout.font_family
+        ));
         self.engine
             .build_axis_primitives_into(&self.axis_frame, &mut self.axis_prims, |text| {
                 axis_ctx
                     .measure_text(text)
                     .ok()
                     .map(|metrics| {
-                        (metrics.actual_bounding_box_ascent()
-                            - metrics.actual_bounding_box_descent())
-                            / 2.0
+                        crate::text_cache::logical_midpoint_correction(
+                            metrics.actual_bounding_box_ascent(),
+                            metrics.actual_bounding_box_descent(),
+                            dpr,
+                        )
                     })
                     .unwrap_or(0.0)
             });
