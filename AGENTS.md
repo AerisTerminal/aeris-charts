@@ -25,10 +25,11 @@ Use callers, measurements, tests, pinned dependency source, official platform be
 
 ## Markdown rule
 
-Exactly two Markdown files may exist:
+Exactly three Markdown files may exist:
 
 - `ARCHITECTURE.md`
 - `AGENTS.md`
+- `README.md`
 
 Do not create any other `.md` file, including temporary plans, reports, reviews, generated output, package READMEs, or nested agent files. If a tool creates one during work, remove it before committing.
 
@@ -71,7 +72,7 @@ Ponytail removes accidental complexity. It must not simplify away render parity,
 4. Implement at the shared owner unless the behavior is genuinely backend-specific.
 5. Verify parity and performance in proportion to the risk.
 6. Update `ARCHITECTURE.md` in the same commit when any architectural claim changed.
-7. Confirm exactly the two allowed Markdown files exist.
+7. Confirm exactly the three allowed Markdown files exist.
 
 A passing unit test that bypasses the real host or executor path is not sufficient runtime evidence.
 
@@ -102,7 +103,7 @@ npm run typecheck
 npm run test:pack
 ```
 
-Run Playwright for browser-facing changes and GPUI parity/replay checks for GPUI executor changes. Documentation-only changes may skip code gates, but still require diff, link/path, architecture-consistency, and two-Markdown-file checks.
+Run Playwright for browser-facing changes and GPUI parity/replay checks for GPUI executor changes. Documentation-only changes may skip code gates, but still require diff, link/path, architecture-consistency, and three-Markdown-file checks.
 
 When complete, review the diff, commit once with a structured message describing the outcome and verification, push `main` to `github` without force, and report remaining manual verification honestly.
 

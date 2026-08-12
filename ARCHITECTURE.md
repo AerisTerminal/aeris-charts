@@ -104,7 +104,7 @@ Lower layers never import a host API to bypass their boundary. The headless path
 
 ## Repository documentation rule
 
-The only Markdown files allowed are root-level `ARCHITECTURE.md` and `AGENTS.md`. Do not create plans, reports, reviews, roadmaps, temporary Markdown, package READMEs, or duplicate architecture documents. Put durable architecture here, executable behavior in code and tests, and transient work notes outside the repository.
+The only Markdown files allowed are the root-level `README.md`, `ARCHITECTURE.md`, and `AGENTS.md`. Keep the README focused on product orientation and contributor setup. Do not create plans, reports, reviews, roadmaps, temporary Markdown, package READMEs, or duplicate architecture documents. Put durable architecture here, executable behavior in code and tests, and transient work notes outside the repository.
 
 ## Verification
 
