@@ -801,13 +801,13 @@ impl ChartInner {
                 (
                     self.pane_left - 10.0,
                     AxisTextAlign::Right,
-                    self.pane_left - width,
+                    self.pane_left - 1.0 - width,
                 )
             } else {
                 (
                     self.pane_left + self.pane_w + 10.0,
                     AxisTextAlign::Left,
-                    self.pane_left + self.pane_w,
+                    self.pane_left + self.pane_w + 1.0,
                 )
             };
             self.axis_frame.labels.push(AxisLabel {
@@ -885,7 +885,7 @@ impl ChartInner {
                 midpoint: AxisTextMidpoint::StableTime,
                 font_scale: 1.0,
                 bold: false,
-                background: Some((box_x, self.pane_h, width, height, background)),
+                background: Some((box_x, self.pane_h + BORDER, width, height, background)),
                 background_corners: AxisLabelCorners::BOTTOM,
                 measure_extra: 0.0,
                 attach_group: None,
