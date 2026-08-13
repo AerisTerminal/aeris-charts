@@ -229,13 +229,33 @@ impl ChartEngine {
             .filter(|label| label.background.is_some())
         {
             if let Some((x, y, w, h, color)) = label.background {
-                let bx = (x * dpr).round();
-                let by = match (label.attach_group, last_attach) {
+                let mut bx = (x * dpr).round();
+                let mut by = match (label.attach_group, last_attach) {
                     (Some(group), Some((previous, bottom))) if group == previous => bottom,
                     _ => (y * dpr).round(),
                 };
-                let bw = ((x + w) * dpr).round() - bx;
-                let bh = ((y + h) * dpr).round() - by;
+                let mut right = ((x + w) * dpr).round();
+                let bottom = ((y + h) * dpr).round();
+                match (label.align, label.midpoint) {
+                    (AxisTextAlign::Left, AxisTextMidpoint::Label)
+                        if right_scale.border_visible =>
+                    {
+                        bx = bx.max(((pane_left + pane_w) * dpr).round() + f64::from(border_w));
+                    }
+                    (AxisTextAlign::Right, AxisTextMidpoint::Label)
+                        if left_scale.border_visible =>
+                    {
+                        right = right.min((pane_left * dpr).round() - f64::from(border_w));
+                    }
+                    (AxisTextAlign::Center, AxisTextMidpoint::StableTime)
+                        if time_scale.border_visible =>
+                    {
+                        by = by.max((pane_h * dpr).round() + f64::from(border_w));
+                    }
+                    _ => {}
+                }
+                let bw = right - bx;
+                let bh = bottom - by;
                 last_attach = label.attach_group.map(|group| (group, by + bh));
                 if label.background_corners.is_empty() {
                     output.push(Prim::Rect {
@@ -265,43 +285,6 @@ impl ChartEngine {
                         border_width: 0.0,
                         border_color: Color::rgba(0, 0, 0, 0),
                     });
-                }
-                // Paint the box flush with the scale edge, then restore the actual axis border
-                // over it. Doing this after DPR conversion keeps the border exactly one device
-                // pixel at fractional DPR and makes the visible box begin beyond the border.
-                // The outside title chip is centered and does not cross the separator.
-                let separator = match (label.align, label.midpoint) {
-                    (AxisTextAlign::Left, AxisTextMidpoint::Label) => Some((
-                        IRect {
-                            x: ((pane_left + pane_w) * dpr).round() as i32,
-                            y: by as i32,
-                            w: border_w,
-                            h: bh as i32,
-                        },
-                        right_border,
-                    )),
-                    (AxisTextAlign::Right, AxisTextMidpoint::Label) => Some((
-                        IRect {
-                            x: (pane_left * dpr).round() as i32 - border_w,
-                            y: by as i32,
-                            w: border_w,
-                            h: bh as i32,
-                        },
-                        left_border,
-                    )),
-                    (AxisTextAlign::Center, AxisTextMidpoint::StableTime) => Some((
-                        IRect {
-                            x: bx as i32,
-                            y: (pane_h * dpr).round() as i32,
-                            w: bw as i32,
-                            h: border_w,
-                        },
-                        time_border,
-                    )),
-                    _ => None,
-                };
-                if let Some((rect, color)) = separator {
-                    output.push(Prim::Rect { rect, color });
                 }
             } else {
                 last_attach = None;

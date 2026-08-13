@@ -2018,8 +2018,8 @@ fn last_value_cluster_rows_toggle_independently() {
     assert_eq!(chip_bg, LINE);
     assert_eq!(price_bg, LINE);
     assert_eq!(cd_bg, LINE);
-    // Both boxes meet at the logical border. The primitive encoder restores the separator after
-    // DPR conversion so it remains exactly one device pixel at fractional scale factors.
+    // Both boxes meet at the logical border. The primitive encoder excludes the border's exact
+    // device pixels from the axis-side box at fractional scale factors.
     assert_eq!(chip_y, price_y);
     let border_x = chart.pane_left + chart.pane_w;
     assert_eq!(chip_x + chip_w, border_x);
@@ -2245,16 +2245,9 @@ fn boxed_axis_labels_select_the_axis_facing_corners() {
 }
 
 #[test]
-fn boxed_labels_restore_one_device_pixel_separator_at_every_dpr() {
-    let price_border_color = Color::rgb(0x11, 0x22, 0x33);
-    let time_border_color = Color::rgb(0x44, 0x55, 0x66);
+fn boxed_labels_begin_beyond_the_axis_border_at_every_dpr() {
     for dpr in [1.0, 1.25, 1.5, 2.0, 3.0] {
         let mut chart = countdown_chart();
-        chart
-            .apply_options(
-                r##"{"rightPriceScale":{"borderColor":"#112233"},"timeScale":{"borderColor":"#445566"}}"##,
-            )
-            .unwrap();
         chart.dpr = dpr;
         chart.series[0].title = "NDQ".to_string();
         chart.series[0].countdown_visible = false;
@@ -2266,35 +2259,22 @@ fn boxed_labels_restore_one_device_pixel_separator_at_every_dpr() {
         let border_w = 1f64.max(dpr.floor()) as i32;
         let price_border = ((chart.pane_left + chart.pane_w) * dpr).round() as i32;
         assert!(
-            primitives.windows(2).any(|pair| matches!(
-                (&pair[0], &pair[1]),
-                (
-                    Prim::RoundRect { x, fill, .. },
-                    Prim::Rect { rect, color }
-                ) if *x == price_border as f32
-                    && *fill == LINE
-                    && rect.x == price_border
-                    && rect.w == border_w
-                    && *color == price_border_color
+            primitives.iter().any(|primitive| matches!(
+                primitive,
+                Prim::RoundRect { x, fill, .. }
+                    if *x == (price_border + border_w) as f32 && *fill == LINE
             )),
-            "price separator at dpr {dpr}"
+            "price label must start after the border at dpr {dpr}"
         );
 
         let time_border = (chart.pane_h * dpr).round() as i32;
         assert!(
-            primitives.windows(2).any(|pair| matches!(
-                (&pair[0], &pair[1]),
-                (
-                    Prim::RoundRect { x, y, w, .. },
-                    Prim::Rect { rect, color }
-                ) if rect.x == *x as i32
-                    && rect.y == time_border
-                    && rect.w == *w as i32
-                    && rect.h == border_w
-                    && (*y - time_border as f32).abs() < f32::EPSILON
-                    && *color == time_border_color
+            primitives.iter().any(|primitive| matches!(
+                primitive,
+                Prim::RoundRect { y, fill, .. }
+                    if *y == (time_border + border_w) as f32 && *fill == CROSSHAIR_LABEL_BG
             )),
-            "time separator at dpr {dpr}"
+            "time label must start below the border at dpr {dpr}"
         );
     }
 }

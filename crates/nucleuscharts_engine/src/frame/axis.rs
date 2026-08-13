@@ -1177,8 +1177,8 @@ impl ChartEngine {
             .map(|text| measure(text) * COUNTDOWN_FONT_SCALE)
             .unwrap_or(0.0);
         // TradingView geometry: the title chip sits outside the strip and the price/countdown
-        // box sits inside it; both meet at the logical border. The primitive encoder restores
-        // the separator after DPR conversion so the visible seam is exactly one device pixel.
+        // box sits inside it. Their logical bounds meet at the border; the primitive encoder
+        // excludes the border's exact device pixels from both axis-side boxes.
         // Inside rows share one width, stack flush, and start text at the tick-label inset from
         // the border; the box retains the reference's full outer padding.
         const TEXT_INSET: f64 = 5.0 + 5.0;
