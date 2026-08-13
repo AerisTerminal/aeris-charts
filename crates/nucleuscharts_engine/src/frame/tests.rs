@@ -845,6 +845,33 @@ fn indicator_price_chip_matches_the_main_chip_width_and_stands_one_row_tall() {
 }
 
 #[test]
+fn indicator_price_chip_inherits_source_precision_at_creation() {
+    let mut chart = countdown_chart();
+    assert!(
+        chart.series_apply_price_format_json(0, r#"{"type":"price","precision":0,"min_move":1}"#)
+    );
+    let sma = chart.add_sma(0, 2).expect("valid sma");
+
+    assert_eq!(chart.series_format_price(sma, 12.34).as_deref(), Some("12"));
+    let labels = boxed_labels(&mut chart);
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.attach_group == Some(sma as u32) && label.text == "12"),
+        "indicator chip should use the source's zero-decimal format"
+    );
+
+    assert!(chart.series_apply_price_format_json(
+        sma,
+        r#"{"type":"price","precision":4,"min_move":0.0001}"#
+    ));
+    assert_eq!(
+        chart.series_format_price(sma, 12.34).as_deref(),
+        Some("12.3400")
+    );
+}
+
+#[test]
 fn indicator_lines_support_dotted_and_dashed_styles() {
     let polylines = |chart: &mut ChartEngine| {
         chart.build_frame().panes[0]

@@ -332,6 +332,13 @@ impl ChartEngine {
         {
             return Vec::new();
         }
+        let source_price_format = self.series.get(source).map(|series| {
+            (
+                series.price_format.kind,
+                series.price_format.precision,
+                series.price_format.min_move,
+            )
+        });
         let ids = (0..outputs)
             .map(|_| self.add_series(SeriesKind::Line))
             .collect::<Vec<_>>();
@@ -346,6 +353,11 @@ impl ChartEngine {
                 s.title_visible = true;
                 s.title = title.clone();
                 s.line_width = Some(1.0);
+                if let Some((kind, precision, min_move)) = source_price_format {
+                    s.price_format.kind = kind;
+                    s.price_format.precision = precision;
+                    s.price_format.min_move = min_move;
+                }
             }
         }
         self.indicators.push(IndicatorBinding {

@@ -116,6 +116,19 @@ test("indicator chips: auto-name on, no countdown, 1px default, style overrides"
   expect(out.after).toEqual({ title: "RSI(14) 1h", title_visible: true, line_style: 1, line_width: 2 });
 });
 
+test("indicator values inherit source precision at creation", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+  const values = await page.evaluate(() => {
+    window.__main.apply_options({ price_format: { type: "price", precision: 0, min_move: 1 } });
+    const [upper] = window.__chart.add_bollinger(window.__main, 20, 2);
+    const inherited = upper.price_formatter()(65475.46);
+    upper.apply_options({ price_format: { type: "price", precision: 4, min_move: 0.0001 } });
+    return { inherited, overridden: upper.price_formatter()(65475.46) };
+  });
+  expect(values).toEqual({ inherited: "65475", overridden: "65475.4600" });
+});
+
 test("stochastic, atr, vwap, and wma register with lineage and placement", async ({ page }) => {
   await page.goto("/");
   await wait_grid(page);
