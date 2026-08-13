@@ -30,8 +30,10 @@ const IDLE: u8 = 0;
 const PENDING: u8 = 1;
 /// Mapped and ready for the host to drain.
 const MAPPED: u8 = 2;
-/// The map failed (e.g. the device went away); drop the sample and re-arm.
+/// The map failed (e.g. the adapter cannot read timestamps); clean up the map and stop sampling.
 const FAILED: u8 = 3;
+/// Timestamp collection is unavailable for the rest of this timer's lifetime.
+const DISABLED: u8 = 4;
 
 pub struct GpuTimer {
     query_set: wgpu::QuerySet,
@@ -100,7 +102,14 @@ impl GpuTimer {
                 }
                 self.state.store(IDLE, Ordering::Release);
             }
-            FAILED => self.state.store(IDLE, Ordering::Release),
+            FAILED => {
+                // WGPU retains the slice's map range even when the browser rejects mapAsync.
+                // Unmapping is required before the buffer can be mapped again; disable sampling
+                // as well because GPU timing is optional and repeated failures only add work.
+                self.readback.unmap();
+                self.last_ms.set(None);
+                self.state.store(DISABLED, Ordering::Release);
+            }
             _ => {}
         }
         self.last_ms.get()
