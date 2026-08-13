@@ -10,7 +10,7 @@ import { dataset_metadata, generate_ohlcv, metric, percentile, summarize } from 
 function fixture() {
   return {
     schema_version: 1,
-    product: { name: "nucleuscharts-financial", version: "0.8.12" },
+    product: { name: "nucleuscharts-financial", version: "0.8.13" },
     source: { git_commit: "abc", git_branch: "main", git_tag: null, dirty_worktree: false },
     build: { profile: "release", logging: "default-no-verbose-debug", build_command: "npm run build", rustc_version: "rustc test", wasm_pack_version: "wasm-pack test", node_version: process.version, npm_version: "test", esbuild_version: "test", package_lock_sha256: "0".repeat(64), cargo_lock_sha256: "1".repeat(64), wasm_opt_args: ["-Oz"] },
     environment: { ...base_environment("official-benchmark-runner"), id: "official-test" },
@@ -102,7 +102,7 @@ test("public summary includes only measured public candidates from official clea
   run.scenarios[0].metrics.internal_only = metric([7], "count", "informational", "internal", "test");
   run.scenarios[0].metrics.unsupported_public = metric([], "ms", "lower_is_better", "public_candidate", "test", "unsupported");
   const summary = public_summary(run);
-  assert.equal(summary.release, "0.8.12");
+  assert.equal(summary.release, "0.8.13");
   assert.ok(summary.scenarios["historical-candlestick-10k@1"].metrics.set_data_api_ms);
   assert.equal(summary.scenarios["historical-candlestick-10k@1"].metrics.internal_only, undefined);
   assert.equal(summary.scenarios["historical-candlestick-10k@1"].metrics.unsupported_public, undefined);
