@@ -12,6 +12,10 @@ env:
   # plain stable toolchain (installed below) must win instead.
   RUSTUP_TOOLCHAIN: stable
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   namespace:
     name: Namespace guard
@@ -95,6 +99,9 @@ jobs:
       - name: Install package deps
         working-directory: packages/charts
         run: npm ci
+      - name: Verify tag matches package version
+        working-directory: packages/charts
+        run: node -e "const p=require('./package.json');if(process.env.GITHUB_REF_NAME !== 'v'+p.version)throw new Error('tag '+process.env.GITHUB_REF_NAME+' does not match package v'+p.version)"
       - name: Publish (prepublishOnly rebuilds + pack-smokes first)
         working-directory: packages/charts
         run: npm publish

@@ -10,6 +10,10 @@ env:
   NUCLEUSCHARTS_BENCH_ENV_CLASS: shared-ci
   NUCLEUSCHARTS_BENCH_ENV_ID: github-ubuntu-shared
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   smoke:
     runs-on: ubuntu-latest

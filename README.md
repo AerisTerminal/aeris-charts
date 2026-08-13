@@ -6,15 +6,20 @@ The project includes professional chart interactions, drawings, technical indica
 
 ## Browser package
 
-The browser SDK is configured as `@nucleuscharts/financial` for GitHub Packages. Configure the registry before installing a release:
+The browser SDK is published as `@nucleuscharts/financial` on GitHub Packages. Configure the
+registry and authenticate with a GitHub token that can read packages before installing:
 
 ```ini
 @nucleuscharts:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
 ```
 
 ```sh
 npm install @nucleuscharts/financial
 ```
+
+Version tags publish automatically when the tag matches `packages/charts/package.json` exactly
+(for example, package version `0.8.12` is released from tag `v0.8.12`).
 
 Create a chart with the asynchronous, snake-case API:
 

@@ -37,8 +37,7 @@ async function consumer_bundle(kind, source, temporary) {
   const entry = path.join(temporary, `${kind}.mjs`);
   const output = path.join(temporary, `${kind}.js`);
   await writeFile(entry, source);
-  const esbuild = path.join(package_root, "node_modules", "esbuild", "bin", "esbuild");
-  run(process.execPath, [esbuild, entry, "--bundle", "--minify", "--format=esm", `--outfile=${output}`], package_root);
+  run(executable, ["exec", "--", "esbuild", entry, "--bundle", "--minify", "--format=esm", `--outfile=${output}`], package_root);
   return compressed_metrics(`consumer_${kind}_js_bundle`, output);
 }
 
