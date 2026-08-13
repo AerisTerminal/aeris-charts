@@ -111,11 +111,9 @@ jobs:
   browser:
     name: Browser runtime & parity (Playwright)
     runs-on: ubuntu-latest
-    # Report-only on CI: the pixel-fidelity thresholds are calibrated to the dev machine's exact
-    # SwiftShader/Dawn build, so this job can never go green on a vanilla runner (it has failed on
-    # every push). It still runs and uploads its report; the strict gate is the dev-machine suite
-    # (28/28 locally). Tighten once thresholds are made environment-robust.
-    continue-on-error: true
+    # Report-only on CI: pixel-fidelity thresholds are calibrated to the development machine's
+    # exact GPU/Dawn build. Preserve failures and screenshots as an artifact without turning those
+    # non-portable thresholds into a red check; Metrics smoke is the strict portable browser gate.
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -140,10 +138,12 @@ jobs:
         working-directory: examples/web_demo
         run: npx playwright install --with-deps
       - name: Run browser suite
+        id: browser-suite
+        continue-on-error: true
         working-directory: examples/web_demo
         run: npx playwright test
       - uses: actions/upload-artifact@v4
-        if: failure()
+        if: steps.browser-suite.outcome == 'failure'
         with:
           name: playwright-report
           path: examples/web_demo/playwright-report/
