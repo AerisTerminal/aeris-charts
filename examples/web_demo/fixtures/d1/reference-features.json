@@ -7,18 +7,18 @@
   "cases": [
     {
       "name": "base",
-      "measured": { "full": 0.011039737654320987, "pane": 0.008272129351947332, "price_axis": 0.06439217770690762, "time_axis": 0.01562621775387733 },
-      "maximum": { "full": 0.015, "pane": 0.012, "price_axis": 0.075, "time_axis": 0.022 }
+      "measured": { "full": 0.011549479166666665, "pane": 0.008261617719249006, "price_axis": 0.07631829557283015, "time_axis": 0.01562621775387733 },
+      "maximum": { "full": 0.015, "pane": 0.012, "price_axis": 0.077, "time_axis": 0.022 }
     },
     {
       "name": "markers",
-      "measured": { "full": 0.011868730709876545, "pane": 0.008797710986863612, "price_axis": 0.07238721680730073, "time_axis": 0.01562621775387733 },
+      "measured": { "full": 0.012341338734567902, "pane": 0.008792455170514449, "price_axis": 0.08332779660266205, "time_axis": 0.01562621775387733 },
       "maximum": { "full": 0.016, "pane": 0.012, "price_axis": 0.085, "time_axis": 0.022 }
     },
     {
       "name": "volume",
-      "measured": { "full": 0.01847800925925926, "pane": 0.0162709562537382, "price_axis": 0.06439217770690762, "time_axis": 0.01562621775387733 },
-      "maximum": { "full": 0.024, "pane": 0.022, "price_axis": 0.075, "time_axis": 0.022 }
+      "measured": { "full": 0.019577064043209874, "pane": 0.016260444621039876, "price_axis": 0.08985006533342192, "time_axis": 0.01562621775387733 },
+      "maximum": { "full": 0.024, "pane": 0.022, "price_axis": 0.09, "time_axis": 0.022 }
     }
   ]
 }

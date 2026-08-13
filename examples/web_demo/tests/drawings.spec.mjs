@@ -10,7 +10,7 @@ import { PNG } from "pngjs";
 
 const fixture = JSON.parse(readFileSync(new URL("../fixtures/d1/candles.json", import.meta.url), "utf8"));
 const PR = fixture.pixel_ratio;
-const BLUE = [41, 98, 255]; // #2962ff — the anchor-handle border and default drawing color
+const BLUE = [62, 99, 221]; // semantic primary #3e63dd — anchor border and drawing default
 const PURPLE = [123, 31, 162]; // #7b1fa2 — text label color (collides with no fixture pixel)
 
 test.beforeEach(async ({ page }) => {
@@ -866,7 +866,7 @@ test("Ctrl magnets the crosshair to the hovered bar's OHLC", async ({ page }) =>
   await page.evaluate(() => window.__chart.set_drawing_tool("trend_line"));
   // The crosshair's horizontal line is the default crosshair gray — find the pane row with
   // the most of it (the dashed line covers the pane width).
-  const CROSS = [149, 152, 161]; // #9598a1
+  const CROSS = [229, 229, 229]; // semantic border #e5e5e5
   const crosshair_row = async () => {
     const png = await capture(page);
     const pane_bottom = Math.round((fixture.css_height - fixture.time_axis_height) * PR);
@@ -877,9 +877,9 @@ test("Ctrl magnets the crosshair to the hovered bar's OHLC", async ({ page }) =>
       for (let x = 0; x < png.width; x += 1) {
         const o = (y * png.width + x) * 4;
         if (
-          Math.abs(png.data[o] - CROSS[0]) <= 20 &&
-          Math.abs(png.data[o + 1] - CROSS[1]) <= 20 &&
-          Math.abs(png.data[o + 2] - CROSS[2]) <= 20
+          Math.abs(png.data[o] - CROSS[0]) <= 4 &&
+          Math.abs(png.data[o + 1] - CROSS[1]) <= 4 &&
+          Math.abs(png.data[o + 2] - CROSS[2]) <= 4
         ) count += 1;
       }
       if (count > best_count) {
@@ -1124,7 +1124,7 @@ test("text tool: press places and opens typing mode; typing replaces the preview
   expect(await wrap.evaluate((el) => getComputedStyle(el).borderRadius)).toBe("0px");
   expect(await wrap.evaluate((el) => getComputedStyle(el).border)).toContain("2px");
   const border_color = await wrap.evaluate((el) => getComputedStyle(el).borderColor);
-  expect(border_color).toBe("rgb(41, 98, 255)");
+  expect(border_color).toBe("rgb(62, 99, 221)");
   // One visual only: the canvas's muted-text pixels at the anchor stay at the clean baseline —
   // the engine's own placeholder prim is suppressed while editing (the selected drawing's
   // blue anchor handle stays, correctly).

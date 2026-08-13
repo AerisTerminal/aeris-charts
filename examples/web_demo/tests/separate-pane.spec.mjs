@@ -6,7 +6,7 @@ import { PNG } from "pngjs";
 // affordances work there, and removing the series prunes the empty pane.
 
 const PURPLE = [171, 71, 188]; // #ab47bc — the demo's RSI stroke
-const BLUE = [41, 98, 255]; // #2962ff — selection anchor border
+const BLUE = [62, 99, 221]; // semantic primary #3e63dd — selection anchor border
 
 async function wait_for_chart(page) {
   await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
@@ -121,7 +121,7 @@ test("pane divider follows the axis border color (theme-aware) until pinned", as
   await page.selectOption("#theme_select", "dark");
   await wait_for_chart(page);
   expected = hex(await border_color()).join(",");
-  expect(expected).toBe("22,25,31");
+  expect(expected).toBe("44,44,44");
   expect((await divider_color()).get(expected) ?? 0, `dark divider must use border color ${expected}`).toBeGreaterThanOrEqual(3);
 
   // An explicit separator color pins it through theme switches.

@@ -628,8 +628,8 @@ fn bid_ask_lines_and_chips_render_only_when_enabled_with_values() {
     // Default OFF: pushing quotes alone renders nothing. (Quotes are inside the fixture's
     // 10-12.5 scale range; out-of-range quotes are clipped by design.)
     chart.set_bid_ask(0, Some(11.0), Some(12.0));
-    let blue = Color::rgb(0x29, 0x62, 0xff);
-    let red = Color::rgb(0xf2, 0x36, 0x45);
+    let blue = Color::rgb(0x3e, 0x63, 0xdd);
+    let red = Color::rgb(0xff, 0x4b, 0x62);
     assert!(!hlines(&mut chart)
         .iter()
         .any(|&(_, c)| c == blue || c == red));
@@ -658,6 +658,9 @@ fn bid_ask_lines_and_chips_render_only_when_enabled_with_values() {
     };
     let bid_chip = side_chip("Bid");
     let ask_chip = side_chip("Ask");
+    let foreground = Color::rgb(0xfa, 0xfa, 0xfa);
+    assert_eq!(bid_chip.color, foreground);
+    assert_eq!(ask_chip.color, foreground);
     assert!(
         (bid_chip.y - bid_y as f64).abs() < 1.0,
         "bid chip centers on the quote"
@@ -685,7 +688,7 @@ fn bid_ask_lines_and_chips_render_only_when_enabled_with_values() {
     let options: serde_json::Value =
         serde_json::from_str(&chart.series_options_json(0).unwrap()).unwrap();
     assert_eq!(options["bid_ask_visible"], false);
-    assert_eq!(options["bid_color"], "#2962ff");
+    assert_eq!(options["bid_color"], "#3e63dd");
     assert_eq!(options["ask_color"], "#112233");
     assert_eq!(options["bid"], serde_json::Value::Null);
     assert_eq!(options["ask"], 12.0);
@@ -913,15 +916,15 @@ fn horizontal_line_drawings_label_the_axis_in_the_line_color() {
     };
     let label = label_at(&mut chart);
     let (_, _, _, _, bg) = label.background.expect("boxed");
-    assert_eq!(bg, Color::rgb(0x29, 0x62, 0xff), "default drawing color");
-    assert_eq!(label.color, bg.contrast_text());
+    assert_eq!(bg, PRIMARY, "default drawing color");
+    assert_eq!(label.color, Color::rgb(0xfa, 0xfa, 0xfa));
 
     // The label is part of the line: recoloring the drawing recolors the label.
     assert!(chart.drawing_apply_options(id, r##"{"color":"#ff0000"}"##));
     let label = label_at(&mut chart);
     let (_, _, _, _, bg) = label.background.expect("boxed");
     assert_eq!(bg, Color::rgb(0xff, 0x00, 0x00));
-    assert_eq!(label.color, bg.contrast_text());
+    assert_eq!(label.color, Color::rgb(0xfa, 0xfa, 0xfa));
 }
 
 #[test]
@@ -1968,20 +1971,10 @@ fn last_value_cluster_rows_toggle_independently() {
     // 2.5px), so the countdown text sits ~4 css px under the price text.
     assert_eq!(price_h, 12.0 + 2.5 * 2.0);
     assert_eq!(cd_h, 12.0 + 1.5 * 2.0);
-    // Title and price texts share the contrast-pick color; the countdown text is slightly
-    // muted against the chip (TradingView-style).
-    assert_eq!(chip.color, LINE.contrast_text());
-    assert_eq!(price.color, LINE.contrast_text());
-    let muted = {
-        let base = LINE.contrast_text();
-        Color::rgba(
-            base.r(),
-            base.g(),
-            base.b(),
-            (base.a() as f64 * 0.65).round() as u8,
-        )
-    };
-    assert_eq!(countdown.color, muted);
+    // Boxed values use the primary text token; countdowns use muted foreground.
+    assert_eq!(chip.color, Color::rgb(0xfa, 0xfa, 0xfa));
+    assert_eq!(price.color, Color::rgb(0xfa, 0xfa, 0xfa));
+    assert_eq!(countdown.color, Color::rgb(0xa1, 0xa1, 0xa1));
 
     // Price off, title + countdown on: only the outside title chip and the inside countdown
     // chip render — no empty price box, and the title chip ATTACHES to the countdown row
@@ -2296,7 +2289,7 @@ fn frame_discs(chart: &mut ChartEngine) -> Vec<(f32, f32, Color)> {
 
 #[test]
 fn selection_anchors_paint_theme_derived_discs_on_the_selected_series() {
-    const BLUE: Color = Color::rgb(0x29, 0x62, 0xff); // TradingView accent blue
+    const BLUE: Color = PRIMARY;
     let mut chart = anchor_chart();
     // Nothing selected: no anchor discs.
     assert!(frame_discs(&mut chart).is_empty());
@@ -2348,7 +2341,7 @@ fn selection_anchors_decimate_to_a_sparse_hint_at_tight_spacing() {
     chart.fit_content();
     chart.set_selected_series(Some(0));
     let discs = frame_discs(&mut chart);
-    let blue = Color::rgb(0x29, 0x62, 0xff);
+    let blue = PRIMARY;
     let borders: Vec<_> = discs.iter().copied().filter(|d| d.2 == blue).collect();
     // 800 px at one anchor per >=96 px: far fewer than the 200 bars, first and last kept.
     assert!(

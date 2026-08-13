@@ -315,7 +315,7 @@ impl ChartEngine {
                 "bid_color" => {
                     if let Some(v) = value.as_str() {
                         s.bid_color = if v.is_empty() {
-                            "#2962ff".to_string()
+                            nucleuscharts_core::style::DEFAULT_PRIMARY_CSS.to_string()
                         } else {
                             v.to_string()
                         };
@@ -324,7 +324,7 @@ impl ChartEngine {
                 "ask_color" => {
                     if let Some(v) = value.as_str() {
                         s.ask_color = if v.is_empty() {
-                            "#f23645".to_string()
+                            nucleuscharts_core::style::MARKET_DOWN_CSS.to_string()
                         } else {
                             v.to_string()
                         };

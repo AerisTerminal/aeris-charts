@@ -7,57 +7,41 @@
      of the canvas bitmap. user-scalable=no stops native pinch-zoom fighting the chart. -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <title>Nucleus Charts — @nucleuscharts/financial demo</title>
+<link rel="stylesheet" href="./dist/nucleuscharts.css" />
 <style>
-  :root {
-    color-scheme: light;
-    --demo-surface: #fff;
-    --demo-panel: #f7f8fa;
-    --demo-control: #fff;
-    --demo-text: #191919;
-    --demo-muted: #787b86;
-    --demo-border: #e0e3eb;
-    --demo-control-border: #d0d3da;
-  }
-  :root[data-theme="dark"] {
-    color-scheme: dark;
-    --demo-panel: #121212;
-    --demo-control: #181818;
-    --demo-muted: #a3a7b1;
-    --demo-control-border: #303030;
-  }
-  html, body { margin: 0; height: 100%; background: var(--demo-surface); color: var(--demo-text); font-family: -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif; }
+  html, body { height: 100%; }
   #wrap { display: flex; flex-direction: column; height: 100%; }
-  #bar { padding: 8px 10px; font-size: 12px; color: var(--demo-text); background: var(--demo-surface);
-         border-bottom: 1px solid var(--demo-border); display: flex; gap: 7px; align-items: stretch;
-         align-content: flex-start; flex-wrap: wrap; }
+  #bar { max-height: 30vh; overflow-y: auto; padding: 8px 10px; font-size: 12px; color: var(--foreground);
+         background: var(--background); border-bottom: 1px solid var(--border); display: flex;
+         gap: 8px; align-items: stretch; align-content: flex-start; flex-wrap: wrap; }
   #bar .group { position: relative; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
-                padding: 10px 9px 5px; margin-top: 3px; background: var(--demo-panel);
-                border: 1px solid var(--demo-border); border-radius: 6px; }
+                padding: 10px 9px 5px; margin-top: 3px; background: var(--muted);
+                border: 1px solid var(--muted-border); border-radius: var(--radius-df); }
   /* The flex display above would otherwise beat the UA [hidden] rule (specificity) — the style
      groups toggle via the `hidden` attribute, so it must win here. */
   #bar .group[hidden] { display: none; }
   #bar .group::before { content: attr(data-caption); position: absolute; top: -8px; left: 8px;
-                padding: 0 5px; background: var(--demo-surface); font-size: 9.5px; font-weight: 600; letter-spacing: 0.07em;
-                text-transform: uppercase; color: var(--demo-muted); }
+                padding: 0 5px; background: var(--background); font-size: 9.5px; letter-spacing: 0.07em;
+                text-transform: uppercase; color: var(--muted-foreground); }
   #bar label { display: inline-flex; gap: 4px; align-items: center; white-space: nowrap; }
   #bar button, #bar select, #bar input[type="text"], #bar input[type="number"] {
-    min-height: 23px; box-sizing: border-box; background: var(--demo-control); color: var(--demo-text);
-    border: 1px solid var(--demo-control-border); border-radius: 4px;
+    min-height: 25px; background: var(--input); color: var(--foreground);
+    border: 1px solid var(--muted-border); border-radius: var(--radius-sm);
   }
   #bar button { padding: 2px 8px; cursor: pointer; }
-  #bar button:hover { border-color: #26a69a; }
-  #bar button:focus-visible, #bar select:focus-visible, #bar input:focus-visible { outline: 2px solid #26a69a; outline-offset: 1px; }
-  #bar input[type="color"] { width: 24px; height: 21px; padding: 0; border: 1px solid var(--demo-control-border); border-radius: 4px; background: var(--demo-control); cursor: pointer; }
+  #bar button:hover { background: var(--accent); }
+  #bar button:focus-visible, #bar select:focus-visible, #bar input:focus-visible { outline-color: var(--primary); }
+  #bar input[type="color"] { width: 24px; height: 23px; padding: 0; border: 1px solid var(--muted-border); border-radius: var(--radius-sm); background: var(--input); cursor: pointer; }
   #bar input[type="range"] { width: 72px; vertical-align: middle; }
-  #bar .brand { align-self: center; background:#26a69a; color:#fff; padding:4px 7px; border-radius:4px; font-weight: 700; }
-  #bar .hint { color: var(--demo-muted); font-size: 11px; }
-  #status { align-self: center; margin-left: auto; color: var(--demo-muted); font-variant-numeric: tabular-nums; }
+  #bar .brand { align-self: center; background: var(--primary); color: var(--primary-foreground); padding: 5px 8px; border-radius: var(--radius-sm); }
+  #bar .hint { color: var(--muted-foreground); font-size: 11px; }
+  #status { align-self: center; margin-left: auto; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
   /* The library creates and manages the canvases inside this container. */
   #chart_wrap { flex: 1; position: relative; min-height: 0; }
   #chart_container { position: absolute; inset: 0; touch-action: none; overscroll-behavior: none; }
   /* crosshair-move legend (top-left, over the pane) driven by subscribe_crosshair_move */
-  #legend { position: absolute; top: 8px; left: 8px; z-index: 3; font-size: 12px; color: var(--demo-text);
-            background: color-mix(in srgb, var(--demo-surface) 72%, transparent); padding: 3px 7px; border-radius: 3px; pointer-events: none;
+  #legend { position: absolute; top: 8px; left: 8px; z-index: 3; font-size: 12px; color: var(--foreground);
+            background: color-mix(in srgb, var(--background) 72%, transparent); padding: 3px 7px; border-radius: var(--radius-sm); pointer-events: none;
             font-variant-numeric: tabular-nums; }
 </style>
 </head>
@@ -140,7 +124,7 @@
       <button type="button" data-tool="rectangle" title="Rectangle between two corners">rect</button>
       <button type="button" data-tool="text" title="Text label at a point (uses the label text below)">text</button>
       <button type="button" data-tool="brush" title="Freehand brush: drag to draw a smooth stroke; when selected its two end anchors re-anchor, the body moves">brush</button>
-      <label title="Stroke/border color — templates new drawings and applies live to the selected one">color <input type="color" id="drawing_color" value="#2962ff"></label>
+      <label title="Stroke/border color — templates new drawings and applies live to the selected one">color <input type="color" id="drawing_color" value="#3e63dd"></label>
       <label title="Stroke style (solid/dotted/dashed) — templates new drawings and applies live to the selected one">style
         <select id="drawing_style">
           <option value="solid" selected>solid</option>
@@ -177,7 +161,7 @@
           <option value="2">hidden</option>
         </select>
       </label>
-      <label>color <input type="color" id="cross_color" value="#9598a1"></label>
+      <label>color <input type="color" id="cross_color" value="#e5e5e5"></label>
       <label>w <input type="range" id="cross_width" min="1" max="4" step="1" value="1"><span id="cross_width_val">1</span></label>
       <label>style
         <select id="cross_style">
@@ -186,7 +170,7 @@
           <option value="2" selected>dashed</option>
         </select>
       </label>
-      <label>label bg <input type="color" id="cross_label_bg" value="#131722"></label>
+      <label>label bg <input type="color" id="cross_label_bg" value="#fcfcfc"></label>
       <label><input type="checkbox" id="cross_label_visible" checked> labels</label>
     </div>
 
@@ -198,7 +182,7 @@
         </select>
       </label>
       <label><input type="checkbox" id="grid_toggle" checked> grid</label>
-      <label>grid color <input type="color" id="grid_color" value="#d6dcde"></label>
+      <label>grid color <input type="color" id="grid_color" value="#e5e5e5"></label>
       <label>grid style
         <select id="grid_style">
           <option value="0" selected>solid</option>
@@ -234,10 +218,10 @@
 
     <!-- price/time axis cosmetics: border (reference borderColor/borderVisible) + text (textColor) -->
     <div class="group" data-caption="Axes">
-      <label>border <input type="color" id="axis_border_color" value="#f5f5f5"></label>
+      <label>border <input type="color" id="axis_border_color" value="#e5e5e5"></label>
       <label><input type="checkbox" id="axis_border_visible" checked> borders</label>
-      <label>text <input type="color" id="axis_text_color" value="#0a0a0a"></label>
-      <label>separator <input type="color" id="pane_separator_color" value="#f5f5f5" title="Pane divider color — follows the axis border color (theme-aware) until you pin an explicit one"></label>
+      <label>text <input type="color" id="axis_text_color" value="#333333"></label>
+      <label>separator <input type="color" id="pane_separator_color" value="#e5e5e5" title="Pane divider color — follows the axis border color (theme-aware) until you pin an explicit one"></label>
     </div>
 
     <!-- watermark (reference v4 shape) -->
@@ -343,15 +327,15 @@ if (parity_fixture !== null) {
     textColor: palette.text,
   };
   chart_options.grid = {
-    vertLines: { color: palette.grid },
-    horzLines: { color: palette.grid },
+    vertLines: { color: palette.grid, visible: true },
+    horzLines: { color: palette.grid, visible: true },
   };
   // Keep the cross-library fidelity gate pinned to the reference's axis-border default; the package
   // theme palette (theme.ts) must not leak into the comparison. `boldRoundLabels` is a Nucleus-only
   // extension (default on) with no reference counterpart, so the comparison disables it too.
   chart_options.timeScale = { borderColor: "#2B2B43" };
-  chart_options.leftPriceScale = { ...(chart_options.leftPriceScale ?? {}), borderColor: "#2B2B43", boldRoundLabels: false };
-  chart_options.rightPriceScale = { ...(chart_options.rightPriceScale ?? {}), borderColor: "#2B2B43", boldRoundLabels: false };
+  chart_options.leftPriceScale = { ...(chart_options.leftPriceScale ?? {}), borderColor: "#2B2B43", textColor: palette.text, boldRoundLabels: false };
+  chart_options.rightPriceScale = { ...(chart_options.rightPriceScale ?? {}), borderColor: "#2B2B43", textColor: palette.text, boldRoundLabels: false };
 }
 if (runtime_test === "adapterFailure") chart_options.__simulate_webgpu_adapter_failure = true;
 if (query.get("forceFallbackAdapter") === "1") chart_options.__force_webgpu_fallback_adapter = true;
@@ -397,6 +381,14 @@ const data = generate_data(parity_fixture?.bar_count ?? 1000, parity_fixture ?? 
 const pristine_demo = query.toString() === "";
 const main = chart.add_series("candlestick", {
   ...(requested_left_scale ? { priceScaleId: "left" } : {}),
+  ...(parity_fixture !== null ? {
+    up_color: "#26a69a",
+    down_color: "#ef5350",
+    wick_up_color: "#26a69a",
+    wick_down_color: "#ef5350",
+    border_up_color: "#26a69a",
+    border_down_color: "#ef5350",
+  } : {}),
   ...(pristine_demo ? { title: document.getElementById("series_title").value } : {}),
 });
 main.set_data(data);
@@ -703,8 +695,8 @@ const drawing_tool_buttons = [...document.querySelectorAll("#drawings_group [dat
 function sync_drawing_tool_buttons(tool) {
   for (const button of drawing_tool_buttons) {
     const active = button.dataset.tool === tool;
-    button.style.background = active ? "#2962ff" : "";
-    button.style.color = active ? "#fff" : "";
+    button.style.background = active ? "var(--primary)" : "";
+    button.style.color = active ? "var(--primary-foreground)" : "";
   }
 }
 // The customization inputs template newly created drawings AND apply live to the selected one
@@ -1185,11 +1177,7 @@ apply_interaction();
 // tokens onto the chart options live (background + axis borders + axis text), then the pickers
 // are synced so the controls reflect the active palette. The page chrome follows too.
 function sync_page_theme(theme) {
-  const palette = theme_palette(theme);
   document.documentElement.dataset.theme = theme;
-  document.documentElement.style.setProperty("--demo-surface", palette.background);
-  document.documentElement.style.setProperty("--demo-border", palette.border);
-  document.documentElement.style.setProperty("--demo-text", palette.text);
   document.getElementById("theme_select").value = theme;
 }
 document.getElementById("theme_select").addEventListener("change", (e) => {
@@ -1206,12 +1194,13 @@ document.getElementById("theme_select").addEventListener("change", (e) => {
   if (!theme_color_touched.axis_border) document.getElementById("axis_border_color").value = palette.border;
   apply_axis_border();
   if (!theme_color_touched.separator) document.getElementById("pane_separator_color").value = palette.border;
-  if (!theme_color_touched.axis_text) document.getElementById("axis_text_color").value = palette.text;
-  chart.apply_options({ layout: { textColor: palette.text } });
-  if (!theme_color_touched.grid) document.getElementById("grid_color").value = palette.grid;
+  else chart.apply_options({ layout: { panes: { separatorColor: document.getElementById("pane_separator_color").value } } });
+  if (!theme_color_touched.axis_text) document.getElementById("axis_text_color").value = palette.foreground;
+  chart.apply_options({ layout: { textColor: palette.foreground, mutedTextColor: palette.muted_foreground } });
+  if (!theme_color_touched.grid) document.getElementById("grid_color").value = palette.border;
   apply_grid_style();
-  if (!theme_color_touched.crosshair_line) document.getElementById("cross_color").value = palette.crosshair;
-  if (!theme_color_touched.crosshair_label) document.getElementById("cross_label_bg").value = palette.crosshair;
+  if (!theme_color_touched.crosshair_line) document.getElementById("cross_color").value = palette.border;
+  if (!theme_color_touched.crosshair_label) document.getElementById("cross_label_bg").value = palette.muted;
   apply_crosshair_style();
   sync_page_theme(e.target.value);
 });
@@ -1222,11 +1211,11 @@ if (parity_fixture === null) {
   document.getElementById("axis_border_color").value = palette.border;
   apply_axis_border();
   document.getElementById("pane_separator_color").value = palette.border;
-  document.getElementById("axis_text_color").value = palette.text;
-  document.getElementById("grid_color").value = palette.grid;
+  document.getElementById("axis_text_color").value = palette.foreground;
+  document.getElementById("grid_color").value = palette.border;
   apply_grid_style();
-  document.getElementById("cross_color").value = palette.crosshair;
-  document.getElementById("cross_label_bg").value = palette.crosshair;
+  document.getElementById("cross_color").value = palette.border;
+  document.getElementById("cross_label_bg").value = palette.muted;
   apply_crosshair_style();
 }
 sync_style_visibility("candlestick");

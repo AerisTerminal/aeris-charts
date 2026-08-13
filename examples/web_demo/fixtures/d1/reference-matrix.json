@@ -9,23 +9,23 @@
       "dpr": 1,
       "spacing": 6,
       "theme": "light",
-      "measured": { "full": 0.0000998263888888889, "pane": 0, "price_axis": 0, "time_axis": 0 },
-      "maximum": { "full": 0.0003, "pane": 0.0001, "price_axis": 0.0005, "time_axis": 0.0005 }
+      "measured": { "full": 0.0014442274305555556, "pane": 0.0006870665922443071, "price_axis": 0.016394259517640022, "time_axis": 0 },
+      "maximum": { "full": 0.0016, "pane": 0.0008, "price_axis": 0.018, "time_axis": 0.0005 }
     },
     {
       "name": "dpr-1_25-spacing-6-light",
       "dpr": 1.25,
       "spacing": 6,
       "theme": "light",
-      "measured": { "full": 0.006652777777777777, "pane": 0.004280029053052084, "price_axis": 0.06514129736673089, "time_axis": 0.01131264023934181 },
-      "maximum": { "full": 0.009, "pane": 0.006, "price_axis": 0.075, "time_axis": 0.017 }
+      "measured": { "full": 0.007282638888888889, "pane": 0.004342826014587053, "price_axis": 0.0783718689788054, "time_axis": 0.01131264023934181 },
+      "maximum": { "full": 0.009, "pane": 0.006, "price_axis": 0.08, "time_axis": 0.017 }
     },
     {
       "name": "dpr-2-spacing-6-light",
       "dpr": 2,
       "spacing": 6,
       "theme": "light",
-      "measured": { "full": 0.02816351996527778, "pane": 0.02507793061691721, "price_axis": 0.07789141917480566, "time_axis": 0.017542962356792143 },
+      "measured": { "full": 0.02895968967013889, "pane": 0.02541111652460195, "price_axis": 0.08911575642814432, "time_axis": 0.017542962356792143 },
       "maximum": { "full": 0.035, "pane": 0.03, "price_axis": 0.09, "time_axis": 0.025 }
     },
     {
@@ -33,23 +33,23 @@
       "dpr": 3,
       "spacing": 6,
       "theme": "light",
-      "measured": { "full": 0.0121923225308642, "pane": 0.008917280808807067, "price_axis": 0.07609682634597922, "time_axis": 0.016366612111292964 },
-      "maximum": { "full": 0.018, "pane": 0.015, "price_axis": 0.085, "time_axis": 0.025 }
+      "measured": { "full": 0.012931134259259258, "pane": 0.009153135567475746, "price_axis": 0.08809215334529268, "time_axis": 0.016366612111292964 },
+      "maximum": { "full": 0.018, "pane": 0.015, "price_axis": 0.09, "time_axis": 0.025 }
     },
     {
       "name": "dpr-1_5-spacing-0_5-light",
       "dpr": 1.5,
       "spacing": 0.5,
       "theme": "light",
-      "measured": { "full": 0.025771122685185185, "pane": 0.024381732043766235, "price_axis": 0.06817930148605851, "time_axis": 0.009365339152573195 },
-      "maximum": { "full": 0.032, "pane": 0.03, "price_axis": 0.08, "time_axis": 0.015 }
+      "measured": { "full": 0.02620997299382716, "pane": 0.02429763898217963, "price_axis": 0.08002790512258322, "time_axis": 0.009365339152573195 },
+      "maximum": { "full": 0.032, "pane": 0.03, "price_axis": 0.081, "time_axis": 0.015 }
     },
     {
       "name": "dpr-1_5-spacing-50-light",
       "dpr": 1.5,
       "spacing": 50,
       "theme": "light",
-      "measured": { "full": 0.011413001543209877, "pane": 0.008836078446212502, "price_axis": 0.05365092020463757, "time_axis": 0.025004546281142024 },
+      "measured": { "full": 0.011821952160493828, "pane": 0.008814004017546017, "price_axis": 0.06351737426084646, "time_axis": 0.025004546281142024 },
       "maximum": { "full": 0.018, "pane": 0.015, "price_axis": 0.065, "time_axis": 0.035 }
     },
     {
@@ -57,8 +57,8 @@
       "dpr": 1.5,
       "spacing": 6,
       "theme": "dark",
-      "measured": { "full": 0.003928915895061729, "pane": 0.0008277910749931412, "price_axis": 0.05929838548933626, "time_axis": 0.015041695892759723 },
-      "maximum": { "full": 0.008, "pane": 0.005, "price_axis": 0.07, "time_axis": 0.022 }
+      "measured": { "full": 0.0044053819444444445, "pane": 0.0008172794422948156, "price_axis": 0.07047150798396563, "time_axis": 0.015041695892759723 },
+      "maximum": { "full": 0.008, "pane": 0.005, "price_axis": 0.072, "time_axis": 0.022 }
     }
   ]
 }

@@ -289,7 +289,7 @@ pub struct PriceLine {
     pub axis_label_visible: bool,
     /// reference `axisLabelColor` (default `''`): label background; `None` follows the line color.
     pub axis_label_color: Option<String>,
-    /// reference `axisLabelTextColor` (default `''`): label text; `None` is the contrast pick
+    /// reference `axisLabelTextColor` (default `''`): label text; `None` uses semantic foreground
     /// against the label background (as the crosshair labels do).
     pub axis_label_text_color: Option<String>,
 }
@@ -365,9 +365,9 @@ pub struct SeriesEntry {
     pub bid: Option<f64>,
     /// Current ask price (`None` hides the ask side).
     pub ask: Option<f64>,
-    /// Bid line/chip color (default `#2962ff`). Stored verbatim; parsed at render time.
+    /// Bid line/chip color (default: the canonical primary token). Stored verbatim.
     pub bid_color: String,
-    /// Ask line/chip color (default `#f23645`). Stored verbatim; parsed at render time.
+    /// Ask line/chip color (default: the canonical loss token). Stored verbatim.
     pub ask_color: String,
     /// Bid/ask line width in CSS px (default 1, mirrors `price_line_width`).
     pub bid_ask_line_width: f64,
@@ -480,8 +480,8 @@ impl SeriesEntry {
             bid_ask_visible: false,
             bid: None,
             ask: None,
-            bid_color: "#2962ff".to_string(),
-            ask_color: "#f23645".to_string(),
+            bid_color: nucleuscharts_core::style::DEFAULT_PRIMARY_CSS.to_string(),
+            ask_color: nucleuscharts_core::style::MARKET_DOWN_CSS.to_string(),
             bid_ask_line_width: 1.0,
             bid_ask_line_style: 1,
             line_style: 0,

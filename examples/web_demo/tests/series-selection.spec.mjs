@@ -5,7 +5,7 @@ import { PNG } from "pngjs";
 // cursor; clicking selects it and paints anchor points on its drawn data points — theme-derived
 // fill (white on light backgrounds, black on dark) with the accent-blue border.
 
-const BLUE = [41, 98, 255]; // #2962ff — the anchor border
+const BLUE = [62, 99, 221]; // semantic primary #3e63dd — the anchor border
 
 test.beforeEach(async ({ page }) => {
   page.on("pageerror", (error) => console.log(`[browser:pageerror] ${error.message}`));

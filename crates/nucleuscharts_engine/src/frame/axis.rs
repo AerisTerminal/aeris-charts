@@ -176,6 +176,18 @@ fn recalculate_overlapping(
 }
 
 impl ChartEngine {
+    fn primary_text_color(&self) -> Color {
+        let fallback = nucleuscharts_core::style::DEFAULT_FOREGROUND_RGB;
+        Color::parse_css(&self.options.get().layout.text_color)
+            .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2))
+    }
+
+    fn muted_text_color(&self) -> Color {
+        let fallback = nucleuscharts_core::style::DEFAULT_MUTED_FOREGROUND_RGB;
+        Color::parse_css(&self.options.get().layout.muted_text_color)
+            .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2))
+    }
+
     pub(super) fn format_scale_value(&self, scale: &PriceScaleCore, value: f64) -> String {
         if scale.mode() == PriceScaleMode::Percentage {
             // Percentage mode has its own formatter; the host price formatter does not apply here
@@ -368,13 +380,7 @@ impl ChartEngine {
             ..AxisFrame::default()
         };
         let visible = self.visible_range_for_frame();
-        let default_axis_text = nucleuscharts_core::style::DEFAULT_AXIS_TEXT_RGB;
-        let layout_text_color =
-            Color::parse_css(&self.options.get().layout.text_color).unwrap_or(Color::rgb(
-                default_axis_text.0,
-                default_axis_text.1,
-                default_axis_text.2,
-            ));
+        let layout_text_color = self.primary_text_color();
         // Per-scale label color (reference `textColor`): the scale's own color when set, else the
         // layout text color (price-axis-widget.ts:569).
         let scale_text_color = |scale: &PriceScaleCore| {
@@ -769,8 +775,8 @@ impl ChartEngine {
                             self.pane_left + self.pane_w,
                         )
                     };
-                    // reference defaults: the label background follows the line color and the text is
-                    // its contrast pick (as the crosshair labels do); both are overridable.
+                    // The label background follows the line color; chart text follows the semantic
+                    // foreground token unless the line explicitly supplies a text override.
                     let background = line
                         .axis_label_color
                         .as_deref()
@@ -780,7 +786,7 @@ impl ChartEngine {
                         .axis_label_text_color
                         .as_deref()
                         .and_then(Color::parse_css)
-                        .unwrap_or_else(|| background.contrast_text());
+                        .unwrap_or_else(|| self.primary_text_color());
                     labels.push(AxisLabel {
                         text,
                         x,
@@ -807,7 +813,7 @@ impl ChartEngine {
 
     /// TradingView's horizontal-line/ray axis label: the drawing's price boxed on the price
     /// axis in the LINE's own color (the label is part of the drawing — recoloring the line
-    /// recolors the label on the next frame), with the contrast-pick text color. Formatted
+    /// recolors the label on the next frame), with semantic foreground text. Formatted
     /// with the pane's primary series' price format, like the price-line labels.
     pub(super) fn append_drawing_line_labels<F>(&self, labels: &mut Vec<AxisLabel>, measure: &F)
     where
@@ -848,17 +854,15 @@ impl ChartEngine {
                     None => self.format_scale_value(scale, logical),
                 };
                 // The label IS the line: background in the drawing's color (parsed per frame,
-                // so option changes track), contrast-picked text.
-                let background = Color::parse_css(&drawing.color)
-                    .unwrap_or(Color::rgb(0x29, 0x62, 0xff))
-                    .solid();
+                // so option changes track), semantic foreground text.
+                let background = Color::parse_css(&drawing.color).unwrap_or(PRIMARY).solid();
                 let width = 1.0 + 5.0 + 5.0 + 5.0 + measure(&text);
                 let height = font_size + 2.5 * 2.0;
                 labels.push(AxisLabel {
                     text,
                     x: self.pane_left + self.pane_w + 10.0,
                     y,
-                    color: background.contrast_text(),
+                    color: self.primary_text_color(),
                     align: AxisTextAlign::Left,
                     midpoint: AxisTextMidpoint::Label,
                     bold: false,
@@ -879,7 +883,7 @@ impl ChartEngine {
 
     /// reference SeriesPriceAxisView: every visible series with `lastValueVisible` (default true)
     /// gets a last-value label on its price scale — the background is the series' bar color,
-    /// the text its contrast, the value the last visible bar's close in the scale's format.
+    /// semantic foreground text, and the last visible bar's close in the scale's format.
     /// Labels sharing an axis side are pushed apart with the reference's overlap resolution
     /// (price-axis-widget.ts `_fixLabelOverlap`).
     ///
@@ -1030,20 +1034,8 @@ impl ChartEngine {
                 // chips never chain into the main cluster (or each other) when adjacent.
                 if series.bid_ask_visible {
                     let sides = [
-                        (
-                            "Bid",
-                            series.bid,
-                            series.bid_color.as_str(),
-                            Color::rgb(0x29, 0x62, 0xff),
-                            1u32,
-                        ),
-                        (
-                            "Ask",
-                            series.ask,
-                            series.ask_color.as_str(),
-                            Color::rgb(0xf2, 0x36, 0x45),
-                            2u32,
-                        ),
+                        ("Bid", series.bid, series.bid_color.as_str(), PRIMARY, 1u32),
+                        ("Ask", series.ask, series.ask_color.as_str(), DOWN, 2u32),
                     ];
                     for (side, value, css, fallback, side_offset) in sides {
                         let Some(quote) = value else {
@@ -1113,7 +1105,7 @@ impl ChartEngine {
                         text,
                         x,
                         y: label.y,
-                        color: label.color.contrast_text(),
+                        color: self.primary_text_color(),
                         align,
                         midpoint: AxisTextMidpoint::Label,
                         bold: false,
@@ -1152,18 +1144,8 @@ impl ChartEngine {
         F: Fn(&str) -> f64,
     {
         let right_strip = target != PriceScaleTarget::Left;
-        let text_color = label.color.contrast_text();
-        // The countdown row's text is slightly MUTED against the chip (TradingView-style)
-        // instead of the full-contrast color the title and price texts use.
-        let muted_text_color = {
-            let base = text_color;
-            Color::rgba(
-                base.r(),
-                base.g(),
-                base.b(),
-                (base.a() as f64 * 0.65).round() as u8,
-            )
-        };
+        let text_color = self.primary_text_color();
+        let muted_text_color = self.muted_text_color();
         // The title chip shares the main label color by default (matching the price and
         // countdown chips).
         let chip_color = label.color;
@@ -1353,7 +1335,7 @@ impl ChartEngine {
         }
         // Price-axis label tracks the horizontal line (reference `horzLine`); time-axis label tracks the
         // vertical line (reference `vertLine`). Each carries its own `labelVisible`/`labelBackgroundColor`,
-        // and the text color is the reference contrast pick against that background.
+        // and the text color is the semantic foreground token.
         let options = self.options.get();
         let font_size = options.layout.font_size;
         let ch = options.crosshair;
@@ -1410,7 +1392,7 @@ impl ChartEngine {
                         text,
                         x: label_x,
                         y: snap_y,
-                        color: label_bg.contrast_text(),
+                        color: self.primary_text_color(),
                         align,
                         midpoint: AxisTextMidpoint::Label,
                         bold: false,
@@ -1446,7 +1428,7 @@ impl ChartEngine {
                     text,
                     x: box_x + width / 2.0,
                     y: self.pane_h + 1.0 + height / 2.0,
-                    color: label_bg.contrast_text(),
+                    color: self.primary_text_color(),
                     align: AxisTextAlign::Center,
                     midpoint: AxisTextMidpoint::StableTime,
                     bold: false,

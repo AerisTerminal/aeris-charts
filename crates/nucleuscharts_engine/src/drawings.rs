@@ -182,8 +182,8 @@ impl DrawingTextVAlign {
     }
 }
 
-/// TradingView's drawing default color (its trend-line/ray blue).
-pub const DRAWING_DEFAULT_COLOR: &str = "#2962ff";
+/// Canonical interactive primary used by drawing strokes and handles.
+pub const DRAWING_DEFAULT_COLOR: &str = nucleuscharts_core::style::DEFAULT_PRIMARY_CSS;
 
 /// An engine-owned drawing. Colors follow the series pattern: stored verbatim as CSS strings
 /// and parsed at render time (`None`/unparseable falls back to the follow behavior documented

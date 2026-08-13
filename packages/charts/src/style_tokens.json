@@ -2,21 +2,34 @@
   "default_theme": "dark",
   "light": {
     "surface": "#ffffff",
-    "border": "#f5f5f5",
-    "axis_text": "#0a0a0a",
-    "crosshair": "#9598a1",
-    "separator_hover": "rgba(149, 152, 161, 0.2)"
+    "foreground": "#333333",
+    "primary": "#3e63dd",
+    "primary_foreground": "#eff6ff",
+    "primary_hover": "#2f50c8",
+    "muted": "#fcfcfc",
+    "muted_foreground": "#737373",
+    "accent": "#f5f5f5",
+    "border": "#e5e5e5",
+    "muted_border": "#f3f3f3",
+    "ring": "#a1a1a1"
   },
   "dark": {
-    "surface": "#0c0c0c",
-    "border": "#1e1e1e",
-    "axis_text": "#f5f5f5",
-    "crosshair": "#2e2e2e",
-    "separator_hover": "rgba(46, 46, 46, 0.2)"
+    "surface": "#141414",
+    "foreground": "#fafafa",
+    "primary": "#3e63dd",
+    "primary_foreground": "#eff6ff",
+    "primary_hover": "#4e76f2",
+    "muted": "#1b1b1b",
+    "muted_foreground": "#a1a1a1",
+    "accent": "#262626",
+    "border": "#2c2c2c",
+    "muted_border": "#242424",
+    "ring": "#737373"
   },
   "market": {
-    "up": "#089981",
-    "down": "#f7525f",
+    "up": "#07b57a",
+    "down": "#ff4b62",
+    "warning": "#f59e0a",
     "volume_alpha": 128
   }
 }

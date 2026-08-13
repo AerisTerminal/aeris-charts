@@ -3135,7 +3135,7 @@ impl Render for InteractiveDemo {
         let (divider_color, legend) = self.root_chart().map_or_else(
             || {
                 (
-                    shell_rgb(theme_border(self.theme), 0xf5f5f5),
+                    shell_rgb(theme_border(self.theme), 0xe5e5e5),
                     "O —  H —  L —  C —".to_string(),
                 )
             },
@@ -3144,7 +3144,7 @@ impl Render for InteractiveDemo {
                 (
                     shell_rgb(
                         &probe.engine.options.get().time_scale.border_color,
-                        shell_rgb(theme_border(self.theme), 0xf5f5f5),
+                        shell_rgb(theme_border(self.theme), 0xe5e5e5),
                     ),
                     format!("{}  ·  {}", probe.legend, probe.click_status),
                 )

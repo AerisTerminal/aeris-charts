@@ -3,8 +3,8 @@
  *
  * Packs the package exactly as npm would for publish, installs the tarball into a scratch dir,
  * and asserts the installed artifact is complete and importable:
- *   1. `npm pack` produces a tarball containing dist/index.js, dist/index.d.ts, the wasm binary,
- *      LICENSE.
+ *   1. `npm pack` produces a tarball containing JavaScript, types, WebAssembly, the portable
+ *      design system and font, and LICENSE.
  *   2. `npm install <tarball>` into an empty consumer dir.
  *   3. The installed module imports in Node (side-effect-free) and exposes `create_chart`.
  *   4. `dist/nucleuscharts_wasm_bg.wasm` is present inside the installed package (non-trivial size).
@@ -27,8 +27,12 @@ const scratch = mkdtempSync(join(tmpdir(), "nucleuscharts-pack-smoke-"));
 const env = { ...process.env };
 delete env.npm_config_dry_run;
 
-const run = (cmd, args, cwd) =>
-  execFileSync(cmd, args, { cwd, env, encoding: "utf8", shell: process.platform === "win32" }).trim();
+const run = (cmd, args, cwd) => {
+  if (cmd === "npm" && process.env.npm_execpath) {
+    return execFileSync(process.execPath, [process.env.npm_execpath, ...args], { cwd, env, encoding: "utf8" }).trim();
+  }
+  return execFileSync(cmd, args, { cwd, env, encoding: "utf8" }).trim();
+};
 
 try {
   // 1. Pack and inspect the tarball file list.
@@ -38,6 +42,8 @@ try {
     "package/dist/index.js",
     "package/dist/index.d.ts",
     "package/dist/nucleuscharts_wasm_bg.wasm",
+    "package/dist/nucleuscharts.css",
+    "package/dist/inter_400.ttf",
     "package/LICENSE",
   ]) {
     assert.ok(files.includes(required), `tarball is missing ${required}`);

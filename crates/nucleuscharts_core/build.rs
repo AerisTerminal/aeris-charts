@@ -50,10 +50,6 @@ fn emit_color(output: &mut String, name: &str, css: &str) {
     ));
 }
 
-fn emit_css(output: &mut String, name: &str, css: &str) {
-    output.push_str(&format!("pub const {name}_CSS: &str = \"{css}\";\n"));
-}
-
 fn main() {
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest dir"));
     let tokens_path = manifest_dir.join("../../packages/charts/src/style_tokens.json");
@@ -77,9 +73,16 @@ fn main() {
         let prefix = theme.to_ascii_uppercase();
         for (field, suffix) in [
             ("surface", "SURFACE"),
+            ("foreground", "FOREGROUND"),
+            ("primary", "PRIMARY"),
+            ("primary_foreground", "PRIMARY_FOREGROUND"),
+            ("primary_hover", "PRIMARY_HOVER"),
+            ("muted", "MUTED"),
+            ("muted_foreground", "MUTED_FOREGROUND"),
+            ("accent", "ACCENT"),
             ("border", "BORDER"),
-            ("axis_text", "AXIS_TEXT"),
-            ("crosshair", "CROSSHAIR"),
+            ("muted_border", "MUTED_BORDER"),
+            ("ring", "RING"),
         ] {
             emit_color(
                 &mut output,
@@ -87,11 +90,6 @@ fn main() {
                 required_string(&tokens, &[theme, field]),
             );
         }
-        emit_css(
-            &mut output,
-            &format!("{prefix}_SEPARATOR_HOVER"),
-            required_string(&tokens, &[theme, "separator_hover"]),
-        );
     }
     emit_color(
         &mut output,
@@ -103,13 +101,30 @@ fn main() {
         "MARKET_DOWN",
         required_string(&tokens, &["market", "down"]),
     );
+    emit_color(
+        &mut output,
+        "MARKET_WARNING",
+        required_string(&tokens, &["market", "warning"]),
+    );
     let volume_alpha = required_u8(&tokens, &["market", "volume_alpha"]);
     output.push_str(&format!(
         "pub const MARKET_VOLUME_ALPHA: u8 = 0x{volume_alpha:02x};\n"
     ));
 
     let default_prefix = default_theme.to_ascii_uppercase();
-    for suffix in ["SURFACE", "BORDER", "AXIS_TEXT", "CROSSHAIR"] {
+    for suffix in [
+        "SURFACE",
+        "FOREGROUND",
+        "PRIMARY",
+        "PRIMARY_FOREGROUND",
+        "PRIMARY_HOVER",
+        "MUTED",
+        "MUTED_FOREGROUND",
+        "ACCENT",
+        "BORDER",
+        "MUTED_BORDER",
+        "RING",
+    ] {
         output.push_str(&format!(
             "pub const DEFAULT_{suffix}_CSS: &str = {default_prefix}_{suffix}_CSS;\n"
         ));
@@ -117,9 +132,21 @@ fn main() {
             "pub const DEFAULT_{suffix}_RGB: (u8, u8, u8) = {default_prefix}_{suffix}_RGB;\n"
         ));
     }
-    output.push_str(&format!(
-        "pub const DEFAULT_SEPARATOR_HOVER_CSS: &str = {default_prefix}_SEPARATOR_HOVER_CSS;\n"
-    ));
+    output.push_str("pub const LIGHT_AXIS_TEXT_CSS: &str = LIGHT_FOREGROUND_CSS;\n");
+    output.push_str("pub const LIGHT_AXIS_TEXT_RGB: (u8, u8, u8) = LIGHT_FOREGROUND_RGB;\n");
+    output.push_str("pub const DARK_AXIS_TEXT_CSS: &str = DARK_FOREGROUND_CSS;\n");
+    output.push_str("pub const DARK_AXIS_TEXT_RGB: (u8, u8, u8) = DARK_FOREGROUND_RGB;\n");
+    output.push_str("pub const DEFAULT_AXIS_TEXT_CSS: &str = DEFAULT_FOREGROUND_CSS;\n");
+    output.push_str("pub const DEFAULT_AXIS_TEXT_RGB: (u8, u8, u8) = DEFAULT_FOREGROUND_RGB;\n");
+    output.push_str("pub const LIGHT_CROSSHAIR_CSS: &str = LIGHT_BORDER_CSS;\n");
+    output.push_str("pub const LIGHT_CROSSHAIR_RGB: (u8, u8, u8) = LIGHT_BORDER_RGB;\n");
+    output.push_str("pub const DARK_CROSSHAIR_CSS: &str = DARK_BORDER_CSS;\n");
+    output.push_str("pub const DARK_CROSSHAIR_RGB: (u8, u8, u8) = DARK_BORDER_RGB;\n");
+    output.push_str("pub const DEFAULT_CROSSHAIR_CSS: &str = DEFAULT_BORDER_CSS;\n");
+    output.push_str("pub const DEFAULT_CROSSHAIR_RGB: (u8, u8, u8) = DEFAULT_BORDER_RGB;\n");
+    output.push_str("pub const LIGHT_SEPARATOR_HOVER_CSS: &str = LIGHT_ACCENT_CSS;\n");
+    output.push_str("pub const DARK_SEPARATOR_HOVER_CSS: &str = DARK_ACCENT_CSS;\n");
+    output.push_str("pub const DEFAULT_SEPARATOR_HOVER_CSS: &str = DEFAULT_ACCENT_CSS;\n");
 
     let output_path = Path::new(&env::var_os("OUT_DIR").expect("out dir")).join("style_tokens.rs");
     fs::write(&output_path, output)

@@ -13,6 +13,7 @@ const mime_types = new Map([
   [".mjs", "text/javascript; charset=utf-8"],
   [".map", "application/json; charset=utf-8"],
   [".json", "application/json; charset=utf-8"],
+  [".ttf", "font/ttf"],
   [".wasm", "application/wasm"],
 ]);
 

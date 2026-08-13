@@ -406,7 +406,7 @@ mod tests {
         let frame = ChartFrame::default();
         assert_eq!(
             PreparedNucleusFrame::from_engine(&frame, &engine).background,
-            Paint::Solid(Color::rgb(0x0c, 0x0c, 0x0c))
+            Paint::Solid(Color::rgb(0x14, 0x14, 0x14))
         );
 
         engine
@@ -429,7 +429,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             PreparedNucleusFrame::from_engine(&frame, &engine).background,
-            Paint::Solid(Color::rgb(0x0c, 0x0c, 0x0c))
+            Paint::Solid(Color::rgb(0x14, 0x14, 0x14))
         );
     }
 

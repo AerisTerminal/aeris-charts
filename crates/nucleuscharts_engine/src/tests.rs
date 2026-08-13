@@ -1089,7 +1089,7 @@ fn macd_outputs_are_line_line_histogram_with_four_state_colors() {
     // Every installed histogram row carries one of the four palette colors.
     let rows = chart.data.series_data(ids[2]).unwrap().1[3].len();
     assert!(rows > 0);
-    const PALETTE: [u32; 4] = [0x089981ff, 0x08998180, 0xf7525fff, 0xf7525f80];
+    const PALETTE: [u32; 4] = [0x07b57aff, 0x07b57a80, 0xff4b62ff, 0xff4b6280];
     for r in 0..rows {
         let color = chart
             .data
@@ -1537,6 +1537,22 @@ fn crosshair_label_visibility_and_background_flow_from_options() {
     chart.fit_content();
     chart.crosshair = Some((200.0, 120.0));
 
+    let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let muted = Color::rgb(0x1b, 0x1b, 0x1b);
+    let foreground = Color::rgb(0xfa, 0xfa, 0xfa);
+    let time_label = axis
+        .labels
+        .iter()
+        .find(|label| label.midpoint == AxisTextMidpoint::StableTime)
+        .expect("default crosshair time label");
+    assert_eq!(time_label.color, foreground);
+    assert!(matches!(time_label.background, Some((.., color)) if color == muted));
+    assert!(axis.labels.iter().any(|label| {
+        label.midpoint == AxisTextMidpoint::Label
+            && label.color == foreground
+            && matches!(label.background, Some((.., color)) if color == muted)
+    }));
+
     // Distinctive per-line label backgrounds prove each honors `labelBackgroundColor`. The price
     // label follows the horizontal line; the time label is the unique `StableTime` midpoint label.
     chart
@@ -1702,12 +1718,11 @@ fn price_line_extras_drive_line_and_axis_label_rendering() {
             .find(|l| l.text == "target")
     };
 
-    // Defaults (reference price-line-options.ts): line drawn, boxed label in the line color with
-    // contrast text.
+    // Defaults: line drawn, boxed label in the line color with semantic foreground text.
     assert!(has_line(&mut chart));
     let label = find_label(&mut chart).expect("price-line label");
     assert!(matches!(label.background, Some((.., c)) if c == line_color));
-    assert_eq!(label.color, line_color.contrast_text());
+    assert_eq!(label.color, Color::rgb(0xfa, 0xfa, 0xfa));
 
     // `lineVisible: false` skips only the HLine; the axis label stays.
     assert!(chart.price_line_apply_options(id, r#"{"line_visible":false}"#));
@@ -3647,14 +3662,16 @@ fn theme_switch_uses_nucleus_tokens_without_replacing_market_data() {
     chart.set_theme(ChartTheme::Light);
     let light = chart.options.get();
     assert_eq!(light.layout.background.color, "#ffffff");
-    assert_eq!(light.layout.text_color, "#0a0a0a");
-    assert_eq!(light.right_price_scale.border_color, "#f5f5f5");
+    assert_eq!(light.layout.text_color, "#333333");
+    assert_eq!(light.layout.muted_text_color, "#737373");
+    assert_eq!(light.right_price_scale.border_color, "#e5e5e5");
     assert_eq!(row_count(&chart, 0), 20);
 
     chart.set_theme(ChartTheme::Dark);
     let dark = chart.options.get();
-    assert_eq!(dark.layout.background.color, "#0c0c0c");
-    assert_eq!(dark.layout.text_color, "#f5f5f5");
-    assert_eq!(dark.right_price_scale.border_color, "#1e1e1e");
+    assert_eq!(dark.layout.background.color, "#141414");
+    assert_eq!(dark.layout.text_color, "#fafafa");
+    assert_eq!(dark.layout.muted_text_color, "#a1a1a1");
+    assert_eq!(dark.right_price_scale.border_color, "#2c2c2c");
     assert_eq!(row_count(&chart, 0), 20);
 }

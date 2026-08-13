@@ -518,6 +518,8 @@ export interface chart_options {
   layout: {
     background: { type: string; color: string };
     textColor: string;
+    /** Secondary chart text. Value labels and axes always use `textColor`. */
+    mutedTextColor: string;
     fontSize: number;
     fontFamily: string;
     attributionLogo: boolean;
@@ -688,9 +690,9 @@ export interface series_options {
    * draws a line across the pane and a title chip on the scale.
    */
   bid_ask_visible?: boolean;
-  /** Bid line/chip color (default `"#2962ff"`). */
+  /** Bid line/chip color (default: the theme's primary token). */
   bid_color?: string;
-  /** Ask line/chip color (default `"#f23645"`). */
+  /** Ask line/chip color (default: the market-loss token). */
   ask_color?: string;
   /** Bid/ask line width in CSS px (default 1, mirrors `price_line_width`). */
   bid_ask_line_width?: number;
@@ -867,7 +869,7 @@ export type drawing_text_v_align = "top" | "middle" | "bottom";
  * `text_size: null` follows `layout.fontSize`.
  */
 export interface drawing_options {
-  /** Line/border color (default `"#2962ff"`, TradingView's drawing blue). */
+  /** Line/border color (default: the canonical primary token). */
   color: string;
   /** Stroke width in CSS px (default 2; 1 for a rectangle's border). */
   width: number;

@@ -108,7 +108,14 @@ export async function run_backend_parity({ create_chart, chart, container, data,
   // defaults, which package theming would silently break.)
   const fallback_chart = await create_chart(container, { ...chart_options, autoSize: false, backend: "canvas2d" });
   fallback_chart.resize(fixture.css_width, fixture.css_height, fixture.pixel_ratio);
-  const fallback_main = fallback_chart.add_series("candlestick");
+  const fallback_main = fallback_chart.add_series("candlestick", {
+    up_color: "#26a69a",
+    down_color: "#ef5350",
+    wick_up_color: "#26a69a",
+    wick_down_color: "#ef5350",
+    border_up_color: "#26a69a",
+    border_down_color: "#ef5350",
+  });
   fallback_main.set_data(data);
   fallback_chart.add_sma(fallback_main, 20, { color: "#ff9800", line_width: 2, visible: false });
   fallback_chart.time_scale().fit_content();

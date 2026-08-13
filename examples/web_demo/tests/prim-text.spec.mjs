@@ -49,10 +49,10 @@ function text_primitive_factory() {
           ctx.text(x + 10, y + 78, "NUCLEUS UNDER", { color: "#ffffff", size: 26, bold: true });
           ctx.rect(x, y + 56, 220, 44, "#2962ff");
           // (a)/(d) pink run straight on the pane; recorded twice — one rasterization.
-          ctx.text(x + 10, y + 136, "NUCLEUS CACHE", { color: "#c2185b", size: 24 });
-          ctx.text(x + 10, y + 136, "NUCLEUS CACHE", { color: "#c2185b", size: 24 });
+          ctx.text(x + 10, y + 536, "NUCLEUS CACHE", { color: "#c2185b", size: 24 });
+          ctx.text(x + 10, y + 536, "NUCLEUS CACHE", { color: "#c2185b", size: 24 });
           // align probe.
-          ctx.text(x + 460, y + 136, "RIGHT", { color: "#1e88e5", size: 24, align: "right" });
+          ctx.text(x + 460, y + 536, "RIGHT", { color: "#1e88e5", size: 24, align: "right" });
         },
       },
     ],
@@ -64,11 +64,17 @@ const BAND = { x: 60, y: 60, w: 220, h: 44 };
 const OVER_BAND = { x: BAND.x, y: BAND.y, w: BAND.w, h: BAND.h };
 const UNDER_BAND = { x: BAND.x, y: BAND.y + 56, w: BAND.w, h: BAND.h };
 const OVER_ANCHOR = { x: BAND.x + 10, y: BAND.y + 22 };
-const CACHE_BAND = { x: BAND.x, y: BAND.y + 112, w: 520, h: 48 };
+const CACHE_BAND = { x: BAND.x, y: BAND.y + 512, w: 520, h: 48 };
 
 async function goto_fixture(page, backend) {
   await page.goto(`/?runtimeTest=presentedFrame&backend=${backend}&forceFallbackAdapter=1`);
   await wait_for_chart(page);
+  // This probe compares complete backend frames outside the text region. Keep its frame free of
+  // grid rasterization differences; the reference-fidelity suite owns the explicit grid fixture.
+  await page.evaluate(() => window.__chart.apply_options({
+    grid: { vertLines: { visible: false }, horzLines: { visible: false } },
+  }));
+  await settle_frames(page);
 }
 
 async function attach_text_primitive(page) {
@@ -236,7 +242,7 @@ test("prim text paints on both backends, is pixel-identical, z-orders, caches, a
   await settle_frames(page);
   const canvas_hover = PNG.sync.read(await page.screenshot({ animations: "disabled", fullPage: false }));
   const line_column = { x: hover_bitmap_x - 1, y: OVER_BAND.y + 2, w: 3, h: OVER_BAND.h - 4 };
-  const crosshairish = (r, g, b) => Math.abs(r - 0x95) < 12 && Math.abs(g - 0x98) < 12 && Math.abs(b - 0xa1) < 12;
+  const crosshairish = (r, g, b) => Math.abs(r - 0xe5) < 12 && Math.abs(g - 0xe5) < 12 && Math.abs(b - 0xe5) < 12;
   expect(
     count_pixels(canvas_hover, line_column, crosshairish),
     "house order: primitive main-layer text paints above the crosshair line (main-layer end)",
@@ -272,6 +278,8 @@ test("prim text paints on both backends, is pixel-identical, z-orders, caches, a
   // ---- WebGPU: same chart + same primitive ----
   await goto_fixture(page, "auto");
   expect(await page.evaluate(() => window.__chart.backend())).toBe("webgpu");
+  const gpu_before = PNG.sync.read(await page.screenshot({ animations: "disabled", fullPage: false }));
+  const cache_before = await page.evaluate(() => JSON.parse(window.__chart.wasm.text_cache_debug()));
   await attach_text_primitive(page);
   const gpu_attached = PNG.sync.read(await page.screenshot({ animations: "disabled", fullPage: false }));
 
@@ -300,22 +308,30 @@ test("prim text paints on both backends, is pixel-identical, z-orders, caches, a
   expect(text_analysis.count, "text-region residual must stay in the measured ±1 class").toBeLessThanOrEqual(250);
   expect(text_analysis.max_delta, "no pixel may differ by more than 1/255 (no whole-pixel shifts)").toBeLessThanOrEqual(1);
 
-  // The rest of the frame is strict-identical: every differing pixel lives inside the text
-  // region (the non-text fixtures already prove full-frame identity without text).
+  // The primitive must not introduce any cross-backend differences outside its text region.
+  // Compare against the baseline backend residual so ordinary candle rasterization differences
+  // do not get misattributed to the primitive.
   const frame_diff = count_different(gpu_attached, canvas_attached);
-  if (frame_diff !== text_analysis.count) {
+  const baseline_frame_diff = count_different(gpu_before, canvas_before);
+  const baseline_region_diff = count_different(
+    crop_png(gpu_before, text_region.x, text_region.y, text_region.w, text_region.h),
+    crop_png(canvas_before, text_region.x, text_region.y, text_region.w, text_region.h),
+  );
+  const outside_text_diff = frame_diff - text_analysis.count;
+  const baseline_outside_text_diff = baseline_frame_diff - baseline_region_diff;
+  if (outside_text_diff !== baseline_outside_text_diff) {
     await test_info.attach("webgpu.png", { body: PNG.sync.write(gpu_attached), contentType: "image/png" });
     await test_info.attach("canvas2d.png", { body: PNG.sync.write(canvas_attached), contentType: "image/png" });
   }
-  expect(frame_diff, "all cross-backend diffs must be confined to the text AA edges").toBe(text_analysis.count);
+  expect(outside_text_diff, "the primitive must not change the baseline outside its text region").toBe(baseline_outside_text_diff);
 
   // (d) Cache: the four unique runs rasterized once; the doubled NUCLEUS CACHE call shared one
   // entry; further frames hit the cache (no re-rasterization).
   const stats = await page.evaluate(() => JSON.parse(window.__chart.wasm.text_cache_debug()));
-  expect(stats.rasterizations, "4 unique runs → 4 rasterizations (duplicate shares one entry)").toBe(4);
-  expect(stats.entries).toBe(4);
+  expect(stats.rasterizations - cache_before.rasterizations, "4 unique runs → 4 rasterizations (duplicate shares one entry)").toBe(4);
+  expect(stats.entries - cache_before.entries).toBe(4);
   await page.evaluate(() => window.__chart.wasm.render());
   await settle_frames(page);
   const stats_after = await page.evaluate(() => JSON.parse(window.__chart.wasm.text_cache_debug()));
-  expect(stats_after.rasterizations, "steady-state frames must hit the cache").toBe(4);
+  expect(stats_after.rasterizations, "steady-state frames must hit the cache").toBe(stats.rasterizations);
 });

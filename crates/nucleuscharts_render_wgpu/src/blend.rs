@@ -161,7 +161,7 @@ mod tests {
 
     #[test]
     fn volume_fixture_colors_match_chrome() {
-        // Canonical #f7525f80 / #08998180 over border #1e1e1e and surface #0c0c0c.
+        // Representative translucent market colors over two neutral destinations.
         let cases: [([u8; 3], [u8; 3], [u8; 3]); 4] = [
             ([247, 82, 95], [30, 30, 30], [139, 56, 63]),
             ([8, 153, 129], [30, 30, 30], [19, 92, 80]),

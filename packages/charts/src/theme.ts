@@ -11,34 +11,46 @@ import style_tokens from "./style_tokens.json";
 export interface chart_theme {
   /** Chart main background. */
   background: string;
-  /** Price/time axis border color. */
+  /** Primary non-interactive text: axes, prices, values, and boxed labels. */
+  foreground: string;
+  primary: string;
+  primary_foreground: string;
+  primary_hover: string;
+  /** Crosshair-label and passive control surface. */
+  muted: string;
+  muted_foreground: string;
+  accent: string;
   border: string;
-  /** Grid line color. */
-  grid: string;
-  /** Axis text color (price/time labels). */
-  text: string;
-  /** Crosshair lines and label background. */
-  crosshair: string;
-  /** Pane separator hover band. Defaults to the crosshair color for custom palettes. */
-  separator_hover?: string;
+  muted_border: string;
+  ring: string;
 }
 
 export const light_theme: chart_theme = {
   background: style_tokens.light.surface,
+  foreground: style_tokens.light.foreground,
+  primary: style_tokens.light.primary,
+  primary_foreground: style_tokens.light.primary_foreground,
+  primary_hover: style_tokens.light.primary_hover,
+  muted: style_tokens.light.muted,
+  muted_foreground: style_tokens.light.muted_foreground,
+  accent: style_tokens.light.accent,
   border: style_tokens.light.border,
-  grid: style_tokens.light.border,
-  text: style_tokens.light.axis_text,
-  crosshair: style_tokens.light.crosshair,
-  separator_hover: style_tokens.light.separator_hover,
+  muted_border: style_tokens.light.muted_border,
+  ring: style_tokens.light.ring,
 };
 
 export const dark_theme: chart_theme = {
   background: style_tokens.dark.surface,
+  foreground: style_tokens.dark.foreground,
+  primary: style_tokens.dark.primary,
+  primary_foreground: style_tokens.dark.primary_foreground,
+  primary_hover: style_tokens.dark.primary_hover,
+  muted: style_tokens.dark.muted,
+  muted_foreground: style_tokens.dark.muted_foreground,
+  accent: style_tokens.dark.accent,
   border: style_tokens.dark.border,
-  grid: style_tokens.dark.border,
-  text: style_tokens.dark.axis_text,
-  crosshair: style_tokens.dark.crosshair,
-  separator_hover: style_tokens.dark.separator_hover,
+  muted_border: style_tokens.dark.muted_border,
+  ring: style_tokens.dark.ring,
 };
 
 export type theme_name = "light" | "dark";
@@ -55,22 +67,23 @@ export function theme_options(theme: theme_name | chart_theme): deep_partial<cha
   return {
     layout: {
       background: { type: "solid", color: palette.background },
-      textColor: palette.text,
+      textColor: palette.foreground,
+      mutedTextColor: palette.muted_foreground,
       panes: {
         separatorColor: palette.border,
-        separatorHoverColor: palette.separator_hover ?? palette.crosshair,
+        separatorHoverColor: palette.accent,
       },
     },
-    leftPriceScale: { borderColor: palette.border },
-    rightPriceScale: { borderColor: palette.border },
+    leftPriceScale: { borderColor: palette.border, textColor: palette.foreground },
+    rightPriceScale: { borderColor: palette.border, textColor: palette.foreground },
     timeScale: { borderColor: palette.border },
     grid: {
-      vertLines: { color: palette.grid },
-      horzLines: { color: palette.grid },
+      vertLines: { color: palette.border },
+      horzLines: { color: palette.border },
     },
     crosshair: {
-      vertLine: { color: palette.crosshair, labelBackgroundColor: palette.crosshair },
-      horzLine: { color: palette.crosshair, labelBackgroundColor: palette.crosshair },
+      vertLine: { color: palette.border, labelBackgroundColor: palette.muted },
+      horzLine: { color: palette.border, labelBackgroundColor: palette.muted },
     },
   };
 }

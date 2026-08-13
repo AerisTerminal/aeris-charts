@@ -40,13 +40,16 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./design.css": "./dist/nucleuscharts.css"
   },
   "files": [
     "dist",
     "!dist/index.js.map"
   ],
-  "sideEffects": false,
+  "sideEffects": [
+    "./dist/nucleuscharts.css"
+  ],
   "scripts": {
     "typecheck": "tsc --noEmit",
     "check:namespace": "node scripts/namespace_guard.mjs",
@@ -55,7 +58,8 @@
     "build:js": "esbuild src/index.ts --bundle --format=esm --sourcemap --outfile=dist/index.js",
     "build:types": "tsc --declaration --emitDeclarationOnly --outDir dist --noEmit false",
     "build:copy-wasm": "node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});fs.copyFileSync('pkg/nucleuscharts_wasm_bg.wasm','dist/nucleuscharts_wasm_bg.wasm')\"",
-    "build": "npm run build:wasm && npm run build:js && npm run build:types && npm run build:copy-wasm",
+    "build:copy-design": "node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});fs.copyFileSync('src/nucleuscharts.css','dist/nucleuscharts.css');fs.copyFileSync('../../crates/nucleuscharts_native/assets/Inter.ttf','dist/inter_400.ttf')\"",
+    "build": "npm run build:wasm && npm run build:js && npm run build:types && npm run build:copy-wasm && npm run build:copy-design",
     "lint": "oxlint src",
     "test:pack": "node scripts/pack_smoke.mjs",
     "prepublishOnly": "npm run clean && npm run build && npm run test:pack"

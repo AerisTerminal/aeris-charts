@@ -12,18 +12,19 @@
 use nucleuscharts_render::color::Color;
 use nucleuscharts_render::draw_list::{IRect, LineStyle, LineType, Prim, TextAlign};
 
+use super::PRIMARY;
 use crate::drawings::{
     Drawing, DrawingKind, DrawingTextHAlign, TEXT_PAD, TEXT_PLACEHOLDER_MIN_SIZE,
 };
 use crate::ChartEngine;
 
-/// TradingView-style drawing anchor handle: a theme-derived disc with the accent-blue border
+/// TradingView-style drawing anchor handle: a theme-derived disc with the primary-token border
 /// (the crosshair-marks disc idiom — the border is a larger filled disc underneath). Slightly
 /// larger than the series selection anchors (2.5/1.5, series_geometry.rs) since these are
 /// drag targets.
 const ANCHOR_RADIUS: f64 = 4.0;
 const ANCHOR_BORDER_WIDTH: f64 = 1.5;
-const ANCHOR_BORDER: Color = Color::rgb(0x29, 0x62, 0xff); // TradingView accent blue
+const ANCHOR_BORDER: Color = PRIMARY;
 
 impl ChartEngine {
     /// Emit every drawing bound to `pane_index` (z-order: later overpaints earlier), the
@@ -139,7 +140,7 @@ impl ChartEngine {
         out: &mut Vec<Prim>,
         points: &mut Vec<[f32; 2]>,
     ) {
-        let color = Color::parse_css(&drawing.color).unwrap_or(Color::rgb(0x29, 0x62, 0xff));
+        let color = Color::parse_css(&drawing.color).unwrap_or(PRIMARY);
         let crisp_width = (drawing.width * vpr).round().max(1.0) as i32;
         match drawing.kind {
             DrawingKind::TrendLine => {
@@ -320,21 +321,25 @@ impl ChartEngine {
             pane.height * vpr,
         );
         let (x, y, align) = ChartEngine::text_placement(drawing, &reference, size, TEXT_PAD * vpr);
+        let token = if placeholder {
+            &layout.muted_text_color
+        } else {
+            &layout.text_color
+        };
         let color = drawing
             .text_color
             .as_deref()
+            .filter(|_| !placeholder)
             .and_then(Color::parse_css)
-            .or_else(|| Color::parse_css(&layout.text_color))
+            .or_else(|| Color::parse_css(token))
             .unwrap_or_else(|| {
-                let fallback = nucleuscharts_core::style::DEFAULT_AXIS_TEXT_RGB;
+                let fallback = if placeholder {
+                    nucleuscharts_core::style::DEFAULT_MUTED_FOREGROUND_RGB
+                } else {
+                    nucleuscharts_core::style::DEFAULT_FOREGROUND_RGB
+                };
                 Color::rgb(fallback.0, fallback.1, fallback.2)
             });
-        // The placeholder is muted (TradingView's prompt): the resolved text color at half alpha.
-        let color = if placeholder {
-            Color::rgba(color.r(), color.g(), color.b(), color.a() / 2)
-        } else {
-            color
-        };
 
         // The container (text tool with a background/border): a box wrapping the run, emitted
         // as the rectangle tool's crisp integer-snapped prims (`Rect` fill + `RectFrame`

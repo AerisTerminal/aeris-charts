@@ -921,7 +921,7 @@ impl ChartEngine {
 
     /// TradingView-style bid/ask lines (default OFF, `bid_ask_visible`): one horizontal line
     /// per side with a live value, on the series' own price scale, colored by the side's
-    /// pinned CSS color (bid `#2962ff` / ask `#f23645` defaults).
+    /// pinned CSS color (semantic primary / market-loss defaults).
     pub(super) fn build_bid_ask_lines_frame(
         &self,
         pane_index: usize,
@@ -944,16 +944,8 @@ impl ChartEngine {
                 continue;
             };
             let sides = [
-                (
-                    series.bid,
-                    series.bid_color.as_str(),
-                    Color::rgb(0x29, 0x62, 0xff),
-                ),
-                (
-                    series.ask,
-                    series.ask_color.as_str(),
-                    Color::rgb(0xf2, 0x36, 0x45),
-                ),
+                (series.bid, series.bid_color.as_str(), PRIMARY),
+                (series.ask, series.ask_color.as_str(), DOWN),
             ];
             for (value, css, fallback) in sides {
                 let Some(price) = value else {
@@ -1053,7 +1045,7 @@ impl ChartEngine {
     ) {
         const ANCHOR_RADIUS: f64 = 2.5;
         const ANCHOR_BORDER_WIDTH: f64 = 1.5;
-        const ANCHOR_BORDER: Color = Color::rgb(0x29, 0x62, 0xff); // TradingView accent blue
+        const ANCHOR_BORDER: Color = PRIMARY;
         let Some(selected) = self.selected_series else {
             return;
         };

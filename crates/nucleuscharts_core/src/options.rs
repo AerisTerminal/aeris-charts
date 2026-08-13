@@ -25,10 +25,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::style::{
-    DARK_AXIS_TEXT_CSS, DARK_BORDER_CSS, DARK_CROSSHAIR_CSS, DARK_SEPARATOR_HOVER_CSS,
-    DARK_SURFACE_CSS, DEFAULT_AXIS_TEXT_CSS, DEFAULT_BORDER_CSS, DEFAULT_CROSSHAIR_CSS,
-    DEFAULT_SEPARATOR_HOVER_CSS, DEFAULT_SURFACE_CSS, LIGHT_AXIS_TEXT_CSS, LIGHT_BORDER_CSS,
-    LIGHT_CROSSHAIR_CSS, LIGHT_SEPARATOR_HOVER_CSS, LIGHT_SURFACE_CSS,
+    DARK_ACCENT_CSS, DARK_BORDER_CSS, DARK_FOREGROUND_CSS, DARK_MUTED_CSS,
+    DARK_MUTED_FOREGROUND_CSS, DARK_SURFACE_CSS, DEFAULT_ACCENT_CSS, DEFAULT_BORDER_CSS,
+    DEFAULT_FOREGROUND_CSS, DEFAULT_MUTED_CSS, DEFAULT_MUTED_FOREGROUND_CSS, DEFAULT_SURFACE_CSS,
+    LIGHT_ACCENT_CSS, LIGHT_BORDER_CSS, LIGHT_FOREGROUND_CSS, LIGHT_MUTED_CSS,
+    LIGHT_MUTED_FOREGROUND_CSS, LIGHT_SURFACE_CSS,
 };
 
 /// Nucleus-owned application color mode. Hosts select a mode; Nucleus resolves every chart color
@@ -42,20 +43,22 @@ pub enum ChartTheme {
 /// Complete cosmetic patch for one canonical Nucleus theme.
 #[must_use]
 pub fn chart_theme_patch(theme: ChartTheme) -> Value {
-    let (surface, border, axis_text, crosshair, separator_hover) = match theme {
+    let (surface, foreground, muted, muted_foreground, border, accent) = match theme {
         ChartTheme::Light => (
             LIGHT_SURFACE_CSS,
+            LIGHT_FOREGROUND_CSS,
+            LIGHT_MUTED_CSS,
+            LIGHT_MUTED_FOREGROUND_CSS,
             LIGHT_BORDER_CSS,
-            LIGHT_AXIS_TEXT_CSS,
-            LIGHT_CROSSHAIR_CSS,
-            LIGHT_SEPARATOR_HOVER_CSS,
+            LIGHT_ACCENT_CSS,
         ),
         ChartTheme::Dark => (
             DARK_SURFACE_CSS,
+            DARK_FOREGROUND_CSS,
+            DARK_MUTED_CSS,
+            DARK_MUTED_FOREGROUND_CSS,
             DARK_BORDER_CSS,
-            DARK_AXIS_TEXT_CSS,
-            DARK_CROSSHAIR_CSS,
-            DARK_SEPARATOR_HOVER_CSS,
+            DARK_ACCENT_CSS,
         ),
     };
     serde_json::json!({
@@ -66,10 +69,11 @@ pub fn chart_theme_patch(theme: ChartTheme) -> Value {
                 "topColor": surface,
                 "bottomColor": surface
             },
-            "textColor": axis_text,
+            "textColor": foreground,
+            "mutedTextColor": muted_foreground,
             "panes": {
                 "separatorColor": border,
-                "separatorHoverColor": separator_hover
+                "separatorHoverColor": accent
             }
         },
         "grid": {
@@ -77,11 +81,11 @@ pub fn chart_theme_patch(theme: ChartTheme) -> Value {
             "horzLines": { "color": border }
         },
         "crosshair": {
-            "vertLine": { "color": crosshair, "labelBackgroundColor": crosshair },
-            "horzLine": { "color": crosshair, "labelBackgroundColor": crosshair }
+            "vertLine": { "color": border, "labelBackgroundColor": muted },
+            "horzLine": { "color": border, "labelBackgroundColor": muted }
         },
-        "leftPriceScale": { "borderColor": border, "textColor": axis_text },
-        "rightPriceScale": { "borderColor": border, "textColor": axis_text },
+        "leftPriceScale": { "borderColor": border, "textColor": foreground },
+        "rightPriceScale": { "borderColor": border, "textColor": foreground },
         "timeScale": { "borderColor": border }
     })
 }
@@ -106,16 +110,19 @@ fn surface_color() -> String {
     DEFAULT_SURFACE_CSS.into()
 }
 fn text_color() -> String {
-    DEFAULT_AXIS_TEXT_CSS.into()
+    DEFAULT_FOREGROUND_CSS.into()
+}
+fn muted_text_color() -> String {
+    DEFAULT_MUTED_FOREGROUND_CSS.into()
 }
 fn grid_color() -> String {
     DEFAULT_BORDER_CSS.into()
 }
 fn crosshair_color() -> String {
-    DEFAULT_CROSSHAIR_CSS.into()
+    DEFAULT_BORDER_CSS.into()
 }
 fn crosshair_label_bg() -> String {
-    DEFAULT_CROSSHAIR_CSS.into()
+    DEFAULT_MUTED_CSS.into()
 }
 fn axis_border_color() -> String {
     DEFAULT_BORDER_CSS.into()
@@ -168,7 +175,7 @@ impl Default for PanesOptions {
     fn default() -> Self {
         Self {
             separator_color: String::new(),
-            separator_hover_color: DEFAULT_SEPARATOR_HOVER_CSS.into(),
+            separator_hover_color: DEFAULT_ACCENT_CSS.into(),
         }
     }
 }
@@ -180,6 +187,9 @@ pub struct LayoutOptions {
     pub background: BackgroundOptions,
     #[serde(rename = "textColor")]
     pub text_color: String,
+    /// Secondary chart text such as countdowns. Axis and boxed-label values use `textColor`.
+    #[serde(rename = "mutedTextColor")]
+    pub muted_text_color: String,
     #[serde(rename = "fontSize")]
     pub font_size: f64,
     #[serde(rename = "fontFamily")]
@@ -194,6 +204,7 @@ impl Default for LayoutOptions {
         Self {
             background: BackgroundOptions::default(),
             text_color: text_color(),
+            muted_text_color: muted_text_color(),
             font_size: 12.0,
             font_family: default_font_family(),
             attribution_logo: true,
@@ -520,16 +531,17 @@ mod tests {
     #[test]
     fn defaults_match_nucleus_style() {
         let o = ChartOptions::default();
-        assert_eq!(o.layout.background.color, "#0c0c0c");
-        assert_eq!(o.layout.text_color, "#f5f5f5");
+        assert_eq!(o.layout.background.color, "#141414");
+        assert_eq!(o.layout.text_color, "#fafafa");
+        assert_eq!(o.layout.muted_text_color, "#a1a1a1");
         assert_eq!(o.layout.font_size, 12.0);
-        assert_eq!(o.grid.vert_lines.color, "#1e1e1e");
+        assert_eq!(o.grid.vert_lines.color, "#2c2c2c");
         assert_eq!(o.grid.horz_lines.style, line_style::SOLID);
         assert_eq!(o.crosshair.mode, crosshair_mode::NORMAL);
         assert!(!o.crosshair.do_not_snap_to_hidden_series_indices);
         assert_eq!(o.crosshair.vert_line.style, line_style::DOTTED);
-        assert_eq!(o.crosshair.vert_line.color, "#2e2e2e");
-        assert_eq!(o.crosshair.horz_line.label_background_color, "#2e2e2e");
+        assert_eq!(o.crosshair.vert_line.color, "#2c2c2c");
+        assert_eq!(o.crosshair.horz_line.label_background_color, "#1b1b1b");
         assert!(o.hovered_series_on_top);
         assert!(!o.auto_size);
         // Axis border cosmetics use the canonical border everywhere.
@@ -537,10 +549,10 @@ mod tests {
         assert!(!o.left_price_scale.visible);
         assert!(o.right_price_scale.border_visible);
         assert!(o.left_price_scale.border_visible);
-        assert_eq!(o.right_price_scale.border_color, "#1e1e1e");
-        assert_eq!(o.left_price_scale.border_color, "#1e1e1e");
+        assert_eq!(o.right_price_scale.border_color, "#2c2c2c");
+        assert_eq!(o.left_price_scale.border_color, "#2c2c2c");
         assert!(o.time_scale.border_visible);
-        assert_eq!(o.time_scale.border_color, "#1e1e1e");
+        assert_eq!(o.time_scale.border_color, "#2c2c2c");
         // Watermark defaults: hidden, transparent, 48px centered (reference v4).
         assert!(!o.watermark.visible);
         assert_eq!(o.watermark.color, "rgba(0, 0, 0, 0)");
@@ -555,25 +567,35 @@ mod tests {
         store.apply(&chart_theme_patch(ChartTheme::Light));
         let light = store.get();
         assert_eq!(light.layout.background.color, LIGHT_SURFACE_CSS);
-        assert_eq!(light.layout.text_color, LIGHT_AXIS_TEXT_CSS);
+        assert_eq!(light.layout.text_color, LIGHT_FOREGROUND_CSS);
+        assert_eq!(light.layout.muted_text_color, LIGHT_MUTED_FOREGROUND_CSS);
         assert_eq!(light.grid.vert_lines.color, LIGHT_BORDER_CSS);
-        assert_eq!(light.crosshair.vert_line.color, LIGHT_CROSSHAIR_CSS);
+        assert_eq!(light.crosshair.vert_line.color, LIGHT_BORDER_CSS);
+        assert_eq!(
+            light.crosshair.vert_line.label_background_color,
+            LIGHT_MUTED_CSS
+        );
         assert_eq!(light.right_price_scale.border_color, LIGHT_BORDER_CSS);
         assert_eq!(
             light.right_price_scale.text_color.as_deref(),
-            Some(LIGHT_AXIS_TEXT_CSS)
+            Some(LIGHT_FOREGROUND_CSS)
         );
 
         store.apply(&chart_theme_patch(ChartTheme::Dark));
         let dark = store.get();
         assert_eq!(dark.layout.background.color, DARK_SURFACE_CSS);
-        assert_eq!(dark.layout.text_color, DARK_AXIS_TEXT_CSS);
+        assert_eq!(dark.layout.text_color, DARK_FOREGROUND_CSS);
+        assert_eq!(dark.layout.muted_text_color, DARK_MUTED_FOREGROUND_CSS);
         assert_eq!(dark.grid.vert_lines.color, DARK_BORDER_CSS);
-        assert_eq!(dark.crosshair.vert_line.color, DARK_CROSSHAIR_CSS);
+        assert_eq!(dark.crosshair.vert_line.color, DARK_BORDER_CSS);
+        assert_eq!(
+            dark.crosshair.vert_line.label_background_color,
+            DARK_MUTED_CSS
+        );
         assert_eq!(dark.right_price_scale.border_color, DARK_BORDER_CSS);
         assert_eq!(
             dark.right_price_scale.text_color.as_deref(),
-            Some(DARK_AXIS_TEXT_CSS)
+            Some(DARK_FOREGROUND_CSS)
         );
     }
 
@@ -605,9 +627,9 @@ mod tests {
         // untouched siblings survive: strip visibility and the other border options
         assert!(o.right_price_scale.visible);
         assert!(o.right_price_scale.border_visible);
-        assert_eq!(o.left_price_scale.border_color, "#1e1e1e");
+        assert_eq!(o.left_price_scale.border_color, "#2c2c2c");
         assert!(!o.time_scale.border_visible);
-        assert_eq!(o.time_scale.border_color, "#1e1e1e");
+        assert_eq!(o.time_scale.border_color, "#2c2c2c");
     }
 
     #[test]
@@ -621,7 +643,7 @@ mod tests {
         assert_eq!(o.grid.vert_lines.style, line_style::SOLID);
         assert!(!o.grid.vert_lines.visible);
         // ...and the neighbouring family is untouched.
-        assert_eq!(o.grid.horz_lines.color, "#1e1e1e");
+        assert_eq!(o.grid.horz_lines.color, "#2c2c2c");
     }
 
     #[test]
@@ -634,7 +656,7 @@ mod tests {
         assert_eq!(o.grid.vert_lines.color, "#111111");
         assert_eq!(o.crosshair.mode, crosshair_mode::NORMAL);
         // and unrelated defaults remain
-        assert_eq!(o.layout.background.color, "#0c0c0c");
+        assert_eq!(o.layout.background.color, "#141414");
     }
 
     #[test]

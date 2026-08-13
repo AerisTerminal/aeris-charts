@@ -18,7 +18,7 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
   const theme_state = () => page.evaluate(() => ({
     root: document.documentElement.dataset.theme,
     control: document.getElementById("theme_select").value,
-    surface: getComputedStyle(document.documentElement).getPropertyValue("--demo-surface").trim(),
+    surface: getComputedStyle(document.documentElement).getPropertyValue("--background").trim(),
     header: getComputedStyle(document.getElementById("bar")).backgroundColor,
     chart: window.__chart.options().layout.background.color,
     border_control: document.getElementById("axis_border_color").value,
@@ -28,11 +28,11 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
   expect(await theme_state()).toEqual({
     root: "dark",
     control: "dark",
-    surface: "#0c0c0c",
-    header: "rgb(12, 12, 12)",
-    chart: "#0c0c0c",
-    border_control: "#1e1e1e",
-    crosshair_control: "#2e2e2e",
+    surface: "oklch(0.191251 0 0)",
+    header: "oklch(0.191251 0 0)",
+    chart: "#141414",
+    border_control: "#2c2c2c",
+    crosshair_control: "#2c2c2c",
   });
 
   await page.selectOption("#theme_select", "light");
@@ -40,11 +40,11 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
   expect(await theme_state()).toEqual({
     root: "light",
     control: "light",
-    surface: "#ffffff",
-    header: "rgb(255, 255, 255)",
+    surface: "oklch(1 0 0)",
+    header: "oklch(1 0 0)",
     chart: "#ffffff",
-    border_control: "#f5f5f5",
-    crosshair_control: "#9598a1",
+    border_control: "#e5e5e5",
+    crosshair_control: "#e5e5e5",
   });
 });
 
@@ -293,7 +293,7 @@ test("split dividers follow the axis border token (theme and explicit changes)",
   await page.selectOption("#theme_select", "light");
   await wait_grid(page);
   const light_border = await border_hex();
-  expect(light_border.toLowerCase()).toBe("#f5f5f5");
+  expect(light_border.toLowerCase()).toBe("#e5e5e5");
   expect(await divider_rgb()).toBe(to_rgb(light_border));
 
   // An explicit axis border change re-resolves the divider too.

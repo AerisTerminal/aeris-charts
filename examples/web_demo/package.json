@@ -2,7 +2,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "npm --prefix ../../packages/charts run build && node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});fs.copyFileSync('../../packages/charts/dist/index.js','dist/nucleuscharts_financial.js');fs.copyFileSync('../../packages/charts/dist/index.js.map','dist/index.js.map');fs.copyFileSync('../../packages/charts/dist/nucleuscharts_wasm_bg.wasm','dist/nucleuscharts_wasm_bg.wasm')\"",
+    "build": "npm --prefix ../../packages/charts run build && node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});for(const [source,target] of [['index.js','nucleuscharts_financial.js'],['index.js.map','index.js.map'],['nucleuscharts_wasm_bg.wasm','nucleuscharts_wasm_bg.wasm'],['nucleuscharts.css','nucleuscharts.css'],['inter_400.ttf','inter_400.ttf']])fs.copyFileSync('../../packages/charts/dist/'+source,'dist/'+target)\"",
     "test:browser": "playwright test",
     "test:gpui-webgpu": "npm run build && node run_gpui_webgpu_matrix.mjs"
   },

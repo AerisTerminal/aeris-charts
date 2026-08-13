@@ -1,5 +1,6 @@
 //! Deterministic real-engine fixture used by native golden tests and examples.
 
+use nucleuscharts_core::options::ChartTheme;
 use nucleuscharts_engine::ChartEngine;
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -54,9 +55,28 @@ pub fn parity_engine() -> ChartEngine {
     }
 
     let mut chart = ChartEngine::new(fixture.css_width, fixture.css_height, fixture.pixel_ratio);
+    chart.set_theme(ChartTheme::Light);
+    chart
+        .options
+        .apply_str(
+            r##"{
+                "layout":{"background":{"type":"solid","color":"#ffffff"},"textColor":"#191919"},
+                "grid":{"vertLines":{"color":"#d6dcde","visible":true},"horzLines":{"color":"#d6dcde","visible":true}},
+                "leftPriceScale":{"borderColor":"#2b2b43","textColor":"#191919","boldRoundLabels":false},
+                "rightPriceScale":{"borderColor":"#2b2b43","textColor":"#191919","boldRoundLabels":false},
+                "timeScale":{"borderColor":"#2b2b43"}
+            }"##,
+        )
+        .expect("shared D1 fixture options are valid");
     chart
         .set_series_data(0, &times, &open, &high, &low, &close)
         .expect("shared D1 fixture data is valid");
+    chart.series[0].up_color = Some("#26a69a".into());
+    chart.series[0].down_color = Some("#ef5350".into());
+    chart.series[0].wick_up_color = Some("#26a69a".into());
+    chart.series[0].wick_down_color = Some("#ef5350".into());
+    chart.series[0].border_up_color = Some("#26a69a".into());
+    chart.series[0].border_down_color = Some("#ef5350".into());
     chart.pane_w = fixture.css_width - fixture.price_axis_width;
     chart.pane_h = fixture.css_height - fixture.time_axis_height;
     chart.axis_w = fixture.price_axis_width;

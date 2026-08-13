@@ -2189,7 +2189,7 @@ export class chart_impl implements chart_api {
     let coords = this.wasm.drawing_point_to_coordinate(drawing.id, 0);
     if (coords.length !== 2) return;
     const options = drawing.options();
-    const layout = (this.options() as { layout?: { fontSize?: number; fontFamily?: string; textColor?: string; background?: { color?: string } } }).layout ?? {};
+    const layout = (this.options() as { layout?: { fontSize?: number; fontFamily?: string; textColor?: string; mutedTextColor?: string; background?: { color?: string } } }).layout ?? {};
     const font_size = Math.max(options.text_size ?? layout.fontSize ?? 12, 12);
     const font_family = layout.fontFamily ?? "sans-serif";
     // The exact CSS shorthand the engine rasterizes with. `line-height: normal` keeps the DOM
@@ -2200,14 +2200,14 @@ export class chart_impl implements chart_api {
     const font = `${style_prefix}${options.text_weight ?? 400} ${font_size}px ${font_family}`;
     const preview_font = `${style_prefix}700 ${font_size}px ${font_family}`;
 
-    // Square, thick blue-bordered container hugging the text (no radius).
+    const default_palette = theme_palette(default_theme_name);
+    // Square container hugging the text, using the same interactive-primary role as drawing handles.
     const wrap = document.createElement("div");
     wrap.id = "nucleuscharts-text-editor";
     wrap.style.position = "absolute";
     wrap.style.zIndex = "10";
-    wrap.style.border = "2px solid #2962ff";
+    wrap.style.border = `2px solid ${default_palette.primary}`;
     wrap.style.borderRadius = "0";
-    const default_palette = theme_palette(default_theme_name);
     wrap.style.background = options.box_color || layout.background?.color || default_palette.background;
     wrap.style.padding = "4px";
 
@@ -2220,7 +2220,7 @@ export class chart_impl implements chart_api {
     preview.style.top = "50%";
     preview.style.transform = "translateY(-50%)";
     preview.style.font = preview_font;
-    preview.style.color = "rgba(120, 123, 134, 0.7)"; // muted gray
+    preview.style.color = layout.mutedTextColor || default_palette.muted_foreground;
     preview.style.pointerEvents = "none";
     preview.style.whiteSpace = "nowrap";
 
@@ -2230,7 +2230,7 @@ export class chart_impl implements chart_api {
     editor.textContent = options.text;
     editor.style.font = font;
     editor.style.lineHeight = "normal"; // the font's own ascent+descent center (see above)
-    editor.style.color = options.text_color || layout.textColor || default_palette.text;
+    editor.style.color = options.text_color || layout.textColor || default_palette.foreground;
     editor.style.background = "transparent";
     editor.style.border = "none";
     editor.style.outline = "none";

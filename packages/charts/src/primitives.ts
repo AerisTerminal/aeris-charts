@@ -125,8 +125,8 @@ export interface primitive_hit_result {
 /**
  * A boxed axis label descriptor (cf. reference `ISeriesPrimitiveAxisView`). `coordinate` is media px
  * from the pane's top edge (price axis) or the pane's left edge (time axis). `background_color`
- * (or `color` as a shorthand) fills the box; `text_color` defaults to the background's reference
- * contrast pick. Extension over reference: reference exposes axis views only on series primitives; Nucleus
+ * (or `color` as a shorthand) fills the box; `text_color` defaults to the chart foreground token.
+ * Extension over reference: reference exposes axis views only on series primitives; Nucleus
  * accepts them on pane primitives too (painted on the pane's right scale / the time strip).
  */
 export interface primitive_axis_label {
