@@ -46,6 +46,11 @@ impl ChartEngine {
         let left_border = parse(&left_scale.border_color, fallback);
         let right_border = parse(&right_scale.border_color, fallback);
         let time_border = parse(&time_scale.border_color, fallback);
+        let surface = nucleuscharts_core::style::DEFAULT_SURFACE_RGB;
+        let pane_background = parse(
+            &layout.background.top_color,
+            Color::rgb(surface.0, surface.1, surface.2),
+        );
 
         // Watermark is below chrome and labels, matching the browser host's old overlay slot.
         if watermark.visible && !watermark.text.is_empty() {
@@ -264,6 +269,37 @@ impl ChartEngine {
                         fill: color,
                         border_width: 0.0,
                         border_color: Color::rgba(0, 0, 0, 0),
+                    });
+                }
+                // Reference geometry paints the box flush with the scale edge, then restores one
+                // device-pixel pane-colored separator over it. Doing this after DPR conversion
+                // avoids the 1-or-2-pixel gap produced by offsetting one CSS pixel at fractional
+                // DPR. The outside title chip is centered and does not cross the separator.
+                let separator = match (label.align, label.midpoint) {
+                    (AxisTextAlign::Left, AxisTextMidpoint::Label) => Some(IRect {
+                        x: ((pane_left + pane_w) * dpr).round() as i32,
+                        y: by as i32,
+                        w: border_w,
+                        h: bh as i32,
+                    }),
+                    (AxisTextAlign::Right, AxisTextMidpoint::Label) => Some(IRect {
+                        x: (pane_left * dpr).round() as i32 - border_w,
+                        y: by as i32,
+                        w: border_w,
+                        h: bh as i32,
+                    }),
+                    (AxisTextAlign::Center, AxisTextMidpoint::StableTime) => Some(IRect {
+                        x: bx as i32,
+                        y: (pane_h * dpr).round() as i32,
+                        w: bw as i32,
+                        h: border_w,
+                    }),
+                    _ => None,
+                };
+                if let Some(rect) = separator {
+                    output.push(Prim::Rect {
+                        rect,
+                        color: pane_background,
                     });
                 }
             } else {

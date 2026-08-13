@@ -14,7 +14,6 @@ const LIVE_LABEL_COUNTDOWN_TEXT: Color = Color::rgba(
     0xb3,
 );
 const COUNTDOWN_FONT_SCALE: f64 = 11.0 / 12.0;
-const AXIS_BORDER_SIZE: f64 = 1.0;
 
 /// A last-value label candidate before axis overlap resolution (reference IPriceAxisView state:
 /// the source `coordinate` plus the render coordinate the overlap pass adjusts). `align`
@@ -784,13 +783,13 @@ impl ChartEngine {
                         (
                             self.pane_left - 10.0,
                             AxisTextAlign::Right,
-                            self.pane_left - AXIS_BORDER_SIZE - width,
+                            self.pane_left - width,
                         )
                     } else {
                         (
                             self.pane_left + self.pane_w + 10.0,
                             AxisTextAlign::Left,
-                            self.pane_left + self.pane_w + AXIS_BORDER_SIZE,
+                            self.pane_left + self.pane_w,
                         )
                     };
                     // The label background follows the line color; chart text follows the semantic
@@ -887,7 +886,7 @@ impl ChartEngine {
                     font_scale: 1.0,
                     bold: false,
                     background: Some((
-                        self.pane_left + self.pane_w + AXIS_BORDER_SIZE,
+                        self.pane_left + self.pane_w,
                         y - height / 2.0,
                         width,
                         height,
@@ -1112,13 +1111,13 @@ impl ChartEngine {
                         (
                             self.pane_left - 10.0,
                             AxisTextAlign::Right,
-                            self.pane_left - AXIS_BORDER_SIZE - width,
+                            self.pane_left - width,
                         )
                     } else {
                         (
                             self.pane_left + self.pane_w + 10.0,
                             AxisTextAlign::Left,
-                            self.pane_left + self.pane_w + AXIS_BORDER_SIZE,
+                            self.pane_left + self.pane_w,
                         )
                     };
                     labels.push(AxisLabel {
@@ -1177,13 +1176,11 @@ impl ChartEngine {
             .as_deref()
             .map(|text| measure(text) * COUNTDOWN_FONT_SCALE)
             .unwrap_or(0.0);
-        // TradingView geometry: the title chip sits OUTSIDE the axis strip (on the pane, a small
-        // gap before the border), while the price chip and the countdown chip live inside the
-        // strip, share ONE width (the wider of the two texts), and stack flush. Both rows' text
-        // starts at the exact same x as the tick labels (tick length + inner padding from the
-        // border), and the box carries the reference's full outer padding — the same right edge
-        // every scale text ends at.
-        const GAP: f64 = 1.0;
+        // TradingView geometry: the title chip sits outside the strip and the price/countdown
+        // box sits inside it; both meet at the logical border. The primitive encoder restores
+        // the separator after DPR conversion so the visible seam is exactly one device pixel.
+        // Inside rows share one width, stack flush, and start text at the tick-label inset from
+        // the border; the box retains the reference's full outer padding.
         const TEXT_INSET: f64 = 5.0 + 5.0;
         const RIGHT_PAD: f64 = 5.0;
         let inner_text_w = price_w.max(countdown_w);
@@ -1195,9 +1192,9 @@ impl ChartEngine {
             self.pane_left
         };
         let inner_x = if right_strip {
-            border_x + AXIS_BORDER_SIZE
+            border_x
         } else {
-            border_x - AXIS_BORDER_SIZE - inner_w
+            border_x - inner_w
         };
         let text_x = if right_strip {
             border_x + TEXT_INSET
@@ -1232,9 +1229,9 @@ impl ChartEngine {
         // Title chip: outside the strip, a small standalone rounded box next to the border.
         if let (Some(title), Some(_)) = (&label.title, title_w) {
             let chip_x = if right_strip {
-                border_x - GAP - chip_w
+                border_x - chip_w
             } else {
-                border_x + GAP
+                border_x
             };
             // Without a price row the chip attaches to the cluster's single inside row (the
             // countdown row, or the title-only row) — never a phantom blank top row.
@@ -1404,13 +1401,13 @@ impl ChartEngine {
                         (
                             self.pane_left - 10.0,
                             AxisTextAlign::Right,
-                            self.pane_left - AXIS_BORDER_SIZE - width,
+                            self.pane_left - width,
                         )
                     } else {
                         (
                             self.pane_left + self.pane_w + 10.0,
                             AxisTextAlign::Left,
-                            self.pane_left + self.pane_w + AXIS_BORDER_SIZE,
+                            self.pane_left + self.pane_w,
                         )
                     };
                     let label_bg =
@@ -1464,13 +1461,7 @@ impl ChartEngine {
                     midpoint: AxisTextMidpoint::StableTime,
                     font_scale: 1.0,
                     bold: false,
-                    background: Some((
-                        box_x,
-                        self.pane_h + AXIS_BORDER_SIZE,
-                        width,
-                        height,
-                        label_bg,
-                    )),
+                    background: Some((box_x, self.pane_h, width, height, label_bg)),
                     background_corners: AxisLabelCorners::BOTTOM,
                     measure_extra: 0.0,
                     attach_group: None,

@@ -2018,12 +2018,12 @@ fn last_value_cluster_rows_toggle_independently() {
     assert_eq!(chip_bg, LINE);
     assert_eq!(price_bg, LINE);
     assert_eq!(cd_bg, LINE);
-    // TradingView geometry: the title chip ends one pixel before the border and the inside chip
-    // begins one pixel after it, so neither box erases the scale separator.
+    // Both boxes meet at the logical border. The primitive encoder restores the separator after
+    // DPR conversion so it remains exactly one device pixel at fractional scale factors.
     assert_eq!(chip_y, price_y);
     let border_x = chart.pane_left + chart.pane_w;
-    assert_eq!(chip_x + chip_w, border_x - 1.0);
-    assert_eq!(price_x, border_x + 1.0);
+    assert_eq!(chip_x + chip_w, border_x);
+    assert_eq!(price_x, border_x);
     assert!((price_y + price_h - cd_y).abs() < 1e-9, "flush stack");
     assert!((cd_x - price_x).abs() < 1e-9, "same left edge");
     assert!((cd_w - price_w).abs() < 1e-9, "same width");
@@ -2119,7 +2119,7 @@ fn boxed_axis_labels_select_the_axis_facing_corners() {
     assert_eq!(labels.len(), 1);
     assert_eq!(labels[0].background_corners, AxisLabelCorners::RIGHT);
     let (right_x, ..) = labels[0].background.expect("right boxed label");
-    assert_eq!(right_x, chart.pane_left + chart.pane_w + 1.0);
+    assert_eq!(right_x, chart.pane_left + chart.pane_w);
 
     // The same label on the left strip rounds the left corners.
     chart.series[0].left_scale = true;
@@ -2127,7 +2127,7 @@ fn boxed_axis_labels_select_the_axis_facing_corners() {
     assert_eq!(labels.len(), 1);
     assert_eq!(labels[0].background_corners, AxisLabelCorners::LEFT);
     let (left_x, _, left_w, _, _) = labels[0].background.expect("left boxed label");
-    assert_eq!(left_x + left_w, chart.pane_left - 1.0);
+    assert_eq!(left_x + left_w, chart.pane_left);
     chart.series[0].left_scale = false;
 
     // The crosshair price label follows its strip; the time label rounds the bottom corners.
@@ -2142,14 +2142,14 @@ fn boxed_axis_labels_select_the_axis_facing_corners() {
         .expect("crosshair price label");
     assert_eq!(price.background_corners, AxisLabelCorners::RIGHT);
     let (price_x, ..) = price.background.expect("boxed crosshair price label");
-    assert_eq!(price_x, chart.pane_left + chart.pane_w + 1.0);
+    assert_eq!(price_x, chart.pane_left + chart.pane_w);
     let time = labels
         .iter()
         .find(|l| l.midpoint == AxisTextMidpoint::StableTime)
         .expect("crosshair time label");
     assert_eq!(time.background_corners, AxisLabelCorners::BOTTOM);
     let (_, time_y, _, time_h, _) = time.background.expect("boxed time label");
-    assert_eq!(time_y, chart.pane_h + 1.0);
+    assert_eq!(time_y, chart.pane_h);
     assert_eq!(time_h, 1.0 + 5.0 + 3.0 + 12.0 + 3.0);
     assert_eq!(time.y, chart.pane_h + 1.0 + 5.0 + 3.0 + 12.0 / 2.0);
     chart.crosshair = None;
@@ -2242,6 +2242,56 @@ fn boxed_axis_labels_select_the_axis_facing_corners() {
             ..AxisLabelCorners::NONE
         }
     );
+}
+
+#[test]
+fn boxed_labels_restore_one_device_pixel_separator_at_every_dpr() {
+    let surface_rgb = nucleuscharts_core::style::DEFAULT_SURFACE_RGB;
+    let surface = Color::rgb(surface_rgb.0, surface_rgb.1, surface_rgb.2);
+    for dpr in [1.0, 1.25, 1.5, 2.0, 3.0] {
+        let mut chart = countdown_chart();
+        chart.dpr = dpr;
+        chart.series[0].title = "NDQ".to_string();
+        chart.series[0].countdown_visible = false;
+        chart.crosshair = Some((400.0, 250.0));
+        let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+        let mut primitives = Vec::new();
+        chart.build_axis_primitives_into(&axis, &mut primitives, |_| 0.0);
+
+        let border_w = 1f64.max(dpr.floor()) as i32;
+        let price_border = ((chart.pane_left + chart.pane_w) * dpr).round() as i32;
+        assert!(
+            primitives.windows(2).any(|pair| matches!(
+                (&pair[0], &pair[1]),
+                (
+                    Prim::RoundRect { x, fill, .. },
+                    Prim::Rect { rect, color }
+                ) if *x == price_border as f32
+                    && *fill == LINE
+                    && rect.x == price_border
+                    && rect.w == border_w
+                    && *color == surface
+            )),
+            "price separator at dpr {dpr}"
+        );
+
+        let time_border = (chart.pane_h * dpr).round() as i32;
+        assert!(
+            primitives.windows(2).any(|pair| matches!(
+                (&pair[0], &pair[1]),
+                (
+                    Prim::RoundRect { x, y, w, .. },
+                    Prim::Rect { rect, color }
+                ) if rect.x == *x as i32
+                    && rect.y == time_border
+                    && rect.w == *w as i32
+                    && rect.h == border_w
+                    && (*y - time_border as f32).abs() < f32::EPSILON
+                    && *color == surface
+            )),
+            "time separator at dpr {dpr}"
+        );
+    }
 }
 
 #[test]
