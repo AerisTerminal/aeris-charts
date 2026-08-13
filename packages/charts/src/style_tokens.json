@@ -27,8 +27,8 @@
     "border": "#16191f",
     "muted_border": "#131519",
     "ring": "#737373",
-    "crosshair_line": "#f5f5f5",
-    "crosshair_label": "#5c5c5c"
+    "crosshair_line": "#16191f",
+    "crosshair_label": "#0c1115"
   },
   "market": {
     "up": "#089981",

@@ -544,8 +544,8 @@ mod tests {
         assert_eq!(o.crosshair.mode, crosshair_mode::NORMAL);
         assert!(!o.crosshair.do_not_snap_to_hidden_series_indices);
         assert_eq!(o.crosshair.vert_line.style, line_style::DOTTED);
-        assert_eq!(o.crosshair.vert_line.color, "#f5f5f5");
-        assert_eq!(o.crosshair.horz_line.label_background_color, "#5c5c5c");
+        assert_eq!(o.crosshair.vert_line.color, "#16191f");
+        assert_eq!(o.crosshair.horz_line.label_background_color, "#0c1115");
         assert!(o.hovered_series_on_top);
         assert!(!o.auto_size);
         // Axis border cosmetics use the canonical border everywhere.

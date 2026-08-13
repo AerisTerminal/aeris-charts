@@ -14,8 +14,8 @@ mod tests {
         assert_eq!(DARK_MUTED_CSS, "#0c1115");
         assert_eq!(DARK_MUTED_FOREGROUND_CSS, "#9da3aa");
         assert_eq!(DARK_BORDER_CSS, "#16191f");
-        assert_eq!(DARK_CROSSHAIR_CSS, "#f5f5f5");
-        assert_eq!(DARK_CROSSHAIR_LABEL_CSS, "#5c5c5c");
+        assert_eq!(DARK_CROSSHAIR_CSS, DARK_BORDER_CSS);
+        assert_eq!(DARK_CROSSHAIR_LABEL_CSS, DARK_MUTED_CSS);
         assert_eq!(LIGHT_CROSSHAIR_CSS, "#333333");
         assert_eq!(LIGHT_CROSSHAIR_LABEL_CSS, "#141414");
         assert_eq!(DARK_SEPARATOR_HOVER_CSS, DARK_ACCENT_CSS);

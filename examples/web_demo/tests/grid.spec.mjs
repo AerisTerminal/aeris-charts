@@ -23,6 +23,7 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
     chart: window.__chart.options().layout.background.color,
     border_control: document.getElementById("axis_border_color").value,
     crosshair_control: document.getElementById("cross_color").value,
+    crosshair_label_control: document.getElementById("cross_label_bg").value,
   }));
 
   expect(await theme_state()).toEqual({
@@ -32,7 +33,8 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
     header: "rgb(7, 10, 15)",
     chart: "#070a0f",
     border_control: "#16191f",
-    crosshair_control: "#f5f5f5",
+    crosshair_control: "#16191f",
+    crosshair_label_control: "#0c1115",
   });
 
   await page.selectOption("#theme_select", "light");
@@ -45,6 +47,7 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
     chart: "#ffffff",
     border_control: "#f3f3f3",
     crosshair_control: "#333333",
+    crosshair_label_control: "#141414",
   });
 });
 
