@@ -799,6 +799,9 @@ fn dashed_line_style_splits_the_polyline_into_solid_runs() {
 #[test]
 fn indicator_price_chip_matches_the_main_chip_width_and_stands_one_row_tall() {
     let mut chart = countdown_chart();
+    chart
+        .apply_options(r##"{"layout":{"textColor":"#333333","mutedTextColor":"#737373"}}"##)
+        .unwrap();
     chart.now_override = Some(250.0);
     chart.series[0].title = "BTC".to_string();
     chart.series[0].countdown_visible = true;
@@ -832,6 +835,8 @@ fn indicator_price_chip_matches_the_main_chip_width_and_stands_one_row_tall() {
         .iter()
         .find(|l| l.text == "SMA 2")
         .expect("sma name chip");
+    assert_eq!(sma_price.color, Color::rgb(0xfa, 0xfa, 0xfa));
+    assert_eq!(sma_name.color, Color::rgb(0xfa, 0xfa, 0xfa));
     assert_eq!(
         bg(sma_name).3,
         bg(sma_price).3,
