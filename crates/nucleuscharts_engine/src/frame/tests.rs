@@ -1874,9 +1874,9 @@ fn countdown_format_covers_all_three_ranges() {
     assert_eq!(fmt(60.0), "01:00");
     assert_eq!(fmt(3599.0), "59:59");
     assert_eq!(fmt(-3.0), "00:00");
-    // < 1d: h:mm:ss.
-    assert_eq!(fmt(3600.0), "1:00:00");
-    assert_eq!(fmt(3661.0), "1:01:01");
+    // < 1d: hh:mm:ss.
+    assert_eq!(fmt(3600.0), "01:00:00");
+    assert_eq!(fmt(3661.0), "01:01:01");
     assert_eq!(fmt(86399.0), "23:59:59");
     // >= 1d: "Xd Xh".
     assert_eq!(fmt(86400.0), "1d 0h");
@@ -2002,10 +2002,12 @@ fn last_value_cluster_rows_toggle_independently() {
     assert!((cd_x - price_x).abs() < 1e-9, "same left edge");
     assert!((cd_w - price_w).abs() < 1e-9, "same width");
     assert_eq!(chip_h, price_h);
-    // TradingView-style countdown row: tighter vertical padding (1.5px vs the price row's
-    // 2.5px), so the countdown text sits ~4 css px under the price text.
+    // TradingView-style countdown row: 11px text and tighter vertical padding (1.5px vs the
+    // price row's 12px text and 2.5px padding), so it reads as secondary information.
     assert_eq!(price_h, 12.0 + 2.5 * 2.0);
-    assert_eq!(cd_h, 12.0 + 1.5 * 2.0);
+    assert_eq!(cd_h, 11.0 + 1.5 * 2.0);
+    assert_eq!(price.font_scale, 1.0);
+    assert_eq!(countdown.font_scale, 11.0 / 12.0);
     // Live labels always use the dark foreground token, even under light-theme layout text.
     // The countdown is the same foreground with reduced opacity.
     assert_eq!(chip.color, Color::rgb(0xfa, 0xfa, 0xfa));
@@ -2217,7 +2219,7 @@ fn axis_width_negotiation_covers_the_widest_cluster_row() {
     chart.series[0].countdown_visible = true;
     chart.now_override = Some(300.0 - 86399.0);
     let with_countdown = chart.optimal_price_axis_width_for(PriceScaleTarget::Right, measure);
-    assert_eq!(with_countdown, 78.0); // 77 snapped up to even
+    assert_eq!(with_countdown, 74.0); // 72.33 snapped up to even
     assert!(with_countdown > plain);
 
     // The title chip lives OUTSIDE the strip (pane side), so it never widens the axis.
@@ -2277,7 +2279,7 @@ fn last_value_cluster_overlap_resolution_uses_the_total_height() {
         .labels;
     // Two colliding two-row clusters: the overlap pass pushes them apart by each cluster's
     // total height (price row + the tighter countdown row), measured between the price rows.
-    let cluster_height = (12.0 + 2.5 * 2.0) + (12.0 + 1.5 * 2.0);
+    let cluster_height = (12.0 + 2.5 * 2.0) + (11.0 + 1.5 * 2.0);
     let mut price_ys: Vec<f64> = labels
         .iter()
         .filter(|l| l.background.is_some() && l.text == "12.50")

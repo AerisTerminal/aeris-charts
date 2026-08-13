@@ -1,4 +1,5 @@
-//! Price formatter. Port of `src/formatters/price-formatter.ts`.
+//! Financial price formatter based on `src/formatters/price-formatter.ts`, with grouped integer
+//! digits as the Nucleus presentation default.
 //!
 //! Note: reference uses U+2212 (minus sign) instead of '-' because it has the same advance width as
 //! '+', keeping axis labels stable when values flip sign.
@@ -17,6 +18,20 @@ fn number_to_string_with_leading_zero(value: u64, length: usize) -> String {
     } else {
         format!("{}{}", "0".repeat(length - s.len()), s)
     }
+}
+
+/// Groups an integer price with the conventional financial thousands separator.
+fn format_integer(value: u64) -> String {
+    let digits = value.to_string();
+    let separators = digits.len().saturating_sub(1) / 3;
+    let mut grouped = String::with_capacity(digits.len() + separators);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped
 }
 
 #[derive(Clone, Debug)]
@@ -105,7 +120,7 @@ impl PriceFormatter {
             }
         }
 
-        format!("{}{}", int_part as i64, frac_string)
+        format!("{}{}", format_integer(int_part as u64), frac_string)
     }
 }
 
@@ -120,12 +135,15 @@ mod tests {
         assert_eq!(f.format(0.0), "0.00");
         assert_eq!(f.format(123.456), "123.46");
         assert_eq!(f.format(123.454), "123.45");
+        assert_eq!(f.format(62_000.0), "62,000.00");
+        assert_eq!(f.format(1_234_567.89), "1,234,567.89");
     }
 
     #[test]
     fn negative_uses_unicode_minus() {
         let f = PriceFormatter::new(100, 1.0);
         assert_eq!(f.format(-1.5), "\u{2212}1.50");
+        assert_eq!(f.format(-62_000.0), "\u{2212}62,000.00");
     }
 
     #[test]

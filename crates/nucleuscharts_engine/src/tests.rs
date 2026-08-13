@@ -2428,14 +2428,14 @@ fn price_format_drives_last_value_label_and_ticks() {
 
     // Default: two-decimal price labels.
     let texts = label_texts(&mut chart);
-    assert!(texts.iter().any(|t| t == "2500000.00"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "2,500,000.00"), "{texts:?}");
 
     // Volume format: K/M/B suffixes on the series' last-value label and the axis ticks
     // (the series is the scale's primary source).
     assert!(chart.series_apply_price_format_json(0, r#"{"type": "volume", "precision": 1}"#));
     let texts = label_texts(&mut chart);
     assert!(texts.iter().any(|t| t == "2.5M"), "{texts:?}");
-    assert!(!texts.iter().any(|t| t == "2500000.00"), "{texts:?}");
+    assert!(!texts.iter().any(|t| t == "2,500,000.00"), "{texts:?}");
 
     // Percent format: a % sign (precision as decimal digits; see the reference-quirk note at
     // `format_with_price_format`).
@@ -2449,7 +2449,7 @@ fn price_format_drives_last_value_label_and_ticks() {
         r#"{"type": "price", "precision": 4, "min_move": 0.0001}"#
     ));
     let texts = label_texts(&mut chart);
-    assert!(texts.iter().any(|t| t == "2500000.0000"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "2,500,000.0000"), "{texts:?}");
 }
 
 #[test]

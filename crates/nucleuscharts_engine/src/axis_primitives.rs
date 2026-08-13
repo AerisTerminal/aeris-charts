@@ -196,13 +196,14 @@ impl ChartEngine {
                 AxisTextMidpoint::Label => Some(label.text.as_str()),
                 AxisTextMidpoint::StableTime => Some("Apr0"),
             };
-            let correction = metrics_text.map(&midpoint_correction).unwrap_or(0.0);
+            let correction =
+                metrics_text.map(&midpoint_correction).unwrap_or(0.0) * label.font_scale;
             output.push(Prim::Text {
                 x: (label.x * dpr) as f32,
                 y: ((label.y + correction) * dpr) as f32,
                 text: label.text.clone(),
                 color: label.color,
-                size: (layout.font_size * dpr) as f32,
+                size: (layout.font_size * label.font_scale * dpr) as f32,
                 family: layout.font_family.clone(),
                 align: match label.align {
                     AxisTextAlign::Left => TextAlign::Left,

@@ -275,6 +275,9 @@ pub struct AxisLabel {
     pub color: Color,
     pub align: AxisTextAlign,
     pub midpoint: AxisTextMidpoint,
+    /// Scale relative to the chart layout font size. Axis labels use `1.0`; secondary rows such
+    /// as the candle countdown may be smaller while retaining the same family and metrics.
+    pub font_scale: f64,
     pub bold: bool,
     pub background: Option<(f64, f64, f64, f64, Color)>,
     /// Rounded-corner selection for `background` (see [`AxisLabelCorners`]); `NONE` paints the

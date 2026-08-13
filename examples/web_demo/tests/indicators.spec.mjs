@@ -126,7 +126,7 @@ test("indicator values inherit source precision at creation", async ({ page }) =
     upper.apply_options({ price_format: { type: "price", precision: 4, min_move: 0.0001 } });
     return { inherited, overridden: upper.price_formatter()(65475.46) };
   });
-  expect(values).toEqual({ inherited: "65475", overridden: "65475.4600" });
+  expect(values).toEqual({ inherited: "65,475", overridden: "65,475.4600" });
 });
 
 test("stochastic, atr, vwap, and wma register with lineage and placement", async ({ page }) => {

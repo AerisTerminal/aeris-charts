@@ -13,6 +13,7 @@ const LIVE_LABEL_COUNTDOWN_TEXT: Color = Color::rgba(
     nucleuscharts_core::style::DARK_FOREGROUND_RGB.2,
     0xb3,
 );
+const COUNTDOWN_FONT_SCALE: f64 = 11.0 / 12.0;
 
 /// A last-value label candidate before axis overlap resolution (reference IPriceAxisView state:
 /// the source `coordinate` plus the render coordinate the overlap pass adjusts). `align`
@@ -67,13 +68,18 @@ pub(crate) fn median_bar_interval(times: &[i64]) -> Option<f64> {
 }
 
 /// TradingView countdown format by remaining magnitude: `mm:ss` zero-padded below an hour,
-/// `h:mm:ss` below a day, `"Xd Xh"` at a day and beyond.
+/// `hh:mm:ss` below a day, `"Xd Xh"` at a day and beyond.
 pub(crate) fn format_countdown_remaining(remaining: f64) -> String {
     let secs = remaining.max(0.0).floor() as u64;
     if secs < 3600 {
         format!("{:02}:{:02}", secs / 60, secs % 60)
     } else if secs < 86400 {
-        format!("{}:{:02}:{:02}", secs / 3600, secs % 3600 / 60, secs % 60)
+        format!(
+            "{:02}:{:02}:{:02}",
+            secs / 3600,
+            secs % 3600 / 60,
+            secs % 60
+        )
     } else {
         format!("{}d {}h", secs / 86400, secs % 86400 / 3600)
     }
@@ -434,6 +440,7 @@ impl ChartEngine {
                             color: text_color,
                             align: AxisTextAlign::Left,
                             midpoint: AxisTextMidpoint::Label,
+                            font_scale: 1.0,
                             bold,
                             background: None,
                             background_corners: AxisLabelCorners::NONE,
@@ -474,6 +481,7 @@ impl ChartEngine {
                             color: text_color,
                             align: AxisTextAlign::Right,
                             midpoint: AxisTextMidpoint::Label,
+                            font_scale: 1.0,
                             bold,
                             background: None,
                             background_corners: AxisLabelCorners::NONE,
@@ -515,6 +523,7 @@ impl ChartEngine {
                     color: layout_text_color,
                     align: AxisTextAlign::Center,
                     midpoint: AxisTextMidpoint::None,
+                    font_scale: 1.0,
                     // reference `timeScale.allowBoldLabels` (default true): bold major labels.
                     bold: self.time_scale.options().allow_bold_labels && weight >= maximum_weight,
                     background: None,
@@ -575,7 +584,7 @@ impl ChartEngine {
             .filter(|label| label.align == wanted_align)
             // `measure_extra` carries the cluster's title-chip width on its price-area label,
             // so the negotiated strip covers the chip + price row as one unit.
-            .map(|label| measure(&label.text) + label.measure_extra)
+            .map(|label| measure(&label.text) * label.font_scale + label.measure_extra)
             .fold(0.0_f64, f64::max);
         // reference optimalWidth reserves room for the crosshair label via a STATIC worst-case
         // sample (never the live label): the top/bottom prices snapped outward with a
@@ -716,6 +725,7 @@ impl ChartEngine {
                             color: marker.color,
                             align: AxisTextAlign::Center,
                             midpoint: AxisTextMidpoint::None,
+                            font_scale: 1.0,
                             bold: false,
                             background: None,
                             background_corners: AxisLabelCorners::NONE,
@@ -800,6 +810,7 @@ impl ChartEngine {
                         color: text_color,
                         align,
                         midpoint: AxisTextMidpoint::Label,
+                        font_scale: 1.0,
                         bold: false,
                         background: Some((
                             background_x,
@@ -871,6 +882,7 @@ impl ChartEngine {
                     color: self.primary_text_color(),
                     align: AxisTextAlign::Left,
                     midpoint: AxisTextMidpoint::Label,
+                    font_scale: 1.0,
                     bold: false,
                     background: Some((
                         self.pane_left + self.pane_w,
@@ -908,10 +920,10 @@ impl ChartEngine {
             return;
         };
         let row_height = self.options.get().layout.font_size + 2.5 * 2.0;
-        // TradingView-style countdown row: tighter vertical padding than a price row
-        // (1.5px vs 2.5px), so the countdown text sits ~4 css px under the price text
-        // instead of a full row pitch away.
-        let countdown_row_height = self.options.get().layout.font_size + 1.5 * 2.0;
+        // TradingView-style countdown row: 11px secondary text and tighter vertical padding than
+        // the 12px price row, keeping the cluster compact without competing with the price.
+        let countdown_row_height =
+            self.options.get().layout.font_size * COUNTDOWN_FONT_SCALE + 1.5 * 2.0;
         let mut right: Vec<LastValueLabel> = Vec::new();
         let mut left: Vec<LastValueLabel> = Vec::new();
         for (pi, pane) in self.panes.iter().enumerate() {
@@ -1114,6 +1126,7 @@ impl ChartEngine {
                         color: LIVE_LABEL_TEXT,
                         align,
                         midpoint: AxisTextMidpoint::Label,
+                        font_scale: 1.0,
                         bold: false,
                         background: Some((
                             background_x,
@@ -1157,7 +1170,11 @@ impl ChartEngine {
         let title_w = label.title.as_deref().map(measure);
         let chip_w = title_w.map(|w| w + 10.0).unwrap_or(0.0);
         let price_w = label.price_text.as_deref().map(measure).unwrap_or(0.0);
-        let countdown_w = label.countdown.as_deref().map(measure).unwrap_or(0.0);
+        let countdown_w = label
+            .countdown
+            .as_deref()
+            .map(|text| measure(text) * COUNTDOWN_FONT_SCALE)
+            .unwrap_or(0.0);
         // TradingView geometry: the title chip sits OUTSIDE the axis strip (on the pane, a small
         // gap before the border), while the price chip and the countdown chip live inside the
         // strip, share ONE width (the wider of the two texts), and stack flush. Both rows' text
@@ -1231,6 +1248,7 @@ impl ChartEngine {
                 color: text_color,
                 align: AxisTextAlign::Center,
                 midpoint: AxisTextMidpoint::Label,
+                font_scale: 1.0,
                 bold: false,
                 background: Some((chip_x, top_y, chip_w, chip_row_h, chip_color)),
                 // The outside chip rounds only its OUTER (chart-facing) side — sharp on the
@@ -1254,6 +1272,7 @@ impl ChartEngine {
                 color: text_color,
                 align: text_align,
                 midpoint: AxisTextMidpoint::Label,
+                font_scale: 1.0,
                 bold: false,
                 background: Some((inner_x, top_y, inner_w, label.top_height, label.color)),
                 background_corners: axis_corners_top,
@@ -1291,6 +1310,7 @@ impl ChartEngine {
                 color: LIVE_LABEL_COUNTDOWN_TEXT,
                 align: text_align,
                 midpoint: AxisTextMidpoint::Label,
+                font_scale: COUNTDOWN_FONT_SCALE,
                 bold: false,
                 background: Some((inner_x, countdown_y, inner_w, countdown_height, label.color)),
                 background_corners: corners,
@@ -1400,6 +1420,7 @@ impl ChartEngine {
                         color: self.primary_text_color(),
                         align,
                         midpoint: AxisTextMidpoint::Label,
+                        font_scale: 1.0,
                         bold: false,
                         background: Some((
                             background_x,
@@ -1436,6 +1457,7 @@ impl ChartEngine {
                     color: self.primary_text_color(),
                     align: AxisTextAlign::Center,
                     midpoint: AxisTextMidpoint::StableTime,
+                    font_scale: 1.0,
                     bold: false,
                     background: Some((box_x, self.pane_h + 1.0, width, height, label_bg)),
                     background_corners: AxisLabelCorners::BOTTOM,
