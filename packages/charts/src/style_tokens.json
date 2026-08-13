@@ -13,7 +13,7 @@
     "muted_border": "#f5f5f5",
     "ring": "#a1a1a1",
     "crosshair_line": "#333333",
-    "crosshair_label": "#141414"
+    "crosshair_label": "#333333"
   },
   "dark": {
     "surface": "#070a0f",

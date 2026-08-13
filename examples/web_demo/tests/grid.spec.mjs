@@ -47,7 +47,7 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
     chart: "#ffffff",
     border_control: "#f3f3f3",
     crosshair_control: "#333333",
-    crosshair_label_control: "#141414",
+    crosshair_label_control: "#333333",
   });
 });
 
