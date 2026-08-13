@@ -7,6 +7,7 @@ import { PNG } from "pngjs";
 
 const LABEL = [247, 82, 95]; // #f7525f — the deterministic final DOWN bar's label color
 const CHIP = LABEL; // the title chip shares the main label color by default
+const BORDER = [44, 44, 44]; // #2c2c2c - the demo's dark-theme axis border
 const ROW = 17; // 12px font + 2*2.5 padding
 
 const test_port = Number.parseInt(process.env.NUCLEUSCHARTS_TEST_PORT ?? "4174", 10);
@@ -133,9 +134,9 @@ function count_chip_left(png, pane_w, anchor_y) {
   return n;
 }
 
-// Locate the cluster's painted bounding box: column pane_w+2 (inside the chip, left of its
-// centered text) brackets the vertical extent; the right edge is the widest box-colored run
-// across the rows (rounded corners only shrink the outer 2 rows).
+// Locate the cluster's painted bounding box: the axis border occupies pane_w, so the box begins
+// one device pixel later at DPR 1. Column pane_w+2 brackets the vertical extent; the right edge
+// is the widest box-colored run across the rows (rounded corners only shrink the outer 2 rows).
 function find_cluster(png, pane_w) {
   let top = -1;
   let bottom = -1;
@@ -154,7 +155,7 @@ function find_cluster(png, pane_w) {
       }
     }
   }
-  return { left: pane_w, top, right, bottom: bottom + 1 };
+  return { left: pane_w + 1, top, right, bottom: bottom + 1 };
 }
 
 function count_where(png, box, predicate) {
@@ -299,6 +300,16 @@ test("crosshair price and time glyphs stay centered in their label boxes", async
   const [price_label, time_label] = labels.sort(
     (a, b) => (a.bottom - a.top) - (b.bottom - b.top),
   );
+  const geometry = await page.evaluate(() => ({
+    dpr: window.devicePixelRatio,
+    pane_w: window.__chart.time_scale().width(),
+    pane_h: window.__chart.wasm.pane_height(0),
+  }));
+  const border_w = Math.max(1, Math.floor(geometry.dpr));
+  expect(price_label.left).toBe(Math.round(geometry.pane_w * geometry.dpr) + border_w);
+  expect(time_label.top).toBe(Math.round(geometry.pane_h * geometry.dpr) + border_w);
+  expect(near(px(shot, price_label.left - border_w, price_label.top + 3), BORDER)).toBe(true);
+  expect(near(px(shot, Math.floor((time_label.left + time_label.right) / 2), time_label.top - border_w), BORDER)).toBe(true);
   expect_white_ink_centered(shot, price_label, 2);
   // The reference time box includes border + 5px tick space above the text body. Its glyph is
   // therefore deliberately below the full box center rather than incorrectly centered in it.
@@ -423,6 +434,9 @@ test("cluster rounds its axis-facing corners and keeps the chart-facing side sha
   const shot = await capture(page);
   const box = find_cluster(shot, anchor.pane_w);
   expect(box.top).toBeGreaterThanOrEqual(0);
+  expect(box.left).toBe(anchor.pane_w + 1);
+  expect(near(px(shot, anchor.pane_w, box.top + 3), BORDER)).toBe(true);
+  expect(near(px(shot, box.left, box.top + 3), LABEL)).toBe(true);
   const strip_bg = px(shot, box.right + 3, box.top + 3);
 
   // Axis-facing top-right corner (2px radius): the extreme corner pixel is clipped (blended
