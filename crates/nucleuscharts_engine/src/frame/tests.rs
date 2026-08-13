@@ -2246,10 +2246,15 @@ fn boxed_axis_labels_select_the_axis_facing_corners() {
 
 #[test]
 fn boxed_labels_restore_one_device_pixel_separator_at_every_dpr() {
-    let surface_rgb = nucleuscharts_core::style::DEFAULT_SURFACE_RGB;
-    let surface = Color::rgb(surface_rgb.0, surface_rgb.1, surface_rgb.2);
+    let price_border_color = Color::rgb(0x11, 0x22, 0x33);
+    let time_border_color = Color::rgb(0x44, 0x55, 0x66);
     for dpr in [1.0, 1.25, 1.5, 2.0, 3.0] {
         let mut chart = countdown_chart();
+        chart
+            .apply_options(
+                r##"{"rightPriceScale":{"borderColor":"#112233"},"timeScale":{"borderColor":"#445566"}}"##,
+            )
+            .unwrap();
         chart.dpr = dpr;
         chart.series[0].title = "NDQ".to_string();
         chart.series[0].countdown_visible = false;
@@ -2270,7 +2275,7 @@ fn boxed_labels_restore_one_device_pixel_separator_at_every_dpr() {
                     && *fill == LINE
                     && rect.x == price_border
                     && rect.w == border_w
-                    && *color == surface
+                    && *color == price_border_color
             )),
             "price separator at dpr {dpr}"
         );
@@ -2287,7 +2292,7 @@ fn boxed_labels_restore_one_device_pixel_separator_at_every_dpr() {
                     && rect.w == *w as i32
                     && rect.h == border_w
                     && (*y - time_border as f32).abs() < f32::EPSILON
-                    && *color == surface
+                    && *color == time_border_color
             )),
             "time separator at dpr {dpr}"
         );
