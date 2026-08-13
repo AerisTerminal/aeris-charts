@@ -49,11 +49,18 @@ async function page_environment(page) {
   return page.evaluate(() => globalThis.__nucleus_bench.environment());
 }
 
+function report_browser_errors(page) {
+  page.on("console", (message) => {
+    if (message.type() === "error") console.error(`browser console: ${message.text()}`);
+  });
+}
+
 async function cold_start(browser, base_url, scenario) {
   const rows = [];
   for (let run = 0; run < scenario.measured_runs; run += 1) {
     const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
     const page = await context.newPage();
+    report_browser_errors(page);
     await page.goto(`${base_url}/benchmark.html`);
     await page.waitForFunction(() => globalThis.__nucleus_bench_ready === true);
     rows.push(await page.evaluate(({ points, seed_value }) => globalThis.__nucleus_bench.startup(points, seed_value), { points: scenario.points, seed_value: seed }));
@@ -267,6 +274,7 @@ export async function run_browser_scenarios(scenarios) {
         } else {
           const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
           const page = await context.newPage();
+          report_browser_errors(page);
           await page.goto(`${base_url}/benchmark.html`);
           await page.waitForFunction(() => globalThis.__nucleus_bench_ready === true);
           const session = await context.newCDPSession(page);
