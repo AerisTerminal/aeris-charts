@@ -28,11 +28,11 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
   expect(await theme_state()).toEqual({
     root: "dark",
     control: "dark",
-    surface: "oklch(0.191251 0 0)",
-    header: "oklch(0.191251 0 0)",
-    chart: "#141414",
-    border_control: "#2c2c2c",
-    crosshair_control: "#2c2c2c",
+    surface: "#070a0f",
+    header: "rgb(7, 10, 15)",
+    chart: "#070a0f",
+    border_control: "#16191f",
+    crosshair_control: "#f5f5f5",
   });
 
   await page.selectOption("#theme_select", "light");
@@ -43,9 +43,65 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
     surface: "oklch(1 0 0)",
     header: "oklch(1 0 0)",
     chart: "#ffffff",
-    border_control: "#e5e5e5",
-    crosshair_control: "#e5e5e5",
+    border_control: "#f3f3f3",
+    crosshair_control: "#333333",
   });
+});
+
+test("portable design tokens and disabled controls match the brand contract", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+
+  const tokens = () => page.evaluate(() => {
+    const style = getComputedStyle(document.documentElement);
+    return Object.fromEntries([
+      "background",
+      "card",
+      "muted",
+      "muted-foreground",
+      "disabled-foreground",
+      "accent",
+      "border",
+      "muted-border",
+      "input",
+    ].map((name) => [name, style.getPropertyValue(`--${name}`).trim()]));
+  });
+
+  expect(await tokens()).toEqual({
+    background: "#070a0f",
+    card: "#070a0f",
+    muted: "#0c1115",
+    "muted-foreground": "#9da3aa",
+    "disabled-foreground": "oklch(0.52 0 0)",
+    accent: "#222224",
+    border: "#16191f",
+    "muted-border": "#131519",
+    input: "#0c1115",
+  });
+
+  await page.selectOption("#theme_select", "light");
+  expect(await tokens()).toMatchObject({
+    background: "oklch(1 0 0)",
+    card: "oklch(1 0 0)",
+    "disabled-foreground": "oklch(0.74 0 0)",
+    border: "#f3f3f3",
+    "muted-border": "#f5f5f5",
+  });
+
+  await page.evaluate(() => {
+    const button = document.createElement("button");
+    button.id = "disabled_brand_button";
+    button.className = "nc-button nc-button--outline";
+    button.disabled = true;
+    button.textContent = "Disabled";
+    document.body.append(button);
+  });
+  const disabled = page.locator("#disabled_brand_button");
+  await expect(disabled).toHaveCSS("cursor", "not-allowed");
+  await expect(disabled).toHaveCSS("pointer-events", "auto");
+  const background = await disabled.evaluate((button) => getComputedStyle(button).backgroundColor);
+  await disabled.hover({ force: true });
+  await expect(disabled).toHaveCSS("background-color", background);
 });
 
 /** Every cell's chart handle has resolved (a split rebuilds the layout once the chart is in). */
@@ -293,7 +349,7 @@ test("split dividers follow the axis border token (theme and explicit changes)",
   await page.selectOption("#theme_select", "light");
   await wait_grid(page);
   const light_border = await border_hex();
-  expect(light_border.toLowerCase()).toBe("#e5e5e5");
+  expect(light_border.toLowerCase()).toBe("#f3f3f3");
   expect(await divider_rgb()).toBe(to_rgb(light_border));
 
   // An explicit axis border change re-resolves the divider too.

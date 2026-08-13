@@ -2141,6 +2141,11 @@ fn boxed_axis_labels_select_the_axis_facing_corners() {
         })
         .expect("crosshair price label");
     assert_eq!(price.background_corners, AxisLabelCorners::RIGHT);
+    let boxed_text = nucleuscharts_core::style::DARK_FOREGROUND_RGB;
+    assert_eq!(
+        price.color,
+        Color::rgb(boxed_text.0, boxed_text.1, boxed_text.2)
+    );
     let (price_x, ..) = price.background.expect("boxed crosshair price label");
     assert_eq!(price_x, chart.pane_left + chart.pane_w);
     let time = labels
@@ -2148,6 +2153,10 @@ fn boxed_axis_labels_select_the_axis_facing_corners() {
         .find(|l| l.midpoint == AxisTextMidpoint::StableTime)
         .expect("crosshair time label");
     assert_eq!(time.background_corners, AxisLabelCorners::BOTTOM);
+    assert_eq!(
+        time.color,
+        Color::rgb(boxed_text.0, boxed_text.1, boxed_text.2)
+    );
     let (_, time_y, _, time_h, _) = time.background.expect("boxed time label");
     assert_eq!(time_y, chart.pane_h);
     assert_eq!(time_h, 1.0 + 5.0 + 3.0 + 12.0 + 3.0);

@@ -1442,7 +1442,8 @@ fn empty_text_tool_renders_the_muted_placeholder_and_hits_it() {
         .iter()
         .find(|(t, _)| t == TEXT_PLACEHOLDER)
         .expect("placeholder rendered");
-    assert_eq!(*color, Color::rgb(0xa1, 0xa1, 0xa1));
+    let muted = nucleuscharts_core::style::DEFAULT_MUTED_FOREGROUND_RGB;
+    assert_eq!(*color, Color::rgb(muted.0, muted.1, muted.2));
     // The preview reads bold and ≥ 12 CSS px (dpr 1 here, so bitmap size == CSS size).
     let frame = chart.build_frame();
     let (size, weight) = frame.panes[0]

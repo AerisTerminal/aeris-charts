@@ -242,7 +242,7 @@ test("prim text paints on both backends, is pixel-identical, z-orders, caches, a
   await settle_frames(page);
   const canvas_hover = PNG.sync.read(await page.screenshot({ animations: "disabled", fullPage: false }));
   const line_column = { x: hover_bitmap_x - 1, y: OVER_BAND.y + 2, w: 3, h: OVER_BAND.h - 4 };
-  const crosshairish = (r, g, b) => Math.abs(r - 0xe5) < 12 && Math.abs(g - 0xe5) < 12 && Math.abs(b - 0xe5) < 12;
+  const crosshairish = (r, g, b) => Math.abs(r - 0x33) < 12 && Math.abs(g - 0x33) < 12 && Math.abs(b - 0x33) < 12;
   expect(
     count_pixels(canvas_hover, line_column, crosshairish),
     "house order: primitive main-layer text paints above the crosshair line (main-layer end)",

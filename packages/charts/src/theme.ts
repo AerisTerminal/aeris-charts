@@ -16,13 +16,15 @@ export interface chart_theme {
   primary: string;
   primary_foreground: string;
   primary_hover: string;
-  /** Crosshair-label and passive control surface. */
+  /** Passive control surface. Crosshair colors have dedicated tokens below. */
   muted: string;
   muted_foreground: string;
   accent: string;
   border: string;
   muted_border: string;
   ring: string;
+  crosshair_line: string;
+  crosshair_label: string;
 }
 
 export const light_theme: chart_theme = {
@@ -37,6 +39,8 @@ export const light_theme: chart_theme = {
   border: style_tokens.light.border,
   muted_border: style_tokens.light.muted_border,
   ring: style_tokens.light.ring,
+  crosshair_line: style_tokens.light.crosshair_line,
+  crosshair_label: style_tokens.light.crosshair_label,
 };
 
 export const dark_theme: chart_theme = {
@@ -51,6 +55,8 @@ export const dark_theme: chart_theme = {
   border: style_tokens.dark.border,
   muted_border: style_tokens.dark.muted_border,
   ring: style_tokens.dark.ring,
+  crosshair_line: style_tokens.dark.crosshair_line,
+  crosshair_label: style_tokens.dark.crosshair_label,
 };
 
 export type theme_name = "light" | "dark";
@@ -82,8 +88,8 @@ export function theme_options(theme: theme_name | chart_theme): deep_partial<cha
       horzLines: { color: palette.border },
     },
     crosshair: {
-      vertLine: { color: palette.border, labelBackgroundColor: palette.muted },
-      horzLine: { color: palette.border, labelBackgroundColor: palette.muted },
+      vertLine: { color: palette.crosshair_line, labelBackgroundColor: palette.crosshair_label },
+      horzLine: { color: palette.crosshair_line, labelBackgroundColor: palette.crosshair_label },
     },
   };
 }

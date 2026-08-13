@@ -121,7 +121,7 @@ test("pane divider follows the axis border color (theme-aware) until pinned", as
   await page.selectOption("#theme_select", "dark");
   await wait_for_chart(page);
   expected = hex(await border_color()).join(",");
-  expect(expected).toBe("44,44,44");
+  expect(expected).toBe("22,25,31");
   expect((await divider_color()).get(expected) ?? 0, `dark divider must use border color ${expected}`).toBeGreaterThanOrEqual(3);
 
   // An explicit separator color pins it through theme switches.

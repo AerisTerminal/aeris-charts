@@ -83,6 +83,8 @@ fn main() {
             ("border", "BORDER"),
             ("muted_border", "MUTED_BORDER"),
             ("ring", "RING"),
+            ("crosshair_line", "CROSSHAIR_LINE"),
+            ("crosshair_label", "CROSSHAIR_LABEL"),
         ] {
             emit_color(
                 &mut output,
@@ -124,6 +126,8 @@ fn main() {
         "BORDER",
         "MUTED_BORDER",
         "RING",
+        "CROSSHAIR_LINE",
+        "CROSSHAIR_LABEL",
     ] {
         output.push_str(&format!(
             "pub const DEFAULT_{suffix}_CSS: &str = {default_prefix}_{suffix}_CSS;\n"
@@ -138,12 +142,13 @@ fn main() {
     output.push_str("pub const DARK_AXIS_TEXT_RGB: (u8, u8, u8) = DARK_FOREGROUND_RGB;\n");
     output.push_str("pub const DEFAULT_AXIS_TEXT_CSS: &str = DEFAULT_FOREGROUND_CSS;\n");
     output.push_str("pub const DEFAULT_AXIS_TEXT_RGB: (u8, u8, u8) = DEFAULT_FOREGROUND_RGB;\n");
-    output.push_str("pub const LIGHT_CROSSHAIR_CSS: &str = LIGHT_BORDER_CSS;\n");
-    output.push_str("pub const LIGHT_CROSSHAIR_RGB: (u8, u8, u8) = LIGHT_BORDER_RGB;\n");
-    output.push_str("pub const DARK_CROSSHAIR_CSS: &str = DARK_BORDER_CSS;\n");
-    output.push_str("pub const DARK_CROSSHAIR_RGB: (u8, u8, u8) = DARK_BORDER_RGB;\n");
-    output.push_str("pub const DEFAULT_CROSSHAIR_CSS: &str = DEFAULT_BORDER_CSS;\n");
-    output.push_str("pub const DEFAULT_CROSSHAIR_RGB: (u8, u8, u8) = DEFAULT_BORDER_RGB;\n");
+    output.push_str("pub const LIGHT_CROSSHAIR_CSS: &str = LIGHT_CROSSHAIR_LINE_CSS;\n");
+    output.push_str("pub const LIGHT_CROSSHAIR_RGB: (u8, u8, u8) = LIGHT_CROSSHAIR_LINE_RGB;\n");
+    output.push_str("pub const DARK_CROSSHAIR_CSS: &str = DARK_CROSSHAIR_LINE_CSS;\n");
+    output.push_str("pub const DARK_CROSSHAIR_RGB: (u8, u8, u8) = DARK_CROSSHAIR_LINE_RGB;\n");
+    output.push_str("pub const DEFAULT_CROSSHAIR_CSS: &str = DEFAULT_CROSSHAIR_LINE_CSS;\n");
+    output
+        .push_str("pub const DEFAULT_CROSSHAIR_RGB: (u8, u8, u8) = DEFAULT_CROSSHAIR_LINE_RGB;\n");
     output.push_str("pub const LIGHT_SEPARATOR_HOVER_CSS: &str = LIGHT_ACCENT_CSS;\n");
     output.push_str("pub const DARK_SEPARATOR_HOVER_CSS: &str = DARK_ACCENT_CSS;\n");
     output.push_str("pub const DEFAULT_SEPARATOR_HOVER_CSS: &str = DEFAULT_ACCENT_CSS;\n");

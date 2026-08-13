@@ -161,7 +161,7 @@
           <option value="2">hidden</option>
         </select>
       </label>
-      <label>color <input type="color" id="cross_color" value="#e5e5e5"></label>
+      <label>color <input type="color" id="cross_color" value="#333333"></label>
       <label>w <input type="range" id="cross_width" min="1" max="4" step="1" value="1"><span id="cross_width_val">1</span></label>
       <label>style
         <select id="cross_style">
@@ -182,7 +182,7 @@
         </select>
       </label>
       <label><input type="checkbox" id="grid_toggle" checked> grid</label>
-      <label>grid color <input type="color" id="grid_color" value="#e5e5e5"></label>
+      <label>grid color <input type="color" id="grid_color" value="#f3f3f3"></label>
       <label>grid style
         <select id="grid_style">
           <option value="0" selected>solid</option>
@@ -218,10 +218,10 @@
 
     <!-- price/time axis cosmetics: border (reference borderColor/borderVisible) + text (textColor) -->
     <div class="group" data-caption="Axes">
-      <label>border <input type="color" id="axis_border_color" value="#e5e5e5"></label>
+      <label>border <input type="color" id="axis_border_color" value="#f3f3f3"></label>
       <label><input type="checkbox" id="axis_border_visible" checked> borders</label>
       <label>text <input type="color" id="axis_text_color" value="#333333"></label>
-      <label>separator <input type="color" id="pane_separator_color" value="#e5e5e5" title="Pane divider color — follows the axis border color (theme-aware) until you pin an explicit one"></label>
+      <label>separator <input type="color" id="pane_separator_color" value="#f3f3f3" title="Pane divider color — follows the axis border color (theme-aware) until you pin an explicit one"></label>
     </div>
 
     <!-- watermark (reference v4 shape) -->
@@ -1199,8 +1199,8 @@ document.getElementById("theme_select").addEventListener("change", (e) => {
   chart.apply_options({ layout: { textColor: palette.foreground, mutedTextColor: palette.muted_foreground } });
   if (!theme_color_touched.grid) document.getElementById("grid_color").value = palette.border;
   apply_grid_style();
-  if (!theme_color_touched.crosshair_line) document.getElementById("cross_color").value = palette.border;
-  if (!theme_color_touched.crosshair_label) document.getElementById("cross_label_bg").value = palette.muted;
+  if (!theme_color_touched.crosshair_line) document.getElementById("cross_color").value = palette.crosshair_line;
+  if (!theme_color_touched.crosshair_label) document.getElementById("cross_label_bg").value = palette.crosshair_label;
   apply_crosshair_style();
   sync_page_theme(e.target.value);
 });
@@ -1214,8 +1214,8 @@ if (parity_fixture === null) {
   document.getElementById("axis_text_color").value = palette.foreground;
   document.getElementById("grid_color").value = palette.border;
   apply_grid_style();
-  document.getElementById("cross_color").value = palette.border;
-  document.getElementById("cross_label_bg").value = palette.muted;
+  document.getElementById("cross_color").value = palette.crosshair_line;
+  document.getElementById("cross_label_bg").value = palette.crosshair_label;
   apply_crosshair_style();
 }
 sync_style_visibility("candlestick");

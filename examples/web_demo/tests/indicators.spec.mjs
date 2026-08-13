@@ -80,8 +80,8 @@ test("rsi and macd stack their own panes with channel strip and four-state histo
   await wait_grid(page);
   const geo = await page.evaluate(() => window.__chart.panes().map((p) => p.get_geometry()));
   const { crop } = await shot(page);
-  // RSI channel strip rgba(120,123,134,0.2) over the canonical dark surface blends to ~#292a2b.
-  const rsi_strip = count_color(crop(geo[1].top, geo[1].top + geo[1].height), [40, 41, 43], 6);
+  // RSI channel strip rgba(120,123,134,0.2) over the canonical dark surface blends to ~#1e2127.
+  const rsi_strip = count_color(crop(geo[1].top, geo[1].top + geo[1].height), [30, 33, 39], 6);
   expect(rsi_strip, "rsi 30/70 channel strip pixels").toBeGreaterThan(500);
   // MACD histogram strong-up columns paint the opaque candle green.
   const macd_green = count_color(crop(geo[2].top, geo[2].top + geo[2].height), [8, 153, 129], 10);

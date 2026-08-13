@@ -15,8 +15,8 @@ use nucleuscharts_core::model::plot_list::{MismatchDirection, PlotList, PlotValu
 use nucleuscharts_core::model::price_range::PriceRange;
 use nucleuscharts_core::scale::price_scale_core::{PriceScaleCore, PriceScaleMode};
 use nucleuscharts_core::style::{
-    DEFAULT_BORDER_RGB, DEFAULT_MUTED_RGB, DEFAULT_PRIMARY_RGB, MARKET_DOWN_RGB, MARKET_UP_RGB,
-    MARKET_VOLUME_ALPHA,
+    DEFAULT_BORDER_RGB, DEFAULT_CROSSHAIR_LABEL_RGB, DEFAULT_CROSSHAIR_LINE_RGB,
+    DEFAULT_PRIMARY_RGB, MARKET_DOWN_RGB, MARKET_UP_RGB, MARKET_VOLUME_ALPHA,
 };
 use nucleuscharts_render::bars::{build_bars, BarItem, BarsParams};
 use nucleuscharts_render::candles::{build_candles, CandleItem, CandlesParams};
@@ -89,14 +89,14 @@ const BASELINE_BOTTOM_FILL2: Color =
     Color::rgba(MARKET_DOWN_RGB.0, MARKET_DOWN_RGB.1, MARKET_DOWN_RGB.2, 71);
 pub(crate) const LINE_WIDTH: f64 = 3.0;
 const CROSSHAIR_COLOR: Color = Color::rgb(
-    DEFAULT_BORDER_RGB.0,
-    DEFAULT_BORDER_RGB.1,
-    DEFAULT_BORDER_RGB.2,
+    DEFAULT_CROSSHAIR_LINE_RGB.0,
+    DEFAULT_CROSSHAIR_LINE_RGB.1,
+    DEFAULT_CROSSHAIR_LINE_RGB.2,
 );
 const CROSSHAIR_LABEL_BG: Color = Color::rgb(
-    DEFAULT_MUTED_RGB.0,
-    DEFAULT_MUTED_RGB.1,
-    DEFAULT_MUTED_RGB.2,
+    DEFAULT_CROSSHAIR_LABEL_RGB.0,
+    DEFAULT_CROSSHAIR_LABEL_RGB.1,
+    DEFAULT_CROSSHAIR_LABEL_RGB.2,
 );
 
 fn ceiled_odd(value: f64) -> f64 {

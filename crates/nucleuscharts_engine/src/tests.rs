@@ -1538,19 +1538,21 @@ fn crosshair_label_visibility_and_background_flow_from_options() {
     chart.crosshair = Some((200.0, 120.0));
 
     let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
-    let muted = Color::rgb(0x1b, 0x1b, 0x1b);
-    let foreground = Color::rgb(0xfa, 0xfa, 0xfa);
+    let label_background = nucleuscharts_core::style::DEFAULT_CROSSHAIR_LABEL_RGB;
+    let label_background = Color::rgb(label_background.0, label_background.1, label_background.2);
+    let foreground = nucleuscharts_core::style::DEFAULT_FOREGROUND_RGB;
+    let foreground = Color::rgb(foreground.0, foreground.1, foreground.2);
     let time_label = axis
         .labels
         .iter()
         .find(|label| label.midpoint == AxisTextMidpoint::StableTime)
         .expect("default crosshair time label");
     assert_eq!(time_label.color, foreground);
-    assert!(matches!(time_label.background, Some((.., color)) if color == muted));
+    assert!(matches!(time_label.background, Some((.., color)) if color == label_background));
     assert!(axis.labels.iter().any(|label| {
         label.midpoint == AxisTextMidpoint::Label
             && label.color == foreground
-            && matches!(label.background, Some((.., color)) if color == muted)
+            && matches!(label.background, Some((.., color)) if color == label_background)
     }));
 
     // Distinctive per-line label backgrounds prove each honors `labelBackgroundColor`. The price
@@ -3664,14 +3666,14 @@ fn theme_switch_uses_nucleus_tokens_without_replacing_market_data() {
     assert_eq!(light.layout.background.color, "#ffffff");
     assert_eq!(light.layout.text_color, "#333333");
     assert_eq!(light.layout.muted_text_color, "#737373");
-    assert_eq!(light.right_price_scale.border_color, "#e5e5e5");
+    assert_eq!(light.right_price_scale.border_color, "#f3f3f3");
     assert_eq!(row_count(&chart, 0), 20);
 
     chart.set_theme(ChartTheme::Dark);
     let dark = chart.options.get();
-    assert_eq!(dark.layout.background.color, "#141414");
+    assert_eq!(dark.layout.background.color, "#070a0f");
     assert_eq!(dark.layout.text_color, "#fafafa");
-    assert_eq!(dark.layout.muted_text_color, "#a1a1a1");
-    assert_eq!(dark.right_price_scale.border_color, "#2c2c2c");
+    assert_eq!(dark.layout.muted_text_color, "#9da3aa");
+    assert_eq!(dark.right_price_scale.border_color, "#16191f");
     assert_eq!(row_count(&chart, 0), 20);
 }

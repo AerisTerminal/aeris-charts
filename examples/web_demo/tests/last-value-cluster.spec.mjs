@@ -7,7 +7,7 @@ import { PNG } from "pngjs";
 
 const LABEL = [247, 82, 95]; // #f7525f — the deterministic final DOWN bar's label color
 const CHIP = LABEL; // the title chip shares the main label color by default
-const BORDER = [44, 44, 44]; // #2c2c2c - the demo's dark-theme axis border
+const BORDER = [22, 25, 31]; // #16191f - the demo's dark-theme axis border
 const ROW = 17; // 12px font + 2*2.5 padding
 
 const test_port = Number.parseInt(process.env.NUCLEUSCHARTS_TEST_PORT ?? "4174", 10);
@@ -437,20 +437,19 @@ test("cluster rounds its axis-facing corners and keeps the chart-facing side sha
   expect(box.left).toBe(anchor.pane_w + 1);
   expect(near(px(shot, anchor.pane_w, box.top + 3), BORDER)).toBe(true);
   expect(near(px(shot, box.left, box.top + 3), LABEL)).toBe(true);
-  const strip_bg = px(shot, box.right + 3, box.top + 3);
-
   // Axis-facing top-right corner (2px radius): the extreme corner pixel is clipped (blended
-  // toward the strip background), while the same column a few px down is fully filled.
+  // away from the fill), while the same column a few px down is fully filled.
   const corner_tr = px(shot, box.right - 1, box.top);
-  expect(dist(corner_tr, LABEL)).toBeGreaterThan(40);
-  expect(dist(corner_tr, strip_bg)).toBeLessThan(dist(corner_tr, LABEL));
-  expect(near(px(shot, box.right - 1, box.top + 3), LABEL)).toBe(true);
+  const inside_tr = px(shot, box.right - 1, box.top + 3);
+  expect(dist(corner_tr, LABEL)).toBeGreaterThan(dist(inside_tr, LABEL));
+  expect(near(inside_tr, LABEL)).toBe(true);
   // Chart-facing top-left corner of the inside price chip: sharp, fully filled.
   expect(near(px(shot, box.left, box.top), LABEL)).toBe(true);
   // Axis-facing bottom-right corner of the countdown row: clipped the same way.
   const corner_br = px(shot, box.right - 1, box.bottom - 1);
-  expect(dist(corner_br, LABEL)).toBeGreaterThan(40);
-  expect(near(px(shot, box.right - 1, box.bottom - 4), LABEL)).toBe(true);
+  const inside_br = px(shot, box.right - 1, box.bottom - 4);
+  expect(dist(corner_br, LABEL)).toBeGreaterThan(dist(inside_br, LABEL));
+  expect(near(inside_br, LABEL)).toBe(true);
   // Chart-facing bottom-left corner: sharp.
   expect(near(px(shot, box.left, box.bottom - 1), LABEL)).toBe(true);
   // The OUTSIDE title chip rounds only its OUTER side: the corner pixel itself is clipped

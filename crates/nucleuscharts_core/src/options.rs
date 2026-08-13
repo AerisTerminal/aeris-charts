@@ -25,10 +25,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::style::{
-    DARK_ACCENT_CSS, DARK_BORDER_CSS, DARK_FOREGROUND_CSS, DARK_MUTED_CSS,
-    DARK_MUTED_FOREGROUND_CSS, DARK_SURFACE_CSS, DEFAULT_ACCENT_CSS, DEFAULT_BORDER_CSS,
-    DEFAULT_FOREGROUND_CSS, DEFAULT_MUTED_CSS, DEFAULT_MUTED_FOREGROUND_CSS, DEFAULT_SURFACE_CSS,
-    LIGHT_ACCENT_CSS, LIGHT_BORDER_CSS, LIGHT_FOREGROUND_CSS, LIGHT_MUTED_CSS,
+    DARK_ACCENT_CSS, DARK_BORDER_CSS, DARK_CROSSHAIR_LABEL_CSS, DARK_CROSSHAIR_LINE_CSS,
+    DARK_FOREGROUND_CSS, DARK_MUTED_FOREGROUND_CSS, DARK_SURFACE_CSS, DEFAULT_ACCENT_CSS,
+    DEFAULT_BORDER_CSS, DEFAULT_CROSSHAIR_LABEL_CSS, DEFAULT_CROSSHAIR_LINE_CSS,
+    DEFAULT_FOREGROUND_CSS, DEFAULT_MUTED_FOREGROUND_CSS, DEFAULT_SURFACE_CSS, LIGHT_ACCENT_CSS,
+    LIGHT_BORDER_CSS, LIGHT_CROSSHAIR_LABEL_CSS, LIGHT_CROSSHAIR_LINE_CSS, LIGHT_FOREGROUND_CSS,
     LIGHT_MUTED_FOREGROUND_CSS, LIGHT_SURFACE_CSS,
 };
 
@@ -43,24 +44,27 @@ pub enum ChartTheme {
 /// Complete cosmetic patch for one canonical Nucleus theme.
 #[must_use]
 pub fn chart_theme_patch(theme: ChartTheme) -> Value {
-    let (surface, foreground, muted, muted_foreground, border, accent) = match theme {
-        ChartTheme::Light => (
-            LIGHT_SURFACE_CSS,
-            LIGHT_FOREGROUND_CSS,
-            LIGHT_MUTED_CSS,
-            LIGHT_MUTED_FOREGROUND_CSS,
-            LIGHT_BORDER_CSS,
-            LIGHT_ACCENT_CSS,
-        ),
-        ChartTheme::Dark => (
-            DARK_SURFACE_CSS,
-            DARK_FOREGROUND_CSS,
-            DARK_MUTED_CSS,
-            DARK_MUTED_FOREGROUND_CSS,
-            DARK_BORDER_CSS,
-            DARK_ACCENT_CSS,
-        ),
-    };
+    let (surface, foreground, muted_foreground, border, accent, crosshair_line, crosshair_label) =
+        match theme {
+            ChartTheme::Light => (
+                LIGHT_SURFACE_CSS,
+                LIGHT_FOREGROUND_CSS,
+                LIGHT_MUTED_FOREGROUND_CSS,
+                LIGHT_BORDER_CSS,
+                LIGHT_ACCENT_CSS,
+                LIGHT_CROSSHAIR_LINE_CSS,
+                LIGHT_CROSSHAIR_LABEL_CSS,
+            ),
+            ChartTheme::Dark => (
+                DARK_SURFACE_CSS,
+                DARK_FOREGROUND_CSS,
+                DARK_MUTED_FOREGROUND_CSS,
+                DARK_BORDER_CSS,
+                DARK_ACCENT_CSS,
+                DARK_CROSSHAIR_LINE_CSS,
+                DARK_CROSSHAIR_LABEL_CSS,
+            ),
+        };
     serde_json::json!({
         "layout": {
             "background": {
@@ -81,8 +85,8 @@ pub fn chart_theme_patch(theme: ChartTheme) -> Value {
             "horzLines": { "color": border }
         },
         "crosshair": {
-            "vertLine": { "color": border, "labelBackgroundColor": muted },
-            "horzLine": { "color": border, "labelBackgroundColor": muted }
+            "vertLine": { "color": crosshair_line, "labelBackgroundColor": crosshair_label },
+            "horzLine": { "color": crosshair_line, "labelBackgroundColor": crosshair_label }
         },
         "leftPriceScale": { "borderColor": border, "textColor": foreground },
         "rightPriceScale": { "borderColor": border, "textColor": foreground },
@@ -119,10 +123,10 @@ fn grid_color() -> String {
     DEFAULT_BORDER_CSS.into()
 }
 fn crosshair_color() -> String {
-    DEFAULT_BORDER_CSS.into()
+    DEFAULT_CROSSHAIR_LINE_CSS.into()
 }
 fn crosshair_label_bg() -> String {
-    DEFAULT_MUTED_CSS.into()
+    DEFAULT_CROSSHAIR_LABEL_CSS.into()
 }
 fn axis_border_color() -> String {
     DEFAULT_BORDER_CSS.into()
@@ -531,17 +535,17 @@ mod tests {
     #[test]
     fn defaults_match_nucleus_style() {
         let o = ChartOptions::default();
-        assert_eq!(o.layout.background.color, "#141414");
+        assert_eq!(o.layout.background.color, "#070a0f");
         assert_eq!(o.layout.text_color, "#fafafa");
-        assert_eq!(o.layout.muted_text_color, "#a1a1a1");
+        assert_eq!(o.layout.muted_text_color, "#9da3aa");
         assert_eq!(o.layout.font_size, 12.0);
-        assert_eq!(o.grid.vert_lines.color, "#2c2c2c");
+        assert_eq!(o.grid.vert_lines.color, "#16191f");
         assert_eq!(o.grid.horz_lines.style, line_style::SOLID);
         assert_eq!(o.crosshair.mode, crosshair_mode::NORMAL);
         assert!(!o.crosshair.do_not_snap_to_hidden_series_indices);
         assert_eq!(o.crosshair.vert_line.style, line_style::DOTTED);
-        assert_eq!(o.crosshair.vert_line.color, "#2c2c2c");
-        assert_eq!(o.crosshair.horz_line.label_background_color, "#1b1b1b");
+        assert_eq!(o.crosshair.vert_line.color, "#f5f5f5");
+        assert_eq!(o.crosshair.horz_line.label_background_color, "#5c5c5c");
         assert!(o.hovered_series_on_top);
         assert!(!o.auto_size);
         // Axis border cosmetics use the canonical border everywhere.
@@ -549,10 +553,10 @@ mod tests {
         assert!(!o.left_price_scale.visible);
         assert!(o.right_price_scale.border_visible);
         assert!(o.left_price_scale.border_visible);
-        assert_eq!(o.right_price_scale.border_color, "#2c2c2c");
-        assert_eq!(o.left_price_scale.border_color, "#2c2c2c");
+        assert_eq!(o.right_price_scale.border_color, "#16191f");
+        assert_eq!(o.left_price_scale.border_color, "#16191f");
         assert!(o.time_scale.border_visible);
-        assert_eq!(o.time_scale.border_color, "#2c2c2c");
+        assert_eq!(o.time_scale.border_color, "#16191f");
         // Watermark defaults: hidden, transparent, 48px centered (reference v4).
         assert!(!o.watermark.visible);
         assert_eq!(o.watermark.color, "rgba(0, 0, 0, 0)");
@@ -570,10 +574,10 @@ mod tests {
         assert_eq!(light.layout.text_color, LIGHT_FOREGROUND_CSS);
         assert_eq!(light.layout.muted_text_color, LIGHT_MUTED_FOREGROUND_CSS);
         assert_eq!(light.grid.vert_lines.color, LIGHT_BORDER_CSS);
-        assert_eq!(light.crosshair.vert_line.color, LIGHT_BORDER_CSS);
+        assert_eq!(light.crosshair.vert_line.color, LIGHT_CROSSHAIR_LINE_CSS);
         assert_eq!(
             light.crosshair.vert_line.label_background_color,
-            LIGHT_MUTED_CSS
+            LIGHT_CROSSHAIR_LABEL_CSS
         );
         assert_eq!(light.right_price_scale.border_color, LIGHT_BORDER_CSS);
         assert_eq!(
@@ -587,10 +591,10 @@ mod tests {
         assert_eq!(dark.layout.text_color, DARK_FOREGROUND_CSS);
         assert_eq!(dark.layout.muted_text_color, DARK_MUTED_FOREGROUND_CSS);
         assert_eq!(dark.grid.vert_lines.color, DARK_BORDER_CSS);
-        assert_eq!(dark.crosshair.vert_line.color, DARK_BORDER_CSS);
+        assert_eq!(dark.crosshair.vert_line.color, DARK_CROSSHAIR_LINE_CSS);
         assert_eq!(
             dark.crosshair.vert_line.label_background_color,
-            DARK_MUTED_CSS
+            DARK_CROSSHAIR_LABEL_CSS
         );
         assert_eq!(dark.right_price_scale.border_color, DARK_BORDER_CSS);
         assert_eq!(
@@ -627,9 +631,9 @@ mod tests {
         // untouched siblings survive: strip visibility and the other border options
         assert!(o.right_price_scale.visible);
         assert!(o.right_price_scale.border_visible);
-        assert_eq!(o.left_price_scale.border_color, "#2c2c2c");
+        assert_eq!(o.left_price_scale.border_color, "#16191f");
         assert!(!o.time_scale.border_visible);
-        assert_eq!(o.time_scale.border_color, "#2c2c2c");
+        assert_eq!(o.time_scale.border_color, "#16191f");
     }
 
     #[test]
@@ -643,7 +647,7 @@ mod tests {
         assert_eq!(o.grid.vert_lines.style, line_style::SOLID);
         assert!(!o.grid.vert_lines.visible);
         // ...and the neighbouring family is untouched.
-        assert_eq!(o.grid.horz_lines.color, "#2c2c2c");
+        assert_eq!(o.grid.horz_lines.color, "#16191f");
     }
 
     #[test]
@@ -656,7 +660,7 @@ mod tests {
         assert_eq!(o.grid.vert_lines.color, "#111111");
         assert_eq!(o.crosshair.mode, crosshair_mode::NORMAL);
         // and unrelated defaults remain
-        assert_eq!(o.layout.background.color, "#141414");
+        assert_eq!(o.layout.background.color, "#070a0f");
     }
 
     #[test]

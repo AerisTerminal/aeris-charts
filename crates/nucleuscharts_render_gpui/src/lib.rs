@@ -404,9 +404,10 @@ mod tests {
     fn prepared_frame_resolves_surface_paint_from_nucleus_options() {
         let mut engine = ChartEngine::new(200.0, 100.0, 1.0);
         let frame = ChartFrame::default();
+        let surface = nucleuscharts_core::style::DEFAULT_SURFACE_RGB;
         assert_eq!(
             PreparedNucleusFrame::from_engine(&frame, &engine).background,
-            Paint::Solid(Color::rgb(0x14, 0x14, 0x14))
+            Paint::Solid(Color::rgb(surface.0, surface.1, surface.2))
         );
 
         engine
@@ -429,7 +430,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             PreparedNucleusFrame::from_engine(&frame, &engine).background,
-            Paint::Solid(Color::rgb(0x14, 0x14, 0x14))
+            Paint::Solid(Color::rgb(surface.0, surface.1, surface.2))
         );
     }
 
