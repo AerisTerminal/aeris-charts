@@ -862,8 +862,11 @@ impl ChartInner {
             else {
                 continue;
             };
+            const BORDER: f64 = 1.0;
+            const TICK: f64 = 5.0;
+            const PADDING: f64 = 3.0;
             let width = measure(&text) + 9.0 * 2.0;
-            let height = font_size + 3.0 + 3.0;
+            let height = BORDER + TICK + PADDING + font_size + PADDING;
             let x = self.pane_left + coordinate;
             let box_x = (x - width / 2.0).clamp(
                 self.pane_left,
@@ -876,13 +879,13 @@ impl ChartInner {
             self.axis_frame.labels.push(AxisLabel {
                 text,
                 x: box_x + width / 2.0,
-                y: self.pane_h + 1.0 + height / 2.0,
+                y: self.pane_h + BORDER + TICK + PADDING + font_size / 2.0,
                 color: text_color,
                 align: AxisTextAlign::Center,
                 midpoint: AxisTextMidpoint::StableTime,
                 font_scale: 1.0,
                 bold: false,
-                background: Some((box_x, self.pane_h + 1.0, width, height, background)),
+                background: Some((box_x, self.pane_h, width, height, background)),
                 background_corners: AxisLabelCorners::BOTTOM,
                 measure_extra: 0.0,
                 attach_group: None,

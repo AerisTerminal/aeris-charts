@@ -1089,7 +1089,7 @@ fn macd_outputs_are_line_line_histogram_with_four_state_colors() {
     // Every installed histogram row carries one of the four palette colors.
     let rows = chart.data.series_data(ids[2]).unwrap().1[3].len();
     assert!(rows > 0);
-    const PALETTE: [u32; 4] = [0x07b57aff, 0x07b57a80, 0xff4b62ff, 0xff4b6280];
+    const PALETTE: [u32; 4] = [0x089981ff, 0x08998180, 0xf7525fff, 0xf7525f80];
     for r in 0..rows {
         let color = chart
             .data
@@ -1942,7 +1942,7 @@ fn series_options_json_covers_the_ts_field_set() {
     assert_eq!(options["countdown_visible"], true);
 
     // Set state round-trips with colors and flags intact.
-    chart.series[0].up_color = Some("#26a69a".to_string());
+    chart.series[0].up_color = Some("#089981".to_string());
     chart.series[0].wick_up_color = Some(Color::rgba(1, 2, 3, 0x80).to_css());
     chart.series[0].border_visible = Some(false);
     chart.series[0].line_width = Some(5.0);
@@ -1952,7 +1952,7 @@ fn series_options_json_covers_the_ts_field_set() {
     chart.set_series_visible(0, false);
     let options: serde_json::Value =
         serde_json::from_str(&chart.series_options_json(0).unwrap()).unwrap();
-    assert_eq!(options["up_color"], "#26a69a");
+    assert_eq!(options["up_color"], "#089981");
     assert_eq!(
         Color::parse_css(options["wick_up_color"].as_str().unwrap()),
         Some(Color::rgba(1, 2, 3, 0x80))

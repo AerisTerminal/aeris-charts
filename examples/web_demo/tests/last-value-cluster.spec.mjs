@@ -5,7 +5,7 @@ import { PNG } from "pngjs";
 // held together with side-specific corner radius. These specs drive the live demo page (hourly
 // bars ending at the current hour) through the public API only.
 
-const LABEL = [239, 83,80]; // #ef5350 — the deterministic final DOWN bar's label color
+const LABEL = [247, 82, 95]; // #f7525f — the deterministic final DOWN bar's label color
 const CHIP = LABEL; // the title chip shares the main label color by default
 const ROW = 17; // 12px font + 2*2.5 padding
 
@@ -31,14 +31,14 @@ async function open_cluster_page(browser, options, deviceScaleFactor = 1) {
   await wait_for_chart(page);
   await page.evaluate((opts) => {
     // A deterministic final DOWN bar at the current second: the label color is pinned to
-    // #ef5350 and the countdown always has ~1h left (no hour-boundary flake). The bar is a
+    // #f7525f and the countdown always has ~1h left (no hour-boundary flake). The bar is a
     // real `update` through the public series API.
     const now = Math.floor(Date.now() / 1000);
     const last = window.__data[window.__data.length - 1];
     const close = last.close - 2;
     window.__cluster_close = close;
     window.__main.update({ time: now, open: last.close, high: last.close + 0.6, low: close - 0.6, close });
-    window.__main.apply_options({ down_color: "#ef5350", price_line_visible: false, ...opts });
+    window.__main.apply_options({ down_color: "#f7525f", price_line_visible: false, ...opts });
   }, options);
   await page.evaluate(() => new Promise((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(resolve));
@@ -296,7 +296,16 @@ test("crosshair price and time glyphs stay centered in their label boxes", async
   const shot = await capture(page);
   const labels = color_bands(shot, [255, 0, 255]).filter((box) => box.bottom - box.top >= 12);
   expect(labels).toHaveLength(2);
-  for (const label of labels) expect_white_ink_centered(shot, label, 2);
+  const [price_label, time_label] = labels.sort(
+    (a, b) => (a.bottom - a.top) - (b.bottom - b.top),
+  );
+  expect_white_ink_centered(shot, price_label, 2);
+  // The reference time box includes border + 5px tick space above the text body. Its glyph is
+  // therefore deliberately below the full box center rather than incorrectly centered in it.
+  const time_box_center = (time_label.top + time_label.bottom - 1) / 2;
+  const time_ink_offset = white_ink_center(shot, time_label) - time_box_center;
+  expect(time_ink_offset).toBeGreaterThan(1.5);
+  expect(time_ink_offset).toBeLessThanOrEqual(4);
   await context.close();
 });
 

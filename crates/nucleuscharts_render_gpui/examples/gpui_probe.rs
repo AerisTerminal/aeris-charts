@@ -3224,7 +3224,7 @@ impl Render for InteractiveDemo {
                             .px_2()
                             .py_1()
                             .rounded_md()
-                            .bg(rgb(0x26a69a))
+                            .bg(rgb(0x089981))
                             .text_color(rgb(0xffffff))
                             .child("@nucleuscharts/financial"),
                     )

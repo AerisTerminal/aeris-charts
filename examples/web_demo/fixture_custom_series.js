@@ -79,10 +79,10 @@ export function rounded_candles_pane_view(overrides = {}, hooks = {}) {
   // reference rounded-candles-series.ts `defaultOptions` (rendering half; the engine half —
   // `customStyleDefaults.color` — arrives via `default_options` below).
   const options = {
-    upColor: "#26a69a",
-    downColor: "#ef5350",
-    wickUpColor: "#26a69a",
-    wickDownColor: "#ef5350",
+    upColor: "#089981",
+    downColor: "#f7525f",
+    wickUpColor: "#089981",
+    wickDownColor: "#f7525f",
     radius: (bs) => (bs < 4 ? 0 : bs / 3),
     ...overrides,
   };

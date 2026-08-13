@@ -572,7 +572,7 @@ test("drawing tools render pixel-identical on WebGPU and Canvas2D (AA coverage s
         { logical: l1 - 2, price: lo - 0.5 },
       ], { color: "#7b1fa2", width: 3 });
       // One interactive creation through the click flow shares the engine path too.
-      chart.set_drawing_tool("trend_line", { color: "#26a69a" });
+      chart.set_drawing_tool("trend_line", { color: "#089981" });
     });
     const s = await anchor_spots(page);
     const p1 = await spot(page, s.l0, s.p_mid);

@@ -27,8 +27,8 @@
     "ring": "#737373"
   },
   "market": {
-    "up": "#07b57a",
-    "down": "#ff4b62",
+    "up": "#089981",
+    "down": "#f7525f",
     "warning": "#f59e0a",
     "volume_alpha": 128
   }

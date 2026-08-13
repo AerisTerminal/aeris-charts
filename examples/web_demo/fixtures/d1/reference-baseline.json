@@ -3,14 +3,14 @@
   "fixture": "candles-1000-default-light",
   "ref_version": "5.2.0",
   "capture": "Chromium presented page at DPR 1.5",
-  "measured_2026_07_18": {
-    "full": 0.03368344907407408,
-    "pane": 0.03254033576257165,
-    "price_axis": 0.06817930148605851,
+  "measured_2026_08_14": {
+    "full": 0.03886284722222222,
+    "pane": 0.037758835815655396,
+    "price_axis": 0.0770934378668084,
     "time_axis": 0.020834957005169775
   },
   "maximum_perceptual_difference": {
-    "full": 0.038,
+    "full": 0.039,
     "pane": 0.038,
     "price_axis": 0.085,
     "time_axis": 0.035

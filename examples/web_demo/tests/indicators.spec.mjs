@@ -84,7 +84,7 @@ test("rsi and macd stack their own panes with channel strip and four-state histo
   const rsi_strip = count_color(crop(geo[1].top, geo[1].top + geo[1].height), [40, 41, 43], 6);
   expect(rsi_strip, "rsi 30/70 channel strip pixels").toBeGreaterThan(500);
   // MACD histogram strong-up columns paint the opaque candle green.
-  const macd_green = count_color(crop(geo[2].top, geo[2].top + geo[2].height), [7, 181, 122], 10);
+  const macd_green = count_color(crop(geo[2].top, geo[2].top + geo[2].height), [8, 153, 129], 10);
   expect(macd_green, "macd histogram strong-state pixels").toBeGreaterThan(20);
 });
 

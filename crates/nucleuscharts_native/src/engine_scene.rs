@@ -71,12 +71,12 @@ pub fn parity_engine() -> ChartEngine {
     chart
         .set_series_data(0, &times, &open, &high, &low, &close)
         .expect("shared D1 fixture data is valid");
-    chart.series[0].up_color = Some("#26a69a".into());
-    chart.series[0].down_color = Some("#ef5350".into());
-    chart.series[0].wick_up_color = Some("#26a69a".into());
-    chart.series[0].wick_down_color = Some("#ef5350".into());
-    chart.series[0].border_up_color = Some("#26a69a".into());
-    chart.series[0].border_down_color = Some("#ef5350".into());
+    chart.series[0].up_color = Some("#089981".into());
+    chart.series[0].down_color = Some("#f7525f".into());
+    chart.series[0].wick_up_color = Some("#089981".into());
+    chart.series[0].wick_down_color = Some("#f7525f".into());
+    chart.series[0].border_up_color = Some("#089981".into());
+    chart.series[0].border_down_color = Some("#f7525f".into());
     chart.pane_w = fixture.css_width - fixture.price_axis_width;
     chart.pane_h = fixture.css_height - fixture.time_axis_height;
     chart.axis_w = fixture.price_axis_width;

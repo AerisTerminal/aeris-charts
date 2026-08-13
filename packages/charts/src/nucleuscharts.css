@@ -38,9 +38,9 @@
   --input: oklch(0.991063 0 0);
   --ring: oklch(0.708 0 0);
   --overlay: oklch(0 0 0 / 50%);
-  --profit: oklch(0.683185 0.151035 160.989);
-  --loss: oklch(0.67448 0.214901 18.127);
-  --destructive: var(--loss);
+  --positive: #089981;
+  --negative: #f7525f;
+  --destructive: var(--negative);
   --warning: oklch(0.768578 0.164801 70.108);
   --radius-sm: 4px;
   --radius-df: 6px;
@@ -65,9 +65,9 @@
   --input: oklch(0.222127 0 0);
   --ring: oklch(0.556 0 0);
   --overlay: oklch(0 0 0 / 50%);
-  --profit: oklch(0.683185 0.151035 160.989);
-  --loss: oklch(0.67448 0.214901 18.127);
-  --destructive: var(--loss);
+  --positive: #089981;
+  --negative: #f7525f;
+  --destructive: var(--negative);
   --warning: oklch(0.768578 0.164801 70.108);
 }
 
@@ -188,8 +188,10 @@ input[type="number"] {
 
 .nc-text-primary { color: var(--foreground); }
 .nc-text-muted { color: var(--muted-foreground); }
-.nc-text-profit { color: var(--profit); }
-.nc-text-loss { color: var(--loss); }
+.nc-text-positive,
+.nc-text-profit { color: var(--positive); }
+.nc-text-negative,
+.nc-text-loss { color: var(--negative); }
 .nc-text-warning { color: var(--warning); }
 
 .nc-button {

@@ -581,10 +581,11 @@ impl ChartEngine {
         let mut max_text_width = frame
             .labels
             .iter()
-            .filter(|label| label.align == wanted_align)
-            // `measure_extra` carries the cluster's title-chip width on its price-area label,
-            // so the negotiated strip covers the chip + price row as one unit.
-            .map(|label| measure(&label.text) * label.font_scale + label.measure_extra)
+            // Reference optimalWidth measures ticks and ordinary back labels. The smaller
+            // Nucleus countdown extension is the exception: it shares the already-negotiated
+            // price chip width instead of leaving permanent blank space on the whole scale.
+            .filter(|label| label.align == wanted_align && label.font_scale == 1.0)
+            .map(|label| measure(&label.text) + label.measure_extra)
             .fold(0.0_f64, f64::max);
         // reference optimalWidth reserves room for the crosshair label via a STATIC worst-case
         // sample (never the live label): the top/bottom prices snapped outward with a
@@ -1442,8 +1443,11 @@ impl ChartEngine {
             // when the snapped index has no bar (past either data edge).
             if index >= 0 && (index as usize) < self.data.merged_times().len() {
                 let text = self.format_crosshair_ts(self.data.merged_times()[index as usize]);
+                const BORDER: f64 = 1.0;
+                const TICK: f64 = 5.0;
+                const PADDING: f64 = 3.0;
                 let width = measure(&text) + 9.0 * 2.0;
-                let height = font_size + 3.0 + 3.0;
+                let height = BORDER + TICK + PADDING + font_size + PADDING;
                 let x = self.pane_left + self.time_scale.index_to_coordinate(index);
                 let box_x = (x - width / 2.0).clamp(
                     self.pane_left,
@@ -1453,13 +1457,13 @@ impl ChartEngine {
                 labels.push(AxisLabel {
                     text,
                     x: box_x + width / 2.0,
-                    y: self.pane_h + 1.0 + height / 2.0,
+                    y: self.pane_h + BORDER + TICK + PADDING + font_size / 2.0,
                     color: self.primary_text_color(),
                     align: AxisTextAlign::Center,
                     midpoint: AxisTextMidpoint::StableTime,
                     font_scale: 1.0,
                     bold: false,
-                    background: Some((box_x, self.pane_h + 1.0, width, height, label_bg)),
+                    background: Some((box_x, self.pane_h, width, height, label_bg)),
                     background_corners: AxisLabelCorners::BOTTOM,
                     measure_extra: 0.0,
                     attach_group: None,

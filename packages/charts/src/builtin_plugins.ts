@@ -419,7 +419,7 @@ class series_markers_primitive implements series_primitive {
  * @example
  * ```js
  * const markers = create_series_markers(series, [
- *   { time: 1556880900, position: "aboveBar", shape: "arrowDown", color: "#ef5350", text: "SELL" },
+ *   { time: 1556880900, position: "aboveBar", shape: "arrowDown", color: "#f7525f", text: "SELL" },
  * ]);
  * markers.set_markers([]); // remove all markers
  * markers.detach();

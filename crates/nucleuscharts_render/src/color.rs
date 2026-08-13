@@ -149,12 +149,12 @@ mod tests {
     #[test]
     fn hex_parsing() {
         assert_eq!(
-            Color::from_hex("#26a69a"),
-            Some(Color::rgb(0x26, 0xa6, 0x9a))
+            Color::from_hex("#089981"),
+            Some(Color::rgb(0x08, 0x99, 0x81))
         );
         assert_eq!(
-            Color::from_hex("#26a69a80"),
-            Some(Color::rgba(0x26, 0xa6, 0x9a, 0x80))
+            Color::from_hex("#08998180"),
+            Some(Color::rgba(0x08, 0x99, 0x81, 0x80))
         );
         assert_eq!(Color::from_hex("oops"), None);
     }
@@ -207,7 +207,7 @@ mod tests {
             Color::rgb(0xe0, 0xe3, 0xeb).contrast_text(),
             Color::rgb(0, 0, 0)
         );
-        assert_eq!(Color::rgb(0x26, 0xa6, 0x9a).to_hex(), "#26a69a");
+        assert_eq!(Color::rgb(0x08, 0x99, 0x81).to_hex(), "#089981");
     }
 
     #[test]
@@ -238,7 +238,7 @@ mod tests {
     #[test]
     fn to_css_preserves_alpha_and_round_trips() {
         // Opaque colors stay in the compact hex form.
-        assert_eq!(Color::rgb(0x26, 0xa6, 0x9a).to_css(), "#26a69a");
+        assert_eq!(Color::rgb(0x08, 0x99, 0x81).to_css(), "#089981");
         // Any alpha < 1 switches to the functional form with a 0..1 alpha.
         let translucent = Color::rgba(0x26, 0xa6, 0x9a, 0x80);
         assert_eq!(translucent.to_css(), "rgba(38,166,154,0.5019607843137255)");

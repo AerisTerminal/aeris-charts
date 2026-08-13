@@ -60,12 +60,12 @@
 
     <!-- candle/bar colors: body, wick, and border per direction + part visibility -->
     <div class="group" id="candle_style" data-caption="Candle style">
-      <label>up <input type="color" id="up_color" value="#26a69a"></label>
-      <label>down <input type="color" id="down_color" value="#ef5350"></label>
-      <label>wick up <input type="color" id="wick_up_color" value="#26a69a"></label>
-      <label>wick dn <input type="color" id="wick_down_color" value="#ef5350"></label>
-      <label>border up <input type="color" id="border_up_color" value="#26a69a"></label>
-      <label>border dn <input type="color" id="border_down_color" value="#ef5350"></label>
+      <label>up <input type="color" id="up_color" value="#089981"></label>
+      <label>down <input type="color" id="down_color" value="#f7525f"></label>
+      <label>wick up <input type="color" id="wick_up_color" value="#089981"></label>
+      <label>wick dn <input type="color" id="wick_down_color" value="#f7525f"></label>
+      <label>border up <input type="color" id="border_up_color" value="#089981"></label>
+      <label>border dn <input type="color" id="border_down_color" value="#f7525f"></label>
       <label><input type="checkbox" id="wick_visible" checked> wicks</label>
       <label><input type="checkbox" id="border_visible" checked> borders</label>
       <button id="candle_parts_reset" type="button" title="Reset wick/border colors to follow the body colors">reset parts</button>
@@ -382,12 +382,12 @@ const pristine_demo = query.toString() === "";
 const main = chart.add_series("candlestick", {
   ...(requested_left_scale ? { priceScaleId: "left" } : {}),
   ...(parity_fixture !== null ? {
-    up_color: "#26a69a",
-    down_color: "#ef5350",
-    wick_up_color: "#26a69a",
-    wick_down_color: "#ef5350",
-    border_up_color: "#26a69a",
-    border_down_color: "#ef5350",
+    up_color: "#089981",
+    down_color: "#f7525f",
+    wick_up_color: "#089981",
+    wick_down_color: "#f7525f",
+    border_up_color: "#089981",
+    border_down_color: "#f7525f",
   } : {}),
   ...(pristine_demo ? { title: document.getElementById("series_title").value } : {}),
 });

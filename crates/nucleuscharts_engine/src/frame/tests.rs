@@ -629,7 +629,7 @@ fn bid_ask_lines_and_chips_render_only_when_enabled_with_values() {
     // 10-12.5 scale range; out-of-range quotes are clipped by design.)
     chart.set_bid_ask(0, Some(11.0), Some(12.0));
     let blue = Color::rgb(0x3e, 0x63, 0xdd);
-    let red = Color::rgb(0xff, 0x4b, 0x62);
+    let red = Color::rgb(0xf7, 0x52, 0x5f);
     assert!(!hlines(&mut chart)
         .iter()
         .any(|&(_, c)| c == blue || c == red));
@@ -2113,6 +2113,10 @@ fn boxed_axis_labels_select_the_axis_facing_corners() {
         .find(|l| l.midpoint == AxisTextMidpoint::StableTime)
         .expect("crosshair time label");
     assert_eq!(time.background_corners, AxisLabelCorners::BOTTOM);
+    let (_, time_y, _, time_h, _) = time.background.expect("boxed time label");
+    assert_eq!(time_y, chart.pane_h);
+    assert_eq!(time_h, 1.0 + 5.0 + 3.0 + 12.0 + 3.0);
+    assert_eq!(time.y, chart.pane_h + 1.0 + 5.0 + 3.0 + 12.0 / 2.0);
     chart.crosshair = None;
 
     // Cluster: only the outer axis-facing corners round; internal boundaries stay sharp.
@@ -2206,7 +2210,7 @@ fn boxed_axis_labels_select_the_axis_facing_corners() {
 }
 
 #[test]
-fn axis_width_negotiation_covers_the_widest_cluster_row() {
+fn axis_width_negotiation_excludes_the_secondary_countdown_row() {
     let measure = |t: &str| t.len() as f64 * 7.0;
     let mut chart = countdown_chart();
     let plain = chart.optimal_price_axis_width_for(PriceScaleTarget::Right, measure);
@@ -2215,12 +2219,12 @@ fn axis_width_negotiation_covers_the_widest_cluster_row() {
     // (exact reference structural: 1 border + 5 tick + 5 inner + 5 outer + 5 offset).
     assert_eq!(plain, 56.0);
 
-    // A long countdown row ("23:59:59", 8 chars) widens the strip. next_close = 240 + 60.
+    // The smaller countdown extension shares the primary price chip width instead of leaving
+    // permanent blank axis space. Full-size price and indicator labels still negotiate normally.
     chart.series[0].countdown_visible = true;
     chart.now_override = Some(300.0 - 86399.0);
     let with_countdown = chart.optimal_price_axis_width_for(PriceScaleTarget::Right, measure);
-    assert_eq!(with_countdown, 74.0); // 72.33 snapped up to even
-    assert!(with_countdown > plain);
+    assert_eq!(with_countdown, plain);
 
     // The title chip lives OUTSIDE the strip (pane side), so it never widens the axis.
     chart.now_override = Some(250.0); // "00:50" — same 5 chars as the price
