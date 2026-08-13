@@ -187,7 +187,7 @@ pub struct LayoutOptions {
     pub background: BackgroundOptions,
     #[serde(rename = "textColor")]
     pub text_color: String,
-    /// Secondary chart text such as countdowns. Axis and boxed-label values use `textColor`.
+    /// Secondary unboxed chart text. Live labels use the dark foreground for contrast.
     #[serde(rename = "mutedTextColor")]
     pub muted_text_color: String,
     #[serde(rename = "fontSize")]

@@ -1924,6 +1924,9 @@ fn last_value_cluster_chips_stay_solid_when_the_series_color_is_translucent() {
 #[test]
 fn last_value_cluster_rows_toggle_independently() {
     let mut chart = countdown_chart();
+    chart
+        .apply_options(r##"{"layout":{"textColor":"#333333","mutedTextColor":"#737373"}}"##)
+        .unwrap();
     chart.now_override = Some(250.0);
     chart.series[0].title = "NDQ".to_string();
     chart.series[0].countdown_visible = true;
@@ -1971,10 +1974,11 @@ fn last_value_cluster_rows_toggle_independently() {
     // 2.5px), so the countdown text sits ~4 css px under the price text.
     assert_eq!(price_h, 12.0 + 2.5 * 2.0);
     assert_eq!(cd_h, 12.0 + 1.5 * 2.0);
-    // Boxed values use the primary text token; countdowns use muted foreground.
+    // Live labels always use the dark foreground token, even under light-theme layout text.
+    // The countdown is the same foreground with reduced opacity.
     assert_eq!(chip.color, Color::rgb(0xfa, 0xfa, 0xfa));
     assert_eq!(price.color, Color::rgb(0xfa, 0xfa, 0xfa));
-    assert_eq!(countdown.color, Color::rgb(0xa1, 0xa1, 0xa1));
+    assert_eq!(countdown.color, Color::rgba(0xfa, 0xfa, 0xfa, 0xb3));
 
     // Price off, title + countdown on: only the outside title chip and the inside countdown
     // chip render — no empty price box, and the title chip ATTACHES to the countdown row

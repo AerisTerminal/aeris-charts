@@ -2,6 +2,18 @@
 
 use super::*;
 
+const LIVE_LABEL_TEXT: Color = Color::rgb(
+    nucleuscharts_core::style::DARK_FOREGROUND_RGB.0,
+    nucleuscharts_core::style::DARK_FOREGROUND_RGB.1,
+    nucleuscharts_core::style::DARK_FOREGROUND_RGB.2,
+);
+const LIVE_LABEL_COUNTDOWN_TEXT: Color = Color::rgba(
+    nucleuscharts_core::style::DARK_FOREGROUND_RGB.0,
+    nucleuscharts_core::style::DARK_FOREGROUND_RGB.1,
+    nucleuscharts_core::style::DARK_FOREGROUND_RGB.2,
+    0xb3,
+);
+
 /// A last-value label candidate before axis overlap resolution (reference IPriceAxisView state:
 /// the source `coordinate` plus the render coordinate the overlap pass adjusts). `align`
 /// is the owning scale's `alignLabels` — a scale with it off leaves its labels at their raw
@@ -179,12 +191,6 @@ impl ChartEngine {
     fn primary_text_color(&self) -> Color {
         let fallback = nucleuscharts_core::style::DEFAULT_FOREGROUND_RGB;
         Color::parse_css(&self.options.get().layout.text_color)
-            .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2))
-    }
-
-    fn muted_text_color(&self) -> Color {
-        let fallback = nucleuscharts_core::style::DEFAULT_MUTED_FOREGROUND_RGB;
-        Color::parse_css(&self.options.get().layout.muted_text_color)
             .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2))
     }
 
@@ -1105,7 +1111,7 @@ impl ChartEngine {
                         text,
                         x,
                         y: label.y,
-                        color: self.primary_text_color(),
+                        color: LIVE_LABEL_TEXT,
                         align,
                         midpoint: AxisTextMidpoint::Label,
                         bold: false,
@@ -1144,8 +1150,7 @@ impl ChartEngine {
         F: Fn(&str) -> f64,
     {
         let right_strip = target != PriceScaleTarget::Left;
-        let text_color = self.primary_text_color();
-        let muted_text_color = self.muted_text_color();
+        let text_color = LIVE_LABEL_TEXT;
         // The title chip shares the main label color by default (matching the price and
         // countdown chips).
         let chip_color = label.color;
@@ -1283,7 +1288,7 @@ impl ChartEngine {
                 text: countdown.clone(),
                 x: text_x,
                 y: countdown_y + countdown_height / 2.0,
-                color: muted_text_color,
+                color: LIVE_LABEL_COUNTDOWN_TEXT,
                 align: text_align,
                 midpoint: AxisTextMidpoint::Label,
                 bold: false,

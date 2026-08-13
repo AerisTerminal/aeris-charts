@@ -518,7 +518,7 @@ export interface chart_options {
   layout: {
     background: { type: string; color: string };
     textColor: string;
-    /** Secondary chart text. Value labels and axes always use `textColor`. */
+    /** Secondary unboxed chart text. Live labels use the dark foreground for contrast. */
     mutedTextColor: string;
     fontSize: number;
     fontFamily: string;

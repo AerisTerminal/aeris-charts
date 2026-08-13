@@ -328,10 +328,10 @@ test("cluster parts toggle independently", async ({ browser }) => {
   expect(extent.found, "outside title chip present").toBe(true);
   // Gap between the chip's right edge and the axis border (~2px, ±2 for AA).
   expect(Math.abs(anchor.pane_w - extent.right - 1 - 2)).toBeLessThanOrEqual(2);
-  // Inside the strip the top row is empty above the countdown; the countdown row has text in
-  // Countdown text uses the opaque muted-foreground token, independent of the chip color.
-  const is_muted_text = (c) => c.every((v) => v > 130 && v < 190) && Math.max(...c) - Math.min(...c) < 15;
-  expect(count_where(shot, { ...box, top: box.top }, is_muted_text)).toBeGreaterThan(5);
+  // Inside the strip the top row is empty above the countdown. Its text is the dark-theme
+  // foreground at 70% opacity, composited over the red label background.
+  const is_faded_white = (c) => near(c, [247, 200, 199], 20);
+  expect(count_where(shot, { ...box, top: box.top }, is_faded_white)).toBeGreaterThan(5);
 
   // Countdown off (chip + price on): one inside row, nothing painted below it, price text present.
   await page.evaluate(() => window.__main.apply_options({ last_value_visible: true, countdown_visible: false }));
