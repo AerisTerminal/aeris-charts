@@ -472,11 +472,12 @@ pub fn deep_merge(dst: &mut Value, patch: &Value) {
     }
 }
 
-/// Accumulates chart options across successive `apply_options` calls. Holds the full options as a
-/// canonical JSON value so every patch deep-merges into the live state (not back into defaults).
+/// Accumulates chart options across successive `apply_options` calls. The typed view is canonical
+/// for engine/frame reads; raw JSON is retained only for deep-merge and browser round-tripping.
 #[derive(Clone, Debug)]
 pub struct ChartOptionsStore {
     value: Value,
+    typed: ChartOptions,
     generation: u64,
 }
 
@@ -489,8 +490,10 @@ impl Default for ChartOptionsStore {
 impl ChartOptionsStore {
     /// Start from the reference-matching defaults.
     pub fn new() -> Self {
+        let typed = ChartOptions::default();
         Self {
-            value: serde_json::to_value(ChartOptions::default()).expect("options serialize"),
+            value: serde_json::to_value(&typed).expect("options serialize"),
+            typed,
             generation: 0,
         }
     }
@@ -500,6 +503,7 @@ impl ChartOptionsStore {
     pub fn apply(&mut self, patch: &Value) {
         if patch.is_object() {
             deep_merge(&mut self.value, patch);
+            self.typed = serde_json::from_value(self.value.clone()).unwrap_or_default();
             self.generation = self.generation.wrapping_add(1);
         }
     }
@@ -513,8 +517,8 @@ impl ChartOptionsStore {
     }
 
     /// Typed view of the current options.
-    pub fn get(&self) -> ChartOptions {
-        serde_json::from_value(self.value.clone()).unwrap_or_default()
+    pub fn get(&self) -> &ChartOptions {
+        &self.typed
     }
 
     /// The raw merged JSON (for round-tripping back to JS via `options()`).
@@ -671,6 +675,16 @@ mod tests {
     }
 
     #[test]
+    fn typed_options_are_retained_between_frame_reads() {
+        let mut store = ChartOptionsStore::new();
+        let before = std::ptr::from_ref(store.get());
+        assert_eq!(before, std::ptr::from_ref(store.get()));
+        store.apply(&json!({ "layout": { "fontSize": 18 } }));
+        assert_eq!(store.get().layout.font_size, 18.0);
+        assert_eq!(store.value()["layout"]["fontSize"], 18);
+    }
+
+    #[test]
     fn crosshair_do_not_snap_patch_merges_camelcase_key() {
         let mut store = ChartOptionsStore::new();
         store.apply(&json!({ "crosshair": { "doNotSnapToHiddenSeriesIndices": true } }));
@@ -701,9 +715,9 @@ mod tests {
     #[test]
     fn apply_str_rejects_malformed_without_mutating() {
         let mut store = ChartOptionsStore::new();
-        let before = store.get();
+        let before = store.get().clone();
         assert!(store.apply_str("{ not valid json ").is_err());
-        assert_eq!(store.get(), before);
+        assert_eq!(store.get(), &before);
     }
 
     #[test]

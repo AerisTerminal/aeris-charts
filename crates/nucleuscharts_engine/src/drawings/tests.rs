@@ -1908,7 +1908,7 @@ fn candidate_frame_matches_full_reference_across_viewports_and_mutations() {
 fn pane_candidates_are_isolated_and_removed_panes_drop_membership() {
     let mut chart = settled_chart();
     for _ in 1..4 {
-        let pane = chart.add_pane(true);
+        let pane = chart.add_pane(true).unwrap();
         let series = chart.add_series(SeriesKind::Line);
         let times = (0..10).map(|index| index as f64).collect::<Vec<_>>();
         let values = vec![10.0; 10];

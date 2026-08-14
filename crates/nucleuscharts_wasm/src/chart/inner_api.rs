@@ -731,10 +731,11 @@ impl ChartInner {
     }
 
     pub fn pane_stable_id(&self, index: u32) -> Option<u32> {
-        self.engine.pane_stable_id(index as usize)
+        self.engine.pane_stable_id(index as usize).map(PaneId::get)
     }
 
     pub fn pane_index_for_id(&self, stable_id: u32) -> Option<u32> {
+        let stable_id = PaneId::try_from(stable_id).ok()?;
         self.engine
             .pane_index_for_id(stable_id)
             .map(|index| index as u32)
@@ -807,8 +808,41 @@ impl ChartInner {
     }
 
     /// reference v5 `chart.addPane(preserveEmptyPane)`: append a pane and return its index.
-    pub fn add_pane(&mut self, preserve_empty: bool) -> u32 {
-        self.engine.add_pane(preserve_empty) as u32
+    pub fn add_pane(&mut self, preserve_empty: bool) -> Option<u32> {
+        self.engine
+            .add_pane(preserve_empty)
+            .and_then(|index| u32::try_from(index).ok())
+    }
+
+    pub fn export_state_result_json(&self) -> String {
+        match self.engine.export_state_json() {
+            Ok(document) => serde_json::json!({ "ok": true, "document": document }).to_string(),
+            Err(error) => serde_json::json!({
+                "ok": false,
+                "error": { "code": error.code().name(), "message": error.message() }
+            })
+            .to_string(),
+        }
+    }
+
+    pub fn import_state_result_json(&mut self, document: &str) -> String {
+        match self.engine.import_state_json(document) {
+            Ok(result) => serde_json::json!({
+                "ok": true,
+                "result": {
+                    "schema_version": result.schema_version,
+                    "panes": result.panes,
+                    "drawings": result.drawings,
+                    "points": result.points,
+                }
+            })
+            .to_string(),
+            Err(error) => serde_json::json!({
+                "ok": false,
+                "error": { "code": error.code().name(), "message": error.message() }
+            })
+            .to_string(),
+        }
     }
 
     /// reference `chart.removePane`: refuses the last remaining pane and stale indices (false).
@@ -1331,7 +1365,7 @@ impl ChartInner {
 
     /// Typed snapshot of the current options for the render path.
     pub(super) fn opts(&self) -> ChartOptions {
-        self.options.get()
+        self.options.get().clone()
     }
 
     pub fn resize(&mut self, css_width: f64, css_height: f64, dpr: f64) {

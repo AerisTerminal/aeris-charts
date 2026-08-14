@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "files": [
+    {
+      "path": "builtin_plugins.d.ts",
+      "bytes": 5933,
+      "sha256": "ce79b5f89949c42daa46fa22ea7be94dadde471e5e752d40def4900f0266f61c"
+    },
+    {
+      "path": "canvas_plugins.d.ts",
+      "bytes": 5416,
+      "sha256": "eb8f3df6d4b6268d392e4ef6c8338e0483379e66cf431bcc5790bed0b496ede7"
+    },
+    {
+      "path": "custom_series.d.ts",
+      "bytes": 5957,
+      "sha256": "f6fae555f43769dd304179629f95f6c60b6744f176c3e78245967beed4c87d70"
+    },
+    {
+      "path": "errors.d.ts",
+      "bytes": 656,
+      "sha256": "ba7f59658dee30f2ed33aeb5242c66e41ab1142e1bfe2a1c38897fbabc228cde"
+    },
+    {
+      "path": "grid.d.ts",
+      "bytes": 4451,
+      "sha256": "7fc5e4f908b52e65e59da469e5285e1155dd537e928dc09c6ce0795d8e9dd042"
+    },
+    {
+      "path": "index.d.ts",
+      "bytes": 1852,
+      "sha256": "03d9977b211766ec81c25429d822269840e12a0abf353f4b2315a9db95fbbd07"
+    },
+    {
+      "path": "offscreen.d.ts",
+      "bytes": 5036,
+      "sha256": "1da5ec61da93c31704a68cb61a79d1905fddf735ce4f5384a4e32ad4a268addf"
+    },
+    {
+      "path": "primitives.d.ts",
+      "bytes": 16563,
+      "sha256": "e4d5258966c3cf1f1fca618e4eb6704effa1d972a7abed717d90ca820d23d883"
+    },
+    {
+      "path": "shortcuts.d.ts",
+      "bytes": 1581,
+      "sha256": "ee2a059314e5a463c22aca6a63c714ecdd0f42bf88b62a8c0cd84bf84afa5499"
+    },
+    {
+      "path": "theme.d.ts",
+      "bytes": 1272,
+      "sha256": "7d73c34c301923943b0db285f87b3475d491d68a9aad4f63b4dd0d27931216e7"
+    },
+    {
+      "path": "types.d.ts",
+      "bytes": 76293,
+      "sha256": "55c04c694baad7cb0559b4a9b20c41cf3bd98f8f4644aa1f3e89b4839cb9e6e0"
+    }
+  ]
+}

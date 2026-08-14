@@ -73,7 +73,7 @@ export async function measure_size({ build = true } = {}) {
       typescript_declarations_bytes: metric([await declaration_bytes(dist)], "bytes", "lower_is_better", "public_candidate", "Sum of .d.ts files in the production dist directory."),
       ...await compressed_metrics("javascript", path.join(dist, "index.js")),
       ...await compressed_metrics("wasm", path.join(dist, "nucleuscharts_wasm_bg.wasm")),
-      ...await consumer_bundle("minimal", `import { countdown_timer_needed } from ${JSON.stringify(package_url)}; console.log(countdown_timer_needed);`, temporary),
+      ...await consumer_bundle("minimal", `import { nucleuscharts_error } from ${JSON.stringify(package_url)}; console.log(nucleuscharts_error);`, temporary),
       ...await consumer_bundle("typical", `import { create_chart, init_wasm } from ${JSON.stringify(package_url)}; console.log(create_chart, init_wasm);`, temporary),
       ...await consumer_bundle("full", `import * as charts from ${JSON.stringify(package_url)}; console.log(charts);`, temporary),
     };

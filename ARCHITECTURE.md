@@ -19,7 +19,7 @@ Host API and market data
     -> pixels and frame metrics
 ```
 
-Browser hosts enter through `packages/charts`, which translates the public TypeScript API into typed arrays and WebAssembly calls. Native Rust hosts use `nucleuscharts_engine` directly and select a renderer. Rendering backends consume prepared frame data; they do not own chart semantics.
+Browser hosts enter through `packages/charts`, which translates the supported public TypeScript API into typed arrays and WebAssembly calls. Repository-native Rust hosts use `nucleuscharts_engine` directly and select a renderer, but the Rust crates are internal exact-revision components rather than crates.io/semver products. Rendering backends consume prepared frame data; they do not own chart semantics.
 
 Canonical series data uses opaque chart-local `u32` identities mapped to reusable storage slots. Identities are never reused, removed identities are classified as stale, and slot-backed vectors remain bounded by peak concurrent series rather than lifetime add/remove count. Each ordinary series owns one timestamp column and either one scalar value column or four OHLC columns. `PlotList` owns only a dense range or sparse logical-index mapping plus its chunked autoscale cache; allocation-free views join that mapping to the canonical values for queries and frame construction. Dense aligned mappings carry no per-row index allocation. Indicator outputs own one scalar value column and alias a contiguous source-time range by identity, so they duplicate neither source timestamps nor plot values. The merged timestamp union remains independently owned because ordinary source series are independently mutable and may diverge or carry whitespace. It carries a generation that changes only when its contents change; time weights use that generation, while value-only current-bar updates retain the O(1) fast path.
 
@@ -32,6 +32,11 @@ Each canonical series also carries a data generation. An ascending typed batch i
 ### `nucleuscharts_core`
 
 Platform-free chart fundamentals: validated canonical columnar data, compact plot index/view storage, ranges, options, formatting, price scales, time scales, tick marks, and shared math. It also exposes structure-level payload and capacity attribution for memory evidence; these counters are not allocator, WASM-page, or browser-memory measurements. Media-space calculations remain `f64`; conversion to backend coordinate formats happens at rendering boundaries.
+
+`ChartOptionsStore` keeps typed options canonical for engine and frame reads and retains the raw JSON
+object only for boundary-compatible deep merges and serialization. An option patch is merged and
+validated once at mutation time; frame construction borrows the typed value without cloning or
+deserializing JSON.
 
 `nucleuscharts_core` must not depend on a window system, browser, GPU, or host application.
 
@@ -50,6 +55,15 @@ Built-in frame geometry and series hit testing share one viewport-density query.
 An indicator binding keeps its public definition, compact private runtime, and ordinary canonical output series separate. Sparse runtime checkpoints are tied to source row positions and to the source and optional volume-series generations. A tail mutation advances only bindings that depend on that source and installs only changed output rows; a historical mutation resumes from the nearest valid checkpoint and replaces the affected output suffix, while truncation or complete replacement performs a clean rebuild. Removed source/output series drop the binding and its runtime state together.
 
 Drawing anchors, kinds, styles, pane association, z-order, and metadata remain the only authoritative drawing state. A chart-local derived runtime maps the existing monotonic `DrawingId` values to conservative logical/price bounds, coordinate-keyed media-space anchor geometry, and pane-local z-ordered candidate lists. Candidate queries first reject drawings in semantic space, then test cached conservative screen bounds; only viewport or pointer candidates rebuild coordinate geometry and reach canonical primitive emission or precise hit testing. Full-span horizontal lines, full-height vertical lines, and half-infinite horizontal rays retain explicit unbounded dimensions rather than fake finite extents. Brush bounds are computed once on semantic mutation, padded for curved interpolation, and remain conservatively unbounded during an active brush drag before one exact pointer-up rebuild. Runtime bounds, geometry, counters, and index entries are never serialized.
+
+Versioned persistence is an engine-owned semantic DTO boundary, never serialization of live engine
+structs. V1 contains ordered pane topology and built-in drawings only. Pane persistence identity is
+separate from live `PaneId`: import preserves document references while issuing fresh monotonic live
+IDs, so pre-import pane and price-scale handles become stale. The complete document is size-bounded,
+parsed, and validated before one transactional install; drawing bounds, candidates, and geometry are
+rebuilt once from anchors. Market history, series/indicator definitions, chart options, extensions,
+callbacks, and every runtime cache remain host-owned or derived. Unknown versions and semantic kinds
+fail structurally without mutation.
 
 ### `nucleuscharts_render`
 
@@ -81,6 +95,12 @@ The package also ships `design.css` and Inter as the portable host design system
 
 The package uses `snake_case` publicly. Data crosses into WebAssembly in typed columns or bounded shared-ring layouts rather than per-point object calls on hot paths. Typed update batches transfer their sanitized owned columns to the engine's batch entry point; the browser wrapper never loops through the single-row engine API. `examples/web_demo` is an integration and parity test host, not part of the library architecture.
 
+The supported, experimental, internal-but-exposed, and legacy surfaces are classified in
+`PUBLIC_API.md`. Predictable browser failures use `nucleuscharts_error` with stable category codes;
+clean ingestion retains a null diagnostics fast path. The generated WASM surface and benchmark/test
+hooks are internal even when visible to developer tools. A deterministic declaration manifest makes
+supported TypeScript surface changes explicit in CI.
+
 `chart.remove()` is the single public browser lifecycle operation. It is idempotent and transitions the retained TypeScript handle to a disposed state after cancelling scheduling, detaching browser resources and extensions, releasing per-chart GPU state, explicitly disposing the Rust object, and calling the generated `free()`. Later operations fail with a stable disposed-state error. Offscreen charts use the same explicit dispose-then-free ordering.
 
 ## State and frame ownership
@@ -93,7 +113,10 @@ Drawing semantic mutations reuse this graph: add/remove/style/anchor changes inv
 
 The engine retains semantic pane layers and their ordered primitive/point ranges, then assembles the same canonical `ChartFrame` contract from clean and rebuilt layers. The retained boundaries are underlay/grid, individual series, pane chrome, drawings, and overlay. Retention never gives a backend permission to change ordering or semantics. Host/plugin primitive callbacks use the canonical frame but conservatively rebuild the affected pane stream because their output is not engine-owned. Incremental frames are tested against forced clean rebuilds across data, interaction, scale, drawing, theme, and resize mutations.
 
-Panes expose stable chart-local identities at the browser boundary. A live pane handle resolves its current index after moves or swaps; removal permanently invalidates that handle, so later index reuse cannot retarget it to another pane.
+Panes expose opaque, monotonic chart-local identities at the browser boundary. A live pane or
+price-scale handle resolves its current index after moves or swaps; removal permanently invalidates
+that handle, so later index reuse cannot retarget it to another pane or scale. Persistence uses a
+separate stable pane identity and intentionally issues fresh live IDs during restore.
 
 The ordered frame contract contains pane backgrounds and grids, series geometry, custom-series contributions, drawings, primitives, crosshair overlays, axes, labels, and text. Backends preserve ordering, clipping, blending, and coordinate conversion. A backend may batch compatible adjacent primitives only when visible output is unchanged.
 
@@ -104,6 +127,11 @@ Custom series and primitives are explicit host boundaries. The engine owns their
 Extensions must not receive unrestricted engine internals or create a second scene graph. Add extension surfaces only for current consumers with a stable semantic need.
 
 Disposal invokes every registered extension teardown exactly once; one failing JavaScript cleanup hook cannot prevent the remaining hooks from running.
+
+Extension rendering is host-timed, non-reentrant with chart mutation, and error-contained at the
+host boundary. Extension runtime objects and callbacks are never persisted by the engine; hosts own
+their configuration and restoration. The current custom-series and primitive APIs are experimental,
+not a second plugin framework.
 
 ## Performance contract
 
@@ -142,7 +170,11 @@ Benchmark comparisons enforce only explicitly configured budgets. An empty polic
 
 Chart math must be deterministic for the same state, viewport, and device scale. Validate malformed data at the input boundary. Preserve whitespace rows, time ordering, logical ranges, primitive order, and explicit warm-up gaps.
 
-OHLC ingestion preserves structurally valid numeric input rather than silently rewriting financial values. Impossible relationships are accepted for compatibility but counted in structured diagnostics alongside accepted, dropped, deduplicated, reordered, non-finite, and out-of-range rows. Clean ingestion returns no diagnostic object on the browser hot path.
+OHLC ingestion preserves structurally valid numeric input rather than silently rewriting financial values. Impossible relationships are accepted for compatibility but counted in structured diagnostics alongside accepted, dropped, deduplicated, reordered, non-finite, and out-of-range rows. Clean ingestion returns no diagnostic object on the browser hot path. Predictable boundary failures carry stable error categories rather than relying on console text.
+
+The generic `Workspace` engine type owns only split-tree topology. Subscription caps, billing-tier
+vetoes, cumulative split usage, and cell-age metering live in the browser grid host; persistence and
+the shared engine have no commercial-policy knowledge.
 
 Changes to geometry, snapping, scales, interactions, or execution require the narrowest relevant combination of unit tests, frame-contract tests, golden images, draw-stream parity, replay stability, browser tests, and release performance evidence. A backend-specific screenshot alone is not proof of shared-engine correctness.
 
@@ -182,3 +214,9 @@ node benchmarks/benchmark.mjs test
 node benchmarks/benchmark.mjs smoke
 node benchmarks/benchmark.mjs release
 ```
+
+Tag publication requires the Rust, package, and portable Chromium/Firefox/WebKit jobs. Public
+declaration and release-policy guards, V1 fixtures, Node import, and pack smoke are portable blocking
+checks. Configured `perf_gate` budgets run strictly. Machine-calibrated screenshots, GPU timings,
+heap sampling, and wall-clock evidence stay in separate non-blocking diagnostic steps; approved hashes
+are never changed merely to satisfy a different host.

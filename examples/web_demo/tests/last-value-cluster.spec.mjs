@@ -228,14 +228,6 @@ function region_diff(a, b, box) {
   return diff;
 }
 
-test("countdown_timer_needed gates on visibility and data (pure timer logic)", async () => {
-  const { countdown_timer_needed } = await import("../dist/nucleuscharts_financial.js");
-  expect(countdown_timer_needed([])).toBe(false);
-  expect(countdown_timer_needed([{ countdown_visible: true, has_data: true }])).toBe(true);
-  expect(countdown_timer_needed([{ countdown_visible: true, has_data: false }])).toBe(false);
-  expect(countdown_timer_needed([{ countdown_visible: false, has_data: true }])).toBe(false);
-  expect(countdown_timer_needed([{ has_data: true }, { countdown_visible: true, has_data: true }])).toBe(true);
-});
 
 test("last-value cluster paints chip, price, and countdown rows; the chip matches the label color", async ({ browser }) => {
   const { context, page } = await open_cluster_page(browser, {

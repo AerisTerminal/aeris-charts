@@ -6,13 +6,8 @@
 //! side) or vertically (stacked), recursively and without a built-in cap; removing a cell
 //! collapses its split node so the sibling subtree absorbs the freed space.
 //!
-//! Paywall metering is first-class: the workspace tracks the live chart count, the cumulative
-//! split count, and per-cell ages (host-injected clock), exposes a usage snapshot, a hard
-//! `max_charts` cap, and a split veto error so the platform enforces its own limits. Layout is
-//! engine-owned but rendering-agnostic: hosts read the tree (see [`Workspace::layout_json`])
-//! and place each cell's chart themselves.
-
-use std::collections::BTreeMap;
+//! Subscription limits, billing meters, and cell-age policy are host-owned. This engine type is
+//! only the generic, rendering-agnostic layout primitive.
 
 /// Split orientation: `Horizontal` places the two charts side by side, `Vertical` stacks them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
@@ -75,51 +70,30 @@ impl WorkspaceLayout {
 /// Why a split/remove was rejected (the host maps these to its own UI affordances).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkspaceError {
-    /// The `max_charts` cap rejects the split (paywall tier reached).
-    AtCapacity,
     /// Unknown cell id.
     NotFound,
     /// The last remaining cell cannot be removed.
     LastCell,
 }
 
-/// Usage/metering snapshot (the paywall signal): live chart count, cumulative splits, and
-/// per-cell ages in seconds against the host clock passed to [`Workspace::usage`].
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
-pub struct WorkspaceUsage {
-    pub chart_count: usize,
-    pub split_count: u64,
-    pub elapsed_seconds: f64,
-    pub cells: Vec<CellUsage>,
-}
-
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
-pub struct CellUsage {
-    pub id: u64,
-    pub age_seconds: f64,
-}
-
-/// The split-grid model: an authoritative binary tree plus metering state. Times are
-/// host-injected seconds (the engine stays headless/clock-free).
+/// The split-grid model: an authoritative binary tree with stable cell identities.
 pub struct Workspace {
     root: WorkspaceLayout,
-    created_at: BTreeMap<u64, f64>,
     next_id: u64,
-    split_count: u64,
-    max_charts: Option<usize>,
-    started_at: f64,
+}
+
+impl Default for Workspace {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Workspace {
     /// A workspace holding a single chart cell.
-    pub fn new(now: f64) -> Self {
+    pub fn new() -> Self {
         Self {
             root: WorkspaceLayout::Cell { id: 1 },
-            created_at: BTreeMap::from([(1, now)]),
             next_id: 2,
-            split_count: 0,
-            max_charts: None,
-            started_at: now,
         }
     }
 
@@ -131,42 +105,24 @@ impl Workspace {
     }
 
     pub fn chart_count(&self) -> usize {
-        self.created_at.len()
-    }
-
-    /// Hard cap on live charts (`None` = unlimited).
-    pub fn set_max_charts(&mut self, max: Option<usize>) {
-        self.max_charts = max;
+        self.cell_ids().len()
     }
 
     /// Split a cell in two; the existing chart keeps its state in the first half and the new
-    /// cell (returned id) fills the second. `AtCapacity` when the cap rejects the split,
-    /// `NotFound` for an unknown cell.
-    pub fn split(
-        &mut self,
-        id: u64,
-        direction: SplitDirection,
-        now: f64,
-    ) -> Result<u64, WorkspaceError> {
-        if let Some(max) = self.max_charts {
-            if self.chart_count() + 1 > max {
-                return Err(WorkspaceError::AtCapacity);
-            }
-        }
+    /// cell (returned id) fills the second. `NotFound` for an unknown cell.
+    pub fn split(&mut self, id: u64, direction: SplitDirection) -> Result<u64, WorkspaceError> {
         let new_id = self.next_id;
         if !split_node(&mut self.root, id, direction, new_id) {
             return Err(WorkspaceError::NotFound);
         }
         self.next_id += 1;
-        self.created_at.insert(new_id, now);
-        self.split_count += 1;
         Ok(new_id)
     }
 
     /// Remove a cell: its sibling subtree absorbs the freed space. `LastCell` refuses to
     /// remove the final chart.
     pub fn remove(&mut self, id: u64) -> Result<(), WorkspaceError> {
-        if !self.created_at.contains_key(&id) {
+        if !self.cell_ids().contains(&id) {
             return Err(WorkspaceError::NotFound);
         }
         if self.chart_count() <= 1 {
@@ -175,7 +131,6 @@ impl Workspace {
         if !remove_node(&mut self.root, id) {
             return Err(WorkspaceError::NotFound);
         }
-        self.created_at.remove(&id);
         Ok(())
     }
 
@@ -193,23 +148,6 @@ impl Workspace {
             Ok(())
         } else {
             Err(WorkspaceError::NotFound)
-        }
-    }
-
-    /// The metering snapshot at host time `now` (seconds).
-    pub fn usage(&self, now: f64) -> WorkspaceUsage {
-        WorkspaceUsage {
-            chart_count: self.chart_count(),
-            split_count: self.split_count,
-            elapsed_seconds: (now - self.started_at).max(0.0),
-            cells: self
-                .cell_ids()
-                .into_iter()
-                .map(|id| CellUsage {
-                    id,
-                    age_seconds: (now - self.created_at[&id]).max(0.0),
-                })
-                .collect(),
         }
     }
 
@@ -290,34 +228,26 @@ mod tests {
 
     #[test]
     fn split_grows_the_tree_in_layout_order() {
-        let mut ws = Workspace::new(100.0);
+        let mut ws = Workspace::new();
         assert_eq!(ws.cell_ids(), [1]);
-        let second = ws.split(1, SplitDirection::Horizontal, 110.0).unwrap();
+        let second = ws.split(1, SplitDirection::Horizontal).unwrap();
         assert_eq!(second, 2);
         assert_eq!(ws.cell_ids(), [1, 2]);
-        let third = ws.split(2, SplitDirection::Vertical, 120.0).unwrap();
+        let third = ws.split(2, SplitDirection::Vertical).unwrap();
         assert_eq!(ws.cell_ids(), [1, 2, 3]);
         let layout = ws.layout_json();
         assert!(layout.contains(r#""direction":"horizontal""#));
         assert!(layout.contains(r#""direction":"vertical""#));
         assert_eq!(ws.chart_count(), 3);
-        // The new cell's id is fresh; the source cell keeps its creation time.
-        let usage = ws.usage(130.0);
-        assert_eq!(usage.chart_count, 3);
-        assert_eq!(usage.split_count, 2);
-        assert!((usage.elapsed_seconds - 30.0).abs() < 1e-9);
-        let age = |id| usage.cells.iter().find(|c| c.id == id).unwrap().age_seconds;
-        assert!((age(1) - 30.0).abs() < 1e-9);
-        assert!((age(2) - 20.0).abs() < 1e-9);
-        assert!((age(third) - 10.0).abs() < 1e-9);
+        assert_eq!(third, 3);
     }
 
     #[test]
     fn typed_layout_snapshot_tracks_splits_resizes_and_removals() {
-        let mut ws = Workspace::new(0.0);
+        let mut ws = Workspace::new();
         assert_eq!(ws.layout(), WorkspaceLayout::Cell { id: 1 });
 
-        let second = ws.split(1, SplitDirection::Horizontal, 1.0).unwrap();
+        let second = ws.split(1, SplitDirection::Horizontal).unwrap();
         assert_eq!(
             ws.layout(),
             WorkspaceLayout::Split {
@@ -329,7 +259,7 @@ mod tests {
         );
 
         ws.resize_between(1, second, 0.25).unwrap();
-        let third = ws.split(second, SplitDirection::Vertical, 2.0).unwrap();
+        let third = ws.split(second, SplitDirection::Vertical).unwrap();
         assert_eq!(
             ws.layout(),
             WorkspaceLayout::Split {
@@ -359,9 +289,9 @@ mod tests {
 
     #[test]
     fn remove_collapses_the_split_node_and_the_last_cell_refuses() {
-        let mut ws = Workspace::new(0.0);
-        let second = ws.split(1, SplitDirection::Horizontal, 1.0).unwrap();
-        let third = ws.split(second, SplitDirection::Vertical, 2.0).unwrap();
+        let mut ws = Workspace::new();
+        let second = ws.split(1, SplitDirection::Horizontal).unwrap();
+        let third = ws.split(second, SplitDirection::Vertical).unwrap();
         // Remove the middle: cell 1 and cell 3 stay, the tree is a horizontal split again.
         ws.remove(second).unwrap();
         assert_eq!(ws.cell_ids(), [1, 3]);
@@ -374,25 +304,10 @@ mod tests {
     }
 
     #[test]
-    fn max_charts_caps_splits() {
-        let mut ws = Workspace::new(0.0);
-        ws.set_max_charts(Some(2));
-        assert!(ws.split(1, SplitDirection::Horizontal, 1.0).is_ok());
-        assert_eq!(
-            ws.split(1, SplitDirection::Horizontal, 2.0),
-            Err(WorkspaceError::AtCapacity)
-        );
-        assert_eq!(ws.chart_count(), 2);
-        ws.set_max_charts(None);
-        assert!(ws.split(1, SplitDirection::Vertical, 3.0).is_ok());
-        assert_eq!(ws.chart_count(), 3);
-    }
-
-    #[test]
     fn remove_placeholder_is_not_a_real_cell() {
-        let mut ws = Workspace::new(0.0);
-        ws.split(1, SplitDirection::Horizontal, 1.0).unwrap();
-        ws.split(2, SplitDirection::Horizontal, 2.0).unwrap();
+        let mut ws = Workspace::new();
+        ws.split(1, SplitDirection::Horizontal).unwrap();
+        ws.split(2, SplitDirection::Horizontal).unwrap();
         ws.remove(2).unwrap();
         // The collapse must not leave the placeholder id anywhere.
         assert!(!ws.layout_json().contains(&u64::MAX.to_string()));
@@ -401,9 +316,9 @@ mod tests {
 
     #[test]
     fn resize_between_adjusts_the_shared_divider_and_clamps() {
-        let mut ws = Workspace::new(0.0);
-        ws.split(1, SplitDirection::Horizontal, 1.0).unwrap();
-        let third = ws.split(2, SplitDirection::Vertical, 2.0).unwrap();
+        let mut ws = Workspace::new();
+        ws.split(1, SplitDirection::Horizontal).unwrap();
+        let third = ws.split(2, SplitDirection::Vertical).unwrap();
         // Nested divider between cells 2 and 3 (the vertical split's own boundary)…
         ws.resize_between(2, third, 0.3).unwrap();
         assert!(ws.layout_json().contains(r#""ratio":0.8"#));
@@ -421,7 +336,7 @@ mod tests {
             Err(WorkspaceError::NotFound)
         );
         // Ratios survive an unrelated split.
-        ws.split(1, SplitDirection::Horizontal, 3.0).unwrap();
+        ws.split(1, SplitDirection::Horizontal).unwrap();
         assert!(ws.layout_json().contains(r#""ratio":0.95"#));
     }
 }

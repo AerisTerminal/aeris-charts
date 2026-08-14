@@ -17,6 +17,7 @@
 import { create_chart as wasm_create_chart } from "../pkg/nucleuscharts_wasm.js";
 
 export * from "./types.js";
+export * from "./errors.js";
 export * from "./theme.js";
 export * from "./primitives.js";
 export * from "./canvas_plugins.js";
@@ -29,9 +30,6 @@ import { chart_impl } from "./impl.js";
 import { ensure_init } from "./impl.js";
 import { default_theme_name, theme_options } from "./theme.js";
 import type { chart_api, chart_options, deep_partial, localization_options, tracking_mode_options } from "./types.js";
-
-/** Pure countdown-timer predicate (unit-tested without a chart). */
-export { countdown_timer_needed } from "./impl.js";
 
 // ---------------------------------------------------------------------------------------------
 // Entry point

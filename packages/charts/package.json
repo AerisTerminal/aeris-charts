@@ -53,6 +53,9 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "check:namespace": "node scripts/namespace_guard.mjs",
+    "check:api": "node scripts/api_surface.mjs",
+    "update:api": "node scripts/api_surface.mjs --update",
+    "check:release-gates": "node scripts/release_gate_guard.mjs",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true});require('fs').rmSync('pkg',{recursive:true,force:true})\"",
     "build:wasm": "wasm-pack build ../../crates/nucleuscharts_wasm --target web --out-dir ../../packages/charts/pkg",
     "build:js": "esbuild src/index.ts --bundle --format=esm --sourcemap --outfile=dist/index.js",
@@ -62,7 +65,7 @@
     "build": "npm run build:wasm && npm run build:js && npm run build:types && npm run build:copy-wasm && npm run build:copy-design",
     "lint": "oxlint src",
     "test:pack": "node scripts/pack_smoke.mjs",
-    "prepublishOnly": "npm run clean && npm run build && npm run test:pack"
+    "prepublishOnly": "npm run clean && npm run build && npm run check:api && npm run check:release-gates && npm run test:pack"
   },
   "devDependencies": {
     "esbuild": "^0.24.0",

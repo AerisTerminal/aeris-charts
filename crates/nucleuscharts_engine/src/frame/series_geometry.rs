@@ -98,7 +98,7 @@ impl ChartEngine {
         vpr: f64,
         scale: &nucleuscharts_core::scale::price_scale_core::PriceScaleCore,
     ) {
-        let grid = self.options.get().grid;
+        let grid = &self.options.get().grid;
         let vert = css_color(&grid.vert_lines.color, GRID);
         let horz = css_color(&grid.horz_lines.color, GRID);
         // reference lineStyle (0 solid … 4 sparse-dotted); the backends expand dash patterns into

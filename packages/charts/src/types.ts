@@ -941,12 +941,62 @@ export interface drawing_options {
   box_border_width: number;
 }
 
-/** A drawing as listed by {@link chart_api.drawings} (also the serialization format). */
+/** A drawing as listed by {@link chart_api.drawings}. This inspection shape is not persistence. */
 export interface drawing_info extends drawing_options {
   id: number;
   kind: drawing_kind;
   pane_index: number;
   points: drawing_point[];
+}
+
+/** Pane topology persisted by schema V1. Array order is pane order; IDs survive reordering. */
+export interface persisted_pane_v1 {
+  id: `pane-${number}`;
+  stretch_factor: number;
+  preserve_empty: boolean;
+}
+
+/** Stable semantic drawing style persisted by schema V1. Omitted fields restore defaults. */
+export interface persisted_drawing_style_v1 {
+  color?: string;
+  width?: number;
+  line_style?: line_style;
+  fill_color?: string;
+  text?: string;
+  text_color?: string;
+  text_size?: number;
+  text_weight?: number;
+  text_italic?: boolean;
+  text_h_align?: drawing_text_h_align;
+  text_v_align?: drawing_text_v_align;
+  box_color?: string;
+  box_border_color?: string;
+  box_border_width?: number;
+}
+
+/** One semantic drawing in the durable V1 persistence contract. */
+export interface persisted_drawing_v1 {
+  id: number;
+  kind: drawing_kind;
+  pane_id: `pane-${number}`;
+  anchors: drawing_point[];
+  style?: persisted_drawing_style_v1;
+}
+
+/** Versioned chart persistence V1: pane topology and built-in drawings only. */
+export interface chart_state_v1 {
+  schema: "nucleuscharts-state";
+  schema_version: 1;
+  panes: persisted_pane_v1[];
+  drawings: persisted_drawing_v1[];
+}
+
+/** Counts returned after one validated, atomic state restore. */
+export interface persistence_restore_result {
+  schema_version: 1;
+  panes: number;
+  drawings: number;
+  points: number;
 }
 
 /** A live handle to an engine-owned drawing. */
@@ -1119,6 +1169,7 @@ export interface series_api {
    * scale's range. Divergence: reference returns `void`; here the returned handle detaches. Removing
    * the series auto-detaches its primitives (the `detached` hook fires).
    */
+  /** @experimental Host primitive contract; extension persistence is host-owned. */
   attach_primitive(primitive: series_primitive): series_primitive_handle;
   /**
    * The indicator lineage of this series when it is an output of
@@ -1183,7 +1234,6 @@ export interface price_scale_api {
   set_auto_scale(on: boolean): void;
 }
 
-/** The chart. Create with {@link create_chart}. */
 /** A stacked pane (roadmap Phase B1). Mirrors the reference charting library `IPaneApi`. */
 export interface pane_api {
   /** This pane's current index (0 = top/price pane). Throws after this pane is removed. */
@@ -1222,6 +1272,7 @@ export interface pane_api {
    * here the returned handle detaches. The pane binding is by index — it does not follow
    * later pane moves/removals (a removed pane's primitives draw nowhere until detached).
    */
+  /** @experimental Host primitive contract; extension persistence is host-owned. */
   attach_primitive(primitive: pane_primitive): pane_primitive_handle;
   /**
    * Attach a canvas primitive (plugin platform Phase C-e — the Canvas2D escape hatch) and
@@ -1232,6 +1283,7 @@ export interface pane_api {
    * between engine layers — `normal`/`top` only order among canvas views) and below the axis
    * chrome/crosshair. Divergence: reference returns `void`; here the returned handle detaches.
    */
+  /** @experimental Package-side Canvas2D extension; persistence is host-owned. */
   attach_canvas_primitive(primitive: canvas_primitive): canvas_primitive_handle;
   /**
    * This pane's price scale by id (reference `IPaneApi.priceScale`): the visible `"left"`/`"right"`
@@ -1241,6 +1293,7 @@ export interface pane_api {
   price_scale(id: "left" | "right" | ""): price_scale_api;
 }
 
+/** The chart. Create with {@link create_chart}. */
 export interface chart_api {
   /** Active pane backend: `webgpu` when available, otherwise the shared `canvas2d` fallback. */
   backend(): "webgpu" | "canvas2d";
@@ -1266,6 +1319,7 @@ export interface chart_api {
    * family, `price_format`) and unsupported style keys are ignored. Removing the series fires
    * the view's `destroy` hook.
    */
+  /** @experimental Custom-series lifecycle is supported but its exact type surface is not frozen. */
   add_custom_series(pane_view: custom_series_pane_view, options?: Partial<series_options>): series_api;
   /**
    * Remove a series (and any indicators derived from it). No-op for an already-removed or
@@ -1390,6 +1444,10 @@ export interface chart_api {
   add_drawing(kind: drawing_kind, points: drawing_point[], options?: Partial<drawing_options>, pane_index?: number): drawing_api;
   /** Every drawing as live handles, in z-order (bottom first). */
   drawings(): drawing_api[];
+  /** Export deterministic persistence V1 (pane topology + semantic drawings; never market data or runtime caches). */
+  export_state(): chart_state_v1;
+  /** Validate and atomically restore V1 into a fresh chart. Throws {@link nucleuscharts_error} on failure. */
+  import_state(state: chart_state_v1 | string): persistence_restore_result;
   /** Remove every drawing (the "clear all" action) and repaint. */
   clear_drawings(): void;
   /**

@@ -6,6 +6,8 @@ export function measure_native(scenario) {
   const started = performance.now();
   const output = execFileSync("cargo", ["run", "--quiet", "--release", "-p", "nucleuscharts_native", "--example", "evidence_bench"], { cwd: repository_root, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "inherit"] });
   const raw = JSON.parse(output);
+  const persistence_output = execFileSync("cargo", ["run", "--quiet", "--release", "-p", "nucleuscharts_native", "--example", "persistence_perf"], { cwd: repository_root, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "inherit"] });
+  const persistence = JSON.parse(persistence_output);
   const dataset = dataset_metadata(raw.points, raw.seed);
   dataset.configuration.scenario = { runtime_target: "native-rust-headless" };
   const metrics = {
@@ -41,6 +43,13 @@ export function measure_native(scenario) {
       const unit = name.endsWith("bytes") ? "bytes" : "count";
       metrics[`${prefix}_${name}`] = metric([row[name]], unit, "informational", "internal", `Drawing-density ${name.replaceAll("_", " ")}.`);
     }
+  }
+  for (const name of ["parse_us", "validation_us", "semantic_install_us", "index_rebuild_us", "first_frame_us"]) {
+    metrics[`persistence_1000_drawings_${name}`] = metric(persistence[name], "us", "lower_is_better", "internal", `V1 1,000-drawing restore ${name.replaceAll("_", " ")}.`);
+  }
+  metrics.persistence_1000_drawings_document_bytes = metric([persistence.document_bytes], "bytes", "informational", "internal", "Deterministic V1 1,000-drawing document size.");
+  for (const [name, value] of Object.entries(persistence.candidate_evidence)) {
+    metrics[`persistence_1000_drawings_${name}`] = metric([value], "count", "informational", "internal", `Post-restore M6 ${name.replaceAll("_", " ")}.`);
   }
   return {
     id: scenario.id,

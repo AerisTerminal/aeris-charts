@@ -34,10 +34,10 @@ test("retained chart disposal is idempotent and destroys every extension", async
     const canvases_before = document.querySelectorAll("#chart_container canvas").length;
     chart.remove();
     chart.remove();
-    let chart_error = "";
-    let series_error = "";
-    try { chart.backend(); } catch (error) { chart_error = String(error); }
-    try { series.update({ time: 1, value: 1 }); } catch (error) { series_error = String(error); }
+    let chart_error = null;
+    let series_error = null;
+    try { chart.backend(); } catch (error) { chart_error = { message: String(error), code: error.code }; }
+    try { series.update({ time: 1, value: 1 }); } catch (error) { series_error = { message: String(error), code: error.code }; }
     return {
       destroyed,
       detached,
@@ -53,8 +53,9 @@ test("retained chart disposal is idempotent and destroys every extension", async
   expect(result.canvases_after).toBe(0);
   expect(result.destroyed).toEqual([0, 1, 2]);
   expect(result.detached).toEqual([0, 1, 2]);
-  expect(result.chart_error).toContain("chart has been disposed");
-  expect(result.series_error).toContain("series has been removed");
+  expect(result.chart_error).toMatchObject({ code: "disposed" });
+  expect(result.chart_error.message).toContain("chart has been disposed");
+  expect(result.series_error).toMatchObject({ code: "disposed" });
   expect(result.loss_count).toBe(0);
 });
 
@@ -75,7 +76,21 @@ test("ingestion exposes structured repair and impossible-OHLC diagnostics", asyn
       low: new Float64Array([1, 0, 21, 2, 1e20]),
       close: new Float64Array([2, 1, 22, 3, 1e20]),
     });
-    return { clean, semantic, repaired: series.last_ingestion_diagnostics(), values_after_semantic };
+    const repaired = series.last_ingestion_diagnostics();
+    series.set_data_typed({
+      times: new Float64Array([1, 2]),
+      open: new Float64Array([1]),
+      high: new Float64Array([1]),
+      low: new Float64Array([1]),
+      close: new Float64Array([1]),
+    });
+    return {
+      clean,
+      semantic,
+      repaired,
+      rejected: series.last_ingestion_diagnostics(),
+      values_after_semantic,
+    };
   });
   expect(result.clean).toBeNull();
   expect(result.semantic).toMatchObject({
@@ -92,6 +107,41 @@ test("ingestion exposes structured repair and impossible-OHLC diagnostics", asyn
     deduplicated: 1,
     reordered: true,
   });
+  expect(result.rejected).toMatchObject({
+    status: "rejected",
+    accepted: 0,
+    reason: expect.stringContaining("equal length"),
+  });
+});
+
+test("pane and price-scale handles follow the same pane through reorder", async ({ page }) => {
+  await page.goto("/?backend=canvas2d");
+  await wait_for_chart(page);
+  const result = await page.evaluate(() => {
+    const chart = window.__chart;
+    const original = chart.panes()[0];
+    const original_scale = original.price_scale("right");
+    const added = chart.add_pane(true);
+    original.set_stretch_factor(3);
+    added.move_to(0);
+    original_scale.set_auto_scale(false);
+    return {
+      original_index: original.pane_index(),
+      original_stretch: original.get_stretch_factor(),
+      original_auto_scale: original_scale.options().auto_scale,
+      added_index: added.pane_index(),
+      added_stretch: added.get_stretch_factor(),
+      added_auto_scale: added.price_scale("right").options().auto_scale,
+    };
+  });
+  expect(result).toEqual({
+    original_index: 1,
+    original_stretch: 3,
+    original_auto_scale: false,
+    added_index: 0,
+    added_stretch: 1,
+    added_auto_scale: true,
+  });
 });
 
 test("removed pane handles never retarget a replacement pane", async ({ page }) => {
@@ -101,20 +151,53 @@ test("removed pane handles never retarget a replacement pane", async ({ page }) 
     const chart = window.__chart;
     const removed = chart.add_pane(true);
     const removed_index = removed.pane_index();
+    const scale = removed.price_scale("right");
     chart.remove_pane(removed_index);
     const replacement = chart.add_pane(true);
-    let error = "";
-    try { removed.set_stretch_factor(7); } catch (value) { error = String(value); }
+    let pane_error = null;
+    let scale_error = null;
+    try { removed.set_stretch_factor(7); } catch (value) {
+      pane_error = { message: String(value), code: value.code };
+    }
+    try { scale.set_auto_scale(false); } catch (value) {
+      scale_error = { message: String(value), code: value.code };
+    }
     return {
       removed_index,
       replacement_index: replacement.pane_index(),
       replacement_stretch: replacement.get_stretch_factor(),
-      error,
+      pane_error,
+      scale_error,
     };
   });
   expect(result.replacement_index).toBe(result.removed_index);
   expect(result.replacement_stretch).toBe(1);
-  expect(result.error).toContain("pane has been removed");
+  expect(result.pane_error).toMatchObject({ code: "stale_handle" });
+  expect(result.scale_error).toMatchObject({ code: "stale_handle" });
+});
+
+test("neighboring unsupported series operations throw the public typed error", async ({ page }) => {
+  await page.goto("/?backend=canvas2d");
+  await wait_for_chart(page);
+  const errors = await page.evaluate(() => {
+    const chart = window.__chart;
+    const secondary = chart.add_series("line");
+    const custom = chart.add_custom_series({ price_value_builder: () => [1], render() {} });
+    const captured = [];
+    for (const operation of [
+      () => secondary.set_type("area"),
+      () => custom.set_data_typed(),
+    ]) {
+      try { operation(); } catch (error) {
+        captured.push({ name: error.name, code: error.code });
+      }
+    }
+    return captured;
+  });
+  expect(errors).toEqual([
+    { name: "NucleusChartsError", code: "unsupported_operation" },
+    { name: "NucleusChartsError", code: "unsupported_operation" },
+  ]);
 });
 
 test("shared WebGPU loss wakes 1, 2, 8, and 16 live charts", async ({ page, browserName }) => {

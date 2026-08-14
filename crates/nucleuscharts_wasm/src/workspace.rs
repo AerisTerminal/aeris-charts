@@ -1,7 +1,6 @@
 //! Multi-chart workspace host: the wasm surface over `nucleuscharts_engine::Workspace` (the split-grid
-//! MODEL). The browser side keeps only DOM placement and per-cell chart instances keyed by the
-//! cell ids this returns; every topology decision, the usage metering, and the paywall cap are
-//! engine-owned and headless-tested.
+//! MODEL). The browser side keeps DOM placement, commercial limits, usage metering, and one chart
+//! instance per cell. The shared engine owns generic topology only.
 
 use nucleuscharts_engine::{SplitDirection, Workspace, WorkspaceError};
 use wasm_bindgen::prelude::*;
@@ -16,9 +15,9 @@ pub struct NucleusWorkspace {
 impl NucleusWorkspace {
     /// A workspace holding a single chart cell (id 1).
     #[wasm_bindgen(constructor)]
-    pub fn new(now: f64) -> Self {
+    pub fn new(_now: f64) -> Self {
         Self {
-            workspace: Workspace::new(now),
+            workspace: Workspace::new(),
         }
     }
 
@@ -30,7 +29,8 @@ impl NucleusWorkspace {
             "vertical" => SplitDirection::Vertical,
             _ => return -1,
         };
-        match self.workspace.split(id as u64, direction, now) {
+        let _ = now;
+        match self.workspace.split(id as u64, direction) {
             Ok(new_id) => new_id as i64,
             Err(_) => -1,
         }
@@ -50,11 +50,6 @@ impl NucleusWorkspace {
             .is_ok()
     }
 
-    /// Hard cap on live charts (`undefined` clears it).
-    pub fn set_max_charts(&mut self, max: Option<u32>) {
-        self.workspace.set_max_charts(max.map(|m| m as usize));
-    }
-
     pub fn chart_count(&self) -> usize {
         self.workspace.chart_count()
     }
@@ -68,19 +63,12 @@ impl NucleusWorkspace {
     pub fn layout_json(&self) -> String {
         self.workspace.layout_json()
     }
-
-    /// The usage/metering snapshot at host time `now` as JSON (`chart_count`, `split_count`,
-    /// `elapsed_seconds`, per-cell `age_seconds`).
-    pub fn usage_json(&self, now: f64) -> String {
-        serde_json::to_string(&self.workspace.usage(now)).unwrap_or_else(|_| "{}".to_string())
-    }
 }
 
 /// Maps engine rejections to the host convention (-1 / false); kept for future richer errors.
 #[allow(dead_code)]
 fn _err_code(err: WorkspaceError) -> i64 {
     match err {
-        WorkspaceError::AtCapacity => -1,
         WorkspaceError::NotFound => -2,
         WorkspaceError::LastCell => -3,
     }

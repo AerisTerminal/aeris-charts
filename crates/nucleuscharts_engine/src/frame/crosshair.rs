@@ -22,7 +22,7 @@ impl ChartEngine {
         }
         let index = self.snapped_crosshair_index(x_css);
         let snapped_x = self.time_scale.index_to_coordinate(index);
-        let ch = self.options.get().crosshair;
+        let ch = &self.options.get().crosshair;
         let vert_color = css_color(&ch.vert_line.color, CROSSHAIR_COLOR);
         let horz_color = css_color(&ch.horz_line.color, CROSSHAIR_COLOR);
         // reference lineWidth is in CSS px; generalize the crisp "1 CSS px" rule (grid uses the same

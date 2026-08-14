@@ -106,7 +106,7 @@ impl<'a> PreparedNucleusFrame<'a> {
 
     /// A frame whose complete surface paint is resolved from its owning engine options.
     pub fn from_engine(frame: &'a ChartFrame, engine: &ChartEngine) -> Self {
-        let options = engine.options.get().layout.background;
+        let options = &engine.options.get().layout.background;
         let fallback = nucleuscharts_core::style::DEFAULT_SURFACE_RGB;
         let fallback = Color::rgb(fallback.0, fallback.1, fallback.2);
         let background = if matches!(options.kind.as_str(), "gradient" | "vertical_gradient") {

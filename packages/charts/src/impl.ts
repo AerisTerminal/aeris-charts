@@ -11,15 +11,17 @@ import type { pane_primitive, pane_primitive_handle, series_primitive, series_pr
 import type { canvas_primitive, canvas_primitive_handle, canvas_pane_view } from "./canvas_plugins.js";
 import { create_canvas_render_target } from "./canvas_plugins.js";
 import type { custom_series_item, custom_series_pane_view } from "./custom_series.js";
+import { nucleuscharts_error } from "./errors.js";
+import type { nucleuscharts_error_code } from "./errors.js";
 import type {
-  bars_info, chart_api, chart_options, data_changed_handler, dbl_click_handler,
+  bars_info, chart_api, chart_options, chart_state_v1, data_changed_handler, dbl_click_handler,
   deep_partial, drawing_api, drawing_info, drawing_kind, drawing_options, drawing_point,
   frame_stats,
   ingestion_diagnostics,
   handle_scale_options, handle_scroll_options, indicator_info, kinetic_scroll_options,
   last_value_data, localization_options, logical_range,
   mismatch_direction, mouse_event_handler, mouse_event_params, ohlc_columns, ohlc_data, options_change_handler, pane_api, pane_geometry, price_line_api, price_line_options,
-  price_range, price_scale_api, price_scale_options, ring_source_layout,
+  persistence_restore_result, price_range, price_scale_api, price_scale_options, ring_source_layout,
   series_api, series_change_handler, series_data, series_kind,
   series_marker, series_marker_options, series_options, single_value_data, size_change_handler, time, time_range,
   time_scale_api, time_scale_options, tracking_mode_options, visible_logical_range_handler, visible_time_range_handler,
@@ -32,6 +34,15 @@ import { default_theme_name, theme_palette } from "./theme.js";
 // ---------------------------------------------------------------------------------------------
 
 let init_promise: Promise<unknown> | null = null;
+
+type persistence_error_result = {
+  ok: false;
+  error: { code: nucleuscharts_error_code; message: string };
+};
+
+function throw_persistence_error(result: persistence_error_result): never {
+  throw new nucleuscharts_error(result.error.code, result.error.message);
+}
 /**
  * Instantiate the wasm module once per page. `wasm_url` overrides the default asset resolution
  * (`new URL("nucleuscharts_wasm_bg.wasm", import.meta.url)` beside the bundle) — the escape hatch for
@@ -66,7 +77,7 @@ const SCROLL_ANIM_MS = 300;
  * Whether the candle-close countdown timer should run: any series with `countdown_visible`
  * and data. Factored pure so the start/stop logic is testable without a chart.
  */
-export function countdown_timer_needed(
+function countdown_timer_needed(
   series: readonly { countdown_visible?: boolean; has_data: boolean }[],
 ): boolean {
   return series.some((s) => s.countdown_visible === true && s.has_data);
@@ -317,7 +328,8 @@ class series_impl implements series_api {
     for (const handler of this.data_changed_subs) handler("update");
   }
   protected assert_live(): void {
-    if (this.removed) throw new Error("nucleuscharts: this series has been removed from the chart");
+    void this.chart.wasm;
+    if (this.removed) throw new nucleuscharts_error("stale_handle", "this series has been removed from the chart");
   }
 
   set_data(data: readonly series_data[]): void {
@@ -383,18 +395,21 @@ class series_impl implements series_api {
       return;
     }
     if (layout === undefined) {
-      throw new Error("nucleuscharts: set_ring_source requires a layout when a buffer is given");
+      throw new nucleuscharts_error("invalid_options", "set_ring_source requires a layout when a buffer is given");
     }
     // A plain ArrayBuffer would work for the reads but defeats the point (the producer is a worker),
     // and `Atomics.load` on non-shared memory is a footgun rather than an error. Reject it here
     // where the message can say why.
     if (typeof SharedArrayBuffer !== "undefined" && !(buffer instanceof SharedArrayBuffer)) {
-      throw new Error("nucleuscharts: set_ring_source expects a SharedArrayBuffer (is the page cross-origin isolated?)");
+      throw new nucleuscharts_error(
+        "invalid_data",
+        "set_ring_source expects a SharedArrayBuffer (is the page cross-origin isolated?)",
+      );
     }
     const reason = this.chart.wasm.set_ring_source(
       this.id, new Uint8Array(buffer), new Int32Array(buffer), JSON.stringify(layout),
     );
-    if (reason !== "") throw new Error(`nucleuscharts: set_ring_source rejected — ${reason}`);
+    if (reason !== "") throw new nucleuscharts_error("invalid_options", `set_ring_source rejected — ${reason}`);
     this.chart.sync_ring_drain_loop();
   }
 
@@ -596,13 +611,18 @@ class series_impl implements series_api {
   set_type(kind: series_kind): void {
     this.assert_live();
     if (kind === "custom") {
-      console.warn("nucleuscharts: set_type() cannot convert a series to 'custom'; use chart.add_custom_series");
-      return;
+      throw new nucleuscharts_error(
+        "unsupported_operation",
+        "set_type() cannot convert a series to 'custom'; use chart.add_custom_series",
+      );
     }
     if (this.id === 0) {
       this.chart.wasm.set_series_type(KIND_TO_U8[kind]);
     } else {
-      console.warn("nucleuscharts: set_type() currently supports the primary series only");
+      throw new nucleuscharts_error(
+        "unsupported_operation",
+        "set_type() currently supports the primary series only",
+      );
     }
     this.chart.repaint();
   }
@@ -804,17 +824,20 @@ class custom_series_impl extends series_impl {
 
   set_data_typed(): void {
     // A custom series carries raw plugin items aligned by time, not OHLC columns.
-    console.warn("nucleuscharts: set_data_typed() does not apply to a custom series");
+    this.assert_live();
+    throw new nucleuscharts_error("unsupported_operation", "set_data_typed() does not apply to a custom series");
   }
 
   update_typed(): void {
     // Same reason as `set_data_typed`: no OHLC columns to append.
-    console.warn("nucleuscharts: update_typed() does not apply to a custom series");
+    this.assert_live();
+    throw new nucleuscharts_error("unsupported_operation", "update_typed() does not apply to a custom series");
   }
 
   set_ring_source(): void {
     // A ring carries OHLC rows; a custom series' values live in its host-side pane view.
-    console.warn("nucleuscharts: set_ring_source() does not apply to a custom series");
+    this.assert_live();
+    throw new nucleuscharts_error("unsupported_operation", "set_ring_source() does not apply to a custom series");
   }
 
   /** The raw items aligned with the engine rows (sorted, last-wins deduped). */
@@ -836,7 +859,8 @@ class custom_series_impl extends series_impl {
 
   set_type(): void {
     // A custom series' type IS the pane view; change it by removing and re-adding the series.
-    console.warn("nucleuscharts: set_type() does not apply to a custom series");
+    this.assert_live();
+    throw new nucleuscharts_error("unsupported_operation", "set_type() does not apply to a custom series");
   }
 }
 
@@ -981,26 +1005,40 @@ class time_scale_impl implements time_scale_api {
 }
 
 class price_scale_impl implements price_scale_api {
+  private readonly pane_id: number;
+
   constructor(
     private readonly chart: chart_impl,
-    private readonly pane: number,
+    pane: number,
     private readonly target: number,
-  ) {}
+  ) {
+    const pane_id = undef_to_null(chart.wasm.pane_stable_id(pane));
+    if (pane_id === null) {
+      throw new nucleuscharts_error("invalid_handle", `pane index ${pane} does not identify a live price scale`);
+    }
+    this.pane_id = pane_id;
+  }
+
+  private pane(): number {
+    const pane = undef_to_null(this.chart.wasm.pane_index_for_id(this.pane_id));
+    if (pane === null) throw new nucleuscharts_error("stale_handle", "price-scale pane has been removed");
+    return pane;
+  }
 
   apply_options(options: deep_partial<price_scale_options>): void {
     if (options.mode !== undefined) {
-      this.chart.wasm.set_price_scale_mode(this.pane, this.target, options.mode);
+      this.chart.wasm.set_price_scale_mode(this.pane(), this.target, options.mode);
     }
     if (options.auto_scale !== undefined) {
-      this.chart.wasm.set_price_scale_auto_scale(this.pane, this.target, options.auto_scale);
+      this.chart.wasm.set_price_scale_auto_scale(this.pane(), this.target, options.auto_scale);
     }
     if (options.invert_scale !== undefined) {
-      this.chart.wasm.set_price_scale_inverted(this.pane, this.target, options.invert_scale);
+      this.chart.wasm.set_price_scale_inverted(this.pane(), this.target, options.invert_scale);
     }
     if (options.scale_margins !== undefined) {
       const current = this.options().scale_margins;
       this.chart.wasm.set_price_scale_margins(
-        this.pane,
+        this.pane(),
         this.target,
         options.scale_margins.top ?? current.top,
         options.scale_margins.bottom ?? current.bottom,
@@ -1013,31 +1051,31 @@ class price_scale_impl implements price_scale_api {
       if (value !== undefined) json_patch[key] = value;
     }
     if (Object.keys(json_patch).length > 0) {
-      this.chart.wasm.price_scale_apply_options_json(this.pane, this.target, JSON.stringify(json_patch));
+      this.chart.wasm.price_scale_apply_options_json(this.pane(), this.target, JSON.stringify(json_patch));
     }
     this.chart.repaint();
   }
 
   options(): price_scale_options {
-    return JSON.parse(this.chart.wasm.price_scale_options_json(this.pane, this.target)) as price_scale_options;
+    return JSON.parse(this.chart.wasm.price_scale_options_json(this.pane(), this.target)) as price_scale_options;
   }
 
   width(): number {
-    return this.chart.wasm.price_scale_width(this.pane, this.target);
+    return this.chart.wasm.price_scale_width(this.pane(), this.target);
   }
 
   set_visible_range(range: price_range): void {
-    this.chart.wasm.set_price_scale_visible_range(this.pane, this.target, range.from, range.to);
+    this.chart.wasm.set_price_scale_visible_range(this.pane(), this.target, range.from, range.to);
     this.chart.repaint();
   }
 
   get_visible_range(): price_range | null {
-    const range = this.chart.wasm.price_scale_visible_range(this.pane, this.target);
+    const range = this.chart.wasm.price_scale_visible_range(this.pane(), this.target);
     return range.length === 2 ? { from: range[0]!, to: range[1]! } : null;
   }
 
   set_auto_scale(on: boolean): void {
-    this.chart.wasm.set_price_scale_auto_scale(this.pane, this.target, on);
+    this.chart.wasm.set_price_scale_auto_scale(this.pane(), this.target, on);
     this.chart.repaint();
   }
 }
@@ -1047,13 +1085,13 @@ class pane_impl implements pane_api {
 
   constructor(private readonly chart: chart_impl, index: number) {
     const stable_id = undef_to_null(chart.wasm.pane_stable_id(index));
-    if (stable_id === null) throw new Error("nucleuscharts: pane has been removed");
+    if (stable_id === null) throw new nucleuscharts_error("invalid_handle", `pane index ${index} is not live`);
     this.stable_id = stable_id;
   }
 
   private index(): number {
     const index = undef_to_null(this.chart.wasm.pane_index_for_id(this.stable_id));
-    if (index === null) throw new Error("nucleuscharts: pane has been removed");
+    if (index === null) throw new nucleuscharts_error("stale_handle", "pane has been removed");
     return index;
   }
 
@@ -1173,34 +1211,56 @@ interface canvas_primitive_entry {
  * creation — they never change over a drawing's lifetime; everything else queries the engine.
  */
 class drawing_impl implements drawing_api {
+  private removed = false;
+
   constructor(
     private readonly chart: chart_impl,
     readonly id: number,
     private readonly drawing_kind: drawing_kind,
     private readonly pane: number,
   ) {}
+  private assert_live(): string {
+    void this.chart.wasm;
+    if (this.removed) throw new nucleuscharts_error("stale_handle", "drawing has been removed");
+    const options = this.chart.wasm.drawing_options_json(this.id);
+    if (options === "") throw new nucleuscharts_error("stale_handle", "drawing has been removed");
+    return options;
+  }
   kind(): drawing_kind {
+    this.assert_live();
     return this.drawing_kind;
   }
   pane_index(): number {
+    this.assert_live();
     return this.pane;
   }
   points(): drawing_point[] {
+    this.assert_live();
     return JSON.parse(this.chart.wasm.drawing_points_json(this.id)) as drawing_point[];
   }
   set_points(points: drawing_point[]): void {
-    this.chart.wasm.drawing_set_points(this.id, JSON.stringify(points));
+    this.assert_live();
+    if (!this.chart.wasm.drawing_set_points(this.id, JSON.stringify(points))) {
+      throw new nucleuscharts_error("invalid_data", "drawing anchors are malformed or invalid for this kind");
+    }
     this.chart.repaint();
   }
   options(): drawing_options {
-    return JSON.parse(this.chart.wasm.drawing_options_json(this.id)) as drawing_options;
+    return JSON.parse(this.assert_live()) as drawing_options;
   }
   apply_options(options: Partial<drawing_options>): void {
-    this.chart.wasm.drawing_apply_options(this.id, JSON.stringify(options));
+    this.assert_live();
+    if (!this.chart.wasm.drawing_apply_options(this.id, JSON.stringify(options))) {
+      throw new nucleuscharts_error("invalid_options", "drawing options are malformed");
+    }
     this.chart.repaint();
   }
   remove(): void {
-    this.chart.wasm.remove_drawing(this.id);
+    this.assert_live();
+    if (!this.chart.wasm.remove_drawing(this.id)) {
+      throw new nucleuscharts_error("stale_handle", "drawing has been removed");
+    }
+    this.removed = true;
     this.chart.repaint();
   }
 }
@@ -1408,7 +1468,9 @@ export class chart_impl implements chart_api {
   ) {
     this.wasm_instance = wasm;
     const plugin_ctx = plugin_canvas.getContext("2d");
-    if (plugin_ctx === null) throw new Error("nucleuscharts: plugin canvas 2D context is unavailable");
+    if (plugin_ctx === null) {
+      throw new nucleuscharts_error("renderer_platform_error", "plugin canvas 2D context is unavailable");
+    }
     this.plugin_ctx = plugin_ctx;
     window.addEventListener("nucleuscharts-chart-backend-lost", this.backend_loss_handler);
     this.last_visible_logical_range = this.read_visible_logical_range();
@@ -1435,7 +1497,7 @@ export class chart_impl implements chart_api {
   /** Internal package boundary. Every post-disposal operation fails with one stable error. */
   get wasm(): NucleusChart {
     if (this.wasm_instance === null) {
-      throw new Error("nucleuscharts: this chart has been disposed");
+      throw new nucleuscharts_error("disposed", "this chart has been disposed");
     }
     return this.wasm_instance;
   }
@@ -1750,7 +1812,10 @@ export class chart_impl implements chart_api {
 
   add_series(kind: series_kind, options?: Partial<series_options>): series_api {
     if (kind === "custom") {
-      throw new Error("nucleuscharts: add_series does not accept 'custom'; use add_custom_series(pane_view)");
+      throw new nucleuscharts_error(
+        "invalid_options",
+        "add_series does not accept 'custom'; use add_custom_series(pane_view)",
+      );
     }
     // Series 0 is created by the engine at construction; the first add_series adopts it so the
     // common "one chart, one series" path matches reference (add_series returns the primary series).
@@ -1781,7 +1846,10 @@ export class chart_impl implements chart_api {
       if (typeof hook === "function") adapted[key] = hook.bind(pane_view);
     }
     if (typeof adapted.price_value_builder !== "function" || typeof adapted.render !== "function") {
-      throw new Error("nucleuscharts: add_custom_series needs a pane view with `price_value_builder` and `render` (reference `ensure(customPaneView)`)");
+      throw new nucleuscharts_error(
+        "invalid_options",
+        "add_custom_series needs a pane view with `price_value_builder` and `render`",
+      );
     }
     // The first-series adoption mirrors add_series (the engine's construction-time series 0
     // converts to Custom instead of leaving an empty built-in behind).
@@ -1792,7 +1860,9 @@ export class chart_impl implements chart_api {
     } else {
       id = this.wasm.add_custom_series(adapted, false);
     }
-    if (id === 0xffffffff) throw new Error("nucleuscharts: add_custom_series was rejected by the engine");
+    if (id === 0xffffffff) {
+      throw new nucleuscharts_error("invalid_options", "add_custom_series was rejected by the engine");
+    }
     const series = new custom_series_impl(id, this);
     this.series_by_id.set(id, series);
     // reference createCustomSeriesDefinition: the view's defaultOptions merge UNDER the caller's.
@@ -1859,7 +1929,7 @@ export class chart_impl implements chart_api {
   }
 
   private indicator_series(id: number, options?: Partial<series_options>): series_api {
-    if (id === 0xffffffff) throw new Error("nucleuscharts: invalid indicator configuration");
+    if (id === 0xffffffff) throw new nucleuscharts_error("invalid_options", "invalid indicator configuration");
     const series = new series_impl(id, "line", this);
     this.series_by_id.set(id, series);
     if (options) series.apply_options(options);
@@ -1880,7 +1950,7 @@ export class chart_impl implements chart_api {
 
   add_bollinger(source: series_api, period: number, deviation = 2, options?: Partial<series_options>): [series_api, series_api, series_api] {
     const ids = this.wasm.add_bollinger(source.id, Math.max(1, Math.floor(period)), deviation);
-    if (ids.length !== 3) throw new Error("nucleuscharts: invalid Bollinger configuration");
+    if (ids.length !== 3) throw new nucleuscharts_error("invalid_options", "invalid Bollinger configuration");
     return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options), this.indicator_series(ids[2]!, options)];
   }
 
@@ -1890,13 +1960,13 @@ export class chart_impl implements chart_api {
 
   add_macd(source: series_api, fast: number, slow: number, signal: number, options?: Partial<series_options>): [series_api, series_api, series_api] {
     const ids = this.wasm.add_macd(source.id, Math.max(1, Math.floor(fast)), Math.max(1, Math.floor(slow)), Math.max(1, Math.floor(signal)));
-    if (ids.length !== 3) throw new Error("nucleuscharts: invalid MACD configuration");
+    if (ids.length !== 3) throw new nucleuscharts_error("invalid_options", "invalid MACD configuration");
     return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options), this.indicator_series(ids[2]!, options)];
   }
 
   add_stochastic(source: series_api, k_period: number, d_period: number, options?: Partial<series_options>): [series_api, series_api] {
     const ids = this.wasm.add_stochastic(source.id, Math.max(1, Math.floor(k_period)), Math.max(1, Math.floor(d_period)));
-    if (ids.length !== 2) throw new Error("nucleuscharts: invalid Stochastic configuration");
+    if (ids.length !== 2) throw new nucleuscharts_error("invalid_options", "invalid Stochastic configuration");
     return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options)];
   }
 
@@ -2124,7 +2194,10 @@ export class chart_impl implements chart_api {
       JSON.stringify(options ?? {}),
     );
     if (id === 0) {
-      throw new Error("nucleuscharts: add_drawing rejected (stale pane, wrong anchor count, or non-finite anchors)");
+      throw new nucleuscharts_error(
+        "invalid_data",
+        "add_drawing rejected (stale pane, wrong anchor count, or non-finite anchors)",
+      );
     }
     this.repaint();
     return new drawing_impl(this, id, kind, pane_index);
@@ -2133,6 +2206,29 @@ export class chart_impl implements chart_api {
   drawings(): drawing_api[] {
     const list = JSON.parse(this.wasm.drawings_json()) as drawing_info[];
     return list.map((d) => new drawing_impl(this, d.id, d.kind, d.pane_index));
+  }
+
+  export_state(): chart_state_v1 {
+    const result = JSON.parse(this.wasm.export_state_result_json()) as
+      | { ok: true; document: string }
+      | persistence_error_result;
+    if (!result.ok) throw_persistence_error(result);
+    return JSON.parse(result.document) as chart_state_v1;
+  }
+
+  import_state(state: chart_state_v1 | string): persistence_restore_result {
+    let document: string;
+    try {
+      document = typeof state === "string" ? state : JSON.stringify(state);
+    } catch (error) {
+      throw new nucleuscharts_error("serialization_error", `state is not JSON-serializable: ${error}`);
+    }
+    const response = JSON.parse(this.wasm.import_state_result_json(document)) as
+      | { ok: true; result: persistence_restore_result }
+      | persistence_error_result;
+    if (!response.ok) throw_persistence_error(response);
+    this.repaint();
+    return response.result;
   }
 
   clear_drawings(): void {
@@ -2641,7 +2737,8 @@ export class chart_impl implements chart_api {
   }
 
   add_pane(preserve_empty = false): pane_api {
-    const index = this.wasm.add_pane(preserve_empty);
+    const index = undef_to_null(this.wasm.add_pane(preserve_empty));
+    if (index === null) throw new nucleuscharts_error("resource_limit", "pane identity space is exhausted");
     this.repaint();
     return new pane_impl(this, index);
   }
@@ -2716,7 +2813,9 @@ export class chart_impl implements chart_api {
     output.width = this.overlay.width;
     output.height = this.overlay.height;
     const ctx = output.getContext("2d");
-    if (ctx === null) throw new Error("nucleuscharts: screenshot Canvas2D context is unavailable");
+    if (ctx === null) {
+      throw new nucleuscharts_error("renderer_platform_error", "screenshot Canvas2D context is unavailable");
+    }
     ctx.drawImage(this.fallback_pane, 0, 0);
     // Canvas primitives composite at pane level (the reference paints primitives on the pane
     // canvas), so they are captured regardless of `add_top_layer`. The repaint above re-ran

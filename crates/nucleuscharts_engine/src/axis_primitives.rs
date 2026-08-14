@@ -31,11 +31,11 @@ impl ChartEngine {
         let pane_w = self.pane_w;
         let pane_h = self.pane_h;
         let options = self.options.get();
-        let layout = options.layout;
-        let left_scale = options.left_price_scale;
-        let right_scale = options.right_price_scale;
-        let time_scale = options.time_scale;
-        let watermark = options.watermark;
+        let layout = &options.layout;
+        let left_scale = &options.left_price_scale;
+        let right_scale = &options.right_price_scale;
+        let time_scale = &options.time_scale;
+        let watermark = &options.watermark;
         let border_w = 1f64.max(dpr.floor()) as i32;
         let parse = |css: &str, fallback: Color| Color::parse_css(css).unwrap_or(fallback);
         let fallback = Color::rgb(
@@ -63,13 +63,13 @@ impl ChartEngine {
             output.push(Prim::Text {
                 x: (x * dpr) as f32,
                 y: (y * dpr) as f32,
-                text: watermark.text,
+                text: watermark.text.clone(),
                 color: parse(
                     &watermark.color,
                     Color::rgb(default_text.0, default_text.1, default_text.2),
                 ),
                 size: (watermark.font_size * dpr) as f32,
-                family: watermark.font_family,
+                family: watermark.font_family.clone(),
                 align,
                 weight: if watermark.font_style.contains("bold") {
                     700

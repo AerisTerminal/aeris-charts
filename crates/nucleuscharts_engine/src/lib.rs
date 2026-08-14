@@ -12,6 +12,7 @@ mod hit_test;
 mod host_layout;
 mod indicators;
 mod interaction;
+mod persistence;
 mod price_line_api;
 mod price_scale_api;
 mod series_query_api;
@@ -20,6 +21,7 @@ mod tests;
 mod workspace;
 
 use std::cell::{Cell, RefCell};
+use std::num::NonZeroU32;
 
 pub(crate) use drawings::{BrushCapture, DrawingDrag, DrawingRuntime, PendingDrawing};
 pub use drawings::{
@@ -37,7 +39,14 @@ pub use interaction::{
     pinch_zoom_scale, wheel_zoom_scale, ScrollAnimation, KINETIC_DUMPING, KINETIC_MAX_SPEED,
     KINETIC_MIN_MOVE, KINETIC_MIN_SPEED, PINCH_ZOOM_INTENSITY, WHEEL_SCROLL_PX_PER_DELTA,
 };
-pub use workspace::{SplitDirection, Workspace, WorkspaceError, WorkspaceLayout, WorkspaceUsage};
+#[cfg(not(target_arch = "wasm32"))]
+pub use persistence::PersistenceRestoreProfile;
+pub use persistence::{
+    PersistenceRestoreResult, ValidatedStateV1, PERSISTENCE_MAX_DOCUMENT_BYTES,
+    PERSISTENCE_MAX_DRAWINGS, PERSISTENCE_MAX_PANES, PERSISTENCE_MAX_POINTS_PER_DRAWING,
+    PERSISTENCE_MAX_TOTAL_POINTS, PERSISTENCE_SCHEMA_VERSION,
+};
+pub use workspace::{SplitDirection, Workspace, WorkspaceError, WorkspaceLayout};
 
 use nucleuscharts_core::format::price_formatter::PriceFormatter;
 use nucleuscharts_core::format::time_formatter::{MonthNames, DEFAULT_DATE_FORMAT};
@@ -151,6 +160,92 @@ pub const TIME_AXIS_HEIGHT: f64 = 28.0;
 /// many appends instead of once per append. 32 keeps the post-trim floor within ~3% of the cap
 /// (a 28,800-point 8-hour window trims every 900 bars) while making the amortized cost constant.
 pub const CAP_TRIM_MARGIN_DIVISOR: usize = 32;
+
+/// Stable machine-readable categories for failures caused by public input or handle state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ErrorCode {
+    Disposed,
+    InvalidHandle,
+    StaleHandle,
+    InvalidData,
+    InvalidOptions,
+    UnsupportedOperation,
+    SerializationError,
+    PersistenceVersionError,
+    ExtensionError,
+    RendererPlatformError,
+    ResourceLimit,
+}
+
+impl ErrorCode {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Disposed => "disposed",
+            Self::InvalidHandle => "invalid_handle",
+            Self::StaleHandle => "stale_handle",
+            Self::InvalidData => "invalid_data",
+            Self::InvalidOptions => "invalid_options",
+            Self::UnsupportedOperation => "unsupported_operation",
+            Self::SerializationError => "serialization_error",
+            Self::PersistenceVersionError => "persistence_version_error",
+            Self::ExtensionError => "extension_error",
+            Self::RendererPlatformError => "renderer_platform_error",
+            Self::ResourceLimit => "resource_limit",
+        }
+    }
+}
+
+/// Public failure with a stable category and a human-readable message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChartError {
+    code: ErrorCode,
+    message: String,
+}
+
+impl ChartError {
+    pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+
+    pub fn code(&self) -> ErrorCode {
+        self.code
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl core::fmt::Display for ChartError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ChartError {}
+
+/// Opaque chart-local pane identity. IDs are monotonic and never reused by a chart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PaneId(NonZeroU32);
+
+impl PaneId {
+    pub fn get(self) -> u32 {
+        self.0.get()
+    }
+}
+
+impl TryFrom<u32> for PaneId {
+    type Error = ChartError;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        NonZeroU32::new(value)
+            .map(Self)
+            .ok_or_else(|| ChartError::new(ErrorCode::InvalidHandle, "pane id zero is invalid"))
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SeriesKind {
@@ -564,7 +659,11 @@ pub(crate) const PANELESS: usize = usize::MAX;
 pub struct Pane {
     /// Chart-local identity that survives index changes and is never reused. Zero is reserved for
     /// standalone/default panes that are not owned by a [`ChartEngine`].
-    stable_id: u32,
+    stable_id: Option<PaneId>,
+    /// Persistence identity is separate from the live handle identity. Imports preserve this
+    /// value while issuing fresh live IDs, so pre-import handles become stale rather than
+    /// retargeting restored panes.
+    persistent_id: Option<u32>,
     pub price_scale: PriceScaleCore,
     pub left_scale: PriceScaleCore,
     pub overlay_scale: PriceScaleCore,
@@ -587,10 +686,14 @@ pub struct Pane {
 
 impl Pane {
     pub fn new() -> Self {
-        Self::with_stable_id(0)
+        Self::with_ids(None, None)
     }
 
-    fn with_stable_id(stable_id: u32) -> Self {
+    fn with_chart_ids(stable_id: PaneId, persistent_id: u32) -> Self {
+        Self::with_ids(Some(stable_id), Some(persistent_id))
+    }
+
+    fn with_ids(stable_id: Option<PaneId>, persistent_id: Option<u32>) -> Self {
         let main_scale = PriceScaleCore::new(PriceScaleCoreOptions::default());
         let overlay_scale = PriceScaleCore::new(PriceScaleCoreOptions {
             scale_margins: PriceScaleMargins {
@@ -601,6 +704,7 @@ impl Pane {
         });
         Self {
             stable_id,
+            persistent_id,
             price_scale: main_scale,
             left_scale: PriceScaleCore::new(PriceScaleCoreOptions::default()),
             overlay_scale,
@@ -619,8 +723,12 @@ impl Pane {
         }
     }
 
-    pub fn stable_id(&self) -> u32 {
+    pub fn stable_id(&self) -> Option<PaneId> {
         self.stable_id
+    }
+
+    pub(crate) fn persistent_id(&self) -> Option<u32> {
+        self.persistent_id
     }
 
     pub fn layout(&mut self, content_h: f64) {
@@ -670,6 +778,7 @@ pub struct ChartEngine {
     pub series: Vec<SeriesEntry>,
     tick_marks: TimeTickMarks,
     next_pane_id: u32,
+    next_persistent_pane_id: u32,
     pub options: ChartOptionsStore,
     pub crosshair_mode: CrosshairMode,
     /// TradingView's Ctrl-held magnet: while set, a Normal-mode crosshair snaps to the hovered
@@ -795,12 +904,13 @@ impl ChartEngine {
         let main = data.add_series();
         Self {
             time_scale: TimeScaleCore::new(TimeScaleOptions::default()),
-            panes: vec![Pane::with_stable_id(1)],
+            panes: vec![Pane::with_chart_ids(PaneId(NonZeroU32::MIN), 1)],
             price_formatter: PriceFormatter::default(),
             data,
             series: vec![SeriesEntry::new(main, SeriesKind::Candlestick)],
             tick_marks: TimeTickMarks::new(),
             next_pane_id: 2,
+            next_persistent_pane_id: 2,
             options: ChartOptionsStore::new(),
             crosshair_mode: CrosshairMode::Normal,
             crosshair_ohlc_magnet: false,
@@ -1104,8 +1214,9 @@ impl ChartEngine {
     /// reference chart-api.ts `addPane(preserveEmptyPane)` → chart-model.ts `_addPane`: append a
     /// pane and return its index. The new pane's scales inherit the chart-level
     /// `leftPriceScale`/`rightPriceScale` cosmetics, exactly like the reference's `Pane` constructor.
-    pub fn add_pane(&mut self, preserve_empty: bool) -> usize {
-        let mut pane = Pane::with_stable_id(self.take_pane_id());
+    pub fn add_pane(&mut self, preserve_empty: bool) -> Option<usize> {
+        let (stable_id, persistent_id) = self.take_pane_ids()?;
+        let mut pane = Pane::with_chart_ids(stable_id, persistent_id);
         pane.preserve_empty = preserve_empty;
         self.apply_chart_scale_options(&mut pane);
         self.panes.push(pane);
@@ -1113,28 +1224,29 @@ impl ChartEngine {
             .borrow_mut()
             .rebuild_panes(&self.drawings, self.panes.len());
         self.invalidate_frame_all();
-        self.panes.len() - 1
+        Some(self.panes.len() - 1)
     }
 
-    fn take_pane_id(&mut self) -> u32 {
-        let id = self.next_pane_id;
-        self.next_pane_id = self
-            .next_pane_id
-            .checked_add(1)
-            .expect("pane identity space exhausted");
-        id
+    fn take_pane_ids(&mut self) -> Option<(PaneId, u32)> {
+        let stable_id = PaneId::try_from(self.next_pane_id).ok()?;
+        let next_stable = self.next_pane_id.checked_add(1)?;
+        let persistent_id = self.next_persistent_pane_id;
+        let next_persistent = persistent_id.checked_add(1)?;
+        self.next_pane_id = next_stable;
+        self.next_persistent_pane_id = next_persistent;
+        Some((stable_id, persistent_id))
     }
 
     /// Stable chart-local identity for the pane currently at `index`.
-    pub fn pane_stable_id(&self, index: usize) -> Option<u32> {
-        self.panes.get(index).map(Pane::stable_id)
+    pub fn pane_stable_id(&self, index: usize) -> Option<PaneId> {
+        self.panes.get(index)?.stable_id()
     }
 
     /// Current index of a live pane identity. Removed pane identities never resolve again.
-    pub fn pane_index_for_id(&self, stable_id: u32) -> Option<usize> {
+    pub fn pane_index_for_id(&self, stable_id: PaneId) -> Option<usize> {
         self.panes
             .iter()
-            .position(|pane| pane.stable_id() == stable_id)
+            .position(|pane| pane.stable_id() == Some(stable_id))
     }
 
     /// reference chart-model.ts `removePane`: refuses the last remaining pane and out-of-range
@@ -1280,7 +1392,10 @@ impl ChartEngine {
             return;
         }
         while self.panes.len() <= pane_index {
-            let mut pane = Pane::with_stable_id(self.take_pane_id());
+            let Some((stable_id, persistent_id)) = self.take_pane_ids() else {
+                return;
+            };
+            let mut pane = Pane::with_chart_ids(stable_id, persistent_id);
             pane.stretch_factor = stretch_factor.max(0.01);
             self.apply_chart_scale_options(&mut pane);
             self.panes.push(pane);

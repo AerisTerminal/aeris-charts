@@ -417,11 +417,13 @@ impl ChartEngine {
                 .and_then(Color::parse_css)
                 .unwrap_or(layout_text_color)
         };
-        let options = self.options.get();
+        let right_scale_visible = self.options.get().right_price_scale.visible;
+        let left_scale_visible = self.options.get().left_price_scale.visible;
+        let font_size = self.options.get().layout.font_size;
         let right_text_x = self.pane_left + self.pane_w + 5.0 + 5.0;
         let left_text_x = (self.pane_left - 5.0 - 5.0).max(0.0);
         for (pi, pane) in self.panes.iter().enumerate() {
-            if options.right_price_scale.visible {
+            if right_scale_visible {
                 // reference `entireTextOnly`: corner marks shift in by half the font height so no
                 // label text is clipped (price-tick-mark-builder.ts:71).
                 let entire_margin = if pane.price_scale.options().entire_text_only {
@@ -464,7 +466,7 @@ impl ChartEngine {
                     }
                 }
             }
-            if options.left_price_scale.visible {
+            if left_scale_visible {
                 let entire_margin = if pane.left_scale.options().entire_text_only {
                     pane.left_scale.options().font_size / 2.0
                 } else {
@@ -533,7 +535,7 @@ impl ChartEngine {
                 out.labels.push(AxisLabel {
                     text: self.format_time_tick(ts, kind),
                     x,
-                    y: self.pane_h + 1.0 + 5.0 + 3.0 + options.layout.font_size / 2.0,
+                    y: self.pane_h + 1.0 + 5.0 + 3.0 + font_size / 2.0,
                     color: layout_text_color,
                     align: AxisTextAlign::Center,
                     midpoint: AxisTextMidpoint::None,
@@ -1374,7 +1376,7 @@ impl ChartEngine {
         // and the text color is the semantic foreground token.
         let options = self.options.get();
         let font_size = options.layout.font_size;
-        let ch = options.crosshair;
+        let ch = &options.crosshair;
         if ch.horz_line.label_visible {
             if let Some(pi) = self
                 .panes

@@ -266,6 +266,13 @@ impl DrawingRuntime {
         self.stats.index_updates += drawings.len();
     }
 
+    pub(crate) fn rebuild_all(&mut self, drawings: &[Drawing], pane_count: usize) {
+        self.clear();
+        for (position, drawing) in drawings.iter().enumerate() {
+            self.insert(drawing, position, pane_count);
+        }
+    }
+
     pub(crate) fn capacity_bytes(&self) -> usize {
         self.entries.capacity()
             * (std::mem::size_of::<DrawingId>() + std::mem::size_of::<DrawingCache>())
@@ -400,7 +407,7 @@ pub enum DrawingTextHAlign {
 }
 
 impl DrawingTextHAlign {
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Left => "left",
             Self::Center => "center",
@@ -408,7 +415,7 @@ impl DrawingTextHAlign {
         }
     }
 
-    fn from_name(name: &str) -> Option<Self> {
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
         Some(match name {
             "left" => Self::Left,
             "center" => Self::Center,
@@ -427,7 +434,7 @@ pub enum DrawingTextVAlign {
 }
 
 impl DrawingTextVAlign {
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Top => "top",
             Self::Middle => "middle",
@@ -435,7 +442,7 @@ impl DrawingTextVAlign {
         }
     }
 
-    fn from_name(name: &str) -> Option<Self> {
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
         Some(match name {
             "top" => Self::Top,
             "middle" => Self::Middle,
@@ -494,7 +501,12 @@ pub const TEXT_PLACEHOLDER: &str = "Add text";
 pub(crate) const TEXT_PLACEHOLDER_MIN_SIZE: f64 = 12.0;
 
 impl Drawing {
-    fn new(id: DrawingId, kind: DrawingKind, pane_index: usize, points: Vec<DrawingPoint>) -> Self {
+    pub(crate) fn new(
+        id: DrawingId,
+        kind: DrawingKind,
+        pane_index: usize,
+        points: Vec<DrawingPoint>,
+    ) -> Self {
         Self {
             id,
             kind,
@@ -1176,10 +1188,10 @@ impl ChartEngine {
         let generation = self.options.generation();
         let mut runtime = self.drawing_runtime.borrow_mut();
         if runtime.layout_generation != generation || runtime.font_family.is_empty() {
-            let layout = self.options.get().layout;
+            let layout = &self.options.get().layout;
             runtime.layout_generation = generation;
             runtime.font_size = layout.font_size;
-            runtime.font_family = Rc::from(layout.font_family);
+            runtime.font_family = Rc::from(layout.font_family.as_str());
         }
         (runtime.font_size, Rc::clone(&runtime.font_family))
     }

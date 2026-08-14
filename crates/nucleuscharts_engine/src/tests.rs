@@ -3827,9 +3827,9 @@ fn panes_add_remove_swap_move_and_series_movement() {
     let third = chart.add_series(SeriesKind::Histogram);
 
     // addPane appends and reports the new index (reference chart-api.ts addPane).
-    let pane1 = chart.add_pane(false);
+    let pane1 = chart.add_pane(false).unwrap();
     assert_eq!(pane1, 1);
-    let pane2 = chart.add_pane(true);
+    let pane2 = chart.add_pane(true).unwrap();
     assert_eq!(pane2, 2);
     assert!(chart.pane_preserve_empty(pane2));
     assert!(!chart.pane_preserve_empty(pane1));
@@ -3886,7 +3886,7 @@ fn panes_add_remove_swap_move_and_series_movement() {
 fn pane_identity_survives_moves_and_never_retargets_after_removal() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     let original = chart.pane_stable_id(0).unwrap();
-    let added_index = chart.add_pane(true);
+    let added_index = chart.add_pane(true).unwrap();
     let added = chart.pane_stable_id(added_index).unwrap();
 
     assert!(chart.move_pane(added_index, 0));
@@ -3895,10 +3895,36 @@ fn pane_identity_survives_moves_and_never_retargets_after_removal() {
 
     assert!(chart.remove_pane(0));
     assert_eq!(chart.pane_index_for_id(added), None);
-    let reused_index = chart.add_pane(true);
+    let reused_index = chart.add_pane(true).unwrap();
     assert_eq!(reused_index, 1);
     assert_ne!(chart.pane_stable_id(reused_index), Some(added));
     assert_eq!(chart.pane_index_for_id(added), None);
+}
+
+#[test]
+fn pane_identity_exhaustion_is_recoverable_and_does_not_mutate_topology() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart.next_pane_id = u32::MAX;
+    let before = chart.panes.len();
+    assert_eq!(chart.add_pane(true), None);
+    assert_eq!(chart.panes.len(), before);
+}
+
+#[test]
+fn ordinary_public_handle_misuse_is_recoverable_not_a_panic() {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        assert!(PaneId::try_from(0).is_err());
+        assert!(!chart.remove_series(u32::MAX));
+        assert!(!chart.remove_drawing(u32::MAX));
+        assert!(!chart.remove_pane(usize::MAX));
+        assert!(!chart.move_pane(usize::MAX, 0));
+        assert!(!chart.swap_panes(0, usize::MAX));
+        assert!(chart.series_data(u32::MAX).is_empty());
+        assert!(chart.series_options_json(u32::MAX).is_none());
+        assert!(chart.drawing_options_json(u32::MAX).is_none());
+    }));
+    assert!(outcome.is_ok());
 }
 
 #[test]
@@ -4020,7 +4046,7 @@ fn price_scale_apply_options_json_round_trip_and_chart_group_routing() {
     }
     // A pane added afterwards inherits the merged chart-level cosmetics (reference Pane
     // constructor `_createPriceScale` from the chart options).
-    let pane_index = chart.add_pane(false);
+    let pane_index = chart.add_pane(false).unwrap();
     assert!(chart.panes[pane_index].price_scale.options().ticks_visible);
     assert!(!chart.panes[pane_index].left_scale.options().align_labels);
 }

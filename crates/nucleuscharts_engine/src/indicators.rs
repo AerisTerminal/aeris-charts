@@ -258,7 +258,9 @@ impl ChartEngine {
     /// Move output series into a fresh oscillator pane below everything (TradingView
     /// separate-pane default, reduced stretch).
     fn place_outputs_in_oscillator_pane(&mut self, ids: &[SeriesId]) {
-        let pane = self.add_pane(false);
+        let Some(pane) = self.add_pane(false) else {
+            return;
+        };
         if let Some(p) = self.panes.get_mut(pane) {
             p.stretch_factor = OSCILLATOR_PANE_STRETCH;
         }

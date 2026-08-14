@@ -48,8 +48,8 @@ use nucleuscharts_core::scale::price_scale_core::PriceScaleMode;
 use nucleuscharts_engine::{
     crosshair_mode_from_u8, line_style_from_u8, marker_pos, marker_shape, AxisFrame, AxisLabel,
     AxisLabelCorners, AxisTextAlign, AxisTextMidpoint, ChartEngine, DrawingKind, DrawingModifiers,
-    DrawingPoint, Marker, PriceFormatterFn, PriceScaleTarget, PrimitiveAutoscaleContribution,
-    SeriesKind, TickMarkFormatterFn, TimeFormatterFn,
+    DrawingPoint, Marker, PaneId, PriceFormatterFn, PriceScaleTarget,
+    PrimitiveAutoscaleContribution, SeriesKind, TickMarkFormatterFn, TimeFormatterFn,
 };
 use nucleuscharts_render::canvas2d::{
     execute as execute_canvas2d, Canvas2d, Viewport as CanvasViewport,
@@ -91,7 +91,18 @@ fn validation_diagnostics_json(
 }
 
 fn rejected_diagnostics_json(reason: impl core::fmt::Display) -> String {
-    serde_json::json!({ "status": "rejected", "reason": reason.to_string() }).to_string()
+    serde_json::json!({
+        "status": "rejected",
+        "accepted": 0,
+        "dropped_invalid": 0,
+        "dropped_non_finite": 0,
+        "dropped_out_of_range": 0,
+        "deduplicated": 0,
+        "reordered": false,
+        "semantic_anomalies": 0,
+        "reason": reason.to_string(),
+    })
+    .to_string()
 }
 
 fn broadcast_gpu_loss() {
@@ -1348,8 +1359,19 @@ impl NucleusChart {
     }
 
     /// reference v5 `chart.addPane(preserveEmptyPane)`: append a pane and return its index.
-    pub fn add_pane(&mut self, preserve_empty: bool) -> u32 {
+    pub fn add_pane(&mut self, preserve_empty: bool) -> Option<u32> {
         self.inner.borrow_mut().add_pane(preserve_empty)
+    }
+
+    /// Versioned semantic chart-state export. The JSON envelope contains either a V1 document or
+    /// a structured public error; runtime caches and host market data are never included.
+    pub fn export_state_result_json(&self) -> String {
+        self.inner.borrow().export_state_result_json()
+    }
+
+    /// Validate and atomically restore a V1 semantic chart-state document.
+    pub fn import_state_result_json(&mut self, document: &str) -> String {
+        self.inner.borrow_mut().import_state_result_json(document)
     }
 
     /// reference `chart.removePane`: refuses the last remaining pane and stale indices (false).

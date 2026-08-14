@@ -1,0 +1,12 @@
+{
+  "schema": "nucleuscharts-state",
+  "schema_version": 1,
+  "panes": [{"id": "pane-7", "stretch_factor": 1.5, "preserve_empty": true}],
+  "drawings": [{
+    "id": 12,
+    "kind": "trend_line",
+    "pane_id": "pane-7",
+    "anchors": [{"logical": 2.0, "price": 10.5}, {"logical": 7.0, "price": 12.5}],
+    "style": {"color": "#2962ff", "width": 3.0, "line_style": "dashed", "text": "support"}
+  }]
+}

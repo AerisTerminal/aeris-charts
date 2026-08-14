@@ -5,6 +5,7 @@
 import { create_offscreen_chart as wasm_create_offscreen_chart, NucleusChart } from "../pkg/nucleuscharts_wasm.js";
 
 import { ensure_init } from "./impl.js";
+import { nucleuscharts_error } from "./errors.js";
 import { default_theme_name, theme_options } from "./theme.js";
 import { KIND_TO_U8 } from "./types.js";
 import type {
@@ -63,11 +64,14 @@ function split_offscreen_options(options: offscreen_chart_options): {
 } {
   const raw = options as Record<string, unknown>;
   for (const key of UNSUPPORTED_WORKER_OPTIONS) {
-    if (key in raw) throw new Error(`nucleuscharts: worker charts do not support option ${key}`);
+    if (key in raw) throw new nucleuscharts_error("unsupported_operation", `worker charts do not support option ${key}`);
   }
   const layout = raw.layout as { panes?: Record<string, unknown> } | undefined;
   if (layout?.panes && "enableResize" in layout.panes) {
-    throw new Error("nucleuscharts: worker charts do not support option layout.panes.enableResize");
+    throw new nucleuscharts_error(
+      "unsupported_operation",
+      "worker charts do not support option layout.panes.enableResize",
+    );
   }
   const { theme, ...engine } = options;
   return { theme, engine: engine as Record<string, unknown> };
@@ -404,7 +408,7 @@ export class offscreen_chart {
   }
 
   private assert_live(): void {
-    if (this.removed) throw new Error("nucleuscharts: offscreen chart has been removed");
+    if (this.removed) throw new nucleuscharts_error("disposed", "offscreen chart has been removed");
   }
 }
 
@@ -413,6 +417,7 @@ export class offscreen_chart {
  * canvas matching `chart.backend()`; two surfaces preserve runtime Canvas2D fallback without
  * rebuilding chart state.
  */
+/** @experimental Worker/offscreen hosting is not part of the frozen stable surface. */
 export async function create_offscreen_chart(
   gpu_canvas: OffscreenCanvas,
   fallback_canvas: OffscreenCanvas,

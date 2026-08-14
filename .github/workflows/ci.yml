@@ -42,8 +42,10 @@ jobs:
         run: cargo clippy -p nucleuscharts_wasm --target wasm32-unknown-unknown --locked -- -D warnings
       - name: tests (includes golden-image regression)
         run: cargo test --workspace --locked
-      - name: perf gate (report-only; NUCLEUSCHARTS_PERF_STRICT=1 makes it a hard gate)
+      - name: perf gate (hard configured budgets)
         run: cargo run -p nucleuscharts_native --example perf_gate --release
+        env:
+          NUCLEUSCHARTS_PERF_STRICT: "1"
 
   package:
     name: TypeScript package (lint, typecheck, build)
@@ -71,6 +73,12 @@ jobs:
       - name: Typecheck
         working-directory: packages/charts
         run: npm run typecheck
+      - name: Public API compatibility snapshot
+        working-directory: packages/charts
+        run: npm run check:api
+      - name: Release gate policy simulation
+        working-directory: packages/charts
+        run: npm run check:release-gates
       - name: Pack smoke test (tarball installs and imports)
         working-directory: packages/charts
         run: npm run test:pack
