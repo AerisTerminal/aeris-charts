@@ -22,11 +22,13 @@
     { "id": "pan-candlestick-100k", "version": 1, "kind": "interaction", "interaction": "pan", "points": 100000, "steps": 120, "profiles": ["smoke", "nightly", "release"], "warmup_runs": 1, "measured_runs": 3, "visibility": "public_candidate" },
     { "id": "zoom-candlestick-100k", "version": 1, "kind": "interaction", "interaction": "zoom", "points": 100000, "steps": 60, "profiles": ["nightly", "release"], "warmup_runs": 1, "measured_runs": 3, "visibility": "public_candidate" },
     { "id": "crosshair-candlestick-100k", "version": 1, "kind": "interaction", "interaction": "crosshair", "points": 100000, "steps": 120, "profiles": ["nightly", "release"], "warmup_runs": 1, "measured_runs": 3, "visibility": "public_candidate" },
+    { "id": "crosshair-candlestick-1m", "version": 1, "kind": "interaction", "interaction": "crosshair", "points": 1000000, "steps": 120, "profiles": ["release"], "warmup_runs": 1, "measured_runs": 3, "visibility": "public_candidate" },
     { "id": "lifecycle-10-cycles", "version": 1, "kind": "lifecycle", "points": 10000, "cycles": 10, "profiles": ["smoke"], "warmup_runs": 1, "measured_runs": 1, "visibility": "public_candidate" },
     { "id": "lifecycle-50-cycles", "version": 1, "kind": "lifecycle", "points": 10000, "cycles": 50, "profiles": ["nightly"], "warmup_runs": 1, "measured_runs": 1, "visibility": "public_candidate" },
     { "id": "lifecycle-100-cycles", "version": 1, "kind": "lifecycle", "points": 10000, "cycles": 100, "profiles": ["release"], "warmup_runs": 1, "measured_runs": 1, "visibility": "public_candidate" },
     { "id": "multi-chart-scaling-10k", "version": 1, "kind": "multi_chart", "points": 10000, "chart_counts": [1, 2, 4, 8, 16], "profiles": ["nightly", "release"], "warmup_runs": 0, "measured_runs": 1, "visibility": "public_candidate" },
     { "id": "multi-series-pane-scaling-10k", "version": 1, "kind": "multi_series", "points": 10000, "series_counts": [1, 2, 4, 8], "pane_counts": [1, 2, 4], "profiles": ["release"], "warmup_runs": 0, "measured_runs": 1, "visibility": "public_candidate" },
+    { "id": "retained-current-candle-100k", "version": 1, "kind": "retained_updates", "points": 100000, "series_counts": [1, 2, 4, 8, 16], "pane_counts": [1, 4], "iterations": 30, "profiles": ["nightly", "release"], "warmup_runs": 1, "measured_runs": 30, "visibility": "public_candidate" },
     { "id": "soak-100k", "version": 1, "kind": "soak", "points": 100000, "duration_ms": 3600000, "sample_interval_ms": 1000, "memory_sample_interval_ms": 60000, "profiles": ["soak", "release"], "warmup_runs": 0, "measured_runs": 1, "visibility": "public_candidate" }
   ]
 }

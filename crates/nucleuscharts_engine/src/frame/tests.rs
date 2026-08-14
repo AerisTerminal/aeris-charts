@@ -2482,3 +2482,259 @@ fn selection_anchors_decimate_to_a_sparse_hint_at_tight_spacing() {
     );
     chart.set_selected_series(None);
 }
+
+fn retained_two_series_chart() -> ChartEngine {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let second = chart.add_series(SeriesKind::Line);
+    let times = [1.0, 2.0, 3.0];
+    chart
+        .set_series_data(
+            0,
+            &times,
+            &[10.0, 20.0, 15.0],
+            &[11.0, 21.0, 16.0],
+            &[9.0, 19.0, 14.0],
+            &[10.5, 20.5, 15.5],
+        )
+        .unwrap();
+    chart
+        .set_series_data(
+            second,
+            &times,
+            &[100.0, 101.0, 102.0],
+            &[101.0, 102.0, 103.0],
+            &[99.0, 100.0, 101.0],
+            &[100.5, 101.5, 102.5],
+        )
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    chart
+}
+
+#[test]
+fn crosshair_only_rebuilds_the_overlay_layer() {
+    let mut chart = retained_two_series_chart();
+    chart.build_frame();
+    chart.set_crosshair_at(300.0, 200.0);
+    chart.build_frame();
+    assert_eq!(
+        chart.frame_build_stats(),
+        FrameBuildStats {
+            overlay_rebuilds: 1,
+            ..FrameBuildStats::default()
+        }
+    );
+}
+
+#[test]
+fn hover_reorders_retained_series_without_rebuilding_geometry() {
+    let mut chart = retained_two_series_chart();
+    chart.build_frame();
+    chart.set_hovered_series(Some(0));
+    let incremental = chart.build_frame();
+    assert_eq!(chart.frame_build_stats(), FrameBuildStats::default());
+
+    chart.retained_frame = RetainedFrame::default();
+    chart.frame_invalidation.all();
+    let full = chart.build_frame();
+    assert_eq!(incremental, full);
+
+    chart.set_hovered_series(Some(0));
+    chart.build_frame();
+    assert_eq!(chart.frame_build_stats(), FrameBuildStats::default());
+}
+
+#[test]
+fn current_bar_rebuilds_only_its_series_when_the_scale_range_is_unchanged() {
+    let mut chart = retained_two_series_chart();
+    chart.build_frame();
+    assert!(chart.update_series_bar(0, 3.0, [15.0, 16.0, 14.0, 15.75]));
+    let incremental = chart.build_frame();
+    let stats = chart.frame_build_stats();
+    assert_eq!(stats.series_rebuilds, 1);
+    assert_eq!(stats.grid_rebuilds, 0);
+    assert_eq!(stats.drawing_rebuilds, 0);
+    assert_eq!(stats.layout_rebuilds, 0);
+
+    chart.retained_frame = RetainedFrame::default();
+    chart.frame_invalidation.all();
+    let full = chart.build_frame();
+    assert_eq!(incremental, full);
+}
+
+#[test]
+fn stable_frame_reuses_every_semantic_layer() {
+    let mut chart = retained_two_series_chart();
+    chart.build_frame();
+    chart.build_frame();
+    assert_eq!(chart.frame_build_stats(), FrameBuildStats::default());
+}
+
+#[test]
+fn stable_axis_frame_is_not_rebuilt_until_an_axis_input_changes() {
+    let mut chart = retained_two_series_chart();
+    chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    assert!(!chart.frame_requires_axis());
+    chart.set_crosshair_at(300.0, 200.0);
+    assert!(chart.frame_requires_axis());
+    chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    assert!(!chart.frame_requires_axis());
+}
+
+#[test]
+fn countdown_tick_invalidates_axis_without_rebuilding_pane_layers() {
+    let mut chart = retained_two_series_chart();
+    chart.build_frame();
+    chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    chart.set_now_seconds(1_700_000_000.0);
+    assert!(chart.frame_requires_axis());
+    chart.build_frame();
+    assert_eq!(chart.frame_build_stats(), FrameBuildStats::default());
+}
+
+fn assert_retained_frame_matches_clean_rebuild(chart: &mut ChartEngine) {
+    let incremental = chart.build_frame();
+    chart.retained_frame = RetainedFrame::default();
+    chart.frame_invalidation.all();
+    let rebuilt = chart.build_frame();
+    assert_eq!(incremental, rebuilt);
+}
+
+#[test]
+fn retained_frame_matches_clean_rebuild_across_mutation_sequence() {
+    use crate::drawings::{DrawingKind, DrawingPoint};
+
+    let mut chart = retained_two_series_chart();
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+
+    chart.set_crosshair_at(245.0, 175.0);
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+
+    assert!(chart.update_series_bar(0, 3.0, [15.0, 16.0, 14.0, 15.8]));
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+
+    chart.set_right_offset(3.5);
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+
+    chart.set_bar_spacing(11.0);
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+
+    let drawing = chart
+        .add_drawing(
+            DrawingKind::TrendLine,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 0.0,
+                    price: 10.0,
+                },
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 16.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+
+    assert!(chart.drawing_set_points(
+        drawing,
+        r#"[{"logical":0.5,"price":11.0},{"logical":2.5,"price":17.0}]"#
+    ));
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+
+    chart
+        .apply_options(r##"{"layout":{"background":{"color":"#101820"}}}"##)
+        .unwrap();
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+
+    chart.css_width = 960.0;
+    chart.css_height = 540.0;
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+
+    let removed = chart.pane_series_ids(0)[1];
+    assert!(chart.remove_series(removed));
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+
+    let added = chart.add_series(SeriesKind::Line);
+    chart
+        .set_series_data(
+            added,
+            &[1.0, 2.0, 3.0],
+            &[30.0, 31.0, 32.0],
+            &[30.0, 31.0, 32.0],
+            &[30.0, 31.0, 32.0],
+            &[30.0, 31.0, 32.0],
+        )
+        .unwrap();
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+
+    chart.set_series_pane(added, 1, 1.0);
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+}
+
+#[test]
+fn repeated_crosshair_moves_only_rebuild_overlay_and_axis_inputs() {
+    let mut chart = retained_two_series_chart();
+    chart.build_frame();
+    for step in 0..100 {
+        chart.set_crosshair_at(100.0 + f64::from(step), 150.0 + f64::from(step % 10));
+        chart.build_frame();
+        assert_eq!(
+            chart.frame_build_stats(),
+            FrameBuildStats {
+                overlay_rebuilds: 1,
+                ..FrameBuildStats::default()
+            }
+        );
+    }
+}
+
+#[test]
+fn appended_timestamp_matches_a_clean_rebuild() {
+    let mut chart = retained_two_series_chart();
+    chart.build_frame();
+    assert!(chart.update_series_bar(0, 4.0, [15.5, 16.5, 14.5, 16.0]));
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+}
+
+#[test]
+fn one_current_bar_update_rebuilds_one_of_many_series() {
+    for series_count in [2, 4, 8, 16] {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let mut ids = vec![0];
+        ids.extend((1..series_count).map(|_| chart.add_series(SeriesKind::Line)));
+        let times = [1.0, 2.0, 3.0];
+        for (index, id) in ids.iter().copied().enumerate() {
+            let base = 100.0 + index as f64 * 10.0;
+            let values = [base, base + 1.0, base + 2.0];
+            chart
+                .set_series_data(id, &times, &values, &values, &values, &values)
+                .unwrap();
+        }
+        chart.time_scale.set_width(800.0);
+        chart.fit_content();
+        chart.build_frame();
+
+        let target = ids[series_count / 2];
+        let base = 100.0 + (series_count / 2) as f64 * 10.0;
+        assert!(chart.update_series_bar(target, 3.0, [base + 2.0; 4]));
+        chart.build_frame();
+        assert_eq!(chart.frame_build_stats().series_rebuilds, 1);
+    }
+}
+
+#[test]
+fn multi_pane_current_bar_keeps_other_pane_series_retained() {
+    let mut chart = retained_two_series_chart();
+    let second = chart.pane_series_ids(0)[1];
+    chart.set_series_pane(second, 1, 1.0);
+    chart.build_frame();
+
+    assert!(chart.update_series_bar(0, 3.0, [15.0, 16.0, 14.0, 15.8]));
+    chart.build_frame();
+    assert_eq!(chart.frame_build_stats().series_rebuilds, 1);
+    assert_eq!(chart.frame_build_stats().layout_rebuilds, 0);
+}

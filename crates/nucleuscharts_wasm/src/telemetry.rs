@@ -21,7 +21,7 @@ use std::cell::Cell;
 /// `f64` slots written by `NucleusChart::frame_stats_into`. The TypeScript façade owns one
 /// scratch `Float64Array` of this length and re-reads it every frame, so a `frame_stats()` call
 /// allocates nothing on either side of the boundary.
-pub const FRAME_STATS_LEN: usize = 8;
+pub const FRAME_STATS_LEN: usize = 19;
 
 /// Slot indices in the `frame_stats_into` buffer. Kept in lockstep with `read_frame_stats` in
 /// `packages/charts/src/impl.ts` — append only, never reorder (the package pins `^0.8`).
@@ -35,6 +35,17 @@ pub mod slot {
     pub const MEMORY_BYTES: usize = 5;
     pub const CANVAS2D_OPS: usize = 6;
     pub const RING_OVERRUNS: usize = 7;
+    pub const GPU_BUFFER_ALLOCATIONS: usize = 8;
+    pub const GPU_WRITE_CALLS: usize = 9;
+    pub const GPU_UPLOADED_BYTES: usize = 10;
+    pub const LAYOUT_REBUILDS: usize = 11;
+    pub const AUTOSCALE_RUNS: usize = 12;
+    pub const SERIES_REBUILDS: usize = 13;
+    pub const DRAWING_REBUILDS: usize = 14;
+    pub const GRID_REBUILDS: usize = 15;
+    pub const OVERLAY_REBUILDS: usize = 16;
+    pub const AXIS_REBUILDS: usize = 17;
+    pub const TEXT_RESOLUTIONS: usize = 18;
 }
 
 #[derive(Default)]
@@ -63,6 +74,17 @@ pub struct FrameTelemetry {
     pending_ingest_ms: Cell<f64>,
     /// Set by the first `frame_stats()` read; arms the WebGPU timestamp path.
     stats_requested: Cell<bool>,
+    gpu_buffer_allocations: Cell<u64>,
+    gpu_write_calls: Cell<u64>,
+    gpu_uploaded_bytes: Cell<u64>,
+    layout_rebuilds: Cell<u64>,
+    autoscale_runs: Cell<u64>,
+    series_rebuilds: Cell<u64>,
+    drawing_rebuilds: Cell<u64>,
+    grid_rebuilds: Cell<u64>,
+    overlay_rebuilds: Cell<u64>,
+    axis_rebuilds: Cell<u64>,
+    text_resolutions: Cell<u64>,
 }
 
 impl FrameTelemetry {
@@ -81,6 +103,26 @@ impl FrameTelemetry {
 
     pub fn set_draw_calls(&self, calls: u32) {
         self.last_draw_calls.set(calls);
+    }
+
+    pub fn set_gpu_resources(&self, allocations: u64, writes: u64, bytes: u64) {
+        self.gpu_buffer_allocations.set(allocations);
+        self.gpu_write_calls.set(writes);
+        self.gpu_uploaded_bytes.set(bytes);
+    }
+
+    pub fn set_rebuilds(&self, stats: nucleuscharts_engine::FrameBuildStats) {
+        self.layout_rebuilds.set(stats.layout_rebuilds);
+        self.autoscale_runs.set(stats.autoscale_runs);
+        self.series_rebuilds.set(stats.series_rebuilds);
+        self.drawing_rebuilds.set(stats.drawing_rebuilds);
+        self.grid_rebuilds.set(stats.grid_rebuilds);
+        self.overlay_rebuilds.set(stats.overlay_rebuilds);
+    }
+
+    pub fn set_browser_rebuilds(&self, axis: u64, text: u64) {
+        self.axis_rebuilds.set(axis);
+        self.text_resolutions.set(text);
     }
 
     /// Zero the per-frame Canvas2D op counter at the top of a frame.
@@ -132,6 +174,17 @@ impl FrameTelemetry {
         out[slot::MEMORY_BYTES] = wasm_memory_bytes();
         out[slot::CANVAS2D_OPS] = f64::from(self.last_canvas2d_ops.get());
         out[slot::RING_OVERRUNS] = f64::from(self.ring_overruns.get());
+        out[slot::GPU_BUFFER_ALLOCATIONS] = self.gpu_buffer_allocations.get() as f64;
+        out[slot::GPU_WRITE_CALLS] = self.gpu_write_calls.get() as f64;
+        out[slot::GPU_UPLOADED_BYTES] = self.gpu_uploaded_bytes.get() as f64;
+        out[slot::LAYOUT_REBUILDS] = self.layout_rebuilds.get() as f64;
+        out[slot::AUTOSCALE_RUNS] = self.autoscale_runs.get() as f64;
+        out[slot::SERIES_REBUILDS] = self.series_rebuilds.get() as f64;
+        out[slot::DRAWING_REBUILDS] = self.drawing_rebuilds.get() as f64;
+        out[slot::GRID_REBUILDS] = self.grid_rebuilds.get() as f64;
+        out[slot::OVERLAY_REBUILDS] = self.overlay_rebuilds.get() as f64;
+        out[slot::AXIS_REBUILDS] = self.axis_rebuilds.get() as f64;
+        out[slot::TEXT_RESOLUTIONS] = self.text_resolutions.get() as f64;
     }
 }
 
@@ -195,6 +248,27 @@ mod tests {
         assert_eq!(out[slot::DROPPED_FRAMES], 1.0);
         assert_eq!(out[slot::CANVAS2D_OPS], 2.0);
         assert_eq!(out[slot::GPU_MS], 2.0);
+    }
+
+    #[test]
+    fn retained_and_gpu_diagnostics_use_the_append_only_slots() {
+        let telemetry = FrameTelemetry::default();
+        telemetry.set_gpu_resources(1, 2, 3);
+        telemetry.set_rebuilds(nucleuscharts_engine::FrameBuildStats {
+            layout_rebuilds: 4,
+            autoscale_runs: 5,
+            grid_rebuilds: 6,
+            series_rebuilds: 7,
+            drawing_rebuilds: 8,
+            overlay_rebuilds: 9,
+        });
+        telemetry.set_browser_rebuilds(10, 11);
+        let mut out = [0.0; FRAME_STATS_LEN];
+        telemetry.write_into(&mut out, None);
+        assert_eq!(
+            &out[slot::GPU_BUFFER_ALLOCATIONS..],
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 8.0, 6.0, 9.0, 10.0, 11.0]
+        );
     }
 
     #[test]

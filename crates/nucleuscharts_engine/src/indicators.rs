@@ -373,6 +373,7 @@ impl ChartEngine {
     }
 
     pub(crate) fn recompute_indicators(&mut self) {
+        self.invalidate_frame_scene();
         for index in 0..self.indicators.len() {
             let binding = self.indicators[index].clone();
             let Some((times, values)) = self.data.series_data(binding.source) else {
@@ -494,6 +495,13 @@ impl ChartEngine {
     }
 
     pub(crate) fn update_indicators_after_source_update(&mut self, source: SeriesId, time: i64) {
+        if self
+            .indicators
+            .iter()
+            .any(|binding| binding.source == source)
+        {
+            self.invalidate_frame_scene();
+        }
         for index in 0..self.indicators.len() {
             if self.indicators[index].source != source {
                 continue;

@@ -431,8 +431,12 @@ impl ChartEngine {
     /// `ChartModel.hoveredSource`). Hosts refresh it from their hover pipeline; a removed
     /// id never sticks.
     pub fn set_hovered_series(&mut self, id: Option<SeriesId>) {
-        self.hovered_series =
-            id.filter(|&sid| self.series.iter().any(|s| s.id == sid && !s.removed));
+        let next = id.filter(|&sid| self.series.iter().any(|s| s.id == sid && !s.removed));
+        if self.hovered_series != next {
+            self.hovered_series = next;
+            // Hover-on-top changes only retained-layer assembly order; per-series geometry stays
+            // valid and is reassembled in the new order by every canonical frame build.
+        }
     }
 
     pub fn hovered_series(&self) -> Option<SeriesId> {
@@ -443,8 +447,11 @@ impl ChartEngine {
     /// click-to-select). Hosts refresh it from their click pipeline (empty-space clicks pass
     /// `None`); a removed id never sticks.
     pub fn set_selected_series(&mut self, id: Option<SeriesId>) {
-        self.selected_series =
-            id.filter(|&sid| self.series.iter().any(|s| s.id == sid && !s.removed));
+        let next = id.filter(|&sid| self.series.iter().any(|s| s.id == sid && !s.removed));
+        if self.selected_series != next {
+            self.selected_series = next;
+            self.invalidate_frame_overlay();
+        }
     }
 
     pub fn selected_series(&self) -> Option<SeriesId> {

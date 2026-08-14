@@ -23,6 +23,7 @@ impl ChartEngine {
     where
         F: Fn(&str) -> f64,
     {
+        self.frame_build_stats.layout_rebuilds += 1;
         let content_h = (self.css_height - self.time_axis_height()).max(1.0);
         self.layout_panes(content_h);
         let options = self.options.get();
@@ -92,6 +93,7 @@ impl ChartEngine {
         self.pane_w = (self.css_width - left_axis_w - axis_w).max(1.0);
         self.pane_h = content_h;
         self.axis_w = axis_w;
+        self.frame_layout_prepared();
     }
 }
 

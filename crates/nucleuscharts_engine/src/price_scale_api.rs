@@ -59,6 +59,7 @@ impl ChartEngine {
         from: f64,
         to: f64,
     ) {
+        self.invalidate_frame_scene();
         self.set_price_scale_visible_range_for(
             pane,
             if overlay {
@@ -78,6 +79,7 @@ impl ChartEngine {
         from: f64,
         to: f64,
     ) {
+        self.invalidate_frame_scene();
         if !from.is_finite() || !to.is_finite() || from >= to {
             return;
         }
@@ -108,6 +110,7 @@ impl ChartEngine {
     }
 
     pub fn set_price_scale_auto_scale(&mut self, pane: usize, overlay: bool, enabled: bool) {
+        self.invalidate_frame_scene();
         self.set_price_scale_auto_scale_for(
             pane,
             if overlay {
@@ -125,6 +128,7 @@ impl ChartEngine {
         target: PriceScaleTarget,
         enabled: bool,
     ) {
+        self.invalidate_frame_scene();
         if let Some(scale) = self.price_scale_for_mut(pane, target) {
             scale.set_auto_scale(enabled);
         }
@@ -146,6 +150,7 @@ impl ChartEngine {
     }
 
     pub fn set_price_scale_inverted(&mut self, pane: usize, overlay: bool, inverted: bool) {
+        self.invalidate_frame_scene();
         self.set_price_scale_inverted_for(
             pane,
             if overlay {
@@ -163,6 +168,7 @@ impl ChartEngine {
         target: PriceScaleTarget,
         inverted: bool,
     ) {
+        self.invalidate_frame_scene();
         if let Some(scale) = self.price_scale_for_mut(pane, target) {
             scale.set_invert_scale(inverted);
         }
@@ -189,6 +195,7 @@ impl ChartEngine {
     }
 
     pub fn set_price_scale_margins(&mut self, pane: usize, overlay: bool, top: f64, bottom: f64) {
+        self.invalidate_frame_scene();
         self.set_price_scale_margins_for(
             pane,
             if overlay {
@@ -208,6 +215,7 @@ impl ChartEngine {
         top: f64,
         bottom: f64,
     ) {
+        self.invalidate_frame_scene();
         if !top.is_finite()
             || !bottom.is_finite()
             || top < 0.0
@@ -243,6 +251,7 @@ impl ChartEngine {
     }
 
     pub fn set_price_scale_mode(&mut self, pane: usize, overlay: bool, mode: PriceScaleMode) {
+        self.invalidate_frame_scene();
         self.set_price_scale_mode_for(
             pane,
             if overlay {
@@ -260,12 +269,14 @@ impl ChartEngine {
         target: PriceScaleTarget,
         mode: PriceScaleMode,
     ) {
+        self.invalidate_frame_scene();
         if let Some(scale) = self.price_scale_for_mut(pane, target) {
             scale.set_mode(mode);
         }
     }
 
     pub fn set_series_price_scale(&mut self, id: SeriesId, target: PriceScaleTarget) {
+        self.invalidate_frame_scene();
         if let Some(series) = self.series_entry_mut(id) {
             series.overlay = target == PriceScaleTarget::Overlay;
             series.left_scale = target == PriceScaleTarget::Left;

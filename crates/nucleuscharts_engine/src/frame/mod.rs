@@ -24,6 +24,7 @@ use nucleuscharts_render::color::Color;
 use nucleuscharts_render::draw_list::{Gradient, IRect, LineStyle, LineType, Prim};
 use nucleuscharts_render::histogram::{build_histogram, HistogramItem, HistogramParams};
 use nucleuscharts_render::line::{dash_split, expand_line, LinePoint};
+use std::hash::{Hash, Hasher};
 
 use crate::drawings::DrawingKind;
 use crate::{
@@ -162,7 +163,7 @@ fn marker_auto_scale_margins(markers: &[crate::Marker], bar_spacing: f64) -> (f6
     )
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct FramePane {
     pub top: f64,
     pub height: f64,
@@ -183,12 +184,176 @@ pub struct FramePane {
     pub points: Vec<[f32; 2]>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ChartFrame {
     pub width: f64,
     pub height: f64,
     pub pixel_ratio: f64,
     pub panes: Vec<FramePane>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FrameBuildStats {
+    pub layout_rebuilds: u64,
+    pub autoscale_runs: u64,
+    pub grid_rebuilds: u64,
+    pub series_rebuilds: u64,
+    pub drawing_rebuilds: u64,
+    pub overlay_rebuilds: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FramePaneSegments {
+    pub under_end: usize,
+    pub series_end: usize,
+    pub drawings_end: usize,
+    pub overlay_end: usize,
+    pub under_revision: u64,
+    pub series_revision: u64,
+    pub drawings_revision: u64,
+    pub overlay_revision: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FrameSeriesSegment {
+    pub series_id: Option<SeriesId>,
+    pub start: usize,
+    pub end: usize,
+    pub revision: u64,
+}
+
+#[derive(Default)]
+pub(crate) struct FrameInvalidation {
+    clock: u64,
+    layout: u64,
+    scene: u64,
+    drawings: u64,
+    overlay: u64,
+    axis: u64,
+    autoscale: u64,
+    chrome: u64,
+    series: Vec<(SeriesId, u64)>,
+}
+
+impl FrameInvalidation {
+    fn tick(&mut self) -> u64 {
+        self.clock = self.clock.wrapping_add(1).max(1);
+        self.clock
+    }
+
+    fn all(&mut self) {
+        let generation = self.tick();
+        self.layout = generation;
+        self.scene = generation;
+        self.chrome = generation;
+        self.drawings = generation;
+        self.overlay = generation;
+        self.axis = generation;
+        self.autoscale = generation;
+    }
+
+    fn scene(&mut self) {
+        let generation = self.tick();
+        self.scene = generation;
+        self.chrome = generation;
+        self.drawings = generation;
+        self.overlay = generation;
+        self.axis = generation;
+        self.autoscale = generation;
+    }
+
+    fn coordinates(&mut self) {
+        let generation = self.tick();
+        self.scene = generation;
+        self.chrome = generation;
+        self.drawings = generation;
+        self.overlay = generation;
+        self.axis = generation;
+    }
+
+    fn series(&mut self, id: SeriesId) {
+        let generation = self.tick();
+        match self.series.iter_mut().find(|entry| entry.0 == id) {
+            Some(entry) => entry.1 = generation,
+            None => self.series.push((id, generation)),
+        }
+        self.chrome = generation;
+        self.overlay = generation;
+        self.autoscale = generation;
+        self.axis = generation;
+    }
+
+    fn series_generation(&self, id: SeriesId) -> u64 {
+        self.series
+            .iter()
+            .find_map(|entry| (entry.0 == id).then_some(entry.1))
+            .unwrap_or(0)
+    }
+
+    fn drawings(&mut self) {
+        let generation = self.tick();
+        self.drawings = generation;
+        self.overlay = generation;
+        self.axis = generation;
+    }
+
+    fn overlay(&mut self) {
+        let generation = self.tick();
+        self.overlay = generation;
+        self.axis = generation;
+    }
+
+    fn axis(&mut self) {
+        self.axis = self.tick();
+    }
+}
+
+#[derive(Clone, Default)]
+struct RetainedLayer {
+    prims: Vec<Prim>,
+    points: Vec<[f32; 2]>,
+    revision: u64,
+}
+
+#[derive(Clone, Default)]
+struct RetainedPane {
+    top: f64,
+    height: f64,
+    scissor: [u32; 4],
+    under: RetainedLayer,
+    series: RetainedLayer,
+    series_paint_marks: Vec<(SeriesId, usize)>,
+    series_layers: Vec<RetainedSeriesLayer>,
+    chrome: RetainedLayer,
+    drawings: RetainedLayer,
+    overlay: RetainedLayer,
+}
+
+#[derive(Clone, Default)]
+struct RetainedSeriesLayer {
+    id: SeriesId,
+    coordinate_generation: u64,
+    source_generation: u64,
+    layer: RetainedLayer,
+}
+
+#[derive(Default)]
+pub(crate) struct RetainedFrame {
+    initialized: bool,
+    panes: Vec<RetainedPane>,
+    segments: Vec<FramePaneSegments>,
+    series_segments: Vec<Vec<FrameSeriesSegment>>,
+    layout_generation: u64,
+    scene_generation: u64,
+    chrome_generation: u64,
+    drawings_generation: u64,
+    overlay_generation: u64,
+    autoscale_generation: u64,
+    axis_generation: u64,
+    last_layout_key: Option<[u64; 9]>,
+    last_overlay_key: Option<[u64; 6]>,
+    last_options_generation: u64,
+    last_series_style_key: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -393,6 +558,132 @@ pub(crate) fn verbatim_color(value: &Option<String>, fallback: Color) -> Color {
         .unwrap_or(fallback)
 }
 
+fn series_style_key(series: &[crate::SeriesEntry]) -> u64 {
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    for s in series {
+        s.id.hash(&mut hash);
+        s.kind.to_u8().hash(&mut hash);
+        for color in [
+            &s.line_color,
+            &s.up_color,
+            &s.down_color,
+            &s.wick_up_color,
+            &s.wick_down_color,
+            &s.border_up_color,
+            &s.border_down_color,
+            &s.area_top_color,
+            &s.area_bottom_color,
+            &s.price_line_color,
+            &s.top_fill_color1,
+            &s.top_fill_color2,
+            &s.top_line_color,
+            &s.bottom_fill_color1,
+            &s.bottom_fill_color2,
+            &s.bottom_line_color,
+        ] {
+            color.hash(&mut hash);
+        }
+        for value in [
+            s.line_width,
+            s.baseline,
+            Some(s.price_line_width),
+            s.bid,
+            s.ask,
+            Some(s.bid_ask_line_width),
+            s.point_markers_radius,
+            s.top_line_width,
+            s.bottom_line_width,
+            Some(s.base),
+        ] {
+            value.map(f64::to_bits).hash(&mut hash);
+        }
+        s.wick_visible.hash(&mut hash);
+        s.border_visible.hash(&mut hash);
+        s.histogram_updown.hash(&mut hash);
+        s.overlay.hash(&mut hash);
+        s.left_scale.hash(&mut hash);
+        s.pane_index.hash(&mut hash);
+        (match s.line_type {
+            LineType::Simple => 0_u8,
+            LineType::WithSteps => 1,
+            LineType::Curved => 2,
+        })
+        .hash(&mut hash);
+        for flag in [
+            s.point_markers,
+            s.visible,
+            s.last_price_animation,
+            s.last_value_visible,
+            s.title_visible,
+            s.countdown_visible,
+            s.price_line_visible,
+            s.bid_ask_visible,
+            s.line_visible,
+            s.invert_filled_area,
+            s.open_visible,
+            s.thin_bars,
+            s.markers_auto_scale,
+            s.removed,
+        ] {
+            flag.hash(&mut hash);
+        }
+        for value in [
+            s.price_line_source,
+            s.price_line_style,
+            s.bid_ask_line_style,
+            s.line_style,
+            s.top_line_style,
+            s.bottom_line_style,
+        ] {
+            value.hash(&mut hash);
+        }
+        s.title.hash(&mut hash);
+        s.bid_color.hash(&mut hash);
+        s.ask_color.hash(&mut hash);
+        s.price_lines.len().hash(&mut hash);
+        for line in &s.price_lines {
+            line.id.hash(&mut hash);
+            line.price.to_bits().hash(&mut hash);
+            line.color.hash(&mut hash);
+            line.width.hash(&mut hash);
+            line.title.hash(&mut hash);
+            line.line_visible.hash(&mut hash);
+            line.axis_label_visible.hash(&mut hash);
+        }
+        s.markers.len().hash(&mut hash);
+        for marker in &s.markers {
+            marker.time.hash(&mut hash);
+            marker.position.hash(&mut hash);
+            marker.shape.hash(&mut hash);
+            marker.color.hash(&mut hash);
+            marker.text.hash(&mut hash);
+        }
+        s.custom_frame.first_value.map(f64::to_bits).hash(&mut hash);
+        for last in [s.custom_frame.last, s.custom_frame.last_visible]
+            .into_iter()
+            .flatten()
+        {
+            last.value.to_bits().hash(&mut hash);
+            last.color.hash(&mut hash);
+            last.time.hash(&mut hash);
+        }
+    }
+    hash.finish()
+}
+
+fn price_scale_coordinate_key(panes: &[crate::Pane]) -> u64 {
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    for pane in panes {
+        for scale in [&pane.price_scale, &pane.left_scale, &pane.overlay_scale] {
+            scale
+                .price_range()
+                .map(|range| (range.min_value().to_bits(), range.max_value().to_bits()))
+                .hash(&mut hash);
+        }
+    }
+    hash.finish()
+}
+
 impl ChartEngine {
     /// The Baseline series' effective baseline price: the pinned `baseline_value` option, or
     /// the visible-range close midpoint (the engine's auto mode when the option is unset).
@@ -522,14 +813,117 @@ fn translate_prims_x(prims: &mut [Prim], dx: i32) {
     }
 }
 
+fn append_retained_layer(layer: &RetainedLayer, prims: &mut Vec<Prim>, points: &mut Vec<[f32; 2]>) {
+    let point_base = points.len() as u32;
+    points.extend_from_slice(&layer.points);
+    prims.reserve(layer.prims.len());
+    for prim in &layer.prims {
+        let mut prim = prim.clone();
+        match &mut prim {
+            Prim::Polyline { first_point, .. } | Prim::AreaFill { first_point, .. } => {
+                *first_point += point_base;
+            }
+            Prim::BandFill {
+                upper_first,
+                lower_first,
+                ..
+            } => {
+                *upper_first += point_base;
+                *lower_first += point_base;
+            }
+            _ => {}
+        }
+        prims.push(prim);
+    }
+}
+
 impl ChartEngine {
+    pub(crate) fn invalidate_frame_all(&mut self) {
+        self.frame_invalidation.all();
+    }
+
+    pub(crate) fn invalidate_frame_scene(&mut self) {
+        self.frame_invalidation.scene();
+    }
+
+    pub(crate) fn invalidate_frame_series(&mut self, id: SeriesId) {
+        self.frame_invalidation.series(id);
+    }
+
+    pub(crate) fn invalidate_frame_drawings(&mut self) {
+        self.frame_invalidation.drawings();
+    }
+
+    pub(crate) fn invalidate_frame_overlay(&mut self) {
+        self.frame_invalidation.overlay();
+    }
+
+    pub(crate) fn invalidate_frame_axis(&mut self) {
+        self.frame_invalidation.axis();
+    }
+
+    pub fn frame_build_stats(&self) -> FrameBuildStats {
+        self.frame_build_stats
+    }
+
+    pub fn frame_pane_segments(&self, pane: usize) -> Option<FramePaneSegments> {
+        self.retained_frame.segments.get(pane).copied()
+    }
+
+    pub fn frame_series_segments(&self, pane: usize) -> &[FrameSeriesSegment] {
+        self.retained_frame
+            .series_segments
+            .get(pane)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    pub fn frame_requires_layout(&self) -> bool {
+        self.retained_frame.layout_generation != self.frame_invalidation.layout
+            || self.retained_frame.autoscale_generation != self.frame_invalidation.autoscale
+    }
+
+    pub(crate) fn frame_layout_prepared(&mut self) {
+        self.retained_frame.layout_generation = self.frame_invalidation.layout;
+    }
+
+    pub fn frame_requires_axis(&self) -> bool {
+        self.retained_frame.axis_generation != self.frame_invalidation.axis
+    }
+
+    /// Force the next axis build to start from engine-owned labels. Browser extensions use this
+    /// after mutating their transient axis views so detached plugin labels cannot be retained.
+    pub fn invalidate_axis_frame(&mut self) {
+        self.invalidate_frame_axis();
+    }
+
+    pub fn set_crosshair_at(&mut self, x: f64, y: f64) {
+        let next = Some((x, y));
+        if self.crosshair != next {
+            self.crosshair = next;
+            self.invalidate_frame_overlay();
+        }
+    }
+
+    pub fn clear_crosshair_at(&mut self) {
+        if self.crosshair.take().is_some() {
+            self.invalidate_frame_overlay();
+        }
+    }
+
     /// Recompute pane price ranges for the current visible time window.
     /// Hosts that need scale-dependent layout measurements may call this before building a frame;
     /// `build_frame` calls it as well so standalone backends remain correct.
     pub fn autoscale_visible(&mut self) {
+        self.frame_build_stats.autoscale_runs += 1;
+        let before = price_scale_coordinate_key(&self.panes);
         if let Some((from, to)) = self.visible_range_for_frame() {
             self.autoscale_for_frame(from, to);
         }
+        if price_scale_coordinate_key(&self.panes) != before {
+            self.frame_invalidation.coordinates();
+        }
+        self.retained_frame.autoscale_generation = self.frame_invalidation.autoscale;
     }
 
     /// Build the visible chart geometry as backend-neutral primitives.
@@ -546,9 +940,76 @@ impl ChartEngine {
     /// repaint repeatedly should keep one `ChartFrame` and call this method instead of allocating
     /// a fresh tree for every cursor/animation frame.
     pub fn build_frame_into(&mut self, output: &mut ChartFrame) {
-        self.layout_for_frame();
+        self.frame_build_stats = FrameBuildStats::default();
+        self.build_frame_into_accumulating(output);
+    }
+
+    /// Start one host-coordinated frame whose layout/axis preparation occurs before pane-frame
+    /// construction. The browser uses this to keep diagnostics for the complete operation.
+    pub fn begin_frame_build(&mut self) {
+        self.frame_build_stats = FrameBuildStats::default();
+    }
+
+    fn sync_frame_input_invalidation(&mut self) {
+        let layout_key = [
+            self.css_width.to_bits(),
+            self.css_height.to_bits(),
+            self.dpr.to_bits(),
+            self.pane_w.to_bits(),
+            self.pane_h.to_bits(),
+            self.pane_left.to_bits(),
+            self.left_axis_w.to_bits(),
+            self.axis_w.to_bits(),
+            self.panes.len() as u64,
+        ];
+        let crosshair = self.crosshair.unwrap_or((f64::NAN, f64::NAN));
+        let overlay_key = [
+            crosshair.0.to_bits(),
+            crosshair.1.to_bits(),
+            self.crosshair_mode as u64,
+            u64::from(self.crosshair_ohlc_magnet),
+            self.animation_time.to_bits(),
+            self.separator_hover.map_or(u64::MAX, |index| index as u64),
+        ];
+        let options_generation = self.options.generation();
+        let series_style_key = series_style_key(&self.series);
+        if self.retained_frame.last_layout_key != Some(layout_key)
+            || self.retained_frame.last_options_generation != options_generation
+        {
+            self.frame_invalidation.all();
+        } else if self.retained_frame.last_series_style_key != series_style_key {
+            self.frame_invalidation.scene();
+        } else if self.retained_frame.last_overlay_key != Some(overlay_key) {
+            self.frame_invalidation.overlay();
+        }
+        self.retained_frame.last_layout_key = Some(layout_key);
+        self.retained_frame.last_overlay_key = Some(overlay_key);
+        self.retained_frame.last_options_generation = options_generation;
+        self.retained_frame.last_series_style_key = series_style_key;
+    }
+
+    /// Build pane geometry without resetting work already recorded by host layout preparation.
+    pub fn build_frame_into_accumulating(&mut self, output: &mut ChartFrame) {
+        self.sync_frame_input_invalidation();
+
+        let layout_dirty = self.retained_frame.layout_generation != self.frame_invalidation.layout;
+        let autoscale_dirty =
+            self.retained_frame.autoscale_generation != self.frame_invalidation.autoscale;
+
+        if layout_dirty {
+            self.layout_for_frame();
+            self.frame_build_stats.layout_rebuilds += 1;
+        }
         let visible = self.visible_range_for_frame();
-        self.autoscale_visible();
+        if autoscale_dirty {
+            self.autoscale_visible();
+        }
+        let scene_dirty = self.retained_frame.scene_generation != self.frame_invalidation.scene;
+        let drawings_dirty =
+            self.retained_frame.drawings_generation != self.frame_invalidation.drawings;
+        let overlay_dirty =
+            self.retained_frame.overlay_generation != self.frame_invalidation.overlay;
+        let chrome_dirty = self.retained_frame.chrome_generation != self.frame_invalidation.chrome;
 
         // reference/fancy-canvas renders each pane with its actual bitmap/media ratio, which can differ
         // slightly from devicePixelRatio when a fractional-DPR pane dimension rounds. Using DPR
@@ -668,153 +1129,332 @@ impl ChartEngine {
         output.pixel_ratio = self.dpr;
         output.panes.resize_with(pane_count, FramePane::default);
         output.panes.truncate(pane_count);
-        let time_marks = self.time_marks_for_frame();
+        let time_marks = if layout_dirty || scene_dirty {
+            self.time_marks_for_frame()
+        } else {
+            Vec::new()
+        };
+        let mut retained = std::mem::take(&mut self.retained_frame);
+        retained
+            .panes
+            .resize_with(pane_count, RetainedPane::default);
+        retained.panes.truncate(pane_count);
+        retained
+            .segments
+            .resize(pane_count, FramePaneSegments::default());
+        retained.segments.truncate(pane_count);
+        retained.series_segments.resize_with(pane_count, Vec::new);
+        retained.series_segments.truncate(pane_count);
         for (pi, pane) in self.panes.iter().enumerate() {
             let top_px = (pane.top * vpr).round().max(0.0) as u32;
             let height_px = (pane.height * vpr).round().max(0.0) as u32;
-            let out = &mut output.panes[pi];
-            out.top = pane.top;
-            out.height = pane.height;
-            out.scissor = [pane_left_px, top_px, pane_w_px, height_px];
-            out.under.clear();
-            out.main.clear();
-            out.top_prims.clear();
-            out.series_paint_marks.clear();
-            out.points.clear();
-            // reference `layout.background` vertical gradient (pane-widget.ts `_drawBackground`):
-            // each pane paints its own two-stop gradient spanning its full height, behind
-            // the grid and the series. A solid background emits nothing (the backends' clear
-            // color already covers it).
-            if let Some(background) =
-                self.background_gradient_prim(pane_left_px, top_px, pane_w_px, height_px)
-            {
-                out.under.push(background);
+            let cache = &mut retained.panes[pi];
+            cache.top = pane.top;
+            cache.height = pane.height;
+            cache.scissor = [pane_left_px, top_px, pane_w_px, height_px];
+
+            if layout_dirty || scene_dirty {
+                cache.under.prims.clear();
+                cache.under.points.clear();
+                if let Some(background) =
+                    self.background_gradient_prim(pane_left_px, top_px, pane_w_px, height_px)
+                {
+                    cache.under.prims.push(background);
+                }
+                if let Some((from, to)) = visible {
+                    self.build_grid_frame(
+                        &mut cache.under.prims,
+                        &time_marks,
+                        from,
+                        to,
+                        pane_w_px as i32,
+                        top_px as i32,
+                        height_px as i32,
+                        hpr,
+                        vpr,
+                        if pane.price_scale.is_empty() {
+                            &pane.left_scale
+                        } else {
+                            &pane.price_scale
+                        },
+                    );
+                }
+                cache.under.revision = self.frame_invalidation.scene;
+                self.frame_build_stats.grid_rebuilds += 1;
             }
-            if let Some((from, to)) = visible {
-                self.build_grid_frame(
-                    &mut out.under,
-                    &time_marks,
-                    from,
-                    to,
-                    pane_w_px as i32,
-                    top_px as i32,
-                    height_px as i32,
-                    hpr,
-                    vpr,
-                    if pane.price_scale.is_empty() {
-                        &pane.left_scale
-                    } else {
-                        &pane.price_scale
-                    },
-                );
-                for rs in &resolved {
-                    if rs.pane != Some(pi) || !rs.visible {
-                        continue;
-                    }
-                    let scale = pane_scale(pane, rs.scale_target);
-                    match rs.kind {
-                        SeriesKind::Candlestick => {
-                            self.build_candles_frame(*rs, from, to, hpr, vpr, &mut out.main, scale)
+
+            let series_layers_dirty = scene_dirty
+                || resolved
+                    .iter()
+                    .filter(|rs| rs.pane == Some(pi) && rs.visible)
+                    .any(|rs| {
+                        let source_generation = self.frame_invalidation.series_generation(rs.id);
+                        cache
+                            .series_layers
+                            .iter()
+                            .find(|layer| layer.id == rs.id)
+                            .is_none_or(|layer| {
+                                layer.coordinate_generation != self.frame_invalidation.scene
+                                    || layer.source_generation != source_generation
+                            })
+                    });
+            if series_layers_dirty || chrome_dirty {
+                cache.series.prims.clear();
+                cache.series.points.clear();
+                cache.series_paint_marks.clear();
+                cache
+                    .series_layers
+                    .retain(|layer| resolved.iter().any(|rs| rs.id == layer.id));
+                cache.chrome.prims.clear();
+                cache.chrome.points.clear();
+                if let Some((from, to)) = visible {
+                    for rs in &resolved {
+                        if rs.pane != Some(pi) || !rs.visible {
+                            continue;
                         }
-                        SeriesKind::Bar => {
-                            self.build_bars_frame(*rs, from, to, hpr, vpr, &mut out.main, scale)
-                        }
-                        SeriesKind::Histogram => self.build_histogram_frame(
-                            *rs,
-                            from,
-                            to,
-                            hpr,
-                            vpr,
-                            &mut out.main,
-                            scale,
-                        ),
-                        SeriesKind::Line | SeriesKind::Area => {
-                            // Oscillator channel band (RSI 30/70, Stochastic 20/80): a
-                            // translucent strip between the two price levels spanning the
-                            // pane, under the indicator's lines (TradingView-style).
-                            if let Some((lower_level, upper_level)) = self.oscillator_channel(rs.id)
-                            {
-                                let y_upper = (scale
-                                    .price_to_coordinate(upper_level, rs.base_value)
-                                    * vpr) as f32;
-                                let y_lower = (scale
-                                    .price_to_coordinate(lower_level, rs.base_value)
-                                    * vpr) as f32;
-                                let top = y_upper.min(y_lower);
-                                let height = (y_lower - y_upper).abs();
-                                if height >= 1.0 {
-                                    out.main.push(Prim::Rect {
-                                        rect: IRect {
-                                            x: 0,
-                                            y: top.round() as i32,
-                                            w: pane_w_px as i32,
-                                            h: height.round() as i32,
-                                        },
-                                        color: Color::rgba(0x78, 0x7B, 0x86, 0x33),
-                                    });
-                                }
+                        let source_generation = self.frame_invalidation.series_generation(rs.id);
+                        let layer_index = match cache
+                            .series_layers
+                            .iter()
+                            .position(|layer| layer.id == rs.id)
+                        {
+                            Some(index) => index,
+                            None => {
+                                cache.series_layers.push(RetainedSeriesLayer {
+                                    id: rs.id,
+                                    ..RetainedSeriesLayer::default()
+                                });
+                                cache.series_layers.len() - 1
                             }
-                            self.build_line_frame(
+                        };
+                        let series_layer = &mut cache.series_layers[layer_index];
+                        let rebuild_series = scene_dirty
+                            || series_layer.coordinate_generation != self.frame_invalidation.scene
+                            || series_layer.source_generation != source_generation;
+                        if !rebuild_series {
+                            continue;
+                        }
+                        series_layer.layer.prims.clear();
+                        series_layer.layer.points.clear();
+                        let scale = pane_scale(pane, rs.scale_target);
+                        match rs.kind {
+                            SeriesKind::Candlestick => self.build_candles_frame(
                                 *rs,
                                 from,
                                 to,
                                 hpr,
                                 vpr,
-                                pane.top,
-                                pane.top + pane.height,
-                                &mut out.main,
-                                &mut out.points,
+                                &mut series_layer.layer.prims,
                                 scale,
-                            )
+                            ),
+                            SeriesKind::Bar => self.build_bars_frame(
+                                *rs,
+                                from,
+                                to,
+                                hpr,
+                                vpr,
+                                &mut series_layer.layer.prims,
+                                scale,
+                            ),
+                            SeriesKind::Histogram => self.build_histogram_frame(
+                                *rs,
+                                from,
+                                to,
+                                hpr,
+                                vpr,
+                                &mut series_layer.layer.prims,
+                                scale,
+                            ),
+                            SeriesKind::Line | SeriesKind::Area => {
+                                if let Some((lower_level, upper_level)) =
+                                    self.oscillator_channel(rs.id)
+                                {
+                                    let y_upper =
+                                        (scale.price_to_coordinate(upper_level, rs.base_value)
+                                            * vpr) as f32;
+                                    let y_lower =
+                                        (scale.price_to_coordinate(lower_level, rs.base_value)
+                                            * vpr) as f32;
+                                    let top = y_upper.min(y_lower);
+                                    let height = (y_lower - y_upper).abs();
+                                    if height >= 1.0 {
+                                        series_layer.layer.prims.push(Prim::Rect {
+                                            rect: IRect {
+                                                x: 0,
+                                                y: top.round() as i32,
+                                                w: pane_w_px as i32,
+                                                h: height.round() as i32,
+                                            },
+                                            color: Color::rgba(0x78, 0x7B, 0x86, 0x33),
+                                        });
+                                    }
+                                }
+                                self.build_line_frame(
+                                    *rs,
+                                    from,
+                                    to,
+                                    hpr,
+                                    vpr,
+                                    pane.top,
+                                    pane.top + pane.height,
+                                    &mut series_layer.layer.prims,
+                                    &mut series_layer.layer.points,
+                                    scale,
+                                )
+                            }
+                            SeriesKind::Baseline => self.build_baseline_frame(
+                                *rs,
+                                from,
+                                to,
+                                hpr,
+                                vpr,
+                                &mut series_layer.layer.prims,
+                                &mut series_layer.layer.points,
+                                scale,
+                            ),
+                            SeriesKind::Custom => {}
                         }
-                        SeriesKind::Baseline => self.build_baseline_frame(
-                            *rs,
-                            from,
-                            to,
-                            hpr,
-                            vpr,
-                            &mut out.main,
-                            &mut out.points,
-                            scale,
-                        ),
-                        // A custom series paints nothing engine-side: the host's plugin pass
-                        // splices its prims into `main` at the mark recorded below (Phase C-c).
-                        SeriesKind::Custom => {}
+                        series_layer.coordinate_generation = self.frame_invalidation.scene;
+                        series_layer.source_generation = source_generation;
+                        series_layer.layer.revision =
+                            self.frame_invalidation.scene.max(source_generation);
+                        self.frame_build_stats.series_rebuilds += 1;
                     }
-                    out.series_paint_marks.push((rs.id, out.main.len()));
+                    self.build_markers_frame(pi, from, to, hpr, vpr, &mut cache.chrome.prims);
+                    self.build_price_lines_frame(
+                        pi,
+                        &mut cache.chrome.prims,
+                        pane_w_px as i32,
+                        vpr,
+                    );
+                    self.build_last_value_line_frame(
+                        pi,
+                        from,
+                        to,
+                        &mut cache.chrome.prims,
+                        pane_w_px as i32,
+                        hpr,
+                        vpr,
+                    );
+                    self.build_bid_ask_lines_frame(
+                        pi,
+                        from,
+                        &mut cache.chrome.prims,
+                        pane_w_px as i32,
+                        hpr,
+                        vpr,
+                    );
+                    if pi == 0 {
+                        self.build_last_pulse_frame(&mut cache.chrome.prims, hpr, vpr);
+                    }
                 }
-                self.build_markers_frame(pi, from, to, hpr, vpr, &mut out.main);
-                self.build_price_lines_frame(pi, &mut out.main, pane_w_px as i32, vpr);
-                self.build_last_value_line_frame(
+                cache.chrome.revision = self.frame_invalidation.chrome;
+                for rs in &resolved {
+                    if rs.pane != Some(pi) || !rs.visible {
+                        continue;
+                    }
+                    if let Some(layer) = cache.series_layers.iter().find(|layer| layer.id == rs.id)
+                    {
+                        append_retained_layer(
+                            &layer.layer,
+                            &mut cache.series.prims,
+                            &mut cache.series.points,
+                        );
+                    }
+                    cache
+                        .series_paint_marks
+                        .push((rs.id, cache.series.prims.len()));
+                }
+                append_retained_layer(
+                    &cache.chrome,
+                    &mut cache.series.prims,
+                    &mut cache.series.points,
+                );
+                cache.series.revision = self
+                    .frame_invalidation
+                    .scene
+                    .max(self.frame_invalidation.chrome);
+            }
+
+            if drawings_dirty {
+                cache.drawings.prims.clear();
+                cache.drawings.points.clear();
+                self.build_drawings_frame(
                     pi,
-                    from,
-                    to,
-                    &mut out.main,
                     pane_w_px as i32,
                     hpr,
                     vpr,
+                    &mut cache.drawings.prims,
+                    &mut cache.drawings.points,
                 );
-                self.build_bid_ask_lines_frame(pi, from, &mut out.main, pane_w_px as i32, hpr, vpr);
-                if pi == 0 {
-                    self.build_last_pulse_frame(&mut out.main, hpr, vpr);
+                cache.drawings.revision = self.frame_invalidation.drawings;
+                self.frame_build_stats.drawing_rebuilds += 1;
+            }
+
+            if overlay_dirty {
+                cache.overlay.prims.clear();
+                cache.overlay.points.clear();
+                self.build_crosshair_frame(
+                    pi,
+                    pane_w_px as i32,
+                    hpr,
+                    vpr,
+                    &mut cache.overlay.prims,
+                );
+                if let Some((from, to)) = visible {
+                    self.build_selection_anchors_frame(
+                        pi,
+                        from,
+                        to,
+                        hpr,
+                        vpr,
+                        &mut cache.overlay.prims,
+                    );
                 }
+                cache.overlay.revision = self.frame_invalidation.overlay;
+                self.frame_build_stats.overlay_rebuilds += 1;
             }
-            // Drawing tools (drawings.rs): above the series/chrome, below the crosshair
-            // (TradingView's drawings-under-crosshair order). The selected drawing's anchor
-            // handles and the interactive-creation preview emit with them.
-            self.build_drawings_frame(
-                pi,
-                pane_w_px as i32,
-                hpr,
-                vpr,
-                &mut out.main,
-                &mut out.points,
-            );
-            self.build_crosshair_frame(pi, pane_w_px as i32, hpr, vpr, &mut out.main);
-            // Selection anchors paint last: above the series and the crosshair marks.
-            if let Some((from, to)) = visible {
-                self.build_selection_anchors_frame(pi, from, to, hpr, vpr, &mut out.main);
+
+            let out = &mut output.panes[pi];
+            out.top = cache.top;
+            out.height = cache.height;
+            out.scissor = cache.scissor;
+            out.under.clear();
+            out.main.clear();
+            out.top_prims.clear();
+            out.series_paint_marks.clear();
+            out.points.clear();
+            append_retained_layer(&cache.under, &mut out.under, &mut out.points);
+            retained.series_segments[pi].clear();
+            for rs in &resolved {
+                if rs.pane != Some(pi) || !rs.visible {
+                    continue;
+                }
+                let start = out.main.len();
+                if let Some(layer) = cache.series_layers.iter().find(|layer| layer.id == rs.id) {
+                    append_retained_layer(&layer.layer, &mut out.main, &mut out.points);
+                    retained.series_segments[pi].push(FrameSeriesSegment {
+                        series_id: Some(rs.id),
+                        start,
+                        end: out.main.len(),
+                        revision: layer.layer.revision,
+                    });
+                }
+                out.series_paint_marks.push((rs.id, out.main.len()));
             }
+            let chrome_start = out.main.len();
+            append_retained_layer(&cache.chrome, &mut out.main, &mut out.points);
+            retained.series_segments[pi].push(FrameSeriesSegment {
+                series_id: None,
+                start: chrome_start,
+                end: out.main.len(),
+                revision: cache.chrome.revision,
+            });
+            let series_end = out.main.len();
+            append_retained_layer(&cache.drawings, &mut out.main, &mut out.points);
+            let drawings_end = out.main.len();
+            append_retained_layer(&cache.overlay, &mut out.main, &mut out.points);
+            let overlay_end = out.main.len();
             if pane_left_px != 0 {
                 translate_prims_x(&mut out.under, pane_left_px as i32);
                 translate_prims_x(&mut out.main, pane_left_px as i32);
@@ -823,7 +1463,25 @@ impl ChartEngine {
                     point[0] += pane_left_px as f32;
                 }
             }
+            retained.segments[pi] = FramePaneSegments {
+                under_end: out.under.len(),
+                series_end,
+                drawings_end,
+                overlay_end,
+                under_revision: cache.under.revision,
+                series_revision: cache.series.revision,
+                drawings_revision: cache.drawings.revision,
+                overlay_revision: cache.overlay.revision,
+            };
         }
+        retained.layout_generation = self.frame_invalidation.layout;
+        retained.scene_generation = self.frame_invalidation.scene;
+        retained.chrome_generation = self.frame_invalidation.chrome;
+        retained.drawings_generation = self.frame_invalidation.drawings;
+        retained.overlay_generation = self.frame_invalidation.overlay;
+        retained.autoscale_generation = self.frame_invalidation.autoscale;
+        retained.initialized = true;
+        self.retained_frame = retained;
     }
 
     fn layout_for_frame(&mut self) {

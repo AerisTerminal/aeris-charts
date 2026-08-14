@@ -21,6 +21,8 @@ impl ChartInner {
         // producing a frame. Two clock reads per frame; the record itself is fixed-size.
         let frame_start = self.clock.as_ref().map(|clock| clock.now());
         self.telemetry.reset_canvas2d_ops();
+        self.telemetry.set_gpu_resources(0, 0, 0);
+        self.telemetry.set_browser_rebuilds(0, 0);
         let outcome = self.render_inner();
         if let (Some(clock), Some(start)) = (self.clock.as_ref(), frame_start) {
             self.telemetry.set_cpu_ms(clock.now() - start);
@@ -29,6 +31,7 @@ impl ChartInner {
     }
 
     fn render_inner(&mut self) -> Result<(), JsValue> {
+        self.engine.begin_frame_build();
         // Series primitives (plugin platform Phase C-b): pull this frame's autoscale
         // contributions from the plugin hooks before any layout/autoscale pass runs, so the
         // axis-width negotiation, axis frame, and pane frame all see the merged ranges.
@@ -36,9 +39,19 @@ impl ChartInner {
         // Custom series (Phase C-c): same pre-layout collection point — the visible items'
         // price values become autoscale contributions and the engine's custom frame values.
         self.collect_custom_series_autoscale();
+        let plugin_active = !self.primitives.is_empty()
+            || !self.series_primitives.is_empty()
+            || !self.custom_series.is_empty();
+        if plugin_active {
+            // Plugins append transient labels to `axis_frame`; rebuild its engine-owned base on
+            // every conservative plugin frame so labels neither duplicate nor survive detach.
+            self.engine.invalidate_axis_frame();
+        }
 
         // ---- layout (price axis width negotiated against the price labels) ----
-        self.recompute_layout(false);
+        if self.engine.frame_requires_layout() {
+            self.recompute_layout(false);
+        }
 
         // Feed the engine clock for the candle-close countdown labels: the host-pinned value
         // when `set_now_seconds` installed one (the package's 1s countdown timer), else the
@@ -48,7 +61,12 @@ impl ChartInner {
             .unwrap_or_else(|| js_sys::Date::now() / 1000.0);
         self.engine.set_now_seconds(now);
 
-        // time tick marks: built once (needs &mut), shared by GPU grid + 2D labels.
+        // Settle layout, autoscale, and retained pane layers before building axis labels so the
+        // axis consumes the same finalized scale ranges as the canonical pane frame.
+        self.engine.build_frame_into_accumulating(&mut self.frame);
+        self.telemetry.set_rebuilds(self.engine.frame_build_stats());
+
+        // Build the retained axis labels only when an axis input changed.
         // Font comes from `layout` (reference `fontSize`/`fontFamily`): it drives the tick-density
         // estimate, host text measurement, and glyph drawing so all three agree. The label
         // width cap is reference `timeScale.tickMarkMaxCharacterLength` (default 8).
@@ -60,14 +78,18 @@ impl ChartInner {
             pixels_per_character * f64::from(self.engine.tick_mark_max_character_length);
         let axis_ctx = &self.axis_ctx;
         let dpr = self.dpr;
-        self.axis_frame = self.engine.build_axis_frame(max_label_width, |text| {
-            measure_text_ctx(axis_ctx, dpr, &font_family, font_size, text)
-        });
-
-        // ---- GPU: one scissored draw group per stacked pane ----
-        // The headless engine owns chart geometry. The WASM host only adds browser-adapter
-        // concerns such as crosshair interaction and text labels.
-        self.engine.build_frame_into(&mut self.frame);
+        if self.engine.frame_requires_axis() {
+            let next_axis_frame = self.engine.build_axis_frame(max_label_width, |text| {
+                measure_text_ctx(axis_ctx, dpr, &font_family, font_size, text)
+            });
+            if next_axis_frame != self.axis_frame {
+                self.axis_frame = next_axis_frame;
+            }
+            // Axis lowering also consumes option colors that are not stored in `AxisFrame`.
+            // Rebuild its primitives whenever the engine invalidates the axis, even when label
+            // geometry itself compares equal (for example a separator-only theme change).
+            self.axis_dirty = true;
+        }
 
         // Pane primitives (plugin platform Phase C-a): plugin renderers record Prim commands
         // into the pane layers and boxed labels into the axis frame, after the engine frame is
@@ -80,9 +102,20 @@ impl ChartInner {
         // Custom series (Phase C-c): plugin renders splice into each pane's `main` layer at
         // the series' paint-order marks (same command-recording model).
         self.run_custom_series();
+        if !self.primitives.is_empty()
+            || !self.series_primitives.is_empty()
+            || !self.custom_series.is_empty()
+        {
+            self.axis_dirty = true;
+        }
         // Axis labels contributed by primitives are now complete; convert the whole top layer once
         // and feed it to whichever backend executes this frame.
+        let axis_rebuilt = self.axis_dirty;
         self.build_axis_prims();
+        let text_rasterizations_before = self
+            .text_runs
+            .as_ref()
+            .map_or(0, TextRunStore::rasterizations);
 
         if self
             .gfx
@@ -107,9 +140,16 @@ impl ChartInner {
         let pane_outcome = if self.gfx.is_some() {
             let engine_frame = &self.frame;
             let pane_count = engine_frame.panes.len();
+            let pane_group_count = if plugin_active {
+                pane_count
+            } else {
+                (0..pane_count)
+                    .map(|pane| 3 + self.engine.frame_series_segments(pane).len())
+                    .sum()
+            };
             self.gpu_groups
-                .resize_with(pane_count + 1, DrawGroup::default);
-            self.gpu_groups.truncate(pane_count + 1);
+                .resize_with(pane_group_count + 1, DrawGroup::default);
+            self.gpu_groups.truncate(pane_group_count + 1);
             let Some(gfx) = self.gfx.as_mut() else {
                 return Err(JsValue::from_str("WebGPU state disappeared mid-render"));
             };
@@ -117,127 +157,229 @@ impl ChartInner {
             let renderers = Rc::clone(&gfx.renderers);
             let text_runs = &mut self.text_runs;
             let mut atlas = shared.atlas.borrow_mut();
-            for (group, pane_frame) in self
-                .gpu_groups
-                .iter_mut()
-                .take(pane_count)
-                .zip(&engine_frame.panes)
+            atlas.begin_frame();
+            let atlas_changed = self.gpu_atlas_epoch != atlas.epoch();
+            self.gpu_atlas_epoch = atlas.epoch();
+            if !atlas_changed
+                && self
+                    .gpu_groups
+                    .iter()
+                    .any(|group| !group.tex_quads.is_empty())
             {
-                group.scissor = Some(pane_frame.scissor);
-                group.clear();
-                // Convert the shared frame only at the WebGPU backend boundary. The builder
-                // walks each layer in the Canvas2D executor's order (under, then main, then
-                // top; prims in list order within a layer) and records one run per maximal
-                // same-pipeline block, so e.g. markers emitted after the candles paint over
-                // the wicks on WebGPU exactly as they do on Canvas2D. Text prims resolve
-                // through the host's browser-rasterized atlas cache (chart/text_runs.rs) and
-                // schedule as tex-quad runs at their prim position in the same order.
-                let queue = &shared.queue;
+                atlas.protect_retained_frame_slots();
+            }
+            let queue = &shared.queue;
+            if plugin_active {
+                for (pane, pane_frame) in engine_frame.panes.iter().enumerate() {
+                    let group = &mut self.gpu_groups[pane];
+                    group.key = 0x1000_0000 | pane as u64;
+                    group.scissor = Some(pane_frame.scissor);
+                    group.clear();
+                    let mut resolve_text = |prim: &Prim| {
+                        text_runs
+                            .as_mut()
+                            .and_then(|runs| runs.resolve(&mut atlas, queue, prim))
+                    };
+                    prims_to_group(
+                        &pane_frame.under,
+                        &pane_frame.points,
+                        group,
+                        &mut resolve_text,
+                    );
+                    prims_to_group(
+                        &pane_frame.main,
+                        &pane_frame.points,
+                        group,
+                        &mut resolve_text,
+                    );
+                    prims_to_group(
+                        &pane_frame.top_prims,
+                        &pane_frame.points,
+                        group,
+                        &mut resolve_text,
+                    );
+                }
+            } else {
+                let mut build_group = |group: &mut DrawGroup,
+                                       key: u64,
+                                       source_revision: u64,
+                                       scissor: Option<[u32; 4]>,
+                                       prims: &[Prim],
+                                       points: &[[f32; 2]]| {
+                    if !atlas_changed
+                        && group.key == key
+                        && group.source_revision == source_revision
+                        && group.scissor == scissor
+                    {
+                        return;
+                    }
+                    group.scissor = scissor;
+                    group.rebuild(key, source_revision);
+                    let mut resolve_text = |prim: &Prim| {
+                        text_runs
+                            .as_mut()
+                            .and_then(|runs| runs.resolve(&mut atlas, queue, prim))
+                    };
+                    prims_to_group(prims, points, group, &mut resolve_text);
+                };
+                let mut group_index = 0;
+                for (pane, pane_frame) in engine_frame.panes.iter().enumerate() {
+                    let segments = self.engine.frame_pane_segments(pane).unwrap_or_default();
+                    let main = &pane_frame.main;
+                    build_group(
+                        &mut self.gpu_groups[group_index],
+                        0x2000_0000 | (pane as u64) << 4,
+                        segments.under_revision,
+                        Some(pane_frame.scissor),
+                        &pane_frame.under[..segments.under_end.min(pane_frame.under.len())],
+                        &pane_frame.points,
+                    );
+                    group_index += 1;
+                    for series in self.engine.frame_series_segments(pane) {
+                        let key = match series.series_id {
+                            Some(id) => 0x3000_0000 | (pane as u64) << 32 | u64::from(id),
+                            None => 0x4000_0000 | pane as u64,
+                        };
+                        build_group(
+                            &mut self.gpu_groups[group_index],
+                            key,
+                            series.revision,
+                            Some(pane_frame.scissor),
+                            &main[series.start.min(main.len())..series.end.min(main.len())],
+                            &pane_frame.points,
+                        );
+                        group_index += 1;
+                    }
+                    build_group(
+                        &mut self.gpu_groups[group_index],
+                        0x2000_0002 | (pane as u64) << 4,
+                        segments.drawings_revision,
+                        Some(pane_frame.scissor),
+                        &main[segments.series_end.min(main.len())
+                            ..segments.drawings_end.min(main.len())],
+                        &pane_frame.points,
+                    );
+                    group_index += 1;
+                    build_group(
+                        &mut self.gpu_groups[group_index],
+                        0x2000_0003 | (pane as u64) << 4,
+                        segments.overlay_revision,
+                        Some(pane_frame.scissor),
+                        &main[segments.drawings_end.min(main.len())
+                            ..segments.overlay_end.min(main.len())],
+                        &pane_frame.points,
+                    );
+                    group_index += 1;
+                }
+            }
+            // Final unscissored top-layer group: watermark, axis chrome and axis/crosshair labels.
+            // It is submitted in this same pass after every pane group, so no engine Canvas2D paint
+            // follows a WebGPU frame.
+            let axis_group = &mut self.gpu_groups[pane_group_count];
+            if atlas_changed
+                || axis_group.key != u64::MAX
+                || axis_group.source_revision != self.axis_revision
+            {
+                axis_group.scissor = None;
+                axis_group.rebuild(u64::MAX, self.axis_revision);
                 let mut resolve_text = |prim: &Prim| {
                     text_runs
                         .as_mut()
                         .and_then(|runs| runs.resolve(&mut atlas, queue, prim))
                 };
-                prims_to_group(
-                    &pane_frame.under,
-                    &pane_frame.points,
-                    group,
-                    &mut resolve_text,
-                );
-                prims_to_group(
-                    &pane_frame.main,
-                    &pane_frame.points,
-                    group,
-                    &mut resolve_text,
-                );
-                prims_to_group(
-                    &pane_frame.top_prims,
-                    &pane_frame.points,
-                    group,
-                    &mut resolve_text,
-                );
+                prims_to_group(&self.axis_prims, &[], axis_group, &mut resolve_text);
             }
-            // Final unscissored top-layer group: watermark, axis chrome and axis/crosshair labels.
-            // It is submitted in this same pass after every pane group, so no engine Canvas2D paint
-            // follows a WebGPU frame.
-            let axis_group = &mut self.gpu_groups[pane_count];
-            axis_group.scissor = None;
-            axis_group.clear();
-            let queue = &shared.queue;
-            let mut resolve_text = |prim: &Prim| {
-                text_runs
-                    .as_mut()
-                    .and_then(|runs| runs.resolve(&mut atlas, queue, prim))
-            };
-            prims_to_group(&self.axis_prims, &[], axis_group, &mut resolve_text);
-            let groups = &self.gpu_groups[..];
-            gfx.msaa.ensure(
-                &shared.device,
-                gfx.config.format,
-                gfx.config.width,
-                gfx.config.height,
-            );
+            let atlas_valid = atlas.frame_valid();
+            drop(atlas);
+            if !atlas_valid {
+                PaneRenderOutcome::Canvas2d
+            } else {
+                let groups = &self.gpu_groups[..];
+                gfx.msaa.ensure(
+                    &shared.device,
+                    gfx.config.format,
+                    gfx.config.width,
+                    gfx.config.height,
+                );
 
-            let acquired = match gfx.surface.get_current_texture() {
-                Ok(frame) => Ok(Some(frame)),
-                Err(error) => match surface_error_action(&error) {
-                    SurfaceErrorAction::Reconfigure => {
-                        // Resize and suspend/resume can invalidate only the swapchain. Reconfigure
-                        // and retry once; if that fails, the warm Canvas2D pane takes over.
-                        gfx.surface.configure(&shared.device, &gfx.config);
-                        match gfx.surface.get_current_texture() {
-                            Ok(frame) => Ok(Some(frame)),
-                            Err(retry_error)
-                                if surface_error_action(&retry_error)
-                                    == SurfaceErrorAction::SkipFrame =>
-                            {
-                                Ok(None)
+                let acquired = match gfx.surface.get_current_texture() {
+                    Ok(frame) => Ok(Some(frame)),
+                    Err(error) => match surface_error_action(&error) {
+                        SurfaceErrorAction::Reconfigure => {
+                            // Resize and suspend/resume can invalidate only the swapchain. Reconfigure
+                            // and retry once; if that fails, the warm Canvas2D pane takes over.
+                            gfx.surface.configure(&shared.device, &gfx.config);
+                            match gfx.surface.get_current_texture() {
+                                Ok(frame) => Ok(Some(frame)),
+                                Err(retry_error)
+                                    if surface_error_action(&retry_error)
+                                        == SurfaceErrorAction::SkipFrame =>
+                                {
+                                    Ok(None)
+                                }
+                                Err(retry_error) => Err(retry_error),
                             }
-                            Err(retry_error) => Err(retry_error),
                         }
-                    }
-                    SurfaceErrorAction::SkipFrame => Ok(None),
-                    SurfaceErrorAction::Fallback => Err(error),
-                },
-            };
+                        SurfaceErrorAction::SkipFrame => Ok(None),
+                        SurfaceErrorAction::Fallback => Err(error),
+                    },
+                };
 
-            match acquired {
-                Ok(Some(frame)) => {
-                    let view = frame
-                        .texture
-                        .create_view(&wgpu::TextureViewDescriptor::default());
-                    let bg_clear = wgpu::Color {
-                        r: bg.r() as f64 / 255.0,
-                        g: bg.g() as f64 / 255.0,
-                        b: bg.b() as f64 / 255.0,
-                        a: 1.0,
-                    };
-                    let draw_calls = render_frame(
-                        &shared.device,
-                        &shared.queue,
-                        gfx.msaa.view(),
-                        &view,
-                        gfx.config.width,
-                        gfx.config.height,
-                        bg_clear,
-                        &renderers.quad,
-                        &renderers.tex,
-                        &renderers.tri,
-                        groups,
-                        gfx.timer.as_ref(),
-                    );
-                    self.telemetry.set_draw_calls(draw_calls);
-                    frame.present();
-                    PaneRenderOutcome::Presented
+                match acquired {
+                    Ok(Some(frame)) => {
+                        let view = frame
+                            .texture
+                            .create_view(&wgpu::TextureViewDescriptor::default());
+                        let bg_clear = wgpu::Color {
+                            r: bg.r() as f64 / 255.0,
+                            g: bg.g() as f64 / 255.0,
+                            b: bg.b() as f64 / 255.0,
+                            a: 1.0,
+                        };
+                        let resources_before = gfx.frame_resources.stats();
+                        let draw_calls = render_frame(
+                            &shared.device,
+                            &shared.queue,
+                            gfx.msaa.view(),
+                            &view,
+                            gfx.config.width,
+                            gfx.config.height,
+                            bg_clear,
+                            &renderers.quad,
+                            &renderers.tex,
+                            &renderers.tri,
+                            groups,
+                            &mut gfx.frame_resources,
+                            gfx.timer.as_ref(),
+                        );
+                        let resources_after = gfx.frame_resources.stats();
+                        self.telemetry.set_gpu_resources(
+                            resources_after.allocations - resources_before.allocations,
+                            resources_after.write_calls - resources_before.write_calls,
+                            resources_after.uploaded_bytes - resources_before.uploaded_bytes,
+                        );
+                        self.telemetry.set_draw_calls(draw_calls);
+                        frame.present();
+                        PaneRenderOutcome::Presented
+                    }
+                    Ok(None) => PaneRenderOutcome::Timeout,
+                    Err(error) => PaneRenderOutcome::Fallback(format!(
+                        "WebGPU surface acquisition failed after recovery: {error}"
+                    )),
                 }
-                Ok(None) => PaneRenderOutcome::Timeout,
-                Err(error) => PaneRenderOutcome::Fallback(format!(
-                    "WebGPU surface acquisition failed after recovery: {error}"
-                )),
             }
         } else {
             PaneRenderOutcome::Canvas2d
         };
+
+        let text_rasterizations_after = self
+            .text_runs
+            .as_ref()
+            .map_or(0, TextRunStore::rasterizations);
+        self.telemetry.set_browser_rebuilds(
+            u64::from(axis_rebuilt),
+            text_rasterizations_after.saturating_sub(text_rasterizations_before),
+        );
 
         match pane_outcome {
             PaneRenderOutcome::Presented => {}
@@ -265,6 +407,9 @@ impl ChartInner {
     /// axis/top layer. The engine owns this policy; this browser host contributes only its native
     /// Canvas text ink metric.
     fn build_axis_prims(&mut self) {
+        if !self.axis_dirty {
+            return;
+        }
         let axis_ctx = &self.axis_ctx;
         let layout = self.opts().layout.clone();
         let dpr = self.dpr;
@@ -291,6 +436,8 @@ impl ChartInner {
                     })
                     .unwrap_or(0.0)
             });
+        self.axis_revision = self.axis_revision.wrapping_add(1).max(1);
+        self.axis_dirty = false;
     }
 
     // ---- Legacy Canvas2D plugin-text escape hatch ----

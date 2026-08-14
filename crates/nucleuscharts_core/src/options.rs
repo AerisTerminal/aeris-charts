@@ -477,6 +477,7 @@ pub fn deep_merge(dst: &mut Value, patch: &Value) {
 #[derive(Clone, Debug)]
 pub struct ChartOptionsStore {
     value: Value,
+    generation: u64,
 }
 
 impl Default for ChartOptionsStore {
@@ -490,6 +491,7 @@ impl ChartOptionsStore {
     pub fn new() -> Self {
         Self {
             value: serde_json::to_value(ChartOptions::default()).expect("options serialize"),
+            generation: 0,
         }
     }
 
@@ -498,6 +500,7 @@ impl ChartOptionsStore {
     pub fn apply(&mut self, patch: &Value) {
         if patch.is_object() {
             deep_merge(&mut self.value, patch);
+            self.generation = self.generation.wrapping_add(1);
         }
     }
 
@@ -517,6 +520,10 @@ impl ChartOptionsStore {
     /// The raw merged JSON (for round-tripping back to JS via `options()`).
     pub fn value(&self) -> &Value {
         &self.value
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 }
 

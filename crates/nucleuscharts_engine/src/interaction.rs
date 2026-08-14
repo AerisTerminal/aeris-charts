@@ -129,6 +129,7 @@ impl ChartEngine {
     /// reference `TimeScale.scaleTo` (bar spacing by the ratio of distances-from-right).
     pub fn time_axis_scale_to(&mut self, x: f64) {
         self.time_scale.scale_to(x);
+        self.invalidate_frame_scene();
     }
 
     pub fn time_axis_end_scale(&mut self) {
@@ -156,6 +157,7 @@ impl ChartEngine {
     pub fn price_axis_scale_to(&mut self, pane: usize, target: PriceScaleTarget, y: f64) {
         if let Some(scale) = self.price_scale_for_mut(pane, target) {
             scale.scale_to(y);
+            self.invalidate_frame_scene();
         }
     }
 
@@ -179,6 +181,7 @@ impl ChartEngine {
         let factor = (1.0 - scale * 0.1).clamp(0.05, 20.0);
         if let Some(price_scale) = self.price_scale_for_mut(pane, target) {
             price_scale.zoom(y, factor);
+            self.invalidate_frame_scene();
         }
     }
 
@@ -195,6 +198,7 @@ impl ChartEngine {
     pub fn price_axis_scroll_to(&mut self, pane: usize, target: PriceScaleTarget, y: f64) {
         if let Some(scale) = self.price_scale_for_mut(pane, target) {
             scale.scroll_to(y);
+            self.invalidate_frame_scene();
         }
     }
 

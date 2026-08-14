@@ -154,6 +154,29 @@ export interface frame_stats {
   /** Producer overruns observed across all ring sources since chart create
    *  (see {@link series_api.set_ring_source}); 0 while no ring is bound. */
   ring_overruns: number;
+  /** WebGPU vertex-buffer allocations made for the most recent frame. A warmed, unchanged chart
+   *  reports 0; capacity grows geometrically and is retained until chart removal. */
+  gpu_buffer_allocations: number;
+  /** WebGPU queue buffer-write calls made for the most recent frame. */
+  gpu_write_calls: number;
+  /** Vertex bytes uploaded to WebGPU for the most recent frame. */
+  gpu_uploaded_bytes: number;
+  /** Retained layout recomputations performed for the most recent frame. */
+  layout_rebuilds: number;
+  /** Autoscale passes performed for the most recent frame. */
+  autoscale_runs: number;
+  /** Individual retained series layers rebuilt for the most recent frame. */
+  series_rebuilds: number;
+  /** Retained drawing layers rebuilt for the most recent frame. */
+  drawing_rebuilds: number;
+  /** Retained grid/underlay layers rebuilt for the most recent frame. */
+  grid_rebuilds: number;
+  /** Retained interaction-overlay layers rebuilt for the most recent frame. */
+  overlay_rebuilds: number;
+  /** Browser axis/top-layer primitive rebuilds for the most recent frame. */
+  axis_rebuilds: number;
+  /** Browser text runs rasterized and resolved into atlas slots for the most recent frame. */
+  text_resolutions: number;
 }
 
 /**

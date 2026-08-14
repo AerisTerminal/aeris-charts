@@ -24,6 +24,17 @@ const FRAME_STATS_SLOT = {
   memory_bytes: 5,
   canvas2d_ops: 6,
   ring_overruns: 7,
+  gpu_buffer_allocations: 8,
+  gpu_write_calls: 9,
+  gpu_uploaded_bytes: 10,
+  layout_rebuilds: 11,
+  autoscale_runs: 12,
+  series_rebuilds: 13,
+  drawing_rebuilds: 14,
+  grid_rebuilds: 15,
+  overlay_rebuilds: 16,
+  axis_rebuilds: 17,
+  text_resolutions: 18,
 } as const;
 
 const UNSUPPORTED_WORKER_OPTIONS = [
@@ -366,6 +377,17 @@ export class offscreen_chart {
       memory_bytes: out[FRAME_STATS_SLOT.memory_bytes] as number,
       canvas2d_ops: out[FRAME_STATS_SLOT.canvas2d_ops] as number,
       ring_overruns: out[FRAME_STATS_SLOT.ring_overruns] as number,
+      gpu_buffer_allocations: out[FRAME_STATS_SLOT.gpu_buffer_allocations] as number,
+      gpu_write_calls: out[FRAME_STATS_SLOT.gpu_write_calls] as number,
+      gpu_uploaded_bytes: out[FRAME_STATS_SLOT.gpu_uploaded_bytes] as number,
+      layout_rebuilds: out[FRAME_STATS_SLOT.layout_rebuilds] as number,
+      autoscale_runs: out[FRAME_STATS_SLOT.autoscale_runs] as number,
+      series_rebuilds: out[FRAME_STATS_SLOT.series_rebuilds] as number,
+      drawing_rebuilds: out[FRAME_STATS_SLOT.drawing_rebuilds] as number,
+      grid_rebuilds: out[FRAME_STATS_SLOT.grid_rebuilds] as number,
+      overlay_rebuilds: out[FRAME_STATS_SLOT.overlay_rebuilds] as number,
+      axis_rebuilds: out[FRAME_STATS_SLOT.axis_rebuilds] as number,
+      text_resolutions: out[FRAME_STATS_SLOT.text_resolutions] as number,
     };
   }
 

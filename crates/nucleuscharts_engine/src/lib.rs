@@ -25,7 +25,8 @@ pub use drawings::{
     TextMeasureFn, DRAWING_DEFAULT_COLOR,
 };
 pub use frame::{
-    AxisFrame, AxisLabel, AxisLabelCorners, AxisTextAlign, AxisTextMidpoint, ChartFrame, FramePane,
+    AxisFrame, AxisLabel, AxisLabelCorners, AxisTextAlign, AxisTextMidpoint, ChartFrame,
+    FrameBuildStats, FramePane, FramePaneSegments, FrameSeriesSegment,
 };
 pub use hit_test::{SeriesHit, SeriesHitKind};
 pub(crate) use indicators::IndicatorBinding;
@@ -737,6 +738,9 @@ pub struct ChartEngine {
     price_formatter_fn: Option<PriceFormatterFn>,
     tick_mark_formatter_fn: Option<TickMarkFormatterFn>,
     time_formatter_fn: Option<TimeFormatterFn>,
+    frame_invalidation: frame::FrameInvalidation,
+    retained_frame: frame::RetainedFrame,
+    frame_build_stats: FrameBuildStats,
 }
 
 impl ChartEngine {
@@ -797,6 +801,9 @@ impl ChartEngine {
             price_formatter_fn: None,
             tick_mark_formatter_fn: None,
             time_formatter_fn: None,
+            frame_invalidation: frame::FrameInvalidation::default(),
+            retained_frame: frame::RetainedFrame::default(),
+            frame_build_stats: FrameBuildStats::default(),
         }
     }
 
@@ -823,6 +830,7 @@ impl ChartEngine {
     /// built-in formatter.
     pub fn set_price_formatter(&mut self, f: Option<PriceFormatterFn>) {
         self.price_formatter_fn = f;
+        self.invalidate_frame_all();
     }
 
     /// Install (or clear) the host time-axis tick formatter (reference `timeScale.tickMarkFormatter`).
@@ -830,6 +838,7 @@ impl ChartEngine {
     /// 2 DayOfMonth, 3 Time, 4 TimeWithSeconds).
     pub fn set_tick_mark_formatter(&mut self, f: Option<TickMarkFormatterFn>) {
         self.tick_mark_formatter_fn = f;
+        self.invalidate_frame_scene();
     }
 
     /// Pin the engine clock (UTC seconds) used by the candle-close countdown rows of the
@@ -837,19 +846,25 @@ impl ChartEngine {
     /// per frame the wasm render path also feeds the system time when nothing was pinned.
     pub fn set_now_seconds(&mut self, now: f64) {
         if now.is_finite() {
+            let changed_second = self.now_override.map(f64::floor) != Some(now.floor());
             self.now_override = Some(now);
+            if changed_second {
+                self.invalidate_frame_axis();
+            }
         }
     }
 
     /// Install (or clear) the host crosshair time formatter (reference `localization.timeFormatter`).
     pub fn set_time_formatter(&mut self, f: Option<TimeFormatterFn>) {
         self.time_formatter_fn = f;
+        self.invalidate_frame_overlay();
     }
 
     /// reference `localization.dateFormat` (default `dd MMM \'yy`): the pattern driving the
     /// crosshair time label. Ignored while a host `timeFormatter` is installed (reference parity).
     pub fn set_date_format(&mut self, pattern: &str) {
         self.date_format = pattern.to_string();
+        self.invalidate_frame_overlay();
     }
 
     /// Inject per-locale month-name tables (reference `localization.locale`): the 12 short and 12
@@ -858,6 +873,7 @@ impl ChartEngine {
     /// `Intl.DateTimeFormat`); the default is English.
     pub fn set_month_names(&mut self, short: [String; 12], long: [String; 12]) {
         self.month_names = MonthNames { short, long };
+        self.invalidate_frame_scene();
     }
 
     /// Add a series to the headless chart. The returned id is stable for the instance lifetime.
@@ -877,6 +893,7 @@ impl ChartEngine {
         // A custom series' time-only rows still count as data rows for the base index.
         self.data
             .set_rows_count_as_data(id, kind == SeriesKind::Custom);
+        self.invalidate_frame_scene();
         id
     }
 
@@ -888,6 +905,7 @@ impl ChartEngine {
             s.kind = kind;
             self.data
                 .set_rows_count_as_data(id, kind == SeriesKind::Custom);
+            self.invalidate_frame_scene();
         }
     }
 
@@ -901,6 +919,7 @@ impl ChartEngine {
             .find(|s| s.id == id && !s.removed && s.kind == SeriesKind::Custom)
         {
             s.custom_frame = values;
+            self.invalidate_frame_scene();
         }
     }
 
@@ -979,12 +998,16 @@ impl ChartEngine {
             return;
         }
         self.primitive_autoscale.push(contribution);
+        self.invalidate_frame_scene();
     }
 
     /// Drop all recorded series-primitive autoscale contributions. Hosts call this at frame
     /// build start, before re-collecting the current frame's contributions.
     pub fn clear_autoscale_contributions(&mut self) {
-        self.primitive_autoscale.clear();
+        if !self.primitive_autoscale.is_empty() {
+            self.primitive_autoscale.clear();
+            self.invalidate_frame_scene();
+        }
     }
 
     /// reference chart-api.ts `addPane(preserveEmptyPane)` → chart-model.ts `_addPane`: append a
@@ -995,6 +1018,7 @@ impl ChartEngine {
         pane.preserve_empty = preserve_empty;
         self.apply_chart_scale_options(&mut pane);
         self.panes.push(pane);
+        self.invalidate_frame_all();
         self.panes.len() - 1
     }
 
@@ -1035,6 +1059,7 @@ impl ChartEngine {
                 s.pane_index -= 1;
             }
         }
+        self.invalidate_frame_all();
         true
     }
 
@@ -1052,6 +1077,7 @@ impl ChartEngine {
                 s.pane_index = first;
             }
         }
+        self.invalidate_frame_all();
         true
     }
 
@@ -1081,6 +1107,7 @@ impl ChartEngine {
                 p
             };
         }
+        self.invalidate_frame_all();
         true
     }
 
@@ -1137,6 +1164,7 @@ impl ChartEngine {
         if from != PANELESS {
             self.cleanup_if_pane_is_empty(from);
         }
+        self.invalidate_frame_all();
     }
 
     /// Port of reference chart-model.ts `_cleanupIfPaneIsEmpty`: a pane left without any live
@@ -1221,6 +1249,7 @@ impl ChartEngine {
             .find(|series| series.id == id && !series.removed)
         {
             series.visible = visible;
+            self.invalidate_frame_scene();
         }
     }
 
@@ -1246,6 +1275,7 @@ impl ChartEngine {
     /// every live series id exactly once (a bad permutation — wrong length, duplicates,
     /// unknown or missing ids — is rejected with false and no state change).
     pub fn set_series_order(&mut self, ids: Vec<SeriesId>) -> bool {
+        self.invalidate_frame_scene();
         if ids.len() != self.series_order.len() {
             return false;
         }
@@ -1265,6 +1295,7 @@ impl ChartEngine {
     /// Per-point color channels truncate with their rows. Returns the new data length, or
     /// `None` for an unknown/removed id.
     pub fn series_pop(&mut self, id: SeriesId, count: usize) -> Option<usize> {
+        self.invalidate_frame_series(id);
         if self.is_series_removed(id) || !self.series.iter().any(|s| s.id == id) {
             return None;
         }
@@ -1275,12 +1306,14 @@ impl ChartEngine {
     }
 
     pub fn set_series_markers(&mut self, id: SeriesId, markers: Vec<Marker>) {
+        self.invalidate_frame_scene();
         if let Some(series) = self.series_entry_mut(id) {
             series.markers = markers;
         }
     }
 
     pub fn set_series_markers_auto_scale(&mut self, id: SeriesId, enabled: bool) {
+        self.invalidate_frame_scene();
         if let Some(series) = self.series_entry_mut(id) {
             series.markers_auto_scale = enabled;
         }
@@ -1288,6 +1321,7 @@ impl ChartEngine {
 
     /// Apply one streaming OHLC update after validating its time and values.
     pub fn update_series_bar(&mut self, id: SeriesId, time: f64, values: [f64; 4]) -> bool {
+        self.invalidate_frame_series(id);
         self.update_series_bar_styled(id, time, values, [None; 3])
     }
 
@@ -1299,6 +1333,7 @@ impl ChartEngine {
     where
         I: IntoIterator<Item = (f64, [f64; 4])>,
     {
+        self.invalidate_frame_series(id);
         if self.validate_series_id(id).is_err() {
             return 0;
         }
@@ -1329,6 +1364,7 @@ impl ChartEngine {
         values: [f64; 4],
         colors: [Option<u32>; 3],
     ) -> bool {
+        self.invalidate_frame_series(id);
         if self.validate_series_id(id).is_err() {
             return false;
         }
@@ -1364,7 +1400,11 @@ impl ChartEngine {
         if self.validate_series_id(id).is_err() {
             return false;
         }
-        self.data.set_point_colors(id, [body, wick, border])
+        let changed = self.data.set_point_colors(id, [body, wick, border]);
+        if changed {
+            self.invalidate_frame_series(id);
+        }
+        changed
     }
 
     /// Full (re)assignment with per-row color channels run through the same repair pipeline as
@@ -1381,6 +1421,7 @@ impl ChartEngine {
         close: &[f64],
         colors: [Option<Vec<u32>>; 3],
     ) -> Result<ValidationReport, ValidationError> {
+        self.invalidate_frame_series(id);
         self.validate_series_id(id).map_err(|error| match error {
             SeriesIdError::Unknown(id) => ValidationError::UnknownSeries(id),
             SeriesIdError::Stale(id) => ValidationError::StaleSeries(id),
@@ -1419,6 +1460,7 @@ impl ChartEngine {
         low: &[f64],
         close: &[f64],
     ) -> Result<ValidationReport, ValidationError> {
+        self.invalidate_frame_series(id);
         // A removed slot must stay empty; ignore the data (the TS series handle rejects the call
         // before it reaches here, so this is defense-in-depth) and report a clean no-op.
         self.validate_series_id(id).map_err(|error| match error {
@@ -1454,6 +1496,7 @@ impl ChartEngine {
         low: Vec<f64>,
         close: Vec<f64>,
     ) -> bool {
+        self.invalidate_frame_series(id);
         if self.validate_series_id(id).is_err() {
             return false;
         }
@@ -1529,12 +1572,14 @@ impl ChartEngine {
     /// Fit the horizontal scale to the current union of series timestamps.
     pub fn fit_content(&mut self) {
         self.time_scale.fit_content();
+        self.invalidate_frame_scene();
     }
 
     /// Apply the public horizontal-scale spacing while keeping ownership in the headless model.
     pub fn set_bar_spacing(&mut self, spacing: f64) {
         if spacing.is_finite() && spacing > 0.0 {
             self.time_scale.set_bar_spacing(spacing);
+            self.invalidate_frame_scene();
         }
     }
 
@@ -1542,12 +1587,14 @@ impl ChartEngine {
     pub fn set_right_offset(&mut self, offset: f64) {
         if offset.is_finite() {
             self.time_scale.set_right_offset(offset);
+            self.invalidate_frame_scene();
         }
     }
 
     /// reference `timeScale.timeVisible`: show the time of day in axis/crosshair labels.
     pub fn set_time_visible(&mut self, visible: bool) {
         self.time_visible = visible;
+        self.invalidate_frame_scene();
     }
 
     /// reference `timeScale.visible`: reserve/collapse the whole time-axis strip. Distinct from
@@ -1555,11 +1602,13 @@ impl ChartEngine {
     /// time-scale-options-defaults.ts keeps the two flags separate).
     pub fn set_time_axis_visible(&mut self, visible: bool) {
         self.time_axis_visible = visible;
+        self.invalidate_frame_all();
     }
 
     /// reference `timeScale.ticksVisible`: tick marks beside the time-axis labels.
     pub fn set_time_ticks_visible(&mut self, visible: bool) {
         self.time_ticks_visible = visible;
+        self.invalidate_frame_scene();
     }
 
     /// reference `timeScale.minimumHeight` (CSS px; non-negative, finite): floor for the strip
@@ -1567,6 +1616,7 @@ impl ChartEngine {
     pub fn set_time_axis_minimum_height(&mut self, height: f64) {
         if height.is_finite() && height >= 0.0 {
             self.time_axis_minimum_height = height;
+            self.invalidate_frame_all();
         }
     }
 
@@ -1574,6 +1624,7 @@ impl ChartEngine {
     /// `tickMarkMaxCharacterLength || defaultTickMarkMaxCharacterLength` (time-scale.ts:635).
     pub fn set_tick_mark_max_character_length(&mut self, n: u32) {
         self.tick_mark_max_character_length = if n == 0 { 8 } else { n };
+        self.invalidate_frame_scene();
     }
 
     /// The reserved time-axis strip height in media px (reference chart-widget.ts
@@ -1592,6 +1643,7 @@ impl ChartEngine {
     /// into the next axis frame; hosts repaint to show the band.
     pub fn set_separator_hover(&mut self, index: Option<usize>) {
         self.separator_hover = index;
+        self.invalidate_frame_overlay();
     }
 
     /// Drag the separator below pane `index` by `delta_css` logical pixels. Positive deltas grow
@@ -1615,11 +1667,13 @@ impl ChartEngine {
         let applied = new_top - top;
         self.panes[index].stretch_factor = new_top;
         self.panes[index + 1].stretch_factor = bottom - applied;
+        self.invalidate_frame_all();
     }
 
     /// reference `timeScale.secondsVisible`: include seconds when `time_visible` is set.
     pub fn set_seconds_visible(&mut self, visible: bool) {
         self.seconds_visible = visible;
+        self.invalidate_frame_scene();
     }
 
     /// TradingView-style bid/ask: push the current quotes for a series. `None` hides that
@@ -1628,33 +1682,39 @@ impl ChartEngine {
         if let Some(series) = self.series.iter_mut().find(|s| s.id == id && !s.removed) {
             series.bid = bid.filter(|v| v.is_finite());
             series.ask = ask.filter(|v| v.is_finite());
+            self.invalidate_frame_scene();
         }
     }
 
     /// reference `timeScale.minBarSpacing`.
     pub fn set_min_bar_spacing(&mut self, spacing: f64) {
         self.time_scale.set_min_bar_spacing(spacing);
+        self.invalidate_frame_scene();
     }
 
     /// reference `timeScale.maxBarSpacing` (CSS px; 0 restores the default half-width cap).
     pub fn set_max_bar_spacing(&mut self, spacing: f64) {
         self.time_scale.set_max_bar_spacing(spacing);
+        self.invalidate_frame_scene();
     }
 
     /// reference `timeScale().applyOptions({ barSpacing })`: write the option and apply it live.
     pub fn apply_bar_spacing_option(&mut self, spacing: f64) {
         self.time_scale.apply_bar_spacing_option(spacing);
+        self.invalidate_frame_scene();
     }
 
     /// reference `timeScale().applyOptions({ rightOffset })`: write the option and apply it live.
     pub fn apply_right_offset_option(&mut self, offset: f64) {
         self.time_scale.apply_right_offset_option(offset);
+        self.invalidate_frame_scene();
     }
 
     /// reference `timeScale.rightOffsetPixels`: pin the right offset in pixels (converted to bars
     /// through the current bar spacing, then preserved across zoom).
     pub fn set_right_offset_pixels(&mut self, pixels: f64) {
         self.time_scale.set_right_offset_pixels(pixels);
+        self.invalidate_frame_scene();
     }
 
     /// reference `timeScale.fixLeftEdge`.
@@ -1722,6 +1782,7 @@ impl ChartEngine {
         };
         let x = self.time_scale.index_to_coordinate(index);
         self.crosshair = Some((x, y));
+        self.invalidate_frame_overlay();
         true
     }
 
@@ -1731,7 +1792,7 @@ impl ChartEngine {
     /// `updateCrosshair` re-deriving from the saved offset) — so clearing it leaves nothing
     /// a scale change could resurrect.
     pub fn clear_crosshair_position(&mut self) {
-        self.crosshair = None;
+        self.clear_crosshair_at();
     }
 
     /// Host-pushed "all scaling and scrolling disabled" aggregate (reference
@@ -1765,11 +1826,13 @@ impl ChartEngine {
     /// default offset, matching the reference charting library's `scrollToRealTime` contract.
     pub fn scroll_to_real_time(&mut self) {
         self.time_scale.set_right_offset(0.0);
+        self.invalidate_frame_scene();
     }
 
     /// Restore the configured default bar spacing and right offset.
     pub fn reset_time_scale(&mut self) {
         self.time_scale.restore_default();
+        self.invalidate_frame_scene();
     }
 
     /// TradingView-style "reset view" button semantics in one action: the time scale returns
@@ -1797,6 +1860,7 @@ impl ChartEngine {
         self.route_time_scale_patch(&patch);
         self.route_price_scale_patch(&patch);
         self.route_localization_patch(&patch);
+        self.invalidate_frame_all();
         Ok(())
     }
 
@@ -1805,6 +1869,7 @@ impl ChartEngine {
         let patch = chart_theme_patch(theme);
         self.options.apply(&patch);
         self.route_price_scale_patch(&patch);
+        self.invalidate_frame_all();
     }
 
     /// Route the behavioral keys of a `timeScale` options patch to the core scale (reference
@@ -2056,6 +2121,7 @@ impl ChartEngine {
         if from.is_finite() && to.is_finite() && from <= to {
             self.time_scale
                 .set_logical_range(LogicalRange::new(from, to));
+            self.invalidate_frame_scene();
         }
     }
 
@@ -2092,6 +2158,7 @@ impl ChartEngine {
         if left <= right {
             self.time_scale
                 .set_visible_range(StrictRange::new(left, right), false);
+            self.invalidate_frame_scene();
         }
     }
 
@@ -2115,6 +2182,11 @@ impl ChartEngine {
     }
 
     fn sync_time_points(&mut self) {
+        let sequence_changed =
+            self.data.time_points_generation() != self.synced_time_points_generation;
+        if sequence_changed {
+            self.invalidate_frame_scene();
+        }
         // Port of reference `ChartModel.updateTimeScale` (chart-model.ts:953-984): decide the
         // right-offset compensation BEFORE the new points/base index land on the scale.
         let old_first_time = self.synced_first_time;

@@ -134,7 +134,9 @@ impl TextRunStore {
             Some(run) => run,
             None => {
                 let run = self.rasterize(atlas, queue, &key, x, y, bbox)?;
-                self.cache.insert(key, run, epoch);
+                // Rasterization may safely reset an atlas before the first insertion of this
+                // frame. Cache the slot against the resulting epoch, never the stale pre-reset one.
+                self.cache.insert(key, run, atlas.epoch());
                 run
             }
         };
@@ -193,7 +195,7 @@ impl TextRunStore {
             placement.w,
             placement.h,
             &pixels.data(),
-        );
+        )?;
         Some(CachedRun {
             slot,
             dx: placement.base_x as f32 - x,
@@ -208,5 +210,9 @@ impl TextRunStore {
             self.cache.len(),
             self.cache.rasterizations()
         )
+    }
+
+    pub(super) fn rasterizations(&self) -> u64 {
+        self.cache.rasterizations()
     }
 }

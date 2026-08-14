@@ -44,6 +44,7 @@ impl ChartEngine {
     /// `{type:"custom"}` keeps the installed fn. Returns false for a malformed patch, an
     /// unknown type, or an unknown/removed id.
     pub fn series_apply_price_format_json(&mut self, id: SeriesId, json: &str) -> bool {
+        self.invalidate_frame_scene();
         let Ok(serde_json::Value::Object(patch)) = serde_json::from_str::<serde_json::Value>(json)
         else {
             return false;
@@ -87,6 +88,7 @@ impl ChartEngine {
     /// callback falls back to the built-in price formatter. Returns false for an
     /// unknown/removed id.
     pub fn set_series_price_formatter(&mut self, id: SeriesId, f: PriceFormatterFn) -> bool {
+        self.invalidate_frame_scene();
         let Some(s) = self.series.iter_mut().find(|s| s.id == id && !s.removed) else {
             return false;
         };
@@ -230,6 +232,7 @@ impl ChartEngine {
     /// the keep/clear/pin contract of the candle part colors (`""` clears an override back to
     /// its follow state). Returns false for a malformed patch or an unknown/removed id.
     pub fn series_apply_options_json(&mut self, id: SeriesId, json: &str) -> bool {
+        self.invalidate_frame_scene();
         let Ok(serde_json::Value::Object(patch)) = serde_json::from_str::<serde_json::Value>(json)
         else {
             return false;

@@ -56,6 +56,14 @@ pub struct DrawGroup {
     pub tex_quads: Vec<TexQuadInstance>,
     /// Run-length draw schedule over `tris`/`quads`/`tex_quads`, in Canvas2D paint order.
     pub runs: Vec<DrawRun>,
+    /// Semantic content revision. The host increments this only when rebuilding this group;
+    /// retained GPU buffers skip uploads while it is unchanged.
+    pub revision: u64,
+    /// Engine/source revision last converted into this group's CPU streams.
+    pub source_revision: u64,
+    /// Stable semantic slot key. A changed key invalidates uploaded revisions while retaining
+    /// compatible capacity at the same vector position.
+    pub key: u64,
 }
 
 impl DrawGroup {
@@ -65,6 +73,17 @@ impl DrawGroup {
         self.quads.clear();
         self.tex_quads.clear();
         self.runs.clear();
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    pub fn rebuild(&mut self, key: u64, revision: u64) {
+        self.tris.clear();
+        self.quads.clear();
+        self.tex_quads.clear();
+        self.runs.clear();
+        self.key = key;
+        self.source_revision = revision;
+        self.revision = self.revision.wrapping_add(1).max(1);
     }
 }
 
@@ -192,10 +211,85 @@ impl MsaaTarget {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BufferStats {
+    pub allocations: u64,
+    pub write_calls: u64,
+    pub uploaded_bytes: u64,
+}
+
+#[derive(Default)]
+struct ReusableBuffer {
+    buffer: Option<wgpu::Buffer>,
+    capacity: u64,
+    uploaded_revision: Option<u64>,
+}
+
+impl ReusableBuffer {
+    fn prepare(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        contents: &[u8],
+        revision: u64,
+        label: &'static str,
+        stats: &mut BufferStats,
+    ) {
+        if contents.is_empty() {
+            return;
+        }
+        let required = contents.len() as u64;
+        if required > self.capacity {
+            let capacity = buffer_capacity(required);
+            self.buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: capacity,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.capacity = capacity;
+            self.uploaded_revision = None;
+            stats.allocations += 1;
+        }
+        if self.uploaded_revision != Some(revision) {
+            if let Some(buffer) = &self.buffer {
+                queue.write_buffer(buffer, 0, contents);
+                self.uploaded_revision = Some(revision);
+                stats.write_calls += 1;
+                stats.uploaded_bytes += required;
+            }
+        }
+    }
+}
+
+fn buffer_capacity(required: u64) -> u64 {
+    required.next_power_of_two().max(256)
+}
+
+#[derive(Default)]
 struct GroupBuffers {
-    tris: Option<wgpu::Buffer>,
-    quads: Option<wgpu::Buffer>,
-    tex: Option<wgpu::Buffer>,
+    key: u64,
+    tris: ReusableBuffer,
+    quads: ReusableBuffer,
+    tex: ReusableBuffer,
+}
+
+/// Per-chart retained vertex resources. Capacities grow geometrically and remain at their
+/// high-water mark until the chart (and therefore this owner) is dropped.
+#[derive(Default)]
+pub struct FrameResources {
+    groups: Vec<GroupBuffers>,
+    stats: BufferStats,
+}
+
+impl FrameResources {
+    pub fn stats(&self) -> BufferStats {
+        self.stats
+    }
+
+    pub fn reset_stats(&mut self) {
+        self.stats = BufferStats::default();
+    }
 }
 
 /// Encode and submit one frame. Returns the number of draw calls issued, which the host
@@ -214,6 +308,7 @@ pub fn render_frame(
     tex: &TexQuadRenderer,
     tri: &TriRenderer,
     groups: &[DrawGroup],
+    resources: &mut FrameResources,
     timer: Option<&GpuTimer>,
 ) -> u32 {
     let timestamps = FrameTimestamps::new(timer);
@@ -222,28 +317,42 @@ pub fn render_frame(
     tex.write_globals(queue, width_px, height_px);
     tri.write_globals(queue, width_px, height_px);
 
-    // Keep uploads on the WebGPU-native queue path. `DeviceExt::create_buffer_init` maps every
-    // buffer at creation, which browser software adapters may reject even for tiny buffers.
-    let vbuf = |contents: &[u8], label| {
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(label),
-            size: contents.len() as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&buffer, 0, contents);
-        buffer
-    };
-
-    // buffers must outlive the pass; draw counts come from the runs
-    let buffers: Vec<GroupBuffers> = groups
-        .iter()
-        .map(|g| GroupBuffers {
-            tris: (!g.tris.is_empty()).then(|| vbuf(bytemuck::cast_slice(&g.tris), "tris")),
-            quads: (!g.quads.is_empty()).then(|| vbuf(bytemuck::cast_slice(&g.quads), "quads")),
-            tex: (!g.tex_quads.is_empty()).then(|| vbuf(bytemuck::cast_slice(&g.tex_quads), "tex")),
-        })
-        .collect();
+    resources
+        .groups
+        .resize_with(groups.len(), GroupBuffers::default);
+    resources.groups.truncate(groups.len());
+    for (group, buffers) in groups.iter().zip(&mut resources.groups) {
+        if buffers.key != group.key {
+            buffers.key = group.key;
+            buffers.tris.uploaded_revision = None;
+            buffers.quads.uploaded_revision = None;
+            buffers.tex.uploaded_revision = None;
+        }
+        buffers.tris.prepare(
+            device,
+            queue,
+            bytemuck::cast_slice(&group.tris),
+            group.revision,
+            "tris",
+            &mut resources.stats,
+        );
+        buffers.quads.prepare(
+            device,
+            queue,
+            bytemuck::cast_slice(&group.quads),
+            group.revision,
+            "quads",
+            &mut resources.stats,
+        );
+        buffers.tex.prepare(
+            device,
+            queue,
+            bytemuck::cast_slice(&group.tex_quads),
+            group.revision,
+            "tex",
+            &mut resources.stats,
+        );
+    }
 
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("frame"),
@@ -265,7 +374,7 @@ pub fn render_frame(
             occlusion_query_set: None,
         });
 
-        for (group, bufs) in groups.iter().zip(&buffers) {
+        for (group, bufs) in groups.iter().zip(&resources.groups) {
             let [sx, sy, sw, sh] = match group.scissor {
                 Some([x, y, w, h]) => {
                     let x = x.min(width_px);
@@ -283,19 +392,19 @@ pub fn render_frame(
             for run in &group.runs {
                 match run.pipeline {
                     RunPipeline::Tri => {
-                        if let Some(b) = &bufs.tris {
+                        if let Some(b) = &bufs.tris.buffer {
                             tri.draw(&mut pass, b, run.first, run.count);
                             draw_calls += 1;
                         }
                     }
                     RunPipeline::Quad => {
-                        if let Some(b) = &bufs.quads {
+                        if let Some(b) = &bufs.quads.buffer {
                             quad.draw(&mut pass, b, run.first, run.count);
                             draw_calls += 1;
                         }
                     }
                     RunPipeline::TexQuad => {
-                        if let Some(b) = &bufs.tex {
+                        if let Some(b) = &bufs.tex.buffer {
                             tex.draw(&mut pass, b, run.first, run.count);
                             draw_calls += 1;
                         }
@@ -310,7 +419,7 @@ pub fn render_frame(
                     .iter()
                     .any(|run| run.pipeline == RunPipeline::TexQuad)
             {
-                if let Some(b) = &bufs.tex {
+                if let Some(b) = &bufs.tex.buffer {
                     tex.draw(&mut pass, b, 0, group.tex_quads.len() as u32);
                     draw_calls += 1;
                 }
@@ -322,4 +431,29 @@ pub fn render_frame(
     queue.submit(Some(encoder.finish()));
     timestamps.begin_readback();
     draw_calls
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vertex_capacity_grows_geometrically_and_never_exact_sizes() {
+        assert_eq!(buffer_capacity(1), 256);
+        assert_eq!(buffer_capacity(256), 256);
+        assert_eq!(buffer_capacity(257), 512);
+        assert_eq!(buffer_capacity(700), 1024);
+    }
+
+    #[test]
+    fn retained_group_revision_changes_only_on_rebuild() {
+        let mut group = DrawGroup::default();
+        group.rebuild(7, 11);
+        let revision = group.revision;
+        assert_eq!(group.key, 7);
+        assert_eq!(group.source_revision, 11);
+        assert_eq!(group.revision, revision);
+        group.rebuild(7, 12);
+        assert_ne!(group.revision, revision);
+    }
 }

@@ -67,6 +67,59 @@ test("reports plausible last-frame telemetry on the WebGPU backend", async ({ pa
   expect(moving_crosshair_ops, "moving crosshair chrome must stay on WebGPU").toBe(0);
 });
 
+test("warmed stable and crosshair frames retain WebGPU resources", async ({ page }) => {
+  await page.goto("/");
+  await wait_chart(page);
+  expect(await page.evaluate(() => window.__chart.backend())).toBe("webgpu");
+
+  await present_frames(page, 5);
+  const stable = await page.evaluate(async () => {
+    const frames = [];
+    for (let i = 0; i < 20; i += 1) {
+      window.__chart.render();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      frames.push(window.__chart.frame_stats());
+    }
+    return frames;
+  });
+  for (const stats of stable) {
+    expect(stats.gpu_buffer_allocations).toBe(0);
+    expect(stats.gpu_write_calls).toBe(0);
+    expect(stats.gpu_uploaded_bytes).toBe(0);
+    expect(stats.layout_rebuilds).toBe(0);
+    expect(stats.autoscale_runs).toBe(0);
+    expect(stats.series_rebuilds).toBe(0);
+    expect(stats.drawing_rebuilds).toBe(0);
+    expect(stats.grid_rebuilds).toBe(0);
+    expect(stats.overlay_rebuilds).toBe(0);
+  }
+
+  await page.evaluate(async () => {
+    const row = window.__data[493];
+    window.__chart.set_crosshair_position(row.close, row.time, window.__main);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+  });
+  const crosshair = await page.evaluate(async () => {
+    const frames = [];
+    for (let i = 0; i < 20; i += 1) {
+      const row = window.__data[500 + i * 7];
+      window.__chart.set_crosshair_position(row.close, row.time, window.__main);
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      frames.push(window.__chart.frame_stats());
+    }
+    return frames;
+  });
+  for (const stats of crosshair) {
+    expect(stats.gpu_buffer_allocations).toBe(0);
+    expect(stats.series_rebuilds).toBe(0);
+    expect(stats.drawing_rebuilds).toBe(0);
+    expect(stats.grid_rebuilds).toBe(0);
+    expect(stats.layout_rebuilds).toBe(0);
+    expect(stats.autoscale_runs).toBe(0);
+    expect(stats.overlay_rebuilds).toBe(1);
+  }
+});
+
 test("reports plausible last-frame telemetry on the Canvas2D fallback", async ({ page }) => {
   await page.goto("/?backend=canvas2d");
   await wait_chart(page);
@@ -139,7 +192,7 @@ test("reading frame_stats costs a negligible fraction of a frame", async ({ page
   });
   console.log(`frame_stats() read cost: ${(read * 1000).toFixed(3)} µs/call`);
   // 0.02 ms is 0.25% of the consumer's 8 ms budget at 120 Hz, and still well above the real
-  // cost of a fixed 64-byte copy plus an object literal.
+  // cost of a fixed 152-byte copy plus an object literal.
   expect(read, `frame_stats() cost ${read} ms/call`).toBeLessThan(0.02);
 
   // And the engine-side record must not become self-referential: polling for a sustained stretch

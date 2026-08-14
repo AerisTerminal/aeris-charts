@@ -74,6 +74,7 @@ impl ChartEngine {
         style: LineStyle,
         title: &str,
     ) -> u32 {
+        self.invalidate_frame_scene();
         let id = self.next_price_line_id;
         self.next_price_line_id += 1;
         if let Some(s) = self.series.iter_mut().find(|s| s.id == series_id) {
@@ -95,6 +96,7 @@ impl ChartEngine {
 
     /// Remove a price line by id (from whichever series holds it).
     pub fn remove_price_line(&mut self, id: u32) {
+        self.invalidate_frame_scene();
         for s in &mut self.series {
             s.price_lines.retain(|pl| pl.id != id);
         }
@@ -104,6 +106,7 @@ impl ChartEngine {
     /// `IPriceLine.applyOptions`): absent keys keep their current values. Returns false for a
     /// malformed patch or an unknown id (both are host no-ops).
     pub fn price_line_apply_options(&mut self, id: u32, json: &str) -> bool {
+        self.invalidate_frame_scene();
         let Ok(patch) = serde_json::from_str::<PriceLinePatch>(json) else {
             return false;
         };

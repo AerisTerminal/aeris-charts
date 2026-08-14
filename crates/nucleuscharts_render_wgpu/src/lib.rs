@@ -17,7 +17,8 @@ mod tri_pipeline;
 
 pub use atlas::{AtlasSlot, LabelAtlas, ATLAS_SIZE};
 pub use frame::{
-    prims_to_group, render_frame, DrawGroup, DrawRun, MsaaTarget, RunPipeline, SAMPLE_COUNT,
+    prims_to_group, render_frame, BufferStats, DrawGroup, DrawRun, FrameResources, MsaaTarget,
+    RunPipeline, SAMPLE_COUNT,
 };
 pub use gpu_timer::GpuTimer;
 pub use quad_executor::{prim_to_instances, prims_to_instances};

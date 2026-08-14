@@ -370,7 +370,10 @@ impl ChartEngine {
     where
         F: Fn(&str) -> f64,
     {
-        self.build_axis_frame_impl(max_label_width, measure, true)
+        self.sync_frame_input_invalidation();
+        let frame = self.build_axis_frame_impl(max_label_width, measure, true);
+        self.retained_frame.axis_generation = self.frame_invalidation.axis;
+        frame
     }
 
     /// `include_transient` gates the crosshair labels: they paint per frame, but the axis-width
@@ -385,8 +388,19 @@ impl ChartEngine {
     where
         F: Fn(&str) -> f64,
     {
-        self.layout_for_frame();
-        self.autoscale_visible();
+        let uninitialized = !self.retained_frame.initialized;
+        if uninitialized || self.retained_frame.layout_generation != self.frame_invalidation.layout
+        {
+            self.layout_for_frame();
+            self.retained_frame.layout_generation = self.frame_invalidation.layout;
+            self.frame_build_stats.layout_rebuilds += 1;
+        }
+        if uninitialized
+            || self.retained_frame.autoscale_generation != self.frame_invalidation.autoscale
+        {
+            self.autoscale_visible();
+        }
+        self.retained_frame.initialized = true;
         let mut out = AxisFrame {
             separator_hover: self.separator_hover,
             ..AxisFrame::default()

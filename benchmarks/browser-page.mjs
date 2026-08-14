@@ -149,6 +149,7 @@ async function realtime(points, seed, mode, update_rate_hz, duration_ms) {
   const deadline = performance.now() + duration_ms;
   const api_samples = [];
   const frame_cpu_samples = [];
+  const frame_stats_samples = [];
   let updates = 0;
   let last_time = entry.columns.times.at(-1);
   let value = entry.columns.close.at(-1);
@@ -166,7 +167,9 @@ async function realtime(points, seed, mode, update_rate_hz, duration_ms) {
     entry.series.update({ time: last_time, open: value, high: value + 0.2, low: value - 0.2, close: value });
     api_samples.push(performance.now() - call_started);
     await next_frame();
-    frame_cpu_samples.push(entry.chart.frame_stats().cpu_ms);
+    const frame_stats = entry.chart.frame_stats();
+    frame_cpu_samples.push(frame_stats.cpu_ms);
+    frame_stats_samples.push(frame_stats);
     updates += 1;
   }
   const elapsed_ms = performance.now() - started;
@@ -174,6 +177,7 @@ async function realtime(points, seed, mode, update_rate_hz, duration_ms) {
   return {
     api_samples,
     frame_cpu_samples,
+    frame_stats_samples,
     elapsed_ms,
     updates,
     presented_frames: after.presented_frames - before.presented_frames,
@@ -194,7 +198,7 @@ async function prepare_interaction(points, seed) {
 
 function start_frame_recording() {
   if (frame_recording !== null) throw new Error("frame recording already active");
-  const record = { active: true, last: performance.now(), last_presented: null, frame_ms: [], cpu_ms: [], gpu_ms: [], draw_calls: [], started: performance.now() };
+  const record = { active: true, last: performance.now(), last_presented: null, frame_ms: [], cpu_ms: [], gpu_ms: [], draw_calls: [], gpu_buffer_allocations: [], gpu_uploaded_bytes: [], layout_rebuilds: [], autoscale_runs: [], series_rebuilds: [], drawing_rebuilds: [], grid_rebuilds: [], axis_rebuilds: [], overlay_rebuilds: [], text_resolutions: [], started: performance.now() };
   frame_recording = record;
   const tick = (time) => {
     if (!record.active) return;
@@ -205,6 +209,16 @@ function start_frame_recording() {
       record.cpu_ms.push(stats.cpu_ms);
       if (stats.gpu_ms !== null) record.gpu_ms.push(stats.gpu_ms);
       record.draw_calls.push(stats.draw_calls);
+      record.gpu_buffer_allocations.push(stats.gpu_buffer_allocations);
+      record.gpu_uploaded_bytes.push(stats.gpu_uploaded_bytes);
+      record.layout_rebuilds.push(stats.layout_rebuilds);
+      record.autoscale_runs.push(stats.autoscale_runs);
+      record.series_rebuilds.push(stats.series_rebuilds);
+      record.drawing_rebuilds.push(stats.drawing_rebuilds);
+      record.grid_rebuilds.push(stats.grid_rebuilds);
+      record.axis_rebuilds.push(stats.axis_rebuilds);
+      record.overlay_rebuilds.push(stats.overlay_rebuilds);
+      record.text_resolutions.push(stats.text_resolutions);
       record.last_presented = stats.presented_frames;
     }
     requestAnimationFrame(tick);
@@ -218,7 +232,7 @@ async function stop_frame_recording() {
   record.active = false;
   frame_recording = null;
   await next_frame();
-  return { frame_ms: record.frame_ms.slice(2), cpu_ms: record.cpu_ms.slice(2), gpu_ms: record.gpu_ms.slice(2), draw_calls: record.draw_calls.slice(2), duration_ms: performance.now() - record.started, stats: live[0].chart.frame_stats() };
+  return { ...Object.fromEntries(Object.entries(record).filter(([, value]) => Array.isArray(value)).map(([key, value]) => [key, value.slice(2)])), duration_ms: performance.now() - record.started, stats: live[0].chart.frame_stats() };
 }
 
 async function prepare_lifecycle(points, seed) {
@@ -267,7 +281,12 @@ async function multi_chart(points, seed, chart_counts) {
     for (let index = 0; index < count; index += 1) await create(points, seed + index, {}, fixtures[index]);
     await next_frame();
     const startup_ms = performance.now() - started;
-    rows.push({ count, startup_ms, wasm_linear_memory_bytes: live[0]?.chart.frame_stats().memory_bytes ?? null, frame_cpu_ms: live.map((entry) => entry.chart.frame_stats().cpu_ms) });
+    const repaint_started = performance.now();
+    for (const entry of live) entry.chart.render();
+    await next_frame();
+    const active_repaint_ms = performance.now() - repaint_started;
+    const stats = live.map((entry) => entry.chart.frame_stats());
+    rows.push({ count, startup_ms, active_repaint_ms, wasm_linear_memory_bytes: stats[0]?.memory_bytes ?? null, frame_cpu_ms: stats.map((entry) => entry.cpu_ms), gpu_buffer_allocations: stats.reduce((sum, entry) => sum + entry.gpu_buffer_allocations, 0), gpu_uploaded_bytes: stats.reduce((sum, entry) => sum + entry.gpu_uploaded_bytes, 0) });
   }
   return { rows, backend: live[0]?.chart.backend() ?? null };
 }
@@ -295,6 +314,46 @@ async function multi_series(points, seed, series_counts, pane_counts) {
       live.push({ chart, series: null, container, columns });
       const stats = chart.frame_stats();
       rows.push({ pane_count, series_count, startup_ms, wasm_linear_memory_bytes: stats.memory_bytes, frame_cpu_ms: stats.cpu_ms });
+    }
+  }
+  return { rows, backend: live[0]?.chart.backend() ?? null };
+}
+
+async function retained_updates(points, seed, series_counts, pane_counts, iterations) {
+  reset();
+  const rows = [];
+  const columns = generate_ohlcv(points, seed);
+  for (const pane_count of pane_counts) {
+    for (const series_count of series_counts) {
+      reset();
+      const api = await load_package();
+      const container = host();
+      const chart = await api.create_chart(container, { autoSize: true });
+      for (let pane = 1; pane < pane_count; pane += 1) chart.add_pane(true);
+      const series = [];
+      for (let index = 0; index < series_count; index += 1) {
+        const item = chart.add_series(index === 0 ? "candlestick" : "line", { pane: index % pane_count });
+        item.set_data_typed(columns);
+        series.push(item);
+      }
+      chart.time_scale().fit_content();
+      chart.render();
+      await next_frame();
+      chart.render();
+      await next_frame();
+      const stable = chart.frame_stats();
+      const target = series[Math.floor(series.length / 2)];
+      const last_time = columns.times.at(-1);
+      const base = columns.close.at(-1);
+      const samples = [];
+      for (let update = 0; update < iterations; update += 1) {
+        const value = base + Math.sin(update * 0.17) * 0.01;
+        target.update({ time: last_time, open: value, high: value + 0.02, low: value - 0.02, close: value });
+        await next_frame();
+        samples.push(chart.frame_stats());
+      }
+      live.push({ chart, series: null, container, columns });
+      rows.push({ pane_count, series_count, stable, samples });
     }
   }
   return { rows, backend: live[0]?.chart.backend() ?? null };
@@ -341,5 +400,5 @@ async function soak(points, seed, duration_ms, sample_interval_ms, memory_sample
   return { duration_ms: performance.now() - started, updates, samples, backend: entry.chart.backend() };
 }
 
-globalThis.__nucleus_bench = { environment, historical, lifecycle, memory_snapshot, multi_chart, multi_series, prepare_interaction, prepare_lifecycle, realtime, reset, soak, start_frame_recording, startup, stop_frame_recording };
+globalThis.__nucleus_bench = { environment, historical, lifecycle, memory_snapshot, multi_chart, multi_series, prepare_interaction, prepare_lifecycle, realtime, reset, retained_updates, soak, start_frame_recording, startup, stop_frame_recording };
 globalThis.__nucleus_bench_ready = true;

@@ -925,6 +925,7 @@ impl ChartEngine {
         points: Vec<DrawingPoint>,
         options_json: Option<&str>,
     ) -> Option<DrawingId> {
+        self.invalidate_frame_drawings();
         if pane_index >= self.panes.len() || !kind.valid_point_count(points.len()) {
             return None;
         }
@@ -949,6 +950,7 @@ impl ChartEngine {
     /// Merge a JSON options patch into the drawing with `id` (reference `applyOptions`): absent
     /// keys keep their current values. Returns false for a malformed patch or an unknown id.
     pub fn drawing_apply_options(&mut self, id: DrawingId, json: &str) -> bool {
+        self.invalidate_frame_drawings();
         let Ok(patch) = serde_json::from_str::<DrawingPatch>(json) else {
             return false;
         };
@@ -962,6 +964,7 @@ impl ChartEngine {
     /// Replace a drawing's anchors from a JSON `[{logical, price}, ...]` array. Returns false
     /// for malformed JSON, a wrong count for the kind, non-finite values, or an unknown id.
     pub fn drawing_set_points(&mut self, id: DrawingId, json: &str) -> bool {
+        self.invalidate_frame_drawings();
         let Ok(points) = serde_json::from_str::<Vec<DrawingPoint>>(json) else {
             return false;
         };
@@ -982,6 +985,7 @@ impl ChartEngine {
     /// Remove a drawing by id. Returns false for an unknown id. Any selection or drag session
     /// pointing at it is released.
     pub fn remove_drawing(&mut self, id: DrawingId) -> bool {
+        self.invalidate_frame_drawings();
         let before = self.drawings.len();
         self.drawings.retain(|d| d.id != id);
         let removed = self.drawings.len() != before;
@@ -998,6 +1002,7 @@ impl ChartEngine {
 
     /// Remove every drawing (the demo's "clear all") and release the selection/drag state.
     pub fn clear_drawings(&mut self) {
+        self.invalidate_frame_drawings();
         self.drawings.clear();
         self.selected_drawing = None;
         self.drawing_drag = None;
@@ -1052,6 +1057,7 @@ impl ChartEngine {
     /// paints anchor handles at its defining points and its anchors accept drags. An unknown id
     /// never sticks.
     pub fn set_selected_drawing(&mut self, id: Option<DrawingId>) {
+        self.invalidate_frame_drawings();
         self.selected_drawing = id.filter(|&sid| self.drawings.iter().any(|d| d.id == sid));
     }
 
@@ -1063,6 +1069,7 @@ impl ChartEngine {
     /// editing state): the frame suppresses its placeholder/label so the editor's preview is
     /// the only visual for it. Cleared when the editor closes. An unknown id never sticks.
     pub fn set_editing_drawing(&mut self, id: Option<DrawingId>) {
+        self.invalidate_frame_drawings();
         self.editing_drawing = id.filter(|&eid| {
             self.drawings
                 .iter()
@@ -1078,6 +1085,7 @@ impl ChartEngine {
     /// the topmost hit is selected; a miss clears the selection. Returns whether a drawing was
     /// hit (the host then skips its series-selection path).
     pub fn select_drawing_at(&mut self, x: f64, y: f64) -> bool {
+        self.invalidate_frame_drawings();
         self.selected_drawing = self.hit_test_drawing(x, y).map(|hit| hit.id);
         self.selected_drawing.is_some()
     }
@@ -1247,6 +1255,7 @@ impl ChartEngine {
     /// re-anchor). A successful grab also selects the drawing (TradingView parity). Returns
     /// false on a miss — the host falls through to its pan/scroll handling.
     pub fn drawing_drag_start_at(&mut self, x: f64, y: f64) -> bool {
+        self.invalidate_frame_drawings();
         let Some(hit) = self.hit_test_drawing(x, y) else {
             return false;
         };
@@ -1278,6 +1287,7 @@ impl ChartEngine {
     /// session recomputes from its start snapshot each call, so toggling a modifier mid-drag
     /// responds live (TradingView parity).
     pub fn drawing_drag_to(&mut self, x: f64, y: f64, modifiers: DrawingModifiers) {
+        self.invalidate_frame_drawings();
         let Some(drag) = &self.drawing_drag else {
             return;
         };
@@ -1437,6 +1447,7 @@ impl ChartEngine {
 
     /// Close the drag session (pointer up/cancel).
     pub fn drawing_drag_end(&mut self) {
+        self.invalidate_frame_drawings();
         self.drawing_drag = None;
     }
 
@@ -1453,6 +1464,7 @@ impl ChartEngine {
     /// ([`DrawingPatch`]). Replaces any in-progress creation. Returns false for a malformed
     /// options template.
     pub fn drawing_create_begin(&mut self, kind: DrawingKind, options_json: Option<&str>) -> bool {
+        self.invalidate_frame_drawings();
         let patch = match options_json {
             Some(json) => match serde_json::from_str::<DrawingPatch>(json) {
                 Ok(patch) => Some(patch),
@@ -1479,6 +1491,7 @@ impl ChartEngine {
     /// committed drawing's id (> 0) once the kind's anchor count is reached — the new drawing is
     /// left selected, TradingView-style.
     pub fn drawing_create_click(&mut self, x: f64, y: f64, modifiers: DrawingModifiers) -> i64 {
+        self.invalidate_frame_drawings();
         let Some(pending) = &self.pending_drawing else {
             return 0;
         };
@@ -1541,6 +1554,7 @@ impl ChartEngine {
     /// Update the creation preview point from a mouse move (no-op while unarmed or off the data).
     /// `modifiers` snaps the preview exactly as a click would snap the placed anchor.
     pub fn drawing_create_move(&mut self, x: f64, y: f64, modifiers: DrawingModifiers) {
+        self.invalidate_frame_drawings();
         let Some(pending) = &self.pending_drawing else {
             return;
         };
@@ -1585,6 +1599,7 @@ impl ChartEngine {
     /// brush points are left untouched. Returns `false` when `json` is malformed or neither a
     /// pending anchored drawing nor a brush capture is active.
     pub fn drawing_create_apply_options(&mut self, json: &str) -> bool {
+        self.invalidate_frame_drawings();
         let Ok(patch) = serde_json::from_str::<DrawingPatch>(json) else {
             return false;
         };
@@ -1602,6 +1617,7 @@ impl ChartEngine {
 
     /// Abandon the in-progress creation (Escape / tool disarm).
     pub fn drawing_create_cancel(&mut self) {
+        self.invalidate_frame_drawings();
         self.pending_drawing = None;
     }
 
@@ -1622,6 +1638,7 @@ impl ChartEngine {
     /// point. `options_json` templates the committed drawing ([`DrawingPatch`]). Returns false
     /// off the panes/data or for a malformed template.
     pub fn brush_create_start(&mut self, options_json: Option<&str>, x: f64, y: f64) -> bool {
+        self.invalidate_frame_drawings();
         let Some(pane) = self.pane_at_y(y) else {
             return false;
         };
@@ -1647,6 +1664,7 @@ impl ChartEngine {
     /// Capture the next stroke point from a pointer move, decimated by distance
     /// ([`BRUSH_MIN_POINT_DISTANCE`] in media px — closer samples are pointer noise).
     pub fn brush_create_add(&mut self, x: f64, y: f64) {
+        self.invalidate_frame_drawings();
         let Some(capture) = &self.brush_capture else {
             return;
         };
@@ -1668,6 +1686,7 @@ impl ChartEngine {
     /// rendered as a curved polyline) and committed as a selected drawing. Returns the id, or
     /// 0 discarding a degenerate stroke (fewer than two surviving points / no capture active).
     pub fn brush_create_end(&mut self) -> DrawingId {
+        self.invalidate_frame_drawings();
         let Some(capture) = self.brush_capture.take() else {
             return 0;
         };
@@ -1707,6 +1726,7 @@ impl ChartEngine {
 
     /// Abandon the in-progress stroke (Escape / tool disarm).
     pub fn brush_create_cancel(&mut self) {
+        self.invalidate_frame_drawings();
         self.brush_capture = None;
     }
 

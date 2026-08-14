@@ -110,9 +110,15 @@ async function run_page_scenario(page, scenario) {
       const result = await page.evaluate((input) => globalThis.__nucleus_bench.realtime(input.points, input.seed, input.mode, input.update_rate_hz, input.duration_ms), { ...scenario, seed });
       if (run >= scenario.warmup_runs) rows.push(result);
     }
-    return { backend: rows.at(-1).backend, metrics: {
+  return { backend: rows.at(-1).backend, metrics: {
       ...samples("update_api_latency_ms", rows.flatMap((row) => row.api_samples), "ms", "lower_is_better", "public_candidate", `Public update() latency across ${scenario.measured_runs} deterministic ${scenario.mode}-candle runs after ${scenario.warmup_runs} discarded warm-up run(s); render requests coalesce through package rAF.`),
       ...samples("frame_cpu_ms", rows.flatMap((row) => row.frame_cpu_samples), "ms", "lower_is_better", "public_candidate", "Existing frame_stats CPU cost observed after each scheduled update frame across measured runs."),
+      ...samples("series_rebuilds", rows.flatMap((row) => row.frame_stats_samples.map((stats) => stats.series_rebuilds)), "count", "lower_is_better", "internal", "Retained series layers rebuilt per streaming frame."),
+      ...samples("layout_rebuilds", rows.flatMap((row) => row.frame_stats_samples.map((stats) => stats.layout_rebuilds)), "count", "lower_is_better", "internal", "Retained layout rebuilds per streaming frame."),
+      ...samples("autoscale_runs", rows.flatMap((row) => row.frame_stats_samples.map((stats) => stats.autoscale_runs)), "count", "lower_is_better", "internal", "Autoscale passes per streaming frame."),
+      ...samples("grid_rebuilds", rows.flatMap((row) => row.frame_stats_samples.map((stats) => stats.grid_rebuilds)), "count", "lower_is_better", "internal", "Retained grid layers rebuilt per streaming frame."),
+      ...samples("gpu_buffer_allocations", rows.flatMap((row) => row.frame_stats_samples.map((stats) => stats.gpu_buffer_allocations)), "count", "lower_is_better", "internal", "WebGPU vertex-buffer allocations per streaming frame."),
+      ...samples("gpu_uploaded_bytes", rows.flatMap((row) => row.frame_stats_samples.map((stats) => stats.gpu_uploaded_bytes)), "bytes", "lower_is_better", "internal", "WebGPU vertex bytes uploaded per streaming frame."),
       ...samples("updates_processed_per_second", rows.map((row) => row.updates / row.elapsed_ms * 1000), "updates/s", "higher_is_better", "public_candidate", "Delivered public API calls divided by the measured interval for each measured run."),
       ...samples("presented_frames", rows.map((row) => row.presented_frames), "count", "higher_is_better", "internal", "Difference in engine presented_frames lifetime counter for each measured run."),
       ...samples("dropped_frames", rows.map((row) => row.dropped_frames), "count", "lower_is_better", "internal", "Difference in engine dropped_frames counter for each measured run."),
@@ -151,6 +157,9 @@ async function run_page_scenario(page, scenario) {
     return { backend, metrics: {
       ...samples("chart_count", rows.map((row) => row.count), "count", "informational", "internal", "Independent variable for aligned multi-chart scaling samples."),
       ...samples("startup_ms", rows.map((row) => row.startup_ms), "ms", "lower_is_better", "public_candidate", "Sequential public creation and 10K install for N charts through the first following rAF."),
+      ...samples("active_repaint_ms", rows.map((row) => row.active_repaint_ms), "ms", "lower_is_better", "public_candidate", "One warmed public render request for every live chart through the following rAF."),
+      ...samples("gpu_buffer_allocations", rows.map((row) => row.gpu_buffer_allocations), "count", "lower_is_better", "internal", "Total WebGPU vertex-buffer allocations across one warmed active repaint of every chart."),
+      ...samples("gpu_uploaded_bytes", rows.map((row) => row.gpu_uploaded_bytes), "bytes", "lower_is_better", "internal", "Total WebGPU vertex bytes uploaded across one warmed active repaint of every chart."),
       ...samples("wasm_linear_memory_bytes", rows.map((row) => row.wasm_linear_memory_bytes), "bytes", "lower_is_better", "public_candidate", "Global WASM linear memory for each chart-count workload; not per-chart RAM."),
     } };
   }
@@ -174,6 +183,24 @@ async function run_page_scenario(page, scenario) {
       ...samples("startup_ms", rows.map((row) => row.startup_ms), "ms", "lower_is_better", "public_candidate", "Public chart, pane, series, data, and render path through the following rAF."),
       ...samples("frame_cpu_ms", rows.map((row) => row.frame_cpu_ms), "ms", "lower_is_better", "public_candidate", "Existing frame_stats CPU duration for each series/pane combination."),
       ...samples("wasm_linear_memory_bytes", rows.map((row) => row.wasm_linear_memory_bytes), "bytes", "lower_is_better", "public_candidate", "Global WASM linear memory for each series/pane combination."),
+    } };
+  }
+  if (scenario.kind === "retained_updates") {
+    const result = await page.evaluate((input) => globalThis.__nucleus_bench.retained_updates(input.points, input.seed, input.series_counts, input.pane_counts, input.iterations), { ...scenario, seed });
+    const frames = result.rows.flatMap((row) => row.samples);
+    return { backend: result.backend, metrics: {
+      ...samples("series_count", result.rows.map((row) => row.series_count), "count", "informational", "internal", "Independent variable for aligned retained-update samples."),
+      ...samples("pane_count", result.rows.map((row) => row.pane_count), "count", "informational", "internal", "Independent variable for aligned retained-update samples."),
+      ...samples("frame_cpu_ms", frames.map((stats) => stats.cpu_ms), "ms", "lower_is_better", "public_candidate", "Current-candle update through the next animation frame, measured by frame_stats CPU timing."),
+      ...samples("series_rebuilds", frames.map((stats) => stats.series_rebuilds), "count", "lower_is_better", "internal", "Retained series layers rebuilt per current-candle frame."),
+      ...samples("layout_rebuilds", frames.map((stats) => stats.layout_rebuilds), "count", "lower_is_better", "internal", "Retained layout rebuilds per current-candle frame."),
+      ...samples("autoscale_runs", frames.map((stats) => stats.autoscale_runs), "count", "lower_is_better", "internal", "Autoscale passes per current-candle frame."),
+      ...samples("grid_rebuilds", frames.map((stats) => stats.grid_rebuilds), "count", "lower_is_better", "internal", "Grid layers rebuilt per current-candle frame."),
+      ...samples("gpu_buffer_allocations", frames.map((stats) => stats.gpu_buffer_allocations), "count", "lower_is_better", "internal", "WebGPU vertex-buffer allocations per current-candle frame after warm-up."),
+      ...samples("gpu_write_calls", frames.map((stats) => stats.gpu_write_calls), "count", "lower_is_better", "internal", "WebGPU queue buffer writes per current-candle frame."),
+      ...samples("gpu_uploaded_bytes", frames.map((stats) => stats.gpu_uploaded_bytes), "bytes", "lower_is_better", "internal", "WebGPU vertex bytes uploaded per current-candle frame."),
+      ...samples("stable_gpu_buffer_allocations", result.rows.map((row) => row.stable.gpu_buffer_allocations), "count", "lower_is_better", "internal", "WebGPU vertex-buffer allocations on a warmed unchanged frame."),
+      ...samples("stable_gpu_uploaded_bytes", result.rows.map((row) => row.stable.gpu_uploaded_bytes), "bytes", "lower_is_better", "internal", "WebGPU vertex bytes uploaded on a warmed unchanged frame."),
     } };
   }
   if (scenario.kind === "soak") {
@@ -242,7 +269,17 @@ async function interaction(page, scenario) {
   const metrics = {
     ...samples("raf_frame_interval_ms", frame_ms, "ms", "lower_is_better", "public_candidate", `requestAnimationFrame callback intervals across ${scenario.measured_runs} actual Playwright pointer/wheel traces after ${scenario.warmup_runs} discarded trace(s); includes display cadence and scheduling.`),
     ...samples("frame_cpu_ms", cpu_ms, "ms", "lower_is_better", "public_candidate", "Existing frame_stats CPU duration sampled during measured interaction frames."),
-    ...samples("draw_calls", draw_calls, "count", "lower_is_better", "internal", "Existing frame_stats draw-call count during measured interaction frames."),
+      ...samples("draw_calls", draw_calls, "count", "lower_is_better", "internal", "Existing frame_stats draw-call count during measured interaction frames."),
+      ...samples("gpu_buffer_allocations", rows.flatMap((row) => row.gpu_buffer_allocations), "count", "lower_is_better", "internal", "WebGPU vertex-buffer allocations during measured interaction frames."),
+      ...samples("gpu_uploaded_bytes", rows.flatMap((row) => row.gpu_uploaded_bytes), "bytes", "lower_is_better", "internal", "WebGPU vertex bytes uploaded during measured interaction frames."),
+      ...samples("layout_rebuilds", rows.flatMap((row) => row.layout_rebuilds), "count", "lower_is_better", "internal", "Retained layout rebuilds during measured interaction frames."),
+      ...samples("autoscale_runs", rows.flatMap((row) => row.autoscale_runs), "count", "lower_is_better", "internal", "Autoscale passes during measured interaction frames."),
+      ...samples("series_rebuilds", rows.flatMap((row) => row.series_rebuilds), "count", "lower_is_better", "internal", "Retained series rebuilds during measured interaction frames."),
+      ...samples("drawing_rebuilds", rows.flatMap((row) => row.drawing_rebuilds), "count", "lower_is_better", "internal", "Retained drawing rebuilds during measured interaction frames."),
+      ...samples("grid_rebuilds", rows.flatMap((row) => row.grid_rebuilds), "count", "lower_is_better", "internal", "Retained grid rebuilds during measured interaction frames."),
+      ...samples("axis_rebuilds", rows.flatMap((row) => row.axis_rebuilds), "count", "lower_is_better", "internal", "Browser axis/top-layer rebuilds during measured interaction frames."),
+      ...samples("overlay_rebuilds", rows.flatMap((row) => row.overlay_rebuilds), "count", "lower_is_better", "internal", "Retained overlay rebuilds during measured interaction frames."),
+      ...samples("text_resolutions", rows.flatMap((row) => row.text_resolutions), "count", "lower_is_better", "internal", "Text atlas rasterizations during measured interaction frames."),
     ...samples("frames_over_8_33_ms", rows.map((row) => row.frame_ms.filter((value) => value > 8.33).length), "count", "lower_is_better", "public_candidate", "Recorded rAF intervals above the 120 Hz frame budget per measured trace."),
     ...samples("frames_over_16_67_ms", rows.map((row) => row.frame_ms.filter((value) => value > 16.67).length), "count", "lower_is_better", "public_candidate", "Recorded rAF intervals above the 60 Hz frame budget per measured trace."),
     ...samples("frames_over_33_33_ms", rows.map((row) => row.frame_ms.filter((value) => value > 33.33).length), "count", "lower_is_better", "public_candidate", "Recorded rAF intervals above two 60 Hz frame periods per measured trace."),

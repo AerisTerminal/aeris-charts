@@ -57,8 +57,8 @@ use nucleuscharts_render::canvas2d::{
 use nucleuscharts_render::color::Color;
 use nucleuscharts_render::draw_list::{LineType, Prim};
 use nucleuscharts_render_wgpu::{
-    prims_to_group, render_frame, DrawGroup, GpuTimer, LabelAtlas, MsaaTarget, QuadRenderer,
-    TexQuadRenderer, TriRenderer, SAMPLE_COUNT,
+    prims_to_group, render_frame, DrawGroup, FrameResources, GpuTimer, LabelAtlas, MsaaTarget,
+    QuadRenderer, TexQuadRenderer, TriRenderer, SAMPLE_COUNT,
 };
 
 #[wasm_bindgen(inline_js = r#"
@@ -219,6 +219,7 @@ struct Gfx {
     /// host reads `frame_stats()` (telemetry.rs: nobody pays for a query set they never read),
     /// and stays `None` forever on a device without `timestamp-query`.
     timer: Option<GpuTimer>,
+    frame_resources: FrameResources,
 }
 
 enum PaneRenderOutcome {
@@ -242,7 +243,10 @@ struct ChartInner {
     /// Backend-neutral top-layer primitives: watermark, axis chrome, ticks, and all axis/crosshair
     /// labels. WebGPU appends this as an unscissored draw group; Canvas2D executes the same list.
     axis_prims: Vec<Prim>,
+    axis_revision: u64,
+    axis_dirty: bool,
     gpu_groups: Vec<DrawGroup>,
+    gpu_atlas_epoch: u64,
     /// Pane-primitive registry (plugin platform Phase C-a): host-retained JS plugin objects,
     /// drawn into the pane layers during `render`. Ids are never reused within a chart.
     primitives: Vec<PanePrimitiveEntry>,
@@ -515,7 +519,10 @@ pub async fn create_chart(
         frame: nucleuscharts_engine::ChartFrame::default(),
         axis_frame: AxisFrame::default(),
         axis_prims: Vec::new(),
+        axis_revision: 0,
+        axis_dirty: true,
         gpu_groups: Vec::new(),
+        gpu_atlas_epoch: 0,
         primitives: Vec::new(),
         series_primitives: Vec::new(),
         next_primitive_id: 1,
@@ -644,7 +651,10 @@ pub async fn create_offscreen_chart(
         frame: nucleuscharts_engine::ChartFrame::default(),
         axis_frame: AxisFrame::default(),
         axis_prims: Vec::new(),
+        axis_revision: 0,
+        axis_dirty: true,
         gpu_groups: Vec::new(),
+        gpu_atlas_epoch: 0,
         primitives: Vec::new(),
         series_primitives: Vec::new(),
         next_primitive_id: 1,
@@ -2391,5 +2401,6 @@ async fn try_create_gfx(
         msaa,
         device_lost,
         timer: None,
+        frame_resources: FrameResources::default(),
     })
 }

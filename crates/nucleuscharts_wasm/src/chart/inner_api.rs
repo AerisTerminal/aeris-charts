@@ -874,6 +874,8 @@ impl ChartInner {
             pane,
             obj: primitive.clone(),
         });
+        self.engine.invalidate_axis_frame();
+        self.axis_dirty = true;
         if let Ok(hook) = js_sys::Reflect::get(&primitive, &"attached".into()) {
             if let Ok(hook) = hook.dyn_into::<js_sys::Function>() {
                 let params = js_sys::Object::new();
@@ -897,6 +899,8 @@ impl ChartInner {
             return false;
         };
         let entry = self.primitives.remove(position);
+        self.engine.invalidate_axis_frame();
+        self.axis_dirty = true;
         if let Ok(hook) = js_sys::Reflect::get(&entry.obj, &"detached".into()) {
             if let Ok(hook) = hook.dyn_into::<js_sys::Function>() {
                 if let Err(error) = hook.call0(&entry.obj) {
@@ -937,6 +941,8 @@ impl ChartInner {
             series: series_id,
             obj: primitive.clone(),
         });
+        self.engine.invalidate_axis_frame();
+        self.axis_dirty = true;
         if let Ok(hook) = js_sys::Reflect::get(&primitive, &"attached".into()) {
             if let Ok(hook) = hook.dyn_into::<js_sys::Function>() {
                 let params = js_sys::Object::new();
@@ -972,6 +978,8 @@ impl ChartInner {
             return false;
         };
         let entry = self.series_primitives.remove(position);
+        self.engine.invalidate_axis_frame();
+        self.axis_dirty = true;
         fire_primitive_detached(&entry.obj);
         true
     }
@@ -1669,10 +1677,10 @@ impl ChartInner {
             .unwrap_or_default()
     }
     pub fn set_crosshair(&mut self, x_css: f64, y_css: f64) {
-        self.crosshair = Some((x_css, y_css));
+        self.set_crosshair_at(x_css, y_css);
     }
     pub fn clear_crosshair(&mut self) {
-        self.crosshair = None;
+        self.clear_crosshair_at();
     }
 
     // --- drawing tools (engine-owned drawing objects; nucleuscharts_engine drawings.rs) ---

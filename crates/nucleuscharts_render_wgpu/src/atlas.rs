@@ -30,13 +30,66 @@ impl AtlasSlot {
 pub struct LabelAtlas {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
+    entries: HashMap<String, AtlasSlot>,
+    packer: AtlasPacker,
+}
+
+#[derive(Default)]
+struct AtlasPacker {
     cursor_x: u32,
     cursor_y: u32,
     shelf_h: u32,
-    entries: HashMap<String, AtlasSlot>,
-    /// Bumped every full-atlas reset, so external slot holders (the host's text-run cache)
-    /// can invalidate placements that point at reused texels.
     epoch: u64,
+    frame_insertions: u32,
+    frame_overflowed: bool,
+    reset_before_next_frame: bool,
+}
+
+impl AtlasPacker {
+    fn begin_frame(&mut self) -> bool {
+        let reset = self.reset_before_next_frame;
+        if reset {
+            self.reset();
+            self.reset_before_next_frame = false;
+        }
+        self.frame_insertions = 0;
+        self.frame_overflowed = false;
+        reset
+    }
+
+    fn reset(&mut self) {
+        self.cursor_x = 0;
+        self.cursor_y = 0;
+        self.shelf_h = 0;
+        self.epoch = self.epoch.wrapping_add(1);
+    }
+
+    fn allocate(&mut self, w: u32, h: u32) -> Option<AtlasSlot> {
+        if self.cursor_x + w > ATLAS_SIZE {
+            self.cursor_x = 0;
+            self.cursor_y += self.shelf_h;
+            self.shelf_h = 0;
+        }
+        if self.cursor_y + h > ATLAS_SIZE {
+            if self.frame_insertions == 0 {
+                self.reset();
+            } else {
+                self.frame_overflowed = true;
+                self.reset_before_next_frame = true;
+                return None;
+            }
+        }
+        let slot = AtlasSlot {
+            x: self.cursor_x,
+            y: self.cursor_y,
+            w,
+            h,
+        };
+        self.cursor_x += w;
+        self.shelf_h = self.shelf_h.max(h);
+        self.frame_insertions += 1;
+        Some(slot)
+    }
 }
 
 impl LabelAtlas {
@@ -59,11 +112,8 @@ impl LabelAtlas {
         Self {
             texture,
             view,
-            cursor_x: 0,
-            cursor_y: 0,
-            shelf_h: 0,
             entries: HashMap::new(),
-            epoch: 0,
+            packer: AtlasPacker::default(),
         }
     }
 
@@ -73,15 +123,35 @@ impl LabelAtlas {
 
     /// Reset generation: changes every time [`Self::insert`] clears the full atlas.
     pub fn epoch(&self) -> u64 {
-        self.epoch
+        self.packer.epoch
     }
 
     pub fn get(&self, key: &str) -> Option<AtlasSlot> {
         self.entries.get(key).copied()
     }
 
-    /// Packs `pixels` (RGBA8, w*h*4 bytes) and uploads. Clears the whole atlas when full
-    /// (rare for axis labels; entries simply re-rasterize on demand).
+    /// Begin one submitted chart frame. A reset deferred by atlas pressure occurs before any
+    /// quads for this frame are accepted, so no already-resolved quad can reference reused texels.
+    pub fn begin_frame(&mut self) {
+        if self.packer.begin_frame() {
+            self.entries.clear();
+        }
+    }
+
+    /// Whether every text run resolved during the current frame remains valid for submission.
+    /// A false result tells the host to use its correct Canvas2D fallback for this frame.
+    pub fn frame_valid(&self) -> bool {
+        !self.packer.frame_overflowed
+    }
+
+    /// Record that the pending submission already contains retained quads referencing this
+    /// epoch. Atlas exhaustion must then defer reset rather than overwrite those texels.
+    pub fn protect_retained_frame_slots(&mut self) {
+        self.packer.frame_insertions = self.packer.frame_insertions.max(1);
+    }
+
+    /// Packs `pixels` (RGBA8, w*h*4 bytes) and uploads. A full atlas resets immediately only
+    /// before this frame references a slot; otherwise the reset is deferred to the next frame.
     pub fn insert(
         &mut self,
         queue: &wgpu::Queue,
@@ -89,36 +159,18 @@ impl LabelAtlas {
         w: u32,
         h: u32,
         pixels: &[u8],
-    ) -> AtlasSlot {
+    ) -> Option<AtlasSlot> {
         debug_assert_eq!(pixels.len(), (w * h * 4) as usize);
         assert!(
             w <= ATLAS_SIZE && h <= ATLAS_SIZE,
             "label larger than atlas"
         );
 
-        if self.cursor_x + w > ATLAS_SIZE {
-            // new shelf
-            self.cursor_x = 0;
-            self.cursor_y += self.shelf_h;
-            self.shelf_h = 0;
-        }
-        if self.cursor_y + h > ATLAS_SIZE {
-            // atlas full: reset (entries re-rasterize lazily)
+        let epoch = self.packer.epoch;
+        let slot = self.packer.allocate(w, h)?;
+        if self.packer.epoch != epoch {
             self.entries.clear();
-            self.cursor_x = 0;
-            self.cursor_y = 0;
-            self.shelf_h = 0;
-            self.epoch += 1;
         }
-
-        let slot = AtlasSlot {
-            x: self.cursor_x,
-            y: self.cursor_y,
-            w,
-            h,
-        };
-        self.cursor_x += w;
-        self.shelf_h = self.shelf_h.max(h);
 
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
@@ -145,6 +197,41 @@ impl LabelAtlas {
         );
 
         self.entries.insert(key, slot);
-        slot
+        Some(slot)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn same_frame_pressure_never_reuses_an_accepted_slot() {
+        let mut packer = AtlasPacker::default();
+        packer.begin_frame();
+        let first = packer.allocate(ATLAS_SIZE, ATLAS_SIZE / 2).unwrap();
+        let second = packer.allocate(ATLAS_SIZE, ATLAS_SIZE / 2).unwrap();
+        assert_ne!(first, second);
+        assert!(packer.allocate(1, 1).is_none());
+        assert!(packer.frame_overflowed);
+        assert_eq!(packer.epoch, 0, "the live frame's texels were not reset");
+
+        assert!(packer.begin_frame());
+        assert_eq!(packer.epoch, 1);
+        assert_eq!(packer.allocate(1, 1).unwrap().x, 0);
+        assert!(packer.cursor_x <= ATLAS_SIZE && packer.cursor_y <= ATLAS_SIZE);
+    }
+
+    #[test]
+    fn retained_quads_defer_a_reset_until_the_next_frame() {
+        let mut packer = AtlasPacker::default();
+        packer.begin_frame();
+        packer.allocate(ATLAS_SIZE, ATLAS_SIZE).unwrap();
+        packer.begin_frame();
+        packer.frame_insertions = 1;
+        assert!(packer.allocate(1, 1).is_none());
+        assert_eq!(packer.epoch, 0);
+        assert!(packer.begin_frame());
+        assert_eq!(packer.epoch, 1);
     }
 }
