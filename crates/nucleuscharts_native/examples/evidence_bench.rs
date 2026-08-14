@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use nucleuscharts_engine::{ChartEngine, ChartFrame};
+use nucleuscharts_engine::{ChartEngine, ChartFrame, DrawingKind, DrawingModifiers, DrawingPoint};
 use serde_json::json;
 
 const POINTS: usize = 100_000;
@@ -294,7 +294,8 @@ fn memory_density_rows() -> Vec<serde_json::Value> {
                     + memory.tick_capacity_bytes
                     + memory.indicator_runtime_bytes
                     + memory.indicator_transfer_capacity_bytes
-                    + memory.retained_frame_capacity_bytes,
+                    + memory.retained_frame_capacity_bytes
+                    + memory.drawing_runtime_capacity_bytes,
                 "aligned_series": memory.data.aligned_series,
                 "dense_index_series": memory.data.dense_index_series,
                 "source_install_ms": source_install_ms,
@@ -693,6 +694,125 @@ fn dense_width_rows() -> Vec<serde_json::Value> {
     rows
 }
 
+fn drawing_density_rows() -> Vec<serde_json::Value> {
+    let columns = generate(100_000, SEED);
+    let kinds = [
+        DrawingKind::TrendLine,
+        DrawingKind::Rectangle,
+        DrawingKind::Brush,
+        DrawingKind::Text,
+        DrawingKind::HorizontalLine,
+        DrawingKind::HorizontalRay,
+        DrawingKind::VerticalLine,
+    ];
+    let mut rows = Vec::new();
+    for count in [100, 500, 1_000] {
+        for distribution in ["mostly_offscreen", "overlapping"] {
+            let mut chart = ChartEngine::new(1280.0, 720.0, 1.0);
+            install(&mut chart, &columns);
+            chart.set_visible_logical_range(49_950.0, 50_050.0);
+            for index in 0..count {
+                let kind = kinds[index % kinds.len()];
+                let visible = distribution == "overlapping" || index < 10;
+                let logical = if visible {
+                    49_980.0 + (index % 20) as f64
+                } else {
+                    200_000.0 + index as f64 * 10.0
+                };
+                let price = if visible {
+                    99.0 + (index % 10) as f64 * 0.2
+                } else {
+                    1_000.0 + index as f64
+                };
+                let mut points = vec![DrawingPoint { logical, price }];
+                if matches!(
+                    kind,
+                    DrawingKind::TrendLine | DrawingKind::Rectangle | DrawingKind::Brush
+                ) {
+                    points.push(DrawingPoint {
+                        logical: logical + 2.0,
+                        price: price + 1.0,
+                    });
+                }
+                chart
+                    .add_drawing(
+                        kind,
+                        0,
+                        points,
+                        (kind == DrawingKind::Text).then_some(r#"{"text":"density"}"#),
+                    )
+                    .expect("drawing fixture");
+            }
+            let mut frame = ChartFrame::default();
+            let initial_started = Instant::now();
+            chart.build_frame_into(&mut frame);
+            let initial_ms = initial_started.elapsed().as_secs_f64() * 1_000.0;
+            let mut frame_ms = Vec::with_capacity(MEASURED_RUNS);
+            let mut hit_us = Vec::with_capacity(MEASURED_RUNS);
+            let mut pan_ms = Vec::with_capacity(MEASURED_RUNS);
+            let mut zoom_ms = Vec::with_capacity(MEASURED_RUNS);
+            let mut drag_ms = Vec::with_capacity(MEASURED_RUNS);
+            for run in 0..MEASURED_RUNS {
+                let offset = if run % 2 == 0 { -0.25 } else { 0.25 };
+                let started = Instant::now();
+                chart.set_visible_logical_range(49_950.0 + offset, 50_050.0 + offset);
+                chart.build_frame_into(&mut frame);
+                frame_ms.push(started.elapsed().as_secs_f64() * 1_000.0);
+
+                let started = Instant::now();
+                let _ = chart.hit_test_drawing(17.0 + run as f64, 17.0);
+                hit_us.push(started.elapsed().as_secs_f64() * 1_000_000.0);
+
+                let started = Instant::now();
+                chart.set_visible_logical_range(49_949.0 + offset, 50_049.0 + offset);
+                chart.build_frame_into(&mut frame);
+                pan_ms.push(started.elapsed().as_secs_f64() * 1_000.0);
+
+                let started = Instant::now();
+                chart.set_visible_logical_range(49_948.0 - offset, 50_052.0 + offset);
+                chart.build_frame_into(&mut frame);
+                zoom_ms.push(started.elapsed().as_secs_f64() * 1_000.0);
+            }
+            let first = chart.drawings()[0].id;
+            let (x, y) = chart
+                .drawing_point_to_coordinate(first, 0)
+                .expect("first drawing visible");
+            assert!(chart.drawing_drag_start_at(x, y));
+            for run in 0..MEASURED_RUNS {
+                let started = Instant::now();
+                chart.drawing_drag_to(x + (run % 2) as f64, y, DrawingModifiers::default());
+                chart.build_frame_into(&mut frame);
+                drag_ms.push(started.elapsed().as_secs_f64() * 1_000.0);
+            }
+            chart.drawing_drag_end();
+            chart.reset_drawing_work_stats();
+            chart.set_visible_logical_range(49_950.0, 50_050.0);
+            chart.build_frame_into(&mut frame);
+            let frame_work = chart.drawing_work_stats();
+            chart.reset_drawing_work_stats();
+            let _ = chart.hit_test_drawing(17.0, 17.0);
+            let hit_work = chart.drawing_work_stats();
+            rows.push(json!({
+                "drawing_count": count,
+                "distribution": distribution,
+                "initial_ms": initial_ms,
+                "frame_ms": frame_ms,
+                "hit_us": hit_us,
+                "drag_ms": drag_ms,
+                "pan_ms": pan_ms,
+                "zoom_ms": zoom_ms,
+                "frame_candidates": frame_work.candidates,
+                "visible_drawings": frame_work.visible,
+                "hit_candidates": hit_work.candidates,
+                "precise_hit_tests": hit_work.precise_hit_tests,
+                "geometry_rebuilds": frame_work.geometry_rebuilds,
+                "drawing_runtime_capacity_bytes": chart.memory_usage().drawing_runtime_capacity_bytes,
+            }));
+        }
+    }
+    rows
+}
+
 fn main() {
     let columns = generate(POINTS, SEED);
     let mut load_samples_ms = Vec::with_capacity(MEASURED_RUNS);
@@ -752,6 +872,7 @@ fn main() {
             "full_history_dense_upload": dense_upload_breakdown(true),
             "dense_complexity": dense_complexity_rows(),
             "dense_width_matrix": dense_width_rows(),
+            "drawing_density": drawing_density_rows(),
         }))
         .expect("JSON serializes")
     );

@@ -27,10 +27,8 @@ const ANCHOR_BORDER_WIDTH: f64 = 1.5;
 const ANCHOR_BORDER: Color = PRIMARY;
 
 impl ChartEngine {
-    /// Emit every drawing bound to `pane_index` (z-order: later overpaints earlier), the
-    /// selected drawing's anchor handles, and the in-progress creation preview. Drawings on
-    /// stale panes (removed after placement) draw nowhere, like a pane-less series.
-    pub(super) fn build_drawings_frame(
+    #[cfg(test)]
+    pub(crate) fn build_drawings_frame_reference(
         &self,
         pane_index: usize,
         pane_w_px: i32,
@@ -40,31 +38,73 @@ impl ChartEngine {
         points: &mut Vec<[f32; 2]>,
     ) {
         for drawing in &self.drawings {
-            if drawing.pane_index != pane_index {
+            if drawing.pane_index != pane_index
+                || !self.drawing_viewport_candidate_reference(drawing)
+            {
                 continue;
             }
             let Some(px) = self.drawing_px(drawing) else {
                 continue;
             };
-            let px: Vec<(f64, f64)> = px.into_iter().map(|(x, y)| (x * hpr, y * vpr)).collect();
+            let px = px
+                .into_iter()
+                .map(|(x, y)| (x * hpr, y * vpr))
+                .collect::<Vec<_>>();
             self.build_drawing_prims(drawing, &px, pane_w_px, vpr, out, points);
             self.build_drawing_text(drawing, &px, pane_w_px, vpr, out);
-            if self.selected_drawing == Some(drawing.id) {
-                // The rectangle shows its eight TradingView anchors: rounded discs on the
-                // corners, slightly-rounded squares on the edge midpoints. The brush shows
-                // handles at its two ENDS; the fixed kinds show one per defining anchor.
-                if drawing.kind == DrawingKind::Rectangle && px.len() == 2 {
-                    build_rectangle_handles(&px, vpr, self.anchor_fill(), out);
-                } else {
-                    let handles: Vec<(f64, f64)> =
-                        if drawing.kind == DrawingKind::Brush && px.len() > 2 {
-                            vec![px[0], px[px.len() - 1]]
-                        } else {
-                            px.clone()
-                        };
-                    build_anchor_handles(&handles, vpr, self.anchor_fill(), out);
+        }
+    }
+
+    /// Emit the viewport candidates bound to `pane_index` in canonical z-order plus the
+    /// in-progress creation preview. Drawings on stale panes draw nowhere.
+    pub(crate) fn build_drawings_frame(
+        &self,
+        pane_index: usize,
+        pane_w_px: i32,
+        hpr: f64,
+        vpr: f64,
+        out: &mut Vec<Prim>,
+        points: &mut Vec<[f32; 2]>,
+    ) {
+        if self.drawing_runtime.borrow().pane_count(pane_index) <= 20 {
+            for drawing in &self.drawings {
+                if drawing.pane_index != pane_index {
+                    continue;
+                }
+                let Some(px) = self.drawing_px(drawing) else {
+                    continue;
+                };
+                let px = px
+                    .into_iter()
+                    .map(|(x, y)| (x * hpr, y * vpr))
+                    .collect::<Vec<_>>();
+                self.build_drawing_prims(drawing, &px, pane_w_px, vpr, out, points);
+                self.build_drawing_text(drawing, &px, pane_w_px, vpr, out);
+            }
+        } else {
+            let (candidates, key) = self.take_drawing_candidates(pane_index, None);
+            if let Some(key) = key {
+                let mut runtime = self.drawing_runtime.borrow_mut();
+                for &id in &candidates {
+                    let Some(position) = runtime.position(id) else {
+                        continue;
+                    };
+                    let Some(drawing) = self.drawings.get(position) else {
+                        continue;
+                    };
+                    let Some(px) = self.drawing_px_cached(drawing, &mut runtime, key) else {
+                        continue;
+                    };
+                    let px = px
+                        .iter()
+                        .map(|&(x, y)| (x * hpr, y * vpr))
+                        .collect::<Vec<_>>();
+                    self.build_drawing_prims(drawing, &px, pane_w_px, vpr, out, points);
+                    self.build_drawing_text(drawing, &px, pane_w_px, vpr, out);
+                    runtime.record_visible();
                 }
             }
+            self.recycle_drawing_candidates(candidates);
         }
         // Live brush stroke: the decimated points so far paint as the same smooth curve the
         // commit will store, so what the user sees while dragging is what they get.
@@ -127,6 +167,44 @@ impl ChartEngine {
                     }
                 }
             }
+        }
+    }
+
+    /// Selection handles are retained with the overlay, so selection-only changes do not
+    /// invalidate or reconstruct unrelated drawing geometry.
+    pub(super) fn build_selected_drawing_handles_frame(
+        &self,
+        pane_index: usize,
+        hpr: f64,
+        vpr: f64,
+        out: &mut Vec<Prim>,
+    ) {
+        let Some(id) = self.selected_drawing else {
+            return;
+        };
+        let Some(drawing) = self.drawing(id) else {
+            return;
+        };
+        if drawing.pane_index != pane_index {
+            return;
+        }
+        let Some(key) = self.drawing_coordinate_key(pane_index) else {
+            return;
+        };
+        let mut runtime = self.drawing_runtime.borrow_mut();
+        let Some(px) = self.drawing_px_cached(drawing, &mut runtime, key) else {
+            return;
+        };
+        let px = px
+            .iter()
+            .map(|&(x, y)| (x * hpr, y * vpr))
+            .collect::<Vec<_>>();
+        if drawing.kind == DrawingKind::Rectangle && px.len() == 2 {
+            build_rectangle_handles(&px, vpr, self.anchor_fill(), out);
+        } else if drawing.kind == DrawingKind::Brush && px.len() > 2 {
+            build_anchor_handles(&[px[0], px[px.len() - 1]], vpr, self.anchor_fill(), out);
+        } else {
+            build_anchor_handles(&px, vpr, self.anchor_fill(), out);
         }
     }
 

@@ -16,6 +16,9 @@
 //! every anchor in COORDINATE space and converts back per anchor, so the shape stays pixel-rigid
 //! under the cursor on any scale mode (normal/log/percentage).
 
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use nucleuscharts_render::color::Color;
 use nucleuscharts_render::draw_list::{LineStyle, LineType};
 
@@ -23,6 +26,266 @@ use super::*;
 
 /// Chart-unique drawing id (never reused within a chart; 0 is the "no drawing" sentinel).
 pub type DrawingId = u32;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[doc(hidden)]
+pub struct DrawingWorkStats {
+    pub drawings_total: usize,
+    pub bounds_tests: usize,
+    pub candidates: usize,
+    pub visible: usize,
+    pub precise_hit_tests: usize,
+    pub bounds_rebuilds: usize,
+    pub geometry_rebuilds: usize,
+    pub index_updates: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum LogicalBounds {
+    Full,
+    From(f64),
+    Finite { min: f64, max: f64 },
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DrawingBounds {
+    logical: LogicalBounds,
+    min_price: Option<f64>,
+    max_price: Option<f64>,
+}
+
+impl DrawingBounds {
+    fn for_drawing(drawing: &Drawing) -> Self {
+        let mut min_logical = f64::INFINITY;
+        let mut max_logical = f64::NEG_INFINITY;
+        let mut min_price = f64::INFINITY;
+        let mut max_price = f64::NEG_INFINITY;
+        for point in &drawing.points {
+            min_logical = min_logical.min(point.logical);
+            max_logical = max_logical.max(point.logical);
+            min_price = min_price.min(point.price);
+            max_price = max_price.max(point.price);
+        }
+        if drawing.kind == DrawingKind::Brush {
+            let logical_pad = (max_logical - min_logical).abs() * 0.25;
+            let price_pad = (max_price - min_price).abs() * 0.25;
+            min_logical -= logical_pad;
+            max_logical += logical_pad;
+            min_price -= price_pad;
+            max_price += price_pad;
+        }
+        let logical = match drawing.kind {
+            DrawingKind::HorizontalLine => LogicalBounds::Full,
+            DrawingKind::HorizontalRay => LogicalBounds::From(min_logical),
+            _ => LogicalBounds::Finite {
+                min: min_logical,
+                max: max_logical,
+            },
+        };
+        let (min_price, max_price) = if drawing.kind == DrawingKind::VerticalLine {
+            (None, None)
+        } else {
+            (Some(min_price), Some(max_price))
+        };
+        Self {
+            logical,
+            min_price,
+            max_price,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ScreenBounds {
+    pub(crate) left: f64,
+    pub(crate) right: f64,
+    pub(crate) top: f64,
+    pub(crate) bottom: f64,
+}
+
+impl ScreenBounds {
+    fn intersects(self, other: Self) -> bool {
+        self.left <= other.right
+            && self.right >= other.left
+            && self.top <= other.bottom
+            && self.bottom >= other.top
+    }
+
+    fn contains(self, x: f64, y: f64) -> bool {
+        x >= self.left && x <= self.right && y >= self.top && y <= self.bottom
+    }
+}
+
+#[derive(Debug)]
+struct DrawingCache {
+    pane_index: usize,
+    bounds: DrawingBounds,
+    bounds_key: [u64; 12],
+    geometry_key: [u64; 12],
+    media_px: Vec<(f64, f64)>,
+    screen_bounds: ScreenBounds,
+    text_key: u64,
+    text_width: f64,
+    text_size: f64,
+    screen_valid: bool,
+    geometry_valid: bool,
+}
+
+impl DrawingCache {
+    fn new(drawing: &Drawing) -> Self {
+        Self {
+            pane_index: drawing.pane_index,
+            bounds: DrawingBounds::for_drawing(drawing),
+            bounds_key: [0; 12],
+            geometry_key: [0; 12],
+            media_px: Vec::new(),
+            screen_bounds: ScreenBounds::default(),
+            text_key: u64::MAX,
+            text_width: 0.0,
+            text_size: 0.0,
+            screen_valid: false,
+            geometry_valid: false,
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct DrawingRuntime {
+    entries: HashMap<DrawingId, DrawingCache>,
+    positions: HashMap<DrawingId, usize>,
+    panes: Vec<Vec<DrawingId>>,
+    scratch: Vec<DrawingId>,
+    layout_generation: u64,
+    font_size: f64,
+    font_family: Rc<str>,
+    stats: DrawingWorkStats,
+}
+
+impl DrawingRuntime {
+    pub(crate) fn position(&self, id: DrawingId) -> Option<usize> {
+        self.positions.get(&id).copied()
+    }
+
+    pub(crate) fn record_visible(&mut self) {
+        self.stats.visible += 1;
+    }
+
+    pub(crate) fn record_precise_hit(&mut self) {
+        self.stats.precise_hit_tests += 1;
+    }
+
+    pub(crate) fn pane_count(&self, pane_index: usize) -> usize {
+        self.panes.get(pane_index).map_or(0, Vec::len)
+    }
+
+    fn ensure_panes(&mut self, pane_count: usize) {
+        self.panes.resize_with(pane_count, Vec::new);
+    }
+
+    fn insert(&mut self, drawing: &Drawing, position: usize, pane_count: usize) {
+        self.ensure_panes(pane_count);
+        self.entries.insert(drawing.id, DrawingCache::new(drawing));
+        self.positions.insert(drawing.id, position);
+        if let Some(pane) = self.panes.get_mut(drawing.pane_index) {
+            pane.push(drawing.id);
+        }
+        self.stats.bounds_rebuilds += 1;
+        self.stats.index_updates += 1;
+    }
+
+    fn update(&mut self, drawing: &Drawing, pane_count: usize) {
+        self.ensure_panes(pane_count);
+        let old_pane = self.entries.get(&drawing.id).map(|entry| entry.pane_index);
+        if old_pane != Some(drawing.pane_index) {
+            if let Some(old) = old_pane.and_then(|pane| self.panes.get_mut(pane)) {
+                old.retain(|&id| id != drawing.id);
+            }
+            if let Some(pane) = self.panes.get_mut(drawing.pane_index) {
+                pane.push(drawing.id);
+            }
+            self.stats.index_updates += 1;
+        }
+        let entry = self
+            .entries
+            .entry(drawing.id)
+            .or_insert_with(|| DrawingCache::new(drawing));
+        entry.pane_index = drawing.pane_index;
+        entry.bounds = DrawingBounds::for_drawing(drawing);
+        entry.screen_valid = false;
+        entry.text_key = u64::MAX;
+        entry.geometry_valid = false;
+        self.stats.bounds_rebuilds += 1;
+    }
+
+    fn remove(&mut self, id: DrawingId, drawings: &[Drawing]) {
+        if let Some(entry) = self.entries.remove(&id) {
+            if let Some(pane) = self.panes.get_mut(entry.pane_index) {
+                pane.retain(|&candidate| candidate != id);
+            }
+            self.stats.index_updates += 1;
+        }
+        self.positions.clear();
+        self.positions.extend(
+            drawings
+                .iter()
+                .enumerate()
+                .map(|(index, drawing)| (drawing.id, index)),
+        );
+    }
+
+    fn clear(&mut self) {
+        if !self.entries.is_empty() {
+            self.stats.index_updates += self.entries.len();
+        }
+        self.entries.clear();
+        self.positions.clear();
+        for pane in &mut self.panes {
+            pane.clear();
+        }
+        self.scratch.clear();
+    }
+
+    pub(crate) fn rebuild_panes(&mut self, drawings: &[Drawing], pane_count: usize) {
+        self.panes.clear();
+        self.ensure_panes(pane_count);
+        self.positions.clear();
+        for (position, drawing) in drawings.iter().enumerate() {
+            self.positions.insert(drawing.id, position);
+            if let Some(entry) = self.entries.get_mut(&drawing.id) {
+                entry.pane_index = drawing.pane_index;
+                entry.screen_valid = false;
+                entry.geometry_valid = false;
+            } else {
+                self.entries.insert(drawing.id, DrawingCache::new(drawing));
+                self.stats.bounds_rebuilds += 1;
+            }
+            if let Some(pane) = self.panes.get_mut(drawing.pane_index) {
+                pane.push(drawing.id);
+            }
+        }
+        self.stats.index_updates += drawings.len();
+    }
+
+    pub(crate) fn capacity_bytes(&self) -> usize {
+        self.entries.capacity()
+            * (std::mem::size_of::<DrawingId>() + std::mem::size_of::<DrawingCache>())
+            + self.positions.capacity()
+                * (std::mem::size_of::<DrawingId>() + std::mem::size_of::<usize>())
+            + self
+                .entries
+                .values()
+                .map(|entry| entry.media_px.capacity() * std::mem::size_of::<(f64, f64)>())
+                .sum::<usize>()
+            + self.panes.capacity() * std::mem::size_of::<Vec<DrawingId>>()
+            + self
+                .panes
+                .iter()
+                .map(|pane| pane.capacity() * std::mem::size_of::<DrawingId>())
+                .sum::<usize>()
+            + self.scratch.capacity() * std::mem::size_of::<DrawingId>()
+            + self.font_family.len()
+    }
+}
 
 /// The drawing-tool kinds. Wire values cross the wasm boundary as `u8`; names cross as the
 /// snake_case strings [`DrawingKind::name`] returns.
@@ -761,6 +1024,302 @@ impl ChartEngine {
             .collect()
     }
 
+    pub(crate) fn drawing_coordinate_key(&self, pane_index: usize) -> Option<[u64; 12]> {
+        let pane = self.panes.get(pane_index)?;
+        let scale = self.drawing_scale(pane_index)?;
+        let range = scale.price_range_for_api()?;
+        let base = self.drawing_scale_base(pane_index);
+        let midpoint = (range.min_value() + range.max_value()) / 2.0;
+        Some([
+            scale.mode() as u64 | (u64::from(scale.is_inverted()) << 8),
+            self.time_scale.logical_to_coordinate(0.0).to_bits(),
+            self.time_scale.logical_to_coordinate(1.0).to_bits(),
+            range.min_value().to_bits(),
+            range.max_value().to_bits(),
+            base.to_bits(),
+            pane.top.to_bits(),
+            pane.height.to_bits(),
+            self.pane_w.to_bits(),
+            scale.price_to_coordinate(midpoint, base).to_bits(),
+            self.dpr.to_bits(),
+            self.options.generation(),
+        ])
+    }
+
+    fn refresh_drawing_screen_bounds(
+        &self,
+        drawing: &Drawing,
+        entry: &mut DrawingCache,
+        key: [u64; 12],
+        base: f64,
+        text_metrics: Option<(f64, f64)>,
+    ) -> bool {
+        if entry.screen_valid && entry.bounds_key == key {
+            return true;
+        }
+        let Some(scale) = self.drawing_scale(drawing.pane_index) else {
+            return false;
+        };
+        if self.data.merged_times().is_empty() {
+            return false;
+        }
+        let pane = &self.panes[drawing.pane_index];
+        let (left, right) = match entry.bounds.logical {
+            LogicalBounds::Full => (0.0, self.pane_w),
+            LogicalBounds::From(logical) => {
+                let origin = self.time_scale.logical_to_coordinate(logical);
+                if origin <= self.pane_w || !drawing.text.is_empty() {
+                    (origin, self.pane_w)
+                } else {
+                    (origin, origin)
+                }
+            }
+            LogicalBounds::Finite { min, max } => (
+                self.time_scale.logical_to_coordinate(min),
+                self.time_scale.logical_to_coordinate(max),
+            ),
+        };
+        let (top, bottom) = match (entry.bounds.min_price, entry.bounds.max_price) {
+            (Some(min), Some(max)) => (
+                scale.price_to_coordinate(max, base),
+                scale.price_to_coordinate(min, base),
+            ),
+            _ => (pane.top, pane.top + pane.height),
+        };
+        let mut extra_x = drawing.width / 2.0 + HIT_TOLERANCE;
+        let mut extra_y = extra_x;
+        extra_x = extra_x.max(ANCHOR_HIT_RADIUS);
+        extra_y = extra_y.max(ANCHOR_HIT_RADIUS);
+        if let Some((width, size)) = text_metrics {
+            extra_x = extra_x.max(width + TEXT_PAD * 2.0);
+            extra_y = extra_y.max(size * 1.2 + TEXT_PAD * 2.0);
+        }
+        entry.screen_bounds = ScreenBounds {
+            left: left.min(right) - extra_x,
+            right: left.max(right) + extra_x,
+            top: top.min(bottom) - extra_y,
+            bottom: top.max(bottom) + extra_y,
+        };
+        entry.bounds_key = key;
+        entry.screen_valid = true;
+        true
+    }
+
+    fn drawing_semantic_might_intersect(
+        &self,
+        drawing: &Drawing,
+        bounds: DrawingBounds,
+        pane_index: usize,
+        visible: (f64, f64),
+        base: f64,
+        text_metrics: Option<(f64, f64)>,
+    ) -> bool {
+        let mut extra_x = drawing.width / 2.0 + ANCHOR_HIT_RADIUS;
+        let mut extra_y = extra_x;
+        if let Some((width, size)) = text_metrics {
+            extra_x = extra_x.max(width + TEXT_PAD * 2.0);
+            extra_y = extra_y.max(size * 1.2 + TEXT_PAD * 2.0);
+        }
+        let logical_pad = extra_x / self.time_scale.bar_spacing().max(f64::MIN_POSITIVE);
+        let logical_intersects = match bounds.logical {
+            LogicalBounds::Full => true,
+            // A labeled ray can anchor its right-aligned label at the pane edge even when its
+            // origin sits beyond that edge, so keep it conservative.
+            LogicalBounds::From(_) if !drawing.text.is_empty() => true,
+            LogicalBounds::From(origin) => origin <= visible.1 + logical_pad,
+            LogicalBounds::Finite { min, max } => {
+                min <= visible.1 + logical_pad && max >= visible.0 - logical_pad
+            }
+        };
+        if !logical_intersects {
+            return false;
+        }
+        let (Some(min_price), Some(max_price)) = (bounds.min_price, bounds.max_price) else {
+            return true;
+        };
+        let Some(scale) = self.drawing_scale(pane_index) else {
+            return false;
+        };
+        let first = scale.price_to_coordinate(min_price, base);
+        let second = scale.price_to_coordinate(max_price, base);
+        let pane = &self.panes[pane_index];
+        first.min(second) <= pane.top + pane.height + extra_y
+            && first.max(second) >= pane.top - extra_y
+    }
+
+    pub(crate) fn drawing_px_cached<'a>(
+        &self,
+        drawing: &Drawing,
+        runtime: &'a mut DrawingRuntime,
+        key: [u64; 12],
+    ) -> Option<&'a [(f64, f64)]> {
+        let rebuild = runtime
+            .entries
+            .get(&drawing.id)
+            .is_some_and(|entry| !entry.geometry_valid || entry.geometry_key != key);
+        if rebuild {
+            let entry = runtime.entries.get_mut(&drawing.id)?;
+            entry.media_px.clear();
+            for &point in &drawing.points {
+                entry
+                    .media_px
+                    .push(self.drawing_to_px(drawing.pane_index, point)?);
+            }
+            entry.geometry_key = key;
+            entry.geometry_valid = true;
+            runtime.stats.geometry_rebuilds += 1;
+        }
+        Some(&runtime.entries.get(&drawing.id)?.media_px)
+    }
+
+    fn cached_drawing_layout(&self) -> (f64, Rc<str>) {
+        let generation = self.options.generation();
+        let mut runtime = self.drawing_runtime.borrow_mut();
+        if runtime.layout_generation != generation || runtime.font_family.is_empty() {
+            let layout = self.options.get().layout;
+            runtime.layout_generation = generation;
+            runtime.font_size = layout.font_size;
+            runtime.font_family = Rc::from(layout.font_family);
+        }
+        (runtime.font_size, Rc::clone(&runtime.font_family))
+    }
+
+    fn cached_drawing_text_metrics(
+        &self,
+        drawing: &Drawing,
+        entry: &mut DrawingCache,
+        key: u64,
+        font_size: f64,
+        font_family: &str,
+    ) -> Option<(f64, f64)> {
+        if drawing.text.is_empty() && drawing.kind != DrawingKind::Text {
+            return None;
+        }
+        if entry.text_key != key {
+            let placeholder = drawing.kind == DrawingKind::Text && drawing.text.is_empty();
+            let size = if placeholder {
+                drawing
+                    .text_size
+                    .unwrap_or(font_size)
+                    .max(TEXT_PLACEHOLDER_MIN_SIZE)
+            } else {
+                drawing.text_size.unwrap_or(font_size)
+            };
+            entry.text_width = self.measure_drawing_text_with_family(drawing, size, font_family);
+            entry.text_size = size;
+            entry.text_key = key;
+        }
+        Some((entry.text_width, entry.text_size))
+    }
+
+    pub(crate) fn take_drawing_candidates(
+        &self,
+        pane_index: usize,
+        point: Option<(f64, f64)>,
+    ) -> (Vec<DrawingId>, Option<[u64; 12]>) {
+        let Some(key) = self.drawing_coordinate_key(pane_index) else {
+            return (Vec::new(), None);
+        };
+        let viewport = ScreenBounds {
+            left: 0.0,
+            right: self.pane_w,
+            top: self.panes[pane_index].top,
+            bottom: self.panes[pane_index].top + self.panes[pane_index].height,
+        };
+        let base = self.drawing_scale_base(pane_index);
+        let (font_size, font_family) = self.cached_drawing_layout();
+        let text_key = self.options.generation();
+        let first_logical = self.time_scale.coordinate_to_float_index(0.0) + 0.5;
+        let last_logical = self.time_scale.coordinate_to_float_index(self.pane_w) + 0.5;
+        let visible = (
+            first_logical.min(last_logical),
+            first_logical.max(last_logical),
+        );
+        let mut runtime = self.drawing_runtime.borrow_mut();
+        let mut candidates = std::mem::take(&mut runtime.scratch);
+        candidates.clear();
+        let pane_len = runtime.panes.get(pane_index).map_or(0, Vec::len);
+        runtime.stats.drawings_total += pane_len;
+        runtime.stats.bounds_tests += pane_len;
+        for index in 0..pane_len {
+            let id = runtime.panes[pane_index][index];
+            let Some(&position) = runtime.positions.get(&id) else {
+                continue;
+            };
+            let Some(drawing) = self.drawings.get(position) else {
+                continue;
+            };
+            let Some(entry) = runtime.entries.get_mut(&id) else {
+                continue;
+            };
+            let text_metrics =
+                self.cached_drawing_text_metrics(drawing, entry, text_key, font_size, &font_family);
+            if !self.drawing_semantic_might_intersect(
+                drawing,
+                entry.bounds,
+                pane_index,
+                visible,
+                base,
+                text_metrics,
+            ) {
+                continue;
+            }
+            let valid = self.refresh_drawing_screen_bounds(drawing, entry, key, base, text_metrics);
+            let bounds = entry.screen_bounds;
+            if valid
+                && point.map_or_else(
+                    || bounds.intersects(viewport),
+                    |(x, y)| bounds.contains(x, y),
+                )
+            {
+                candidates.push(id);
+            }
+        }
+        runtime.stats.candidates += candidates.len();
+        (candidates, Some(key))
+    }
+
+    pub(crate) fn recycle_drawing_candidates(&self, mut candidates: Vec<DrawingId>) {
+        candidates.clear();
+        self.drawing_runtime.borrow_mut().scratch = candidates;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn drawing_viewport_candidate_reference(&self, drawing: &Drawing) -> bool {
+        let Some(key) = self.drawing_coordinate_key(drawing.pane_index) else {
+            return false;
+        };
+        let pane = &self.panes[drawing.pane_index];
+        let viewport = ScreenBounds {
+            left: 0.0,
+            right: self.pane_w,
+            top: pane.top,
+            bottom: pane.top + pane.height,
+        };
+        let base = self.drawing_scale_base(drawing.pane_index);
+        let (font_size, font_family) = self.cached_drawing_layout();
+        let mut entry = DrawingCache::new(drawing);
+        let text_metrics = self.cached_drawing_text_metrics(
+            drawing,
+            &mut entry,
+            self.options.generation(),
+            font_size,
+            &font_family,
+        );
+        self.refresh_drawing_screen_bounds(drawing, &mut entry, key, base, text_metrics)
+            && entry.screen_bounds.intersects(viewport)
+    }
+
+    #[doc(hidden)]
+    pub fn drawing_work_stats(&self) -> DrawingWorkStats {
+        self.drawing_runtime.borrow().stats
+    }
+
+    #[doc(hidden)]
+    pub fn reset_drawing_work_stats(&self) {
+        self.drawing_runtime.borrow_mut().stats = DrawingWorkStats::default();
+    }
+
     /// The rectangle's 8 TradingView anchors derived from its two corners (media px), in
     /// clock order from the top-left: 0 TL, 1 top-mid, 2 TR, 3 right-mid, 4 BR, 5 bottom-mid,
     /// 6 BL, 7 left-mid. Corners resize both adjacent edges, midpoints one edge — all with
@@ -893,7 +1452,10 @@ impl ChartEngine {
     /// placeholder's bold weight when it applies).
     pub(crate) fn measure_drawing_text(&self, drawing: &Drawing, size: f64) -> f64 {
         let layout = &self.options.get().layout;
-        let family = layout.font_family.as_str();
+        self.measure_drawing_text_with_family(drawing, size, &layout.font_family)
+    }
+
+    fn measure_drawing_text_with_family(&self, drawing: &Drawing, size: f64, family: &str) -> f64 {
         let text = drawing.display_text();
         let placeholder = drawing.kind == DrawingKind::Text && drawing.text.is_empty();
         let weight = if placeholder {
@@ -911,6 +1473,53 @@ impl ChartEngine {
     /// boxes (see [`TextMeasureFn`]).
     pub fn set_text_measure(&mut self, f: Option<TextMeasureFn>) {
         self.text_measure_fn = f;
+        for entry in self.drawing_runtime.borrow_mut().entries.values_mut() {
+            entry.screen_valid = false;
+            entry.text_key = u64::MAX;
+        }
+        self.invalidate_frame_drawings();
+    }
+
+    fn insert_drawing_runtime(&self, id: DrawingId) {
+        let Some(position) = self.drawings.iter().position(|drawing| drawing.id == id) else {
+            return;
+        };
+        self.drawing_runtime.borrow_mut().insert(
+            &self.drawings[position],
+            position,
+            self.panes.len(),
+        );
+    }
+
+    fn take_drawing_id(&mut self) -> Option<DrawingId> {
+        let id = self.next_drawing_id;
+        self.next_drawing_id = self.next_drawing_id.checked_add(1)?;
+        Some(id)
+    }
+
+    fn update_drawing_runtime(&self, id: DrawingId) {
+        let Some(drawing) = self.drawing(id) else {
+            return;
+        };
+        self.drawing_runtime
+            .borrow_mut()
+            .update(drawing, self.panes.len());
+    }
+
+    fn invalidate_brush_drag_runtime(&self, id: DrawingId) {
+        let mut runtime = self.drawing_runtime.borrow_mut();
+        let Some(entry) = runtime.entries.get_mut(&id) else {
+            return;
+        };
+        // A moving/endpoint-edited brush stays conservatively global during the active drag.
+        // The exact cached path bounds are rebuilt once on pointer-up, avoiding a second walk of
+        // a 10K-point path on every pointer sample while never excluding the moving stroke.
+        entry.bounds.logical = LogicalBounds::Full;
+        entry.bounds.min_price = None;
+        entry.bounds.max_price = None;
+        entry.screen_valid = false;
+        entry.geometry_valid = false;
+        runtime.stats.bounds_rebuilds += 1;
     }
 
     // --- CRUD ---
@@ -935,8 +1544,7 @@ impl ChartEngine {
         {
             return None;
         }
-        let id = self.next_drawing_id;
-        self.next_drawing_id += 1;
+        let id = self.take_drawing_id()?;
         let mut drawing = Drawing::new(id, kind, pane_index, points);
         if let Some(json) = options_json {
             if let Ok(patch) = serde_json::from_str::<DrawingPatch>(json) {
@@ -944,6 +1552,7 @@ impl ChartEngine {
             }
         }
         self.drawings.push(drawing);
+        self.insert_drawing_runtime(id);
         Some(id)
     }
 
@@ -958,6 +1567,7 @@ impl ChartEngine {
             return false;
         };
         drawing.apply_patch(patch);
+        self.update_drawing_runtime(id);
         true
     }
 
@@ -979,6 +1589,7 @@ impl ChartEngine {
             return false;
         }
         drawing.points = points;
+        self.update_drawing_runtime(id);
         true
     }
 
@@ -990,6 +1601,7 @@ impl ChartEngine {
         self.drawings.retain(|d| d.id != id);
         let removed = self.drawings.len() != before;
         if removed {
+            self.drawing_runtime.borrow_mut().remove(id, &self.drawings);
             if self.selected_drawing == Some(id) {
                 self.selected_drawing = None;
             }
@@ -1004,6 +1616,7 @@ impl ChartEngine {
     pub fn clear_drawings(&mut self) {
         self.invalidate_frame_drawings();
         self.drawings.clear();
+        self.drawing_runtime.borrow_mut().clear();
         self.selected_drawing = None;
         self.drawing_drag = None;
     }
@@ -1057,7 +1670,7 @@ impl ChartEngine {
     /// paints anchor handles at its defining points and its anchors accept drags. An unknown id
     /// never sticks.
     pub fn set_selected_drawing(&mut self, id: Option<DrawingId>) {
-        self.invalidate_frame_drawings();
+        self.invalidate_frame_overlay();
         self.selected_drawing = id.filter(|&sid| self.drawings.iter().any(|d| d.id == sid));
     }
 
@@ -1085,7 +1698,7 @@ impl ChartEngine {
     /// the topmost hit is selected; a miss clears the selection. Returns whether a drawing was
     /// hit (the host then skips its series-selection path).
     pub fn select_drawing_at(&mut self, x: f64, y: f64) -> bool {
-        self.invalidate_frame_drawings();
+        self.invalidate_frame_overlay();
         self.selected_drawing = self.hit_test_drawing(x, y).map(|hit| hit.id);
         self.selected_drawing.is_some()
     }
@@ -1105,6 +1718,16 @@ impl ChartEngine {
     /// bodies hit topmost-first in z-order within the pane under the cursor (hit_test.rs
     /// restricts hits to the hovered pane the same way).
     pub fn hit_test_drawing(&self, x: f64, y: f64) -> Option<DrawingHit> {
+        self.hit_test_drawing_impl(x, y, true)
+    }
+
+    /// Brute-force reference used by deterministic and randomized parity tests.
+    #[doc(hidden)]
+    pub fn hit_test_drawing_bruteforce(&self, x: f64, y: f64) -> Option<DrawingHit> {
+        self.hit_test_drawing_impl(x, y, false)
+    }
+
+    fn hit_test_drawing_impl(&self, x: f64, y: f64, indexed: bool) -> Option<DrawingHit> {
         if !x.is_finite() || !y.is_finite() || x < 0.0 || x > self.pane_w {
             return None;
         }
@@ -1116,7 +1739,21 @@ impl ChartEngine {
         if let Some(selected) = self.selected_drawing {
             if let Some(drawing) = self.drawing(selected) {
                 if drawing.pane_index == pane {
-                    if let Some(px) = self.drawing_px(drawing) {
+                    if drawing.kind == DrawingKind::Brush && drawing.points.len() > 2 {
+                        for &index in &[0, drawing.points.len() - 1] {
+                            if let Some((ax, ay)) =
+                                self.drawing_to_px(drawing.pane_index, drawing.points[index])
+                            {
+                                if (x - ax).hypot(y - ay) <= ANCHOR_HIT_RADIUS {
+                                    return Some(DrawingHit {
+                                        id: selected,
+                                        part: DrawingDragPart::Anchor(index),
+                                        cursor: "pointer",
+                                    });
+                                }
+                            }
+                        }
+                    } else if let Some(px) = self.drawing_px(drawing) {
                         if drawing.kind == DrawingKind::Rectangle && px.len() == 2 {
                             let anchors = Self::rectangle_anchors(&px);
                             for (index, &(ax, ay)) in anchors.iter().enumerate() {
@@ -1129,30 +1766,13 @@ impl ChartEngine {
                                 }
                             }
                         } else {
-                            let anchor_indexes: &[usize] = match drawing.kind {
-                                DrawingKind::Brush if px.len() > 2 => &[0, px.len() - 1],
-                                _ => &[],
-                            };
-                            if anchor_indexes.is_empty() {
-                                for (index, &(ax, ay)) in px.iter().enumerate() {
-                                    if (x - ax).hypot(y - ay) <= ANCHOR_HIT_RADIUS {
-                                        return Some(DrawingHit {
-                                            id: selected,
-                                            part: DrawingDragPart::Anchor(index),
-                                            cursor: "pointer",
-                                        });
-                                    }
-                                }
-                            } else {
-                                for &index in anchor_indexes {
-                                    let (ax, ay) = px[index];
-                                    if (x - ax).hypot(y - ay) <= ANCHOR_HIT_RADIUS {
-                                        return Some(DrawingHit {
-                                            id: selected,
-                                            part: DrawingDragPart::Anchor(index),
-                                            cursor: "pointer",
-                                        });
-                                    }
+                            for (index, &(ax, ay)) in px.iter().enumerate() {
+                                if (x - ax).hypot(y - ay) <= ANCHOR_HIT_RADIUS {
+                                    return Some(DrawingHit {
+                                        id: selected,
+                                        part: DrawingDragPart::Anchor(index),
+                                        cursor: "pointer",
+                                    });
                                 }
                             }
                         }
@@ -1160,22 +1780,55 @@ impl ChartEngine {
                 }
             }
         }
-        for drawing in self.drawings.iter().rev() {
-            if drawing.pane_index != pane {
-                continue;
+        if !indexed {
+            for drawing in self.drawings.iter().rev() {
+                if drawing.pane_index != pane {
+                    continue;
+                }
+                let Some(px) = self.drawing_px(drawing) else {
+                    continue;
+                };
+                if self.drawing_body_hit(drawing, &px, x, y) {
+                    return Some(DrawingHit {
+                        id: drawing.id,
+                        part: DrawingDragPart::Body,
+                        cursor: "move",
+                    });
+                }
             }
-            let Some(px) = self.drawing_px(drawing) else {
-                continue;
-            };
-            if self.drawing_body_hit(drawing, &px, x, y) {
-                return Some(DrawingHit {
-                    id: drawing.id,
-                    part: DrawingDragPart::Body,
-                    cursor: "move",
-                });
+            return None;
+        }
+
+        let (candidates, Some(key)) = self.take_drawing_candidates(pane, Some((x, y))) else {
+            return None;
+        };
+        let mut hit = None;
+        {
+            let mut runtime = self.drawing_runtime.borrow_mut();
+            for &id in candidates.iter().rev() {
+                let Some(&position) = runtime.positions.get(&id) else {
+                    continue;
+                };
+                let Some(drawing) = self.drawings.get(position) else {
+                    continue;
+                };
+                let Some(px) = self.drawing_px_cached(drawing, &mut runtime, key) else {
+                    continue;
+                };
+                let body_hit = self.drawing_body_hit(drawing, px, x, y);
+                runtime.record_precise_hit();
+                if body_hit {
+                    hit = Some(DrawingHit {
+                        id,
+                        part: DrawingDragPart::Body,
+                        cursor: "move",
+                    });
+                    break;
+                }
             }
         }
-        None
+        self.recycle_drawing_candidates(candidates);
+        hit
     }
 
     /// The per-kind body test at media px `(x, y)` against the converted anchors `px`.
@@ -1255,7 +1908,7 @@ impl ChartEngine {
     /// re-anchor). A successful grab also selects the drawing (TradingView parity). Returns
     /// false on a miss — the host falls through to its pan/scroll handling.
     pub fn drawing_drag_start_at(&mut self, x: f64, y: f64) -> bool {
-        self.invalidate_frame_drawings();
+        self.invalidate_frame_overlay();
         let Some(hit) = self.hit_test_drawing(x, y) else {
             return false;
         };
@@ -1373,6 +2026,11 @@ impl ChartEngine {
                     if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
                         drawing.points = points;
                     }
+                    if kind == DrawingKind::Brush {
+                        self.invalidate_brush_drag_runtime(id);
+                    } else {
+                        self.update_drawing_runtime(id);
+                    }
                     return;
                 }
                 if index >= points.len() {
@@ -1443,11 +2101,19 @@ impl ChartEngine {
         if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
             drawing.points = points;
         }
+        if kind == DrawingKind::Brush {
+            self.invalidate_brush_drag_runtime(id);
+        } else {
+            self.update_drawing_runtime(id);
+        }
     }
 
     /// Close the drag session (pointer up/cancel).
     pub fn drawing_drag_end(&mut self) {
-        self.invalidate_frame_drawings();
+        self.invalidate_frame_overlay();
+        if let Some(id) = self.drawing_drag.as_ref().map(|drag| drag.id) {
+            self.update_drawing_runtime(id);
+        }
         self.drawing_drag = None;
     }
 
@@ -1542,11 +2208,13 @@ impl ChartEngine {
         let Some(pending) = self.pending_drawing.take() else {
             return -1;
         };
-        let id = self.next_drawing_id;
-        self.next_drawing_id += 1;
+        let Some(id) = self.take_drawing_id() else {
+            return 0;
+        };
         let mut drawing = pending.drawing;
         drawing.id = id;
         self.drawings.push(drawing);
+        self.insert_drawing_runtime(id);
         self.selected_drawing = Some(id);
         i64::from(id)
     }
@@ -1713,13 +2381,15 @@ impl ChartEngine {
         if points.len() < 2 {
             return 0;
         }
-        let id = self.next_drawing_id;
-        self.next_drawing_id += 1;
+        let Some(id) = self.take_drawing_id() else {
+            return 0;
+        };
         let mut drawing = capture.options;
         drawing.id = id;
         drawing.pane_index = capture.pane_index;
         drawing.points = points;
         self.drawings.push(drawing);
+        self.insert_drawing_runtime(id);
         self.selected_drawing = Some(id);
         id
     }

@@ -19,12 +19,12 @@ mod series_query_api;
 mod tests;
 mod workspace;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
-pub(crate) use drawings::{BrushCapture, DrawingDrag, PendingDrawing};
+pub(crate) use drawings::{BrushCapture, DrawingDrag, DrawingRuntime, PendingDrawing};
 pub use drawings::{
     Drawing, DrawingDragPart, DrawingHit, DrawingId, DrawingKind, DrawingModifiers, DrawingPoint,
-    TextMeasureFn, DRAWING_DEFAULT_COLOR,
+    DrawingWorkStats, TextMeasureFn, DRAWING_DEFAULT_COLOR,
 };
 pub use frame::{
     AxisFrame, AxisLabel, AxisLabelCorners, AxisTextAlign, AxisTextMidpoint, ChartFrame,
@@ -76,6 +76,7 @@ pub struct EngineMemoryUsage {
     pub indicator_runtime_bytes: usize,
     pub indicator_transfer_capacity_bytes: usize,
     pub retained_frame_capacity_bytes: usize,
+    pub drawing_runtime_capacity_bytes: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -93,6 +94,7 @@ impl EngineMemoryUsage {
             + self.tick_payload_bytes
             + self.indicator_runtime_bytes
             + self.retained_frame_capacity_bytes
+            + self.drawing_runtime_capacity_bytes
     }
 }
 
@@ -743,6 +745,9 @@ pub struct ChartEngine {
     /// Engine-owned drawing objects (drawing tools: trend/horizontal/vertical lines, rectangle,
     /// text) in z-order, bottom first. See drawings.rs.
     drawings: Vec<Drawing>,
+    /// Derived, chart-local drawing bounds, pane candidates, and coordinate geometry. Semantic
+    /// anchors and styles in `drawings` remain authoritative and are the only serialized state.
+    drawing_runtime: RefCell<DrawingRuntime>,
     /// Next chart-unique drawing id (never reused; starts at 1 — 0 is the "no drawing" sentinel).
     next_drawing_id: DrawingId,
     /// The drawing the host last clicked (TradingView-style selection): while set, the frame
@@ -831,6 +836,7 @@ impl ChartEngine {
             selected_series: None,
             primitive_autoscale: Vec::new(),
             drawings: Vec::new(),
+            drawing_runtime: RefCell::new(DrawingRuntime::default()),
             next_drawing_id: 1,
             selected_drawing: None,
             drawing_drag: None,
@@ -892,6 +898,7 @@ impl ChartEngine {
             indicator_runtime_bytes,
             indicator_transfer_capacity_bytes,
             retained_frame_capacity_bytes: self.retained_frame.capacity_bytes(),
+            drawing_runtime_capacity_bytes: self.drawing_runtime.borrow().capacity_bytes(),
         }
     }
 
@@ -1102,6 +1109,9 @@ impl ChartEngine {
         pane.preserve_empty = preserve_empty;
         self.apply_chart_scale_options(&mut pane);
         self.panes.push(pane);
+        self.drawing_runtime
+            .borrow_mut()
+            .rebuild_panes(&self.drawings, self.panes.len());
         self.invalidate_frame_all();
         self.panes.len() - 1
     }
@@ -1143,6 +1153,16 @@ impl ChartEngine {
                 s.pane_index -= 1;
             }
         }
+        for drawing in &mut self.drawings {
+            if drawing.pane_index == index {
+                drawing.pane_index = PANELESS;
+            } else if drawing.pane_index != PANELESS && drawing.pane_index > index {
+                drawing.pane_index -= 1;
+            }
+        }
+        self.drawing_runtime
+            .borrow_mut()
+            .rebuild_panes(&self.drawings, self.panes.len());
         self.invalidate_frame_all();
         true
     }
@@ -1161,6 +1181,16 @@ impl ChartEngine {
                 s.pane_index = first;
             }
         }
+        for drawing in &mut self.drawings {
+            if drawing.pane_index == first {
+                drawing.pane_index = second;
+            } else if drawing.pane_index == second {
+                drawing.pane_index = first;
+            }
+        }
+        self.drawing_runtime
+            .borrow_mut()
+            .rebuild_panes(&self.drawings, self.panes.len());
         self.invalidate_frame_all();
         true
     }
@@ -1191,6 +1221,24 @@ impl ChartEngine {
                 p
             };
         }
+        for drawing in &mut self.drawings {
+            let pane = drawing.pane_index;
+            if pane == PANELESS {
+                continue;
+            }
+            drawing.pane_index = if pane == from {
+                to
+            } else if from < to && pane > from && pane <= to {
+                pane - 1
+            } else if to < from && pane >= to && pane < from {
+                pane + 1
+            } else {
+                pane
+            };
+        }
+        self.drawing_runtime
+            .borrow_mut()
+            .rebuild_panes(&self.drawings, self.panes.len());
         self.invalidate_frame_all();
         true
     }

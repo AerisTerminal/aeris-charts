@@ -29,6 +29,19 @@ export function measure_native(scenario) {
     const unit = name.endsWith("bytes") ? "bytes" : "count";
     metrics[`dense_upload_${name}`] = metric([value], unit, "informational", "internal", `Changed dense source-group ${name.replaceAll("_", " ")} after a 1M-bar current update.`);
   }
+  for (const row of raw.drawing_density) {
+    const prefix = `drawing_${row.drawing_count}_${row.distribution}`;
+    metrics[`${prefix}_initial_ms`] = metric([row.initial_ms], "ms", "lower_is_better", "internal", "Initial semantic bounds, pane index, geometry, and retained drawing-frame construction.");
+    metrics[`${prefix}_frame_ms`] = metric(row.frame_ms, "ms", "lower_is_better", "internal", "Coordinate-changing drawing frame rebuild through pane-local viewport candidates.");
+    metrics[`${prefix}_hit_us`] = metric(row.hit_us, "us", "lower_is_better", "internal", "Pointer hit testing through cached conservative bounds and precise candidate arbitration.");
+    metrics[`${prefix}_drag_ms`] = metric(row.drag_ms, "ms", "lower_is_better", "internal", "One-drawing semantic mutation, bounds/index update, and retained frame rebuild.");
+    metrics[`${prefix}_pan_ms`] = metric(row.pan_ms, "ms", "lower_is_better", "internal", "Small alternating time-axis pan plus drawing candidate/frame work.");
+    metrics[`${prefix}_zoom_ms`] = metric(row.zoom_ms, "ms", "lower_is_better", "internal", "Small alternating time-axis zoom plus drawing candidate/frame work.");
+    for (const name of ["frame_candidates", "visible_drawings", "hit_candidates", "precise_hit_tests", "geometry_rebuilds", "drawing_runtime_capacity_bytes"]) {
+      const unit = name.endsWith("bytes") ? "bytes" : "count";
+      metrics[`${prefix}_${name}`] = metric([row[name]], unit, "informational", "internal", `Drawing-density ${name.replaceAll("_", " ")}.`);
+    }
+  }
   return {
     id: scenario.id,
     version: scenario.version,

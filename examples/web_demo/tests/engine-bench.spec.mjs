@@ -113,6 +113,71 @@ test("build-flag benchmark: 1M-bar install, autoscale, hit tests, frame build", 
     window.__chart.render();
     out.full_view_1m_current_frame = { ...window.__chart.frame_stats() };
 
+    // --- Migration 6 combined foundation: 1M bars + 1,000 drawings, ~10 visible ------------
+    window.__chart.clear_drawings();
+    const drawing_initial_started = performance.now();
+    let first_drawing = null;
+    for (let i = 0; i < 1_000; i += 1) {
+      const logical = i < 10 ? 499_990 + i * 2 : 2_000_000 + i * 100;
+      const drawing = window.__chart.add_drawing("trend_line", [
+        { logical, price: 98 + (i % 10) * 0.2 },
+        { logical: logical + 1, price: 99 + (i % 10) * 0.2 },
+      ]);
+      if (i === 0) first_drawing = drawing;
+    }
+    window.__chart.wasm.reset_drawing_work_stats();
+    time_scale.set_visible_logical_range({ from: 0.5, to: 999_999.5 });
+    window.__chart.render();
+    out.drawing_1m_1000_frame = {
+      ...window.__chart.frame_stats(),
+      initial_ms: performance.now() - drawing_initial_started,
+      work: JSON.parse(window.__chart.wasm.drawing_work_stats_json()),
+    };
+    const DRAWING_FRAMES = 30;
+    out.drawing_1m_1000_pan_ms = best(() => timed(() => {
+      for (let i = 0; i < DRAWING_FRAMES; i += 1) {
+        const shift = i % 2 === 0 ? -1 : 1;
+        time_scale.set_visible_logical_range({ from: shift, to: 999_999 + shift });
+        window.__chart.render();
+      }
+    })) / DRAWING_FRAMES;
+    out.drawing_1m_1000_zoom_ms = best(() => timed(() => {
+      for (let i = 0; i < DRAWING_FRAMES; i += 1) {
+        const edge = i % 2 === 0 ? 1 : 2;
+        time_scale.set_visible_logical_range({ from: -edge, to: 999_999 + edge });
+        window.__chart.render();
+      }
+    })) / DRAWING_FRAMES;
+    window.__chart.wasm.reset_drawing_work_stats();
+    window.__chart.wasm.hover_at(17, 17);
+    out.drawing_1m_1000_hit_work = JSON.parse(window.__chart.wasm.drawing_work_stats_json());
+    out.drawing_1m_1000_hover_us = best(() => timed(() => {
+      for (let i = 0; i < 1_000; i += 1) {
+        window.__chart.wasm.hover_at(20 + (i * 17) % 1_200, 20 + (i * 11) % 650);
+      }
+    })) * 1000 / 1_000;
+    const anchor = window.__chart.wasm.drawing_point_to_coordinate(first_drawing.id, 0);
+    if (window.__chart.wasm.drawing_drag_start_at(anchor[0], anchor[1])) {
+      out.drawing_1m_1000_drag_ms = best(() => timed(() => {
+        for (let i = 0; i < DRAWING_FRAMES; i += 1) {
+          window.__chart.wasm.drawing_drag_to(anchor[0] + (i % 2), anchor[1], false, false);
+          window.__chart.render();
+        }
+      })) / DRAWING_FRAMES;
+      window.__chart.wasm.drawing_drag_end();
+    }
+    out.drawing_1m_1000_current_ms = best(() => timed(() => {
+      window.__main.update({
+        time: million.times[last],
+        open: million.open[last],
+        high: million.high[last] + 0.02,
+        low: million.low[last],
+        close: million.close[last] + 0.02,
+      });
+      window.__chart.render();
+    }));
+    window.__chart.clear_drawings();
+
     // --- frame build over a 50k-bar window (the 60fps target's shape) --------------------------
     window.__main.set_data_typed(make_columns(50_000));
     window.__chart.time_scale().fit_content();
@@ -123,7 +188,7 @@ test("build-flag benchmark: 1M-bar install, autoscale, hit tests, frame build", 
     })) / FRAMES;
 
     // --- hit-testing 10k drawings ---------------------------------------------------------------
-    // Anchors spread across the 50k-bar logical range so the R-tree actually has to discriminate
+    // Anchors spread across the 50k-bar logical range so pane-local bounds have to discriminate
     // (`drawing_point` is `{logical, price}` — bar indices, not timestamps).
     window.__chart.clear_drawings();
     const DRAWINGS = 10_000;

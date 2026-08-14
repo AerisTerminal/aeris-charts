@@ -1594,3 +1594,472 @@ fn text_tool_container_draws_a_crisp_box_behind_the_run() {
         .iter()
         .all(|(fill, _)| *fill != Color::rgba(0xff, 0, 0, 0x80)));
 }
+
+#[test]
+fn thousand_mostly_offscreen_drawings_bound_frame_and_hit_work() {
+    let mut chart = settled_chart();
+    for index in 0..1_000 {
+        let logical = if index < 10 {
+            2.0 + index as f64 * 0.4
+        } else {
+            1_000.0 + index as f64 * 10.0
+        };
+        chart
+            .add_drawing(
+                DrawingKind::TrendLine,
+                0,
+                vec![
+                    DrawingPoint {
+                        logical,
+                        price: 10.5,
+                    },
+                    DrawingPoint {
+                        logical: logical + 0.25,
+                        price: 11.0,
+                    },
+                ],
+                None,
+            )
+            .unwrap();
+    }
+
+    chart.reset_drawing_work_stats();
+    chart.build_frame();
+    let frame = chart.drawing_work_stats();
+    assert_eq!(frame.drawings_total, 1_000);
+    assert_eq!(frame.candidates, 10);
+    assert_eq!(frame.visible, 10);
+    assert_eq!(frame.geometry_rebuilds, 10);
+
+    chart.reset_drawing_work_stats();
+    assert_eq!(chart.hit_test_drawing(5.0, 5.0), None);
+    let hit = chart.drawing_work_stats();
+    assert_eq!(hit.drawings_total, 1_000);
+    assert_eq!(hit.candidates, 0);
+    assert_eq!(hit.precise_hit_tests, 0);
+}
+
+#[test]
+fn every_tool_has_conservative_viewport_inclusion_and_clear_exclusion() {
+    let mut chart = settled_chart();
+    for kind in [
+        DrawingKind::TrendLine,
+        DrawingKind::HorizontalLine,
+        DrawingKind::HorizontalRay,
+        DrawingKind::VerticalLine,
+        DrawingKind::Rectangle,
+        DrawingKind::Text,
+        DrawingKind::Brush,
+    ] {
+        let visible = match kind {
+            DrawingKind::TrendLine | DrawingKind::Rectangle | DrawingKind::Brush => vec![
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 10.5,
+                },
+                DrawingPoint {
+                    logical: 7.0,
+                    price: 12.5,
+                },
+            ],
+            _ => vec![DrawingPoint {
+                logical: 4.0,
+                price: 11.0,
+            }],
+        };
+        let visible_id = chart.add_drawing(kind, 0, visible, None).unwrap();
+        assert!(chart.drawing_viewport_candidate_reference(chart.drawing(visible_id).unwrap()));
+
+        let offscreen = match kind {
+            DrawingKind::HorizontalLine => vec![DrawingPoint {
+                logical: 0.0,
+                price: 1_000.0,
+            }],
+            DrawingKind::TrendLine | DrawingKind::Rectangle | DrawingKind::Brush => vec![
+                DrawingPoint {
+                    logical: 1_000.0,
+                    price: 1_000.0,
+                },
+                DrawingPoint {
+                    logical: 1_010.0,
+                    price: 1_010.0,
+                },
+            ],
+            _ => vec![DrawingPoint {
+                logical: 1_000.0,
+                price: 1_000.0,
+            }],
+        };
+        let offscreen_id = chart.add_drawing(kind, 0, offscreen, None).unwrap();
+        assert!(
+            !chart.drawing_viewport_candidate_reference(chart.drawing(offscreen_id).unwrap()),
+            "{kind:?}"
+        );
+    }
+}
+
+#[test]
+fn thousand_overlapping_drawings_preserve_the_honest_linear_worst_case() {
+    let mut chart = settled_chart();
+    for _ in 0..1_000 {
+        chart
+            .add_drawing(
+                DrawingKind::Rectangle,
+                0,
+                vec![
+                    DrawingPoint {
+                        logical: 2.0,
+                        price: 10.0,
+                    },
+                    DrawingPoint {
+                        logical: 7.0,
+                        price: 13.0,
+                    },
+                ],
+                None,
+            )
+            .unwrap();
+    }
+    let x = (x_at(&chart, 2.0) + x_at(&chart, 7.0)) / 2.0;
+    let y = (y_at(&chart, 10.0) + y_at(&chart, 13.0)) / 2.0;
+    chart.reset_drawing_work_stats();
+    assert_eq!(chart.hit_test_drawing(x, y), None);
+    let work = chart.drawing_work_stats();
+    assert_eq!(work.candidates, 1_000);
+    assert_eq!(work.precise_hit_tests, 1_000);
+}
+
+#[test]
+fn long_offscreen_brush_uses_cached_bounds_without_rebuilding_path_geometry() {
+    let mut chart = settled_chart();
+    let points = (0..10_000)
+        .map(|index| DrawingPoint {
+            logical: 1_000.0 + index as f64 * 0.01,
+            price: 10.0 + (index as f64 * 0.01).sin(),
+        })
+        .collect();
+    chart
+        .add_drawing(DrawingKind::Brush, 0, points, None)
+        .unwrap();
+    // Add enough ordinary drawings to engage the indexed frame path.
+    for index in 0..21 {
+        chart
+            .add_drawing(
+                DrawingKind::VerticalLine,
+                0,
+                vec![DrawingPoint {
+                    logical: 2_000.0 + index as f64,
+                    price: 10.0,
+                }],
+                None,
+            )
+            .unwrap();
+    }
+    chart.reset_drawing_work_stats();
+    chart.build_frame();
+    let frame = chart.drawing_work_stats();
+    assert_eq!(frame.candidates, 0);
+    assert_eq!(frame.geometry_rebuilds, 0);
+    chart.reset_drawing_work_stats();
+    assert_eq!(chart.hit_test_drawing(400.0, 250.0), None);
+    assert_eq!(chart.drawing_work_stats().geometry_rebuilds, 0);
+}
+
+#[test]
+fn indexed_hit_matches_bruteforce_for_randomized_catalog() {
+    let mut chart = settled_chart();
+    let kinds = [
+        DrawingKind::TrendLine,
+        DrawingKind::HorizontalLine,
+        DrawingKind::HorizontalRay,
+        DrawingKind::VerticalLine,
+        DrawingKind::Rectangle,
+        DrawingKind::Text,
+        DrawingKind::Brush,
+    ];
+    let mut state = 0x9e37_79b9_u32;
+    let mut random = || {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        f64::from(state) / f64::from(u32::MAX)
+    };
+    for index in 0..400 {
+        let kind = kinds[index % kinds.len()];
+        let first = DrawingPoint {
+            logical: random() * 30.0 - 10.0,
+            price: random() * 12.0 + 5.0,
+        };
+        let mut points = vec![first];
+        if matches!(
+            kind,
+            DrawingKind::TrendLine | DrawingKind::Rectangle | DrawingKind::Brush
+        ) {
+            points.push(DrawingPoint {
+                logical: first.logical + random() * 8.0,
+                price: first.price + random() * 5.0 - 2.5,
+            });
+        }
+        chart
+            .add_drawing(
+                kind,
+                0,
+                points,
+                (kind == DrawingKind::Text).then_some(r#"{"text":"random label"}"#),
+            )
+            .unwrap();
+    }
+    for index in 0..2_000 {
+        let x = random() * chart.pane_w;
+        let y = random() * chart.pane_h;
+        assert_eq!(
+            chart.hit_test_drawing(x, y),
+            chart.hit_test_drawing_bruteforce(x, y),
+            "pointer {index} at ({x}, {y})"
+        );
+    }
+}
+
+#[test]
+fn candidate_frame_matches_full_reference_across_viewports_and_mutations() {
+    let mut chart = settled_chart();
+    let kinds = [
+        DrawingKind::TrendLine,
+        DrawingKind::HorizontalLine,
+        DrawingKind::HorizontalRay,
+        DrawingKind::VerticalLine,
+        DrawingKind::Rectangle,
+        DrawingKind::Text,
+        DrawingKind::Brush,
+    ];
+    let mut ids = Vec::new();
+    for index in 0..210 {
+        let kind = kinds[index % kinds.len()];
+        let logical = index as f64 - 100.0;
+        let mut points = vec![DrawingPoint {
+            logical,
+            price: 8.0 + (index % 50) as f64 * 0.1,
+        }];
+        if matches!(
+            kind,
+            DrawingKind::TrendLine | DrawingKind::Rectangle | DrawingKind::Brush
+        ) {
+            points.push(DrawingPoint {
+                logical: logical + 4.0,
+                price: points[0].price + 1.0,
+            });
+        }
+        ids.push(
+            chart
+                .add_drawing(
+                    kind,
+                    0,
+                    points,
+                    (kind == DrawingKind::Text).then_some(r#"{"text":"parity"}"#),
+                )
+                .unwrap(),
+        );
+    }
+
+    let assert_parity = |chart: &ChartEngine| {
+        let mut optimized_prims = Vec::new();
+        let mut optimized_points = Vec::new();
+        chart.build_drawings_frame(
+            0,
+            chart.pane_w.round() as i32,
+            1.0,
+            1.0,
+            &mut optimized_prims,
+            &mut optimized_points,
+        );
+        let mut reference_prims = Vec::new();
+        let mut reference_points = Vec::new();
+        chart.build_drawings_frame_reference(
+            0,
+            chart.pane_w.round() as i32,
+            1.0,
+            1.0,
+            &mut reference_prims,
+            &mut reference_points,
+        );
+        assert_eq!(optimized_prims, reference_prims);
+        assert_eq!(optimized_points, reference_points);
+    };
+
+    for (from, to) in [(-120.0, -80.0), (-10.0, 10.0), (80.0, 120.0)] {
+        chart.set_visible_logical_range(from, to);
+        chart.build_frame();
+        assert_parity(&chart);
+    }
+    assert!(chart.drawing_apply_options(ids[70], r#"{"width":8,"text":"changed"}"#));
+    assert!(chart.drawing_set_points(
+        ids[140],
+        r#"[{"logical":0,"price":10},{"logical":8,"price":12}]"#,
+    ));
+    assert!(chart.remove_drawing(ids[35]));
+    chart.dpr = 2.0;
+    chart.css_width = 960.0;
+    chart.pane_w = 960.0;
+    chart.build_frame();
+    assert_parity(&chart);
+}
+
+#[test]
+fn pane_candidates_are_isolated_and_removed_panes_drop_membership() {
+    let mut chart = settled_chart();
+    for _ in 1..4 {
+        let pane = chart.add_pane(true);
+        let series = chart.add_series(SeriesKind::Line);
+        let times = (0..10).map(|index| index as f64).collect::<Vec<_>>();
+        let values = vec![10.0; 10];
+        chart
+            .set_series_data(series, &times, &values, &values, &values, &values)
+            .unwrap();
+        chart.set_series_pane(series, pane, 1.0);
+    }
+    for pane in 0..4 {
+        for index in 0..250 {
+            chart
+                .add_drawing(
+                    DrawingKind::VerticalLine,
+                    pane,
+                    vec![DrawingPoint {
+                        logical: index as f64,
+                        price: 10.0,
+                    }],
+                    None,
+                )
+                .unwrap();
+        }
+    }
+    chart.build_frame();
+    let y = chart.panes[2].top + chart.panes[2].height / 2.0;
+    chart.reset_drawing_work_stats();
+    let _ = chart.hit_test_drawing(7.0, y);
+    assert_eq!(chart.drawing_work_stats().drawings_total, 250);
+
+    assert!(chart.remove_pane(2));
+    assert!(
+        chart
+            .drawings()
+            .iter()
+            .filter(|drawing| drawing.pane_index == PANELESS)
+            .count()
+            == 250
+    );
+    chart.reset_drawing_work_stats();
+    let _ = chart.hit_test_drawing(7.0, chart.panes[0].height / 2.0);
+    assert_eq!(chart.drawing_work_stats().drawings_total, 250);
+}
+
+#[test]
+fn selection_crosshair_and_one_drawing_drag_keep_unrelated_geometry_retained() {
+    let mut chart = settled_chart();
+    let mut first = 0;
+    for index in 0..100 {
+        let id = chart
+            .add_drawing(
+                DrawingKind::TrendLine,
+                0,
+                vec![
+                    DrawingPoint {
+                        logical: 2.0 + index as f64 * 0.01,
+                        price: 10.5,
+                    },
+                    DrawingPoint {
+                        logical: 7.0,
+                        price: 12.5,
+                    },
+                ],
+                None,
+            )
+            .unwrap();
+        if index == 0 {
+            first = id;
+        }
+    }
+    chart.build_frame();
+
+    chart.set_selected_drawing(Some(first));
+    chart.build_frame();
+    let frame = chart.frame_build_stats();
+    assert_eq!(frame.drawing_rebuilds, 0);
+    assert_eq!(frame.overlay_rebuilds, 1);
+
+    chart.reset_drawing_work_stats();
+    chart.set_crosshair_at(400.0, 250.0);
+    chart.build_frame();
+    assert_eq!(chart.frame_build_stats().drawing_rebuilds, 0);
+    assert_eq!(chart.drawing_work_stats().geometry_rebuilds, 0);
+
+    let (x, y) = chart.drawing_point_to_coordinate(first, 0).unwrap();
+    assert!(chart.drawing_drag_start_at(x, y));
+    chart.reset_drawing_work_stats();
+    chart.drawing_drag_to(x + 2.0, y + 1.0, DrawingModifiers::default());
+    chart.build_frame();
+    let work = chart.drawing_work_stats();
+    assert_eq!(work.bounds_rebuilds, 1);
+    assert_eq!(work.geometry_rebuilds, 1);
+}
+
+#[test]
+fn drawing_ids_never_wrap_into_a_live_or_sentinel_identity() {
+    let mut chart = settled_chart();
+    chart.next_drawing_id = DrawingId::MAX;
+    assert!(chart
+        .add_drawing(
+            DrawingKind::VerticalLine,
+            0,
+            vec![DrawingPoint {
+                logical: 1.0,
+                price: 10.0,
+            }],
+            None,
+        )
+        .is_none());
+    assert!(chart.drawings().is_empty());
+    assert_eq!(chart.next_drawing_id, DrawingId::MAX);
+}
+
+#[test]
+fn drawing_runtime_is_isolated_per_chart_even_when_ids_overlap() {
+    let mut first = settled_chart();
+    let mut second = settled_chart();
+    for index in 0..30 {
+        first
+            .add_drawing(
+                DrawingKind::VerticalLine,
+                0,
+                vec![DrawingPoint {
+                    logical: index as f64,
+                    price: 10.0,
+                }],
+                None,
+            )
+            .unwrap();
+    }
+    for index in 0..45 {
+        second
+            .add_drawing(
+                DrawingKind::VerticalLine,
+                0,
+                vec![DrawingPoint {
+                    logical: index as f64,
+                    price: 10.0,
+                }],
+                None,
+            )
+            .unwrap();
+    }
+
+    first.reset_drawing_work_stats();
+    second.reset_drawing_work_stats();
+    first.build_frame();
+    assert_eq!(first.drawing_work_stats().drawings_total, 30);
+    assert_eq!(second.drawing_work_stats(), DrawingWorkStats::default());
+
+    second.build_frame();
+    assert_eq!(second.drawing_work_stats().drawings_total, 45);
+    first.clear_drawings();
+    assert_eq!(second.drawings().len(), 45);
+}

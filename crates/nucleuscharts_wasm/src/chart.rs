@@ -1900,6 +1900,14 @@ impl NucleusChart {
     pub fn drawings_json(&self) -> String {
         self.inner.borrow().drawings_json()
     }
+    /// Internal benchmark counters; not part of the package chart API.
+    pub fn drawing_work_stats_json(&self) -> String {
+        serde_json::to_string(&self.inner.borrow().engine.drawing_work_stats()).unwrap_or_default()
+    }
+    /// Reset internal drawing benchmark counters.
+    pub fn reset_drawing_work_stats(&self) {
+        self.inner.borrow().engine.reset_drawing_work_stats();
+    }
     pub fn remove_drawing(&mut self, id: u32) -> bool {
         self.inner.borrow_mut().remove_drawing(id)
     }
