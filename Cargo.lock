@@ -3099,6 +3099,7 @@ dependencies = [
  "nucleuscharts_core",
  "nucleuscharts_engine",
  "nucleuscharts_render",
+ "nucleuscharts_render_wgpu",
  "serde",
  "serde_json",
  "tiny-skia",

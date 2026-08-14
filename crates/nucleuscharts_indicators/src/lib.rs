@@ -318,6 +318,455 @@ pub fn vwap(
     out
 }
 
+/// Borrowed canonical source columns used by the private rolling runtime. The engine owns the
+/// source storage; this crate owns only formula state and derived output.
+#[derive(Clone, Copy)]
+pub struct IndicatorInput<'a> {
+    pub times: &'a [i64],
+    pub high: &'a [f64],
+    pub low: &'a [f64],
+    pub close: &'a [f64],
+    pub volume: &'a [f64],
+}
+
+/// Incremental formula state, deliberately explicit per built-in rather than a generic indicator
+/// framework. State is aligned to source rows so a historical correction can resume from the
+/// preceding row; realtime append/current replacement touches only the new tail.
+#[derive(Clone, Debug)]
+pub enum IncrementalState {
+    Sma {
+        period: usize,
+        sums: Vec<f64>,
+        output: Vec<Option<f64>>,
+    },
+    Ema {
+        period: usize,
+        output: Vec<Option<f64>>,
+    },
+    Bollinger {
+        period: usize,
+        deviation: f64,
+        output: [Vec<Option<f64>>; 3],
+    },
+    Rsi {
+        period: usize,
+        average_gain: Vec<f64>,
+        average_loss: Vec<f64>,
+        output: Vec<Option<f64>>,
+    },
+    Macd {
+        fast_period: usize,
+        slow_period: usize,
+        signal_period: usize,
+        fast: Vec<Option<f64>>,
+        slow: Vec<Option<f64>>,
+        signal_seen: Vec<usize>,
+        signal_seed_sum: Vec<f64>,
+        output: [Vec<Option<f64>>; 3],
+    },
+    Stochastic {
+        k_period: usize,
+        d_period: usize,
+        output: [Vec<Option<f64>>; 2],
+    },
+    Atr {
+        period: usize,
+        output: Vec<Option<f64>>,
+    },
+    Vwap {
+        cumulative_pv: Vec<f64>,
+        cumulative_volume: Vec<f64>,
+        output: Vec<Option<f64>>,
+    },
+    Wma {
+        period: usize,
+        output: Vec<Option<f64>>,
+    },
+}
+
+impl IncrementalState {
+    pub fn sma(period: usize) -> Self {
+        Self::Sma {
+            period,
+            sums: Vec::new(),
+            output: Vec::new(),
+        }
+    }
+
+    pub fn ema(period: usize) -> Self {
+        Self::Ema {
+            period,
+            output: Vec::new(),
+        }
+    }
+
+    pub fn bollinger(period: usize, deviation: f64) -> Self {
+        Self::Bollinger {
+            period,
+            deviation,
+            output: std::array::from_fn(|_| Vec::new()),
+        }
+    }
+
+    pub fn rsi(period: usize) -> Self {
+        Self::Rsi {
+            period,
+            average_gain: Vec::new(),
+            average_loss: Vec::new(),
+            output: Vec::new(),
+        }
+    }
+
+    pub fn macd(fast_period: usize, slow_period: usize, signal_period: usize) -> Self {
+        Self::Macd {
+            fast_period,
+            slow_period,
+            signal_period,
+            fast: Vec::new(),
+            slow: Vec::new(),
+            signal_seen: Vec::new(),
+            signal_seed_sum: Vec::new(),
+            output: std::array::from_fn(|_| Vec::new()),
+        }
+    }
+
+    pub fn stochastic(k_period: usize, d_period: usize) -> Self {
+        Self::Stochastic {
+            k_period,
+            d_period,
+            output: std::array::from_fn(|_| Vec::new()),
+        }
+    }
+
+    pub fn atr(period: usize) -> Self {
+        Self::Atr {
+            period,
+            output: Vec::new(),
+        }
+    }
+
+    pub fn vwap() -> Self {
+        Self::Vwap {
+            cumulative_pv: Vec::new(),
+            cumulative_volume: Vec::new(),
+            output: Vec::new(),
+        }
+    }
+
+    pub fn wma(period: usize) -> Self {
+        Self::Wma {
+            period,
+            output: Vec::new(),
+        }
+    }
+
+    pub fn output_count(&self) -> usize {
+        match self {
+            Self::Bollinger { .. } | Self::Macd { .. } => 3,
+            Self::Stochastic { .. } => 2,
+            _ => 1,
+        }
+    }
+
+    pub fn output(&self, index: usize) -> &[Option<f64>] {
+        match self {
+            Self::Sma { output, .. }
+            | Self::Ema { output, .. }
+            | Self::Rsi { output, .. }
+            | Self::Atr { output, .. }
+            | Self::Vwap { output, .. }
+            | Self::Wma { output, .. } => (index == 0).then_some(output.as_slice()),
+            Self::Bollinger { output, .. } | Self::Macd { output, .. } => {
+                output.get(index).map(Vec::as_slice)
+            }
+            Self::Stochastic { output, .. } => output.get(index).map(Vec::as_slice),
+        }
+        .expect("indicator output index")
+    }
+
+    pub fn rebuild_from(&mut self, input: IndicatorInput<'_>, from: usize) {
+        let n = input.close.len().min(input.times.len());
+        let start = from.min(n);
+        match self {
+            Self::Sma {
+                period,
+                sums,
+                output,
+            } => {
+                sums.resize(n, 0.0);
+                output.resize(n, None);
+                for i in start..n {
+                    let mut sum = if i == 0 { 0.0 } else { sums[i - 1] } + input.close[i];
+                    if i >= *period {
+                        sum -= input.close[i - *period];
+                    }
+                    sums[i] = sum;
+                    output[i] = (i + 1 >= *period).then(|| sum / *period as f64);
+                }
+            }
+            Self::Ema { period, output } => {
+                output.resize(n, None);
+                let alpha = 2.0 / (*period as f64 + 1.0);
+                for i in start..n {
+                    output[i] = if i + 1 < *period {
+                        None
+                    } else if i + 1 == *period {
+                        Some(input.close[..=*period - 1].iter().sum::<f64>() / *period as f64)
+                    } else {
+                        Some(alpha * input.close[i] + (1.0 - alpha) * output[i - 1].unwrap())
+                    };
+                }
+            }
+            Self::Bollinger {
+                period,
+                deviation,
+                output,
+            } => {
+                for column in output.iter_mut() {
+                    column.resize(n, None);
+                }
+                let factor = deviation.max(0.0);
+                for i in start..n {
+                    if i + 1 < *period {
+                        for column in output.iter_mut() {
+                            column[i] = None;
+                        }
+                        continue;
+                    }
+                    let window = &input.close[i + 1 - *period..=i];
+                    let mean = window.iter().sum::<f64>() / *period as f64;
+                    let variance = window
+                        .iter()
+                        .map(|value| (value - mean).powi(2))
+                        .sum::<f64>()
+                        / *period as f64;
+                    let spread = variance.sqrt() * factor;
+                    output[0][i] = Some(mean + spread);
+                    output[1][i] = Some(mean);
+                    output[2][i] = Some(mean - spread);
+                }
+            }
+            Self::Rsi {
+                period,
+                average_gain,
+                average_loss,
+                output,
+            } => {
+                average_gain.resize(n, 0.0);
+                average_loss.resize(n, 0.0);
+                output.resize(n, None);
+                for i in start..n {
+                    if i < *period {
+                        average_gain[i] = 0.0;
+                        average_loss[i] = 0.0;
+                        output[i] = None;
+                    } else if i == *period {
+                        let mut gain = 0.0;
+                        let mut loss = 0.0;
+                        for row in 1..=*period {
+                            let change = input.close[row] - input.close[row - 1];
+                            gain += change.max(0.0);
+                            loss += (-change).max(0.0);
+                        }
+                        average_gain[i] = gain / *period as f64;
+                        average_loss[i] = loss / *period as f64;
+                        output[i] = Some(rsi_value(average_gain[i], average_loss[i]));
+                    } else {
+                        let change = input.close[i] - input.close[i - 1];
+                        average_gain[i] = (average_gain[i - 1] * (*period as f64 - 1.0)
+                            + change.max(0.0))
+                            / *period as f64;
+                        average_loss[i] = (average_loss[i - 1] * (*period as f64 - 1.0)
+                            + (-change).max(0.0))
+                            / *period as f64;
+                        output[i] = Some(rsi_value(average_gain[i], average_loss[i]));
+                    }
+                }
+            }
+            Self::Macd {
+                fast_period,
+                slow_period,
+                signal_period,
+                fast,
+                slow,
+                signal_seen,
+                signal_seed_sum,
+                output,
+            } => {
+                fast.resize(n, None);
+                slow.resize(n, None);
+                signal_seen.resize(n, 0);
+                signal_seed_sum.resize(n, 0.0);
+                for column in output.iter_mut() {
+                    column.resize(n, None);
+                }
+                let fast_alpha = 2.0 / (*fast_period as f64 + 1.0);
+                let slow_alpha = 2.0 / (*slow_period as f64 + 1.0);
+                let signal_alpha = 2.0 / (*signal_period as f64 + 1.0);
+                for i in start..n {
+                    fast[i] = ema_at(input.close, fast, i, *fast_period, fast_alpha);
+                    slow[i] = ema_at(input.close, slow, i, *slow_period, slow_alpha);
+                    let line = fast[i].zip(slow[i]).map(|(fast, slow)| fast - slow);
+                    output[0][i] = line;
+                    if let Some(line) = line {
+                        let previous_signal = i.checked_sub(1).and_then(|row| output[1][row]);
+                        if let Some(previous) = previous_signal {
+                            output[1][i] =
+                                Some(signal_alpha * line + (1.0 - signal_alpha) * previous);
+                            signal_seen[i] = signal_seen[i - 1] + 1;
+                            signal_seed_sum[i] = signal_seed_sum[i - 1];
+                        } else {
+                            let previous_seen = i.checked_sub(1).map_or(0, |row| signal_seen[row]);
+                            let previous_sum =
+                                i.checked_sub(1).map_or(0.0, |row| signal_seed_sum[row]);
+                            signal_seen[i] = previous_seen + 1;
+                            signal_seed_sum[i] = previous_sum + line;
+                            output[1][i] = (signal_seen[i] == *signal_period)
+                                .then(|| signal_seed_sum[i] / *signal_period as f64);
+                        }
+                    } else {
+                        signal_seen[i] = 0;
+                        signal_seed_sum[i] = 0.0;
+                        output[1][i] = None;
+                    }
+                    output[2][i] = line.zip(output[1][i]).map(|(line, signal)| line - signal);
+                }
+            }
+            Self::Stochastic {
+                k_period,
+                d_period,
+                output,
+            } => {
+                let n = n.min(input.high.len()).min(input.low.len());
+                for column in output.iter_mut() {
+                    column.resize(n, None);
+                }
+                for i in start.min(n)..n {
+                    if i + 1 < *k_period {
+                        output[0][i] = None;
+                        output[1][i] = None;
+                        continue;
+                    }
+                    let high = input.high[i + 1 - *k_period..=i]
+                        .iter()
+                        .fold(f64::NEG_INFINITY, |acc, &value| acc.max(value));
+                    let low = input.low[i + 1 - *k_period..=i]
+                        .iter()
+                        .fold(f64::INFINITY, |acc, &value| acc.min(value));
+                    output[0][i] = Some(if high > low {
+                        100.0 * (input.close[i] - low) / (high - low)
+                    } else {
+                        i.checked_sub(1)
+                            .and_then(|row| output[0][row])
+                            .unwrap_or(50.0)
+                    });
+                    output[1][i] = if i + 1 >= *k_period + *d_period - 1 {
+                        Some(
+                            output[0][i + 1 - *d_period..=i]
+                                .iter()
+                                .map(|v| v.unwrap_or(0.0))
+                                .sum::<f64>()
+                                / *d_period as f64,
+                        )
+                    } else {
+                        None
+                    };
+                }
+            }
+            Self::Atr { period, output } => {
+                let n = n.min(input.high.len()).min(input.low.len());
+                output.resize(n, None);
+                for i in start.min(n)..n {
+                    if i < *period {
+                        output[i] = None;
+                    } else if i == *period {
+                        let sum = (1..=*period).map(|row| true_range(input, row)).sum::<f64>();
+                        output[i] = Some(sum / *period as f64);
+                    } else {
+                        output[i] = Some(
+                            (output[i - 1].unwrap() * (*period as f64 - 1.0)
+                                + true_range(input, i))
+                                / *period as f64,
+                        );
+                    }
+                }
+            }
+            Self::Vwap {
+                cumulative_pv,
+                cumulative_volume,
+                output,
+            } => {
+                let n = n.min(input.high.len()).min(input.low.len());
+                cumulative_pv.resize(n, 0.0);
+                cumulative_volume.resize(n, 0.0);
+                output.resize(n, None);
+                for i in start.min(n)..n {
+                    let typical = (input.high[i] + input.low[i] + input.close[i]) / 3.0;
+                    let volume = input.volume.get(i).copied().unwrap_or(1.0).max(0.0);
+                    let same_session = i > 0
+                        && input.times[i - 1].div_euclid(86_400)
+                            == input.times[i].div_euclid(86_400);
+                    cumulative_pv[i] = if same_session {
+                        cumulative_pv[i - 1]
+                    } else {
+                        0.0
+                    } + typical * volume;
+                    cumulative_volume[i] = if same_session {
+                        cumulative_volume[i - 1]
+                    } else {
+                        0.0
+                    } + volume;
+                    output[i] = Some(if cumulative_volume[i] > 0.0 {
+                        cumulative_pv[i] / cumulative_volume[i]
+                    } else {
+                        typical
+                    });
+                }
+            }
+            Self::Wma { period, output } => {
+                output.resize(n, None);
+                let denominator = (*period * (*period + 1)) as f64 / 2.0;
+                for (i, slot) in output.iter_mut().enumerate().skip(start) {
+                    *slot = if i + 1 < *period {
+                        None
+                    } else {
+                        Some(
+                            input.close[i + 1 - *period..=i]
+                                .iter()
+                                .enumerate()
+                                .map(|(weight, value)| (weight + 1) as f64 * value)
+                                .sum::<f64>()
+                                / denominator,
+                        )
+                    };
+                }
+            }
+        }
+    }
+}
+
+fn ema_at(
+    values: &[f64],
+    state: &[Option<f64>],
+    index: usize,
+    period: usize,
+    alpha: f64,
+) -> Option<f64> {
+    if index + 1 < period {
+        None
+    } else if index + 1 == period {
+        Some(values[..period].iter().sum::<f64>() / period as f64)
+    } else {
+        Some(alpha * values[index] + (1.0 - alpha) * state[index - 1].unwrap())
+    }
+}
+
+fn true_range(input: IndicatorInput<'_>, index: usize) -> f64 {
+    (input.high[index] - input.low[index])
+        .max((input.high[index] - input.close[index - 1]).abs())
+        .max((input.low[index] - input.close[index - 1]).abs())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -441,5 +890,191 @@ mod tests {
         // Empty volume slice = unit weights (cumulative typical mean).
         let u = vwap(&times[..2], &highs[..2], &lows[..2], &closes[..2], &[]);
         assert!((u[1].unwrap() - 15.0).abs() < 1e-12);
+    }
+
+    #[derive(Clone, Copy)]
+    enum TestKind {
+        Sma,
+        Ema,
+        Bollinger,
+        Rsi,
+        Macd,
+        Stochastic,
+        Atr,
+        Vwap,
+        Wma,
+    }
+
+    fn expected(kind: TestKind, input: IndicatorInput<'_>) -> Vec<Vec<Option<f64>>> {
+        match kind {
+            TestKind::Sma => vec![sma(input.close, 5)],
+            TestKind::Ema => vec![ema(input.close, 5)],
+            TestKind::Bollinger => {
+                let points = bollinger(input.close, 5, 2.0);
+                vec![
+                    points.iter().map(|point| point.upper).collect(),
+                    points.iter().map(|point| point.middle).collect(),
+                    points.iter().map(|point| point.lower).collect(),
+                ]
+            }
+            TestKind::Rsi => vec![rsi(input.close, 5)],
+            TestKind::Macd => {
+                let points = macd(input.close, 3, 6, 4);
+                vec![
+                    points.iter().map(|point| point.macd).collect(),
+                    points.iter().map(|point| point.signal).collect(),
+                    points.iter().map(|point| point.histogram).collect(),
+                ]
+            }
+            TestKind::Stochastic => {
+                let points = stochastic(input.high, input.low, input.close, 5, 3);
+                vec![
+                    points.iter().map(|point| point.k).collect(),
+                    points.iter().map(|point| point.d).collect(),
+                ]
+            }
+            TestKind::Atr => vec![atr(input.high, input.low, input.close, 5)],
+            TestKind::Vwap => vec![vwap(
+                input.times,
+                input.high,
+                input.low,
+                input.close,
+                input.volume,
+            )],
+            TestKind::Wma => vec![wma(input.close, 5)],
+        }
+    }
+
+    fn assert_incremental_matches_full(
+        states: &mut [(TestKind, IncrementalState)],
+        input: IndicatorInput<'_>,
+        from: usize,
+    ) {
+        for (kind, state) in states {
+            state.rebuild_from(input, from);
+            let expected = expected(*kind, input);
+            assert_eq!(state.output_count(), expected.len());
+            for (output, expected) in expected.iter().enumerate() {
+                assert_eq!(state.output(output).len(), expected.len());
+                for (index, (&actual, &expected)) in
+                    state.output(output).iter().zip(expected).enumerate()
+                {
+                    match (actual, expected) {
+                        (None, None) => {}
+                        (Some(actual), Some(expected)) => assert!(
+                            (actual - expected).abs() < 1e-10,
+                            "output {output} row {index}: {actual} != {expected}"
+                        ),
+                        _ => panic!("output {output} row {index}: {actual:?} != {expected:?}"),
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_runtime_mutation_matches_fresh_full_recomputation() {
+        let mut states = vec![
+            (TestKind::Sma, IncrementalState::sma(5)),
+            (TestKind::Ema, IncrementalState::ema(5)),
+            (TestKind::Bollinger, IncrementalState::bollinger(5, 2.0)),
+            (TestKind::Rsi, IncrementalState::rsi(5)),
+            (TestKind::Macd, IncrementalState::macd(3, 6, 4)),
+            (TestKind::Stochastic, IncrementalState::stochastic(5, 3)),
+            (TestKind::Atr, IncrementalState::atr(5)),
+            (TestKind::Vwap, IncrementalState::vwap()),
+            (TestKind::Wma, IncrementalState::wma(5)),
+        ];
+        let mut times = (0..40).map(|index| index * 3_600).collect::<Vec<_>>();
+        let mut close = (0..40)
+            .map(|index| 100.0 + (index as f64 * 0.37).sin() * 8.0 + index as f64 * 0.1)
+            .collect::<Vec<_>>();
+        let mut high = close.iter().map(|value| value + 1.5).collect::<Vec<_>>();
+        let mut low = close.iter().map(|value| value - 1.25).collect::<Vec<_>>();
+        let mut volume = (0..40).map(|index| (index % 7) as f64).collect::<Vec<_>>();
+
+        let check = |states: &mut [(TestKind, IncrementalState)],
+                     times: &[i64],
+                     high: &[f64],
+                     low: &[f64],
+                     close: &[f64],
+                     volume: &[f64],
+                     from| {
+            assert_incremental_matches_full(
+                states,
+                IndicatorInput {
+                    times,
+                    high,
+                    low,
+                    close,
+                    volume,
+                },
+                from,
+            );
+        };
+
+        check(&mut states, &times, &high, &low, &close, &volume, 0);
+
+        times.push(40 * 3_600);
+        close.push(108.0);
+        high.push(109.0);
+        low.push(106.0);
+        volume.push(0.0);
+        check(&mut states, &times, &high, &low, &close, &volume, 40);
+
+        for index in 41..50 {
+            times.push(index * 3_600);
+            close.push(100.0 + index as f64 * 0.2);
+            high.push(close[index as usize] + 1.0);
+            low.push(close[index as usize] - 1.0);
+            volume.push((index % 5) as f64);
+        }
+        check(&mut states, &times, &high, &low, &close, &volume, 41);
+
+        for replacement in 0..1_000 {
+            let last = close.len() - 1;
+            close[last] = 111.0 + replacement as f64 * 0.001;
+            high[last] = close[last] + 2.0;
+            low[last] = close[last] - 2.0;
+            volume[last] = (replacement % 11) as f64;
+            check(&mut states, &times, &high, &low, &close, &volume, last);
+        }
+
+        close[17] += 4.0;
+        high[17] = close[17] + 1.0;
+        low[17] = close[17] - 1.0;
+        check(&mut states, &times, &high, &low, &close, &volume, 17);
+
+        let last_ten = close.len() - 10;
+        close[last_ten] -= 2.5;
+        high[last_ten] = close[last_ten] + 1.0;
+        low[last_ten] = close[last_ten] - 1.0;
+        check(&mut states, &times, &high, &low, &close, &volume, last_ten);
+
+        close[2] += 1.75;
+        high[2] = close[2] + 1.0;
+        low[2] = close[2] - 1.0;
+        check(&mut states, &times, &high, &low, &close, &volume, 2);
+
+        times.insert(9, times[8] + 1_800);
+        close.insert(9, 93.0);
+        high.insert(9, 95.0);
+        low.insert(9, 91.0);
+        volume.insert(9, 3.0);
+        check(&mut states, &times, &high, &low, &close, &volume, 9);
+
+        times.truncate(23);
+        close.truncate(23);
+        high.truncate(23);
+        low.truncate(23);
+        volume.truncate(23);
+        check(&mut states, &times, &high, &low, &close, &volume, 23);
+
+        times = (0..31).map(|index| 86_400 + index * 1_800).collect();
+        close = (0..31).map(|index| 80.0 + index as f64 * 0.75).collect();
+        high = close.iter().map(|value| value + 3.0).collect();
+        low = close.iter().map(|value| value - 2.0).collect();
+        volume = (0..31).map(|index| (index % 4 + 1) as f64).collect();
+        check(&mut states, &times, &high, &low, &close, &volume, 0);
     }
 }

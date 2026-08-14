@@ -8,6 +8,27 @@ export function measure_native(scenario) {
   const raw = JSON.parse(output);
   const dataset = dataset_metadata(raw.points, raw.seed);
   dataset.configuration.scenario = { runtime_target: "native-rust-headless" };
+  const metrics = {
+    set_series_data_ms: metric(raw.set_series_data_ms, "ms", "lower_is_better", "internal", "Headless ChartEngine set_series_data plus shared time-scale fit; deterministic data is generated before timing."),
+    build_frame_ms: metric(raw.build_frame_ms, "ms", "lower_is_better", "internal", "Retained ChartFrame build through the backend-neutral engine path after warm-up."),
+    replace_current_candle_us: metric(raw.replace_current_candle_us, "us", "lower_is_better", "internal", "Headless current-candle replacement through ChartEngine update_series_bar."),
+  };
+  for (const row of raw.indicator_current) {
+    metrics[`indicator_current_${row.points}_${row.indicator}_us`] = metric(row.samples_us, "us", "lower_is_better", "internal", `Current-bar replacement on ${row.points} source rows with ${row.indicator} indicators.`);
+  }
+  for (const row of raw.indicator_batch) {
+    metrics[`indicator_batch_${row.points}_${row.indicator}_${row.batch_size}_us`] = metric(row.samples_us, "us", "lower_is_better", "internal", `One engine batch of ${row.batch_size} rows on ${row.points} source rows with ${row.indicator} indicators.`);
+  }
+  for (const row of raw.indicator_scaling) {
+    metrics[`indicator_scaling_${row.indicator_count}_us`] = metric(row.samples_us, "us", "lower_is_better", "internal", `Current-bar replacement with ${row.indicator_count} mixed indicators on one 100K source.`);
+  }
+  for (const row of raw.indicator_source_scaling) {
+    metrics[`indicator_source_scaling_${row.source_count}_us`] = metric(row.samples_us, "us", "lower_is_better", "internal", `Current-bar replacement on one of ${row.source_count} 10K sources with RSI outputs distributed across ${row.pane_count} panes.`);
+  }
+  for (const [name, value] of Object.entries(raw.dense_upload)) {
+    const unit = name.endsWith("bytes") ? "bytes" : "count";
+    metrics[`dense_upload_${name}`] = metric([value], unit, "informational", "internal", `Changed dense source-group ${name.replaceAll("_", " ")} after a 1M-bar current update.`);
+  }
   return {
     id: scenario.id,
     version: scenario.version,
@@ -17,10 +38,6 @@ export function measure_native(scenario) {
     dataset,
     execution: { warmup_runs: raw.warmup_runs, measured_runs: raw.measured_runs, benchmark_duration_ms: performance.now() - started, sampling_method: "Rust std::time::Instant around headless engine operations in an optimized release build; outer duration includes Cargo's up-to-date check and process startup", forced_gc: false },
     capabilities: { runtime_target: "native-rust-headless", gpu: false, presentation: false },
-    metrics: {
-      set_series_data_ms: metric(raw.set_series_data_ms, "ms", "lower_is_better", "internal", "Headless ChartEngine set_series_data plus shared time-scale fit; deterministic data is generated before timing."),
-      build_frame_ms: metric(raw.build_frame_ms, "ms", "lower_is_better", "internal", "Retained ChartFrame build through the backend-neutral engine path after warm-up."),
-      replace_current_candle_us: metric(raw.replace_current_candle_us, "us", "lower_is_better", "internal", "Headless current-candle replacement through ChartEngine update_series_bar."),
-    },
+    metrics,
   };
 }

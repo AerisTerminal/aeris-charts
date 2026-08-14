@@ -29,8 +29,8 @@ pub use frame::{
     FrameBuildStats, FramePane, FramePaneSegments, FrameSeriesSegment,
 };
 pub use hit_test::{SeriesHit, SeriesHitKind};
-pub(crate) use indicators::IndicatorBinding;
 pub use indicators::IndicatorKind;
+pub(crate) use indicators::{IndicatorBinding, IndicatorChange};
 pub use interaction::{
     pinch_zoom_scale, wheel_zoom_scale, ScrollAnimation, KINETIC_DUMPING, KINETIC_MAX_SPEED,
     KINETIC_MIN_MOVE, KINETIC_MIN_SPEED, PINCH_ZOOM_INTENSITY, WHEEL_SCROLL_PX_PER_DELTA,
@@ -39,7 +39,9 @@ pub use workspace::{SplitDirection, Workspace, WorkspaceError, WorkspaceLayout, 
 
 use nucleuscharts_core::format::price_formatter::PriceFormatter;
 use nucleuscharts_core::format::time_formatter::{MonthNames, DEFAULT_DATE_FORMAT};
-use nucleuscharts_core::model::data_layer::{DataLayer, SeriesId, SeriesIdError};
+use nucleuscharts_core::model::data_layer::{
+    DataLayer, PointColorChannel, SeriesId, SeriesIdError,
+};
 use nucleuscharts_core::model::data_validation::{
     sanitize_ohlc, sanitize_ohlc_styled, sanitize_point, ValidationError, ValidationReport,
 };
@@ -675,6 +677,7 @@ pub struct ChartEngine {
     pub left_axis_w: f64,
     pub axis_w: f64,
     indicators: Vec<IndicatorBinding>,
+    indicator_changes: Vec<(SeriesId, IndicatorChange)>,
     synced_points_len: usize,
     synced_time_points_generation: u64,
     synced_last_time: Option<i64>,
@@ -778,6 +781,7 @@ impl ChartEngine {
             left_axis_w: 0.0,
             axis_w: 0.0,
             indicators: Vec::new(),
+            indicator_changes: Vec::new(),
             synced_points_len: 0,
             synced_time_points_generation: 0,
             synced_last_time: None,
@@ -951,7 +955,9 @@ impl ChartEngine {
         // Drop indicator bindings touching this series and collect their output series to tombstone
         // alongside it (a removed source leaves no derived data behind).
         let mut tombstones = self.drop_indicators_touching(id);
-        tombstones.push(id);
+        if !tombstones.contains(&id) {
+            tombstones.push(id);
+        }
         for rid in &tombstones {
             let rid = *rid;
             if let Some(entry) = self.series.iter_mut().find(|s| s.id == rid) {
@@ -1299,9 +1305,17 @@ impl ChartEngine {
         if self.is_series_removed(id) || !self.series.iter().any(|s| s.id == id) {
             return None;
         }
+        let previous_generation = self.data.series_generation(id).unwrap_or(0);
         let len = self.data.pop(id, count)?;
         self.sync_time_points();
-        self.recompute_indicators();
+        self.update_indicators_after_change(
+            id,
+            IndicatorChange {
+                from: len,
+                previous_generation,
+                full_replace: true,
+            },
+        );
         Some(len)
     }
 
@@ -1325,10 +1339,9 @@ impl ChartEngine {
         self.update_series_bar_styled(id, time, values, [None; 3])
     }
 
-    /// Apply an allocation-free batch of ordered streaming rows and synchronize shared chart state
-    /// once. Used by the SharedArrayBuffer drain: row validation and append/replace semantics are
-    /// identical to [`update_series_bar`], while time-scale and indicator work is amortized across
-    /// the frame's batch.
+    /// Apply ordered streaming rows without coordinator allocation, then synchronize shared chart
+    /// state and dependent indicators once. Used by the bounded shared-ring drain; each valid row
+    /// keeps the single-update append/replace semantics.
     pub fn update_series_bars<I>(&mut self, id: SeriesId, rows: I) -> usize
     where
         I: IntoIterator<Item = (f64, [f64; 4])>,
@@ -1337,20 +1350,76 @@ impl ChartEngine {
         if self.validate_series_id(id).is_err() {
             return 0;
         }
-        let mut accepted = 0usize;
+        let previous_generation = self.data.series_generation(id).unwrap_or(0);
+        let mut from = usize::MAX;
+        let mut accepted = 0;
         for (time, values) in rows {
             let Some((time, values)) = sanitize_point(time, values) else {
                 continue;
             };
+            let row = self
+                .data
+                .series_data(id)
+                .map(|(times, _)| {
+                    times
+                        .binary_search(&time)
+                        .unwrap_or_else(|position| position)
+                })
+                .unwrap_or_default();
+            from = from.min(row);
             self.data.update_styled(id, time, values, [None; 3]);
             accepted += 1;
         }
         if accepted == 0 {
             return 0;
         }
-        self.enforce_series_cap(id);
+        let trimmed = self.enforce_series_cap(id);
         self.sync_time_points();
-        self.recompute_indicators();
+        self.update_indicators_after_change(
+            id,
+            IndicatorChange {
+                from: if trimmed { 0 } else { from },
+                previous_generation,
+                full_replace: trimmed,
+            },
+        );
+        accepted
+    }
+
+    /// Install an already sanitized ascending/unique batch. This is the WASM typed-array fast
+    /// path: the data layer merges once, time state synchronizes once, and each dependent
+    /// indicator advances once from the earliest affected row.
+    pub fn update_series_bars_sanitized(
+        &mut self,
+        id: SeriesId,
+        times: Vec<i64>,
+        open: Vec<f64>,
+        high: Vec<f64>,
+        low: Vec<f64>,
+        close: Vec<f64>,
+    ) -> usize {
+        self.invalidate_frame_series(id);
+        if self.validate_series_id(id).is_err() || times.is_empty() {
+            return 0;
+        }
+        let previous_generation = self.data.series_generation(id).unwrap_or(0);
+        let Some(from) = self
+            .data
+            .update_many(id, &times, [&open, &high, &low, &close])
+        else {
+            return 0;
+        };
+        let accepted = times.len();
+        let trimmed = self.enforce_series_cap(id);
+        self.sync_time_points();
+        self.update_indicators_after_change(
+            id,
+            IndicatorChange {
+                from,
+                previous_generation,
+                full_replace: trimmed,
+            },
+        );
         accepted
     }
 
@@ -1371,16 +1440,40 @@ impl ChartEngine {
         let Some((time, values)) = sanitize_point(time, values) else {
             return false;
         };
+        let from = self
+            .data
+            .series_data(id)
+            .map(|(times, _)| {
+                times
+                    .binary_search(&time)
+                    .unwrap_or_else(|position| position)
+            })
+            .unwrap_or_default();
+        let previous_generation = self.data.series_generation(id).unwrap_or(0);
         self.data.update_styled(id, time, values, colors);
         // Retention (`max_points`): usually a no-op flag check, and an O(total) trim once every
         // `margin` appends. Runs before `sync_time_points` so the scale sees the final row set.
         if self.enforce_series_cap(id) {
             self.sync_time_points();
-            self.recompute_indicators();
+            self.update_indicators_after_change(
+                id,
+                IndicatorChange {
+                    from: 0,
+                    previous_generation,
+                    full_replace: true,
+                },
+            );
             return true;
         }
         self.sync_time_points();
-        self.update_indicators_after_source_update(id, time);
+        self.update_indicators_after_change(
+            id,
+            IndicatorChange {
+                from,
+                previous_generation,
+                full_replace: false,
+            },
+        );
         true
     }
 
@@ -1445,7 +1538,7 @@ impl ChartEngine {
         // color channels together.
         self.enforce_series_cap(id);
         self.sync_time_points();
-        self.recompute_indicators();
+        self.recompute_indicators_for(id);
         Ok(report)
     }
 
@@ -1481,7 +1574,7 @@ impl ChartEngine {
         // and the indicators index the rows. The report still describes the caller's input.
         self.enforce_series_cap(id);
         self.sync_time_points();
-        self.recompute_indicators();
+        self.recompute_indicators_for(id);
         Ok(report)
     }
 
@@ -1507,7 +1600,7 @@ impl ChartEngine {
         // scale and the indicators see the row set, so nothing downstream indexes evicted rows.
         self.enforce_series_cap(id);
         self.sync_time_points();
-        self.recompute_indicators();
+        self.recompute_indicators_for(id);
         true
     }
 
@@ -1533,7 +1626,7 @@ impl ChartEngine {
         entry.max_points = max_points;
         if self.enforce_series_cap(id) {
             self.sync_time_points();
-            self.recompute_indicators();
+            self.recompute_indicators_for(id);
         }
         true
     }
@@ -2232,16 +2325,21 @@ impl ChartEngine {
         let time_points_changed =
             self.data.time_points_generation() != self.synced_time_points_generation;
         let appended = time_points_changed
-            && times.len() == self.synced_points_len + 1
+            && times.len() > self.synced_points_len
             && self.synced_points_len > 0
-            && times.last().copied() > self.synced_last_time;
+            && self.synced_last_time.is_some_and(|last| {
+                times
+                    .get(self.synced_points_len)
+                    .is_some_and(|&time| time > last)
+            });
         if appended {
-            let start = self.synced_points_len;
-            let weight = nucleuscharts_core::scale::time_tick_marks::weight_by_time(
-                times[start],
-                times[start - 1],
-            ) as u8;
-            self.tick_marks.push_weight(start as i64, weight);
+            for index in self.synced_points_len..times.len() {
+                let weight = nucleuscharts_core::scale::time_tick_marks::weight_by_time(
+                    times[index],
+                    times[index - 1],
+                ) as u8;
+                self.tick_marks.push_weight(index as i64, weight);
+            }
         } else if time_points_changed {
             let mut weights = vec![0u8; times.len()];
             nucleuscharts_core::scale::time_tick_marks::fill_weights_for_points(

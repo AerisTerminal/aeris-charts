@@ -2738,3 +2738,47 @@ fn multi_pane_current_bar_keeps_other_pane_series_retained() {
     assert_eq!(chart.frame_build_stats().series_rebuilds, 1);
     assert_eq!(chart.frame_build_stats().layout_rebuilds, 0);
 }
+
+#[test]
+fn indicator_tick_rebuilds_only_source_and_dependent_output_layers() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0, 3.0, 4.0],
+            &[10.0, 11.0, 12.0, 13.0],
+            &[20.0, 12.0, 13.0, 14.0],
+            &[0.0, 10.0, 11.0, 12.0],
+            &[10.0, 11.0, 12.0, 13.0],
+        )
+        .unwrap();
+    let unrelated_source = chart.add_series(SeriesKind::Line);
+    chart
+        .set_series_data(
+            unrelated_source,
+            &[1.0, 2.0, 3.0, 4.0],
+            &[30.0, 31.0, 32.0, 33.0],
+            &[30.0, 31.0, 32.0, 33.0],
+            &[30.0, 31.0, 32.0, 33.0],
+            &[30.0, 31.0, 32.0, 33.0],
+        )
+        .unwrap();
+    let rsi = chart.add_rsi(0, 2).unwrap();
+    let unrelated_sma = chart.add_sma(unrelated_source, 2).unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    chart.build_frame();
+    let unrelated_generation = chart.data.series_generation(unrelated_sma).unwrap();
+
+    chart.update_series_bar(0, 4.0, [12.5, 13.5, 11.5, 12.5]);
+    chart.build_frame();
+    let stats = chart.frame_build_stats();
+    assert_eq!(stats.series_rebuilds, 2, "source + RSI only: {stats:?}");
+    assert_eq!(stats.layout_rebuilds, 0);
+    assert_eq!(stats.drawing_rebuilds, 0);
+    assert_eq!(
+        chart.data.series_generation(unrelated_sma),
+        Some(unrelated_generation)
+    );
+    assert!(chart.data.series_generation(rsi).unwrap() > 0);
+}

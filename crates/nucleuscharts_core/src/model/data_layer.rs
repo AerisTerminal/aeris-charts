@@ -78,6 +78,9 @@ struct RawSeries {
     rows_count_as_data: bool,
     /// Rebuilt against merged indices; keys are positions in `merged_times`.
     plot: PlotList,
+    /// Changes on every accepted mutation of this series' canonical rows. Derived-data
+    /// runtimes use it to reject incremental continuation from stale source state.
+    generation: u64,
 }
 
 impl RawSeries {
@@ -88,6 +91,7 @@ impl RawSeries {
             point_colors: [vec![], vec![], vec![]],
             rows_count_as_data: false,
             plot: PlotList::new(),
+            generation: 0,
         }
     }
 }
@@ -99,6 +103,7 @@ pub struct DataLayer {
     free_slots: Vec<usize>,
     next_series_id: SeriesId,
     merged_times: Vec<i64>,
+    merged_times_scratch: Vec<i64>,
     /// Changes only when the merged timestamp sequence changes. Value-only current-bar updates
     /// leave it untouched, so time-derived consumers can distinguish them without rescanning.
     time_points_generation: u64,
@@ -213,6 +218,10 @@ impl DataLayer {
         ))
     }
 
+    pub fn series_generation(&self, id: SeriesId) -> Option<u64> {
+        Some(self.series.get(self.series_slot(id)?)?.generation)
+    }
+
     /// Merged index of the last point that has data (the time-scale base index), or None.
     /// Whitespace rows (reference `{time}`-only items) occupy time points but carry no data, so —
     /// like the reference's `_getBaseIndex` (data-layer.ts:495-510), which reads the whitespace-filtered
@@ -278,6 +287,7 @@ impl DataLayer {
         s.times = times;
         s.values = [open, high, low, close];
         s.point_colors = [vec![], vec![], vec![]];
+        s.generation = s.generation.wrapping_add(1);
         self.rebuild_merged();
         self.reindex_all();
         true
@@ -307,6 +317,29 @@ impl DataLayer {
         for (slot, channel) in s.point_colors.iter_mut().zip(channels) {
             *slot = channel.unwrap_or_default();
         }
+        true
+    }
+
+    /// Set one installed row's color override, creating the aligned channel lazily.
+    pub fn set_point_color(
+        &mut self,
+        id: SeriesId,
+        channel: PointColorChannel,
+        row: usize,
+        color: u32,
+    ) -> bool {
+        let Some(slot) = self.series_slot(id) else {
+            return false;
+        };
+        let rows = self.series[slot].times.len();
+        if row >= rows {
+            return false;
+        }
+        let colors = &mut self.series[slot].point_colors[channel as usize];
+        if colors.is_empty() {
+            colors.resize(rows, POINT_COLOR_ABSENT);
+        }
+        colors[row] = color;
         true
     }
 
@@ -364,6 +397,7 @@ impl DataLayer {
             let s = &mut self.series[slot];
             push_raw(s, time, values, colors);
             s.plot.upsert_last(new_index, values);
+            s.generation = s.generation.wrapping_add(1);
             return true;
         }
 
@@ -387,6 +421,7 @@ impl DataLayer {
                 push_raw(s, time, values, colors);
             }
             s.plot.upsert_last(pos as TimePointIndex, values);
+            s.generation = s.generation.wrapping_add(1);
             return true;
         }
 
@@ -413,9 +448,109 @@ impl DataLayer {
                 }
             }
         }
+        s.generation = s.generation.wrapping_add(1);
         self.rebuild_merged();
         self.reindex_all();
         true
+    }
+
+    /// Apply an ascending, unique batch as one logical data-layer mutation. Tail-only input keeps
+    /// the existing O(1)-per-row append/replace path; a historical batch is merged in O(n + k)
+    /// and rebuilds the shared index once instead of once per row. Returns the first affected row
+    /// in the resulting source series.
+    pub fn update_many(
+        &mut self,
+        id: SeriesId,
+        times: &[i64],
+        values: [&[f64]; 4],
+    ) -> Option<usize> {
+        let slot = self.series_slot(id)?;
+        if times.is_empty() {
+            return Some(self.series[slot].times.len());
+        }
+        debug_assert!(times.windows(2).all(|window| window[0] < window[1]));
+        debug_assert!(values.iter().all(|column| column.len() == times.len()));
+
+        let affected = lower_bound(&self.series[slot].times, |&time| time < times[0]);
+        if self.series[slot]
+            .times
+            .last()
+            .is_none_or(|&last| times[0] >= last)
+        {
+            for row in 0..times.len() {
+                self.update(
+                    id,
+                    times[row],
+                    [
+                        values[0][row],
+                        values[1][row],
+                        values[2][row],
+                        values[3][row],
+                    ],
+                );
+            }
+            return Some(affected);
+        }
+
+        let new_time_points = times
+            .iter()
+            .filter(|time| self.merged_times.binary_search(time).is_err())
+            .count();
+        let old = &self.series[slot];
+        let capacity = old.times.len() + times.len();
+        let mut merged_times = Vec::with_capacity(capacity);
+        let mut merged_values: [Vec<f64>; 4] =
+            std::array::from_fn(|_| Vec::with_capacity(capacity));
+        let mut merged_colors: [Vec<u32>; POINT_COLOR_CHANNELS] = std::array::from_fn(|channel| {
+            if old.point_colors[channel].is_empty() {
+                Vec::new()
+            } else {
+                Vec::with_capacity(capacity)
+            }
+        });
+        let mut old_row = 0usize;
+        let mut new_row = 0usize;
+        while old_row < old.times.len() || new_row < times.len() {
+            let take_new = old_row == old.times.len()
+                || (new_row < times.len() && times[new_row] <= old.times[old_row]);
+            if take_new {
+                let replaces = old_row < old.times.len() && times[new_row] == old.times[old_row];
+                merged_times.push(times[new_row]);
+                for (column, source) in merged_values.iter_mut().zip(values) {
+                    column.push(source[new_row]);
+                }
+                for colors in &mut merged_colors {
+                    if !colors.is_empty() || colors.capacity() > 0 {
+                        colors.push(POINT_COLOR_ABSENT);
+                    }
+                }
+                new_row += 1;
+                old_row += usize::from(replaces);
+            } else {
+                merged_times.push(old.times[old_row]);
+                for (column, source) in merged_values.iter_mut().zip(&old.values) {
+                    column.push(source[old_row]);
+                }
+                for (column, source) in merged_colors.iter_mut().zip(&old.point_colors) {
+                    if !source.is_empty() {
+                        column.push(source[old_row]);
+                    }
+                }
+                old_row += 1;
+            }
+        }
+
+        let series = &mut self.series[slot];
+        series.times = merged_times;
+        series.values = merged_values;
+        series.point_colors = merged_colors;
+        series.generation = series.generation.wrapping_add(times.len() as u64);
+        self.rebuild_merged();
+        self.time_points_generation = self
+            .time_points_generation
+            .wrapping_add(new_time_points.saturating_sub(1) as u64);
+        self.reindex_all();
+        Some(affected)
     }
 
     /// Remove the last `count` rows of a series (reference `popSeriesData`, data-layer.ts:338-383):
@@ -438,6 +573,7 @@ impl DataLayer {
                 channel.truncate(keep);
             }
         }
+        s.generation = s.generation.wrapping_add(1);
         self.rebuild_merged();
         self.reindex_all();
         Some(keep)
@@ -468,6 +604,7 @@ impl DataLayer {
                 channel.drain(..drop);
             }
         }
+        s.generation = s.generation.wrapping_add(1);
         self.rebuild_merged();
         self.reindex_all();
         Some(keep)
@@ -479,14 +616,16 @@ impl DataLayer {
             .values()
             .map(|&slot| self.series[slot].times.len())
             .sum();
-        let mut all = Vec::with_capacity(total);
+        let all = &mut self.merged_times_scratch;
+        all.clear();
+        all.reserve(total.saturating_sub(all.capacity()));
         for &slot in self.live_slots.values() {
             all.extend_from_slice(&self.series[slot].times);
         }
         all.sort_unstable();
         all.dedup();
-        if all != self.merged_times {
-            self.merged_times = all;
+        if *all != self.merged_times {
+            std::mem::swap(&mut self.merged_times, all);
             self.time_points_generation = self.time_points_generation.wrapping_add(1);
         }
     }
@@ -496,32 +635,7 @@ impl DataLayer {
         let merged = &self.merged_times;
         for &slot in self.live_slots.values() {
             let s = &mut self.series[slot];
-            if s.times.is_empty() {
-                s.plot.set_data(vec![], vec![], vec![], vec![], vec![]);
-                continue;
-            }
-            let indices: Vec<TimePointIndex> = s
-                .times
-                .iter()
-                .map(|t| {
-                    // `merged_times` is the union of all series' times, so every series time is
-                    // found by construction. Fall back to the insertion point (nearest index)
-                    // instead of panicking so an invariant break degrades instead of aborting;
-                    // the insertion point also keeps `indices` aligned with the value columns.
-                    let index = merged.binary_search(t).unwrap_or_else(|pos| {
-                        debug_assert!(false, "series time {t} missing from merged time points");
-                        pos.min(merged.len().saturating_sub(1))
-                    });
-                    index as TimePointIndex
-                })
-                .collect();
-            s.plot.set_data(
-                indices,
-                s.values[0].clone(),
-                s.values[1].clone(),
-                s.values[2].clone(),
-                s.values[3].clone(),
-            );
+            s.plot.rebuild_from(merged, &s.times, &s.values);
         }
     }
 }
@@ -659,6 +773,55 @@ mod tests {
 
         dl.update(id, 259_200, [5.0; 4]);
         assert_eq!(dl.time_points_generation(), appended);
+    }
+
+    #[test]
+    fn batch_update_merges_history_once_and_keeps_distinct_times() {
+        let mut dl = DataLayer::new();
+        let id = dl.add_series();
+        set(&mut dl, id, &[1, 3, 5], &[10.0, 30.0, 50.0]);
+        let before = dl.series_generation(id).unwrap();
+
+        let times = [2, 3, 4];
+        let values = [20.0, 33.0, 40.0];
+        assert_eq!(
+            dl.update_many(id, &times, [&values, &values, &values, &values]),
+            Some(1)
+        );
+
+        let (actual_times, columns) = dl.series_data(id).unwrap();
+        assert_eq!(actual_times, &[1, 2, 3, 4, 5]);
+        assert_eq!(columns[3], &[10.0, 20.0, 33.0, 40.0, 50.0]);
+        assert_eq!(dl.merged_times(), actual_times);
+        assert_eq!(dl.series_generation(id), Some(before + 3));
+    }
+
+    #[test]
+    fn batch_tail_replace_and_append_match_single_updates() {
+        let mut batch = DataLayer::new();
+        let batch_id = batch.add_series();
+        set(&mut batch, batch_id, &[1, 2], &[10.0, 20.0]);
+
+        let mut singles = DataLayer::new();
+        let singles_id = singles.add_series();
+        set(&mut singles, singles_id, &[1, 2], &[10.0, 20.0]);
+
+        let times = [2, 3, 4];
+        let values = [22.0, 30.0, 40.0];
+        batch.update_many(batch_id, &times, [&values, &values, &values, &values]);
+        for (&time, &value) in times.iter().zip(&values) {
+            singles.update(singles_id, time, [value; 4]);
+        }
+
+        assert_eq!(batch.merged_times(), singles.merged_times());
+        assert_eq!(
+            batch.series_data(batch_id).unwrap().0,
+            singles.series_data(singles_id).unwrap().0
+        );
+        assert_eq!(
+            batch.series_data(batch_id).unwrap().1,
+            singles.series_data(singles_id).unwrap().1
+        );
     }
 
     #[test]

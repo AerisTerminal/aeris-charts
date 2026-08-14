@@ -83,6 +83,33 @@ impl PlotList {
         self.min_max_cache.clear();
     }
 
+    /// Reindex canonical columns while retaining the plot's high-water allocation. Full data
+    /// installs and retention trims call this repeatedly; replacing the vectors would fragment
+    /// the WASM allocator even though the retained row count is bounded.
+    pub(crate) fn rebuild_from(
+        &mut self,
+        merged_times: &[i64],
+        times: &[i64],
+        values: &[Vec<f64>; 4],
+    ) {
+        self.indices.clear();
+        self.indices
+            .reserve(times.len().saturating_sub(self.indices.capacity()));
+        for time in times {
+            let index = merged_times.binary_search(time).unwrap_or_else(|position| {
+                debug_assert!(false, "series time {time} missing from merged time points");
+                position.min(merged_times.len().saturating_sub(1))
+            });
+            self.indices.push(index as TimePointIndex);
+        }
+        for (output, source) in self.values.iter_mut().zip(values) {
+            output.clear();
+            output.reserve(source.len().saturating_sub(output.capacity()));
+            output.extend_from_slice(source);
+        }
+        self.min_max_cache.clear();
+    }
+
     /// Streaming append/replace of the last row (the `update()` hot path).
     pub fn upsert_last(&mut self, index: TimePointIndex, values: [f64; 4]) {
         match self.indices.last() {

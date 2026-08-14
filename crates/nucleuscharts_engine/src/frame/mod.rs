@@ -1145,6 +1145,7 @@ impl ChartEngine {
         retained.segments.truncate(pane_count);
         retained.series_segments.resize_with(pane_count, Vec::new);
         retained.series_segments.truncate(pane_count);
+        let initial_build = !retained.initialized;
         for (pi, pane) in self.panes.iter().enumerate() {
             let top_px = (pane.top * vpr).round().max(0.0) as u32;
             let height_px = (pane.height * vpr).round().max(0.0) as u32;
@@ -1424,6 +1425,30 @@ impl ChartEngine {
             out.top_prims.clear();
             out.series_paint_marks.clear();
             out.points.clear();
+            // The first retained build knows its exact assembled size. Reserve once so initial
+            // historical installs pay one retained-to-contract copy, not repeated Vec growth.
+            if initial_build {
+                let mut main_prims = cache.chrome.prims.len()
+                    + cache.drawings.prims.len()
+                    + cache.overlay.prims.len();
+                let mut point_count = cache.under.points.len()
+                    + cache.chrome.points.len()
+                    + cache.drawings.points.len()
+                    + cache.overlay.points.len();
+                for rs in &resolved {
+                    if rs.pane == Some(pi) && rs.visible {
+                        if let Some(layer) =
+                            cache.series_layers.iter().find(|layer| layer.id == rs.id)
+                        {
+                            main_prims += layer.layer.prims.len();
+                            point_count += layer.layer.points.len();
+                        }
+                    }
+                }
+                out.under.reserve(cache.under.prims.len());
+                out.main.reserve(main_prims);
+                out.points.reserve(point_count);
+            }
             append_retained_layer(&cache.under, &mut out.under, &mut out.points);
             retained.series_segments[pi].clear();
             for rs in &resolved {

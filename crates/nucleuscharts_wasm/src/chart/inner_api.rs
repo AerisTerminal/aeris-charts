@@ -215,21 +215,14 @@ impl ChartInner {
     }
 
     /// Columnar streaming append (consumer Item 2): a batch of points in `set_series_data_typed`'s
-    /// column layout, applied through the same per-row engine call the single-point `update` path
-    /// uses — so a one-row batch is semantically identical to `update_series_bar`, and a longer one
-    /// is exactly that repeated.
+    /// column layout, sanitized once and handed to one engine batch transaction.
     ///
     /// The batch is first run through the shared repair pipeline (drop non-finite → stable sort by
     /// time → collapse duplicate times last-wins), matching `set_series_data_typed` rather than
     /// inventing a second policy. All-NaN rows survive as whitespace, as they do for `update`.
     ///
-    /// For the streaming shape — rows at or past the chart's last timestamp — cost is linear in
-    /// the batch and independent of series length: each row hits `sync_time_points`' single-append
-    /// fast path and `DataLayer::update_styled`'s O(1) case, so a 500-row batch on a 1M-bar series
-    /// does 500 O(1) appends. A row that lands *before* the chart's last timestamp is a
-    /// mid-history insert and pays `rebuild_merged` + `reindex_all`, exactly as the same row does
-    /// through the single-point `update` — the batch does not coalesce those into one reindex.
-    /// Rewriting history belongs in `set_series_data_typed`.
+    /// Tail rows remain O(1) apiece; historical rows are merged in one O(n + k) pass and cause one
+    /// canonical time/indicator synchronization rather than one global reindex per row.
     pub fn update_series_bars_typed(
         &mut self,
         id: u32,
@@ -264,15 +257,14 @@ impl ChartInner {
             web_sys::console::warn_1(&format!("nucleuscharts: update_typed sanitized batch — accepted {}, dropped {} invalid, {} duplicate{}", s.report.accepted, s.report.dropped_invalid, s.report.dropped_duplicate, if s.report.reordered { ", reordered" } else { "" }).into());
         }
         let diagnostics = validation_diagnostics_json(&s.report);
-        // `sanitize_ohlc_owned` yields integer-second times; the engine's update entry point takes
-        // the f64 JS form, so hand them back in that shape and let it re-narrow.
-        for row in 0..s.times.len() {
-            self.engine.update_series_bar(
-                id as SeriesId,
-                s.times[row] as f64,
-                [s.open[row], s.high[row], s.low[row], s.close[row]],
-            );
-        }
+        self.engine.update_series_bars_sanitized(
+            id as SeriesId,
+            s.times,
+            s.open,
+            s.high,
+            s.low,
+            s.close,
+        );
         diagnostics
     }
 

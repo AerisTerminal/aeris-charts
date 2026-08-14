@@ -3,8 +3,8 @@ import { test, expect } from "@playwright/test";
 // `series_api.update_typed(columns)` (consumer Item 2). The streaming path was one JS object per
 // point, called twice per bar; at the consumer's 50k ticks/sec target that is 100k short-lived
 // allocations per second entering wasm. These specs pin the contract that replaces it: a one-row
-// batch must be indistinguishable from `update`, a 500-row batch must be one call and one
-// notification, and a long run of batches must not accumulate JS objects.
+// batch must be indistinguishable from `update`, a 500-row batch must be one engine transaction
+// and one notification, and a long run of batches must not accumulate JS objects.
 
 async function wait_chart(page) {
   await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
@@ -206,6 +206,53 @@ test("the batch is repaired like set_data_typed: sorted, deduped last-wins, non-
   expect(result[2].value).toBe(20);
   expect(result[3].value).toBe(30);
   expect(result[4].value).toBeUndefined();
+});
+
+test("typed batch and repeated singles produce identical built-in indicators", async ({ page }) => {
+  const result = await page.evaluate(() => {
+    const chart = window.__chart;
+    const a = chart.add_series("candlestick", { visible: false });
+    const b = chart.add_series("candlestick", { visible: false });
+    const base = [];
+    for (let index = 0; index < 80; index += 1) {
+      const close = 100 + Math.sin(index * 0.17) * 4 + index * 0.05;
+      base.push({ time: 2_000_000_000 + index * 60, open: close - 0.2, high: close + 1, low: close - 1, close });
+    }
+    a.set_data(base);
+    b.set_data(base);
+    const attach = (source) => [
+      chart.add_sma(source, 5),
+      chart.add_ema(source, 5),
+      ...chart.add_bollinger(source, 5, 2),
+      chart.add_rsi(source, 5),
+      ...chart.add_macd(source, 3, 6, 4),
+      ...chart.add_stochastic(source, 5, 3),
+      chart.add_atr(source, 5),
+      chart.add_vwap(source, null),
+      chart.add_wma(source, 5),
+    ];
+    const outputs_a = attach(a);
+    const outputs_b = attach(b);
+    const rows = Array.from({ length: 20 }, (_, index) => {
+      const close = 105 + Math.cos(index * 0.23) * 3;
+      return { time: 2_000_000_000 + (80 + index) * 60, open: close - 0.3, high: close + 1.2, low: close - 1.1, close };
+    });
+    for (const row of rows) a.update(row);
+    b.update_typed({
+      times: new Float64Array(rows.map((row) => row.time)),
+      open: new Float64Array(rows.map((row) => row.open)),
+      high: new Float64Array(rows.map((row) => row.high)),
+      low: new Float64Array(rows.map((row) => row.low)),
+      close: new Float64Array(rows.map((row) => row.close)),
+    });
+    return {
+      source_a: a.data(),
+      source_b: b.data(),
+      outputs: outputs_a.map((series, index) => [series.data(), outputs_b[index].data()]),
+    };
+  });
+  expect(result.source_b).toEqual(result.source_a);
+  for (const [single, batch] of result.outputs) expect(batch).toEqual(single);
 });
 
 test("appending 1M points in batches allocates no per-point JS objects", async ({ page }) => {

@@ -23,6 +23,8 @@ Browser hosts enter through `packages/charts`, which translates the public TypeS
 
 Canonical series data uses opaque chart-local `u32` identities mapped to reusable storage slots. Identities are never reused, removed identities are classified as stale, and slot-backed vectors remain bounded by peak concurrent series rather than lifetime add/remove count. The merged timestamp sequence carries a generation that changes only when its contents change; time weights use that generation, while value-only current-bar updates retain the O(1) fast path.
 
+Each canonical series also carries a data generation. An ascending typed batch is sanitized once at the host boundary, merged into its source in one data-layer operation, then synchronizes merged time points, tick weights, dependent indicators, and frame generations once. Tail batches append weights incrementally; historical batches merge in `O(n + k)` and reindex once rather than once per input row.
+
 ## Crate boundaries
 
 ### `nucleuscharts_core`
@@ -33,13 +35,15 @@ Platform-free chart fundamentals: validated data, plot lists, ranges, options, f
 
 ### `nucleuscharts_indicators`
 
-Pure technical-indicator calculations over numeric slices. Warm-up gaps are explicit. This crate does not know about charts, panes, rendering, WebAssembly, or GPUI.
+Pure technical-indicator calculations over numeric slices. Warm-up gaps are explicit. Alongside clean full-recomputation functions, it owns the explicit per-formula rolling state used for append, current-bar replacement, and rebuild-from-index. This crate does not know about charts, panes, rendering, WebAssembly, or GPUI.
 
 ### `nucleuscharts_engine`
 
 The headless owner of chart behavior and mutable chart state. It owns series, panes, scales, workspace layout, drawings, hit testing, interaction models, indicator bindings, price lines, and frame construction.
 
 Hosts send input and data to the engine. The engine returns query results and a prepared `ChartFrame`. Host-specific gesture recognition may translate operating-system events, but zoom, scroll, kinetic motion, snapping, selection, and drawing semantics belong here.
+
+An indicator binding keeps its public definition, private rolling runtime, and ordinary output series separate. Runtime checkpoints are aligned to source rows and tied to the source and optional volume-series generations. A tail mutation advances only bindings that depend on that source and installs only changed output rows; a historical mutation resumes at the earliest affected index, while truncation or complete replacement performs a clean rebuild. Removed source/output series drop the binding and its runtime state together.
 
 ### `nucleuscharts_render`
 
@@ -69,7 +73,7 @@ The headless native executor and verification support. It uses tiny-skia for det
 
 The package also ships `design.css` and Inter as the portable host design system. Its semantic CSS colors have deterministic sRGB render equivalents in `packages/charts/src/style_tokens.json`; `nucleuscharts_core` compiles that file into the default options used by every engine and backend. Chart foreground, muted foreground, surfaces, borders, and market colors therefore resolve before frame construction rather than through demo or renderer overrides. The demo consumes the published CSS asset and selects the same named theme as the chart. A `v*` tag matching the package version publishes the verified artifact to GitHub Packages.
 
-The package uses `snake_case` publicly. Data crosses into WebAssembly in typed columns or bounded shared-ring layouts rather than per-point object calls on hot paths. `examples/web_demo` is an integration and parity test host, not part of the library architecture.
+The package uses `snake_case` publicly. Data crosses into WebAssembly in typed columns or bounded shared-ring layouts rather than per-point object calls on hot paths. Typed update batches transfer their sanitized owned columns to the engine's batch entry point; the browser wrapper never loops through the single-row engine API. `examples/web_demo` is an integration and parity test host, not part of the library architecture.
 
 `chart.remove()` is the single public browser lifecycle operation. It is idempotent and transitions the retained TypeScript handle to a disposed state after cancelling scheduling, detaching browser resources and extensions, releasing per-chart GPU state, explicitly disposing the Rust object, and calling the generated `free()`. Later operations fail with a stable disposed-state error. Offscreen charts use the same explicit dispose-then-free ordering.
 

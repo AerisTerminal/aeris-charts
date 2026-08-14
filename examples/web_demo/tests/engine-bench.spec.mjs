@@ -127,3 +127,57 @@ test("build-flag benchmark: 1M-bar install, autoscale, hit tests, frame build", 
   expect(results.frame_build_50k_ms).toBeGreaterThan(0);
   expect(results.hit_test_10k_drawings_us).toBeGreaterThan(0);
 });
+
+test("indicator benchmark: 1M RSI current/batch latency and linear-memory delta", async ({ page }) => {
+  test.skip(!ENABLED, "set NUCLEUSCHARTS_BENCH=1 to run the build-flag benchmark");
+  test.setTimeout(600_000);
+  const result = await page.evaluate(() => {
+    const rows = 1_000_000;
+    const t0 = 2_500_000_000;
+    const times = new Float64Array(rows);
+    const values = new Float64Array(rows);
+    for (let index = 0; index < rows; index += 1) {
+      times[index] = t0 + index * 60;
+      values[index] = 100 + Math.sin(index * 0.017) * 8;
+    }
+    const source = window.__chart.add_series("line", { visible: false });
+    source.set_data_typed({ times, open: values, high: values, low: values, close: values });
+    const before_indicator_bytes = window.__chart.frame_stats().memory_bytes;
+    window.__chart.add_rsi(source, 14, { visible: false });
+    const after_indicator_bytes = window.__chart.frame_stats().memory_bytes;
+
+    const last_time = times[rows - 1];
+    let started = performance.now();
+    for (let update = 0; update < 10_000; update += 1) {
+      source.update({ time: last_time, value: values[rows - 1] + update * 0.000001 });
+    }
+    const current_update_us = (performance.now() - started) * 1000 / 10_000;
+
+    const batch = 10_000;
+    const batch_times = new Float64Array(batch);
+    const batch_values = new Float64Array(batch);
+    for (let index = 0; index < batch; index += 1) {
+      batch_times[index] = last_time + (index + 1) * 60;
+      batch_values[index] = 100 + Math.cos(index * 0.031) * 4;
+    }
+    started = performance.now();
+    source.update_typed({
+      times: batch_times,
+      open: batch_values,
+      high: batch_values,
+      low: batch_values,
+      close: batch_values,
+    });
+    const batch_10k_ms = performance.now() - started;
+    return {
+      before_indicator_bytes,
+      after_indicator_bytes,
+      indicator_delta_bytes: after_indicator_bytes - before_indicator_bytes,
+      current_update_us,
+      batch_10k_ms,
+    };
+  });
+  console.log(`INDICATOR BENCH ${JSON.stringify(result, null, 2)}`);
+  expect(result.current_update_us).toBeGreaterThan(0);
+  expect(result.batch_10k_ms).toBeGreaterThan(0);
+});

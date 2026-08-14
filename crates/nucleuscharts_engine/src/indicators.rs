@@ -40,13 +40,25 @@ pub enum IndicatorKind {
 
 #[derive(Clone, Debug)]
 pub(crate) struct IndicatorBinding {
-    source: SeriesId,
-    kind: IndicatorKind,
-    outputs: Vec<SeriesId>,
+    pub(crate) source: SeriesId,
+    pub(crate) kind: IndicatorKind,
+    pub(crate) outputs: Vec<SeriesId>,
     /// Parallel volume column source (VWAP); `None` = unit weights.
-    volume_source: Option<SeriesId>,
-    last_source_len: usize,
-    last_source_time: Option<i64>,
+    pub(crate) volume_source: Option<SeriesId>,
+    runtime: nucleuscharts_indicators::IncrementalState,
+    source_len: usize,
+    source_generation: u64,
+    volume_generation: Option<u64>,
+    source_times: Vec<i64>,
+    install_times: Vec<i64>,
+    install_values: Vec<f64>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct IndicatorChange {
+    pub(crate) from: usize,
+    pub(crate) previous_generation: u64,
+    pub(crate) full_replace: bool,
 }
 
 /// Stretch factor of the pane a separate-pane indicator creates for itself (TradingView
@@ -296,7 +308,14 @@ impl ChartEngine {
     pub(crate) fn drop_indicators_touching(&mut self, id: SeriesId) -> Vec<SeriesId> {
         let mut dropped_outputs = Vec::new();
         self.indicators.retain(|binding| {
-            if binding.source == id || binding.outputs.contains(&id) {
+            let touches_removed = binding.source == id
+                || binding.volume_source == Some(id)
+                || binding.outputs.contains(&id)
+                || dropped_outputs.contains(&binding.source)
+                || binding
+                    .volume_source
+                    .is_some_and(|source| dropped_outputs.contains(&source));
+            if touches_removed {
                 dropped_outputs.extend(binding.outputs.iter().copied());
                 false
             } else {
@@ -362,111 +381,32 @@ impl ChartEngine {
         }
         self.indicators.push(IndicatorBinding {
             source,
+            runtime: incremental_state(&kind),
             kind,
             outputs: ids.clone(),
             volume_source,
-            last_source_len: 0,
-            last_source_time: None,
+            source_len: 0,
+            source_generation: 0,
+            volume_generation: None,
+            source_times: Vec::new(),
+            install_times: Vec::new(),
+            install_values: Vec::new(),
         });
-        self.recompute_indicators();
+        self.rebuild_indicator(self.indicators.len() - 1, 0, true);
         ids
     }
 
-    pub(crate) fn recompute_indicators(&mut self) {
-        self.invalidate_frame_scene();
-        for index in 0..self.indicators.len() {
-            let binding = self.indicators[index].clone();
-            let Some((times, values)) = self.data.series_data(binding.source) else {
-                continue;
-            };
-            let times = times.to_vec();
-            let close = values[3].to_vec();
-            // H/L-consuming kinds clone those columns too (kept empty otherwise).
-            let (high, low) = if matches!(
-                binding.kind,
-                IndicatorKind::Stochastic { .. } | IndicatorKind::Atr { .. } | IndicatorKind::Vwap
-            ) {
-                (values[1].to_vec(), values[2].to_vec())
-            } else {
-                (Vec::new(), Vec::new())
-            };
-            match binding.kind {
-                IndicatorKind::Sma { period } => {
-                    let values = nucleuscharts_indicators::sma(&close, period);
-                    self.install_indicator_output(binding.outputs[0], &times, &values);
-                }
-                IndicatorKind::Ema { period } => {
-                    let values = nucleuscharts_indicators::ema(&close, period);
-                    self.install_indicator_output(binding.outputs[0], &times, &values);
-                }
-                IndicatorKind::Bollinger { period, deviation } => {
-                    let values = nucleuscharts_indicators::bollinger(&close, period, deviation);
-                    let mut upper = Vec::with_capacity(values.len());
-                    let mut middle = Vec::with_capacity(values.len());
-                    let mut lower = Vec::with_capacity(values.len());
-                    for point in values {
-                        upper.push(point.upper);
-                        middle.push(point.middle);
-                        lower.push(point.lower);
-                    }
-                    self.install_indicator_output(binding.outputs[0], &times, &upper);
-                    self.install_indicator_output(binding.outputs[1], &times, &middle);
-                    self.install_indicator_output(binding.outputs[2], &times, &lower);
-                }
-                IndicatorKind::Rsi { period } => {
-                    let values = nucleuscharts_indicators::rsi(&close, period);
-                    self.install_indicator_output(binding.outputs[0], &times, &values);
-                }
-                IndicatorKind::Macd { fast, slow, signal } => {
-                    let points = nucleuscharts_indicators::macd(&close, fast, slow, signal);
-                    let mut macd = Vec::with_capacity(points.len());
-                    let mut signal_line = Vec::with_capacity(points.len());
-                    let mut histogram = Vec::with_capacity(points.len());
-                    for point in points {
-                        macd.push(point.macd);
-                        signal_line.push(point.signal);
-                        histogram.push(point.histogram);
-                    }
-                    self.install_indicator_output(binding.outputs[0], &times, &macd);
-                    self.install_indicator_output(binding.outputs[1], &times, &signal_line);
-                    self.install_indicator_output(binding.outputs[2], &times, &histogram);
-                    self.install_macd_histogram_colors(binding.outputs[2], &histogram);
-                }
-                IndicatorKind::Stochastic { k_period, d_period } => {
-                    let points = nucleuscharts_indicators::stochastic(
-                        &high, &low, &close, k_period, d_period,
-                    );
-                    let mut k = Vec::with_capacity(points.len());
-                    let mut d = Vec::with_capacity(points.len());
-                    for point in points {
-                        k.push(point.k);
-                        d.push(point.d);
-                    }
-                    self.install_indicator_output(binding.outputs[0], &times, &k);
-                    self.install_indicator_output(binding.outputs[1], &times, &d);
-                }
-                IndicatorKind::Atr { period } => {
-                    let values = nucleuscharts_indicators::atr(&high, &low, &close, period);
-                    self.install_indicator_output(binding.outputs[0], &times, &values);
-                }
-                IndicatorKind::Vwap => {
-                    let volumes = binding
-                        .volume_source
-                        .and_then(|id| self.data.series_data(id))
-                        .map(|(_, v)| v[3].to_vec())
-                        .unwrap_or_default();
-                    let values =
-                        nucleuscharts_indicators::vwap(&times, &high, &low, &close, &volumes);
-                    self.install_indicator_output(binding.outputs[0], &times, &values);
-                }
-                IndicatorKind::Wma { period } => {
-                    let values = nucleuscharts_indicators::wma(&close, period);
-                    self.install_indicator_output(binding.outputs[0], &times, &values);
-                }
-            }
-            self.indicators[index].last_source_len = times.len();
-            self.indicators[index].last_source_time = times.last().copied();
-        }
+    pub(crate) fn recompute_indicators_for(&mut self, dependency: SeriesId) {
+        self.indicator_changes.clear();
+        self.indicator_changes.push((
+            dependency,
+            IndicatorChange {
+                from: 0,
+                previous_generation: 0,
+                full_replace: true,
+            },
+        ));
+        self.propagate_indicator_changes();
         self.sync_time_points();
     }
 
@@ -477,119 +417,229 @@ impl ChartEngine {
         let mut colors = Vec::new();
         let mut previous: Option<f64> = None;
         for &value in values.iter().flatten() {
-            let rising = previous.is_none_or(|p| value >= p);
-            colors.push(if value >= 0.0 {
-                if rising {
-                    MACD_UP
-                } else {
-                    MACD_UP_WEAK
-                }
-            } else if rising {
-                MACD_DOWN_WEAK
-            } else {
-                MACD_DOWN
-            });
+            colors.push(macd_histogram_color(value, previous));
             previous = Some(value);
         }
         self.data.set_point_colors(id, [Some(colors), None, None]);
     }
 
-    pub(crate) fn update_indicators_after_source_update(&mut self, source: SeriesId, time: i64) {
-        if self
-            .indicators
-            .iter()
-            .any(|binding| binding.source == source)
-        {
-            self.invalidate_frame_scene();
-        }
-        for index in 0..self.indicators.len() {
-            if self.indicators[index].source != source {
-                continue;
-            }
-            let binding = self.indicators[index].clone();
-            // Only SMA/EMA/Bollinger have an incremental tail path; every other kind recomputes
-            // in full on each source update (correct first, cheap at column scale).
-            if !matches!(
-                binding.kind,
-                IndicatorKind::Sma { .. }
-                    | IndicatorKind::Ema { .. }
-                    | IndicatorKind::Bollinger { .. }
-            ) {
-                self.recompute_indicators();
-                return;
-            }
-            let Some((times, values)) = self.data.series_data(source) else {
-                continue;
-            };
-            let source_len = times.len();
-            let source_last_time = times.last().copied();
-            let close = values[3];
-            let tail_update = binding.last_source_len > 0
-                && binding
-                    .last_source_time
-                    .map(|last| time >= last)
-                    .unwrap_or(false)
-                && (source_len == binding.last_source_len
-                    || source_len == binding.last_source_len + 1);
-            if !tail_update {
-                self.recompute_indicators();
-                return;
-            }
-            let appended = source_len == binding.last_source_len + 1;
-            match binding.kind {
-                IndicatorKind::Sma { period } => {
-                    if let Some(value) = rolling_mean(close, period) {
-                        self.data.update(binding.outputs[0], time, [value; 4]);
-                    }
-                }
-                IndicatorKind::Ema { period } => {
-                    if let Some(value) =
-                        rolling_ema_tail(close, period, &self.data, binding.outputs[0], appended)
-                    {
-                        self.data.update(binding.outputs[0], time, [value; 4]);
-                    }
-                }
-                IndicatorKind::Bollinger { period, deviation } => {
-                    if let Some((upper, middle, lower)) =
-                        rolling_bollinger(close, period, deviation)
-                    {
-                        self.data.update(binding.outputs[0], time, [upper; 4]);
-                        self.data.update(binding.outputs[1], time, [middle; 4]);
-                        self.data.update(binding.outputs[2], time, [lower; 4]);
-                    }
-                }
-                // Non-incremental kinds exited via the full-recompute guard above.
-                _ => unreachable!("guarded to SMA/EMA/Bollinger above"),
-            }
-            self.indicators[index].last_source_len = source_len;
-            self.indicators[index].last_source_time = source_last_time.or(Some(time));
-        }
+    pub(crate) fn update_indicators_after_change(
+        &mut self,
+        dependency: SeriesId,
+        change: IndicatorChange,
+    ) {
+        self.indicator_changes.clear();
+        self.indicator_changes.push((dependency, change));
+        self.propagate_indicator_changes();
         self.sync_time_points();
     }
 
-    fn install_indicator_output(&mut self, id: SeriesId, times: &[i64], values: &[Option<f64>]) {
-        let mut out_times = Vec::new();
-        let mut out_values = Vec::new();
-        for (&time, value) in times.iter().zip(values) {
-            if let Some(value) = value {
-                out_times.push(time);
-                out_values.push(*value);
+    fn propagate_indicator_changes(&mut self) {
+        // Bindings are topological by construction: an indicator output must exist before it can
+        // be selected as a later indicator's source. One forward pass therefore updates direct
+        // dependencies and every downstream chain without repeatedly scanning the whole graph.
+        for index in 0..self.indicators.len() {
+            let update = {
+                let binding = &self.indicators[index];
+                self.indicator_changes
+                    .iter()
+                    .filter_map(|&(dependency, change)| {
+                        let tracked = if binding.source == dependency {
+                            binding.source_generation
+                        } else if binding.volume_source == Some(dependency) {
+                            binding.volume_generation.unwrap_or(0)
+                        } else {
+                            return None;
+                        };
+                        let stale = tracked != change.previous_generation;
+                        Some((
+                            if stale { 0 } else { change.from },
+                            change.full_replace || stale,
+                        ))
+                    })
+                    .reduce(|left, right| (left.0.min(right.0), left.1 || right.1))
+            };
+            if let Some((from, full_replace)) = update {
+                let changes = self.rebuild_indicator(index, from, full_replace);
+                self.indicator_changes.extend(changes.into_iter().flatten());
             }
         }
-        self.data.set_data(
-            id,
-            out_times,
-            out_values.clone(),
-            out_values.clone(),
-            out_values.clone(),
-            out_values,
-        );
+    }
+
+    fn rebuild_indicator(
+        &mut self,
+        index: usize,
+        from: usize,
+        full_replace: bool,
+    ) -> [Option<(SeriesId, IndicatorChange)>; 3] {
+        let mut changes = [None; 3];
+        let old_len = self.indicators[index].source_len;
+        let outputs: [Option<SeriesId>; 3] =
+            std::array::from_fn(|slot| self.indicators[index].outputs.get(slot).copied());
+        for &output in outputs.iter().flatten() {
+            self.invalidate_frame_series(output);
+        }
+
+        let source = self.indicators[index].source;
+        let volume_source = self.indicators[index].volume_source;
+        let new_len = {
+            let Some((times, values)) = self.data.series_data(source) else {
+                return changes;
+            };
+            let volume = volume_source
+                .and_then(|id| self.data.series_data(id))
+                .map_or(&[][..], |(_, values)| values[3]);
+            let binding = &mut self.indicators[index];
+            binding.runtime.rebuild_from(
+                nucleuscharts_indicators::IndicatorInput {
+                    times,
+                    high: values[1],
+                    low: values[2],
+                    close: values[3],
+                    volume,
+                },
+                if full_replace { 0 } else { from },
+            );
+            let install_from = if full_replace {
+                0
+            } else {
+                from.min(times.len())
+            };
+            binding.source_times.clear();
+            binding
+                .source_times
+                .extend_from_slice(&times[install_from..]);
+            times.len()
+        };
+        self.indicators[index].source_generation = self.data.series_generation(source).unwrap_or(0);
+        self.indicators[index].source_len = new_len;
+        self.indicators[index].volume_generation =
+            volume_source.and_then(|id| self.data.series_generation(id));
+
+        for (output_index, output) in outputs.iter().flatten().copied().enumerate() {
+            let previous_generation = self.data.series_generation(output).unwrap_or(0);
+            let binding = &mut self.indicators[index];
+            binding.install_times.clear();
+            binding.install_values.clear();
+            let values = binding.runtime.output(output_index);
+            let install_from = if full_replace { 0 } else { from.min(new_len) };
+            for (&time, &value) in binding.source_times.iter().zip(&values[install_from..]) {
+                if let Some(value) = value {
+                    binding.install_times.push(time);
+                    binding.install_values.push(value);
+                }
+            }
+
+            let output_from = if full_replace {
+                0
+            } else if let Some(&first_time) = binding.install_times.first() {
+                self.data.series_data(output).map_or(0, |(times, _)| {
+                    times
+                        .binary_search(&first_time)
+                        .unwrap_or_else(|position| position)
+                })
+            } else {
+                continue;
+            };
+
+            if full_replace {
+                let values = &binding.install_values;
+                self.data.set_data(
+                    output,
+                    binding.install_times.clone(),
+                    values.clone(),
+                    values.clone(),
+                    values.clone(),
+                    values.clone(),
+                );
+            } else if from >= old_len.saturating_sub(1) && new_len >= old_len {
+                for (&time, &value) in binding.install_times.iter().zip(&binding.install_values) {
+                    self.data.update(output, time, [value; 4]);
+                }
+            } else if !binding.install_times.is_empty() {
+                let values = binding.install_values.as_slice();
+                self.data.update_many(
+                    output,
+                    &binding.install_times,
+                    [values, values, values, values],
+                );
+            }
+            if self.data.series_generation(output).unwrap_or(0) != previous_generation {
+                changes[output_index] = Some((
+                    output,
+                    IndicatorChange {
+                        from: output_from,
+                        previous_generation,
+                        full_replace,
+                    },
+                ));
+            }
+        }
+
+        if let IndicatorKind::Macd { slow, signal, .. } = self.indicators[index].kind {
+            if full_replace || from < old_len.saturating_sub(1) {
+                let histogram = self.indicators[index].runtime.output(2).to_vec();
+                self.install_macd_histogram_colors(outputs[2].unwrap(), &histogram);
+            } else {
+                let histogram = self.indicators[index].runtime.output(2);
+                let first_histogram = slow.saturating_add(signal).saturating_sub(2);
+                let output_start = from.saturating_sub(first_histogram);
+                let mut previous = from
+                    .checked_sub(1)
+                    .and_then(|row| histogram.get(row).copied().flatten());
+                for (offset, &value) in histogram[from.min(histogram.len())..]
+                    .iter()
+                    .flatten()
+                    .enumerate()
+                {
+                    let color = macd_histogram_color(value, previous);
+                    self.data.set_point_color(
+                        outputs[2].unwrap(),
+                        PointColorChannel::Body,
+                        output_start + offset,
+                        color,
+                    );
+                    previous = Some(value);
+                }
+            }
+        }
+        changes
     }
 }
 
-fn rolling_mean(values: &[f64], period: usize) -> Option<f64> {
-    (period > 0 && values.len() >= period)
-        .then(|| values[values.len() - period..].iter().sum::<f64>() / period as f64)
+fn incremental_state(kind: &IndicatorKind) -> nucleuscharts_indicators::IncrementalState {
+    match *kind {
+        IndicatorKind::Sma { period } => nucleuscharts_indicators::IncrementalState::sma(period),
+        IndicatorKind::Ema { period } => nucleuscharts_indicators::IncrementalState::ema(period),
+        IndicatorKind::Bollinger { period, deviation } => {
+            nucleuscharts_indicators::IncrementalState::bollinger(period, deviation)
+        }
+        IndicatorKind::Rsi { period } => nucleuscharts_indicators::IncrementalState::rsi(period),
+        IndicatorKind::Macd { fast, slow, signal } => {
+            nucleuscharts_indicators::IncrementalState::macd(fast, slow, signal)
+        }
+        IndicatorKind::Stochastic { k_period, d_period } => {
+            nucleuscharts_indicators::IncrementalState::stochastic(k_period, d_period)
+        }
+        IndicatorKind::Atr { period } => nucleuscharts_indicators::IncrementalState::atr(period),
+        IndicatorKind::Vwap => nucleuscharts_indicators::IncrementalState::vwap(),
+        IndicatorKind::Wma { period } => nucleuscharts_indicators::IncrementalState::wma(period),
+    }
+}
+
+fn macd_histogram_color(value: f64, previous: Option<f64>) -> u32 {
+    let rising = previous.is_none_or(|previous| value >= previous);
+    if value >= 0.0 {
+        if rising {
+            MACD_UP
+        } else {
+            MACD_UP_WEAK
+        }
+    } else if rising {
+        MACD_DOWN_WEAK
+    } else {
+        MACD_DOWN
+    }
 }
 
 /// The auto-generated indicator name behind the (hidden-by-default) name chip — what
@@ -618,39 +668,4 @@ fn indicator_title(kind: &IndicatorKind) -> String {
         IndicatorKind::Vwap => "VWAP".to_string(),
         IndicatorKind::Wma { period } => format!("WMA {period}"),
     }
-}
-
-fn rolling_bollinger(values: &[f64], period: usize, deviation: f64) -> Option<(f64, f64, f64)> {
-    let window =
-        (period > 0 && values.len() >= period).then(|| &values[values.len() - period..])?;
-    let middle = window.iter().sum::<f64>() / period as f64;
-    let spread = (window.iter().map(|v| (v - middle).powi(2)).sum::<f64>() / period as f64).sqrt()
-        * deviation.max(0.0);
-    Some((middle + spread, middle, middle - spread))
-}
-
-fn rolling_ema_tail(
-    values: &[f64],
-    period: usize,
-    data: &DataLayer,
-    output: SeriesId,
-    appended: bool,
-) -> Option<f64> {
-    if period == 0 || values.len() < period {
-        return None;
-    }
-    if values.len() == period {
-        return rolling_mean(values, period);
-    }
-    let previous = data.series_data(output)?;
-    let output_values = previous.1[3];
-    let previous_ema = if appended {
-        output_values.last().copied()?
-    } else if output_values.len() >= 2 {
-        output_values[output_values.len() - 2]
-    } else {
-        return rolling_mean(&values[..values.len() - 1], period);
-    };
-    let alpha = 2.0 / (period as f64 + 1.0);
-    Some(alpha * values[values.len() - 1] + (1.0 - alpha) * previous_ema)
 }

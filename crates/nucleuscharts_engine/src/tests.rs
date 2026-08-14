@@ -812,6 +812,400 @@ fn indicators_are_engine_owned_series() {
     assert!((ema_rows.1[3].last().copied().unwrap() - 5.388888888888889).abs() < 1e-12);
 }
 
+fn add_test_indicator(
+    chart: &mut ChartEngine,
+    kind: &IndicatorKind,
+    volume: Option<SeriesId>,
+) -> Vec<SeriesId> {
+    match *kind {
+        IndicatorKind::Sma { period } => vec![chart.add_sma(0, period).unwrap()],
+        IndicatorKind::Ema { period } => vec![chart.add_ema(0, period).unwrap()],
+        IndicatorKind::Bollinger { period, deviation } => chart.add_bollinger(0, period, deviation),
+        IndicatorKind::Rsi { period } => vec![chart.add_rsi(0, period).unwrap()],
+        IndicatorKind::Macd { fast, slow, signal } => chart.add_macd(0, fast, slow, signal),
+        IndicatorKind::Stochastic { k_period, d_period } => {
+            chart.add_stochastic(0, k_period, d_period)
+        }
+        IndicatorKind::Atr { period } => vec![chart.add_atr(0, period).unwrap()],
+        IndicatorKind::Vwap => vec![chart.add_vwap(0, volume).unwrap()],
+        IndicatorKind::Wma { period } => vec![chart.add_wma(0, period).unwrap()],
+    }
+}
+
+fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usize) {
+    let binding = &chart.indicators[binding_index];
+    let (times, source) = chart.data.series_data(binding.source).unwrap();
+    let expected = match binding.kind {
+        IndicatorKind::Sma { period } => vec![nucleuscharts_indicators::sma(source[3], period)],
+        IndicatorKind::Ema { period } => vec![nucleuscharts_indicators::ema(source[3], period)],
+        IndicatorKind::Bollinger { period, deviation } => {
+            let points = nucleuscharts_indicators::bollinger(source[3], period, deviation);
+            vec![
+                points.iter().map(|point| point.upper).collect(),
+                points.iter().map(|point| point.middle).collect(),
+                points.iter().map(|point| point.lower).collect(),
+            ]
+        }
+        IndicatorKind::Rsi { period } => vec![nucleuscharts_indicators::rsi(source[3], period)],
+        IndicatorKind::Macd { fast, slow, signal } => {
+            let points = nucleuscharts_indicators::macd(source[3], fast, slow, signal);
+            vec![
+                points.iter().map(|point| point.macd).collect(),
+                points.iter().map(|point| point.signal).collect(),
+                points.iter().map(|point| point.histogram).collect(),
+            ]
+        }
+        IndicatorKind::Stochastic { k_period, d_period } => {
+            let points = nucleuscharts_indicators::stochastic(
+                source[1], source[2], source[3], k_period, d_period,
+            );
+            vec![
+                points.iter().map(|point| point.k).collect(),
+                points.iter().map(|point| point.d).collect(),
+            ]
+        }
+        IndicatorKind::Atr { period } => vec![nucleuscharts_indicators::atr(
+            source[1], source[2], source[3], period,
+        )],
+        IndicatorKind::Vwap => {
+            let volume = binding
+                .volume_source
+                .and_then(|id| chart.data.series_data(id))
+                .map_or(&[][..], |(_, values)| values[3]);
+            vec![nucleuscharts_indicators::vwap(
+                times, source[1], source[2], source[3], volume,
+            )]
+        }
+        IndicatorKind::Wma { period } => vec![nucleuscharts_indicators::wma(source[3], period)],
+    };
+
+    for (&output, expected) in binding.outputs.iter().zip(expected) {
+        let expected = times
+            .iter()
+            .copied()
+            .zip(expected)
+            .filter_map(|(time, value)| value.map(|value| (time, value)))
+            .collect::<Vec<_>>();
+        let (actual_times, actual) = chart.data.series_data(output).unwrap();
+        assert_eq!(
+            actual_times,
+            expected.iter().map(|(time, _)| *time).collect::<Vec<_>>()
+        );
+        assert_eq!(actual[3].len(), expected.len());
+        for (&actual, (_, expected)) in actual[3].iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-10, "{actual} != {expected}");
+        }
+    }
+}
+
+#[test]
+fn every_indicator_engine_path_matches_full_recomputation() {
+    let kinds = [
+        IndicatorKind::Sma { period: 5 },
+        IndicatorKind::Ema { period: 5 },
+        IndicatorKind::Bollinger {
+            period: 5,
+            deviation: 2.0,
+        },
+        IndicatorKind::Rsi { period: 5 },
+        IndicatorKind::Macd {
+            fast: 3,
+            slow: 6,
+            signal: 4,
+        },
+        IndicatorKind::Stochastic {
+            k_period: 5,
+            d_period: 3,
+        },
+        IndicatorKind::Atr { period: 5 },
+        IndicatorKind::Vwap,
+        IndicatorKind::Wma { period: 5 },
+    ];
+    for kind in kinds {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let volume = chart.add_series(SeriesKind::Histogram);
+        let times = (0..40)
+            .map(|index| index as f64 * 3_600.0)
+            .collect::<Vec<_>>();
+        let close = (0..40)
+            .map(|index| 90.0 + index as f64 * 0.4)
+            .collect::<Vec<_>>();
+        let high = close.iter().map(|value| value + 2.0).collect::<Vec<_>>();
+        let low = close.iter().map(|value| value - 1.0).collect::<Vec<_>>();
+        let volumes = (0..40).map(|index| (index % 7) as f64).collect::<Vec<_>>();
+        chart
+            .set_series_data(0, &times, &close, &high, &low, &close)
+            .unwrap();
+        chart
+            .set_series_data(volume, &times, &volumes, &volumes, &volumes, &volumes)
+            .unwrap();
+        let outputs = add_test_indicator(&mut chart, &kind, Some(volume));
+        let binding = chart.indicators.len() - 1;
+        assert_indicator_binding_matches_full(&chart, binding);
+
+        chart.update_series_bar(0, 40.0 * 3_600.0, [106.0, 108.0, 105.0, 107.0]);
+        assert_indicator_binding_matches_full(&chart, binding);
+
+        let batch_times = (41..46).map(|index| index * 3_600).collect::<Vec<_>>();
+        let batch_close = (41..46)
+            .map(|index| 90.0 + index as f64 * 0.4)
+            .collect::<Vec<_>>();
+        let batch_high = batch_close
+            .iter()
+            .map(|value| value + 2.0)
+            .collect::<Vec<_>>();
+        let batch_low = batch_close
+            .iter()
+            .map(|value| value - 1.0)
+            .collect::<Vec<_>>();
+        chart.update_series_bars_sanitized(
+            0,
+            batch_times,
+            batch_close.clone(),
+            batch_high,
+            batch_low,
+            batch_close,
+        );
+        assert_indicator_binding_matches_full(&chart, binding);
+
+        for replacement in 0..1_000 {
+            let close = 111.0 + replacement as f64 * 0.001;
+            chart.update_series_bar(0, 45.0 * 3_600.0, [close, close + 1.0, close - 1.0, close]);
+        }
+        assert_indicator_binding_matches_full(&chart, binding);
+
+        chart.update_series_bar(0, 17.0 * 3_600.0, [99.0, 102.0, 97.0, 100.0]);
+        assert_indicator_binding_matches_full(&chart, binding);
+        chart.update_series_bar(0, 17.5 * 3_600.0, [98.0, 101.0, 96.0, 99.0]);
+        assert_indicator_binding_matches_full(&chart, binding);
+
+        chart.series_pop(0, 7).unwrap();
+        assert_indicator_binding_matches_full(&chart, binding);
+
+        let replacement_times = (0..31)
+            .map(|index| 86_400.0 + index as f64 * 1_800.0)
+            .collect::<Vec<_>>();
+        let replacement = (0..31)
+            .map(|index| 70.0 + index as f64 * 0.75)
+            .collect::<Vec<_>>();
+        let replacement_high = replacement
+            .iter()
+            .map(|value| value + 3.0)
+            .collect::<Vec<_>>();
+        let replacement_low = replacement
+            .iter()
+            .map(|value| value - 2.0)
+            .collect::<Vec<_>>();
+        chart
+            .set_series_data(
+                0,
+                &replacement_times,
+                &replacement,
+                &replacement_high,
+                &replacement_low,
+                &replacement,
+            )
+            .unwrap();
+        assert_indicator_binding_matches_full(&chart, binding);
+
+        assert!(chart.remove_series(0));
+        assert!(outputs
+            .iter()
+            .all(|&output| chart.series_kind(output).is_none()));
+        assert!(chart.indicators.is_empty());
+    }
+}
+
+#[test]
+fn batch_and_single_updates_are_semantically_identical_for_every_indicator() {
+    let kinds = [
+        IndicatorKind::Sma { period: 5 },
+        IndicatorKind::Ema { period: 5 },
+        IndicatorKind::Bollinger {
+            period: 5,
+            deviation: 2.0,
+        },
+        IndicatorKind::Rsi { period: 5 },
+        IndicatorKind::Macd {
+            fast: 3,
+            slow: 6,
+            signal: 4,
+        },
+        IndicatorKind::Stochastic {
+            k_period: 5,
+            d_period: 3,
+        },
+        IndicatorKind::Atr { period: 5 },
+        IndicatorKind::Vwap,
+        IndicatorKind::Wma { period: 5 },
+    ];
+    for kind in kinds {
+        let setup = || {
+            let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+            let volume = chart.add_series(SeriesKind::Histogram);
+            let times = (0..40)
+                .map(|index| index as f64 * 3_600.0)
+                .collect::<Vec<_>>();
+            let close = (0..40)
+                .map(|index| 90.0 + index as f64 * 0.4)
+                .collect::<Vec<_>>();
+            let high = close.iter().map(|value| value + 2.0).collect::<Vec<_>>();
+            let low = close.iter().map(|value| value - 1.0).collect::<Vec<_>>();
+            let volumes = (0..40).map(|index| (index % 7) as f64).collect::<Vec<_>>();
+            chart
+                .set_series_data(0, &times, &close, &high, &low, &close)
+                .unwrap();
+            chart
+                .set_series_data(volume, &times, &volumes, &volumes, &volumes, &volumes)
+                .unwrap();
+            add_test_indicator(&mut chart, &kind, Some(volume));
+            chart
+        };
+        let mut singles = setup();
+        let mut batch = setup();
+        let rows = [
+            (41.0 * 3_600.0, [106.0, 108.0, 105.0, 107.0]),
+            (10.0 * 3_600.0, [95.0, 99.0, 94.0, 98.0]),
+            (f64::NAN, [1.0; 4]),
+            (10.0 * 3_600.0, [96.0, 100.0, 95.0, 99.0]),
+            (42.0 * 3_600.0, [107.0, 109.0, 106.0, 108.0]),
+        ];
+        for (time, values) in rows {
+            singles.update_series_bar(0, time, values);
+        }
+        assert_eq!(batch.update_series_bars(0, rows), 4);
+
+        assert_eq!(
+            singles.data.time_points_generation(),
+            batch.data.time_points_generation()
+        );
+        assert_eq!(singles.data.merged_times(), batch.data.merged_times());
+        assert_eq!(singles.series_order(), batch.series_order());
+        for &series in singles.series_order() {
+            let single = singles.data.series_data(series).unwrap();
+            let batched = batch.data.series_data(series).unwrap();
+            assert_eq!(single.0, batched.0);
+            assert_eq!(single.1, batched.1);
+        }
+
+        singles.time_scale.set_width(800.0);
+        batch.time_scale.set_width(800.0);
+        singles.fit_content();
+        batch.fit_content();
+        assert_eq!(
+            singles.tick_marks.build(6.0, 50.0),
+            batch.tick_marks.build(6.0, 50.0)
+        );
+        assert_eq!(singles.build_frame(), batch.build_frame());
+        for (single, batched) in singles.panes.iter().zip(&batch.panes) {
+            assert_eq!(
+                single.price_scale.price_range(),
+                batched.price_scale.price_range()
+            );
+        }
+    }
+}
+
+#[test]
+fn vwap_volume_catchup_and_replacement_resume_at_the_affected_row() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let volume = chart.add_series(SeriesKind::Histogram);
+    let times = (0..10).map(|index| index as f64 * 60.0).collect::<Vec<_>>();
+    let close = (0..10)
+        .map(|index| 100.0 + index as f64)
+        .collect::<Vec<_>>();
+    let high = close.iter().map(|value| value + 1.0).collect::<Vec<_>>();
+    let low = close.iter().map(|value| value - 1.0).collect::<Vec<_>>();
+    chart
+        .set_series_data(0, &times, &close, &high, &low, &close)
+        .unwrap();
+    chart
+        .set_series_data(
+            volume,
+            &times[..5],
+            &[1.0; 5],
+            &[1.0; 5],
+            &[1.0; 5],
+            &[1.0; 5],
+        )
+        .unwrap();
+    chart.add_vwap(0, Some(volume)).unwrap();
+    let binding = chart.indicators.len() - 1;
+    assert_indicator_binding_matches_full(&chart, binding);
+
+    let added_times = (5..10).map(|index| index * 60).collect::<Vec<_>>();
+    let added = [2.0, 0.0, 4.0, 5.0, 6.0];
+    chart.update_series_bars_sanitized(
+        volume,
+        added_times,
+        added.to_vec(),
+        added.to_vec(),
+        added.to_vec(),
+        added.to_vec(),
+    );
+    assert_indicator_binding_matches_full(&chart, binding);
+    chart.update_series_bar(volume, 9.0 * 60.0, [8.0; 4]);
+    assert_indicator_binding_matches_full(&chart, binding);
+}
+
+#[test]
+fn chained_indicators_propagate_every_source_change_and_remove_together() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times = (0..20).map(|index| index as f64 * 60.0).collect::<Vec<_>>();
+    let close = (0..20)
+        .map(|index| 100.0 + index as f64)
+        .collect::<Vec<_>>();
+    chart
+        .set_series_data(0, &times, &close, &close, &close, &close)
+        .unwrap();
+    let sma = chart.add_sma(0, 3).unwrap();
+    let ema = chart.add_ema(sma, 2).unwrap();
+    let wma = chart.add_wma(ema, 2).unwrap();
+    for binding in 0..chart.indicators.len() {
+        assert_indicator_binding_matches_full(&chart, binding);
+    }
+
+    let generation = chart.data.series_generation(wma).unwrap();
+    chart.update_series_bar(0, 19.0 * 60.0, [125.0; 4]);
+    assert!(chart.data.series_generation(wma).unwrap() > generation);
+    for binding in 0..chart.indicators.len() {
+        assert_indicator_binding_matches_full(&chart, binding);
+    }
+
+    chart.update_series_bar(0, 20.0 * 60.0, [126.0; 4]);
+    chart.update_series_bar(0, 7.0 * 60.0, [111.0; 4]);
+    for binding in 0..chart.indicators.len() {
+        assert_indicator_binding_matches_full(&chart, binding);
+    }
+
+    let replacement_times = (0..12)
+        .map(|index| 86_400.0 + index as f64 * 60.0)
+        .collect::<Vec<_>>();
+    let replacement = (0..12)
+        .map(|index| 75.0 + index as f64 * 0.5)
+        .collect::<Vec<_>>();
+    chart
+        .set_series_data(
+            0,
+            &replacement_times,
+            &replacement,
+            &replacement,
+            &replacement,
+            &replacement,
+        )
+        .unwrap();
+    for binding in 0..chart.indicators.len() {
+        assert_indicator_binding_matches_full(&chart, binding);
+    }
+
+    let mut removed = chart.remove_series_tracked(sma);
+    removed.sort_unstable();
+    let mut expected = vec![sma, ema, wma];
+    expected.sort_unstable();
+    assert_eq!(removed, expected);
+    assert!(chart.indicators.is_empty());
+}
+
 #[test]
 fn host_formatters_override_builtin_labels() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
