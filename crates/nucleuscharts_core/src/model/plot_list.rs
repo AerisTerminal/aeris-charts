@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 
 use crate::helpers::algorithms::{lower_bound, upper_bound};
+use crate::model::lod::{LodPyramid, LodPyramidView};
 use crate::TimePointIndex;
 
 /// `CHUNK_SIZE` in reference.
@@ -99,11 +100,33 @@ impl<'a> PlotValues<'a> {
 pub struct PlotListView<'a> {
     list: &'a PlotList,
     values: PlotValues<'a>,
+    lod: Option<&'a LodPyramid>,
 }
 
 impl<'a> PlotListView<'a> {
     pub fn new(list: &'a PlotList, values: PlotValues<'a>) -> Self {
-        Self { list, values }
+        Self {
+            list,
+            values,
+            lod: None,
+        }
+    }
+
+    pub(crate) fn with_lod(
+        list: &'a PlotList,
+        values: PlotValues<'a>,
+        lod: &'a LodPyramid,
+    ) -> Self {
+        Self {
+            list,
+            values,
+            lod: Some(lod),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn lod(self) -> Option<LodPyramidView<'a>> {
+        self.lod.map(|lod| lod.view(self.values))
     }
 
     pub fn size(self) -> usize {

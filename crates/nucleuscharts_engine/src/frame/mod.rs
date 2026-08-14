@@ -39,7 +39,10 @@ mod series_geometry;
 #[cfg(test)]
 mod tests;
 
-use conflation::{visible_histogram_rows, visible_line_rows, visible_ohlc};
+use conflation::{
+    visible_histogram_rows, visible_histogram_rows_with_work, visible_line_rows,
+    visible_line_rows_with_work, visible_ohlc, visible_ohlc_with_work,
+};
 
 const UP: Color = Color::rgb(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2);
 const DOWN: Color = Color::rgb(MARKET_DOWN_RGB.0, MARKET_DOWN_RGB.1, MARKET_DOWN_RGB.2);
@@ -976,6 +979,7 @@ impl ChartEngine {
     /// a fresh tree for every cursor/animation frame.
     pub fn build_frame_into(&mut self, output: &mut ChartFrame) {
         self.frame_build_stats = FrameBuildStats::default();
+        self.reset_lod_work();
         self.build_frame_into_accumulating(output);
     }
 
@@ -983,6 +987,7 @@ impl ChartEngine {
     /// construction. The browser uses this to keep diagnostics for the complete operation.
     pub fn begin_frame_build(&mut self) {
         self.frame_build_stats = FrameBuildStats::default();
+        self.reset_lod_work();
     }
 
     fn sync_frame_input_invalidation(&mut self) {

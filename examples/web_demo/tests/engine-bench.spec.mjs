@@ -30,6 +30,7 @@ async function wait_chart(page) {
 
 test.beforeEach(async ({ page }) => {
   test.skip(!ENABLED, "set NUCLEUSCHARTS_BENCH=1 to run the build-flag benchmark");
+  test.setTimeout(600_000);
   page.on("pageerror", (error) => console.log(`[browser:pageerror] ${error.message}`));
   await page.goto("/");
   await wait_chart(page);
@@ -93,6 +94,25 @@ test("build-flag benchmark: 1M-bar install, autoscale, hit tests, frame build", 
       window.__chart.render();
     }));
 
+    // --- true 1M full-history density frame + current-bar update ------------------------------
+    // The default 0.5px minimum spacing only exposes a few thousand bars. Lower it explicitly so
+    // this evidence covers all one million source rows in a 1280px viewport.
+    const time_scale = window.__chart.time_scale();
+    time_scale.apply_options({ min_bar_spacing: 0.000001 });
+    time_scale.set_visible_logical_range({ from: 0, to: 999_999 });
+    out.full_view_1m_frame = { ...window.__chart.frame_stats() };
+
+    const last = million.close.length - 1;
+    out.full_view_1m_current_update_us = timed(() => window.__main.update({
+      time: million.times[last],
+      open: million.open[last],
+      high: million.high[last] + 0.01,
+      low: million.low[last],
+      close: million.close[last] + 0.01,
+    })) * 1000;
+    window.__chart.render();
+    out.full_view_1m_current_frame = { ...window.__chart.frame_stats() };
+
     // --- frame build over a 50k-bar window (the 60fps target's shape) --------------------------
     window.__main.set_data_typed(make_columns(50_000));
     window.__chart.time_scale().fit_content();
@@ -126,6 +146,7 @@ test("build-flag benchmark: 1M-bar install, autoscale, hit tests, frame build", 
 
     out.wasm_memory_bytes = window.__chart.frame_stats().memory_bytes;
     out.backend = window.__chart.backend();
+    window.__chart.remove();
     return out;
   }, REPEATS);
 

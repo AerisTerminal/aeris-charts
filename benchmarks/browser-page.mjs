@@ -190,7 +190,9 @@ async function realtime(points, seed, mode, update_rate_hz, duration_ms) {
 async function prepare_interaction(points, seed) {
   reset();
   const entry = await create(points, seed);
-  entry.chart.time_scale().fit_content();
+  const scale = entry.chart.time_scale();
+  scale.apply_options({ min_bar_spacing: 1280 / Math.max(points, 1) / 2 });
+  scale.set_visible_logical_range({ from: 0, to: Math.max(points - 1, 0) });
   entry.chart.render();
   await next_frame();
   return { backend: entry.chart.backend() };
@@ -198,7 +200,13 @@ async function prepare_interaction(points, seed) {
 
 function start_frame_recording() {
   if (frame_recording !== null) throw new Error("frame recording already active");
-  const record = { active: true, last: performance.now(), last_presented: null, frame_ms: [], cpu_ms: [], gpu_ms: [], draw_calls: [], gpu_buffer_allocations: [], gpu_uploaded_bytes: [], layout_rebuilds: [], autoscale_runs: [], series_rebuilds: [], drawing_rebuilds: [], grid_rebuilds: [], axis_rebuilds: [], overlay_rebuilds: [], text_resolutions: [], started: performance.now() };
+  const record = { active: true, last: performance.now(), last_presented: null, frame_ms: [], cpu_ms: [], gpu_ms: [], draw_calls: [], canvas2d_ops: [], gpu_buffer_allocations: [], gpu_uploaded_bytes: [], layout_rebuilds: [], autoscale_runs: [], series_rebuilds: [], drawing_rebuilds: [], grid_rebuilds: [], axis_rebuilds: [], overlay_rebuilds: [], text_resolutions: [], long_task_ms: [], long_task_observer: null, started: performance.now() };
+  if (PerformanceObserver.supportedEntryTypes?.includes("longtask")) {
+    record.long_task_observer = new PerformanceObserver((entries) => {
+      for (const entry of entries.getEntries()) record.long_task_ms.push(entry.duration);
+    });
+    record.long_task_observer.observe({ type: "longtask" });
+  }
   frame_recording = record;
   const tick = (time) => {
     if (!record.active) return;
@@ -209,6 +217,7 @@ function start_frame_recording() {
       record.cpu_ms.push(stats.cpu_ms);
       if (stats.gpu_ms !== null) record.gpu_ms.push(stats.gpu_ms);
       record.draw_calls.push(stats.draw_calls);
+      record.canvas2d_ops.push(stats.canvas2d_ops);
       record.gpu_buffer_allocations.push(stats.gpu_buffer_allocations);
       record.gpu_uploaded_bytes.push(stats.gpu_uploaded_bytes);
       record.layout_rebuilds.push(stats.layout_rebuilds);
@@ -229,10 +238,14 @@ function start_frame_recording() {
 async function stop_frame_recording() {
   const record = frame_recording;
   if (record === null) throw new Error("frame recording is not active");
+  if (record.long_task_observer !== null) {
+    for (const entry of record.long_task_observer.takeRecords()) record.long_task_ms.push(entry.duration);
+    record.long_task_observer.disconnect();
+  }
   record.active = false;
   frame_recording = null;
   await next_frame();
-  return { ...Object.fromEntries(Object.entries(record).filter(([, value]) => Array.isArray(value)).map(([key, value]) => [key, value.slice(2)])), duration_ms: performance.now() - record.started, stats: live[0].chart.frame_stats() };
+  return { ...Object.fromEntries(Object.entries(record).filter(([, value]) => Array.isArray(value)).map(([key, value]) => [key, key === "long_task_ms" ? value : value.slice(2)])), duration_ms: performance.now() - record.started, stats: live[0].chart.frame_stats() };
 }
 
 async function prepare_lifecycle(points, seed) {
@@ -280,6 +293,13 @@ async function multi_chart(points, seed, chart_counts) {
     const started = performance.now();
     for (let index = 0; index < count; index += 1) await create(points, seed + index, {}, fixtures[index]);
     await next_frame();
+    for (const entry of live) {
+      const scale = entry.chart.time_scale();
+      scale.apply_options({ min_bar_spacing: entry.container.clientWidth / Math.max(points, 1) / 2 });
+      scale.set_visible_logical_range({ from: 0, to: Math.max(points - 1, 0) });
+      entry.chart.render();
+    }
+    await next_frame();
     const startup_ms = performance.now() - started;
     const repaint_started = performance.now();
     for (const entry of live) entry.chart.render();
@@ -307,7 +327,9 @@ async function multi_series(points, seed, series_counts, pane_counts) {
         const series = chart.add_series(index === 0 ? "candlestick" : "line", { pane: index % pane_count });
         series.set_data_typed(columns);
       }
-      chart.time_scale().fit_content();
+      const scale = chart.time_scale();
+      scale.apply_options({ min_bar_spacing: container.clientWidth / Math.max(points, 1) / 2 });
+      scale.set_visible_logical_range({ from: 0, to: Math.max(points - 1, 0) });
       chart.render();
       await next_frame();
       const startup_ms = performance.now() - started;

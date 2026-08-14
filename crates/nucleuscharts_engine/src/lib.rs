@@ -19,6 +19,8 @@ mod series_query_api;
 mod tests;
 mod workspace;
 
+use std::cell::Cell;
+
 pub(crate) use drawings::{BrushCapture, DrawingDrag, PendingDrawing};
 pub use drawings::{
     Drawing, DrawingDragPart, DrawingHit, DrawingId, DrawingKind, DrawingModifiers, DrawingPoint,
@@ -74,6 +76,15 @@ pub struct EngineMemoryUsage {
     pub indicator_runtime_bytes: usize,
     pub indicator_transfer_capacity_bytes: usize,
     pub retained_frame_capacity_bytes: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct LodWorkStats {
+    pub selected_level: usize,
+    pub summary_nodes: usize,
+    pub raw_rows: usize,
+    pub candidates: usize,
 }
 
 impl EngineMemoryUsage {
@@ -770,6 +781,7 @@ pub struct ChartEngine {
     frame_invalidation: frame::FrameInvalidation,
     retained_frame: frame::RetainedFrame,
     frame_build_stats: FrameBuildStats,
+    lod_work: Cell<LodWorkStats>,
 }
 
 impl ChartEngine {
@@ -834,7 +846,32 @@ impl ChartEngine {
             frame_invalidation: frame::FrameInvalidation::default(),
             retained_frame: frame::RetainedFrame::default(),
             frame_build_stats: FrameBuildStats::default(),
+            lod_work: Cell::new(LodWorkStats::default()),
         }
+    }
+
+    #[doc(hidden)]
+    pub fn lod_work_stats(&self) -> LodWorkStats {
+        self.lod_work.get()
+    }
+
+    pub(crate) fn reset_lod_work(&self) {
+        self.lod_work.set(LodWorkStats::default());
+    }
+
+    pub(crate) fn record_lod_work(
+        &self,
+        selected_level: usize,
+        summary_nodes: usize,
+        raw_rows: usize,
+        candidates: usize,
+    ) {
+        let mut work = self.lod_work.get();
+        work.selected_level = work.selected_level.max(selected_level);
+        work.summary_nodes += summary_nodes;
+        work.raw_rows += raw_rows;
+        work.candidates += candidates;
+        self.lod_work.set(work);
     }
 
     /// Read-only access to canonical series data. All mutation must use engine commands so time,

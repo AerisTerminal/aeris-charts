@@ -1,7 +1,11 @@
 //! Frame-production unit tests (extracted from `frame.rs`).
 
-use super::conflation::{VisibleHistogramRow, VisibleOhlc};
+use super::conflation::{
+    visible_histogram_rows_raw_reference, visible_line_rows_raw_reference,
+    visible_ohlc_raw_reference, DensityWork, VisibleHistogramRow, VisibleOhlc,
+};
 use super::*;
+use nucleuscharts_core::model::data_layer::DataLayer;
 use nucleuscharts_core::model::plot_list::{PlotList, PlotValues};
 
 #[test]
@@ -188,6 +192,188 @@ fn histogram_conflation_preserves_largest_magnitude_and_source_row() {
             },
         ]
     );
+}
+
+#[test]
+fn hierarchical_density_matches_forced_raw_reference_across_random_viewports() {
+    let count = 20_000usize;
+    let mut state = 0x7a31_9d2bu32;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        state
+    };
+    let times = (0..count as i64).collect::<Vec<_>>();
+    let mut open = Vec::with_capacity(count);
+    let mut high = Vec::with_capacity(count);
+    let mut low = Vec::with_capacity(count);
+    let mut close = Vec::with_capacity(count);
+    for row in 0..count {
+        if row % 211 == 0 {
+            open.push(f64::NAN);
+            high.push(f64::NAN);
+            low.push(f64::NAN);
+            close.push(f64::NAN);
+            continue;
+        }
+        let base = 100.0 + f64::from(next() % 10_000) / 100.0;
+        let end = base + f64::from(next() % 2_000) / 100.0 - 10.0;
+        open.push(base);
+        high.push(base.max(end) + f64::from(next() % 500) / 100.0);
+        low.push(base.min(end) - f64::from(next() % 500) / 100.0);
+        close.push(end);
+    }
+    high[7_777] = 10_000.0;
+    low[13_333] = -10_000.0;
+    let mut data = DataLayer::new();
+    let id = data.add_series();
+    assert!(data.set_data(id, times, open, high, low, close));
+
+    for iteration in 0..200 {
+        let left = (next() as usize % (count - 2_000)) as i64;
+        let right = (left as usize + 1_000 + next() as usize % 1_000) as i64;
+        let bar_spacing = [0.0007, 0.0023, 0.007, 0.02][iteration % 4];
+        let hpr = [1.0, 1.25, 2.0][iteration % 3];
+        let offset = f64::from(next() % 1_000) / 1_000.0;
+        let x_at = |index: i64| index as f64 * bar_spacing * hpr + offset;
+        let plot = data.plot(id);
+
+        assert_eq!(
+            visible_ohlc(plot, left, right, bar_spacing, hpr, x_at),
+            visible_ohlc_raw_reference(plot, left, right, bar_spacing, hpr, x_at),
+            "OHLC mismatch at iteration {iteration}"
+        );
+        assert_eq!(
+            visible_line_rows(plot, left, right, bar_spacing, hpr, x_at),
+            visible_line_rows_raw_reference(plot, left, right, bar_spacing, hpr, x_at),
+            "line mismatch at iteration {iteration}"
+        );
+        assert_eq!(
+            visible_histogram_rows(plot, left, right, bar_spacing, hpr, x_at),
+            visible_histogram_rows_raw_reference(plot, left, right, bar_spacing, hpr, x_at),
+            "histogram mismatch at iteration {iteration}"
+        );
+    }
+
+    let plot = data.plot(id);
+    let mut work = DensityWork::default();
+    let rows = visible_ohlc_with_work(
+        plot,
+        0,
+        count as i64 - 1,
+        0.001,
+        1.0,
+        |index| index as f64 * 0.001,
+        &mut work,
+    );
+    assert!(work.selected_level > 0);
+    assert!(work.raw_rows + work.summary_nodes < count / 5);
+    assert!(rows.iter().any(|bar| bar.high == 10_000.0));
+    assert!(rows.iter().any(|bar| bar.low == -10_000.0));
+}
+
+#[test]
+fn hierarchical_density_preserves_sparse_series_and_long_whitespace_runs() {
+    let source_rows = 18_001usize;
+    let sparse_rows = 6_001usize;
+    let mut data = DataLayer::new();
+    let dense = data.add_series();
+    let sparse = data.add_series();
+    let dense_times = (0..source_rows as i64).collect::<Vec<_>>();
+    let dense_values = vec![1.0; source_rows];
+    assert!(data.set_data(
+        dense,
+        dense_times,
+        dense_values.clone(),
+        dense_values.clone(),
+        dense_values.clone(),
+        dense_values,
+    ));
+
+    let sparse_times = (0..sparse_rows as i64)
+        .map(|row| row * 3)
+        .collect::<Vec<_>>();
+    let mut sparse_values = (0..sparse_rows)
+        .map(|row| 100.0 + (row as f64 * 0.03).sin())
+        .collect::<Vec<_>>();
+    sparse_values[17] = f64::NAN;
+    sparse_values[1_000..2_000].fill(f64::NAN);
+    assert!(data.set_data(
+        sparse,
+        sparse_times,
+        sparse_values.clone(),
+        sparse_values.clone(),
+        sparse_values.clone(),
+        sparse_values,
+    ));
+    assert!(!data.series_memory_usage(sparse).unwrap().dense_index_view);
+
+    let plot = data.plot(sparse);
+    let from = 41;
+    let to = 17_963;
+    let spacing = 0.01;
+    let x_at = |index: i64| index as f64 * spacing + 0.37;
+    assert_eq!(
+        visible_ohlc(plot, from, to, spacing, 1.0, x_at),
+        visible_ohlc_raw_reference(plot, from, to, spacing, 1.0, x_at)
+    );
+    assert_eq!(
+        visible_line_rows(plot, from, to, spacing, 1.0, x_at),
+        visible_line_rows_raw_reference(plot, from, to, spacing, 1.0, x_at)
+    );
+    assert_eq!(
+        visible_histogram_rows(plot, from, to, spacing, 1.0, x_at),
+        visible_histogram_rows_raw_reference(plot, from, to, spacing, 1.0, x_at)
+    );
+}
+
+#[test]
+fn million_bar_full_view_bounds_density_work_for_frame_and_hit_test() {
+    let count = 1_000_000usize;
+    let times = (0..count).map(|row| row as f64).collect::<Vec<_>>();
+    let close = (0..count)
+        .map(|row| 100.0 + (row % 101) as f64 * 0.01)
+        .collect::<Vec<_>>();
+    let high = close.iter().map(|value| value + 0.5).collect::<Vec<_>>();
+    let low = close.iter().map(|value| value - 0.5).collect::<Vec<_>>();
+    let mut chart = ChartEngine::new(1_280.0, 720.0, 1.0);
+    chart
+        .set_series_data(0, &times, &close, &high, &low, &close)
+        .unwrap();
+    chart.time_scale.set_width(1_280.0);
+    chart.set_min_bar_spacing(0.000_001);
+    chart.set_visible_logical_range(0.0, count as f64 - 1.0);
+
+    let frame = chart.build_frame();
+    let work = chart.lod_work_stats();
+    assert_eq!(work.selected_level, 2);
+    assert!(work.raw_rows < 25_000, "{work:?}");
+    assert!(work.summary_nodes < 30_000, "{work:?}");
+    assert!(work.candidates <= 1_280 * 6, "{work:?}");
+    assert!(!frame.panes[0].main.is_empty());
+
+    let _ = chart.hit_test_one_series(0, 640.0, 360.0);
+    let hit_work = chart.lod_work_stats();
+    assert_eq!(hit_work.selected_level, 2);
+    assert!(hit_work.raw_rows < 25_000, "{hit_work:?}");
+    assert!(hit_work.summary_nodes < 30_000, "{hit_work:?}");
+
+    for appended in 0..32 {
+        let row = count + appended;
+        assert!(chart.update_series_bar(0, row as f64, [101.0, 101.5, 100.5, 101.25],));
+        assert!(chart
+            .data
+            .last_lod_update_nodes(0)
+            .is_some_and(|nodes| nodes <= 5));
+        chart.set_visible_logical_range(0.0, row as f64);
+        chart.build_frame();
+        let append_work = chart.lod_work_stats();
+        assert_eq!(append_work.selected_level, 2);
+        assert!(append_work.raw_rows < 25_000, "{append_work:?}");
+        assert!(append_work.summary_nodes < 30_000, "{append_work:?}");
+        assert!(append_work.candidates <= 1_280 * 6, "{append_work:?}");
+    }
 }
 
 fn crosshair_chart() -> ChartEngine {
@@ -2699,6 +2885,49 @@ fn retained_frame_matches_clean_rebuild_across_mutation_sequence() {
 
     chart.set_series_pane(added, 1, 1.0);
     assert_retained_frame_matches_clean_rebuild(&mut chart);
+}
+
+#[test]
+fn dense_retained_frame_matches_clean_rebuild_after_update_pan_and_zoom() {
+    let count = 20_000usize;
+    let times = (0..count).map(|row| row as f64).collect::<Vec<_>>();
+    let values = (0..count)
+        .map(|row| 100.0 + (row as f64 * 0.017).sin() * 8.0)
+        .collect::<Vec<_>>();
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart
+        .set_series_data(0, &times, &values, &values, &values, &values)
+        .unwrap();
+    let rsi = chart.add_rsi(0, 14).unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.set_min_bar_spacing(0.000_001);
+    chart.set_visible_logical_range(0.0, count as f64 - 1.0);
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+    assert!(chart.lod_work_stats().selected_level > 0);
+
+    assert!(chart.update_series_bar(0, count as f64 - 1.0, [103.0; 4]));
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+    assert!(chart
+        .data
+        .last_lod_update_nodes(0)
+        .is_some_and(|nodes| nodes <= 4));
+    assert!(chart
+        .data
+        .last_lod_update_nodes(rsi)
+        .is_some_and(|nodes| nodes <= 4));
+
+    chart.set_visible_logical_range(2_000.0, count as f64 - 2_000.0);
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+    chart.set_visible_logical_range(7_000.0, 13_000.0);
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+    chart.set_visible_logical_range(0.0, count as f64 - 1.0);
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+    chart.set_visible_logical_range(19_500.0, count as f64 - 1.0);
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+    assert_eq!(chart.lod_work_stats().selected_level, 0);
+    chart.set_visible_logical_range(0.0, count as f64 - 1.0);
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+    assert!(chart.lod_work_stats().selected_level > 0);
 }
 
 #[test]

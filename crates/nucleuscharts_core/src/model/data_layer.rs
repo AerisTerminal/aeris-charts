@@ -8,10 +8,12 @@
 //! scale even when their sample sets differ.
 
 use std::collections::HashMap;
+use std::ops::Range;
 use std::sync::OnceLock;
 
 use crate::helpers::algorithms::lower_bound;
 use crate::model::data_validation::is_whitespace_values;
+use crate::model::lod::LodPyramid;
 use crate::model::plot_list::{PlotList, PlotListView, PlotValueIndex, PlotValues};
 use crate::TimePointIndex;
 
@@ -233,6 +235,9 @@ struct RawSeries {
     rows_count_as_data: bool,
     /// Rebuilt against merged indices; keys are positions in `merged_times`.
     plot: PlotList,
+    /// Compact endpoint and extrema source-row identities used only for dense viewport queries.
+    lod: LodPyramid,
+    last_lod_update_nodes: usize,
     /// Changes on every accepted mutation of this series' canonical rows. Derived-data
     /// runtimes use it to reject incremental continuation from stale source state.
     generation: u64,
@@ -254,8 +259,22 @@ impl RawSeries {
             point_colors: [vec![], vec![], vec![]],
             rows_count_as_data: false,
             plot: PlotList::new(),
+            lod: LodPyramid::default(),
+            last_lod_update_nodes: 0,
             generation: 0,
         }
+    }
+
+    fn rebuild_lod(&mut self) {
+        self.lod.rebuild(self.values.view());
+        self.last_lod_update_nodes = self.lod.node_count();
+    }
+
+    fn rebuild_lod_range(&mut self, affected: Range<usize>) {
+        self.last_lod_update_nodes = self
+            .lod
+            .rebuild_range(self.values.view(), affected)
+            .nodes_updated;
     }
 }
 
@@ -281,6 +300,7 @@ pub struct DataLayerMemoryUsage {
     pub merged_time_bytes: usize,
     pub point_color_bytes: usize,
     pub autoscale_cache_bytes: usize,
+    pub lod_bytes: usize,
     pub scratch_capacity_bytes: usize,
     pub allocated_capacity_bytes: usize,
     pub aligned_series: usize,
@@ -294,6 +314,7 @@ pub struct SeriesMemoryUsage {
     pub canonical_value_bytes: usize,
     pub plot_index_bytes: usize,
     pub point_color_bytes: usize,
+    pub lod_bytes: usize,
     pub aligned_time_view: bool,
     pub dense_index_view: bool,
 }
@@ -306,6 +327,7 @@ impl DataLayerMemoryUsage {
             + self.merged_time_bytes
             + self.point_color_bytes
             + self.autoscale_cache_bytes
+            + self.lod_bytes
     }
 }
 
@@ -359,9 +381,11 @@ impl DataLayer {
                 .map(|colors| colors.len() * std::mem::size_of::<u32>())
                 .sum::<usize>();
             usage.autoscale_cache_bytes += series.plot.cache_payload_bytes();
+            usage.lod_bytes += series.lod.logical_bytes();
             usage.allocated_capacity_bytes += series.times.capacity() * std::mem::size_of::<i64>()
                 + series.values.capacity_bytes()
                 + series.plot.index_capacity_bytes()
+                + series.lod.capacity_bytes()
                 + series
                     .point_colors
                     .iter()
@@ -388,6 +412,7 @@ impl DataLayer {
                 .iter()
                 .map(|colors| colors.len() * std::mem::size_of::<u32>())
                 .sum(),
+            lod_bytes: series.lod.logical_bytes(),
             aligned_time_view: series.time_alias.is_some(),
             dense_index_view: series.plot.is_dense(),
         })
@@ -467,7 +492,11 @@ impl DataLayer {
     pub fn try_plot(&self, id: SeriesId) -> Option<PlotListView<'_>> {
         let slot = self.series_slot(id)?;
         let series = &self.series[slot];
-        Some(PlotListView::new(&series.plot, series.values.view()))
+        Some(PlotListView::with_lod(
+            &series.plot,
+            series.values.view(),
+            &series.lod,
+        ))
     }
 
     pub fn min_max_on_range_cached(
@@ -522,6 +551,15 @@ impl DataLayer {
 
     pub fn series_generation(&self, id: SeriesId) -> Option<u64> {
         Some(self.series.get(self.series_slot(id)?)?.generation)
+    }
+
+    #[doc(hidden)]
+    pub fn last_lod_update_nodes(&self, id: SeriesId) -> Option<usize> {
+        Some(
+            self.series
+                .get(self.series_slot(id)?)?
+                .last_lod_update_nodes,
+        )
     }
 
     /// Merged index of the last point that has data (the time-scale base index), or None.
@@ -587,6 +625,7 @@ impl DataLayer {
         s.times = times;
         s.time_alias = None;
         s.values = SeriesValues::Ohlc([open, high, low, close]);
+        s.rebuild_lod();
         s.point_colors = [vec![], vec![], vec![]];
         s.generation = s.generation.wrapping_add(1);
         self.rebuild_merged();
@@ -606,6 +645,7 @@ impl DataLayer {
         series.times = times;
         series.time_alias = None;
         series.values = SeriesValues::Single(values);
+        series.rebuild_lod();
         series.point_colors = [vec![], vec![], vec![]];
         series.generation = series.generation.wrapping_add(1);
         self.rebuild_merged();
@@ -647,6 +687,7 @@ impl DataLayer {
                 len: values.len(),
             });
             target.values = SeriesValues::Single(values);
+            target.rebuild_lod();
             target.point_colors = [vec![], vec![], vec![]];
             target.generation = target.generation.wrapping_add(1);
         }
@@ -705,6 +746,7 @@ impl DataLayer {
                 }
             }
             target.generation = target.generation.wrapping_add(1);
+            target.rebuild_lod_range(output_row..output_len);
         }
         self.copy_plot_range(target_slot, source_slot, alias.offset, output_len);
         Some(output_row)
@@ -807,7 +849,7 @@ impl DataLayer {
     /// The fast path (append at a new global max time, or replace an existing point) avoids a
     /// full rebuild.
     pub fn update(&mut self, id: SeriesId, time: i64, values: [f64; 4]) -> bool {
-        self.update_styled(id, time, values, [None; POINT_COLOR_CHANNELS])
+        self.update_styled_impl(id, time, values, [None; POINT_COLOR_CHANNELS], true)
     }
 
     /// [`update`] plus the target bar's per-point colors (reference `series.update` with data-item
@@ -822,6 +864,17 @@ impl DataLayer {
         values: [f64; 4],
         colors: [Option<u32>; POINT_COLOR_CHANNELS],
     ) -> bool {
+        self.update_styled_impl(id, time, values, colors, true)
+    }
+
+    fn update_styled_impl(
+        &mut self,
+        id: SeriesId,
+        time: i64,
+        values: [f64; 4],
+        colors: [Option<u32>; POINT_COLOR_CHANNELS],
+        update_lod: bool,
+    ) -> bool {
         let Some(slot) = self.materialize_time_alias(id) else {
             return false;
         };
@@ -833,7 +886,11 @@ impl DataLayer {
             self.merged_times.push(time);
             self.time_points_generation = self.time_points_generation.wrapping_add(1);
             let s = &mut self.series[slot];
+            let affected = s.values.len();
             push_raw(s, time, values, colors);
+            if update_lod {
+                s.rebuild_lod_range(affected..affected + 1);
+            }
             s.plot.upsert_last(new_index);
             s.generation = s.generation.wrapping_add(1);
             return true;
@@ -845,7 +902,7 @@ impl DataLayer {
         let existing = self.merged_times.binary_search(&time).ok();
         if let (Some(pos), true) = (existing, series_last.is_none_or(|lt| time >= lt)) {
             let s = &mut self.series[slot];
-            if series_last == Some(time) {
+            let affected = if series_last == Some(time) {
                 let row = s.times.len() - 1;
                 s.values.set_row(row, values);
                 for (channel, color) in s.point_colors.iter_mut().zip(colors) {
@@ -853,8 +910,14 @@ impl DataLayer {
                         channel[row] = color.unwrap_or(POINT_COLOR_ABSENT);
                     }
                 }
+                row
             } else {
+                let row = s.values.len();
                 push_raw(s, time, values, colors);
+                row
+            };
+            if update_lod {
+                s.rebuild_lod_range(affected..affected + 1);
             }
             s.plot.upsert_last(pos as TimePointIndex);
             s.generation = s.generation.wrapping_add(1);
@@ -864,12 +927,16 @@ impl DataLayer {
         // Case 3: insert into the middle of this series (and possibly the merged set) — rebuild.
         let s = &mut self.series[slot];
         let insert = lower_bound(&s.times, |&t| t < time);
-        if s.times.get(insert) == Some(&time) {
+        let inserted = s.times.get(insert) != Some(&time);
+        if !inserted {
             s.values.set_row(insert, values);
             for (channel, color) in s.point_colors.iter_mut().zip(colors) {
                 if !channel.is_empty() {
                     channel[insert] = color.unwrap_or(POINT_COLOR_ABSENT);
                 }
+            }
+            if update_lod {
+                s.rebuild_lod_range(insert..insert + 1);
             }
         } else {
             s.times.insert(insert, time);
@@ -878,6 +945,9 @@ impl DataLayer {
                 if !channel.is_empty() {
                     channel.insert(insert, color.unwrap_or(POINT_COLOR_ABSENT));
                 }
+            }
+            if update_lod {
+                s.rebuild_lod();
             }
         }
         s.generation = s.generation.wrapping_add(1);
@@ -919,7 +989,7 @@ impl DataLayer {
             .is_none_or(|&last| times[0] >= last)
         {
             for row in 0..times.len() {
-                self.update(
+                self.update_styled_impl(
                     id,
                     times[row],
                     [
@@ -928,8 +998,12 @@ impl DataLayer {
                         values[2][row],
                         values[3][row],
                     ],
+                    [None; POINT_COLOR_CHANNELS],
+                    false,
                 );
             }
+            let series = &mut self.series[slot];
+            series.rebuild_lod_range(affected..series.values.len());
             return Some(affected);
         }
 
@@ -938,6 +1012,9 @@ impl DataLayer {
             .filter(|time| self.merged_times.binary_search(time).is_err())
             .count();
         let old = &self.series[slot];
+        let timeline_shift = times
+            .iter()
+            .any(|time| old.times.binary_search(time).is_err());
         let old_values = old.values.columns();
         let capacity = old.times.len() + times.len();
         let mut merged_times = Vec::with_capacity(capacity);
@@ -985,6 +1062,16 @@ impl DataLayer {
         let series = &mut self.series[slot];
         series.times = merged_times;
         series.values = SeriesValues::Ohlc(merged_values);
+        if timeline_shift {
+            series.rebuild_lod();
+        } else {
+            let end = series
+                .times
+                .binary_search(times.last().expect("non-empty batch"))
+                .expect("replacement time remains installed")
+                + 1;
+            series.rebuild_lod_range(affected..end);
+        }
         series.point_colors = merged_colors;
         series.generation = series.generation.wrapping_add(times.len() as u64);
         self.rebuild_merged();
@@ -1017,8 +1104,10 @@ impl DataLayer {
             .is_none_or(|&last| times[0] >= last)
         {
             for (&time, &value) in times.iter().zip(values) {
-                self.update(id, time, [value; 4]);
+                self.update_styled_impl(id, time, [value; 4], [None; POINT_COLOR_CHANNELS], false);
             }
+            let series = &mut self.series[slot];
+            series.rebuild_lod_range(affected..series.values.len());
             return Some(affected);
         }
 
@@ -1027,6 +1116,9 @@ impl DataLayer {
             .filter(|time| self.merged_times.binary_search(time).is_err())
             .count();
         let old = &self.series[slot];
+        let timeline_shift = times
+            .iter()
+            .any(|time| old.times.binary_search(time).is_err());
         let old_values = old.values.columns()[3];
         let capacity = old.times.len() + times.len();
         let mut merged_times = Vec::with_capacity(capacity);
@@ -1069,6 +1161,16 @@ impl DataLayer {
         let series = &mut self.series[slot];
         series.times = merged_times;
         series.values = SeriesValues::Single(merged_values);
+        if timeline_shift {
+            series.rebuild_lod();
+        } else {
+            let end = series
+                .times
+                .binary_search(times.last().expect("non-empty batch"))
+                .expect("replacement time remains installed")
+                + 1;
+            series.rebuild_lod_range(affected..end);
+        }
         series.point_colors = merged_colors;
         series.generation = series.generation.wrapping_add(times.len() as u64);
         self.rebuild_merged();
@@ -1092,6 +1194,7 @@ impl DataLayer {
         }
         s.times.truncate(keep);
         s.values.truncate(keep);
+        s.rebuild_lod();
         for channel in &mut s.point_colors {
             if !channel.is_empty() {
                 channel.truncate(keep);
@@ -1121,6 +1224,7 @@ impl DataLayer {
         let s = &mut self.series[slot];
         s.times.drain(..drop);
         s.values.drain_front(drop);
+        s.rebuild_lod();
         for channel in &mut s.point_colors {
             if !channel.is_empty() {
                 channel.drain(..drop);
@@ -1244,6 +1348,103 @@ mod tests {
 
     fn indices(dl: &DataLayer, id: SeriesId) -> Vec<TimePointIndex> {
         dl.plot(id).indices().collect()
+    }
+
+    fn assert_lod_matches_fresh(dl: &DataLayer, id: SeriesId) {
+        let slot = dl.series_slot(id).unwrap();
+        let series = &dl.series[slot];
+        let values = series.values.view();
+        let mut fresh = LodPyramid::default();
+        fresh.rebuild(values);
+        let len = series.values.len();
+        for range in [0..len, len / 7..len * 6 / 7, len.saturating_sub(97)..len] {
+            let actual = series
+                .lod
+                .view(values)
+                .rows_on_range(range.clone(), usize::MAX)
+                .0
+                .iter()
+                .collect::<Vec<_>>();
+            let expected = fresh
+                .view(values)
+                .rows_on_range(range, usize::MAX)
+                .0
+                .iter()
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected);
+        }
+        assert_eq!(series.lod.logical_bytes(), fresh.logical_bytes());
+    }
+
+    #[test]
+    fn lod_tracks_batches_corrections_insertions_truncation_and_removal() {
+        let mut dl = DataLayer::new();
+        let id = dl.add_series();
+        let rows = 1_024usize;
+        let times = (0..rows).map(|row| row as i64 * 2).collect::<Vec<_>>();
+        let close = (0..rows)
+            .map(|row| 100.0 + (row as f64 * 0.07).sin())
+            .collect::<Vec<_>>();
+        let open = close.iter().map(|value| value - 0.1).collect();
+        let high = close.iter().map(|value| value + 0.5).collect();
+        let low = close.iter().map(|value| value - 0.5).collect();
+        assert!(dl.set_data(id, times, open, high, low, close));
+        assert_lod_matches_fresh(&dl, id);
+
+        let last_time = (rows as i64 - 1) * 2;
+        assert!(dl.update(id, last_time, [101.0, 200.0, -100.0, 102.0]));
+        assert!(dl.last_lod_update_nodes(id).unwrap() <= 4);
+        assert_lod_matches_fresh(&dl, id);
+
+        assert!(dl.update(id, last_time + 2, [102.0, 103.0, 101.0, 102.5]));
+        assert!(dl.last_lod_update_nodes(id).unwrap() <= 4);
+        assert_lod_matches_fresh(&dl, id);
+
+        let batch_times = (1..=100)
+            .map(|row| last_time + 2 + row * 2)
+            .collect::<Vec<_>>();
+        let batch_close = (0..100)
+            .map(|row| 103.0 + row as f64 * 0.01)
+            .collect::<Vec<_>>();
+        let batch_open = batch_close.clone();
+        let batch_high = batch_close
+            .iter()
+            .map(|value| value + 0.2)
+            .collect::<Vec<_>>();
+        let batch_low = batch_close
+            .iter()
+            .map(|value| value - 0.2)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            dl.update_many(
+                id,
+                &batch_times,
+                [&batch_open, &batch_high, &batch_low, &batch_close],
+            ),
+            Some(rows + 1)
+        );
+        assert!(dl.last_lod_update_nodes(id).unwrap() < batch_times.len());
+        assert_lod_matches_fresh(&dl, id);
+
+        assert!(dl.update(id, 400, [100.0, 500.0, -500.0, 101.0]));
+        assert!(dl.last_lod_update_nodes(id).unwrap() <= 4);
+        assert_lod_matches_fresh(&dl, id);
+
+        assert!(dl.update(id, 401, [100.0, 101.0, 99.0, 100.5]));
+        assert_lod_matches_fresh(&dl, id);
+
+        assert_eq!(dl.pop(id, 37), Some(rows + 102 - 37));
+        assert_lod_matches_fresh(&dl, id);
+        assert_eq!(dl.trim_front(id, 500), Some(500));
+        assert_lod_matches_fresh(&dl, id);
+
+        let replacement_times = (0..300).map(|row| row as i64 * 3).collect::<Vec<_>>();
+        let replacement = (0..300).map(|row| row as f64).collect::<Vec<_>>();
+        assert!(dl.set_single_data(id, replacement_times, replacement));
+        assert_lod_matches_fresh(&dl, id);
+        assert!(dl.memory_usage().lod_bytes > 0);
+        assert!(dl.remove_series(id));
+        assert_eq!(dl.memory_usage().lod_bytes, 0);
     }
 
     #[test]

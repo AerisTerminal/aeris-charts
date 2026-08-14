@@ -280,6 +280,7 @@ fn memory_density_rows() -> Vec<serde_json::Value> {
                 "source_time_bytes": source.owned_time_bytes,
                 "canonical_source_value_bytes": source.canonical_value_bytes,
                 "canonical_value_bytes": memory.data.canonical_value_bytes,
+                "lod_bytes": memory.data.lod_bytes,
                 "derived_output_bytes": memory.data.canonical_value_bytes - source.canonical_value_bytes,
                 "index_bytes": memory.data.plot_index_bytes,
                 "merged_time_bytes": memory.data.merged_time_bytes,
@@ -366,6 +367,7 @@ fn multi_series_memory_rows() -> Vec<serde_json::Value> {
                 "alignment": if aligned { "aligned" } else { "independent" },
                 "rows_per_series": points,
                 "canonical_value_bytes": memory.data.canonical_value_bytes,
+                "lod_bytes": memory.data.lod_bytes,
                 "owned_time_bytes": memory.data.owned_time_bytes,
                 "merged_time_bytes": memory.data.merged_time_bytes,
                 "index_bytes": memory.data.plot_index_bytes,
@@ -454,12 +456,17 @@ fn retention_and_lifecycle() -> serde_json::Value {
     })
 }
 
-fn dense_upload_breakdown() -> serde_json::Value {
+fn dense_upload_breakdown(full_history: bool) -> serde_json::Value {
     let columns = generate(1_000_000, SEED);
     let mut chart = ChartEngine::new(1280.0, 720.0, 1.0);
     install(&mut chart, &columns);
+    if full_history {
+        chart.set_min_bar_spacing(1280.0 / columns.times.len() as f64 / 2.0);
+        chart.set_visible_logical_range(0.0, columns.times.len() as f64 - 1.0);
+    }
     let mut frame = ChartFrame::default();
     chart.build_frame_into(&mut frame);
+    let lod_work = chart.lod_work_stats();
     let time = *columns.times.last().unwrap();
     let close = *columns.close.last().unwrap();
     chart.update_series_bar(0, time, [close, close + 0.2, close - 0.2, close]);
@@ -497,7 +504,193 @@ fn dense_upload_breakdown() -> serde_json::Value {
         "quad_bytes": quad_bytes,
         "textured_bytes": textured_bytes,
         "total_bytes": triangle_bytes + quad_bytes + textured_bytes,
+        "selected_lod_level": lod_work.selected_level,
+        "summary_operations": lod_work.summary_nodes,
+        "raw_rows_inspected": lod_work.raw_rows,
     })
+}
+
+fn percentiles(mut samples: Vec<f64>) -> serde_json::Value {
+    samples.sort_by(f64::total_cmp);
+    let at = |quantile: f64| {
+        let index = ((samples.len() as f64 * quantile).ceil() as usize)
+            .saturating_sub(1)
+            .min(samples.len() - 1);
+        samples[index]
+    };
+    json!({ "p50": at(0.50), "p95": at(0.95), "p99": at(0.99) })
+}
+
+fn dense_complexity_rows() -> Vec<serde_json::Value> {
+    let mut rows = Vec::new();
+    for points in [10_000, 100_000, 500_000, 1_000_000] {
+        let columns = generate(points, SEED);
+        for series_count in [1, 4, 8] {
+            for (zoom, visible_points) in [
+                ("normal", points.min(500)),
+                ("moderate", points.min(50_000)),
+                ("full", points),
+            ] {
+                if series_count > 1 && zoom != "full" {
+                    continue;
+                }
+                let mut chart = ChartEngine::new(1280.0, 720.0, 1.0);
+                chart.set_min_bar_spacing(1280.0 / points as f64 / 2.0);
+                let mut ids = vec![0];
+                ids.extend(
+                    (1..series_count)
+                        .map(|_| chart.add_series(nucleuscharts_engine::SeriesKind::Candlestick)),
+                );
+                for &id in &ids {
+                    install_series(&mut chart, id, &columns, 0.0);
+                }
+                chart.time_scale.set_width(1280.0);
+                chart.fit_content();
+                let start = (points - visible_points) / 2;
+                let end = start + visible_points - 1;
+                chart.set_visible_logical_range(start as f64, end as f64);
+                let mut frame = ChartFrame::default();
+                chart.build_frame_into(&mut frame);
+                let lod_work = chart.lod_work_stats();
+
+                let (from, to) = chart.visible_range().expect("installed range is visible");
+                let visible_source_rows = ids
+                    .iter()
+                    .map(|&id| chart.data_layer().plot(id).visible_rows(from, to).len())
+                    .sum::<usize>();
+                let primitive_count = chart
+                    .frame_series_segments(0)
+                    .iter()
+                    .map(|segment| segment.end - segment.start)
+                    .sum::<usize>();
+
+                let mut frame_ms = Vec::with_capacity(MEASURED_RUNS);
+                let mut pan_ms = Vec::with_capacity(MEASURED_RUNS);
+                let mut zoom_ms = Vec::with_capacity(MEASURED_RUNS);
+                let mut crosshair_us = Vec::with_capacity(MEASURED_RUNS);
+                let mut hit_test_us = Vec::with_capacity(MEASURED_RUNS);
+                for run in 0..MEASURED_RUNS {
+                    let fractional = if run % 2 == 0 { 0.0 } else { 0.25 };
+                    let started = Instant::now();
+                    chart.set_visible_logical_range(
+                        start as f64 + fractional,
+                        end as f64 + fractional,
+                    );
+                    chart.build_frame_into(&mut frame);
+                    frame_ms.push(started.elapsed().as_secs_f64() * 1_000.0);
+
+                    let shift = if run % 2 == 0 { -3.0 } else { 3.0 };
+                    let started = Instant::now();
+                    chart.set_visible_logical_range(start as f64 + shift, end as f64 + shift);
+                    chart.build_frame_into(&mut frame);
+                    pan_ms.push(started.elapsed().as_secs_f64() * 1_000.0);
+
+                    let zoom_delta = visible_points as f64 * 0.01;
+                    let started = Instant::now();
+                    chart.set_visible_logical_range(
+                        start as f64 - zoom_delta,
+                        end as f64 + zoom_delta,
+                    );
+                    chart.build_frame_into(&mut frame);
+                    zoom_ms.push(started.elapsed().as_secs_f64() * 1_000.0);
+
+                    let started = Instant::now();
+                    chart.set_crosshair_at(640.0 + f64::from(run as u32 % 7), 360.0);
+                    chart.build_frame_into(&mut frame);
+                    crosshair_us.push(started.elapsed().as_secs_f64() * 1_000_000.0);
+
+                    let started = Instant::now();
+                    let _ = chart.hit_test_one_series(0, 640.0, 360.0);
+                    hit_test_us.push(started.elapsed().as_secs_f64() * 1_000_000.0);
+                }
+                chart.set_visible_logical_range(start as f64, end as f64);
+                chart.build_frame_into(&mut frame);
+                let last_time = *columns.times.last().expect("fixture is non-empty");
+                let last_close = *columns.close.last().expect("fixture is non-empty");
+                let started = Instant::now();
+                assert!(chart.update_series_bar(
+                    0,
+                    last_time,
+                    [last_close, last_close + 0.25, last_close - 0.25, last_close],
+                ));
+                let current_update_us = started.elapsed().as_secs_f64() * 1_000_000.0;
+                let lod_nodes_updated = chart
+                    .data_layer()
+                    .last_lod_update_nodes(0)
+                    .expect("source exists");
+                let started = Instant::now();
+                chart.build_frame_into(&mut frame);
+                let current_frame_ms = started.elapsed().as_secs_f64() * 1_000.0;
+                let current_lod_work = chart.lod_work_stats();
+                rows.push(json!({
+                    "rows": points,
+                    "visible_rows": visible_points,
+                    "series_count": series_count,
+                    "viewport_width": 1280,
+                    "zoom": zoom,
+                    "visible_source_rows": visible_source_rows,
+                    "source_rows_inspected": lod_work.raw_rows,
+                    "selected_lod_level": lod_work.selected_level,
+                    "summary_operations": lod_work.summary_nodes,
+                    "lod_candidates": lod_work.candidates,
+                    "primitive_count": primitive_count,
+                    "frame_ms": percentiles(frame_ms),
+                    "pan_ms": percentiles(pan_ms),
+                    "zoom_ms": percentiles(zoom_ms),
+                    "crosshair_us": percentiles(crosshair_us),
+                    "hit_test_us": percentiles(hit_test_us),
+                    "current_update_us": current_update_us,
+                    "current_lod_nodes_updated": lod_nodes_updated,
+                    "current_frame_ms": current_frame_ms,
+                    "current_summary_operations": current_lod_work.summary_nodes,
+                    "current_raw_rows_inspected": current_lod_work.raw_rows,
+                }));
+            }
+        }
+    }
+    rows
+}
+
+fn dense_width_rows() -> Vec<serde_json::Value> {
+    let mut rows = Vec::new();
+    for points in [1_000, 10_000, 50_000, 100_000, 500_000, 1_000_000] {
+        let columns = generate(points, SEED);
+        for viewport_width in [800, 1_280, 1_920, 3_840] {
+            let width = f64::from(viewport_width);
+            let mut chart = ChartEngine::new(width, 720.0, 1.0);
+            install(&mut chart, &columns);
+            chart.time_scale.set_width(width);
+            chart.set_min_bar_spacing(width / points as f64 / 2.0);
+            chart.set_visible_logical_range(0.0, points as f64 - 1.0);
+            let mut frame = ChartFrame::default();
+            chart.build_frame_into(&mut frame);
+            let work = chart.lod_work_stats();
+            let primitive_count = chart
+                .frame_series_segments(0)
+                .iter()
+                .map(|segment| segment.end - segment.start)
+                .sum::<usize>();
+            let mut frame_ms = Vec::with_capacity(5);
+            for run in 0..5 {
+                let offset = if run % 2 == 0 { 0.0 } else { 0.25 };
+                let started = Instant::now();
+                chart.set_visible_logical_range(offset, points as f64 - 1.0 + offset);
+                chart.build_frame_into(&mut frame);
+                frame_ms.push(started.elapsed().as_secs_f64() * 1_000.0);
+            }
+            rows.push(json!({
+                "rows": points,
+                "viewport_width": viewport_width,
+                "selected_lod_level": work.selected_level,
+                "summary_operations": work.summary_nodes,
+                "raw_rows_inspected": work.raw_rows,
+                "lod_candidates": work.candidates,
+                "primitive_count": primitive_count,
+                "frame_ms": percentiles(frame_ms),
+            }));
+        }
+    }
+    rows
 }
 
 fn main() {
@@ -555,7 +748,10 @@ fn main() {
             "multi_series_memory": multi_series_memory_rows(),
             "multi_chart_memory": multi_chart_memory_rows(),
             "retention_and_lifecycle": retention_and_lifecycle(),
-            "dense_upload": dense_upload_breakdown(),
+            "dense_upload": dense_upload_breakdown(false),
+            "full_history_dense_upload": dense_upload_breakdown(true),
+            "dense_complexity": dense_complexity_rows(),
+            "dense_width_matrix": dense_width_rows(),
         }))
         .expect("JSON serializes")
     );

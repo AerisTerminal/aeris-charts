@@ -146,13 +146,21 @@ impl ChartEngine {
         scale: &nucleuscharts_core::scale::price_scale_core::PriceScaleCore,
     ) {
         let plot = self.data.plot(rs.id);
-        let visible = visible_ohlc(
+        let mut work = conflation::DensityWork::default();
+        let visible = visible_ohlc_with_work(
             plot,
             from,
             to,
             self.time_scale.bar_spacing(),
             hpr,
             |index| self.time_scale.index_to_coordinate(index) * hpr,
+            &mut work,
+        );
+        self.record_lod_work(
+            work.selected_level,
+            work.summary_nodes,
+            work.raw_rows,
+            work.candidates,
         );
         let point_colors = self.data.point_colors(rs.id);
         let items = visible
@@ -215,13 +223,21 @@ impl ChartEngine {
         scale: &nucleuscharts_core::scale::price_scale_core::PriceScaleCore,
     ) {
         let plot = self.data.plot(rs.id);
-        let visible = visible_ohlc(
+        let mut work = conflation::DensityWork::default();
+        let visible = visible_ohlc_with_work(
             plot,
             from,
             to,
             self.time_scale.bar_spacing(),
             hpr,
             |index| self.time_scale.index_to_coordinate(index) * hpr,
+            &mut work,
+        );
+        self.record_lod_work(
+            work.selected_level,
+            work.summary_nodes,
+            work.raw_rows,
+            work.candidates,
         );
         let point_colors = self.data.point_colors(rs.id);
         let items = visible
@@ -285,13 +301,21 @@ impl ChartEngine {
         let histogram_updown = self
             .series_entry(rs.id)
             .is_some_and(|series| series.histogram_updown);
-        let visible = visible_histogram_rows(
+        let mut work = conflation::DensityWork::default();
+        let visible = visible_histogram_rows_with_work(
             plot,
             from,
             to,
             self.time_scale.bar_spacing(),
             hpr,
             |index| self.time_scale.index_to_coordinate(index) * hpr,
+            &mut work,
+        );
+        self.record_lod_work(
+            work.selected_level,
+            work.summary_nodes,
+            work.raw_rows,
+            work.candidates,
         );
         let items = visible
             .into_iter()
@@ -365,13 +389,21 @@ impl ChartEngine {
     ) {
         let plot = self.data.plot(rs.id);
         let c = plot.column(PlotValueIndex::Close);
-        let rows = visible_line_rows(
+        let mut work = conflation::DensityWork::default();
+        let rows = visible_line_rows_with_work(
             plot,
             from,
             to,
             self.time_scale.bar_spacing(),
             hpr,
             |index| self.time_scale.index_to_coordinate(index) * hpr,
+            &mut work,
+        );
+        self.record_lod_work(
+            work.selected_level,
+            work.summary_nodes,
+            work.raw_rows,
+            work.candidates,
         );
         let mut row_points: Vec<[f32; 2]> = Vec::with_capacity(rows.len());
         for &r in &rows {
@@ -404,13 +436,21 @@ impl ChartEngine {
         if let Some(lower_id) = self.bollinger_fill_companion(rs.id) {
             let lower_plot = self.data.plot(lower_id);
             let lower_close = lower_plot.column(PlotValueIndex::Close);
-            let lower_rows = visible_line_rows(
+            let mut work = conflation::DensityWork::default();
+            let lower_rows = visible_line_rows_with_work(
                 lower_plot,
                 from,
                 to,
                 self.time_scale.bar_spacing(),
                 hpr,
                 |index| self.time_scale.index_to_coordinate(index) * hpr,
+                &mut work,
+            );
+            self.record_lod_work(
+                work.selected_level,
+                work.summary_nodes,
+                work.raw_rows,
+                work.candidates,
             );
             if lower_rows.len() == rows.len() && rows.len() >= 2 {
                 let upper_first = points.len() as u32;

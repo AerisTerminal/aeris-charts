@@ -283,6 +283,7 @@ impl ChartEngine {
     /// removed, pane-less, or unscaled series, or a miss. Per-kind geometry and tolerances
     /// are the reference ports documented at the module level.
     pub fn hit_test_one_series(&self, id: SeriesId, x_css: f64, y_css: f64) -> Option<SeriesHit> {
+        self.reset_lod_work();
         if !x_css.is_finite() || !y_css.is_finite() {
             return None;
         }
@@ -304,70 +305,98 @@ impl ChartEngine {
         let hpr = (self.pane_w * self.dpr.max(0.01)).round().max(1.0) / self.pane_w.max(1.0);
         let result = match series.kind {
             SeriesKind::Candlestick | SeriesKind::Bar => {
-                let items = crate::frame::conflation::visible_ohlc(
+                let mut work = crate::frame::conflation::DensityWork::default();
+                let visible = crate::frame::conflation::visible_ohlc_with_work(
                     plot,
                     from,
                     to,
                     bar_spacing,
                     hpr,
                     |index| self.time_scale.index_to_coordinate(index) * hpr,
-                )
-                .into_iter()
-                .map(|bar| {
-                    (
-                        bar.x_px / hpr,
-                        bar.geometry_time,
-                        scale.price_to_coordinate(bar.high, base_value),
-                        scale.price_to_coordinate(bar.low, base_value),
-                    )
-                })
-                .collect::<Vec<_>>();
+                    &mut work,
+                );
+                self.record_lod_work(
+                    work.selected_level,
+                    work.summary_nodes,
+                    work.raw_rows,
+                    work.candidates,
+                );
+                let items = visible
+                    .into_iter()
+                    .map(|bar| {
+                        (
+                            bar.x_px / hpr,
+                            bar.geometry_time,
+                            scale.price_to_coordinate(bar.high, base_value),
+                            scale.price_to_coordinate(bar.low, base_value),
+                        )
+                    })
+                    .collect::<Vec<_>>();
                 hit_test_series_range(&items, x_css, y_css, bar_spacing, HIT_TEST_TOLERANCE)
                     .map(|distance| (distance, SeriesHitKind::Range))
             }
             SeriesKind::Histogram => {
                 let base_y = scale.price_to_coordinate(series.base, base_value);
                 let close = plot.column(PlotValueIndex::Close);
-                let items = crate::frame::conflation::visible_histogram_rows(
+                let mut work = crate::frame::conflation::DensityWork::default();
+                let visible = crate::frame::conflation::visible_histogram_rows_with_work(
                     plot,
                     from,
                     to,
                     bar_spacing,
                     hpr,
                     |index| self.time_scale.index_to_coordinate(index) * hpr,
-                )
-                .into_iter()
-                .map(|item| {
-                    (
-                        item.x_px / hpr,
-                        item.geometry_time,
-                        scale.price_to_coordinate(close[item.source_row], base_value),
-                        base_y,
-                    )
-                })
-                .collect::<Vec<_>>();
+                    &mut work,
+                );
+                self.record_lod_work(
+                    work.selected_level,
+                    work.summary_nodes,
+                    work.raw_rows,
+                    work.candidates,
+                );
+                let items = visible
+                    .into_iter()
+                    .map(|item| {
+                        (
+                            item.x_px / hpr,
+                            item.geometry_time,
+                            scale.price_to_coordinate(close[item.source_row], base_value),
+                            base_y,
+                        )
+                    })
+                    .collect::<Vec<_>>();
                 hit_test_series_range(&items, x_css, y_css, bar_spacing, HIT_TEST_TOLERANCE)
                     .map(|distance| (distance, SeriesHitKind::Range))
             }
             SeriesKind::Line | SeriesKind::Area | SeriesKind::Baseline => {
                 let close = plot.column(PlotValueIndex::Close);
-                let points = crate::frame::conflation::visible_line_rows(
+                let mut work = crate::frame::conflation::DensityWork::default();
+                let visible = crate::frame::conflation::visible_line_rows_with_work(
                     plot,
                     from,
                     to,
                     bar_spacing,
                     hpr,
                     |index| self.time_scale.index_to_coordinate(index) * hpr,
-                )
-                .into_iter()
-                .map(|row| {
-                    (
-                        self.time_scale
-                            .index_to_coordinate(plot.index_at(row).expect("hit-test row index")),
-                        scale.price_to_coordinate(close[row], base_value),
-                    )
-                })
-                .collect::<Vec<_>>();
+                    &mut work,
+                );
+                self.record_lod_work(
+                    work.selected_level,
+                    work.summary_nodes,
+                    work.raw_rows,
+                    work.candidates,
+                );
+                let points = visible
+                    .into_iter()
+                    .map(|row| {
+                        (
+                            self.time_scale.index_to_coordinate(
+                                plot.index_at(row).expect("hit-test row index"),
+                            ),
+                            scale.price_to_coordinate(close[row], base_value),
+                        )
+                    })
+                    .collect::<Vec<_>>();
                 // reference line-hit-test-pane-view-base.ts: width 1 when the stroke is hidden;
                 // point markers join with their resolved radius (default lineWidth/2 + 2).
                 let line_width = if series.line_visible {

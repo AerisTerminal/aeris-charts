@@ -3,27 +3,123 @@
 
 use super::*;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct DensityWork {
+    pub(crate) selected_level: usize,
+    pub(crate) summary_nodes: usize,
+    pub(crate) raw_rows: usize,
+    pub(crate) candidates: usize,
+}
+
+fn density_rows(
+    plot: PlotListView<'_>,
+    from: i64,
+    to: i64,
+    bar_spacing: f64,
+    hpr: f64,
+    x_at: &impl Fn(i64) -> f64,
+    use_lod: bool,
+) -> (Vec<usize>, DensityWork) {
+    let spacing = bar_spacing * hpr;
+    let raw = || {
+        let range = plot.visible_rows(from, to);
+        let raw_rows = range.len();
+        let rows = range
+            .filter(|&row| !plot.is_whitespace_row(row))
+            .collect::<Vec<_>>();
+        let candidates = rows.len();
+        (
+            rows,
+            DensityWork {
+                raw_rows,
+                candidates,
+                ..DensityWork::default()
+            },
+        )
+    };
+    if !use_lod || spacing >= 1.0 || !spacing.is_finite() || spacing <= 0.0 {
+        return raw();
+    }
+    let Some(lod) = plot.lod() else {
+        return raw();
+    };
+    let level = lod.selected_level(1.0 / spacing);
+    if level == 0 {
+        return raw();
+    }
+
+    let x_zero = x_at(0);
+    let first_bucket = x_at(from).floor() as i64;
+    let last_bucket = x_at(to).floor() as i64;
+    let mut output = Vec::with_capacity((last_bucket - first_bucket + 1).max(0) as usize * 6);
+    let mut work = DensityWork {
+        selected_level: level,
+        ..DensityWork::default()
+    };
+    for bucket in first_bucket..=last_bucket {
+        let mut logical_start = (((bucket as f64 - x_zero) / spacing).ceil() as i64).max(from);
+        while logical_start <= to && (x_at(logical_start).floor() as i64) < bucket {
+            logical_start += 1;
+        }
+        while logical_start > from && (x_at(logical_start - 1).floor() as i64) >= bucket {
+            logical_start -= 1;
+        }
+        let mut logical_end =
+            ((((bucket + 1) as f64 - x_zero) / spacing).ceil() as i64 - 1).min(to);
+        while logical_end >= logical_start && (x_at(logical_end).floor() as i64) > bucket {
+            logical_end -= 1;
+        }
+        while logical_end < to && (x_at(logical_end + 1).floor() as i64) <= bucket {
+            logical_end += 1;
+        }
+        if logical_start > logical_end {
+            continue;
+        }
+        let range = plot.visible_rows(logical_start, logical_end);
+        let (rows, stats) = lod.rows_on_range(range, level);
+        work.summary_nodes += stats.summary_nodes;
+        work.raw_rows += stats.raw_rows;
+        output.extend(rows.iter());
+    }
+    work.candidates = output.len();
+    (output, work)
+}
+
 /// Pick a bounded set of rows when several source points occupy the same physical x pixel.
 ///
 /// The normal-spacing path remains unchanged. Once the source spacing drops below one physical
 /// pixel, each bucket keeps its first/last rows plus the close extrema, preserving the visible
 /// envelope and the line's endpoints while avoiding an O(number-of-source-points) draw list.
-pub(crate) fn visible_line_rows(
+pub(crate) fn visible_line_rows_with_work(
     plot: PlotListView<'_>,
     from: i64,
     to: i64,
     bar_spacing: f64,
     hpr: f64,
     x_at: impl Fn(i64) -> f64,
+    work: &mut DensityWork,
+) -> Vec<usize> {
+    visible_line_rows_policy(plot, from, to, bar_spacing, hpr, x_at, work, true)
+}
+
+#[allow(clippy::too_many_arguments)] // production arguments plus the test-only raw/LOD policy seam
+fn visible_line_rows_policy(
+    plot: PlotListView<'_>,
+    from: i64,
+    to: i64,
+    bar_spacing: f64,
+    hpr: f64,
+    x_at: impl Fn(i64) -> f64,
+    work: &mut DensityWork,
+    use_lod: bool,
 ) -> Vec<usize> {
     // Whitespace rows (reference `{time}`-only items) draw nothing: dropping them here leaves the
     // surrounding real bars adjacent in the result, so the line connects across the gap
     // exactly like the reference's whitespace-free plot list.
-    let visible = plot
-        .visible_rows(from, to)
-        .filter(|&row| !plot.is_whitespace_row(row));
+    let (visible, measured) = density_rows(plot, from, to, bar_spacing, hpr, &x_at, use_lod);
+    *work = measured;
     if bar_spacing * hpr >= 1.0 {
-        return visible.collect();
+        return visible;
     }
 
     let close = plot.column(PlotValueIndex::Close);
@@ -67,6 +163,46 @@ pub(crate) fn visible_line_rows(
     out
 }
 
+#[cfg(test)]
+pub(crate) fn visible_line_rows_raw_reference(
+    plot: PlotListView<'_>,
+    from: i64,
+    to: i64,
+    bar_spacing: f64,
+    hpr: f64,
+    x_at: impl Fn(i64) -> f64,
+) -> Vec<usize> {
+    visible_line_rows_policy(
+        plot,
+        from,
+        to,
+        bar_spacing,
+        hpr,
+        x_at,
+        &mut DensityWork::default(),
+        false,
+    )
+}
+
+pub(crate) fn visible_line_rows(
+    plot: PlotListView<'_>,
+    from: i64,
+    to: i64,
+    bar_spacing: f64,
+    hpr: f64,
+    x_at: impl Fn(i64) -> f64,
+) -> Vec<usize> {
+    visible_line_rows_with_work(
+        plot,
+        from,
+        to,
+        bar_spacing,
+        hpr,
+        x_at,
+        &mut DensityWork::default(),
+    )
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct VisibleOhlc {
     /// Physical-pixel x coordinate. Aggregated buckets are pinned to their integer pixel so
@@ -90,13 +226,28 @@ pub(crate) struct VisibleOhlc {
 /// Each compressed bucket is itself a valid OHLC bar: first open, maximum high, minimum low, and
 /// last close. At normal spacing this is an identity transform, apart from copying the visible
 /// values into the small frame-local item list required by the render geometry builders.
-pub(crate) fn visible_ohlc(
+pub(crate) fn visible_ohlc_with_work(
     plot: PlotListView<'_>,
     from: i64,
     to: i64,
     bar_spacing: f64,
     hpr: f64,
     x_at: impl Fn(i64) -> f64,
+    work: &mut DensityWork,
+) -> Vec<VisibleOhlc> {
+    visible_ohlc_policy(plot, from, to, bar_spacing, hpr, x_at, work, true)
+}
+
+#[allow(clippy::too_many_arguments)] // production arguments plus the test-only raw/LOD policy seam
+fn visible_ohlc_policy(
+    plot: PlotListView<'_>,
+    from: i64,
+    to: i64,
+    bar_spacing: f64,
+    hpr: f64,
+    x_at: impl Fn(i64) -> f64,
+    work: &mut DensityWork,
+    use_lod: bool,
 ) -> Vec<VisibleOhlc> {
     let open = plot.column(PlotValueIndex::Open);
     let high = plot.column(PlotValueIndex::High);
@@ -104,12 +255,12 @@ pub(crate) fn visible_ohlc(
     let close = plot.column(PlotValueIndex::Close);
     // Whitespace rows draw nothing (the reference's plot list omits them); a compressed bucket only
     // ever aggregates real bars, so no NaN can leak into an extremum or the bucket close.
-    let visible = plot
-        .visible_rows(from, to)
-        .filter(|&row| !plot.is_whitespace_row(row));
+    let (visible, measured) = density_rows(plot, from, to, bar_spacing, hpr, &x_at, use_lod);
+    *work = measured;
 
     if bar_spacing * hpr >= 1.0 {
         return visible
+            .into_iter()
             .map(|row| VisibleOhlc {
                 x_px: x_at(plot.index_at(row).expect("visible row index")),
                 open: open[row],
@@ -161,6 +312,46 @@ pub(crate) fn visible_ohlc(
     out
 }
 
+#[cfg(test)]
+pub(crate) fn visible_ohlc_raw_reference(
+    plot: PlotListView<'_>,
+    from: i64,
+    to: i64,
+    bar_spacing: f64,
+    hpr: f64,
+    x_at: impl Fn(i64) -> f64,
+) -> Vec<VisibleOhlc> {
+    visible_ohlc_policy(
+        plot,
+        from,
+        to,
+        bar_spacing,
+        hpr,
+        x_at,
+        &mut DensityWork::default(),
+        false,
+    )
+}
+
+pub(crate) fn visible_ohlc(
+    plot: PlotListView<'_>,
+    from: i64,
+    to: i64,
+    bar_spacing: f64,
+    hpr: f64,
+    x_at: impl Fn(i64) -> f64,
+) -> Vec<VisibleOhlc> {
+    visible_ohlc_with_work(
+        plot,
+        from,
+        to,
+        bar_spacing,
+        hpr,
+        x_at,
+        &mut DensityWork::default(),
+    )
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct VisibleHistogramRow {
     pub(crate) x_px: f64,
@@ -173,21 +364,36 @@ pub(crate) struct VisibleHistogramRow {
 /// Select one conservative histogram sample per physical pixel, retaining the value with the
 /// greatest magnitude so a volume/value spike cannot disappear merely because the scale is
 /// compressed. The selected source row also carries its source up/down color classification.
-pub(crate) fn visible_histogram_rows(
+pub(crate) fn visible_histogram_rows_with_work(
     plot: PlotListView<'_>,
     from: i64,
     to: i64,
     bar_spacing: f64,
     hpr: f64,
     x_at: impl Fn(i64) -> f64,
+    work: &mut DensityWork,
+) -> Vec<VisibleHistogramRow> {
+    visible_histogram_rows_policy(plot, from, to, bar_spacing, hpr, x_at, work, true)
+}
+
+#[allow(clippy::too_many_arguments)] // production arguments plus the test-only raw/LOD policy seam
+fn visible_histogram_rows_policy(
+    plot: PlotListView<'_>,
+    from: i64,
+    to: i64,
+    bar_spacing: f64,
+    hpr: f64,
+    x_at: impl Fn(i64) -> f64,
+    work: &mut DensityWork,
+    use_lod: bool,
 ) -> Vec<VisibleHistogramRow> {
     let close = plot.column(PlotValueIndex::Close);
     // Whitespace rows draw nothing (the reference's plot list omits them).
-    let visible = plot
-        .visible_rows(from, to)
-        .filter(|&row| !plot.is_whitespace_row(row));
+    let (visible, measured) = density_rows(plot, from, to, bar_spacing, hpr, &x_at, use_lod);
+    *work = measured;
     if bar_spacing * hpr >= 1.0 {
         return visible
+            .into_iter()
             .map(|source_row| VisibleHistogramRow {
                 x_px: x_at(plot.index_at(source_row).expect("visible row index")),
                 source_row,
@@ -213,4 +419,44 @@ pub(crate) fn visible_histogram_rows(
         }
     }
     out
+}
+
+#[cfg(test)]
+pub(crate) fn visible_histogram_rows_raw_reference(
+    plot: PlotListView<'_>,
+    from: i64,
+    to: i64,
+    bar_spacing: f64,
+    hpr: f64,
+    x_at: impl Fn(i64) -> f64,
+) -> Vec<VisibleHistogramRow> {
+    visible_histogram_rows_policy(
+        plot,
+        from,
+        to,
+        bar_spacing,
+        hpr,
+        x_at,
+        &mut DensityWork::default(),
+        false,
+    )
+}
+
+pub(crate) fn visible_histogram_rows(
+    plot: PlotListView<'_>,
+    from: i64,
+    to: i64,
+    bar_spacing: f64,
+    hpr: f64,
+    x_at: impl Fn(i64) -> f64,
+) -> Vec<VisibleHistogramRow> {
+    visible_histogram_rows_with_work(
+        plot,
+        from,
+        to,
+        bar_spacing,
+        hpr,
+        x_at,
+        &mut DensityWork::default(),
+    )
 }
