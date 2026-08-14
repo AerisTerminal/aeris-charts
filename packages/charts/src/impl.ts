@@ -15,6 +15,7 @@ import type {
   bars_info, chart_api, chart_options, data_changed_handler, dbl_click_handler,
   deep_partial, drawing_api, drawing_info, drawing_kind, drawing_options, drawing_point,
   frame_stats,
+  ingestion_diagnostics,
   handle_scale_options, handle_scroll_options, indicator_info, kinetic_scroll_options,
   last_value_data, localization_options, logical_range,
   mismatch_direction, mouse_event_handler, mouse_event_params, ohlc_columns, ohlc_data, options_change_handler, pane_api, pane_geometry, price_line_api, price_line_options,
@@ -281,6 +282,7 @@ function point_color_to_u32(css: string | undefined): number | undefined {
 class series_impl implements series_api {
   protected readonly data_changed_subs = new Set<data_changed_handler>();
   private removed = false;
+  private last_ingestion: ingestion_diagnostics | null = null;
 
   constructor(
     readonly id: number,
@@ -310,7 +312,7 @@ class series_impl implements series_api {
   set_data(data: readonly series_data[]): void {
     this.assert_live();
     const p = pack(data);
-    this.chart.wasm.set_series_data_typed(this.id, p.times, p.open, p.high, p.low, p.close);
+    this.record_ingestion(this.chart.wasm.set_series_data_typed(this.id, p.times, p.open, p.high, p.low, p.close));
     // set_series_data resets point colors, so per-point channels must be applied after it.
     if (p.body_colors !== undefined || p.wick_colors !== undefined || p.border_colors !== undefined) {
       this.chart.wasm.set_series_point_colors(this.id, p.body_colors, p.wick_colors, p.border_colors);
@@ -331,9 +333,9 @@ class series_impl implements series_api {
    */
   set_data_typed(columns: ohlc_columns): void {
     this.assert_live();
-    this.chart.wasm.set_series_data_typed(
+    this.record_ingestion(this.chart.wasm.set_series_data_typed(
       this.id, columns.times, columns.open, columns.high, columns.low, columns.close,
-    );
+    ));
     this.chart.sync_countdown_timer();
     this.chart.repaint();
     for (const handler of this.data_changed_subs) handler("full");
@@ -347,9 +349,9 @@ class series_impl implements series_api {
    */
   update_typed(columns: ohlc_columns): void {
     this.assert_live();
-    this.chart.wasm.update_series_bars_typed(
+    this.record_ingestion(this.chart.wasm.update_series_bars_typed(
       this.id, columns.times, columns.open, columns.high, columns.low, columns.close,
-    );
+    ));
     // Same post-update bookkeeping as `update`: data arriving on a countdown-enabled series can
     // start the timer, and repaints coalesce onto the next frame rather than painting per batch.
     if (this.chart.countdown_series_present) this.chart.sync_countdown_timer();
@@ -398,13 +400,50 @@ class series_impl implements series_api {
     const wick = "open" in point ? point_color_to_u32(point.wick_color) : undefined;
     const border = "open" in point ? point_color_to_u32(point.border_color) : undefined;
     // Series-scoped streaming: append a new time point or replace the last on this series.
+    const time = time_to_utc_seconds(point.time);
+    this.record_single_ingestion(time, [o, h, l, c]);
     this.chart.wasm.update_series_bar_styled(
-      this.id, time_to_utc_seconds(point.time), o, h, l, c, body, wick, border,
+      this.id, time, o, h, l, c, body, wick, border,
     );
     // Data arriving on a countdown-enabled series can start the timer (cheap flag check).
     if (this.chart.countdown_series_present) this.chart.sync_countdown_timer();
     this.chart.schedule_repaint();
     for (const handler of this.data_changed_subs) handler("update");
+  }
+
+  last_ingestion_diagnostics(): ingestion_diagnostics | null {
+    this.assert_live();
+    return this.last_ingestion;
+  }
+
+  private record_ingestion(json: string | undefined): void {
+    this.last_ingestion = json === undefined ? null : JSON.parse(json) as ingestion_diagnostics;
+  }
+
+  private record_single_ingestion(time: number, values: [number, number, number, number]): void {
+    const whitespace = values.every(Number.isNaN);
+    const non_finite = !Number.isFinite(time) || (!whitespace && values.some((value) => !Number.isFinite(value)));
+    const limit = Number.MAX_SAFE_INTEGER / 100;
+    const out_of_range = !non_finite
+      && !whitespace
+      && values.some((value) => Math.abs(value) > limit);
+    const [open, high, low, close] = values;
+    const semantic = !whitespace && !non_finite && !out_of_range
+      && (high < low || high < open || high < close || low > open || low > close);
+    if (!non_finite && !out_of_range && !semantic) {
+      this.last_ingestion = null;
+      return;
+    }
+    this.last_ingestion = {
+      status: non_finite || out_of_range ? "rejected" : "accepted_with_diagnostics",
+      accepted: semantic ? 1 : 0,
+      dropped_invalid: non_finite || out_of_range ? 1 : 0,
+      dropped_non_finite: non_finite ? 1 : 0,
+      dropped_out_of_range: out_of_range ? 1 : 0,
+      deduplicated: 0,
+      reordered: false,
+      semantic_anomalies: semantic ? 1 : 0,
+    };
   }
 
   pop(count = 1): void {
@@ -993,49 +1032,60 @@ class price_scale_impl implements price_scale_api {
 }
 
 class pane_impl implements pane_api {
-  constructor(private readonly chart: chart_impl, private index: number) {}
+  private readonly stable_id: number;
+
+  constructor(private readonly chart: chart_impl, index: number) {
+    const stable_id = undef_to_null(chart.wasm.pane_stable_id(index));
+    if (stable_id === null) throw new Error("nucleuscharts: pane has been removed");
+    this.stable_id = stable_id;
+  }
+
+  private index(): number {
+    const index = undef_to_null(this.chart.wasm.pane_index_for_id(this.stable_id));
+    if (index === null) throw new Error("nucleuscharts: pane has been removed");
+    return index;
+  }
 
   pane_index(): number {
-    return this.index;
+    return this.index();
   }
   get_height(): number {
-    return this.chart.wasm.pane_height(this.index);
+    return this.chart.wasm.pane_height(this.index());
   }
   get_geometry(): pane_geometry {
     // `{}` answers a stale index (e.g. after a pane removal) — report zeros.
-    const g = JSON.parse(this.chart.wasm.pane_geometry_json(this.index)) as Partial<pane_geometry>;
+    const g = JSON.parse(this.chart.wasm.pane_geometry_json(this.index())) as Partial<pane_geometry>;
     return { left: g.left ?? 0, top: g.top ?? 0, width: g.width ?? 0, height: g.height ?? 0 };
   }
   set_height(height: number): void {
-    this.chart.wasm.set_pane_height(this.index, height);
+    this.chart.wasm.set_pane_height(this.index(), height);
     this.chart.repaint();
   }
   get_stretch_factor(): number {
-    return this.chart.wasm.pane_stretch(this.index);
+    return this.chart.wasm.pane_stretch(this.index());
   }
   set_stretch_factor(factor: number): void {
-    this.chart.wasm.set_pane_stretch(this.index, factor);
+    this.chart.wasm.set_pane_stretch(this.index(), factor);
     this.chart.repaint();
   }
   move_to(target: number): boolean {
     // The engine answers false for a rejected move (e.g. a stale index after remove_pane);
     // on success this handle follows the pane to its new index.
-    if (!this.chart.wasm.pane_move_to(this.index, target)) return false;
-    this.index = target;
+    if (!this.chart.wasm.pane_move_to(this.index(), target)) return false;
     this.chart.repaint();
     return true;
   }
   preserve_empty_pane(): boolean {
     // The engine answers false for a stale index (e.g. after remove_pane).
-    return this.chart.wasm.pane_preserve_empty(this.index);
+    return this.chart.wasm.pane_preserve_empty(this.index());
   }
   set_preserve_empty_pane(flag: boolean): void {
-    this.chart.wasm.pane_set_preserve_empty(this.index, flag);
+    this.chart.wasm.pane_set_preserve_empty(this.index(), flag);
     this.chart.repaint();
   }
   get_series(): series_api[] {
     // Live handles from the engine's id list (empty for a stale index after remove_pane).
-    const ids = this.chart.wasm.pane_series_ids(this.index);
+    const ids = this.chart.wasm.pane_series_ids(this.index());
     const out: series_api[] = [];
     for (const id of ids) {
       out.push(this.chart.series_handle(id));
@@ -1043,7 +1093,7 @@ class pane_impl implements pane_api {
     return out;
   }
   price_scale(id: "left" | "right" | ""): price_scale_api {
-    return this.chart.price_scale(id, this.index);
+    return this.chart.price_scale(id, this.index());
   }
 
   attach_primitive(primitive: pane_primitive): pane_primitive_handle {
@@ -1063,14 +1113,14 @@ class pane_impl implements pane_api {
       const hook = primitive[key];
       if (typeof hook === "function") adapted[key] = hook.bind(primitive);
     }
-    const id = this.chart.wasm.attach_pane_primitive(this.index, adapted);
+    const id = this.chart.wasm.attach_pane_primitive(this.index(), adapted);
     this.chart.repaint();
     return new pane_primitive_handle_impl(this.chart, id);
   }
 
   attach_canvas_primitive(primitive: canvas_primitive): canvas_primitive_handle {
     // No wasm involvement: the package owns the plugin canvas and the per-frame pass.
-    return this.chart.attach_canvas_primitive(this.index, primitive);
+    return this.chart.attach_canvas_primitive(this.index(), primitive);
   }
 }
 
@@ -1239,6 +1289,7 @@ function apply_tracking(v: tracking_mode_options, cfg: resolved_gestures): void 
 }
 
 export class chart_impl implements chart_api {
+  private wasm_instance: NucleusChart | null;
   private next_extra_series = false;
   private readonly gestures_cfg: resolved_gestures = {
     pan: true,
@@ -1293,7 +1344,6 @@ export class chart_impl implements chart_api {
    * scales and repositions the box, so the editor tracks its drawing instead of displacing.
    */
   private text_editor_reposition: (() => void) | null = null;
-  private readonly backend_runtime_id: number;
   private anim_frame: number | null = null;
   /** The 1s candle-close countdown interval; `null` while no countdown is visible. */
   private countdown_timer: ReturnType<typeof setInterval> | null = null;
@@ -1327,15 +1377,17 @@ export class chart_impl implements chart_api {
   private readonly plugin_ctx: CanvasRenderingContext2D;
   private readonly canvas_primitives: canvas_primitive_entry[] = [];
   private plugin_resize_observer: ResizeObserver | null = null;
-  private readonly backend_loss_handler = (event: Event): void => {
-    if ((event as CustomEvent<number>).detail !== this.backend_runtime_id || this.removed) return;
+  private backend_loss_count = 0;
+  private readonly backend_loss_handler = (): void => {
+    if (this.removed) return;
+    this.backend_loss_count += 1;
     // The wgpu callback may arrive from a promise microtask. Defer the repaint once more so the
     // callback stack is fully unwound before Rust drops GPU resources and paints the warm 2D pane.
     queueMicrotask(() => this.repaint());
   };
 
   constructor(
-    readonly wasm: NucleusChart,
+    wasm: NucleusChart,
     private readonly container: HTMLElement,
     private readonly gpu_pane: HTMLCanvasElement,
     private readonly fallback_pane: HTMLCanvasElement,
@@ -1343,10 +1395,10 @@ export class chart_impl implements chart_api {
     private readonly overlay: HTMLCanvasElement,
     auto_size: boolean,
   ) {
+    this.wasm_instance = wasm;
     const plugin_ctx = plugin_canvas.getContext("2d");
     if (plugin_ctx === null) throw new Error("nucleuscharts: plugin canvas 2D context is unavailable");
     this.plugin_ctx = plugin_ctx;
-    this.backend_runtime_id = this.wasm.backend_runtime_id();
     window.addEventListener("nucleuscharts-chart-backend-lost", this.backend_loss_handler);
     this.last_visible_logical_range = this.read_visible_logical_range();
     this.last_visible_time_range = this.read_visible_time_range();
@@ -1367,6 +1419,19 @@ export class chart_impl implements chart_api {
       queueMicrotask(() => this.run_canvas_primitives());
     });
     this.plugin_resize_observer.observe(container);
+  }
+
+  /** Internal package boundary. Every post-disposal operation fails with one stable error. */
+  get wasm(): NucleusChart {
+    if (this.wasm_instance === null) {
+      throw new Error("nucleuscharts: this chart has been disposed");
+    }
+    return this.wasm_instance;
+  }
+
+  /** Deterministic browser-test hook; intentionally absent from `chart_api`. */
+  backend_loss_count_for_test(): number {
+    return this.backend_loss_count;
   }
 
   /**
@@ -2657,6 +2722,18 @@ export class chart_impl implements chart_api {
 
   remove(): void {
     if (this.removed) return;
+    const wasm = this.wasm;
+    // Package-owned canvas extensions live outside wasm; detach each independently so one
+    // throwing hook cannot prevent the rest of the chart from being released.
+    for (const entry of this.canvas_primitives.splice(0)) {
+      if (entry.detached) continue;
+      entry.detached = true;
+      try {
+        entry.primitive.detached?.();
+      } catch (error) {
+        console.warn(`nucleuscharts: canvas primitive \`detached\` threw — ${error}`);
+      }
+    }
     this.removed = true;
     if (this.repaint_raf !== null) {
       cancelAnimationFrame(this.repaint_raf);
@@ -2676,6 +2753,25 @@ export class chart_impl implements chart_api {
     this.detach_gestures?.();
     this.observer?.disconnect();
     this.plugin_resize_observer?.disconnect();
+    this.observer = null;
+    this.detach_gestures = null;
+    this.plugin_resize_observer = null;
+    for (const series of this.series_by_id.values()) series.mark_removed();
+    this.series_by_id.clear();
+    this.crosshair_subs.clear();
+    this.click_subs.clear();
+    this.dbl_click_subs.clear();
+    this.visible_logical_range_subs.clear();
+    this.visible_time_range_subs.clear();
+    this.size_change_subs.clear();
+    this.series_added_subs.clear();
+    this.series_removed_subs.clear();
+    this.options_change_subs.clear();
+    this.tool_listener = null;
+    this.a11y_live = null;
+    wasm.dispose();
+    wasm.free();
+    this.wasm_instance = null;
     this.gpu_pane.remove();
     this.fallback_pane.remove();
     this.plugin_canvas.remove();

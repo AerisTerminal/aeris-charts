@@ -84,8 +84,11 @@ test("comparison enforces scenario, dataset, and environment compatibility", () 
   const current = fixture();
   current.scenarios[0].metrics.set_data_api_ms = { ...current.scenarios[0].metrics.set_data_api_ms, samples: [2, 4, 6], summary: summarize([2, 4, 6]) };
   const compared = compare_runs(baseline, current, { thresholds: { "historical-candlestick-10k.set_data_api_ms.p50": { warning_percent: 20, fail_percent: 50 } } });
+  assert.deepEqual(compared.budget_policy, { status: "ENFORCED", threshold_count: 1 });
   assert.equal(compared.comparisons[0].percentage_change, 100);
   assert.equal(compared.comparisons[0].status, "fail");
+  const no_budget = compare_runs(baseline, baseline);
+  assert.deepEqual(no_budget.budget_policy, { status: "NO ENFORCED BUDGET", threshold_count: 0 });
   current.scenarios[0].dataset.seed += 1;
   assert.equal(compare_runs(baseline, current).comparisons[0].status, "incompatible");
   current.scenarios[0].dataset.seed -= 1;
@@ -95,6 +98,7 @@ test("comparison enforces scenario, dataset, and environment compatibility", () 
   current.build.rustc_version = "different-toolchain";
   assert.equal(compare_runs(baseline, current).comparisons[0].build_compatible, false);
   assert.throws(() => compare_runs(baseline, baseline, { thresholds: { "historical-candlestick-10k.set_data_api_ms.p50": { warning_percent: 20, fail_percent: 10 } } }), /invalid warning\/failure budget/);
+  assert.throws(() => compare_runs(baseline, baseline, { thresholds: { "misspelled.metric.p50": { warning_percent: 20, fail_percent: 50 } } }), /matched no comparable metric/);
 });
 
 test("public summary includes only measured public candidates from official clean releases", () => {

@@ -48,7 +48,7 @@ use nucleuscharts_core::scale::price_scale_core::PriceScaleMode;
 use nucleuscharts_engine::{
     crosshair_mode_from_u8, line_style_from_u8, marker_pos, marker_shape, AxisFrame, AxisLabel,
     AxisLabelCorners, AxisTextAlign, AxisTextMidpoint, ChartEngine, DrawingKind, DrawingModifiers,
-    DrawingPoint, Marker, Pane, PriceFormatterFn, PriceScaleTarget, PrimitiveAutoscaleContribution,
+    DrawingPoint, Marker, PriceFormatterFn, PriceScaleTarget, PrimitiveAutoscaleContribution,
     SeriesKind, TickMarkFormatterFn, TimeFormatterFn,
 };
 use nucleuscharts_render::canvas2d::{
@@ -62,15 +62,42 @@ use nucleuscharts_render_wgpu::{
 };
 
 #[wasm_bindgen(inline_js = r#"
-export function notify_nucleuscharts_backend_loss(runtimeId) {
-    globalThis.dispatchEvent(new CustomEvent('nucleuscharts-chart-backend-lost', { detail: runtimeId }));
+export function notify_nucleuscharts_backend_loss(generation) {
+    globalThis.dispatchEvent(new CustomEvent('nucleuscharts-chart-backend-lost', { detail: generation }));
 }
 "#)]
 extern "C" {
-    fn notify_nucleuscharts_backend_loss(runtime_id: u32);
+    fn notify_nucleuscharts_backend_loss(generation: u32);
 }
 
-static NEXT_RUNTIME_ID: AtomicU32 = AtomicU32::new(1);
+static GPU_LOSS_GENERATION: AtomicU32 = AtomicU32::new(0);
+
+fn validation_diagnostics_json(
+    report: &nucleuscharts_core::model::data_validation::ValidationReport,
+) -> Option<String> {
+    (!report.is_clean()).then(|| {
+        serde_json::json!({
+            "status": "accepted_with_diagnostics",
+            "accepted": report.accepted,
+            "dropped_invalid": report.dropped_invalid,
+            "dropped_non_finite": report.dropped_non_finite,
+            "dropped_out_of_range": report.dropped_out_of_range,
+            "deduplicated": report.dropped_duplicate,
+            "reordered": report.reordered,
+            "semantic_anomalies": report.semantic_anomalies,
+        })
+        .to_string()
+    })
+}
+
+fn rejected_diagnostics_json(reason: impl core::fmt::Display) -> String {
+    serde_json::json!({ "status": "rejected", "reason": reason.to_string() }).to_string()
+}
+
+fn broadcast_gpu_loss() {
+    let generation = GPU_LOSS_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+    notify_nucleuscharts_backend_loss(generation);
+}
 
 // the reference charting library default palette
 // Axis palette (as CSS color strings for the 2D overlay)
@@ -319,11 +346,11 @@ impl Drop for ResizeBinding {
 #[wasm_bindgen]
 pub struct NucleusChart {
     inner: Rc<RefCell<ChartInner>>,
-    runtime_id: u32,
     gpu_pane: Option<web_sys::HtmlCanvasElement>,
     fallback_pane: Option<web_sys::HtmlCanvasElement>,
     overlay: Option<web_sys::HtmlCanvasElement>,
     _resize: Option<ResizeBinding>,
+    disposed: bool,
 }
 
 /// Reads the exact physical-pixel size of a `ResizeObserverEntry`'s device-pixel content box.
@@ -442,7 +469,6 @@ pub async fn create_chart(
 
     let bitmap_w = (css_width * dpr).round().max(1.0) as u32;
     let bitmap_h = (css_height * dpr).round().max(1.0) as u32;
-    let runtime_id = NEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed);
     // A canvas cannot change context type after WebGPU has claimed it. Keep a dedicated 2D pane
     // warm from construction so a device loss can switch backends without replacing DOM nodes or
     // rebuilding chart state.
@@ -458,7 +484,6 @@ pub async fn create_chart(
             css_width,
             css_height,
             dpr,
-            runtime_id,
             simulate_adapter_failure,
             force_fallback_adapter,
         )
@@ -535,11 +560,11 @@ pub async fn create_chart(
 
     Ok(NucleusChart {
         inner: Rc::new(RefCell::new(inner)),
-        runtime_id,
         gpu_pane: Some(gpu_pane_el),
         fallback_pane: Some(fallback_pane_el),
         overlay: Some(overlay_el),
         _resize: None,
+        disposed: false,
     })
 }
 
@@ -581,7 +606,6 @@ pub async fn create_offscreen_chart(
         .ok_or_else(|| JsValue::from_str("no offscreen 2d measurement context"))?
         .unchecked_into::<CanvasRenderingContext2d>();
 
-    let runtime_id = NEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed);
     let gfx = if force_canvas2d {
         None
     } else {
@@ -590,7 +614,6 @@ pub async fn create_offscreen_chart(
             css_width,
             css_height,
             dpr,
-            runtime_id,
             simulate_adapter_failure,
             force_fallback_adapter,
         )
@@ -663,11 +686,11 @@ pub async fn create_offscreen_chart(
 
     Ok(NucleusChart {
         inner: Rc::new(RefCell::new(inner)),
-        runtime_id,
         gpu_pane: None,
         fallback_pane: None,
         overlay: None,
         _resize: None,
+        disposed: false,
     })
 }
 
@@ -675,6 +698,27 @@ pub async fn create_offscreen_chart(
 /// delegate straight through to the inner chart.
 #[wasm_bindgen]
 impl NucleusChart {
+    /// Explicit, idempotent pre-drop cleanup. The TypeScript owner calls this immediately before
+    /// wasm-bindgen `free()` so retained JS handles cannot retain chart, extension, ring, or GPU
+    /// resources through garbage-collection timing.
+    pub fn dispose(&mut self) {
+        if self.disposed {
+            return;
+        }
+        self.disposed = true;
+        self._resize = None;
+        let mut inner = self.inner.borrow_mut();
+        inner.dispose_extensions();
+        inner.gfx = None;
+        inner.gpu_groups.clear();
+        inner.frame = nucleuscharts_engine::ChartFrame::default();
+        inner.axis_frame = AxisFrame::default();
+        inner.axis_prims.clear();
+        inner.text_runs = None;
+        inner.gpu_pane = None;
+        inner.fallback_pane = None;
+    }
+
     /// Binds the engine to `container`, sizing both canvases to the container's exact
     /// device-pixel content box (crisp at any devicePixelRatio, fractional included) and
     /// re-rendering on every size/DPR change. After this, the embedder never sizes canvases.
@@ -923,10 +967,10 @@ impl NucleusChart {
         high: &Float64Array,
         low: &Float64Array,
         close: &Float64Array,
-    ) {
+    ) -> Option<String> {
         self.inner
             .borrow_mut()
-            .set_series_data_typed(id, times, open, high, low, close);
+            .set_series_data_typed(id, times, open, high, low, close)
     }
 
     /// Columnar streaming append: a batch of points in `set_series_data_typed`'s column layout,
@@ -940,10 +984,10 @@ impl NucleusChart {
         high: &Float64Array,
         low: &Float64Array,
         close: &Float64Array,
-    ) {
+    ) -> Option<String> {
         self.inner
             .borrow_mut()
-            .update_series_bars_typed(id, times, open, high, low, close);
+            .update_series_bars_typed(id, times, open, high, low, close)
     }
 
     /// Bind a `SharedArrayBuffer` ring as a series' data source. `bytes` and `cursor_view` must be
@@ -1253,6 +1297,14 @@ impl NucleusChart {
     /// Number of stacked panes.
     pub fn pane_count(&self) -> usize {
         self.inner.borrow().pane_count()
+    }
+    /// Stable identity for a live pane at `index` (`undefined` for a stale index).
+    pub fn pane_stable_id(&self, index: u32) -> Option<u32> {
+        self.inner.borrow().pane_stable_id(index)
+    }
+    /// Current index for a stable pane identity (`undefined` after that pane is removed).
+    pub fn pane_index_for_id(&self, stable_id: u32) -> Option<u32> {
+        self.inner.borrow().pane_index_for_id(stable_id)
     }
     /// CSS Y of each pane boundary (for the host to hit-test separators).
     pub fn pane_separator_ys(&self) -> Vec<f64> {
@@ -1697,7 +1749,7 @@ impl NucleusChart {
     /// `render()` after.
     pub fn set_series_bid_ask(&mut self, id: usize, bid: f64, ask: f64) {
         self.inner.borrow_mut().engine.set_bid_ask(
-            id,
+            id as SeriesId,
             (bid.is_finite()).then_some(bid),
             (ask.is_finite()).then_some(ask),
         );
@@ -1790,7 +1842,7 @@ impl NucleusChart {
         self.inner
             .borrow_mut()
             .engine
-            .set_selected_series(id.map(|id| id as usize));
+            .set_selected_series(id.map(|id| id as SeriesId));
     }
 
     // --- drawing tools (engine-owned drawing objects; nucleuscharts_engine drawings.rs) ---
@@ -2161,19 +2213,13 @@ impl NucleusChart {
         inner.telemetry.write_into(out, gpu_ms);
     }
 
-    /// Internal id used by the package shell to route device-loss notifications to this chart.
-    #[doc(hidden)]
-    pub fn backend_runtime_id(&self) -> u32 {
-        self.runtime_id
-    }
-
     /// Deterministic browser-matrix hook. This is intentionally absent from the public TypeScript
     /// chart API; it marks the current device as lost so the next render exercises real failover.
     #[doc(hidden)]
     pub fn simulate_device_loss_for_test(&mut self) {
         if let Some(gfx) = self.inner.borrow().gfx.as_ref() {
             gfx.device_lost.store(true, Ordering::Release);
-            notify_nucleuscharts_backend_loss(self.runtime_id);
+            broadcast_gpu_loss();
         }
     }
 
@@ -2216,10 +2262,7 @@ enum SharedGpuAction {
     Create(SharedGpuWaiters),
 }
 
-async fn shared_gpu(
-    runtime_id: u32,
-    force_fallback_adapter: bool,
-) -> Result<Rc<SharedGpu>, JsValue> {
+async fn shared_gpu(force_fallback_adapter: bool) -> Result<Rc<SharedGpu>, JsValue> {
     let action = SHARED_GPU.with(|slot| {
         let mut slot = slot.borrow_mut();
         if let SharedGpuSlot::Ready(shared) = &*slot {
@@ -2251,7 +2294,7 @@ async fn shared_gpu(
             .map_err(|_| JsValue::from_str("shared GPU init dropped"))?
             .map_err(|e| JsValue::from_str(&format!("shared GPU init failed: {e}"))),
         SharedGpuAction::Create(waiters) => {
-            let result = create_shared_gpu(runtime_id, force_fallback_adapter).await;
+            let result = create_shared_gpu(force_fallback_adapter).await;
             SHARED_GPU.with(|slot| {
                 let mut slot = slot.borrow_mut();
                 match &result {
@@ -2267,10 +2310,7 @@ async fn shared_gpu(
     }
 }
 
-async fn create_shared_gpu(
-    runtime_id: u32,
-    force_fallback_adapter: bool,
-) -> Result<Rc<SharedGpu>, String> {
+async fn create_shared_gpu(force_fallback_adapter: bool) -> Result<Rc<SharedGpu>, String> {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
@@ -2298,7 +2338,7 @@ async fn create_shared_gpu(
         // already-completed fallback. Only an unknown/driver loss needs to initiate recovery.
         if reason == wgpu::DeviceLostReason::Unknown {
             lost_flag.store(true, Ordering::Release);
-            notify_nucleuscharts_backend_loss(runtime_id);
+            broadcast_gpu_loss();
         }
     });
     Ok(Rc::new(SharedGpu {
@@ -2321,7 +2361,6 @@ async fn try_create_gfx(
     css_width: f64,
     css_height: f64,
     dpr: f64,
-    runtime_id: u32,
     simulate_adapter_failure: bool,
     force_fallback_adapter: bool,
 ) -> Result<Gfx, JsValue> {
@@ -2330,7 +2369,7 @@ async fn try_create_gfx(
             "request_adapter failed: deterministic runtime-matrix injection",
         ));
     }
-    let shared = shared_gpu(runtime_id, force_fallback_adapter).await?;
+    let shared = shared_gpu(force_fallback_adapter).await?;
     let surface = shared
         .instance
         .create_surface(surface_target)

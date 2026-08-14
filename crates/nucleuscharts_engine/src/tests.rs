@@ -99,6 +99,75 @@ fn ingests_data_without_a_host_runtime() {
     assert!(!frame.panes[0].main.is_empty());
 }
 
+fn installed_tick_weights(chart: &mut ChartEngine) -> Vec<u8> {
+    let mut weights = chart
+        .tick_marks
+        .build(1.0, 0.0)
+        .iter()
+        .map(|mark| (mark.index as usize, mark.weight))
+        .collect::<Vec<_>>();
+    weights.sort_unstable_by_key(|(index, _)| *index);
+    weights.into_iter().map(|(_, weight)| weight).collect()
+}
+
+#[test]
+fn timestamp_replacement_rebuilds_weights_for_every_sequence_change() {
+    use nucleuscharts_core::scale::time_tick_marks::fill_weights_for_points;
+
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let values = [1.0; 4];
+    let install = |chart: &mut ChartEngine, times: &[f64]| {
+        chart
+            .set_series_data(0, times, &values, &values, &values, &values)
+            .unwrap();
+    };
+    let expected = |times: &[i64]| {
+        let mut weights = vec![0; times.len()];
+        fill_weights_for_points(times, &mut weights, 0);
+        weights
+    };
+
+    install(&mut chart, &[0.0, 60.0, 120.0, 86_400.0]);
+    assert_eq!(
+        installed_tick_weights(&mut chart),
+        expected(&[0, 60, 120, 86_400])
+    );
+
+    // Same length and endpoints, but different interior calendar boundaries.
+    install(&mut chart, &[0.0, 3_600.0, 7_200.0, 86_400.0]);
+    let interior = installed_tick_weights(&mut chart);
+    assert_eq!(interior, expected(&[0, 3_600, 7_200, 86_400]));
+
+    install(&mut chart, &[-60.0, 3_600.0, 7_200.0, 86_400.0]);
+    assert_eq!(
+        installed_tick_weights(&mut chart),
+        expected(&[-60, 3_600, 7_200, 86_400])
+    );
+
+    install(&mut chart, &[-60.0, 3_600.0, 7_200.0, 172_800.0]);
+    assert_eq!(
+        installed_tick_weights(&mut chart),
+        expected(&[-60, 3_600, 7_200, 172_800])
+    );
+
+    // Identical timestamps and a current-bar value replacement keep the time generation stable.
+    let generation = chart.synced_time_points_generation;
+    let before = installed_tick_weights(&mut chart);
+    install(&mut chart, &[-60.0, 3_600.0, 7_200.0, 172_800.0]);
+    assert_eq!(chart.synced_time_points_generation, generation);
+    assert_eq!(installed_tick_weights(&mut chart), before);
+    assert!(chart.update_series_bar(0, 172_800.0, [2.0; 4]));
+    assert_eq!(chart.synced_time_points_generation, generation);
+    assert_eq!(installed_tick_weights(&mut chart), before);
+
+    assert!(chart.update_series_bar(0, 259_200.0, [3.0; 4]));
+    assert_ne!(chart.synced_time_points_generation, generation);
+    assert_eq!(
+        installed_tick_weights(&mut chart),
+        expected(&[-60, 3_600, 7_200, 172_800, 259_200])
+    );
+}
+
 #[test]
 fn series_primitive_autoscale_contribution_expands_the_owning_scale() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
@@ -855,7 +924,7 @@ fn interaction_disabled_flag_reaches_the_time_scale() {
 }
 
 #[test]
-fn remove_series_tombstones_slot_and_drops_derived_indicators() {
+fn remove_series_releases_slot_and_drops_derived_indicators() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     chart
         .set_series_data(
@@ -903,7 +972,7 @@ fn remove_series_tombstones_slot_and_drops_derived_indicators() {
     // Idempotent â€” removing the same series twice reports false.
     assert!(!chart.remove_series(extra));
 
-    // The tombstoned slot is inert: autoscale now reflects only the primary series.
+    // The released slot is inert: autoscale now reflects only the primary series.
     chart.autoscale_visible();
     assert_eq!(
         chart.panes[0]
@@ -914,17 +983,94 @@ fn remove_series_tombstones_slot_and_drops_derived_indicators() {
         11.0
     );
 
-    // Data mutations on a removed slot are ignored â€” it can never be silently revived.
+    // Data mutations through a removed identity fail and can never silently revive it.
     assert!(!chart.update_series_bar(extra, 3.0, [5.0, 5.0, 5.0, 5.0]));
-    let report = chart
+    let error = chart
         .set_series_data(extra, &[3.0], &[5.0], &[5.0], &[5.0], &[5.0])
-        .unwrap();
-    assert!(report.is_clean());
+        .unwrap_err();
+    assert_eq!(error, ValidationError::StaleSeries(extra));
     assert!(chart.series_data(extra).is_empty());
 
-    // reference `removeSeries` accepts any series: even the primary (id 0) tombstones now.
+    // reference `removeSeries` accepts any series: even the primary (id 0) can be released.
     assert!(chart.remove_series(0));
     assert!(!chart.remove_series(0));
+}
+
+#[test]
+fn unknown_series_id_is_recoverable_and_does_not_mutate() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times_before = chart.data.merged_times().to_vec();
+    let order_before = chart.series_order().to_vec();
+
+    assert_eq!(
+        chart.validate_series_id(u32::MAX),
+        Err(SeriesIdError::Unknown(u32::MAX))
+    );
+    assert!(!chart.update_series_bar(u32::MAX, 1.0, [1.0; 4]));
+    assert_eq!(
+        chart
+            .set_series_data(u32::MAX, &[1.0], &[1.0], &[1.0], &[1.0], &[1.0])
+            .unwrap_err(),
+        ValidationError::UnknownSeries(u32::MAX)
+    );
+    assert_eq!(chart.data.merged_times(), times_before);
+    assert_eq!(chart.series_order(), order_before);
+}
+
+#[test]
+fn stale_series_identity_never_mutates_reused_storage() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let old = chart.add_series(SeriesKind::Line);
+    chart
+        .set_series_data(old, &[1.0], &[10.0], &[10.0], &[10.0], &[10.0])
+        .unwrap();
+    let old_slot = chart.data.series_slot(old).unwrap();
+    assert!(chart.remove_series(old));
+
+    let replacement = chart.add_series(SeriesKind::Line);
+    assert_ne!(replacement, old);
+    assert_eq!(chart.data.series_slot(replacement), Some(old_slot));
+    chart
+        .set_series_data(replacement, &[2.0], &[20.0], &[20.0], &[20.0], &[20.0])
+        .unwrap();
+
+    assert_eq!(
+        chart.validate_series_id(old),
+        Err(SeriesIdError::Stale(old))
+    );
+    assert!(!chart.update_series_bar(old, 3.0, [30.0; 4]));
+    assert_eq!(
+        chart
+            .set_series_data(old, &[3.0], &[30.0], &[30.0], &[30.0], &[30.0])
+            .unwrap_err(),
+        ValidationError::StaleSeries(old)
+    );
+    let (_, columns) = chart.data.series_data(replacement).unwrap();
+    assert_eq!(columns[3], &[20.0]);
+}
+
+#[test]
+fn ten_thousand_add_remove_cycles_reuse_bounded_storage() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let first = chart.add_series(SeriesKind::Line);
+    assert!(chart.remove_series(first));
+
+    for value in 0..10_000 {
+        let id = chart.add_series(SeriesKind::Line);
+        assert_ne!(id, first);
+        assert!(chart.update_series_bar(id, value as f64, [value as f64; 4]));
+        assert!(chart.remove_series(id));
+    }
+
+    assert_eq!(chart.data.series_count(), 1);
+    assert_eq!(chart.data.slot_count(), 2);
+    assert_eq!(chart.series.len(), 2);
+    assert_eq!(
+        chart.validate_series_id(first),
+        Err(SeriesIdError::Stale(first))
+    );
+    assert!(!chart.update_series_bar(first, 20_000.0, [9.0; 4]));
+    assert!(chart.data.series_data(first).is_none());
 }
 
 #[test]
@@ -1665,7 +1811,7 @@ fn series_color_alpha_survives_into_line_and_histogram_strokes() {
     let translucent = Color::parse_css("rgba(10, 20, 30, 0.5)").unwrap();
     assert_eq!(translucent.a(), 128);
     chart.series[0].line_color = Some(translucent.to_css());
-    chart.series[histogram].line_color = Some(translucent.to_css());
+    chart.series_entry_mut(histogram).unwrap().line_color = Some(translucent.to_css());
     chart.time_scale.set_width(800.0);
     chart.fit_content();
 
@@ -1968,9 +2114,9 @@ fn series_options_json_covers_the_ts_field_set() {
 
     // Scale targeting maps to the reference priceScaleId values; removed series report nothing.
     let overlay = chart.add_series(SeriesKind::Histogram);
-    chart.series[overlay].overlay = true;
+    chart.series_entry_mut(overlay).unwrap().overlay = true;
     let left = chart.add_series(SeriesKind::Line);
-    chart.series[left].left_scale = true;
+    chart.series_entry_mut(left).unwrap().left_scale = true;
     let options: serde_json::Value =
         serde_json::from_str(&chart.series_options_json(overlay).unwrap()).unwrap();
     assert_eq!(options["price_scale_id"], "");
@@ -3060,7 +3206,7 @@ fn removing_series_zero_falls_back_to_the_first_live_series() {
             &[5.0, 6.0, 7.0],
         )
         .unwrap();
-    chart.series[second].last_price_animation = true;
+    chart.series_entry_mut(second).unwrap().last_price_animation = true;
     chart.time_scale.set_width(800.0);
     chart.fit_content();
 
@@ -3126,7 +3272,7 @@ fn series_order_controls_paint_order() {
             &[5.0, 6.0, 7.0],
         )
         .unwrap();
-    chart.series[second].line_color = Some("#0000ff".to_string());
+    chart.series_entry_mut(second).unwrap().line_color = Some("#0000ff".to_string());
     chart.time_scale.set_width(800.0);
     chart.fit_content();
     let poly_colors = |chart: &mut ChartEngine| {
@@ -3259,8 +3405,8 @@ fn panes_add_remove_swap_move_and_series_movement() {
     // data but render/scale nowhere; panes below shift one index up.
     assert!(chart.remove_pane(0));
     assert_eq!(chart.panes.len(), 2);
-    assert_eq!(chart.series[second].pane_index, PANELESS);
-    assert_eq!(chart.series[fourth].pane_index, PANELESS);
+    assert_eq!(chart.series_entry(second).unwrap().pane_index, PANELESS);
+    assert_eq!(chart.series_entry(fourth).unwrap().pane_index, PANELESS);
     assert_eq!(chart.pane_series_ids(0), vec![0]);
     assert_eq!(chart.pane_series_ids(1), vec![third]);
     // A pane-less series re-assigned to a live pane renders again (ids in z-order, not
@@ -3273,6 +3419,32 @@ fn panes_add_remove_swap_move_and_series_movement() {
         !chart.remove_pane(0),
         "the last remaining pane cannot be removed"
     );
+    assert_eq!(chart.panes.len(), 1);
+}
+
+#[test]
+fn pane_identity_survives_moves_and_never_retargets_after_removal() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let original = chart.pane_stable_id(0).unwrap();
+    let added_index = chart.add_pane(true);
+    let added = chart.pane_stable_id(added_index).unwrap();
+
+    assert!(chart.move_pane(added_index, 0));
+    assert_eq!(chart.pane_index_for_id(added), Some(0));
+    assert_eq!(chart.pane_index_for_id(original), Some(1));
+
+    assert!(chart.remove_pane(0));
+    assert_eq!(chart.pane_index_for_id(added), None);
+    let reused_index = chart.add_pane(true);
+    assert_eq!(reused_index, 1);
+    assert_ne!(chart.pane_stable_id(reused_index), Some(added));
+    assert_eq!(chart.pane_index_for_id(added), None);
+}
+
+#[test]
+fn invalid_series_cannot_create_panes() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart.set_series_pane(u32::MAX, 10_000, 1.0);
     assert_eq!(chart.panes.len(), 1);
 }
 

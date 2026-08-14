@@ -60,7 +60,7 @@ fn main() {
     // ---- Target A: 60fps @ 10 series x 50k bars ---------------------------------------------
     let mut chart = ChartEngine::new(1600.0, 800.0, 1.0);
     // series[0] exists at construction; add the remaining nine on the shared time axis.
-    let mut ids = vec![0usize];
+    let mut ids = vec![0u32];
     for _ in 1..SERIES {
         ids.push(chart.add_series(SeriesKind::Candlestick));
     }

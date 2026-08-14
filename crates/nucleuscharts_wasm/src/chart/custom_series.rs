@@ -169,6 +169,12 @@ fn custom_bar_color(item: &JsValue, series: &SeriesEntry) -> Color {
 }
 
 impl ChartInner {
+    pub(super) fn destroy_all_custom_series(&mut self) {
+        for entry in std::mem::take(&mut self.custom_series) {
+            fire_custom_destroy(&entry);
+        }
+    }
+
     /// Add a custom series (reference `addCustomSeries`) and return its engine id. The pane view
     /// must carry `price_value_builder` and `render` functions (reference `ensure(customPaneView)`);
     /// `is_whitespace`/`default_options`/`destroy` are optional. `adopt_primary` converts the
@@ -187,7 +193,7 @@ impl ChartInner {
             self.engine.convert_series_kind(0, SeriesKind::Custom);
             0
         } else {
-            self.engine.add_series(SeriesKind::Custom) as u32
+            self.engine.add_series(SeriesKind::Custom)
         };
         self.custom_series.push(CustomSeriesEntry {
             series: id,
@@ -297,7 +303,8 @@ impl ChartInner {
         let Some(entry) = self.custom_series.iter().find(|e| e.series == id) else {
             return JsValue::NULL;
         };
-        self.data
+        self.engine
+            .data_layer()
             .plot(id as SeriesId)
             .search(index as i64, mismatch_direction_from_i8(mismatch))
             .and_then(|row| entry.items.get(row).cloned())
@@ -321,14 +328,7 @@ impl ChartInner {
                 self.custom_series.push(entry);
                 continue;
             }
-            if let Some(destroy) = custom_hook(&entry.view, "destroy") {
-                if let Err(error) = destroy.call0(&entry.view) {
-                    web_sys::console::warn_1(
-                        &format!("nucleuscharts: custom series `destroy` hook threw — {error:?}")
-                            .into(),
-                    );
-                }
-            }
+            fire_custom_destroy(&entry);
         }
     }
 
@@ -349,8 +349,18 @@ impl ChartInner {
             return walk;
         };
         let whitespace_check = custom_hook(view, "is_whitespace");
-        let series = &self.series[entry.series as usize];
-        let indices = self.data.plot(entry.series as SeriesId).indices();
+        let Some(series) = self
+            .series
+            .iter()
+            .find(|series| series.id == entry.series as SeriesId && !series.removed)
+        else {
+            return walk;
+        };
+        let indices = self
+            .engine
+            .data_layer()
+            .plot(entry.series as SeriesId)
+            .indices();
         for (row, item) in entry.items.iter().enumerate() {
             let Some(&merged) = indices.get(row) else {
                 break;
@@ -484,14 +494,16 @@ impl ChartInner {
         }
         let mut pending: Vec<PendingCustom> = Vec::new();
         for id in self.engine.series_order().to_vec() {
-            let Some(index) = self
-                .custom_series
+            let Some(index) = self.custom_series.iter().position(|e| e.series == id) else {
+                continue;
+            };
+            let Some(series) = self
+                .series
                 .iter()
-                .position(|e| e.series == id as u32)
+                .find(|series| series.id == id && !series.removed)
             else {
                 continue;
             };
-            let series = &self.series[id];
             if !series.visible {
                 continue;
             }
@@ -546,7 +558,11 @@ impl ChartInner {
             let items = js_sys::Array::new();
             {
                 let entry = &self.custom_series[p.entry_index];
-                let indices = self.data.plot(entry.series as SeriesId).indices();
+                let indices = self
+                    .engine
+                    .data_layer()
+                    .plot(entry.series as SeriesId)
+                    .indices();
                 let whitespace_check = custom_hook(&view, "is_whitespace");
                 for (row, item) in entry.items.iter().enumerate() {
                     let Some(&merged) = indices.get(row) else {
@@ -618,6 +634,16 @@ impl ChartInner {
             let insert_at = (p.mark + shifts[p.pane]).min(frame_pane.main.len());
             shifts[p.pane] += decoded.prims.len();
             frame_pane.main.splice(insert_at..insert_at, decoded.prims);
+        }
+    }
+}
+
+fn fire_custom_destroy(entry: &CustomSeriesEntry) {
+    if let Some(destroy) = custom_hook(&entry.view, "destroy") {
+        if let Err(error) = destroy.call0(&entry.view) {
+            web_sys::console::warn_1(
+                &format!("nucleuscharts: custom series `destroy` hook threw — {error:?}").into(),
+            );
         }
     }
 }

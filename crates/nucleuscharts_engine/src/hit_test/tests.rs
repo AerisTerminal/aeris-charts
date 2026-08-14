@@ -145,13 +145,13 @@ fn closer_series_beats_paint_order_and_ties_go_topmost() {
     chart.series[0].line_width = Some(4.0);
     let times = (0..5).map(|i| (i * 3600) as f64).collect::<Vec<_>>();
     let bottom = chart.add_series(SeriesKind::Line);
-    chart.series[bottom].line_width = Some(4.0);
+    chart.series_entry_mut(bottom).unwrap().line_width = Some(4.0);
     let values = [100.0; 5];
     chart
         .set_series_data(bottom, &times, &values, &values, &values, &values)
         .unwrap();
     let top = chart.add_series(SeriesKind::Line);
-    chart.series[top].line_width = Some(4.0);
+    chart.series_entry_mut(top).unwrap().line_width = Some(4.0);
     let values = [100.3; 5];
     chart
         .set_series_data(top, &times, &values, &values, &values, &values)
@@ -336,7 +336,7 @@ fn hovered_series_on_top_reorders_the_frame_but_not_the_stable_order() {
     let mut chart = settled_line_chart(&[100.0, 100.0, 100.0, 100.0, 100.0]);
     chart.series[0].line_color = Some("#ff0000".to_string());
     let top = chart.add_series(SeriesKind::Line);
-    chart.series[top].line_color = Some("#0000ff".to_string());
+    chart.series_entry_mut(top).unwrap().line_color = Some("#0000ff".to_string());
     let times = (0..5).map(|i| (i * 3600) as f64).collect::<Vec<_>>();
     let values = [100.0; 5];
     chart

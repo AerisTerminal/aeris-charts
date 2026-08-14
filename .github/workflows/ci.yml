@@ -37,11 +37,11 @@ jobs:
       - name: rustfmt
         run: cargo fmt --all -- --check
       - name: clippy (native, all targets)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: clippy (wasm32)
-        run: cargo clippy -p nucleuscharts_wasm --target wasm32-unknown-unknown -- -D warnings
+        run: cargo clippy -p nucleuscharts_wasm --target wasm32-unknown-unknown --locked -- -D warnings
       - name: tests (includes golden-image regression)
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
       - name: perf gate (report-only; NUCLEUSCHARTS_PERF_STRICT=1 makes it a hard gate)
         run: cargo run -p nucleuscharts_native --example perf_gate --release
 
@@ -78,7 +78,7 @@ jobs:
   publish:
     name: GitHub Packages publish (tags v*)
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [rust, package]
+    needs: [rust, package, browser]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -111,9 +111,6 @@ jobs:
   browser:
     name: Browser runtime & parity (Playwright)
     runs-on: ubuntu-latest
-    # Report-only on CI: pixel-fidelity thresholds are calibrated to the development machine's
-    # exact GPU/Dawn build. Preserve failures and screenshots as an artifact without turning those
-    # non-portable thresholds into a red check; Metrics smoke is the strict portable browser gate.
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -137,13 +134,24 @@ jobs:
       - name: Install Playwright browsers
         working-directory: examples/web_demo
         run: npx playwright install --with-deps
-      - name: Run browser suite
-        id: browser-suite
-        continue-on-error: true
+      - name: Run required portable browser suite
+        id: portable-browser-suite
         working-directory: examples/web_demo
         run: npx playwright test
+        env:
+          NUCLEUSCHARTS_PORTABLE_BROWSER: "1"
+      - name: Run machine-sensitive pixel/GPU/performance evidence
+        id: machine-evidence
+        continue-on-error: true
+        working-directory: examples/web_demo
+        run: npx playwright test tests/backend-parity.spec.mjs tests/engine-bench.spec.mjs tests/gpui-webgpu-matrix.spec.mjs tests/perf-gate.spec.mjs --project=chromium
+      - name: Run machine-sensitive retention-memory evidence
+        id: machine-retention-evidence
+        continue-on-error: true
+        working-directory: examples/web_demo
+        run: npx playwright test tests/retention.spec.mjs --project=chromium --grep @machine
       - uses: actions/upload-artifact@v4
-        if: steps.browser-suite.outcome == 'failure'
+        if: failure() || steps.machine-evidence.outcome == 'failure' || steps.machine-retention-evidence.outcome == 'failure'
         with:
           name: playwright-report
           path: examples/web_demo/playwright-report/

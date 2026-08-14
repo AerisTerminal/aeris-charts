@@ -313,7 +313,7 @@ impl ChartEngine {
         outputs: usize,
         volume_source: Option<SeriesId>,
     ) -> Vec<SeriesId> {
-        if source >= self.series.len()
+        if self.series_entry(source).is_none()
             || outputs == 0
             || matches!(
                 &kind,
@@ -332,7 +332,7 @@ impl ChartEngine {
         {
             return Vec::new();
         }
-        let source_price_format = self.series.get(source).map(|series| {
+        let source_price_format = self.series_entry(source).map(|series| {
             (
                 series.price_format.kind,
                 series.price_format.precision,

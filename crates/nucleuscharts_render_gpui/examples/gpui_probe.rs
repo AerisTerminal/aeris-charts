@@ -29,6 +29,7 @@ use gpui::{
     WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
+use nucleuscharts_core::model::data_layer::SeriesId;
 use nucleuscharts_engine::{
     crosshair_mode_from_u8, marker_pos, marker_shape, ChartEngine, ChartFrame, DrawingKind,
     DrawingModifiers, DrawingPoint, Marker, PriceScaleTarget, PrimitiveAutoscaleContribution,
@@ -418,9 +419,9 @@ struct Probe {
     drawing_template: DrawingTemplate,
     style_pins: StylePins,
     fixtures: NativeFixtures,
-    sma_id: Option<usize>,
-    volume_id: Option<usize>,
-    rsi_id: Option<usize>,
+    sma_id: Option<SeriesId>,
+    volume_id: Option<SeriesId>,
+    rsi_id: Option<SeriesId>,
     legend: String,
     click_status: String,
     bars: usize,
@@ -672,8 +673,15 @@ impl Probe {
         } else {
             self.sma_id = self.engine.add_sma(0, 20);
             if let Some(id) = self.sma_id {
-                self.engine.series[id].line_color = Some("#ff9800".into());
-                self.engine.series[id].line_width = Some(2.0);
+                if let Some(series) = self
+                    .engine
+                    .series
+                    .iter_mut()
+                    .find(|series| series.id == id && !series.removed)
+                {
+                    series.line_color = Some("#ff9800".into());
+                    series.line_width = Some(2.0);
+                }
             }
         }
         self.dirty = true;
@@ -702,7 +710,12 @@ impl Probe {
                     &volume,
                 )
                 .expect("native volume fixture is aligned");
-            let s = &mut self.engine.series[id];
+            let s = self
+                .engine
+                .series
+                .iter_mut()
+                .find(|series| series.id == id && !series.removed)
+                .expect("new volume series is live");
             s.overlay = true;
             s.histogram_updown = true;
             s.price_line_visible = false;
@@ -718,8 +731,15 @@ impl Probe {
         } else {
             self.rsi_id = self.engine.add_rsi(0, 14);
             if let Some(id) = self.rsi_id {
-                self.engine.series[id].line_color = Some("#ab47bc".into());
-                self.engine.series[id].line_width = Some(2.0);
+                if let Some(series) = self
+                    .engine
+                    .series
+                    .iter_mut()
+                    .find(|series| series.id == id && !series.removed)
+                {
+                    series.line_color = Some("#ab47bc".into());
+                    series.line_width = Some(2.0);
+                }
             }
         }
         self.dirty = true;

@@ -857,7 +857,7 @@ fn indicator_price_chip_inherits_source_precision_at_creation() {
     assert!(
         labels
             .iter()
-            .any(|label| label.attach_group == Some(sma as u32) && label.text == "12"),
+            .any(|label| label.attach_group == Some(sma) && label.text == "12"),
         "indicator chip should use the source's zero-decimal format"
     );
 
@@ -883,10 +883,10 @@ fn indicator_lines_support_dotted_and_dashed_styles() {
     let mut chart = countdown_chart();
     let sma = chart.add_sma(0, 2).expect("valid sma");
     let solid = polylines(&mut chart);
-    chart.series[sma].line_style = 1; // dotted
+    chart.series_entry_mut(sma).unwrap().line_style = 1; // dotted
     let dotted = polylines(&mut chart);
     assert!(dotted > solid, "dotted splits the stroke into dash runs");
-    chart.series[sma].line_style = 2; // dashed
+    chart.series_entry_mut(sma).unwrap().line_style = 2; // dashed
     let dashed = polylines(&mut chart);
     assert!(dashed > solid, "dashed splits the stroke into dash runs");
 }
@@ -913,7 +913,7 @@ fn last_value_clusters_attach_only_within_their_own_series() {
     assert!(groups.contains(&0));
     // …and the volume cluster's chips share a DIFFERENT group (its own series id): clusters
     // never chain into each other (a shared constant merged them into one giant box).
-    assert!(groups.contains(&(extra as u32)));
+    assert!(groups.contains(&extra));
     // Chips within one cluster: price + countdown share the same group id.
     let main_chips = groups.iter().filter(|&&g| g == 0).count();
     assert!(
@@ -1175,7 +1175,7 @@ fn histogram_base_offsets_the_column_level() {
         .unwrap();
     chart.time_scale.set_width(800.0);
     chart.fit_content();
-    chart.series[histogram].base = 4.0; // above every value: columns hang down from the base
+    chart.series_entry_mut(histogram).unwrap().base = 4.0; // above every value: columns hang down from the base
 
     let frame = chart.build_frame();
     chart.autoscale_visible();
@@ -1312,7 +1312,7 @@ fn canonical_style_reaches_the_backend_neutral_frame() {
             &[100.0, 120.0],
         )
         .unwrap();
-    chart.series[volume].histogram_updown = true;
+    chart.series_entry_mut(volume).unwrap().histogram_updown = true;
     chart.time_scale.set_width(800.0);
     chart.fit_content();
     chart.crosshair = Some((chart.time_scale.index_to_coordinate(0), 200.0));
@@ -1441,7 +1441,7 @@ fn histogram_per_bar_color_overrides_the_updown_tint() {
     chart
         .set_series_data(volume, &times, &values, &values, &values, &values)
         .unwrap();
-    chart.series[volume].histogram_updown = true;
+    chart.series_entry_mut(volume).unwrap().histogram_updown = true;
     chart.time_scale.set_width(800.0);
     chart.fit_content();
 
@@ -1633,7 +1633,7 @@ fn custom_series_last_value_line_and_label_follow_the_frame_values() {
         Prim::HLine { color, style: LineStyle::Dotted, .. } if *color == global.color
     )));
     // priceLineSource LastVisible switches the line to the visible record.
-    chart.series[custom].price_line_source = 1;
+    chart.series_entry_mut(custom).unwrap().price_line_source = 1;
     let frame = chart.build_frame();
     assert!(frame.panes[0].main.iter().any(|p| matches!(
         p,

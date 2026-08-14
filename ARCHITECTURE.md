@@ -21,6 +21,8 @@ Host API and market data
 
 Browser hosts enter through `packages/charts`, which translates the public TypeScript API into typed arrays and WebAssembly calls. Native Rust hosts use `nucleuscharts_engine` directly and select a renderer. Rendering backends consume prepared frame data; they do not own chart semantics.
 
+Canonical series data uses opaque chart-local `u32` identities mapped to reusable storage slots. Identities are never reused, removed identities are classified as stale, and slot-backed vectors remain bounded by peak concurrent series rather than lifetime add/remove count. The merged timestamp sequence carries a generation that changes only when its contents change; time weights use that generation, while value-only current-bar updates retain the O(1) fast path.
+
 ## Crate boundaries
 
 ### `nucleuscharts_core`
@@ -69,9 +71,13 @@ The package also ships `design.css` and Inter as the portable host design system
 
 The package uses `snake_case` publicly. Data crosses into WebAssembly in typed columns or bounded shared-ring layouts rather than per-point object calls on hot paths. `examples/web_demo` is an integration and parity test host, not part of the library architecture.
 
+`chart.remove()` is the single public browser lifecycle operation. It is idempotent and transitions the retained TypeScript handle to a disposed state after cancelling scheduling, detaching browser resources and extensions, releasing per-chart GPU state, explicitly disposing the Rust object, and calling the generated `free()`. Later operations fail with a stable disposed-state error. Offscreen charts use the same explicit dispose-then-free ordering.
+
 ## State and frame ownership
 
 Each chart has one engine owner. Mutations invalidate only the state that changed. A frame is a deterministic snapshot of engine state for a viewport and device scale.
+
+Panes expose stable chart-local identities at the browser boundary. A live pane handle resolves its current index after moves or swaps; removal permanently invalidates that handle, so later index reuse cannot retarget it to another pane.
 
 The ordered frame contract contains pane backgrounds and grids, series geometry, custom-series contributions, drawings, primitives, crosshair overlays, axes, labels, and text. Backends preserve ordering, clipping, blending, and coordinate conversion. A backend may batch compatible adjacent primitives only when visible output is unchanged.
 
@@ -80,6 +86,8 @@ The ordered frame contract contains pane backgrounds and grids, series geometry,
 Custom series and primitives are explicit host boundaries. The engine owns their identity, layout participation, hit-test context, autoscale contribution, and built-in chrome integration. A host may execute custom drawing callbacks, then records the values the engine needs for the next canonical frame.
 
 Extensions must not receive unrestricted engine internals or create a second scene graph. Add extension surfaces only for current consumers with a stable semantic need.
+
+Disposal invokes every registered extension teardown exactly once; one failing JavaScript cleanup hook cannot prevent the remaining hooks from running.
 
 ## Performance contract
 
@@ -94,6 +102,8 @@ Performance comes from avoiding work:
 
 Track CPU frame time, GPU time where available, draw calls, dropped and presented frames, memory, ring overruns, interaction latency, and steady-state allocation. Device loss or unavailable WebGPU must fail over without losing headless chart state.
 
+Browser WebGPU shares one page-wide adapter/device/queue and atlas while retaining per-chart surfaces. Device loss is therefore a shared generation event, not ownership of the chart that first created the device: every live chart listener wakes and falls back, while disposed charts have no listener. Headless chart data is preserved through fallback.
+
 ## Evidence benchmark subsystem
 
 `benchmarks/` is development and release evidence infrastructure outside every production crate and the published package. Its single Node entry point builds the actual release package, drives the public browser API through the existing Playwright demo host, generates deterministic versioned OHLCV data, validates versioned JSON results, compares explicit baselines, applies centralized budgets, and emits human- and website-readable artifacts. The browser page is served by `examples/web_demo/test_server.mjs` only for automation; it is not part of the npm package.
@@ -102,9 +112,13 @@ The subsystem reuses `chart_api.frame_stats()` for bounded CPU, real capability-
 
 Raw local results are ignored and CI results are artifacts. Public summaries and committed release baselines require a clean `release` profile result classified as `official-benchmark-runner`; shared CI timings are smoke/trend evidence only. Scenario, dataset-generator, schema, and baseline versions preserve historical comparability.
 
+Benchmark comparisons enforce only explicitly configured budgets. An empty policy is reported as `NO ENFORCED BUDGET`, and configured keys must match comparable metrics so a typo cannot silently disable a hard threshold. Publication requires the portable browser runtime/parity suite; machine-calibrated pixel, GPU, and wall-clock evidence remains a separate non-blocking result.
+
 ## Correctness and parity
 
 Chart math must be deterministic for the same state, viewport, and device scale. Validate malformed data at the input boundary. Preserve whitespace rows, time ordering, logical ranges, primitive order, and explicit warm-up gaps.
+
+OHLC ingestion preserves structurally valid numeric input rather than silently rewriting financial values. Impossible relationships are accepted for compatibility but counted in structured diagnostics alongside accepted, dropped, deduplicated, reordered, non-finite, and out-of-range rows. Clean ingestion returns no diagnostic object on the browser hot path.
 
 Changes to geometry, snapping, scales, interactions, or execution require the narrowest relevant combination of unit tests, frame-contract tests, golden images, draw-stream parity, replay stability, browser tests, and release performance evidence. A backend-specific screenshot alone is not proof of shared-engine correctness.
 
@@ -122,9 +136,9 @@ The standard gates mirror CI:
 
 ```text
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo clippy -p nucleuscharts_wasm --target wasm32-unknown-unknown -- -D warnings
-cargo test --workspace
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy -p nucleuscharts_wasm --target wasm32-unknown-unknown --locked -- -D warnings
+cargo test --workspace --locked
 cargo run -p nucleuscharts_native --example perf_gate --release
 
 cd packages/charts

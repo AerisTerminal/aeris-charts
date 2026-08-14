@@ -286,9 +286,9 @@ impl ChartEngine {
         if !x_css.is_finite() || !y_css.is_finite() {
             return None;
         }
-        let series = self.series.iter().find(|s| s.id == id)?;
+        let series = self.series_entry(id)?;
         // reference gates a series' pane-view hit test on visibility (series-pane-view-base.ts).
-        if !series.visible || series.removed || series.pane_index >= self.panes.len() {
+        if !series.visible || series.pane_index >= self.panes.len() {
             return None;
         }
         let (from, to) = self.visible_range_for_frame()?;
@@ -411,7 +411,10 @@ impl ChartEngine {
         let pane = self.pane_at_y(y_css)?;
         let mut best: Option<SeriesHit> = None;
         for &id in self.series_order.iter().rev() {
-            if self.series[id].pane_index != pane {
+            if self
+                .series_entry(id)
+                .is_none_or(|series| series.pane_index != pane)
+            {
                 continue;
             }
             let Some(hit) = self.hit_test_one_series(id, x_css, y_css) else {

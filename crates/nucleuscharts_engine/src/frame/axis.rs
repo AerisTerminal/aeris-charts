@@ -1031,7 +1031,7 @@ impl ChartEngine {
                     price_text: show_price.then_some(text),
                     title,
                     countdown,
-                    group_id: series.id as u32,
+                    group_id: series.id,
                     // The price row stays centered on the value coordinate; the countdown row
                     // hangs below, so a FULL cluster's center shifts down by half the countdown
                     // row. Without a price row the cluster centers on the value directly.
@@ -1077,7 +1077,7 @@ impl ChartEngine {
                             price_text: Some(quote_text),
                             title: Some(side.to_string()),
                             countdown: None,
-                            group_id: (1u32 << 30) + series.id as u32 * 4 + side_offset,
+                            group_id: (1u32 << 30) + series.id * 4 + side_offset,
                             y: quote_y,
                             height: row_height,
                             top_height: row_height,

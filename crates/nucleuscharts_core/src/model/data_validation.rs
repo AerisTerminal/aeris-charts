@@ -34,24 +34,39 @@ pub const MIN_SAFE_VALUE: f64 = -MAX_SAFE_VALUE;
 pub struct ValidationReport {
     /// Rows dropped for a non-finite / out-of-range time or value.
     pub dropped_invalid: usize,
+    /// Invalid rows dropped specifically because a time or value was NaN/infinite (excluding an
+    /// all-NaN whitespace row).
+    pub dropped_non_finite: usize,
+    /// Invalid rows dropped because a finite value exceeded the supported safe range.
+    pub dropped_out_of_range: usize,
     /// Rows discarded because a later row shared their timestamp (last-wins).
     pub dropped_duplicate: usize,
     /// The input was not already ascending and had to be sorted.
     pub reordered: bool,
     /// Rows that made it into the sanitized output.
     pub accepted: usize,
+    /// Accepted finite rows whose OHLC relationships are impossible. Values are preserved; the
+    /// host chooses whether to warn or reject.
+    pub semantic_anomalies: usize,
 }
 
 impl ValidationReport {
     /// True when the input was already clean (nothing dropped or reordered).
     pub fn is_clean(&self) -> bool {
-        self.dropped_invalid == 0 && self.dropped_duplicate == 0 && !self.reordered
+        self.dropped_invalid == 0
+            && self.dropped_duplicate == 0
+            && !self.reordered
+            && self.semantic_anomalies == 0
     }
 }
 
 /// Structural problems the sanitizer cannot repair.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidationError {
+    /// The caller supplied an identity that this chart has never issued.
+    UnknownSeries(u32),
+    /// The caller supplied an identity whose series has already been removed.
+    StaleSeries(u32),
     /// The time column and the value columns have differing lengths.
     LengthMismatch {
         times: usize,
@@ -71,6 +86,8 @@ pub enum ValidationError {
 impl core::fmt::Display for ValidationError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            ValidationError::UnknownSeries(id) => write!(f, "unknown series id {id}"),
+            ValidationError::StaleSeries(id) => write!(f, "stale series id {id}"),
             ValidationError::LengthMismatch { times, open, high, low, close } => write!(
                 f,
                 "time/OHLC arrays must have equal length (times={times}, open={open}, high={high}, low={low}, close={close})"
@@ -103,6 +120,12 @@ fn safe(v: f64) -> bool {
 /// into all four slots, so a NaN value is whitespace there as well.
 pub fn is_whitespace_values(values: [f64; 4]) -> bool {
     values.iter().all(|v| v.is_nan())
+}
+
+/// Whether finite `[open, high, low, close]` values violate the OHLC envelope. The sanitizer
+/// reports but never repairs or drops these rows.
+pub fn is_semantic_ohlc_anomaly([open, high, low, close]: [f64; 4]) -> bool {
+    high < low || high < open || high < close || low > open || low > close
 }
 
 /// Sanitize parallel time/OHLC columns into ascending, unique, finite rows.
@@ -208,8 +231,17 @@ fn sanitize_rows<P: Clone>(
     for i in 0..n {
         let t = times[i];
         let v = [open[i], high[i], low[i], close[i]];
-        if !t.is_finite() || !(is_whitespace_values(v) || v.iter().copied().all(safe)) {
+        let whitespace = is_whitespace_values(v);
+        let non_finite =
+            !t.is_finite() || (!whitespace && v.iter().any(|value| !value.is_finite()));
+        let out_of_range = !whitespace
+            && !non_finite
+            && v.iter()
+                .any(|value| !(MIN_SAFE_VALUE..=MAX_SAFE_VALUE).contains(value));
+        if non_finite || out_of_range {
             report.dropped_invalid += 1;
+            report.dropped_non_finite += usize::from(non_finite);
+            report.dropped_out_of_range += usize::from(out_of_range);
             continue;
         }
         rows.push((t as i64, v, i, payload_of(i)));
@@ -229,9 +261,19 @@ fn sanitize_rows<P: Clone>(
     out.times.reserve(rows.len());
     let mut payloads: Vec<P> = Vec::with_capacity(rows.len());
     for (t, v, _, payload) in rows {
+        let semantic_anomaly = !is_whitespace_values(v) && is_semantic_ohlc_anomaly(v);
         if out.times.last() == Some(&t) {
             report.dropped_duplicate += 1;
             let last = out.times.len() - 1;
+            let previous = [
+                out.open[last],
+                out.high[last],
+                out.low[last],
+                out.close[last],
+            ];
+            if !is_whitespace_values(previous) && is_semantic_ohlc_anomaly(previous) {
+                report.semantic_anomalies -= 1;
+            }
             out.open[last] = v[0];
             out.high[last] = v[1];
             out.low[last] = v[2];
@@ -245,6 +287,7 @@ fn sanitize_rows<P: Clone>(
             out.close.push(v[3]);
             payloads.push(payload);
         }
+        report.semantic_anomalies += usize::from(semantic_anomaly);
     }
 
     report.accepted = out.times.len();
@@ -272,20 +315,22 @@ pub fn sanitize_ohlc_owned(
             close: close.len(),
         });
     }
-    let clean = times
-        .windows(2)
-        .all(|w| w[0].is_finite() && w[0].fract() == 0.0 && w[0] < w[1])
-        && times
-            .last()
-            .map(|t| t.is_finite() && t.fract() == 0.0)
-            .unwrap_or(true)
-        && open
-            .iter()
-            .chain(&high)
-            .chain(&low)
-            .chain(&close)
-            .copied()
-            .all(safe);
+    let mut semantic_anomalies = 0;
+    let mut clean = true;
+    for i in 0..n {
+        let time = times[i];
+        let values = [open[i], high[i], low[i], close[i]];
+        clean &= time.is_finite()
+            && time.fract() == 0.0
+            && (i == 0 || times[i - 1] < time)
+            && (is_whitespace_values(values) || values.iter().copied().all(safe));
+        if !is_whitespace_values(values)
+            && values.iter().copied().all(safe)
+            && is_semantic_ohlc_anomaly(values)
+        {
+            semantic_anomalies += 1;
+        }
+    }
     if clean {
         let accepted = times.len();
         return Ok(SanitizedOhlc {
@@ -296,6 +341,7 @@ pub fn sanitize_ohlc_owned(
             close,
             report: ValidationReport {
                 accepted,
+                semantic_anomalies,
                 ..ValidationReport::default()
             },
         });
@@ -356,6 +402,8 @@ mod tests {
         assert!(s.close[1].is_nan());
         assert_eq!(s.close[2], 50.0);
         assert_eq!(s.report.dropped_invalid, 2);
+        assert_eq!(s.report.dropped_non_finite, 1);
+        assert_eq!(s.report.dropped_out_of_range, 1);
     }
 
     #[test]
@@ -486,6 +534,42 @@ mod tests {
         assert_eq!(s.high, [5.0, 6.0]);
         assert_eq!(s.low, [0.5, 1.5]);
         assert_eq!(s.close, [3.0, 4.0]);
+    }
+
+    #[test]
+    fn impossible_ohlc_is_preserved_and_reported() {
+        let s = sanitize_ohlc(
+            &[1.0, 2.0, 3.0],
+            &[10.0, 10.0, 10.0],
+            &[9.0, 12.0, 12.0],
+            &[8.0, 11.0, 8.0],
+            &[8.5, 11.5, 13.0],
+        )
+        .unwrap();
+        assert_eq!(s.report.accepted, 3);
+        assert_eq!(s.report.semantic_anomalies, 3);
+        assert_eq!(s.open, [10.0, 10.0, 10.0]);
+        assert!(!s.report.is_clean());
+
+        let valid =
+            sanitize_ohlc_owned(vec![1.0], vec![10.0], vec![12.0], vec![8.0], vec![11.0]).unwrap();
+        assert_eq!(valid.report.semantic_anomalies, 0);
+        assert!(valid.report.is_clean());
+    }
+
+    #[test]
+    fn deduplication_reports_only_the_winning_rows_semantics() {
+        let s = sanitize_ohlc(
+            &[1.0, 1.0],
+            &[10.0, 10.0],
+            &[9.0, 12.0],
+            &[8.0, 8.0],
+            &[11.0, 11.0],
+        )
+        .unwrap();
+        assert_eq!(s.report.dropped_duplicate, 1);
+        assert_eq!(s.report.semantic_anomalies, 0);
+        assert_eq!(s.high, [12.0]);
     }
 
     #[test]

@@ -5,10 +5,31 @@ use super::inner_render::measure_text_ctx;
 use super::*;
 
 impl ChartInner {
+    pub(super) fn dispose_extensions(&mut self) {
+        let pane_ids = self
+            .primitives
+            .iter()
+            .map(|entry| entry.id)
+            .collect::<Vec<_>>();
+        for id in pane_ids {
+            self.detach_pane_primitive(id);
+        }
+        let series_ids = self
+            .series_primitives
+            .iter()
+            .map(|entry| entry.id)
+            .collect::<Vec<_>>();
+        for id in series_ids {
+            self.detach_series_primitive(id);
+        }
+        self.destroy_all_custom_series();
+        self.rings.clear();
+        self.primitive_texts.clear();
+    }
+
     /// Adds a series and returns its id. `kind`: 0 candles, 1 bars, 2 line, 3 area, 4 histogram.
     pub fn add_series(&mut self, kind: u8) -> u32 {
-        let id = self.engine.add_series(SeriesKind::from_u8(kind));
-        id as u32
+        self.engine.add_series(SeriesKind::from_u8(kind))
     }
 
     /// Remove a series and any indicators derived from it. Returns true if a live, non-primary
@@ -38,7 +59,7 @@ impl ChartInner {
             let removed: Vec<SeriesId> = dropped.iter().map(|id| *id as SeriesId).collect();
             self.rings.retain(|r| !removed.contains(&r.series_id));
         }
-        dropped.into_iter().map(|id| id as u32).collect()
+        dropped
     }
 
     /// JSON [`IndicatorInfo`] for an indicator output series, or `null` for a plain/source
@@ -53,57 +74,43 @@ impl ChartInner {
     pub fn add_sma(&mut self, source_id: u32, period: u32) -> u32 {
         self.engine
             .add_sma(source_id as SeriesId, period as usize)
-            .map(|id| id as u32)
             .unwrap_or(u32::MAX)
     }
 
     pub fn add_ema(&mut self, source_id: u32, period: u32) -> u32 {
         self.engine
             .add_ema(source_id as SeriesId, period as usize)
-            .map(|id| id as u32)
             .unwrap_or(u32::MAX)
     }
 
     pub fn add_bollinger(&mut self, source_id: u32, period: u32, deviation: f64) -> Vec<u32> {
         self.engine
             .add_bollinger(source_id as SeriesId, period as usize, deviation)
-            .into_iter()
-            .map(|id| id as u32)
-            .collect()
     }
 
     pub fn add_rsi(&mut self, source_id: u32, period: u32) -> u32 {
         self.engine
             .add_rsi(source_id as SeriesId, period as usize)
-            .map(|id| id as u32)
             .unwrap_or(u32::MAX)
     }
 
     pub fn add_macd(&mut self, source_id: u32, fast: u32, slow: u32, signal: u32) -> Vec<u32> {
-        self.engine
-            .add_macd(
-                source_id as SeriesId,
-                fast as usize,
-                slow as usize,
-                signal as usize,
-            )
-            .into_iter()
-            .map(|id| id as u32)
-            .collect()
+        self.engine.add_macd(
+            source_id as SeriesId,
+            fast as usize,
+            slow as usize,
+            signal as usize,
+        )
     }
 
     pub fn add_stochastic(&mut self, source_id: u32, k_period: u32, d_period: u32) -> Vec<u32> {
         self.engine
             .add_stochastic(source_id as SeriesId, k_period as usize, d_period as usize)
-            .into_iter()
-            .map(|id| id as u32)
-            .collect()
     }
 
     pub fn add_atr(&mut self, source_id: u32, period: u32) -> u32 {
         self.engine
             .add_atr(source_id as SeriesId, period as usize)
-            .map(|id| id as u32)
             .unwrap_or(u32::MAX)
     }
 
@@ -112,14 +119,12 @@ impl ChartInner {
         let volume = (volume_source >= 0).then_some(volume_source as SeriesId);
         self.engine
             .add_vwap(source_id as SeriesId, volume)
-            .map(|id| id as u32)
             .unwrap_or(u32::MAX)
     }
 
     pub fn add_wma(&mut self, source_id: u32, period: u32) -> u32 {
         self.engine
             .add_wma(source_id as SeriesId, period as usize)
-            .map(|id| id as u32)
             .unwrap_or(u32::MAX)
     }
 
@@ -132,8 +137,7 @@ impl ChartInner {
         low: &[f64],
         close: &[f64],
     ) {
-        let id = self.series[0].id;
-        self.set_series_data(id as u32, times, open, high, low, close);
+        self.set_series_data(0, times, open, high, low, close);
     }
 
     /// Sets a series' data by id.
@@ -182,7 +186,10 @@ impl ChartInner {
         high: &Float64Array,
         low: &Float64Array,
         close: &Float64Array,
-    ) {
+    ) -> Option<String> {
+        if let Err(error) = self.engine.validate_series_id(id as SeriesId) {
+            return Some(rejected_diagnostics_json(format_args!("{error:?}")));
+        }
         let s = match nucleuscharts_core::model::data_validation::sanitize_ohlc_owned(
             times.to_vec(),
             open.to_vec(),
@@ -195,14 +202,16 @@ impl ChartInner {
                 web_sys::console::warn_1(
                     &format!("nucleuscharts: set_series_data rejected — {e}").into(),
                 );
-                return;
+                return Some(rejected_diagnostics_json(e));
             }
         };
         if !s.report.is_clean() {
             web_sys::console::warn_1(&format!("nucleuscharts: set_series_data sanitized data — accepted {}, dropped {} invalid, {} duplicate{}", s.report.accepted, s.report.dropped_invalid, s.report.dropped_duplicate, if s.report.reordered { ", reordered" } else { "" }).into());
         }
+        let diagnostics = validation_diagnostics_json(&s.report);
         self.engine
             .install_series_data(id as SeriesId, s.times, s.open, s.high, s.low, s.close);
+        diagnostics
     }
 
     /// Columnar streaming append (consumer Item 2): a batch of points in `set_series_data_typed`'s
@@ -229,12 +238,12 @@ impl ChartInner {
         high: &Float64Array,
         low: &Float64Array,
         close: &Float64Array,
-    ) {
+    ) -> Option<String> {
         // Ignore updates to an unknown series rather than corrupting the data layer (same guard
         // as the single-point path).
         if !self.series.iter().any(|s| s.id == id as SeriesId) {
             web_sys::console::warn_1(&"nucleuscharts: update_typed for unknown series id".into());
-            return;
+            return Some(rejected_diagnostics_json("unknown or stale series id"));
         }
         let s = match nucleuscharts_core::model::data_validation::sanitize_ohlc_owned(
             times.to_vec(),
@@ -248,12 +257,13 @@ impl ChartInner {
                 web_sys::console::warn_1(
                     &format!("nucleuscharts: update_typed rejected — {e}").into(),
                 );
-                return;
+                return Some(rejected_diagnostics_json(e));
             }
         };
         if !s.report.is_clean() {
             web_sys::console::warn_1(&format!("nucleuscharts: update_typed sanitized batch — accepted {}, dropped {} invalid, {} duplicate{}", s.report.accepted, s.report.dropped_invalid, s.report.dropped_duplicate, if s.report.reordered { ", reordered" } else { "" }).into());
         }
+        let diagnostics = validation_diagnostics_json(&s.report);
         // `sanitize_ohlc_owned` yields integer-second times; the engine's update entry point takes
         // the f64 JS form, so hand them back in that shape and let it re-narrow.
         for row in 0..s.times.len() {
@@ -263,6 +273,7 @@ impl ChartInner {
                 [s.open[row], s.high[row], s.low[row], s.close[row]],
             );
         }
+        diagnostics
     }
 
     /// Bind a ring source to a series (consumer Item 3), replacing any ring already bound to it.
@@ -347,8 +358,7 @@ impl ChartInner {
 
     /// Streaming update of the main series (append new time or replace last).
     pub fn update_bar(&mut self, time: f64, open: f64, high: f64, low: f64, close: f64) {
-        let id = self.series[0].id as u32;
-        self.update_series_bar(id, time, open, high, low, close);
+        self.update_series_bar(0, time, open, high, low, close);
     }
 
     /// Streaming update of the series with `series_id` (append a new time or replace the last).
@@ -719,19 +729,23 @@ impl ChartInner {
     /// Move a series into pane `pane_index`, creating panes (with the given stretch factor for a
     /// newly-created last pane) as needed. Pane 0 is the top/price pane (roadmap Phase B1).
     pub fn set_series_pane(&mut self, id: u32, pane_index: usize, stretch_factor: f64) {
-        while self.panes.len() <= pane_index {
-            let mut p = Pane::new();
-            p.stretch_factor = stretch_factor.max(0.01);
-            self.panes.push(p);
-        }
-        if let Some(s) = self.series.iter_mut().find(|s| s.id == id as SeriesId) {
-            s.pane_index = pane_index;
-        }
+        self.engine
+            .set_series_pane(id as SeriesId, pane_index, stretch_factor);
     }
 
     /// Number of stacked panes.
     pub fn pane_count(&self) -> usize {
         self.panes.len()
+    }
+
+    pub fn pane_stable_id(&self, index: u32) -> Option<u32> {
+        self.engine.pane_stable_id(index as usize)
+    }
+
+    pub fn pane_index_for_id(&self, stable_id: u32) -> Option<u32> {
+        self.engine
+            .pane_index_for_id(stable_id)
+            .map(|index| index as u32)
     }
 
     /// CSS Y of each pane boundary (top edge of panes 1..n), for separator hit-testing by the host.
@@ -838,11 +852,7 @@ impl ChartInner {
 
     /// reference `IPaneApi.getSeries`: the pane's live series ids in render order (bottom first).
     pub fn pane_series_ids(&self, index: u32) -> Vec<u32> {
-        self.engine
-            .pane_series_ids(index as usize)
-            .into_iter()
-            .map(|id| id as u32)
-            .collect()
+        self.engine.pane_series_ids(index as usize)
     }
 
     /// Attach a pane primitive (reference `IPaneApi.attachPrimitive`, plugin platform Phase C-a) and
@@ -1580,33 +1590,36 @@ impl ChartInner {
     }
     pub fn series_pane_index(&self, id: u32) -> Option<usize> {
         self.engine
-            .series_price_scale(id as usize)
+            .series_price_scale(id as SeriesId)
             .map(|(pane, _)| pane)
     }
     pub fn series_is_overlay(&self, id: u32) -> Option<bool> {
         self.engine
-            .series_price_scale(id as usize)
+            .series_price_scale(id as SeriesId)
             .map(|(_, target)| target == PriceScaleTarget::Overlay)
     }
     pub fn series_price_scale_id(&self, id: u32) -> Option<u8> {
         self.engine
-            .series_price_scale(id as usize)
+            .series_price_scale(id as SeriesId)
             .map(|(_, target)| price_scale_target_to_u8(target))
     }
     pub fn set_series_price_scale(&mut self, id: u32, target: u8) {
         self.engine
-            .set_series_price_scale(id as usize, price_scale_target_from_u8(target));
+            .set_series_price_scale(id as SeriesId, price_scale_target_from_u8(target));
         self.recompute_layout(true);
     }
     pub fn series_price_to_coordinate(&self, id: u32, price: f64) -> Option<f64> {
-        self.engine.series_price_to_coordinate(id as usize, price)
+        self.engine
+            .series_price_to_coordinate(id as SeriesId, price)
     }
     pub fn series_coordinate_to_price(&self, id: u32, coordinate: f64) -> Option<f64> {
         self.engine
-            .series_coordinate_to_price(id as usize, coordinate)
+            .series_coordinate_to_price(id as SeriesId, coordinate)
     }
     pub fn series_kind(&self, id: u32) -> Option<u8> {
-        self.engine.series_kind(id as usize).map(SeriesKind::to_u8)
+        self.engine
+            .series_kind(id as SeriesId)
+            .map(SeriesKind::to_u8)
     }
     pub fn series_data_by_index(&self, id: u32, index: f64, mismatch: i8) -> Vec<f64> {
         if !index.is_finite() || index.fract() != 0.0 {
@@ -1614,7 +1627,7 @@ impl ChartInner {
         }
         self.engine
             .series_data_by_index(
-                id as usize,
+                id as SeriesId,
                 index as i64,
                 mismatch_direction_from_i8(mismatch),
             )
@@ -1630,7 +1643,7 @@ impl ChartInner {
             .unwrap_or_default()
     }
     pub fn series_data(&self, id: u32) -> Vec<f64> {
-        let points = self.engine.series_data(id as usize);
+        let points = self.engine.series_data(id as SeriesId);
         let mut output = Vec::with_capacity(points.len() * 5);
         for point in points {
             output.extend_from_slice(&[
@@ -1645,7 +1658,7 @@ impl ChartInner {
     }
     pub fn series_bars_in_logical_range(&self, id: u32, from: f64, to: f64) -> Vec<f64> {
         self.engine
-            .series_bars_in_logical_range(id as usize, from, to)
+            .series_bars_in_logical_range(id as SeriesId, from, to)
             .map(|info| {
                 let mut output = vec![info.bars_before, info.bars_after];
                 if let (Some(from), Some(to)) = (info.from, info.to) {
@@ -1871,7 +1884,7 @@ impl ChartInner {
     /// Backs the façade's `seriesData` map for crosshair/click events.
     pub fn hover_data(&self, x_css: f64) -> Vec<f64> {
         use nucleuscharts_core::model::plot_list::MismatchDirection;
-        let n = self.data.merged_times().len() as i64;
+        let n = self.engine.data_layer().merged_times().len() as i64;
         if n == 0 {
             return Vec::new();
         }
@@ -1881,7 +1894,7 @@ impl ChartInner {
         }
         let mut out = Vec::new();
         for &id in self.engine.series_order().iter().rev() {
-            let plot = self.data.plot(id);
+            let plot = self.engine.data_layer().plot(id);
             if let Some(row) = plot.search(index, MismatchDirection::None) {
                 if plot.is_whitespace_row(row) {
                     continue;

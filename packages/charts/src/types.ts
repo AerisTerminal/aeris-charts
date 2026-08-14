@@ -101,6 +101,21 @@ export interface ohlc_columns {
   close: Float64Array;
 }
 
+/** Structured result for an ingestion that was repaired, rejected, or semantically suspicious.
+ * `null` from {@link series_api.last_ingestion_diagnostics} means every supplied row was accepted
+ * without repair or anomaly. Financial anomalies are accepted unchanged; hosts choose policy. */
+export interface ingestion_diagnostics {
+  status: "accepted_with_diagnostics" | "rejected";
+  accepted: number;
+  dropped_invalid: number;
+  dropped_non_finite: number;
+  dropped_out_of_range: number;
+  deduplicated: number;
+  reordered: boolean;
+  semantic_anomalies: number;
+  reason?: string;
+}
+
 /**
  * Last-frame render telemetry, read with {@link chart_api.frame_stats}.
  *
@@ -937,6 +952,8 @@ export interface drawing_api {
 export interface series_api {
   /** Replace the series' data. Accepts OHLC or single-value points; packed to typed arrays here. */
   set_data(data: readonly series_data[]): void;
+  /** Diagnostics from the most recent set/update call; `null` is the allocation-free clean case. */
+  last_ingestion_diagnostics(): ingestion_diagnostics | null;
   /**
    * Replace the series' data from already-packed columns, skipping `set_data`'s per-object
    * JS packing. `times` are UTC seconds (the engine's time unit); single-value series
@@ -1146,15 +1163,15 @@ export interface price_scale_api {
 /** The chart. Create with {@link create_chart}. */
 /** A stacked pane (roadmap Phase B1). Mirrors the reference charting library `IPaneApi`. */
 export interface pane_api {
-  /** This pane's index (0 = top/price pane). */
+  /** This pane's current index (0 = top/price pane). Throws after this pane is removed. */
   pane_index(): number;
   /** Current CSS height in px (from the last layout pass). */
   get_height(): number;
   /**
    * This pane's content-area geometry in CSS px relative to the chart container's top-left
    * (from the last layout pass). Absolutely-position platform chrome against it — e.g. a
-   * TradingView-style indicator chip pinned at `{ left, top }` of the pane. A stale handle
-   * (after a pane removal) reports zeros.
+   * TradingView-style indicator chip pinned at `{ left, top }` of the pane. Operations on a
+   * removed pane handle throw instead of silently targeting a replacement pane.
    */
   get_geometry(): pane_geometry;
   /** Resize this pane to `height` CSS px, absorbing the delta from its neighbour. */
@@ -1165,7 +1182,7 @@ export interface pane_api {
   set_stretch_factor(factor: number): void;
   /**
    * Move this pane to the `target` index (reference `IPaneApi.moveTo`). Returns `false` without
-   * changing anything when the engine rejects the move (e.g. a stale index after a removal).
+   * changing anything when the target index is rejected. A removed handle throws.
    * Divergence: reference returns `void`.
    */
   move_to(target: number): boolean;
@@ -1282,14 +1299,14 @@ export interface chart_api {
   /**
    * Remove the pane at `index` (reference `IChartApi.removePane`). Returns `false` without changing
    * anything when the engine refuses (e.g. an out-of-range index or the last pane). Divergence:
-   * reference returns `void`. Pane handles are index-based — a removal shifts the indices of the panes
-   * below it, so re-fetch handles with {@link chart_api.panes} afterwards.
+   * reference returns `void`. Live pane handles follow index shifts; a handle for the removed pane
+   * becomes explicitly invalid and can never retarget a replacement pane.
    */
   remove_pane(index: number): boolean;
   /**
    * Swap the panes at `first` and `second` (reference `IChartApi.swapPanes`). Returns `false` without
    * changing anything when the engine rejects the swap. Divergence: reference returns `void`. Pane
-   * handles are index-based — re-fetch them with {@link chart_api.panes} afterwards.
+   * live handles follow their pane identities across the swap.
    */
   swap_panes(first: number, second: number): boolean;
   /**
@@ -1387,6 +1404,10 @@ export interface chart_api {
   auto_size_active(): boolean;
   /** The container element passed to {@link create_chart} (reference `chartElement`). */
   chart_element(): HTMLElement;
-  /** Tear down: remove canvases and listeners. */
+  /**
+   * Idempotently dispose the chart: stop scheduling, detach listeners/extensions, remove canvases,
+   * release per-chart GPU state, and explicitly free the underlying WASM chart. Later operations
+   * throw a disposed-state error; retaining this JavaScript object does not retain a live engine.
+   */
   remove(): void;
 }

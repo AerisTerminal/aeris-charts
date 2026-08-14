@@ -121,7 +121,6 @@ export class offscreen_chart {
   private height: number;
   private dpr: number;
   private last_backend: "webgpu" | "canvas2d";
-  private readonly runtime_id: number;
   private readonly backend_loss_handler: EventListener;
 
   constructor(
@@ -136,12 +135,9 @@ export class offscreen_chart {
     this.height = height;
     this.dpr = dpr;
     this.last_backend = this.wasm.backend_kind() as "webgpu" | "canvas2d";
-    // Cache the routing ID before installing the listener. Device-loss dispatch can occur while a
-    // wasm export still owns `NucleusChart`; re-entering wasm from that synchronous event would trip
-    // wasm-bindgen's recursive-use guard even though the actual render is deferred below.
-    this.runtime_id = this.wasm.backend_runtime_id();
-    this.backend_loss_handler = (event: Event) => {
-      if ((event as CustomEvent<number>).detail !== this.runtime_id) return;
+    // Device-loss dispatch can occur while a wasm export still owns `NucleusChart`; defer re-entry
+    // so wasm-bindgen's recursive-use guard cannot trip.
+    this.backend_loss_handler = () => {
       // Rendering performs the actual state transition, then notifies the owner so it can reveal
       // the already-warm fallback HTML canvas.
       queueMicrotask(() => {
@@ -152,6 +148,7 @@ export class offscreen_chart {
   }
 
   backend(): "webgpu" | "canvas2d" {
+    this.assert_live();
     return this.wasm.backend_kind() as "webgpu" | "canvas2d";
   }
 
@@ -380,6 +377,7 @@ export class offscreen_chart {
     this.active_pointers.clear();
     this.backend_change_handlers.clear();
     this.removed = true;
+    this.wasm.dispose();
     this.wasm.free();
   }
 

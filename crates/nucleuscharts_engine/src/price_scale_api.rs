@@ -266,7 +266,7 @@ impl ChartEngine {
     }
 
     pub fn set_series_price_scale(&mut self, id: SeriesId, target: PriceScaleTarget) {
-        if let Some(series) = self.series.iter_mut().find(|series| series.id == id) {
+        if let Some(series) = self.series_entry_mut(id) {
             series.overlay = target == PriceScaleTarget::Overlay;
             series.left_scale = target == PriceScaleTarget::Left;
         }
@@ -401,19 +401,16 @@ impl ChartEngine {
     }
 
     pub fn series_price_scale(&self, id: SeriesId) -> Option<(usize, PriceScaleTarget)> {
-        self.series
-            .iter()
-            .find(|series| series.id == id)
-            .map(|series| {
-                let target = if series.overlay {
-                    PriceScaleTarget::Overlay
-                } else if series.left_scale {
-                    PriceScaleTarget::Left
-                } else {
-                    PriceScaleTarget::Right
-                };
-                (series.pane_index, target)
-            })
+        self.series_entry(id).map(|series| {
+            let target = if series.overlay {
+                PriceScaleTarget::Overlay
+            } else if series.left_scale {
+                PriceScaleTarget::Left
+            } else {
+                PriceScaleTarget::Right
+            };
+            (series.pane_index, target)
+        })
     }
 
     /// First close at or to the right of the visible left edge, matching reference series first-value
@@ -423,7 +420,7 @@ impl ChartEngine {
     /// plugin's `priceValueBuilder` current value of the first visible non-whitespace item —
     /// reference `firstValue` reads the custom plot row's Close slot).
     pub(crate) fn series_base_value(&self, id: SeriesId, visible_from: i64) -> Option<f64> {
-        let series = self.series.iter().find(|s| s.id == id)?;
+        let series = self.series_entry(id)?;
         if series.kind == SeriesKind::Custom {
             return series
                 .custom_frame

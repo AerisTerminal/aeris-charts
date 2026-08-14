@@ -190,6 +190,10 @@ function comparable_environment(left, right) {
 export function compare_runs(baseline, current, budgets = { thresholds: {} }) {
   validate_run(baseline);
   validate_run(current);
+  assert_record(budgets, "budgets");
+  assert_record(budgets.thresholds, "budgets.thresholds");
+  const configured_thresholds = new Set(Object.keys(budgets.thresholds));
+  const matched_thresholds = new Set();
   const baseline_by_id = new Map(baseline.scenarios.map((scenario) => [scenario.id, scenario]));
   const comparisons = [];
   for (const scenario of current.scenarios) {
@@ -208,6 +212,7 @@ export function compare_runs(baseline, current, budgets = { thresholds: {} }) {
       const percentage_change = baseline_value === 0 ? null : absolute_change / Math.abs(baseline_value) * 100;
       const key = `${scenario.id}.${metric_name}.p50`;
       const threshold = budgets.thresholds?.[key] ?? null;
+      if (threshold !== null) matched_thresholds.add(key);
       if (threshold !== null && (!Number.isFinite(threshold.warning_percent) || !Number.isFinite(threshold.fail_percent) || threshold.warning_percent < 0 || threshold.fail_percent < threshold.warning_percent)) {
         throw new Error(`${key}: invalid warning/failure budget`);
       }
@@ -219,7 +224,18 @@ export function compare_runs(baseline, current, budgets = { thresholds: {} }) {
       comparisons.push({ scenario: scenario.id, scenario_version: scenario.version, metric: metric_name, statistic: "p50", direction: metric.direction, baseline: baseline_value, current: current_value, absolute_change, percentage_change, scenario_compatible, environment_compatible, build_compatible, compatible, status });
     }
   }
-  return { schema_version: 1, baseline_commit: baseline.source.git_commit, current_commit: current.source.git_commit, comparisons };
+  const unmatched = [...configured_thresholds].filter((key) => !matched_thresholds.has(key));
+  if (unmatched.length > 0) throw new Error(`budget thresholds matched no comparable metric: ${unmatched.join(", ")}`);
+  return {
+    schema_version: 1,
+    baseline_commit: baseline.source.git_commit,
+    current_commit: current.source.git_commit,
+    budget_policy: {
+      status: configured_thresholds.size === 0 ? "NO ENFORCED BUDGET" : "ENFORCED",
+      threshold_count: configured_thresholds.size,
+    },
+    comparisons,
+  };
 }
 
 function render_value(value) {

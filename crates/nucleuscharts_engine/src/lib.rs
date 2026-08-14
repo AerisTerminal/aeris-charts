@@ -38,7 +38,7 @@ pub use workspace::{SplitDirection, Workspace, WorkspaceError, WorkspaceLayout, 
 
 use nucleuscharts_core::format::price_formatter::PriceFormatter;
 use nucleuscharts_core::format::time_formatter::{MonthNames, DEFAULT_DATE_FORMAT};
-use nucleuscharts_core::model::data_layer::{DataLayer, SeriesId};
+use nucleuscharts_core::model::data_layer::{DataLayer, SeriesId, SeriesIdError};
 use nucleuscharts_core::model::data_validation::{
     sanitize_ohlc, sanitize_ohlc_styled, sanitize_point, ValidationError, ValidationReport,
 };
@@ -425,7 +425,7 @@ pub struct SeriesEntry {
     pub price_lines: Vec<PriceLine>,
     pub markers: Vec<Marker>,
     pub markers_auto_scale: bool,
-    /// Tombstone flag (reference `removeSeries`). `SeriesId` is a positional index into the data layer
+    /// Tombstone flag (reference `removeSeries`). The backing slot may later hold another opaque ID.
     /// and this vector, so a removed series keeps its slot (data emptied, hidden) rather than being
     /// compacted; every other series keeps its id. Removed slots are inert in every draw/scale path
     /// because they carry no data and are not visible.
@@ -520,6 +520,9 @@ pub const PANE_SEPARATOR: f64 = 1.0;
 pub(crate) const PANELESS: usize = usize::MAX;
 
 pub struct Pane {
+    /// Chart-local identity that survives index changes and is never reused. Zero is reserved for
+    /// standalone/default panes that are not owned by a [`ChartEngine`].
+    stable_id: u32,
     pub price_scale: PriceScaleCore,
     pub left_scale: PriceScaleCore,
     pub overlay_scale: PriceScaleCore,
@@ -542,6 +545,10 @@ pub struct Pane {
 
 impl Pane {
     pub fn new() -> Self {
+        Self::with_stable_id(0)
+    }
+
+    fn with_stable_id(stable_id: u32) -> Self {
         let main_scale = PriceScaleCore::new(PriceScaleCoreOptions::default());
         let overlay_scale = PriceScaleCore::new(PriceScaleCoreOptions {
             scale_margins: PriceScaleMargins {
@@ -551,6 +558,7 @@ impl Pane {
             ..PriceScaleCoreOptions::default()
         });
         Self {
+            stable_id,
             price_scale: main_scale,
             left_scale: PriceScaleCore::new(PriceScaleCoreOptions::default()),
             overlay_scale,
@@ -567,6 +575,10 @@ impl Pane {
             top: 0.0,
             height: 0.0,
         }
+    }
+
+    pub fn stable_id(&self) -> u32 {
+        self.stable_id
     }
 
     pub fn layout(&mut self, content_h: f64) {
@@ -612,9 +624,10 @@ pub struct ChartEngine {
     pub time_scale: TimeScaleCore,
     pub panes: Vec<Pane>,
     pub price_formatter: PriceFormatter,
-    pub data: DataLayer,
+    data: DataLayer,
     pub series: Vec<SeriesEntry>,
-    pub tick_marks: TimeTickMarks,
+    tick_marks: TimeTickMarks,
+    next_pane_id: u32,
     pub options: ChartOptionsStore,
     pub crosshair_mode: CrosshairMode,
     /// TradingView's Ctrl-held magnet: while set, a Normal-mode crosshair snaps to the hovered
@@ -662,6 +675,7 @@ pub struct ChartEngine {
     pub axis_w: f64,
     indicators: Vec<IndicatorBinding>,
     synced_points_len: usize,
+    synced_time_points_generation: u64,
     synced_last_time: Option<i64>,
     synced_first_time: Option<i64>,
     /// reference `localization.dateFormat` (default `dd MMM \'yy`): drives the crosshair time label.
@@ -731,11 +745,12 @@ impl ChartEngine {
         let main = data.add_series();
         Self {
             time_scale: TimeScaleCore::new(TimeScaleOptions::default()),
-            panes: vec![Pane::new()],
+            panes: vec![Pane::with_stable_id(1)],
             price_formatter: PriceFormatter::default(),
             data,
             series: vec![SeriesEntry::new(main, SeriesKind::Candlestick)],
             tick_marks: TimeTickMarks::new(),
+            next_pane_id: 2,
             options: ChartOptionsStore::new(),
             crosshair_mode: CrosshairMode::Normal,
             crosshair_ohlc_magnet: false,
@@ -760,6 +775,7 @@ impl ChartEngine {
             axis_w: 0.0,
             indicators: Vec::new(),
             synced_points_len: 0,
+            synced_time_points_generation: 0,
             synced_last_time: None,
             synced_first_time: None,
             date_format: DEFAULT_DATE_FORMAT.to_string(),
@@ -782,6 +798,24 @@ impl ChartEngine {
             tick_mark_formatter_fn: None,
             time_formatter_fn: None,
         }
+    }
+
+    /// Read-only access to canonical series data. All mutation must use engine commands so time,
+    /// scale, indicator, retention, and invalidation invariants remain synchronized.
+    pub fn data_layer(&self) -> &DataLayer {
+        &self.data
+    }
+
+    /// Read-only time tick state derived from the canonical timestamp sequence.
+    pub fn tick_marks(&self) -> &TimeTickMarks {
+        &self.tick_marks
+    }
+
+    /// Read-only live/storage entries. Series mutation remains staged through existing engine
+    /// commands; the public field is retained temporarily for host option APIs that still need a
+    /// controlled migration.
+    pub fn series_entries(&self) -> &[SeriesEntry] {
+        &self.series
     }
 
     /// Install (or clear with `None`) the host price formatter (reference `localization.priceFormatter`).
@@ -829,7 +863,15 @@ impl ChartEngine {
     /// Add a series to the headless chart. The returned id is stable for the instance lifetime.
     pub fn add_series(&mut self, kind: SeriesKind) -> SeriesId {
         let id = self.data.add_series();
-        self.series.push(SeriesEntry::new(id, kind));
+        let slot = self
+            .data
+            .series_slot(id)
+            .expect("newly allocated series must have a storage slot");
+        if slot == self.series.len() {
+            self.series.push(SeriesEntry::new(id, kind));
+        } else {
+            self.series[slot] = SeriesEntry::new(id, kind);
+        }
         // new series paint on top (reference appends to the pane's data sources)
         self.series_order.push(id);
         // A custom series' time-only rows still count as data rows for the base index.
@@ -868,9 +910,8 @@ impl ChartEngine {
     /// series (crosshair defaults, the volume up/down reference, the last-price pulse, the
     /// wasm coordinate API) fall back to the first visible non-removed series.
     ///
-    /// The slot is tombstoned rather than compacted: `SeriesId` is a positional index into the
-    /// data layer and the series list (`series[rs.id]` is used directly), so compaction would
-    /// invalidate every other id. The emptied, hidden slot is inert in all draw/scale paths.
+    /// Removal permanently invalidates the opaque identity and releases its backing slot for a
+    /// future series. A stale identity can therefore never alias the replacement series.
     pub fn remove_series(&mut self, id: SeriesId) -> bool {
         !self.remove_series_tracked(id).is_empty()
     }
@@ -900,16 +941,10 @@ impl ChartEngine {
                 entry.price_lines.clear();
                 entry.markers.clear();
             }
-            // Empty the data slot; this rebuilds the merged time points so the removed series'
-            // timestamps leave the shared time axis.
-            self.data.set_data(
-                rid,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-            );
+            // Release the data slot; its opaque identity is invalid forever and the storage may
+            // be reused by a different identity.
+            let removed = self.data.remove_series(rid);
+            debug_assert!(removed, "tracked live series must own a data slot");
         }
         self.series_order.retain(|sid| !tombstones.contains(sid));
         // A hovered series leaving the chart releases the hovered-on-top z-bump with it.
@@ -956,11 +991,32 @@ impl ChartEngine {
     /// pane and return its index. The new pane's scales inherit the chart-level
     /// `leftPriceScale`/`rightPriceScale` cosmetics, exactly like the reference's `Pane` constructor.
     pub fn add_pane(&mut self, preserve_empty: bool) -> usize {
-        let mut pane = Pane::new();
+        let mut pane = Pane::with_stable_id(self.take_pane_id());
         pane.preserve_empty = preserve_empty;
         self.apply_chart_scale_options(&mut pane);
         self.panes.push(pane);
         self.panes.len() - 1
+    }
+
+    fn take_pane_id(&mut self) -> u32 {
+        let id = self.next_pane_id;
+        self.next_pane_id = self
+            .next_pane_id
+            .checked_add(1)
+            .expect("pane identity space exhausted");
+        id
+    }
+
+    /// Stable chart-local identity for the pane currently at `index`.
+    pub fn pane_stable_id(&self, index: usize) -> Option<u32> {
+        self.panes.get(index).map(Pane::stable_id)
+    }
+
+    /// Current index of a live pane identity. Removed pane identities never resolve again.
+    pub fn pane_index_for_id(&self, stable_id: u32) -> Option<usize> {
+        self.panes
+            .iter()
+            .position(|pane| pane.stable_id() == stable_id)
     }
 
     /// reference chart-model.ts `removePane`: refuses the last remaining pane and out-of-range
@@ -1049,7 +1105,10 @@ impl ChartEngine {
         self.series_order
             .iter()
             .copied()
-            .filter(|&id| self.series[id].pane_index == index)
+            .filter(|&id| {
+                self.series_entry(id)
+                    .is_some_and(|series| series.pane_index == index)
+            })
             .collect()
     }
 
@@ -1058,8 +1117,11 @@ impl ChartEngine {
     /// The pane the series left collapses when empty and not preserved (reference
     /// `_cleanupIfPaneIsEmpty`, chart-model.ts:1135).
     pub fn set_series_pane(&mut self, id: SeriesId, pane_index: usize, stretch_factor: f64) {
+        if self.series_entry(id).is_none() {
+            return;
+        }
         while self.panes.len() <= pane_index {
-            let mut pane = Pane::new();
+            let mut pane = Pane::with_stable_id(self.take_pane_id());
             pane.stretch_factor = stretch_factor.max(0.01);
             self.apply_chart_scale_options(&mut pane);
             self.panes.push(pane);
@@ -1124,7 +1186,30 @@ impl ChartEngine {
     /// Whether `id` names a tombstoned (removed) series. Data mutations on such a slot are ignored
     /// so a removed series can never be silently revived.
     pub fn is_series_removed(&self, id: SeriesId) -> bool {
-        self.series.iter().any(|s| s.id == id && s.removed)
+        matches!(
+            self.data.validate_series_id(id),
+            Err(SeriesIdError::Stale(_))
+        )
+    }
+
+    /// Validate a public series identity without touching chart state.
+    pub fn validate_series_id(&self, id: SeriesId) -> Result<(), SeriesIdError> {
+        self.data.validate_series_id(id)
+    }
+
+    /// Resolve a live opaque series identity to its current storage entry.
+    pub(crate) fn series_entry(&self, id: SeriesId) -> Option<&SeriesEntry> {
+        let slot = self.data.series_slot(id)?;
+        self.series
+            .get(slot)
+            .filter(|series| series.id == id && !series.removed)
+    }
+
+    pub(crate) fn series_entry_mut(&mut self, id: SeriesId) -> Option<&mut SeriesEntry> {
+        let slot = self.data.series_slot(id)?;
+        self.series
+            .get_mut(slot)
+            .filter(|series| series.id == id && !series.removed)
     }
 
     /// Toggle a series without destroying its data or indicator binding. A removed slot can
@@ -1183,20 +1268,20 @@ impl ChartEngine {
         if self.is_series_removed(id) || !self.series.iter().any(|s| s.id == id) {
             return None;
         }
-        let len = self.data.pop(id, count);
+        let len = self.data.pop(id, count)?;
         self.sync_time_points();
         self.recompute_indicators();
         Some(len)
     }
 
     pub fn set_series_markers(&mut self, id: SeriesId, markers: Vec<Marker>) {
-        if let Some(series) = self.series.iter_mut().find(|series| series.id == id) {
+        if let Some(series) = self.series_entry_mut(id) {
             series.markers = markers;
         }
     }
 
     pub fn set_series_markers_auto_scale(&mut self, id: SeriesId, enabled: bool) {
-        if let Some(series) = self.series.iter_mut().find(|series| series.id == id) {
+        if let Some(series) = self.series_entry_mut(id) {
             series.markers_auto_scale = enabled;
         }
     }
@@ -1214,7 +1299,7 @@ impl ChartEngine {
     where
         I: IntoIterator<Item = (f64, [f64; 4])>,
     {
-        if self.is_series_removed(id) {
+        if self.validate_series_id(id).is_err() {
             return 0;
         }
         let mut accepted = 0usize;
@@ -1244,7 +1329,7 @@ impl ChartEngine {
         values: [f64; 4],
         colors: [Option<u32>; 3],
     ) -> bool {
-        if self.is_series_removed(id) {
+        if self.validate_series_id(id).is_err() {
             return false;
         }
         let Some((time, values)) = sanitize_point(time, values) else {
@@ -1276,7 +1361,7 @@ impl ChartEngine {
         wick: Option<Vec<u32>>,
         border: Option<Vec<u32>>,
     ) -> bool {
-        if self.is_series_removed(id) || !self.series.iter().any(|s| s.id == id) {
+        if self.validate_series_id(id).is_err() {
             return false;
         }
         self.data.set_point_colors(id, [body, wick, border])
@@ -1296,9 +1381,10 @@ impl ChartEngine {
         close: &[f64],
         colors: [Option<Vec<u32>>; 3],
     ) -> Result<ValidationReport, ValidationError> {
-        if self.is_series_removed(id) {
-            return Ok(ValidationReport::default());
-        }
+        self.validate_series_id(id).map_err(|error| match error {
+            SeriesIdError::Unknown(id) => ValidationError::UnknownSeries(id),
+            SeriesIdError::Stale(id) => ValidationError::StaleSeries(id),
+        })?;
         let s = sanitize_ohlc_styled(times, open, high, low, close, colors)?;
         let report = s.data.report.clone();
         self.data.set_data(
@@ -1335,9 +1421,10 @@ impl ChartEngine {
     ) -> Result<ValidationReport, ValidationError> {
         // A removed slot must stay empty; ignore the data (the TS series handle rejects the call
         // before it reaches here, so this is defense-in-depth) and report a clean no-op.
-        if self.is_series_removed(id) {
-            return Ok(ValidationReport::default());
-        }
+        self.validate_series_id(id).map_err(|error| match error {
+            SeriesIdError::Unknown(id) => ValidationError::UnknownSeries(id),
+            SeriesIdError::Stale(id) => ValidationError::StaleSeries(id),
+        })?;
         let sanitized = sanitize_ohlc(times, open, high, low, close)?;
         let report = sanitized.report.clone();
         self.data.set_data(
@@ -1366,16 +1453,19 @@ impl ChartEngine {
         high: Vec<f64>,
         low: Vec<f64>,
         close: Vec<f64>,
-    ) {
-        if self.is_series_removed(id) {
-            return;
+    ) -> bool {
+        if self.validate_series_id(id).is_err() {
+            return false;
         }
-        self.data.set_data(id, times, open, high, low, close);
+        if !self.data.set_data(id, times, open, high, low, close) {
+            return false;
+        }
         // A full install can land more rows than the retention ceiling allows; trim before the
         // scale and the indicators see the row set, so nothing downstream indexes evicted rows.
         self.enforce_series_cap(id);
         self.sync_time_points();
         self.recompute_indicators();
+        true
     }
 
     /// Set a series' retention ceiling: at most `max_points` rows, oldest evicted first. `None`
@@ -1394,7 +1484,7 @@ impl ChartEngine {
         if self.is_series_removed(id) {
             return false;
         }
-        let Some(entry) = self.series.iter_mut().find(|s| s.id == id) else {
+        let Some(entry) = self.series_entry_mut(id) else {
             return false;
         };
         entry.max_points = max_points;
@@ -1407,10 +1497,7 @@ impl ChartEngine {
 
     /// This series' retention ceiling (`None` = unbounded).
     pub fn series_max_points(&self, id: SeriesId) -> Option<usize> {
-        self.series
-            .iter()
-            .find(|s| s.id == id)
-            .and_then(|s| s.max_points)
+        self.series_entry(id).and_then(|series| series.max_points)
     }
 
     /// Evict oldest rows if the series is over its ceiling. Returns whether anything was dropped,
@@ -2038,9 +2125,8 @@ impl ChartEngine {
         // the reference's `replacedExistingWhitespace` (firstChangedPointIndex === undefined): the time
         // scale points did not change, so a base-index move comes from a real bar replacing a
         // whitespace point (or a same-length data swap) rather than from new points.
-        let points_unchanged = self.data.merged_times().len() == self.synced_points_len
-            && new_first_time == old_first_time
-            && self.data.merged_times().last().copied() == self.synced_last_time;
+        let points_unchanged =
+            self.data.time_points_generation() == self.synced_time_points_generation;
         let replaced_existing_whitespace = points_unchanged;
 
         if let (Some(visible_bars), Some(old_first), Some(new_first)) =
@@ -2061,14 +2147,20 @@ impl ChartEngine {
                 && (!replaced_existing_whitespace || allow_shift_when_replacing_whitespace)
                 && self.time_scale.options().shift_visible_range_on_new_bar;
             if is_series_points_added_to_right && !need_shift_visible_range_on_new_bar {
-                let compensation_shift = new_base_index.unwrap() - current_base_index;
-                self.time_scale
-                    .set_right_offset(self.time_scale.right_offset() - compensation_shift as f64);
+                if let Some(new_base_index) = new_base_index {
+                    let compensation_shift = new_base_index - current_base_index;
+                    self.time_scale.set_right_offset(
+                        self.time_scale.right_offset() - compensation_shift as f64,
+                    );
+                }
             }
         }
 
         let times = self.data.merged_times();
-        let appended = times.len() == self.synced_points_len + 1
+        let time_points_changed =
+            self.data.time_points_generation() != self.synced_time_points_generation;
+        let appended = time_points_changed
+            && times.len() == self.synced_points_len + 1
             && self.synced_points_len > 0
             && times.last().copied() > self.synced_last_time;
         if appended {
@@ -2078,7 +2170,7 @@ impl ChartEngine {
                 times[start - 1],
             ) as u8;
             self.tick_marks.push_weight(start as i64, weight);
-        } else if times.len() != self.synced_points_len {
+        } else if time_points_changed {
             let mut weights = vec![0u8; times.len()];
             nucleuscharts_core::scale::time_tick_marks::fill_weights_for_points(
                 times,
@@ -2088,6 +2180,7 @@ impl ChartEngine {
             self.tick_marks.set_weights(&weights);
         }
         self.synced_points_len = times.len();
+        self.synced_time_points_generation = self.data.time_points_generation();
         self.synced_last_time = times.last().copied();
         self.synced_first_time = times.first().copied();
         self.time_scale.set_points_len(times.len());

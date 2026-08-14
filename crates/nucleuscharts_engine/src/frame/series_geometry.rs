@@ -154,6 +154,7 @@ impl ChartEngine {
             hpr,
             |index| self.time_scale.index_to_coordinate(index) * hpr,
         );
+        let point_colors = self.data.point_colors(rs.id);
         let items = visible
             .into_iter()
             .map(|bar| {
@@ -161,8 +162,8 @@ impl ChartEngine {
                 // reference data-item colors (series-bar-colorer.ts Candlestick arm): a per-point
                 // override wins over the series' up/down resolution for its own channel.
                 let point = |channel: PointColorChannel| {
-                    self.data
-                        .point_color(rs.id, channel, bar.source_row)
+                    point_colors
+                        .and_then(|colors| colors.color(channel, bar.source_row))
                         .map(Color)
                 };
                 CandleItem {
@@ -222,6 +223,7 @@ impl ChartEngine {
             hpr,
             |index| self.time_scale.index_to_coordinate(index) * hpr,
         );
+        let point_colors = self.data.point_colors(rs.id);
         let items = visible
             .into_iter()
             .map(|bar| BarItem {
@@ -232,9 +234,8 @@ impl ChartEngine {
                 close_y: scale.price_to_coordinate(bar.close, rs.base_value),
                 // reference data-item color (series-bar-colorer.ts Bar arm): a per-point `color`
                 // overrides the bar's up/down body color.
-                color: self
-                    .data
-                    .point_color(rs.id, PointColorChannel::Body, bar.source_row)
+                color: point_colors
+                    .and_then(|colors| colors.color(PointColorChannel::Body, bar.source_row))
                     .map(Color)
                     .unwrap_or(if bar.close >= bar.open {
                         rs.up
@@ -281,6 +282,10 @@ impl ChartEngine {
         // TradingView volume tint: the primary series' up/down direction per bar. The primary
         // is the first visible, non-removed series (id 0 may be tombstoned).
         let main = self.primary_series().map(|s| self.data.plot(s.id));
+        let point_colors = self.data.point_colors(rs.id);
+        let histogram_updown = self
+            .series_entry(rs.id)
+            .is_some_and(|series| series.histogram_updown);
         let visible = visible_histogram_rows(
             plot,
             from,
@@ -295,10 +300,12 @@ impl ChartEngine {
                 let r = item.source_row;
                 // reference data-item color (series-bar-colorer.ts Histogram arm): a per-point
                 // `color` wins over both the series `color` and the up/down volume tint.
-                let color = match self.data.point_color(rs.id, PointColorChannel::Body, r) {
+                let color = match point_colors
+                    .and_then(|colors| colors.color(PointColorChannel::Body, r))
+                {
                     Some(c) => Color(c),
                     None => {
-                        if self.series[rs.id].histogram_updown {
+                        if histogram_updown {
                             // A whitespace row (or no row) on the primary series carries no
                             // direction — the column falls back to its solid color.
                             let direction = main.and_then(|m| {
@@ -385,6 +392,7 @@ impl ChartEngine {
         } else {
             LINE
         };
+        let point_colors = self.data.point_colors(rs.id);
         // Bollinger background fill: the band between this UPPER output and its LOWER
         // companion, in the band color at TradingView's 0.2 background alpha, painted under
         // the band strokes. Both outputs share bar times, so the rows (and x's) align
@@ -432,15 +440,15 @@ impl ChartEngine {
         let resolved: Option<Vec<Color>> = rows
             .iter()
             .any(|&r| {
-                self.data
-                    .point_color(rs.id, PointColorChannel::Body, r)
+                point_colors
+                    .and_then(|colors| colors.color(PointColorChannel::Body, r))
                     .is_some()
             })
             .then(|| {
                 rows.iter()
                     .map(|&r| {
-                        self.data
-                            .point_color(rs.id, PointColorChannel::Body, r)
+                        point_colors
+                            .and_then(|colors| colors.color(PointColorChannel::Body, r))
                             .map(Color)
                             .unwrap_or(color)
                     })
@@ -461,7 +469,9 @@ impl ChartEngine {
                 first_point: first,
                 point_count: count,
                 base_y: (base_y * vpr) as f32,
-                line_type: self.series[rs.id].line_type,
+                line_type: self
+                    .series_entry(rs.id)
+                    .map_or(LineType::Simple, |series| series.line_type),
                 gradient: Gradient {
                     top: rs.area_top,
                     bottom: rs.area_bottom,

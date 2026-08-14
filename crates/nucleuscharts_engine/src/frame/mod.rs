@@ -320,7 +320,7 @@ pub struct PriceAxisTick {
 
 #[derive(Clone, Copy)]
 struct ResolvedSeries {
-    id: usize,
+    id: SeriesId,
     kind: SeriesKind,
     color: Color,
     up: Color,
@@ -399,7 +399,7 @@ impl ChartEngine {
     /// Shared by the baseline geometry builder and the bar-color resolution so both agree on
     /// which side of the baseline a bar sits.
     pub(crate) fn resolved_baseline_price(&self, id: SeriesId, from: i64, to: i64) -> Option<f64> {
-        let series = self.series.iter().find(|s| s.id == id)?;
+        let series = self.series_entry(id)?;
         if let Some(price) = series.baseline {
             return Some(price);
         }
@@ -586,7 +586,9 @@ impl ChartEngine {
             _ => self.series_order.clone(),
         };
         for &id in &order {
-            let s = &self.series[id];
+            let Some(s) = self.series_entry(id) else {
+                continue;
+            };
             let base_value = visible
                 .and_then(|(from, _)| self.series_base_value(s.id, from))
                 .unwrap_or(0.0);
@@ -898,7 +900,10 @@ impl ChartEngine {
             let Some(pane_index) = (s.pane_index < n).then_some(s.pane_index) else {
                 continue;
             };
-            let mm = self.data.plot_mut(s.id).min_max_on_range_cached(
+            let Some(plot) = self.data.plot_mut(s.id) else {
+                continue;
+            };
+            let mm = plot.min_max_on_range_cached(
                 from,
                 to,
                 &[PlotValueIndex::Low, PlotValueIndex::High],

@@ -84,7 +84,7 @@ test("max_points is a hard ceiling that keeps the newest window", async ({ page 
   expect(result.final_first_value).toBe(result.expected_last_value - result.final_rows + 1);
 });
 
-test("a capped series plateaus in memory while an uncapped one keeps growing", async ({ page }) => {
+test("@machine a capped series plateaus in memory while an uncapped one keeps growing", async ({ page }) => {
   test.setTimeout(600_000);
   // The consumer's criterion is that an 8-hour, one-bar-per-second run reaches a stable
   // `memory_bytes` plateau rather than growing monotonically. A single 8-hour pass cannot show

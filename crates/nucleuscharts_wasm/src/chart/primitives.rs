@@ -106,7 +106,7 @@ impl ChartInner {
         let series = self.series.iter().find(|s| {
             s.visible && !s.overlay && s.pane_index == pane_index && s.left_scale == left
         })?;
-        let plot = self.data.plot(series.id);
+        let plot = self.engine.data_layer().plot(series.id);
         let row = plot.first_non_whitespace_row(from)?;
         let value = plot.value_at(row, PlotValueIndex::Close);
         value.is_finite().then_some(value)
@@ -115,7 +115,7 @@ impl ChartInner {
     /// A series' own base value for percentage/indexed scale modes — its first visible close
     /// (the anchor the series' own geometry uses; mirrors the engine's `series_base_value`).
     fn series_scale_base_value(&self, id: SeriesId, from: i64) -> Option<f64> {
-        let plot = self.data.plot(id);
+        let plot = self.engine.data_layer().plot(id);
         let row = plot.first_non_whitespace_row(from)?;
         let value = plot.value_at(row, PlotValueIndex::Close);
         value.is_finite().then_some(value)
@@ -143,7 +143,7 @@ impl ChartInner {
             .collect();
         PrimitiveScaleSnapshot {
             time_scale: self.engine.time_scale.clone(),
-            times: self.engine.data.merged_times().to_vec(),
+            times: self.engine.data_layer().merged_times().to_vec(),
             panes,
             hpr,
             vpr,
@@ -253,11 +253,7 @@ impl ChartInner {
             if !on_hit_pane {
                 continue;
             }
-            for entry in self
-                .series_primitives
-                .iter()
-                .filter(|e| e.series == id as u32)
-            {
+            for entry in self.series_primitives.iter().filter(|e| e.series == id) {
                 if let Some(hit) = call_hit_test(&entry.obj, bx, by) {
                     let hit = hit.for_series(id);
                     if best_primitive
@@ -316,7 +312,12 @@ impl ChartInner {
                     return result(series_id, object_id, cursor);
                 }
             }
-            if self.series[id].pane_index != pane {
+            if self
+                .series
+                .iter()
+                .find(|series| series.id == id && !series.removed)
+                .is_none_or(|series| series.pane_index != pane)
+            {
                 continue;
             }
             let Some(candidate) = self.engine.hit_test_one_series(id, x_css, y_css) else {
