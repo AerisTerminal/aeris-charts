@@ -46,12 +46,8 @@ pub(crate) struct IndicatorBinding {
     /// Parallel volume column source (VWAP); `None` = unit weights.
     pub(crate) volume_source: Option<SeriesId>,
     runtime: nucleuscharts_indicators::IncrementalState,
-    source_len: usize,
     source_generation: u64,
     volume_generation: Option<u64>,
-    source_times: Vec<i64>,
-    install_times: Vec<i64>,
-    install_values: Vec<f64>,
 }
 
 #[derive(Clone, Copy)]
@@ -99,6 +95,22 @@ pub struct IndicatorInfo {
 }
 
 impl ChartEngine {
+    pub(crate) fn indicator_memory_usage(&self) -> (usize, usize) {
+        self.indicators.iter().fold((0, 0), |usage, binding| {
+            (
+                usage.0 + binding.runtime.runtime_bytes(),
+                usage.1 + binding.runtime.transfer_capacity_bytes(),
+            )
+        })
+    }
+
+    pub fn last_indicator_work_rows(&self) -> usize {
+        self.indicators
+            .iter()
+            .map(|binding| binding.runtime.last_work_rows())
+            .sum()
+    }
+
     /// The binding an output series belongs to, or `None` when `id` is not an indicator output
     /// (a plain series, an unknown/removed id, or a source series itself).
     pub fn indicator_info(&self, id: SeriesId) -> Option<IndicatorInfo> {
@@ -385,12 +397,8 @@ impl ChartEngine {
             kind,
             outputs: ids.clone(),
             volume_source,
-            source_len: 0,
             source_generation: 0,
             volume_generation: None,
-            source_times: Vec::new(),
-            install_times: Vec::new(),
-            install_values: Vec::new(),
         });
         self.rebuild_indicator(self.indicators.len() - 1, 0, true);
         ids
@@ -408,19 +416,6 @@ impl ChartEngine {
         ));
         self.propagate_indicator_changes();
         self.sync_time_points();
-    }
-
-    /// Per-bar MACD histogram colors (four TradingView states): strong when the bar moves away
-    /// from zero, weak when it falls back toward it. Installed AFTER the data (a data install
-    /// resets point colors), one entry per installed (non-warm-up) row.
-    fn install_macd_histogram_colors(&mut self, id: SeriesId, values: &[Option<f64>]) {
-        let mut colors = Vec::new();
-        let mut previous: Option<f64> = None;
-        for &value in values.iter().flatten() {
-            colors.push(macd_histogram_color(value, previous));
-            previous = Some(value);
-        }
-        self.data.set_point_colors(id, [Some(colors), None, None]);
     }
 
     pub(crate) fn update_indicators_after_change(
@@ -473,7 +468,6 @@ impl ChartEngine {
         full_replace: bool,
     ) -> [Option<(SeriesId, IndicatorChange)>; 3] {
         let mut changes = [None; 3];
-        let old_len = self.indicators[index].source_len;
         let outputs: [Option<SeriesId>; 3] =
             std::array::from_fn(|slot| self.indicators[index].outputs.get(slot).copied());
         for &output in outputs.iter().flatten() {
@@ -482,7 +476,7 @@ impl ChartEngine {
 
         let source = self.indicators[index].source;
         let volume_source = self.indicators[index].volume_source;
-        let new_len = {
+        {
             let Some((times, values)) = self.data.series_data(source) else {
                 return changes;
             };
@@ -500,70 +494,32 @@ impl ChartEngine {
                 },
                 if full_replace { 0 } else { from },
             );
-            let install_from = if full_replace {
-                0
-            } else {
-                from.min(times.len())
-            };
-            binding.source_times.clear();
-            binding
-                .source_times
-                .extend_from_slice(&times[install_from..]);
-            times.len()
-        };
+        }
         self.indicators[index].source_generation = self.data.series_generation(source).unwrap_or(0);
-        self.indicators[index].source_len = new_len;
         self.indicators[index].volume_generation =
             volume_source.and_then(|id| self.data.series_generation(id));
 
+        let mut full_histogram_colors = None;
         for (output_index, output) in outputs.iter().flatten().copied().enumerate() {
             let previous_generation = self.data.series_generation(output).unwrap_or(0);
-            let binding = &mut self.indicators[index];
-            binding.install_times.clear();
-            binding.install_values.clear();
-            let values = binding.runtime.output(output_index);
-            let install_from = if full_replace { 0 } else { from.min(new_len) };
-            for (&time, &value) in binding.source_times.iter().zip(&values[install_from..]) {
-                if let Some(value) = value {
-                    binding.install_times.push(time);
-                    binding.install_values.push(value);
-                }
-            }
+            let source_from = self.indicators[index].runtime.output_from(output_index);
 
             let output_from = if full_replace {
-                0
-            } else if let Some(&first_time) = binding.install_times.first() {
-                self.data.series_data(output).map_or(0, |(times, _)| {
-                    times
-                        .binary_search(&first_time)
-                        .unwrap_or_else(|position| position)
-                })
-            } else {
-                continue;
-            };
-
-            if full_replace {
-                let values = &binding.install_values;
-                self.data.set_data(
-                    output,
-                    binding.install_times.clone(),
-                    values.clone(),
-                    values.clone(),
-                    values.clone(),
-                    values.clone(),
-                );
-            } else if from >= old_len.saturating_sub(1) && new_len >= old_len {
-                for (&time, &value) in binding.install_times.iter().zip(&binding.install_values) {
-                    self.data.update(output, time, [value; 4]);
+                let values = self.indicators[index].runtime.take_output(output_index);
+                if output_index == 2
+                    && matches!(self.indicators[index].kind, IndicatorKind::Macd { .. })
+                {
+                    full_histogram_colors = Some(macd_histogram_colors(&values));
                 }
-            } else if !binding.install_times.is_empty() {
-                let values = binding.install_values.as_slice();
-                self.data.update_many(
-                    output,
-                    &binding.install_times,
-                    [values, values, values, values],
-                );
-            }
+                self.data
+                    .set_single_data_aligned(output, source, source_from, values);
+                0
+            } else {
+                let values = self.indicators[index].runtime.output(output_index);
+                self.data
+                    .update_single_aligned(output, source, source_from, values)
+                    .expect("indicator output remains aligned to its source")
+            };
             if self.data.series_generation(output).unwrap_or(0) != previous_generation {
                 changes[output_index] = Some((
                     output,
@@ -577,24 +533,24 @@ impl ChartEngine {
         }
 
         if let IndicatorKind::Macd { slow, signal, .. } = self.indicators[index].kind {
-            if full_replace || from < old_len.saturating_sub(1) {
-                let histogram = self.indicators[index].runtime.output(2).to_vec();
-                self.install_macd_histogram_colors(outputs[2].unwrap(), &histogram);
+            let histogram_id = outputs[2].unwrap();
+            if let Some(colors) = full_histogram_colors {
+                self.data
+                    .set_point_colors(histogram_id, [Some(colors), None, None]);
             } else {
                 let histogram = self.indicators[index].runtime.output(2);
                 let first_histogram = slow.saturating_add(signal).saturating_sub(2);
-                let output_start = from.saturating_sub(first_histogram);
-                let mut previous = from
-                    .checked_sub(1)
-                    .and_then(|row| histogram.get(row).copied().flatten());
-                for (offset, &value) in histogram[from.min(histogram.len())..]
-                    .iter()
-                    .flatten()
-                    .enumerate()
-                {
+                let source_from = self.indicators[index].runtime.output_from(2);
+                let output_start = source_from.saturating_sub(first_histogram);
+                let mut previous = output_start.checked_sub(1).and_then(|row| {
+                    self.data
+                        .series_data(histogram_id)
+                        .and_then(|(_, values)| values[3].get(row).copied())
+                });
+                for (offset, &value) in histogram.iter().enumerate() {
                     let color = macd_histogram_color(value, previous);
                     self.data.set_point_color(
-                        outputs[2].unwrap(),
+                        histogram_id,
                         PointColorChannel::Body,
                         output_start + offset,
                         color,
@@ -603,8 +559,19 @@ impl ChartEngine {
                 }
             }
         }
+        self.indicators[index].runtime.release_transfer_capacity();
         changes
     }
+}
+
+fn macd_histogram_colors(values: &[f64]) -> Vec<u32> {
+    let mut colors = Vec::with_capacity(values.len());
+    let mut previous = None;
+    for &value in values {
+        colors.push(macd_histogram_color(value, previous));
+        previous = Some(value);
+    }
+    colors
 }
 
 fn incremental_state(kind: &IndicatorKind) -> nucleuscharts_indicators::IncrementalState {

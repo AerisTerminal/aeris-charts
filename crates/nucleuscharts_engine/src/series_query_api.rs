@@ -429,7 +429,7 @@ impl ChartEngine {
 
     fn series_point_at_row(&self, id: SeriesId, row: usize) -> Option<SeriesDataPoint> {
         let plot = self.data.plot(id);
-        let index = *plot.indices().get(row)?;
+        let index = plot.index_at(row)?;
         let time = *self.data.merged_times().get(index as usize)?;
         Some(SeriesDataPoint {
             time,
@@ -525,7 +525,7 @@ impl ChartEngine {
         if !value.is_finite() {
             return None;
         }
-        let time = *self.data.merged_times().get(plot.indices()[row] as usize)?;
+        let time = *self.data.merged_times().get(plot.index_at(row)? as usize)?;
         let formatted = self.format_series_resolved(series, value);
         Some(
             serde_json::json!({
@@ -554,8 +554,8 @@ impl ChartEngine {
         let strict = LogicalRange::new(from, to).to_strict();
         let first_row = plot.search(strict.left(), MismatchDirection::NearestRight);
         let last_row = plot.search(strict.right(), MismatchDirection::NearestLeft);
-        let first_index = first_row.and_then(|row| plot.indices().get(row).copied());
-        let last_index = last_row.and_then(|row| plot.indices().get(row).copied());
+        let first_index = first_row.and_then(|row| plot.index_at(row));
+        let last_index = last_row.and_then(|row| plot.index_at(row));
 
         if first_index
             .zip(last_index)

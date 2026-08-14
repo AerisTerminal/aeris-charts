@@ -61,6 +61,72 @@ fn constructs_without_a_browser_or_gpu() {
 }
 
 #[test]
+fn series_kind_selects_canonical_scalar_storage_without_collapsing_flat_ohlc() {
+    let mut chart = ChartEngine::new(800.0, 600.0, 1.0);
+    let times = [1.0, 2.0, 3.0];
+    let values = [10.0, 10.0, 10.0];
+    chart
+        .set_series_data(0, &times, &values, &values, &values, &values)
+        .unwrap();
+    assert_eq!(
+        chart
+            .data_layer()
+            .series_memory_usage(0)
+            .unwrap()
+            .canonical_value_bytes,
+        3 * 4 * std::mem::size_of::<f64>()
+    );
+
+    let line = chart.add_series(SeriesKind::Line);
+    chart
+        .set_series_data(line, &times, &values, &values, &values, &values)
+        .unwrap();
+    assert_eq!(
+        chart
+            .data_layer()
+            .series_memory_usage(line)
+            .unwrap()
+            .canonical_value_bytes,
+        3 * std::mem::size_of::<f64>()
+    );
+}
+
+#[test]
+fn rsi_output_aliases_source_time_and_keeps_sparse_runtime() {
+    let rows = 10_000;
+    let times = (0..rows).map(|row| row as f64 * 60.0).collect::<Vec<_>>();
+    let close = (0..rows)
+        .map(|row| 100.0 + (row as f64 * 0.01).sin())
+        .collect::<Vec<_>>();
+    let open = close.clone();
+    let high = close.iter().map(|value| value + 1.0).collect::<Vec<_>>();
+    let low = close.iter().map(|value| value - 1.0).collect::<Vec<_>>();
+    let mut chart = ChartEngine::new(800.0, 600.0, 1.0);
+    chart
+        .set_series_data(0, &times, &open, &high, &low, &close)
+        .unwrap();
+    let source_memory = chart.memory_usage();
+    let output = chart.add_rsi(0, 14).unwrap();
+    let memory = chart.memory_usage();
+    let output_memory = chart.data_layer().series_memory_usage(output).unwrap();
+
+    assert_eq!(output_memory.rows, rows - 14);
+    assert_eq!(output_memory.owned_time_bytes, 0);
+    assert_eq!(output_memory.plot_index_bytes, 0);
+    assert_eq!(
+        output_memory.canonical_value_bytes,
+        (rows - 14) * std::mem::size_of::<f64>()
+    );
+    assert!(output_memory.aligned_time_view);
+    assert_eq!(
+        memory.data.merged_time_bytes,
+        source_memory.data.merged_time_bytes
+    );
+    assert!(memory.indicator_runtime_bytes < 4 * 1024);
+    assert_eq!(memory.indicator_transfer_capacity_bytes, 0);
+}
+
+#[test]
 fn pane_layout_is_host_independent() {
     let mut pane = Pane::new();
     pane.top = 100.0;

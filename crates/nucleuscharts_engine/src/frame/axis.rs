@@ -1344,13 +1344,11 @@ impl ChartEngine {
     pub(crate) fn series_countdown_text(&self, id: SeriesId) -> Option<String> {
         let now = self.now_override?;
         let plot = self.data.plot(id);
-        let indices = plot.indices();
         // Only the tail (up to 11 bars → 10 deltas) feeds the inference.
-        let tail = &indices[indices.len().saturating_sub(11)..];
         let times = self.data.merged_times();
-        let tail_times: Vec<i64> = tail
-            .iter()
-            .filter_map(|i| times.get(*i as usize).copied())
+        let tail_times: Vec<i64> = (plot.size().saturating_sub(11)..plot.size())
+            .filter_map(|row| plot.index_at(row))
+            .filter_map(|index| times.get(index as usize).copied())
             .collect();
         let interval = median_bar_interval(&tail_times)?;
         let last_time = *tail_times.last()?;

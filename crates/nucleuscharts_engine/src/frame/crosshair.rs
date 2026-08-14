@@ -106,14 +106,14 @@ impl ChartEngine {
             let plot = self.data.plot(s.id);
             // Whitespace rows hold no bar (the reference's plot list omits them); scan past them.
             if let Some(row) = plot.last_non_whitespace_row(index) {
-                let candidate = plot.indices()[row];
+                let candidate = plot.index_at(row).expect("crosshair row index");
                 if candidate == index {
                     return index; // already snapped
                 }
                 closest_left = Some(closest_left.map_or(candidate, |l: i64| l.max(candidate)));
             }
             if let Some(row) = plot.first_non_whitespace_row(index) {
-                let candidate = plot.indices()[row];
+                let candidate = plot.index_at(row).expect("crosshair row index");
                 if candidate == index {
                     return index; // already snapped
                 }

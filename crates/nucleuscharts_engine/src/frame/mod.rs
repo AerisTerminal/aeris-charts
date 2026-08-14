@@ -11,7 +11,7 @@ use nucleuscharts_core::format::time_formatter::{
 use nucleuscharts_core::format::volume_formatter::VolumeFormatter;
 use nucleuscharts_core::model::data_layer::{PointColorChannel, SeriesId};
 use nucleuscharts_core::model::magnet::{magnet_snap_coordinate, CrosshairMode};
-use nucleuscharts_core::model::plot_list::{MismatchDirection, PlotList, PlotValueIndex};
+use nucleuscharts_core::model::plot_list::{MismatchDirection, PlotListView, PlotValueIndex};
 use nucleuscharts_core::model::price_range::PriceRange;
 use nucleuscharts_core::scale::price_scale_core::{PriceScaleCore, PriceScaleMode};
 use nucleuscharts_core::style::{
@@ -354,6 +354,41 @@ pub(crate) struct RetainedFrame {
     last_overlay_key: Option<[u64; 6]>,
     last_options_generation: u64,
     last_series_style_key: u64,
+}
+
+impl RetainedFrame {
+    pub(crate) fn capacity_bytes(&self) -> usize {
+        fn layer_bytes(layer: &RetainedLayer) -> usize {
+            layer.prims.capacity() * std::mem::size_of::<Prim>()
+                + layer.points.capacity() * std::mem::size_of::<[f32; 2]>()
+        }
+
+        self.panes
+            .iter()
+            .map(|pane| {
+                layer_bytes(&pane.under)
+                    + layer_bytes(&pane.series)
+                    + layer_bytes(&pane.chrome)
+                    + layer_bytes(&pane.drawings)
+                    + layer_bytes(&pane.overlay)
+                    + pane.series_paint_marks.capacity() * std::mem::size_of::<(SeriesId, usize)>()
+                    + pane.series_layers.capacity() * std::mem::size_of::<RetainedSeriesLayer>()
+                    + pane
+                        .series_layers
+                        .iter()
+                        .map(|series| layer_bytes(&series.layer))
+                        .sum::<usize>()
+            })
+            .sum::<usize>()
+            + self.panes.capacity() * std::mem::size_of::<RetainedPane>()
+            + self.segments.capacity() * std::mem::size_of::<FramePaneSegments>()
+            + self.series_segments.capacity() * std::mem::size_of::<Vec<FrameSeriesSegment>>()
+            + self
+                .series_segments
+                .iter()
+                .map(|segments| segments.capacity() * std::mem::size_of::<FrameSeriesSegment>())
+                .sum::<usize>()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1583,10 +1618,8 @@ impl ChartEngine {
             let Some(pane_index) = (s.pane_index < n).then_some(s.pane_index) else {
                 continue;
             };
-            let Some(plot) = self.data.plot_mut(s.id) else {
-                continue;
-            };
-            let mm = plot.min_max_on_range_cached(
+            let mm = self.data.min_max_on_range_cached(
+                s.id,
                 from,
                 to,
                 &[PlotValueIndex::Low, PlotValueIndex::High],

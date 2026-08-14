@@ -40,7 +40,7 @@ pub use workspace::{SplitDirection, Workspace, WorkspaceError, WorkspaceLayout, 
 use nucleuscharts_core::format::price_formatter::PriceFormatter;
 use nucleuscharts_core::format::time_formatter::{MonthNames, DEFAULT_DATE_FORMAT};
 use nucleuscharts_core::model::data_layer::{
-    DataLayer, PointColorChannel, SeriesId, SeriesIdError,
+    DataLayer, DataLayerMemoryUsage, PointColorChannel, SeriesId, SeriesIdError,
 };
 use nucleuscharts_core::model::data_validation::{
     sanitize_ohlc, sanitize_ohlc_styled, sanitize_point, ValidationError, ValidationReport,
@@ -65,6 +65,25 @@ use nucleuscharts_render::draw_list::{LineStyle, LineType};
 pub type PriceFormatterFn = Box<dyn Fn(f64) -> Option<String>>;
 pub type TickMarkFormatterFn = Box<dyn Fn(i64, u8) -> Option<String>>;
 pub type TimeFormatterFn = Box<dyn Fn(i64) -> Option<String>>;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EngineMemoryUsage {
+    pub data: DataLayerMemoryUsage,
+    pub tick_payload_bytes: usize,
+    pub tick_capacity_bytes: usize,
+    pub indicator_runtime_bytes: usize,
+    pub indicator_transfer_capacity_bytes: usize,
+    pub retained_frame_capacity_bytes: usize,
+}
+
+impl EngineMemoryUsage {
+    pub fn estimated_live_bytes(self) -> usize {
+        self.data.logical_payload_bytes()
+            + self.tick_payload_bytes
+            + self.indicator_runtime_bytes
+            + self.retained_frame_capacity_bytes
+    }
+}
 
 /// reference `PriceFormat` kind (model/series-options.ts): the built-in `price` (precision/minMove
 /// decimals), `volume` (K/M/B suffixes), `percent` (% sign), or a host `custom` formatter fn.
@@ -230,6 +249,13 @@ impl SeriesKind {
             Self::Baseline => 5,
             Self::Custom => 6,
         }
+    }
+
+    fn stores_scalar_values(self) -> bool {
+        matches!(
+            self,
+            Self::Line | Self::Area | Self::Histogram | Self::Baseline
+        )
     }
 }
 
@@ -815,6 +841,21 @@ impl ChartEngine {
     /// scale, indicator, retention, and invalidation invariants remain synchronized.
     pub fn data_layer(&self) -> &DataLayer {
         &self.data
+    }
+
+    /// Structure-level memory attribution for engineering evidence. This reports logical payload
+    /// and vector capacity, not allocator metadata, committed WASM pages, or browser memory.
+    pub fn memory_usage(&self) -> EngineMemoryUsage {
+        let (indicator_runtime_bytes, indicator_transfer_capacity_bytes) =
+            self.indicator_memory_usage();
+        EngineMemoryUsage {
+            data: self.data.memory_usage(),
+            tick_payload_bytes: self.tick_marks.payload_bytes(),
+            tick_capacity_bytes: self.tick_marks.capacity_bytes(),
+            indicator_runtime_bytes,
+            indicator_transfer_capacity_bytes,
+            retained_frame_capacity_bytes: self.retained_frame.capacity_bytes(),
+        }
     }
 
     /// Read-only time tick state derived from the canonical timestamp sequence.
@@ -1521,7 +1562,7 @@ impl ChartEngine {
         })?;
         let s = sanitize_ohlc_styled(times, open, high, low, close, colors)?;
         let report = s.data.report.clone();
-        self.data.set_data(
+        self.install_series_columns(
             id,
             s.data.times,
             s.data.open,
@@ -1562,7 +1603,7 @@ impl ChartEngine {
         })?;
         let sanitized = sanitize_ohlc(times, open, high, low, close)?;
         let report = sanitized.report.clone();
-        self.data.set_data(
+        self.install_series_columns(
             id,
             sanitized.times,
             sanitized.open,
@@ -1593,7 +1634,7 @@ impl ChartEngine {
         if self.validate_series_id(id).is_err() {
             return false;
         }
-        if !self.data.set_data(id, times, open, high, low, close) {
+        if !self.install_series_columns(id, times, open, high, low, close) {
             return false;
         }
         // A full install can land more rows than the retention ceiling allows; trim before the
@@ -1602,6 +1643,28 @@ impl ChartEngine {
         self.sync_time_points();
         self.recompute_indicators_for(id);
         true
+    }
+
+    fn install_series_columns(
+        &mut self,
+        id: SeriesId,
+        times: Vec<i64>,
+        open: Vec<f64>,
+        high: Vec<f64>,
+        low: Vec<f64>,
+        close: Vec<f64>,
+    ) -> bool {
+        let scalar = self
+            .series_entry(id)
+            .is_some_and(|series| series.kind.stores_scalar_values())
+            && open == high
+            && open == low
+            && open == close;
+        if scalar {
+            self.data.set_single_data(id, times, close)
+        } else {
+            self.data.set_data(id, times, open, high, low, close)
+        }
     }
 
     /// Set a series' retention ceiling: at most `max_points` rows, oldest evicted first. `None`

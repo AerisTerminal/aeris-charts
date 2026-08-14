@@ -137,6 +137,32 @@ impl TimeTickMarks {
         Self::default()
     }
 
+    /// Estimated live vector payload retained by tick selection. Map/node allocator overhead is
+    /// intentionally excluded; benchmark reports label this as structure payload, not heap truth.
+    pub fn payload_bytes(&self) -> usize {
+        let buckets = self
+            .marks_by_weight
+            .values()
+            .map(|indices| indices.len() * std::mem::size_of::<TimePointIndex>())
+            .sum::<usize>();
+        let cache = self.cache.as_ref().map_or(0, |(_, marks)| {
+            marks.len() * std::mem::size_of::<TickMark>()
+        });
+        buckets + cache
+    }
+
+    pub fn capacity_bytes(&self) -> usize {
+        let buckets = self
+            .marks_by_weight
+            .values()
+            .map(|indices| indices.capacity() * std::mem::size_of::<TimePointIndex>())
+            .sum::<usize>();
+        let cache = self.cache.as_ref().map_or(0, |(_, marks)| {
+            marks.capacity() * std::mem::size_of::<TickMark>()
+        });
+        buckets + cache
+    }
+
     /// Full rebuild from per-point weights (incremental `firstChangedPointIndex` variant
     /// comes with the data layer).
     pub fn set_weights(&mut self, weights: &[u8]) {

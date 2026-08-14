@@ -350,7 +350,6 @@ impl ChartEngine {
                     .map(|distance| (distance, SeriesHitKind::Range))
             }
             SeriesKind::Line | SeriesKind::Area | SeriesKind::Baseline => {
-                let indices = plot.indices();
                 let close = plot.column(PlotValueIndex::Close);
                 let points = crate::frame::conflation::visible_line_rows(
                     plot,
@@ -363,7 +362,8 @@ impl ChartEngine {
                 .into_iter()
                 .map(|row| {
                     (
-                        self.time_scale.index_to_coordinate(indices[row]),
+                        self.time_scale
+                            .index_to_coordinate(plot.index_at(row).expect("hit-test row index")),
                         scale.price_to_coordinate(close[row], base_value),
                     )
                 })

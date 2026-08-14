@@ -2,6 +2,7 @@
 
 use super::conflation::{VisibleHistogramRow, VisibleOhlc};
 use super::*;
+use nucleuscharts_core::model::plot_list::{PlotList, PlotValues};
 
 #[test]
 fn marker_geometry_tracks_reference_spacing_buckets() {
@@ -43,7 +44,35 @@ fn marker_autoscale_margins_match_reference_position_rules() {
     );
 }
 
-fn test_plot(count: usize) -> PlotList {
+struct TestPlot {
+    indices: PlotList,
+    values: [Vec<f64>; 4],
+}
+
+impl TestPlot {
+    fn new(indices: Vec<i64>, values: [Vec<f64>; 4]) -> Self {
+        let mut plot = PlotList::new();
+        plot.set_indices(indices);
+        Self {
+            indices: plot,
+            values,
+        }
+    }
+
+    fn view(&self) -> PlotListView<'_> {
+        PlotListView::new(
+            &self.indices,
+            PlotValues::Ohlc([
+                &self.values[0],
+                &self.values[1],
+                &self.values[2],
+                &self.values[3],
+            ]),
+        )
+    }
+}
+
+fn test_plot(count: usize) -> TestPlot {
     let indices: Vec<i64> = (0..count as i64).collect();
     let close: Vec<f64> = indices
         .iter()
@@ -57,15 +86,16 @@ fn test_plot(count: usize) -> PlotList {
             }
         })
         .collect();
-    let mut plot = PlotList::new();
-    plot.set_data(indices, close.clone(), close.clone(), close.clone(), close);
-    plot
+    TestPlot::new(
+        indices,
+        [close.clone(), close.clone(), close.clone(), close],
+    )
 }
 
 #[test]
 fn conflation_preserves_endpoints_and_pixel_bucket_extrema() {
     let plot = test_plot(100);
-    let rows = visible_line_rows(&plot, 0, 99, 0.1, 1.0, |index| index as f64 * 0.1);
+    let rows = visible_line_rows(plot.view(), 0, 99, 0.1, 1.0, |index| index as f64 * 0.1);
     assert!(
         rows.len() < 60,
         "sub-pixel data should be reduced: {} rows",
@@ -83,7 +113,7 @@ fn conflation_preserves_endpoints_and_pixel_bucket_extrema() {
 #[test]
 fn normal_spacing_keeps_every_visible_row() {
     let plot = test_plot(32);
-    let rows = visible_line_rows(&plot, 4, 20, 2.0, 1.0, |index| index as f64 * 2.0);
+    let rows = visible_line_rows(plot.view(), 4, 20, 2.0, 1.0, |index| index as f64 * 2.0);
     assert_eq!(rows, (4..=20).map(|i| i as usize).collect::<Vec<_>>());
 }
 
@@ -94,10 +124,9 @@ fn ohlc_conflation_keeps_first_open_last_close_and_full_envelope() {
     let high = vec![13.0, 15.0, 19.0, 16.0, 22.0, 25.0, 21.0, 20.0];
     let low = vec![9.0, 8.0, 10.0, 11.0, 18.0, 16.0, 15.0, 14.0];
     let close = vec![12.0, 11.0, 14.0, 13.0, 19.0, 18.0, 17.0, 16.0];
-    let mut plot = PlotList::new();
-    plot.set_data(indices, open, high, low, close);
+    let plot = TestPlot::new(indices, [open, high, low, close]);
 
-    let bars = visible_ohlc(&plot, 0, 7, 0.25, 1.0, |index| index as f64 * 0.25);
+    let bars = visible_ohlc(plot.view(), 0, 7, 0.25, 1.0, |index| index as f64 * 0.25);
     assert_eq!(
         bars,
         vec![
@@ -126,27 +155,24 @@ fn ohlc_conflation_keeps_first_open_last_close_and_full_envelope() {
 #[test]
 fn ohlc_normal_spacing_is_an_identity_transform() {
     let plot = test_plot(8);
-    let bars = visible_ohlc(&plot, 2, 5, 2.0, 1.5, |index| index as f64 * 3.0);
+    let view = plot.view();
+    let bars = visible_ohlc(view, 2, 5, 2.0, 1.5, |index| index as f64 * 3.0);
     assert_eq!(bars.len(), 4);
     assert_eq!(bars[0].x_px, 6.0);
-    assert_eq!(bars[0].open, plot.value_at(2, PlotValueIndex::Open));
-    assert_eq!(bars[3].close, plot.value_at(5, PlotValueIndex::Close));
+    assert_eq!(bars[0].open, view.value_at(2, PlotValueIndex::Open));
+    assert_eq!(bars[3].close, view.value_at(5, PlotValueIndex::Close));
 }
 
 #[test]
 fn histogram_conflation_preserves_largest_magnitude_and_source_row() {
     let indices: Vec<i64> = (0..8).collect();
     let values = vec![1.0, -8.0, 3.0, 4.0, 2.0, 5.0, -12.0, 7.0];
-    let mut plot = PlotList::new();
-    plot.set_data(
+    let plot = TestPlot::new(
         indices,
-        values.clone(),
-        values.clone(),
-        values.clone(),
-        values,
+        [values.clone(), values.clone(), values.clone(), values],
     );
 
-    let rows = visible_histogram_rows(&plot, 0, 7, 0.25, 1.0, |index| index as f64 * 0.25);
+    let rows = visible_histogram_rows(plot.view(), 0, 7, 0.25, 1.0, |index| index as f64 * 0.25);
     assert_eq!(
         rows,
         vec![

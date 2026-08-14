@@ -245,6 +245,215 @@ fn indicator_source_scaling_rows() -> Vec<serde_json::Value> {
     rows
 }
 
+fn memory_density_rows() -> Vec<serde_json::Value> {
+    let mut rows = Vec::new();
+    for points in [10_000, 100_000, 1_000_000] {
+        let columns = generate(points, SEED);
+        for indicator in ["none", "rsi", "macd", "all"] {
+            let mut chart = ChartEngine::new(1280.0, 720.0, 1.0);
+            let started = Instant::now();
+            install(&mut chart, &columns);
+            let source_install_ms = started.elapsed().as_secs_f64() * 1_000.0;
+            let source = chart
+                .data_layer()
+                .series_memory_usage(0)
+                .expect("main source exists");
+            let started = Instant::now();
+            add_indicator_set(&mut chart, indicator);
+            let indicator_install_ms = started.elapsed().as_secs_f64() * 1_000.0;
+            let mut frame = ChartFrame::default();
+            chart.build_frame_into(&mut frame);
+            let memory = chart.memory_usage();
+            let time = *columns.times.last().unwrap();
+            let close = *columns.close.last().unwrap();
+            let mut current_update_us = Vec::with_capacity(10);
+            for run in 0..10 {
+                let value = close + run as f64 * 0.000_01;
+                let started = Instant::now();
+                chart.update_series_bar(0, time, [value, value + 0.2, value - 0.2, value]);
+                current_update_us.push(started.elapsed().as_secs_f64() * 1_000_000.0);
+            }
+            rows.push(json!({
+                "rows": points,
+                "series_type": "ohlc",
+                "indicator_config": indicator,
+                "source_time_bytes": source.owned_time_bytes,
+                "canonical_source_value_bytes": source.canonical_value_bytes,
+                "canonical_value_bytes": memory.data.canonical_value_bytes,
+                "derived_output_bytes": memory.data.canonical_value_bytes - source.canonical_value_bytes,
+                "index_bytes": memory.data.plot_index_bytes,
+                "merged_time_bytes": memory.data.merged_time_bytes,
+                "time_bytes": memory.data.owned_time_bytes + memory.data.merged_time_bytes,
+                "tick_payload_bytes": memory.tick_payload_bytes,
+                "derived_runtime_bytes": memory.indicator_runtime_bytes,
+                "scratch_capacity_bytes": memory.data.scratch_capacity_bytes + memory.indicator_transfer_capacity_bytes,
+                "frame_retained_capacity_bytes": memory.retained_frame_capacity_bytes,
+                "engine_live_payload_bytes": memory.estimated_live_bytes(),
+                "engine_allocated_capacity_bytes": memory.data.allocated_capacity_bytes
+                    + memory.tick_capacity_bytes
+                    + memory.indicator_runtime_bytes
+                    + memory.indicator_transfer_capacity_bytes
+                    + memory.retained_frame_capacity_bytes,
+                "aligned_series": memory.data.aligned_series,
+                "dense_index_series": memory.data.dense_index_series,
+                "source_install_ms": source_install_ms,
+                "indicator_install_ms": indicator_install_ms,
+                "current_update_us": current_update_us,
+            }));
+        }
+    }
+    rows
+}
+
+fn historical_correction_rows() -> Vec<serde_json::Value> {
+    let mut rows = Vec::new();
+    for points in [100_000, 1_000_000] {
+        let columns = generate(points, SEED);
+        for indicator in ["rsi", "all"] {
+            let mut chart = ChartEngine::new(1280.0, 720.0, 1.0);
+            install(&mut chart, &columns);
+            add_indicator_set(&mut chart, indicator);
+            for (position, row) in [
+                ("last", points - 1),
+                ("last_10", points - 10),
+                ("middle", points / 2),
+                ("quarter", points / 4),
+                ("three_quarters", points * 3 / 4),
+                ("warmup", 2),
+            ] {
+                let close = columns.close[row] + 0.001;
+                let started = Instant::now();
+                chart.update_series_bar(
+                    0,
+                    columns.times[row],
+                    [close, close + 0.2, close - 0.2, close],
+                );
+                rows.push(json!({
+                    "rows": points,
+                    "indicator_config": indicator,
+                    "position": position,
+                    "source_row": row,
+                    "work_rows": chart.last_indicator_work_rows(),
+                    "elapsed_ms": started.elapsed().as_secs_f64() * 1_000.0,
+                }));
+            }
+        }
+    }
+    rows
+}
+
+fn multi_series_memory_rows() -> Vec<serde_json::Value> {
+    let points = 10_000;
+    let columns = generate(points, SEED);
+    let mut rows = Vec::new();
+    for aligned in [true, false] {
+        for count in [1, 2, 4, 8, 16] {
+            let mut chart = ChartEngine::new(1280.0, 720.0, 1.0);
+            let mut ids = vec![0];
+            ids.extend(
+                (1..count).map(|_| chart.add_series(nucleuscharts_engine::SeriesKind::Candlestick)),
+            );
+            for (index, id) in ids.into_iter().enumerate() {
+                if aligned || index == 0 {
+                    install_series(&mut chart, id, &columns, 0.0);
+                } else {
+                    install_series(&mut chart, id, &columns, index as f64);
+                }
+            }
+            let memory = chart.memory_usage();
+            rows.push(json!({
+                "series_count": count,
+                "alignment": if aligned { "aligned" } else { "independent" },
+                "rows_per_series": points,
+                "canonical_value_bytes": memory.data.canonical_value_bytes,
+                "owned_time_bytes": memory.data.owned_time_bytes,
+                "merged_time_bytes": memory.data.merged_time_bytes,
+                "index_bytes": memory.data.plot_index_bytes,
+                "engine_live_payload_bytes": memory.estimated_live_bytes(),
+                "dense_index_series": memory.data.dense_index_series,
+            }));
+        }
+    }
+    rows
+}
+
+fn install_series(chart: &mut ChartEngine, id: u32, columns: &Columns, time_offset: f64) {
+    let times = if time_offset == 0.0 {
+        columns.times.clone()
+    } else {
+        columns
+            .times
+            .iter()
+            .map(|time| time + time_offset)
+            .collect()
+    };
+    chart
+        .set_series_data(
+            id,
+            &times,
+            &columns.open,
+            &columns.high,
+            &columns.low,
+            &columns.close,
+        )
+        .expect("deterministic fixture is valid");
+}
+
+fn multi_chart_memory_rows() -> Vec<serde_json::Value> {
+    let columns = generate(10_000, SEED);
+    [1, 2, 4, 8, 16]
+        .into_iter()
+        .map(|count| {
+            let charts = (0..count)
+                .map(|_| {
+                    let mut chart = ChartEngine::new(1280.0, 720.0, 1.0);
+                    install(&mut chart, &columns);
+                    chart
+                })
+                .collect::<Vec<_>>();
+            json!({
+                "chart_count": count,
+                "rows_per_chart": columns.times.len(),
+                "engine_live_payload_bytes": charts.iter().map(|chart| chart.memory_usage().estimated_live_bytes()).sum::<usize>(),
+                "allocated_capacity_bytes": charts.iter().map(|chart| {
+                    let memory = chart.memory_usage();
+                    memory.data.allocated_capacity_bytes + memory.tick_capacity_bytes + memory.retained_frame_capacity_bytes
+                }).sum::<usize>(),
+            })
+        })
+        .collect()
+}
+
+fn retention_and_lifecycle() -> serde_json::Value {
+    let columns = generate(100_000, SEED);
+    let mut chart = ChartEngine::new(1280.0, 720.0, 1.0);
+    install(&mut chart, &columns);
+    chart.add_rsi(0, 14);
+    let before = chart.memory_usage();
+    chart.set_series_max_points(0, Some(10_000));
+    let retained = chart.memory_usage();
+    let removed = chart.remove_series(0);
+    let after_remove = chart.memory_usage();
+
+    let cycle_columns = generate(10_000, SEED);
+    let started = Instant::now();
+    for _ in 0..20 {
+        let mut cycle = ChartEngine::new(1280.0, 720.0, 1.0);
+        install(&mut cycle, &cycle_columns);
+        cycle.add_rsi(0, 14);
+    }
+    json!({
+        "loaded_rows": 100_000,
+        "retained_rows": retained.data.rows,
+        "before_live_bytes": before.estimated_live_bytes(),
+        "retained_live_bytes": retained.estimated_live_bytes(),
+        "series_removed": removed,
+        "after_remove_live_bytes": after_remove.estimated_live_bytes(),
+        "create_destroy_cycles": 20,
+        "create_destroy_elapsed_ms": started.elapsed().as_secs_f64() * 1_000.0,
+    })
+}
+
 fn dense_upload_breakdown() -> serde_json::Value {
     let columns = generate(1_000_000, SEED);
     let mut chart = ChartEngine::new(1280.0, 720.0, 1.0);
@@ -341,6 +550,11 @@ fn main() {
             "indicator_batch": indicator_batch_rows(),
             "indicator_scaling": indicator_scaling_rows(),
             "indicator_source_scaling": indicator_source_scaling_rows(),
+            "memory_density": memory_density_rows(),
+            "historical_corrections": historical_correction_rows(),
+            "multi_series_memory": multi_series_memory_rows(),
+            "multi_chart_memory": multi_chart_memory_rows(),
+            "retention_and_lifecycle": retention_and_lifecycle(),
             "dense_upload": dense_upload_breakdown(),
         }))
         .expect("JSON serializes")

@@ -269,7 +269,6 @@ impl ChartEngine {
         scale: &nucleuscharts_core::scale::price_scale_core::PriceScaleCore,
     ) {
         let plot = self.data.plot(rs.id);
-        let idxs = plot.indices();
         let c = plot.column(PlotValueIndex::Close);
         // reference HistogramStyleOptions.base (histogram-renderer.ts): columns grow from this price
         // level (default 0).
@@ -309,7 +308,10 @@ impl ChartEngine {
                             // A whitespace row (or no row) on the primary series carries no
                             // direction — the column falls back to its solid color.
                             let direction = main.and_then(|m| {
-                                let row = m.search(idxs[r], MismatchDirection::None)?;
+                                let row = m.search(
+                                    plot.index_at(r).expect("histogram row index"),
+                                    MismatchDirection::None,
+                                )?;
                                 if m.is_whitespace_row(row) {
                                     return None;
                                 }
@@ -362,7 +364,6 @@ impl ChartEngine {
         scale: &nucleuscharts_core::scale::price_scale_core::PriceScaleCore,
     ) {
         let plot = self.data.plot(rs.id);
-        let idxs = plot.indices();
         let c = plot.column(PlotValueIndex::Close);
         let rows = visible_line_rows(
             plot,
@@ -375,7 +376,10 @@ impl ChartEngine {
         let mut row_points: Vec<[f32; 2]> = Vec::with_capacity(rows.len());
         for &r in &rows {
             row_points.push([
-                (self.time_scale.index_to_coordinate(idxs[r]) * hpr) as f32,
+                (self
+                    .time_scale
+                    .index_to_coordinate(plot.index_at(r).expect("line row index"))
+                    * hpr) as f32,
                 (scale.price_to_coordinate(c[r], rs.base_value) * vpr) as f32,
             ]);
         }
@@ -399,7 +403,6 @@ impl ChartEngine {
         // point-for-point; a count mismatch skips the fill rather than drawing a wrong one.
         if let Some(lower_id) = self.bollinger_fill_companion(rs.id) {
             let lower_plot = self.data.plot(lower_id);
-            let lower_idxs = lower_plot.indices();
             let lower_close = lower_plot.column(PlotValueIndex::Close);
             let lower_rows = visible_line_rows(
                 lower_plot,
@@ -415,7 +418,9 @@ impl ChartEngine {
                 let lower_first = points.len() as u32;
                 points.extend(lower_rows.iter().map(|&r| {
                     [
-                        (self.time_scale.index_to_coordinate(lower_idxs[r]) * hpr) as f32,
+                        (self.time_scale.index_to_coordinate(
+                            lower_plot.index_at(r).expect("lower-band row index"),
+                        ) * hpr) as f32,
                         (scale.price_to_coordinate(lower_close[r], rs.base_value) * vpr) as f32,
                     ]
                 }));
@@ -570,7 +575,6 @@ impl ChartEngine {
         scale: &nucleuscharts_core::scale::price_scale_core::PriceScaleCore,
     ) {
         let plot = self.data.plot(rs.id);
-        let idxs = plot.indices();
         let close = plot.column(PlotValueIndex::Close);
         let rows = visible_line_rows(
             plot,
@@ -596,11 +600,13 @@ impl ChartEngine {
             let a_row = pair[0];
             let b_row = pair[1];
             let a = (
-                self.time_scale.index_to_coordinate(idxs[a_row]),
+                self.time_scale
+                    .index_to_coordinate(plot.index_at(a_row).expect("baseline row index")),
                 scale.price_to_coordinate(close[a_row], rs.base_value),
             );
             let b = (
-                self.time_scale.index_to_coordinate(idxs[b_row]),
+                self.time_scale
+                    .index_to_coordinate(plot.index_at(b_row).expect("baseline row index")),
                 scale.price_to_coordinate(close[b_row], rs.base_value),
             );
             let mut segments = vec![(a, b)];
@@ -994,7 +1000,7 @@ impl ChartEngine {
         let Some(last) = plot.last_non_whitespace_row(TimePointIndex::MAX) else {
             return;
         };
-        let index = plot.indices()[last];
+        let index = plot.index_at(last).expect("last series row index");
         let close = plot.value_at(last, PlotValueIndex::Close);
         let Some(base_value) = self.visible_series_base_value(series_id) else {
             return;
@@ -1113,12 +1119,13 @@ impl ChartEngine {
                         .collect()
                 }
                 SeriesKind::Line | SeriesKind::Area | SeriesKind::Baseline => {
-                    let indices = plot.indices();
                     visible_line_rows(plot, from, to, bar_spacing, hpr, x_at)
                         .into_iter()
                         .map(|row| {
                             (
-                                (self.time_scale.index_to_coordinate(indices[row]) * hpr) as f32,
+                                (self.time_scale.index_to_coordinate(
+                                    plot.index_at(row).expect("anchor row index"),
+                                ) * hpr) as f32,
                                 (scale.price_to_coordinate(
                                     plot.value_at(row, PlotValueIndex::Close),
                                     base_value,

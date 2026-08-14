@@ -9,7 +9,7 @@ use super::*;
 /// pixel, each bucket keeps its first/last rows plus the close extrema, preserving the visible
 /// envelope and the line's endpoints while avoiding an O(number-of-source-points) draw list.
 pub(crate) fn visible_line_rows(
-    plot: &PlotList,
+    plot: PlotListView<'_>,
     from: i64,
     to: i64,
     bar_spacing: f64,
@@ -27,7 +27,6 @@ pub(crate) fn visible_line_rows(
     }
 
     let close = plot.column(PlotValueIndex::Close);
-    let indices = plot.indices();
     let mut out = Vec::new();
     let mut bucket_rows = Vec::new();
     let mut bucket: Option<i64> = None;
@@ -57,7 +56,7 @@ pub(crate) fn visible_line_rows(
     };
 
     for row in visible {
-        let current_bucket = x_at(indices[row]).floor() as i64;
+        let current_bucket = x_at(plot.index_at(row).expect("visible row index")).floor() as i64;
         if bucket.is_some_and(|previous| previous != current_bucket) {
             flush(&mut bucket_rows, &mut out);
         }
@@ -92,14 +91,13 @@ pub(crate) struct VisibleOhlc {
 /// last close. At normal spacing this is an identity transform, apart from copying the visible
 /// values into the small frame-local item list required by the render geometry builders.
 pub(crate) fn visible_ohlc(
-    plot: &PlotList,
+    plot: PlotListView<'_>,
     from: i64,
     to: i64,
     bar_spacing: f64,
     hpr: f64,
     x_at: impl Fn(i64) -> f64,
 ) -> Vec<VisibleOhlc> {
-    let indices = plot.indices();
     let open = plot.column(PlotValueIndex::Open);
     let high = plot.column(PlotValueIndex::High);
     let low = plot.column(PlotValueIndex::Low);
@@ -113,13 +111,13 @@ pub(crate) fn visible_ohlc(
     if bar_spacing * hpr >= 1.0 {
         return visible
             .map(|row| VisibleOhlc {
-                x_px: x_at(indices[row]),
+                x_px: x_at(plot.index_at(row).expect("visible row index")),
                 open: open[row],
                 high: high[row],
                 low: low[row],
                 close: close[row],
                 source_row: row,
-                geometry_time: indices[row],
+                geometry_time: plot.index_at(row).expect("visible row index"),
             })
             .collect();
     }
@@ -128,7 +126,7 @@ pub(crate) fn visible_ohlc(
     let mut current_bucket: Option<i64> = None;
     let mut current: Option<VisibleOhlc> = None;
     for row in visible {
-        let bucket = x_at(indices[row]).floor() as i64;
+        let bucket = x_at(plot.index_at(row).expect("visible row index")).floor() as i64;
         if current_bucket.is_some_and(|previous| previous != bucket) {
             // `current` is always populated alongside `current_bucket` below.
             if let Some(item) = current.take() {
@@ -176,14 +174,13 @@ pub(crate) struct VisibleHistogramRow {
 /// greatest magnitude so a volume/value spike cannot disappear merely because the scale is
 /// compressed. The selected source row also carries its source up/down color classification.
 pub(crate) fn visible_histogram_rows(
-    plot: &PlotList,
+    plot: PlotListView<'_>,
     from: i64,
     to: i64,
     bar_spacing: f64,
     hpr: f64,
     x_at: impl Fn(i64) -> f64,
 ) -> Vec<VisibleHistogramRow> {
-    let indices = plot.indices();
     let close = plot.column(PlotValueIndex::Close);
     // Whitespace rows draw nothing (the reference's plot list omits them).
     let visible = plot
@@ -192,16 +189,16 @@ pub(crate) fn visible_histogram_rows(
     if bar_spacing * hpr >= 1.0 {
         return visible
             .map(|source_row| VisibleHistogramRow {
-                x_px: x_at(indices[source_row]),
+                x_px: x_at(plot.index_at(source_row).expect("visible row index")),
                 source_row,
-                geometry_time: indices[source_row],
+                geometry_time: plot.index_at(source_row).expect("visible row index"),
             })
             .collect();
     }
 
     let mut out: Vec<VisibleHistogramRow> = Vec::new();
     for source_row in visible {
-        let bucket = x_at(indices[source_row]).floor() as i64;
+        let bucket = x_at(plot.index_at(source_row).expect("visible row index")).floor() as i64;
         match out.last_mut() {
             Some(item) if item.geometry_time == bucket => {
                 if close[source_row].abs() > close[item.source_row].abs() {

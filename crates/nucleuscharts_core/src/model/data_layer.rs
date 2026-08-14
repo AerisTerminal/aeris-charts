@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 
 use crate::helpers::algorithms::lower_bound;
 use crate::model::data_validation::is_whitespace_values;
-use crate::model::plot_list::PlotList;
+use crate::model::plot_list::{PlotList, PlotListView, PlotValueIndex, PlotValues};
 use crate::TimePointIndex;
 
 /// Opaque chart-local series identity. It is deliberately not a storage position: removed
@@ -64,9 +64,164 @@ impl PointColors<'_> {
     }
 }
 
+enum SeriesValues {
+    Single(Vec<f64>),
+    Ohlc([Vec<f64>; 4]),
+}
+
+impl SeriesValues {
+    fn len(&self) -> usize {
+        match self {
+            Self::Single(values) => values.len(),
+            Self::Ohlc(values) => values[0].len(),
+        }
+    }
+
+    fn view(&self) -> PlotValues<'_> {
+        match self {
+            Self::Single(values) => PlotValues::Single(values),
+            Self::Ohlc(values) => {
+                PlotValues::Ohlc([&values[0], &values[1], &values[2], &values[3]])
+            }
+        }
+    }
+
+    fn columns(&self) -> [&[f64]; 4] {
+        match self {
+            Self::Single(values) => [values, values, values, values],
+            Self::Ohlc(values) => [&values[0], &values[1], &values[2], &values[3]],
+        }
+    }
+
+    fn row(&self, row: usize) -> [f64; 4] {
+        match self {
+            Self::Single(values) => [values[row]; 4],
+            Self::Ohlc(values) => [
+                values[0][row],
+                values[1][row],
+                values[2][row],
+                values[3][row],
+            ],
+        }
+    }
+
+    fn set_row(&mut self, row: usize, values: [f64; 4]) {
+        if values.iter().all(|&value| value == values[0]) {
+            match self {
+                Self::Single(column) => column[row] = values[0],
+                Self::Ohlc(columns) => {
+                    for (column, value) in columns.iter_mut().zip(values) {
+                        column[row] = value;
+                    }
+                }
+            }
+        } else {
+            self.ensure_ohlc();
+            let Self::Ohlc(columns) = self else {
+                unreachable!()
+            };
+            for (column, value) in columns.iter_mut().zip(values) {
+                column[row] = value;
+            }
+        }
+    }
+
+    fn push(&mut self, values: [f64; 4]) {
+        if values.iter().all(|&value| value == values[0]) {
+            match self {
+                Self::Single(column) => column.push(values[0]),
+                Self::Ohlc(columns) => {
+                    for (column, value) in columns.iter_mut().zip(values) {
+                        column.push(value);
+                    }
+                }
+            }
+        } else {
+            self.ensure_ohlc();
+            let Self::Ohlc(columns) = self else {
+                unreachable!()
+            };
+            for (column, value) in columns.iter_mut().zip(values) {
+                column.push(value);
+            }
+        }
+    }
+
+    fn insert(&mut self, row: usize, values: [f64; 4]) {
+        if values.iter().all(|&value| value == values[0]) {
+            match self {
+                Self::Single(column) => column.insert(row, values[0]),
+                Self::Ohlc(columns) => {
+                    for (column, value) in columns.iter_mut().zip(values) {
+                        column.insert(row, value);
+                    }
+                }
+            }
+        } else {
+            self.ensure_ohlc();
+            let Self::Ohlc(columns) = self else {
+                unreachable!()
+            };
+            for (column, value) in columns.iter_mut().zip(values) {
+                column.insert(row, value);
+            }
+        }
+    }
+
+    fn truncate(&mut self, len: usize) {
+        match self {
+            Self::Single(values) => values.truncate(len),
+            Self::Ohlc(values) => values.iter_mut().for_each(|column| column.truncate(len)),
+        }
+    }
+
+    fn drain_front(&mut self, count: usize) {
+        match self {
+            Self::Single(values) => {
+                values.drain(..count);
+            }
+            Self::Ohlc(values) => {
+                for column in values {
+                    column.drain(..count);
+                }
+            }
+        }
+    }
+
+    fn ensure_ohlc(&mut self) {
+        if let Self::Single(values) = self {
+            let values = std::mem::take(values);
+            *self = Self::Ohlc([values.clone(), values.clone(), values.clone(), values]);
+        }
+    }
+
+    fn logical_bytes(&self) -> usize {
+        self.len()
+            * std::mem::size_of::<f64>()
+            * if matches!(self, Self::Single(_)) {
+                1
+            } else {
+                4
+            }
+    }
+
+    fn capacity_bytes(&self) -> usize {
+        match self {
+            Self::Single(values) => values.capacity() * std::mem::size_of::<f64>(),
+            Self::Ohlc(values) => values
+                .iter()
+                .map(|column| column.capacity() * std::mem::size_of::<f64>())
+                .sum(),
+        }
+    }
+}
+
 struct RawSeries {
     times: Vec<i64>,
-    values: [Vec<f64>; 4],
+    /// Indicator outputs share a contiguous source-time range by identity instead of retaining
+    /// another timestamp column. Ordinary host series keep owned times.
+    time_alias: Option<TimeAlias>,
+    values: SeriesValues,
     /// Per-row color overrides indexed by `PointColorChannel`. Each channel is either empty
     /// (absent for the whole series) or aligned 1:1 with `times`; kept in lockstep with the
     /// value columns across set_data/update so plot rows (which mirror raw rows) stay aligned.
@@ -83,11 +238,19 @@ struct RawSeries {
     generation: u64,
 }
 
+#[derive(Clone, Copy)]
+struct TimeAlias {
+    source: SeriesId,
+    offset: usize,
+    len: usize,
+}
+
 impl RawSeries {
     fn empty() -> Self {
         Self {
             times: Vec::new(),
-            values: [vec![], vec![], vec![], vec![]],
+            time_alias: None,
+            values: SeriesValues::Single(Vec::new()),
             point_colors: [vec![], vec![], vec![]],
             rows_count_as_data: false,
             plot: PlotList::new(),
@@ -107,6 +270,43 @@ pub struct DataLayer {
     /// Changes only when the merged timestamp sequence changes. Value-only current-bar updates
     /// leave it untouched, so time-derived consumers can distinguish them without rescanning.
     time_points_generation: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DataLayerMemoryUsage {
+    pub rows: usize,
+    pub owned_time_bytes: usize,
+    pub canonical_value_bytes: usize,
+    pub plot_index_bytes: usize,
+    pub merged_time_bytes: usize,
+    pub point_color_bytes: usize,
+    pub autoscale_cache_bytes: usize,
+    pub scratch_capacity_bytes: usize,
+    pub allocated_capacity_bytes: usize,
+    pub aligned_series: usize,
+    pub dense_index_series: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SeriesMemoryUsage {
+    pub rows: usize,
+    pub owned_time_bytes: usize,
+    pub canonical_value_bytes: usize,
+    pub plot_index_bytes: usize,
+    pub point_color_bytes: usize,
+    pub aligned_time_view: bool,
+    pub dense_index_view: bool,
+}
+
+impl DataLayerMemoryUsage {
+    pub fn logical_payload_bytes(self) -> usize {
+        self.owned_time_bytes
+            + self.canonical_value_bytes
+            + self.plot_index_bytes
+            + self.merged_time_bytes
+            + self.point_color_bytes
+            + self.autoscale_cache_bytes
+    }
 }
 
 impl DataLayer {
@@ -140,6 +340,59 @@ impl DataLayer {
         self.series.len()
     }
 
+    pub fn memory_usage(&self) -> DataLayerMemoryUsage {
+        let mut usage = DataLayerMemoryUsage {
+            merged_time_bytes: self.merged_times.len() * std::mem::size_of::<i64>(),
+            scratch_capacity_bytes: self.merged_times_scratch.capacity()
+                * std::mem::size_of::<i64>(),
+            ..DataLayerMemoryUsage::default()
+        };
+        for &slot in self.live_slots.values() {
+            let series = &self.series[slot];
+            usage.rows += series.values.len();
+            usage.owned_time_bytes += series.times.len() * std::mem::size_of::<i64>();
+            usage.canonical_value_bytes += series.values.logical_bytes();
+            usage.plot_index_bytes += series.plot.index_bytes();
+            usage.point_color_bytes += series
+                .point_colors
+                .iter()
+                .map(|colors| colors.len() * std::mem::size_of::<u32>())
+                .sum::<usize>();
+            usage.autoscale_cache_bytes += series.plot.cache_payload_bytes();
+            usage.allocated_capacity_bytes += series.times.capacity() * std::mem::size_of::<i64>()
+                + series.values.capacity_bytes()
+                + series.plot.index_capacity_bytes()
+                + series
+                    .point_colors
+                    .iter()
+                    .map(|colors| colors.capacity() * std::mem::size_of::<u32>())
+                    .sum::<usize>();
+            usage.aligned_series += usize::from(series.time_alias.is_some());
+            usage.dense_index_series += usize::from(series.plot.is_dense());
+        }
+        usage.allocated_capacity_bytes += self.merged_times.capacity() * std::mem::size_of::<i64>()
+            + usage.scratch_capacity_bytes;
+        usage
+    }
+
+    pub fn series_memory_usage(&self, id: SeriesId) -> Option<SeriesMemoryUsage> {
+        let slot = self.series_slot(id)?;
+        let series = &self.series[slot];
+        Some(SeriesMemoryUsage {
+            rows: series.values.len(),
+            owned_time_bytes: series.times.len() * std::mem::size_of::<i64>(),
+            canonical_value_bytes: series.values.logical_bytes(),
+            plot_index_bytes: series.plot.index_bytes(),
+            point_color_bytes: series
+                .point_colors
+                .iter()
+                .map(|colors| colors.len() * std::mem::size_of::<u32>())
+                .sum(),
+            aligned_time_view: series.time_alias.is_some(),
+            dense_index_view: series.plot.is_dense(),
+        })
+    }
+
     /// Current storage position for a live opaque id.
     pub fn series_slot(&self, id: SeriesId) -> Option<usize> {
         self.live_slots.get(&id).copied()
@@ -155,8 +408,32 @@ impl DataLayer {
         }
     }
 
+    fn materialize_time_alias(&mut self, id: SeriesId) -> Option<usize> {
+        let slot = self.series_slot(id)?;
+        if self.series[slot].time_alias.is_some() {
+            let times = self.series_times_by_slot(slot)?.to_vec();
+            self.series[slot].times = times;
+            self.series[slot].time_alias = None;
+        }
+        Some(slot)
+    }
+
     /// Release a live series and make its storage reusable. Returns false for unknown/stale ids.
     pub fn remove_series(&mut self, id: SeriesId) -> bool {
+        let dependents = self
+            .live_slots
+            .iter()
+            .filter_map(|(&candidate, &slot)| {
+                (candidate != id
+                    && self.series[slot]
+                        .time_alias
+                        .is_some_and(|alias| alias.source == id))
+                .then_some(candidate)
+            })
+            .collect::<Vec<_>>();
+        for dependent in dependents {
+            self.materialize_time_alias(dependent);
+        }
         let Some(slot) = self.live_slots.remove(&id) else {
             return false;
         };
@@ -179,22 +456,32 @@ impl DataLayer {
 
     /// Plot data for a live series. Unknown/stale ids safely read as an empty plot; callers that
     /// need to distinguish that case use [`Self::try_plot`].
-    pub fn plot(&self, id: SeriesId) -> &PlotList {
+    pub fn plot(&self, id: SeriesId) -> PlotListView<'_> {
         self.try_plot(id).unwrap_or_else(|| {
             static EMPTY: OnceLock<PlotList> = OnceLock::new();
-            EMPTY.get_or_init(PlotList::new)
+            PlotListView::new(EMPTY.get_or_init(PlotList::new), PlotValues::Single(&[]))
         })
     }
 
     /// Plot data for a live series, or `None` for an unknown/stale id.
-    pub fn try_plot(&self, id: SeriesId) -> Option<&PlotList> {
+    pub fn try_plot(&self, id: SeriesId) -> Option<PlotListView<'_>> {
         let slot = self.series_slot(id)?;
-        Some(&self.series[slot].plot)
+        let series = &self.series[slot];
+        Some(PlotListView::new(&series.plot, series.values.view()))
     }
 
-    pub fn plot_mut(&mut self, id: SeriesId) -> Option<&mut PlotList> {
+    pub fn min_max_on_range_cached(
+        &mut self,
+        id: SeriesId,
+        start: TimePointIndex,
+        end: TimePointIndex,
+        plots: &[PlotValueIndex],
+    ) -> Option<crate::model::plot_list::MinMax> {
         let slot = self.series_slot(id)?;
-        Some(&mut self.series[slot].plot)
+        let series = &mut self.series[slot];
+        series
+            .plot
+            .min_max_on_range_cached(series.values.view(), start, end, plots)
     }
 
     /// Mark a series whose time-only rows still count as data rows for [`base_index`] (custom
@@ -211,11 +498,26 @@ impl DataLayer {
 
     /// Raw series columns for platform-independent derived-data producers.
     pub fn series_data(&self, id: SeriesId) -> Option<(&[i64], [&[f64]; 4])> {
-        let s = self.series.get(self.series_slot(id)?)?;
-        Some((
-            &s.times,
-            [&s.values[0], &s.values[1], &s.values[2], &s.values[3]],
-        ))
+        let slot = self.series_slot(id)?;
+        let s = self.series.get(slot)?;
+        Some((self.series_times_by_slot(slot)?, s.values.columns()))
+    }
+
+    fn series_times_by_slot(&self, mut slot: usize) -> Option<&[i64]> {
+        let mut offset = 0usize;
+        let mut len = self.series.get(slot)?.values.len();
+        for _ in 0..self.series.len().max(1) {
+            let series = self.series.get(slot)?;
+            let Some(alias) = series.time_alias else {
+                let end = offset.saturating_add(len).min(series.times.len());
+                return series.times.get(offset.min(end)..end);
+            };
+            offset = offset.checked_add(alias.offset)?;
+            len = len.min(alias.len);
+            slot = self.series_slot(alias.source)?;
+        }
+        debug_assert!(false, "series time alias cycle");
+        None
     }
 
     pub fn series_generation(&self, id: SeriesId) -> Option<u64> {
@@ -234,18 +536,16 @@ impl DataLayer {
         let mut last_data_time: Option<i64> = None;
         for &slot in self.live_slots.values() {
             let s = &self.series[slot];
-            let row = s.times.len();
+            let Some(times) = self.series_times_by_slot(slot) else {
+                continue;
+            };
+            let row = s.values.len().min(times.len());
             for row in (0..row).rev() {
-                let values = [
-                    s.values[0][row],
-                    s.values[1][row],
-                    s.values[2][row],
-                    s.values[3][row],
-                ];
+                let values = s.values.row(row);
                 if s.rows_count_as_data || !is_whitespace_values(values) {
                     last_data_time = Some(match last_data_time {
-                        Some(t) => t.max(s.times[row]),
-                        None => s.times[row],
+                        Some(t) => t.max(times[row]),
+                        None => times[row],
                     });
                     break;
                 }
@@ -285,12 +585,150 @@ impl DataLayer {
         };
         let s = &mut self.series[slot];
         s.times = times;
-        s.values = [open, high, low, close];
+        s.time_alias = None;
+        s.values = SeriesValues::Ohlc([open, high, low, close]);
         s.point_colors = [vec![], vec![], vec![]];
         s.generation = s.generation.wrapping_add(1);
         self.rebuild_merged();
         self.reindex_all();
         true
+    }
+
+    /// Full assignment for a scalar series. The one value column is canonical and exposed
+    /// through all four reference-compatible plot slots without four stored copies.
+    pub fn set_single_data(&mut self, id: SeriesId, times: Vec<i64>, values: Vec<f64>) -> bool {
+        debug_assert_eq!(times.len(), values.len());
+        debug_assert!(times.windows(2).all(|window| window[0] < window[1]));
+        let Some(slot) = self.series_slot(id) else {
+            return false;
+        };
+        let series = &mut self.series[slot];
+        series.times = times;
+        series.time_alias = None;
+        series.values = SeriesValues::Single(values);
+        series.point_colors = [vec![], vec![], vec![]];
+        series.generation = series.generation.wrapping_add(1);
+        self.rebuild_merged();
+        self.reindex_all();
+        true
+    }
+
+    /// Install a scalar series whose timestamps are a contiguous suffix/range of another live
+    /// series. Only the source identity and row range are retained; values remain canonically
+    /// owned by this series and no timestamp/index columns are duplicated.
+    pub fn set_single_data_aligned(
+        &mut self,
+        id: SeriesId,
+        source: SeriesId,
+        source_from: usize,
+        values: Vec<f64>,
+    ) -> bool {
+        let Some(target_slot) = self.series_slot(id) else {
+            return false;
+        };
+        let Some(source_slot) = self.series_slot(source) else {
+            return false;
+        };
+        if target_slot == source_slot {
+            return false;
+        }
+        let Some(source_len) = self.series_times_by_slot(source_slot).map(<[i64]>::len) else {
+            return false;
+        };
+        if source_from + values.len() != source_len {
+            return false;
+        }
+        {
+            let target = &mut self.series[target_slot];
+            target.times = Vec::new();
+            target.time_alias = Some(TimeAlias {
+                source,
+                offset: source_from,
+                len: values.len(),
+            });
+            target.values = SeriesValues::Single(values);
+            target.point_colors = [vec![], vec![], vec![]];
+            target.generation = target.generation.wrapping_add(1);
+        }
+        self.copy_plot_range(
+            target_slot,
+            source_slot,
+            source_from,
+            source_len - source_from,
+        );
+        true
+    }
+
+    /// Replace an aligned scalar output suffix after an incremental source repair. The unchanged
+    /// prefix and its colors stay in place; current replacement and append remain tail-local.
+    pub fn update_single_aligned(
+        &mut self,
+        id: SeriesId,
+        source: SeriesId,
+        source_from: usize,
+        values: &[f64],
+    ) -> Option<usize> {
+        let target_slot = self.series_slot(id)?;
+        let source_slot = self.series_slot(source)?;
+        let alias = self.series[target_slot].time_alias?;
+        if alias.source != source || source_from < alias.offset {
+            return None;
+        }
+        let source_len = self.series_times_by_slot(source_slot)?.len();
+        if source_from + values.len() != source_len {
+            return None;
+        }
+        let output_row = source_from - alias.offset;
+        let output_len = source_len.saturating_sub(alias.offset);
+        if output_row > self.series[target_slot].values.len() {
+            return None;
+        }
+        {
+            let target = &mut self.series[target_slot];
+            let mut column =
+                match std::mem::replace(&mut target.values, SeriesValues::Single(Vec::new())) {
+                    SeriesValues::Single(values) => values,
+                    SeriesValues::Ohlc(mut columns) => std::mem::take(&mut columns[3]),
+                };
+            column.truncate(output_row);
+            column.extend_from_slice(values);
+            target.values = SeriesValues::Single(column);
+            target.time_alias = Some(TimeAlias {
+                source,
+                offset: alias.offset,
+                len: output_len,
+            });
+            for colors in &mut target.point_colors {
+                if !colors.is_empty() {
+                    colors.truncate(output_row);
+                    colors.resize(output_len, POINT_COLOR_ABSENT);
+                }
+            }
+            target.generation = target.generation.wrapping_add(1);
+        }
+        self.copy_plot_range(target_slot, source_slot, alias.offset, output_len);
+        Some(output_row)
+    }
+
+    fn copy_plot_range(
+        &mut self,
+        target_slot: usize,
+        source_slot: usize,
+        offset: usize,
+        len: usize,
+    ) {
+        debug_assert_ne!(target_slot, source_slot);
+        if target_slot < source_slot {
+            let (left, right) = self.series.split_at_mut(source_slot);
+            left[target_slot]
+                .plot
+                .copy_range_from(&right[0].plot, offset, len);
+        } else {
+            let (left, right) = self.series.split_at_mut(target_slot);
+            right[0]
+                .plot
+                .copy_range_from(&left[source_slot].plot, offset, len);
+        }
     }
 
     /// Install the series' per-row color channels (reference data-item colors). Each channel is
@@ -305,7 +743,7 @@ impl DataLayer {
         let Some(slot) = self.series_slot(id) else {
             return false;
         };
-        let rows = self.series[slot].times.len();
+        let rows = self.series[slot].values.len();
         if channels
             .iter()
             .flatten()
@@ -331,7 +769,7 @@ impl DataLayer {
         let Some(slot) = self.series_slot(id) else {
             return false;
         };
-        let rows = self.series[slot].times.len();
+        let rows = self.series[slot].values.len();
         if row >= rows {
             return false;
         }
@@ -384,7 +822,7 @@ impl DataLayer {
         values: [f64; 4],
         colors: [Option<u32>; POINT_COLOR_CHANNELS],
     ) -> bool {
-        let Some(slot) = self.series_slot(id) else {
+        let Some(slot) = self.materialize_time_alias(id) else {
             return false;
         };
         let last_merged = self.merged_times.last().copied();
@@ -396,7 +834,7 @@ impl DataLayer {
             self.time_points_generation = self.time_points_generation.wrapping_add(1);
             let s = &mut self.series[slot];
             push_raw(s, time, values, colors);
-            s.plot.upsert_last(new_index, values);
+            s.plot.upsert_last(new_index);
             s.generation = s.generation.wrapping_add(1);
             return true;
         }
@@ -409,9 +847,7 @@ impl DataLayer {
             let s = &mut self.series[slot];
             if series_last == Some(time) {
                 let row = s.times.len() - 1;
-                for (col, v) in s.values.iter_mut().zip(values) {
-                    col[row] = v;
-                }
+                s.values.set_row(row, values);
                 for (channel, color) in s.point_colors.iter_mut().zip(colors) {
                     if !channel.is_empty() {
                         channel[row] = color.unwrap_or(POINT_COLOR_ABSENT);
@@ -420,7 +856,7 @@ impl DataLayer {
             } else {
                 push_raw(s, time, values, colors);
             }
-            s.plot.upsert_last(pos as TimePointIndex, values);
+            s.plot.upsert_last(pos as TimePointIndex);
             s.generation = s.generation.wrapping_add(1);
             return true;
         }
@@ -429,9 +865,7 @@ impl DataLayer {
         let s = &mut self.series[slot];
         let insert = lower_bound(&s.times, |&t| t < time);
         if s.times.get(insert) == Some(&time) {
-            for (col, v) in s.values.iter_mut().zip(values) {
-                col[insert] = v;
-            }
+            s.values.set_row(insert, values);
             for (channel, color) in s.point_colors.iter_mut().zip(colors) {
                 if !channel.is_empty() {
                     channel[insert] = color.unwrap_or(POINT_COLOR_ABSENT);
@@ -439,9 +873,7 @@ impl DataLayer {
             }
         } else {
             s.times.insert(insert, time);
-            for (col, v) in s.values.iter_mut().zip(values) {
-                col.insert(insert, v);
-            }
+            s.values.insert(insert, values);
             for (channel, color) in s.point_colors.iter_mut().zip(colors) {
                 if !channel.is_empty() {
                     channel.insert(insert, color.unwrap_or(POINT_COLOR_ABSENT));
@@ -464,7 +896,16 @@ impl DataLayer {
         times: &[i64],
         values: [&[f64]; 4],
     ) -> Option<usize> {
-        let slot = self.series_slot(id)?;
+        if self
+            .series_slot(id)
+            .is_some_and(|slot| matches!(self.series[slot].values, SeriesValues::Single(_)))
+            && values[0] == values[1]
+            && values[0] == values[2]
+            && values[0] == values[3]
+        {
+            return self.update_many_single(id, times, values[0]);
+        }
+        let slot = self.materialize_time_alias(id)?;
         if times.is_empty() {
             return Some(self.series[slot].times.len());
         }
@@ -497,6 +938,7 @@ impl DataLayer {
             .filter(|time| self.merged_times.binary_search(time).is_err())
             .count();
         let old = &self.series[slot];
+        let old_values = old.values.columns();
         let capacity = old.times.len() + times.len();
         let mut merged_times = Vec::with_capacity(capacity);
         let mut merged_values: [Vec<f64>; 4] =
@@ -528,7 +970,7 @@ impl DataLayer {
                 old_row += usize::from(replaces);
             } else {
                 merged_times.push(old.times[old_row]);
-                for (column, source) in merged_values.iter_mut().zip(&old.values) {
+                for (column, source) in merged_values.iter_mut().zip(old_values) {
                     column.push(source[old_row]);
                 }
                 for (column, source) in merged_colors.iter_mut().zip(&old.point_colors) {
@@ -542,7 +984,91 @@ impl DataLayer {
 
         let series = &mut self.series[slot];
         series.times = merged_times;
-        series.values = merged_values;
+        series.values = SeriesValues::Ohlc(merged_values);
+        series.point_colors = merged_colors;
+        series.generation = series.generation.wrapping_add(times.len() as u64);
+        self.rebuild_merged();
+        self.time_points_generation = self
+            .time_points_generation
+            .wrapping_add(new_time_points.saturating_sub(1) as u64);
+        self.reindex_all();
+        Some(affected)
+    }
+
+    /// Scalar-series variant of [`Self::update_many`]. It preserves one canonical value column
+    /// through historical merges instead of constructing four identical temporary columns.
+    pub fn update_many_single(
+        &mut self,
+        id: SeriesId,
+        times: &[i64],
+        values: &[f64],
+    ) -> Option<usize> {
+        let slot = self.materialize_time_alias(id)?;
+        if times.is_empty() {
+            return Some(self.series[slot].times.len());
+        }
+        debug_assert_eq!(times.len(), values.len());
+        debug_assert!(times.windows(2).all(|window| window[0] < window[1]));
+
+        let affected = lower_bound(&self.series[slot].times, |&time| time < times[0]);
+        if self.series[slot]
+            .times
+            .last()
+            .is_none_or(|&last| times[0] >= last)
+        {
+            for (&time, &value) in times.iter().zip(values) {
+                self.update(id, time, [value; 4]);
+            }
+            return Some(affected);
+        }
+
+        let new_time_points = times
+            .iter()
+            .filter(|time| self.merged_times.binary_search(time).is_err())
+            .count();
+        let old = &self.series[slot];
+        let old_values = old.values.columns()[3];
+        let capacity = old.times.len() + times.len();
+        let mut merged_times = Vec::with_capacity(capacity);
+        let mut merged_values = Vec::with_capacity(capacity);
+        let mut merged_colors: [Vec<u32>; POINT_COLOR_CHANNELS] = std::array::from_fn(|channel| {
+            if old.point_colors[channel].is_empty() {
+                Vec::new()
+            } else {
+                Vec::with_capacity(capacity)
+            }
+        });
+        let mut old_row = 0usize;
+        let mut new_row = 0usize;
+        while old_row < old.times.len() || new_row < times.len() {
+            let take_new = old_row == old.times.len()
+                || (new_row < times.len() && times[new_row] <= old.times[old_row]);
+            if take_new {
+                let replaces = old_row < old.times.len() && times[new_row] == old.times[old_row];
+                merged_times.push(times[new_row]);
+                merged_values.push(values[new_row]);
+                for colors in &mut merged_colors {
+                    if !colors.is_empty() || colors.capacity() > 0 {
+                        colors.push(POINT_COLOR_ABSENT);
+                    }
+                }
+                new_row += 1;
+                old_row += usize::from(replaces);
+            } else {
+                merged_times.push(old.times[old_row]);
+                merged_values.push(old_values[old_row]);
+                for (column, source) in merged_colors.iter_mut().zip(&old.point_colors) {
+                    if !source.is_empty() {
+                        column.push(source[old_row]);
+                    }
+                }
+                old_row += 1;
+            }
+        }
+
+        let series = &mut self.series[slot];
+        series.times = merged_times;
+        series.values = SeriesValues::Single(merged_values);
         series.point_colors = merged_colors;
         series.generation = series.generation.wrapping_add(times.len() as u64);
         self.rebuild_merged();
@@ -558,16 +1084,14 @@ impl DataLayer {
     /// truncate in lockstep with their rows, and the merged time points are rebuilt so times
     /// no series occupies anymore leave the shared axis. Returns the new row count.
     pub fn pop(&mut self, id: SeriesId, count: usize) -> Option<usize> {
-        let slot = self.series_slot(id)?;
+        let slot = self.materialize_time_alias(id)?;
         let keep = self.series[slot].times.len().saturating_sub(count);
         let s = &mut self.series[slot];
         if keep == s.times.len() {
             return Some(keep);
         }
         s.times.truncate(keep);
-        for col in &mut s.values {
-            col.truncate(keep);
-        }
+        s.values.truncate(keep);
         for channel in &mut s.point_colors {
             if !channel.is_empty() {
                 channel.truncate(keep);
@@ -588,7 +1112,7 @@ impl DataLayer {
     /// not run this once per appended point. The engine trims with hysteresis for exactly that
     /// reason (see `ChartEngine::enforce_series_cap`).
     pub fn trim_front(&mut self, id: SeriesId, keep: usize) -> Option<usize> {
-        let slot = self.series_slot(id)?;
+        let slot = self.materialize_time_alias(id)?;
         let len = self.series[slot].times.len();
         if len <= keep {
             return Some(len);
@@ -596,9 +1120,7 @@ impl DataLayer {
         let drop = len - keep;
         let s = &mut self.series[slot];
         s.times.drain(..drop);
-        for col in &mut s.values {
-            col.drain(..drop);
-        }
+        s.values.drain_front(drop);
         for channel in &mut s.point_colors {
             if !channel.is_empty() {
                 channel.drain(..drop);
@@ -614,13 +1136,18 @@ impl DataLayer {
         let total: usize = self
             .live_slots
             .values()
+            .filter(|&&slot| self.series[slot].time_alias.is_none())
             .map(|&slot| self.series[slot].times.len())
             .sum();
         let all = &mut self.merged_times_scratch;
         all.clear();
-        all.reserve(total.saturating_sub(all.capacity()));
+        if all.capacity() < total {
+            all.reserve(total);
+        }
         for &slot in self.live_slots.values() {
-            all.extend_from_slice(&self.series[slot].times);
+            if self.series[slot].time_alias.is_none() {
+                all.extend_from_slice(&self.series[slot].times);
+            }
         }
         all.sort_unstable();
         all.dedup();
@@ -631,12 +1158,40 @@ impl DataLayer {
     }
 
     fn reindex_all(&mut self) {
-        // borrow merged_times immutably while mutating each series' plot
+        // Reindex owned timelines first. Aliased outputs copy a range from their ultimate owned
+        // source, so they retain no mapping allocation when that source is dense.
         let merged = &self.merged_times;
         for &slot in self.live_slots.values() {
-            let s = &mut self.series[slot];
-            s.plot.rebuild_from(merged, &s.times, &s.values);
+            if self.series[slot].time_alias.is_none() {
+                let s = &mut self.series[slot];
+                s.plot.rebuild_from(merged, &s.times);
+            }
         }
+        let aliases = self
+            .live_slots
+            .values()
+            .filter_map(|&slot| self.resolved_alias_range(slot).map(|range| (slot, range)))
+            .collect::<Vec<_>>();
+        for (slot, (source_slot, offset, len)) in aliases {
+            self.copy_plot_range(slot, source_slot, offset, len);
+        }
+    }
+
+    fn resolved_alias_range(&self, mut slot: usize) -> Option<(usize, usize, usize)> {
+        let mut offset = 0usize;
+        let len = self.series.get(slot)?.values.len();
+        let mut aliased = false;
+        for _ in 0..self.series.len().max(1) {
+            let Some(alias) = self.series.get(slot)?.time_alias else {
+                let available = self.series[slot].plot.size().saturating_sub(offset);
+                return aliased.then_some((slot, offset, len.min(available)));
+            };
+            aliased = true;
+            offset = offset.checked_add(alias.offset)?;
+            slot = self.series_slot(alias.source)?;
+        }
+        debug_assert!(false, "series time alias cycle");
+        None
     }
 }
 
@@ -647,9 +1202,7 @@ fn push_raw(
     colors: [Option<u32>; POINT_COLOR_CHANNELS],
 ) {
     s.times.push(time);
-    for (col, v) in s.values.iter_mut().zip(values) {
-        col.push(v);
-    }
+    s.values.push(values);
     for (channel, color) in s.point_colors.iter_mut().zip(colors) {
         if !channel.is_empty() {
             channel.push(color.unwrap_or(POINT_COLOR_ABSENT));
@@ -689,6 +1242,106 @@ mod tests {
         );
     }
 
+    fn indices(dl: &DataLayer, id: SeriesId) -> Vec<TimePointIndex> {
+        dl.plot(id).indices().collect()
+    }
+
+    #[test]
+    fn memory_attribution_has_one_ohlc_owner_and_dense_indices() {
+        let mut dl = DataLayer::new();
+        let source = dl.add_series();
+        dl.set_data(
+            source,
+            vec![1, 2, 3, 4],
+            vec![10.0; 4],
+            vec![11.0; 4],
+            vec![9.0; 4],
+            vec![10.5; 4],
+        );
+
+        let source_usage = dl.series_memory_usage(source).unwrap();
+        assert_eq!(
+            source_usage.owned_time_bytes,
+            4 * std::mem::size_of::<i64>()
+        );
+        assert_eq!(
+            source_usage.canonical_value_bytes,
+            4 * 4 * std::mem::size_of::<f64>()
+        );
+        assert_eq!(source_usage.plot_index_bytes, 0);
+        assert!(source_usage.dense_index_view);
+        assert_eq!(
+            dl.memory_usage().merged_time_bytes,
+            4 * std::mem::size_of::<i64>()
+        );
+    }
+
+    #[test]
+    fn aligned_scalar_output_owns_only_values() {
+        let mut dl = DataLayer::new();
+        let source = dl.add_series();
+        let output = dl.add_series();
+        set(&mut dl, source, &[1, 2, 3, 4], &[10.0, 20.0, 30.0, 40.0]);
+        assert!(dl.set_single_data_aligned(output, source, 1, vec![2.0, 3.0, 4.0]));
+
+        let usage = dl.series_memory_usage(output).unwrap();
+        assert_eq!(usage.rows, 3);
+        assert_eq!(usage.owned_time_bytes, 0);
+        assert_eq!(usage.canonical_value_bytes, 3 * std::mem::size_of::<f64>());
+        assert_eq!(usage.plot_index_bytes, 0);
+        assert!(usage.aligned_time_view);
+        assert!(usage.dense_index_view);
+        assert_eq!(dl.series_data(output).unwrap().0, &[2, 3, 4]);
+    }
+
+    #[test]
+    fn independently_timed_series_retain_sparse_mapping() {
+        let mut dl = DataLayer::new();
+        let odd = dl.add_series();
+        let even = dl.add_series();
+        set(&mut dl, odd, &[1, 3, 5], &[1.0, 3.0, 5.0]);
+        set(&mut dl, even, &[2, 4], &[2.0, 4.0]);
+
+        let usage = dl.series_memory_usage(odd).unwrap();
+        assert_eq!(
+            usage.plot_index_bytes,
+            3 * std::mem::size_of::<TimePointIndex>()
+        );
+        assert!(!usage.dense_index_view);
+        assert_eq!(indices(&dl, odd), [0, 2, 4]);
+        assert_eq!(indices(&dl, even), [1, 3]);
+    }
+
+    #[test]
+    fn large_small_large_replacement_reuses_merge_high_water() {
+        let mut dl = DataLayer::new();
+        let source = dl.add_series();
+        let install = |dl: &mut DataLayer, rows: usize| {
+            let times = (0..rows).map(|row| row as i64).collect::<Vec<_>>();
+            let values = (0..rows).map(|row| row as f64).collect::<Vec<_>>();
+            dl.set_data(
+                source,
+                times,
+                values.clone(),
+                values.clone(),
+                values.clone(),
+                values,
+            );
+        };
+
+        install(&mut dl, 10_000);
+        let first = dl.memory_usage().allocated_capacity_bytes;
+        install(&mut dl, 2);
+        assert_eq!(
+            dl.memory_usage().canonical_value_bytes,
+            2 * 4 * std::mem::size_of::<f64>()
+        );
+        install(&mut dl, 10_000);
+        let second = dl.memory_usage().allocated_capacity_bytes;
+
+        assert!(second <= first + 64, "{first} -> {second}");
+    }
+
     #[test]
     fn merged_union_and_per_series_indices() {
         let mut dl = DataLayer::new();
@@ -702,8 +1355,8 @@ mod tests {
         assert_eq!(dl.base_index(), Some(3));
 
         // A occupies merged indices 0,1,2 ; B occupies 1,3 (whitespace at 0,2)
-        assert_eq!(dl.plot(a).indices(), &[0, 1, 2]);
-        assert_eq!(dl.plot(b).indices(), &[1, 3]);
+        assert_eq!(indices(&dl, a), [0, 1, 2]);
+        assert_eq!(indices(&dl, b), [1, 3]);
         assert!(dl.plot(b).contains(1));
         assert!(!dl.plot(b).contains(0));
         assert!(!dl.plot(b).contains(2));
@@ -714,14 +1367,14 @@ mod tests {
         let mut dl = DataLayer::new();
         let a = dl.add_series();
         set(&mut dl, a, &[10, 20, 30], &[1.0, 2.0, 3.0]);
-        assert_eq!(dl.plot(a).indices(), &[0, 1, 2]);
+        assert_eq!(indices(&dl, a), [0, 1, 2]);
 
         // new series introduces earlier + interleaved times -> A's indices shift
         let b = dl.add_series();
         set(&mut dl, b, &[5, 15, 25], &[9.0, 9.0, 9.0]);
         assert_eq!(dl.merged_times(), &[5, 10, 15, 20, 25, 30]);
-        assert_eq!(dl.plot(a).indices(), &[1, 3, 5]);
-        assert_eq!(dl.plot(b).indices(), &[0, 2, 4]);
+        assert_eq!(indices(&dl, a), [1, 3, 5]);
+        assert_eq!(indices(&dl, b), [0, 2, 4]);
     }
 
     #[test]
@@ -731,7 +1384,7 @@ mod tests {
         set(&mut dl, a, &[1, 2, 3], &[10.0, 20.0, 30.0]);
         dl.update(a, 4, [40.0, 41.0, 39.0, 40.0]);
         assert_eq!(dl.merged_times(), &[1, 2, 3, 4]);
-        assert_eq!(dl.plot(a).indices(), &[0, 1, 2, 3]);
+        assert_eq!(indices(&dl, a), [0, 1, 2, 3]);
         assert_eq!(value_at_index(&dl, a, 3, PlotValueIndex::Close), 40.0);
     }
 
@@ -917,7 +1570,7 @@ mod tests {
 
         // Clamp to the row count; colors shift along with their rows (reference popSeriesData).
         assert_eq!(dl.pop(a, 10), Some(0));
-        assert_eq!(dl.plot(a).indices(), &[] as &[i64]);
+        assert!(indices(&dl, a).is_empty());
         // A's times left the merged axis; B's remain.
         assert_eq!(dl.merged_times(), &[3, 4]);
         assert!(!dl.has_point_colors(a));
@@ -926,7 +1579,7 @@ mod tests {
         assert!(dl.set_point_colors(a, [Some(vec![11, 22, 33, 44]), None, None]));
         assert_eq!(dl.pop(a, 0), Some(4)); // count 0 is a no-op
         assert_eq!(dl.pop(a, 2), Some(2));
-        assert_eq!(dl.plot(a).indices(), &[0, 1]);
+        assert_eq!(indices(&dl, a), [0, 1]);
         assert_eq!(dl.point_color(a, PointColorChannel::Body, 0), Some(11));
         assert_eq!(dl.point_color(a, PointColorChannel::Body, 1), Some(22));
         assert_eq!(dl.point_color(a, PointColorChannel::Body, 2), None);
@@ -952,7 +1605,7 @@ mod tests {
 
         // Oldest-first: rows 1,2 leave; the surviving colors are those of rows 3,4.
         assert_eq!(dl.trim_front(a, 2), Some(2));
-        assert_eq!(dl.plot(a).indices(), &[0, 1]);
+        assert_eq!(indices(&dl, a), [0, 1]);
         assert_eq!(dl.point_color(a, PointColorChannel::Body, 0), Some(33));
         assert_eq!(dl.point_color(a, PointColorChannel::Body, 1), Some(44));
         // Times 1,2 belonged to A alone, so they leave the shared axis; 3,4 survive through both.
@@ -1011,7 +1664,7 @@ mod tests {
         );
         // the whitespace times occupy merged slots (reference keeps the time-scale points)
         assert_eq!(dl.merged_times(), &[1, 2, 3, 4, 5]);
-        assert_eq!(dl.plot(a).indices(), &[0, 1, 2, 3, 4]);
+        assert_eq!(indices(&dl, a), [0, 1, 2, 3, 4]);
         assert!(dl.plot(a).is_whitespace_row(2));
         assert!(dl.plot(a).is_whitespace_row(4));
         // base index = the last point with real data (reference _getBaseIndex), not the trailing ws

@@ -356,13 +356,9 @@ impl ChartInner {
         else {
             return walk;
         };
-        let indices = self
-            .engine
-            .data_layer()
-            .plot(entry.series as SeriesId)
-            .indices();
+        let plot = self.engine.data_layer().plot(entry.series as SeriesId);
         for (row, item) in entry.items.iter().enumerate() {
-            let Some(&merged) = indices.get(row) else {
+            let Some(merged) = plot.index_at(row) else {
                 break;
             };
             if custom_is_whitespace(view, whitespace_check.as_ref(), item) {
@@ -558,14 +554,10 @@ impl ChartInner {
             let items = js_sys::Array::new();
             {
                 let entry = &self.custom_series[p.entry_index];
-                let indices = self
-                    .engine
-                    .data_layer()
-                    .plot(entry.series as SeriesId)
-                    .indices();
+                let plot = self.engine.data_layer().plot(entry.series as SeriesId);
                 let whitespace_check = custom_hook(&view, "is_whitespace");
                 for (row, item) in entry.items.iter().enumerate() {
-                    let Some(&merged) = indices.get(row) else {
+                    let Some(merged) = plot.index_at(row) else {
                         break;
                     };
                     if merged < from || merged > to {

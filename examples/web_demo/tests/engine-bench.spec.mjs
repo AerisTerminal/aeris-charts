@@ -74,7 +74,17 @@ test("build-flag benchmark: 1M-bar install, autoscale, hit tests, frame build", 
 
     // --- 1M-bar install: sanitize + column install + time-axis sync -----------------------------
     const million = make_columns(1_000_000);
-    out.install_1m_bars_ms = best(() => timed(() => window.__main.set_data_typed(million)));
+    const first_install_ms = timed(() => window.__main.set_data_typed(million));
+    out.wasm_memory_after_first_1m_bytes = window.__chart.frame_stats().memory_bytes;
+    let install_1m_bars_ms = first_install_ms;
+    for (let repeat = 1; repeat < repeats; repeat += 1) {
+      install_1m_bars_ms = Math.min(
+        install_1m_bars_ms,
+        timed(() => window.__main.set_data_typed(million)),
+      );
+    }
+    out.install_1m_bars_ms = install_1m_bars_ms;
+    out.wasm_memory_after_repeated_1m_bytes = window.__chart.frame_stats().memory_bytes;
 
     // --- autoscale over a 1M-bar series: fit the whole range, then rebuild the frame -----------
     // `fit_content` + render forces a full autoscale pass over every visible bar.
@@ -146,6 +156,19 @@ test("indicator benchmark: 1M RSI current/batch latency and linear-memory delta"
     window.__chart.add_rsi(source, 14, { visible: false });
     const after_indicator_bytes = window.__chart.frame_stats().memory_bytes;
 
+    const small_times = new Float64Array([t0, t0 + 60]);
+    const small_values = new Float64Array([100, 101]);
+    source.set_data_typed({
+      times: small_times,
+      open: small_values,
+      high: small_values,
+      low: small_values,
+      close: small_values,
+    });
+    const after_small_bytes = window.__chart.frame_stats().memory_bytes;
+    source.set_data_typed({ times, open: values, high: values, low: values, close: values });
+    const after_second_large_bytes = window.__chart.frame_stats().memory_bytes;
+
     const last_time = times[rows - 1];
     let started = performance.now();
     for (let update = 0; update < 10_000; update += 1) {
@@ -173,6 +196,9 @@ test("indicator benchmark: 1M RSI current/batch latency and linear-memory delta"
       before_indicator_bytes,
       after_indicator_bytes,
       indicator_delta_bytes: after_indicator_bytes - before_indicator_bytes,
+      after_small_bytes,
+      after_second_large_bytes,
+      second_large_growth_bytes: after_second_large_bytes - after_indicator_bytes,
       current_update_us,
       batch_10k_ms,
     };
@@ -180,4 +206,6 @@ test("indicator benchmark: 1M RSI current/batch latency and linear-memory delta"
   console.log(`INDICATOR BENCH ${JSON.stringify(result, null, 2)}`);
   expect(result.current_update_us).toBeGreaterThan(0);
   expect(result.batch_10k_ms).toBeGreaterThan(0);
+  expect(result.second_large_growth_bytes, "the second 1M load allocated another full high-water block")
+    .toBeLessThan(64 * 1024 * 1024);
 });
