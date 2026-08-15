@@ -1,20 +1,25 @@
 import type {
   chart_api,
+  chart_options,
   feature_brush_style,
   feature_series_options,
   series_api,
 } from "./types.js";
+import { create_delta_tooltip } from "./primitive_features.js";
 
 export interface brushable_area_interaction_options {
   base_style?: Partial<feature_brush_style>;
   faded_style?: Partial<feature_brush_style>;
+  /** Shared overrides for both selected states. */
   selected_style?: Partial<feature_brush_style>;
+  positive_style?: Partial<feature_brush_style>;
+  negative_style?: Partial<feature_brush_style>;
 }
 
 /**
- * Install the reference brush gesture for a Rust-native `brushable_area` series. Pointer capture
- * stays at the browser host boundary; the selected logical range and all resulting geometry stay
- * in the engine through `apply_options`.
+ * Compose the official delta-tooltip gesture with a Rust-native `brushable_area` series. Pointer
+ * lookup, chronological delta direction, touch state, and tooltip geometry stay in the engine;
+ * this host adapter only applies the selected range's positive/negative style.
  */
 export function enable_brushable_area_interaction(
   chart: chart_api,
@@ -37,76 +42,48 @@ export function enable_brushable_area_interaction(
     top_color: "rgba(40,98,255,0.05)",
     ...options.faded_style,
   };
-  const selected: feature_brush_style = {
+  const positive: feature_brush_style = {
     ...base,
     line_color: "rgb(4,153,129)",
     top_color: "rgba(4,153,129,0.4)",
     bottom_color: "rgba(4,153,129,0)",
     line_width: 3,
     ...options.selected_style,
+    ...options.positive_style,
   };
-  const host = chart.chart_element();
-  let pointer_id: number | null = null;
-  let start: number | null = null;
-  let active = false;
-
-  const logical_at = (client_x: number): number | null => {
-    const pane = chart.panes().find((candidate) => candidate.get_series().includes(series));
-    if (pane === undefined) return null;
-    const bounds = host.getBoundingClientRect();
-    const geometry = pane.get_geometry();
-    const x = client_x - bounds.left - geometry.left;
-    if (x < 0 || x > geometry.width) return null;
-    return chart.time_scale().coordinate_to_logical(x);
+  const negative: feature_brush_style = {
+    ...base,
+    line_color: "rgb(239,83,80)",
+    top_color: "rgba(239,83,80,0.4)",
+    bottom_color: "rgba(239,83,80,0)",
+    line_width: 3,
+    ...options.selected_style,
+    ...options.negative_style,
   };
-  const apply = (patch: Partial<feature_series_options>): void => series.apply_options(patch);
-  const claim = (event: PointerEvent): void => {
-    event.preventDefault();
-    event.stopImmediatePropagation();
-  };
-  const on_down = (event: PointerEvent): void => {
-    if (event.button !== 0 || pointer_id !== null) return;
-    const logical = logical_at(event.clientX);
-    if (logical === null) return;
-    claim(event);
-    pointer_id = event.pointerId;
-    start = logical;
-    active = false;
-    host.setPointerCapture(event.pointerId);
-    apply({ ...base, brush_ranges: [] });
-  };
-  const on_move = (event: PointerEvent): void => {
-    if (event.pointerId !== pointer_id || start === null) return;
-    claim(event);
-    const end = logical_at(event.clientX);
-    if (end === null || end === start) return;
-    active = true;
-    apply({
-      ...faded,
-      brush_ranges: [{ range: { from: Math.min(start, end), to: Math.max(start, end) }, style: selected }],
-    });
-  };
-  const finish = (event: PointerEvent): void => {
-    if (event.pointerId !== pointer_id) return;
-    claim(event);
-    if (host.hasPointerCapture(event.pointerId)) host.releasePointerCapture(event.pointerId);
-    pointer_id = null;
-    start = null;
-    if (!active) apply({ ...base, brush_ranges: [] });
-    active = false;
-  };
-  host.addEventListener("pointerdown", on_down, true);
-  host.addEventListener("pointermove", on_move, true);
-  host.addEventListener("pointerup", finish, true);
-  host.addEventListener("pointercancel", finish, true);
+  const previous_options = chart.options() as chart_options;
+  const previous_scroll = previous_options.handle_scroll;
+  const previous_scale = previous_options.handle_scale;
+  chart.apply_options({ handle_scroll: false, handle_scale: false });
+  const tooltip = create_delta_tooltip(chart, {
+    series,
+    on_active_range_change(range) {
+      if (range === null) {
+        series.apply_options({ ...base, brush_ranges: [] });
+        return;
+      }
+      series.apply_options({
+        ...faded,
+        brush_ranges: [{
+          range: { from: range.from, to: range.to },
+          style: range.positive ? positive : negative,
+        }],
+      } satisfies Partial<feature_series_options>);
+    },
+  });
   return {
     detach() {
-      host.removeEventListener("pointerdown", on_down, true);
-      host.removeEventListener("pointermove", on_move, true);
-      host.removeEventListener("pointerup", finish, true);
-      host.removeEventListener("pointercancel", finish, true);
-      pointer_id = null;
-      start = null;
+      tooltip.detach();
+      chart.apply_options({ handle_scroll: previous_scroll, handle_scale: previous_scale });
     },
   };
 }

@@ -2454,6 +2454,49 @@ mod tests {
     }
 
     #[test]
+    fn delta_tooltip_direction_uses_chronological_prices_not_drag_order() {
+        let mut chart = chart();
+        let times: Vec<f64> = (0..10).map(|day| day as f64 * 86_400.0).collect();
+        let close: Vec<f64> = (0..10).map(|day| 110.0 - day as f64).collect();
+        let open: Vec<f64> = close.iter().map(|value| value + 1.0).collect();
+        let high: Vec<f64> = close.iter().map(|value| value + 2.0).collect();
+        let low: Vec<f64> = close.iter().map(|value| value - 2.0).collect();
+        chart
+            .set_series_data(0, &times, &open, &high, &low, &close)
+            .unwrap();
+        chart.fit_content();
+        let primitive = chart
+            .add_delta_tooltip(0, DeltaTooltipOptions::default())
+            .unwrap();
+        let x2 = chart.time_scale.index_to_coordinate(2);
+        let x7 = chart.time_scale.index_to_coordinate(7);
+
+        for (start, end) in [(x2, x7), (x7, x2)] {
+            assert!(chart.delta_tooltip_mouse_down(start));
+            assert!(chart.delta_tooltip_mouse_move(end));
+            assert_eq!(
+                chart.delta_tooltip_active_range(primitive),
+                Some(DeltaTooltipActiveRange {
+                    from: 3,
+                    to: 8,
+                    positive: false,
+                })
+            );
+            assert!(chart.delta_tooltip_mouse_up());
+        }
+
+        chart.delta_tooltip_touch_move(&[x7, x2]);
+        assert_eq!(
+            chart.delta_tooltip_active_range(primitive),
+            Some(DeltaTooltipActiveRange {
+                from: 3,
+                to: 8,
+                positive: false,
+            })
+        );
+    }
+
+    #[test]
     fn tooltip_snapshot_and_bottom_guide_are_owned_by_the_engine() {
         let mut chart = chart();
         let color = Color::rgb(12, 34, 56);

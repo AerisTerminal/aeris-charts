@@ -570,7 +570,9 @@ impl ChartEngine {
                 let h = (height - 1 - (border_y * 2.0).round() as i32).max(1);
                 out.push(Prim::Rect {
                     rect: IRect { x, y, w, h },
-                    color: official_heatmap_color(cell.amount),
+                    color: cell
+                        .color
+                        .unwrap_or_else(|| official_heatmap_color(cell.amount)),
                 });
                 if draw_border
                     && options.cell_border_width > 0.0

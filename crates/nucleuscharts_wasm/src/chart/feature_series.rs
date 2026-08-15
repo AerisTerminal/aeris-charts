@@ -75,6 +75,7 @@ fn parse_feature_value(kind: FeatureSeriesKind, item: &JsValue) -> Option<Featur
                         low: number(&cell, "low").unwrap_or(f64::NAN),
                         high: number(&cell, "high").unwrap_or(f64::NAN),
                         amount: number(&cell, "amount").unwrap_or(f64::NAN),
+                        color: color(&cell, "color"),
                     })
                     .collect(),
             }

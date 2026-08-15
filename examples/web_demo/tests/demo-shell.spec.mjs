@@ -26,7 +26,10 @@ test("demo shell is responsive, icon-led, and has no horizontal control ribbon",
 
 test("feature lab exposes every first-class helper and manages series lifecycle", async ({ page }) => {
   await open_demo(page);
-  await expect(page.locator("#feature_grid .feature-card")).toHaveCount(29);
+  // The 29 official plugins expose 30 demo scenarios because Heat Map has two upstream examples.
+  await expect(page.locator("#feature_grid .feature-card")).toHaveCount(30);
+  await expect(page.locator('[data-feature-id="heatmap-standalone"]')).toBeVisible();
+  await expect(page.locator('[data-feature-id="heatmap-line"]')).toBeVisible();
 
   await page.locator('[data-feature-id="rounded-candles"]').click();
   await expect(page.locator('[data-feature-id="rounded-candles"]')).toHaveAttribute("aria-pressed", "true");
@@ -59,28 +62,122 @@ test("every feature-lab card activates through its real public API wiring", asyn
   expect(errors).toEqual([]);
 });
 
-test("brushable area drag writes a logical range into the Rust series", async ({ page }) => {
+test("reported plugin scenarios use full data and official line compositions", async ({ page }) => {
+  await open_demo(page);
+  const inspect = () => page.evaluate(() => window.__chart.series_order().map((series) => ({
+    type: series.series_type(),
+    points: series.data().length,
+    first_cells: series.series_type() === "heatmap" ? series.data()[0]?.cells.length : null,
+  })));
+
+  const initial_lines = (await inspect()).filter((item) => item.type === "line").length;
+  await page.evaluate(() => window.__feature_lab.activate("dual-range-histogram"));
+  let series = await inspect();
+  expect(series.find((item) => item.type === "dual_range_histogram")?.points).toBe(await page.evaluate(() => window.__data.length));
+  expect(series.filter((item) => item.type === "baseline")).toHaveLength(1);
+  expect(await page.evaluate(() => {
+    const range = window.__chart.time_scale().get_visible_logical_range();
+    return range.to - range.from;
+  })).toBeLessThan(await page.evaluate(() => window.__data.length / 2));
+  const dual_margins = await page.evaluate(() => window.__chart.series_order()
+    .find((item) => item.series_type() === "dual_range_histogram").price_scale().options().scale_margins);
+  expect(dual_margins.top).toBeGreaterThan(0);
+  expect(dual_margins.bottom).toBe(dual_margins.top);
+
+  await page.evaluate(() => window.__feature_lab.activate("heatmap-standalone"));
+  series = await inspect();
+  expect(series.find((item) => item.type === "heatmap")).toMatchObject({
+    points: await page.evaluate(() => window.__data.length),
+    first_cells: 10,
+  });
+  expect(series.filter((item) => item.type === "line")).toHaveLength(initial_lines);
+  expect(await page.evaluate(() => window.__chart.time_scale().options())).toMatchObject({
+    min_bar_spacing: 4,
+    bar_spacing: 21,
+  });
+
+  await page.evaluate(() => window.__feature_lab.activate("heatmap-line"));
+  series = await inspect();
+  expect(series.find((item) => item.type === "heatmap")).toMatchObject({
+    points: await page.evaluate(() => window.__data.length),
+    first_cells: 13,
+  });
+  expect(series.filter((item) => item.type === "line")).toHaveLength(initial_lines + 1);
+
+  await page.evaluate(() => window.__feature_lab.activate("shaded-background"));
+  series = await inspect();
+  expect(series.find((item) => item.type === "background_shade")?.points).toBe(await page.evaluate(() => window.__data.length));
+  expect(series.filter((item) => item.type === "line")).toHaveLength(initial_lines + 1);
+});
+
+test("brushable area writes a logical range whose color follows chronological delta in either drag direction", async ({ page }) => {
   await open_demo(page);
   await page.locator('[data-feature-id="brushable-area"]').click();
-  const overlay = page.locator("#chart_container canvas").last();
-  const bounds = await overlay.boundingBox();
-  expect(bounds).not.toBeNull();
-  const y = bounds.y + bounds.height * 0.45;
-  await page.mouse.move(bounds.x + bounds.width * 0.3, y);
-  await page.mouse.down();
-  await page.mouse.move(bounds.x + bounds.width * 0.65, y, { steps: 8 });
-  await page.mouse.up();
-  const state = await page.evaluate(() => {
+  const targets = await page.evaluate(() => {
     const feature = window.__chart.series_order().find((item) => item.series_type() === "brushable_area");
+    const data = feature.data();
+    const pane = window.__chart.panes()[0].get_geometry();
+    const visible = window.__chart.time_scale().get_visible_logical_range();
+    const pair = (descending) => {
+      for (let gap = 20; gap < Math.min(160, data.length); gap += 10) {
+        for (let index = Math.max(gap, Math.ceil(visible.from) + gap);
+          index <= Math.min(data.length - 1, Math.floor(visible.to)); index += 1) {
+          const first_index = index - gap;
+          const first = data[first_index];
+          const second = data[index];
+          const x1 = window.__chart.time_scale().logical_to_coordinate(first_index);
+          const x2 = window.__chart.time_scale().logical_to_coordinate(index);
+          if (x1 !== null && x2 !== null && Math.abs(x2 - x1) >= 24
+            && x1 >= 0 && x1 <= pane.width && x2 >= 0 && x2 <= pane.width
+            && ((second.value < first.value) === descending)) {
+            return [first_index, index];
+          }
+        }
+      }
+      throw new Error(`No ${descending ? "descending" : "ascending"} pair in brush data`);
+    };
+    const canvases = window.__chart.chart_element().querySelectorAll("canvas");
+    const bounds = canvases[canvases.length - 1].getBoundingClientRect();
+    const point = (index) => ({
+      x: bounds.left + pane.left + window.__chart.time_scale().logical_to_coordinate(index),
+      y: bounds.top + pane.top + pane.height * 0.5,
+    });
+    const [down_from, down_to] = pair(true);
+    const [up_from, up_to] = pair(false);
     return {
-      ranges: feature?.options().brush_ranges ?? [],
-      active: window.__feature_lab.active_ids(),
+      down_from: point(down_from),
+      down_to: point(down_to),
+      up_from: point(up_from),
+      up_to: point(up_to),
     };
   });
-  expect(state.active).toContain("brushable-area");
-  expect(state.ranges).toHaveLength(1);
-  expect(state.ranges[0].range.to).toBeGreaterThan(state.ranges[0].range.from);
-  expect(state.ranges[0].style.line_color).toBe("#049981");
+  const drag = async (from, to, color) => {
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(to.x, to.y, { steps: 4 });
+    await expect.poll(() => page.evaluate(() => {
+      const feature = window.__chart.series_order().find((item) => item.series_type() === "brushable_area");
+      return feature.options().brush_ranges[0]?.style.line_color ?? null;
+    })).toBe(color);
+    await page.mouse.up();
+    return page.evaluate(() => {
+      const feature = window.__chart.series_order().find((item) => item.series_type() === "brushable_area");
+      const brush = feature.options().brush_ranges[0];
+      return {
+        color: brush?.style.line_color ?? null,
+        range: brush?.range ?? null,
+        active: window.__feature_lab.active_ids(),
+      };
+    });
+  };
+
+  const expect_brush = (result, color) => {
+    expect(result).toMatchObject({ color, active: expect.arrayContaining(["brushable-area"]) });
+    expect(result.range.to).toBeGreaterThan(result.range.from);
+  };
+  expect_brush(await drag(targets.down_from, targets.down_to, "#ef5350"), "#ef5350");
+  expect_brush(await drag(targets.down_to, targets.down_from, "#ef5350"), "#ef5350");
+  expect_brush(await drag(targets.up_to, targets.up_from, "#049981"), "#049981");
 });
 
 test("theme action and compact inspector remain directly usable", async ({ page }) => {

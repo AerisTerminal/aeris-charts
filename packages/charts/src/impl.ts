@@ -1506,13 +1506,27 @@ class custom_series_impl extends series_impl {
 
 /** A public handle whose payload and renderer are both owned by the Rust feature-series state. */
 class feature_series_impl extends series_impl {
+  private heatmap_shader: ((amount: number) => string) | null = null;
+
   constructor(id: number, kind: feature_series_kind, chart: chart_impl) {
     super(id, kind, chart);
   }
 
+  private engine_item(item: series_data): series_data {
+    if (this.kind !== "heatmap" || this.heatmap_shader === null || !("cells" in item)) return item;
+    const shader = this.heatmap_shader;
+    return {
+      ...item,
+      cells: item.cells.map((cell) => ({ ...cell, color: shader(cell.amount) })),
+    } as series_data;
+  }
+
   set_data(data: readonly series_data[]): void {
     this.assert_live();
-    const converted = data.map((item) => ({ ...item, time: time_to_utc_seconds(item.time) }));
+    const converted = data.map((item) => this.engine_item({
+      ...item,
+      time: time_to_utc_seconds(item.time),
+    } as series_data));
     this.record_ingestion(this.chart.wasm.set_feature_series_data(this.id, converted));
     this.chart.sync_countdown_timer();
     this.chart.repaint();
@@ -1523,7 +1537,7 @@ class feature_series_impl extends series_impl {
     this.assert_live();
     this.record_ingestion(this.chart.wasm.update_feature_series_item(
       this.id,
-      { ...item, time: time_to_utc_seconds(item.time) },
+      this.engine_item({ ...item, time: time_to_utc_seconds(item.time) } as series_data),
     ));
     if (this.chart.countdown_series_present) this.chart.sync_countdown_timer();
     this.chart.schedule_repaint();
@@ -1567,16 +1581,32 @@ class feature_series_impl extends series_impl {
   }
 
   apply_options(options: Partial<any_series_options>): void {
-    super.apply_options(options);
-    this.chart.wasm.apply_feature_series_options(this.id, JSON.stringify(options));
+    const { cell_shader, ...engine_options } = options;
+    const shader_changed = this.kind === "heatmap" && cell_shader !== undefined;
+    const current_data = shader_changed ? this.data() : [];
+    if (shader_changed) {
+      if (typeof cell_shader !== "function") {
+        throw new nucleuscharts_error("invalid_options", "cell_shader must be a function");
+      }
+      this.heatmap_shader = cell_shader;
+    }
+    super.apply_options(engine_options);
+    this.chart.wasm.apply_feature_series_options(this.id, JSON.stringify(engine_options));
+    if (current_data.length > 0) {
+      this.record_ingestion(this.chart.wasm.set_feature_series_data(
+        this.id,
+        current_data.map((item) => this.engine_item(item)),
+      ));
+    }
     this.chart.repaint();
   }
 
   options(): any_series_options {
-    return {
+    const options = {
       ...super.options(),
       ...(JSON.parse(this.chart.wasm.feature_series_options_json(this.id)) as Partial<any_series_options>),
     };
+    return this.heatmap_shader === null ? options : { ...options, cell_shader: this.heatmap_shader };
   }
 
   series_type(): feature_series_kind {

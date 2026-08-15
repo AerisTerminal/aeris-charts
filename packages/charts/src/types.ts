@@ -107,6 +107,7 @@ export interface dual_range_histogram_data { time: time; values: readonly number
 export interface grouped_bars_data { time: time; values: readonly number[] }
 export interface heatmap_cell { low: number; high: number; amount: number }
 export interface heatmap_data { time: time; cells: readonly heatmap_cell[] }
+export type heatmap_cell_shader = (amount: number) => string;
 export interface hlc_area_data { time: time; high: number; low: number; close: number }
 export interface pretty_histogram_data { time: time; value: number; color?: string }
 export interface lollipop_data { time: time; value: number }
@@ -861,6 +862,8 @@ export interface feature_series_options {
   max_height: number;
   cell_border_width: number;
   cell_border_color: string;
+  /** Official Heat Map `cellShader`; evaluated at the host boundary and retained as engine color. */
+  cell_shader: heatmap_cell_shader;
   high_line_color: string;
   low_line_color: string;
   close_line_color: string;

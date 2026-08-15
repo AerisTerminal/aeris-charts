@@ -71,6 +71,8 @@ pub struct HeatmapCell {
     pub low: f64,
     pub high: f64,
     pub amount: f64,
+    /// Host-resolved `cellShader` output. `None` uses the official default shader.
+    pub color: Option<Color>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -971,6 +973,7 @@ mod tests {
                     low: value - 2.0,
                     high: value + 2.0,
                     amount: index as f64 / 2.0,
+                    color: None,
                 }],
             },
             FeatureSeriesKind::HlcArea => FeatureValue::HlcArea {
@@ -1151,6 +1154,153 @@ mod tests {
     }
 
     #[test]
+    fn heatmap_emits_every_full_width_price_cell_with_host_shader_colors() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        chart.configure_feature_series(
+            0,
+            FeatureSeriesKind::Heatmap,
+            FeatureSeriesOptionsPatch::default(),
+        );
+        let color = Color::rgb(12, 34, 56);
+        chart
+            .set_feature_series_data(
+                0,
+                (0..4)
+                    .map(|time| FeatureDataPoint {
+                        time: time as f64,
+                        value: Some(FeatureValue::Heatmap {
+                            cells: (0..3)
+                                .map(|cell| HeatmapCell {
+                                    low: cell as f64 * 10.0,
+                                    high: (cell + 1) as f64 * 10.0,
+                                    amount: 50.0,
+                                    color: Some(color),
+                                })
+                                .collect(),
+                        }),
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        chart.time_scale.set_width(800.0);
+        chart.fit_content();
+        let frame = chart.build_frame();
+        let segment = chart
+            .frame_series_segments(0)
+            .iter()
+            .find(|segment| segment.series_id == Some(0))
+            .copied()
+            .unwrap();
+        let cells = frame.panes[0].main[segment.start..segment.end]
+            .iter()
+            .filter_map(|primitive| match primitive {
+                nucleuscharts_render::draw_list::Prim::Rect { rect, color: fill }
+                    if *fill == color =>
+                {
+                    Some(*rect)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(cells.len(), 12);
+        assert!(cells.iter().all(|cell| cell.w > 1 && cell.h > 1));
+        let time_columns = cells
+            .chunks_exact(3)
+            .map(|group| group[0].x)
+            .collect::<Vec<_>>();
+        assert_eq!(time_columns.len(), 4);
+        assert!(time_columns.windows(2).all(|pair| pair[0] != pair[1]));
+    }
+
+    #[test]
+    fn dual_range_and_background_columns_use_contiguous_official_widths() {
+        let mut dual = ChartEngine::new(800.0, 500.0, 1.0);
+        dual.configure_feature_series(
+            0,
+            FeatureSeriesKind::DualRangeHistogram,
+            FeatureSeriesOptionsPatch::default(),
+        );
+        dual.set_feature_series_data(
+            0,
+            (0..6)
+                .map(|time| FeatureDataPoint {
+                    time: time as f64,
+                    value: Some(FeatureValue::DualRangeHistogram {
+                        values: vec![20.0, 10.0, -20.0, -10.0],
+                    }),
+                })
+                .collect(),
+        )
+        .unwrap();
+        dual.time_scale.set_width(800.0);
+        dual.fit_content();
+        let frame = dual.build_frame();
+        let segment = dual
+            .frame_series_segments(0)
+            .iter()
+            .find(|segment| segment.series_id == Some(0))
+            .copied()
+            .unwrap();
+        let columns = frame.panes[0].main[segment.start..segment.end]
+            .iter()
+            .filter_map(|primitive| match primitive {
+                nucleuscharts_render::draw_list::Prim::RoundRect { x, w, .. } => {
+                    Some((*x as i32, *w as i32))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(columns.len(), 24);
+        assert!(columns.chunks_exact(4).all(|group| {
+            group
+                .iter()
+                .all(|column| *column == group[0] && column.1 > 1)
+        }));
+
+        let mut background = ChartEngine::new(800.0, 500.0, 1.0);
+        background.configure_feature_series(
+            0,
+            FeatureSeriesKind::BackgroundShade,
+            FeatureSeriesOptionsPatch::default(),
+        );
+        background
+            .set_feature_series_data(
+                0,
+                (0..6)
+                    .map(|time| FeatureDataPoint {
+                        time: time as f64,
+                        value: Some(FeatureValue::BackgroundShade {
+                            value: 10.0 + time as f64,
+                        }),
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        background.time_scale.set_width(800.0);
+        background.fit_content();
+        let frame = background.build_frame();
+        let segment = background
+            .frame_series_segments(0)
+            .iter()
+            .find(|segment| segment.series_id == Some(0))
+            .copied()
+            .unwrap();
+        let mut fields = frame.panes[0].main[segment.start..segment.end]
+            .iter()
+            .filter_map(|primitive| match primitive {
+                nucleuscharts_render::draw_list::Prim::Rect { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        fields.sort_by_key(|rect| rect.x);
+        assert_eq!(fields.len(), 6);
+        assert!(fields
+            .windows(2)
+            .all(|pair| pair[0].x + pair[0].w == pair[1].x));
+        assert!(fields.iter().all(|rect| rect.h == fields[0].h));
+    }
+
+    #[test]
     fn official_feature_defaults_and_shader_colors_are_preserved() {
         let mut lollipop = ChartEngine::new(800.0, 500.0, 1.0);
         lollipop.configure_feature_series(
@@ -1179,6 +1329,7 @@ mod tests {
                                 low: 10.0,
                                 high: 11.0,
                                 amount: 0.5,
+                                color: (time == 1).then_some(Color::rgb(12, 34, 56)),
                             }],
                         }),
                     })
@@ -1190,6 +1341,10 @@ mod tests {
         assert!(heatmap.build_frame().panes[0].main.iter().any(|primitive| {
             matches!(primitive, nucleuscharts_render::draw_list::Prim::Rect { color, .. }
                 if *color == Color::rgba(0, 101, 1, 153))
+        }));
+        assert!(heatmap.build_frame().panes[0].main.iter().any(|primitive| {
+            matches!(primitive, nucleuscharts_render::draw_list::Prim::Rect { color, .. }
+                if *color == Color::rgb(12, 34, 56))
         }));
 
         let mut background = ChartEngine::new(800.0, 500.0, 1.0);

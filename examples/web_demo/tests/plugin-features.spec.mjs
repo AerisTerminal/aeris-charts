@@ -93,6 +93,40 @@ test("advanced-series data, updates, options, and diagnostics round-trip from Ru
   expect(result.invalid).toMatchObject({ status: "rejected", accepted: 0, dropped_invalid: 1 });
 });
 
+test("heatmap cell_shader resolves colors at the host boundary and keeps data engine-owned", async ({ page }) => {
+  await open_chart(page);
+  const result = await page.evaluate(() => {
+    let initial_calls = 0;
+    let replacement_calls = 0;
+    const heatmap = window.__chart.add_series("heatmap", {
+      cell_shader: () => {
+        initial_calls += 1;
+        return "#0c2238";
+      },
+    });
+    heatmap.set_data([
+      { time: 1, cells: [{ low: 10, high: 11, amount: 25 }, { low: 11, high: 12, amount: 75 }] },
+    ]);
+    const data = heatmap.data();
+    heatmap.apply_options({
+      cell_shader: () => {
+        replacement_calls += 1;
+        return "rgba(155,0,255,.8)";
+      },
+    });
+    return {
+      initial_calls,
+      replacement_calls,
+      has_shader: typeof heatmap.options().cell_shader === "function",
+      data,
+    };
+  });
+  expect(result).toMatchObject({ initial_calls: 2, replacement_calls: 2, has_shader: true });
+  expect(result.data).toEqual([
+    { time: 1, cells: [{ low: 10, high: 11, amount: 25 }, { low: 11, high: 12, amount: 75 }] },
+  ]);
+});
+
 test("primitive feature helpers compose existing engine and host boundaries", async ({ page }) => {
   const page_errors = [];
   page.on("pageerror", (error) => page_errors.push(error.message));

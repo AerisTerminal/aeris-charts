@@ -65,7 +65,8 @@ export function install_gestures(chart: chart_impl): () => void {
   let tap_count = 0;
   let tap_timer: ReturnType<typeof setTimeout> | null = null;
   let tap_position = { x: 0, y: 0 }; // client coords of the first tap
-  let last_touch_ts = 0;
+  // No touch has happened yet; startup mouse input must never enter the 500 ms post-touch filter.
+  let last_touch_ts = Number.NEGATIVE_INFINITY;
   const touch_regions = new Map<number, press_region>();
 
   // Crosshair tracking mode (reference _startTrackPoint !== null).

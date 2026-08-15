@@ -20,25 +20,83 @@ import {
 } from "./dist/nucleuscharts_financial.js";
 import { hydrate_icons } from "./demo_icons.js";
 
+function rainbow_color(value) {
+  const t = Math.max(0, Math.min(1, value));
+  const stops = [[48, 24, 110], [32, 150, 210], [42, 220, 120], [250, 220, 45], [190, 30, 45]];
+  const scaled = t * (stops.length - 1);
+  const index = Math.min(stops.length - 2, Math.floor(scaled));
+  const mix = scaled - index;
+  const color = stops[index].map((channel, channel_index) => Math.round(
+    channel + (stops[index + 1][channel_index] - channel) * mix,
+  ));
+  return `rgb(${color.join(",")})`;
+}
+
+function add_line_companion(chart, data, options = {}, kind = "line") {
+  const line = chart.add_series(kind, {
+    color: "#f4f7fb",
+    line_width: 2,
+    price_line_visible: false,
+    last_value_visible: true,
+    ...options,
+  });
+  line.set_data(data);
+  return () => chart.remove_series(line);
+}
+
+function use_official_feature_spacing(chart) {
+  const scale = chart.time_scale();
+  const previous = scale.options();
+  scale.apply_options({ min_bar_spacing: 4, bar_spacing: 21 });
+  return () => scale.apply_options({
+    min_bar_spacing: previous.min_bar_spacing,
+    bar_spacing: previous.bar_spacing,
+  });
+}
+
 function series_features(bars) {
   const sampled = bars.filter((_, index) => index % 5 === 0);
   const closes = sampled.map((bar) => bar.close);
   const base = Math.floor(Math.min(...closes) - 2);
-  const brush_start = sampled[Math.floor(sampled.length / 3)];
-  const brush_end = sampled[Math.floor(sampled.length * 2 / 3)];
-  const brush_from = bars.indexOf(brush_start);
-  const brush_to = bars.indexOf(brush_end) + 1;
   return [
     {
       id: "brushable-area", label: "Brushable area", detail: "Drag to brush", icon: "chart", interactive: true,
       series_kind: "brushable_area",
-      options: { base_price: base, brush_ranges: [{ range: { from: brush_from, to: brush_to }, style: { line_color: "#f7525f", top_color: "#f7525f55", bottom_color: "#f7525f00", line_width: 2 } }] },
-      data: () => sampled.map((bar) => ({ time: bar.time, value: bar.close })),
+      options: { base_price: base },
+      data: () => bars.map((bar) => ({ time: bar.time, value: bar.close })),
     },
     {
       id: "dual-range-histogram", label: "Dual range", detail: "Symmetric histogram", icon: "chart",
+      preserve_time_spacing: true,
       series_kind: "dual_range_histogram", options: {},
-      data: () => sampled.map((bar, index) => ({ time: bar.time, values: [12 + index % 17, 6 + index % 9, -(8 + index % 13), -(4 + index % 7)] })),
+      data: () => bars.map((bar, index) => ({ time: bar.time, values: [12 + index % 17, 6 + index % 9, -(8 + index % 13), -(4 + index % 7)] })),
+      compose: (chart, histogram) => {
+        const restore_spacing = use_official_feature_spacing(chart);
+        const values = bars.map((bar) => bar.close);
+        const middle = (Math.min(...values) + Math.max(...values)) / 2;
+        const remove_baseline = add_line_companion(
+          chart,
+          bars.map((bar) => ({ time: bar.time, value: bar.close - middle })),
+          { baseline_value: 0 },
+          "baseline",
+        );
+        const scale = histogram.price_scale();
+        const previous_margins = scale.options().scale_margins;
+        const update_margins = () => {
+          const height = chart.panes()[0].get_geometry().height;
+          const margin = Math.min(0.3, histogram.options().max_height / 2 / height);
+          scale.apply_options({ scale_margins: { top: margin, bottom: margin } });
+        };
+        const resize_observer = new ResizeObserver(update_margins);
+        resize_observer.observe(chart.chart_element());
+        update_margins();
+        return () => {
+          resize_observer.disconnect();
+          scale.apply_options({ scale_margins: previous_margins });
+          remove_baseline();
+          restore_spacing();
+        };
+      },
     },
     {
       id: "grouped-bars", label: "Grouped bars", detail: "Side-by-side values", icon: "chart",
@@ -46,9 +104,50 @@ function series_features(bars) {
       data: () => sampled.map((bar, index) => ({ time: bar.time, values: [12 + index % 13, 18 + index % 9, 8 + index % 16] })),
     },
     {
-      id: "heatmap", label: "Heatmap", detail: "Price × time cells", icon: "chart",
-      series_kind: "heatmap", options: { cell_border_color: "rgba(255,255,255,.08)" },
-      data: () => sampled.map((bar, index) => ({ time: bar.time, cells: [{ low: bar.low, high: bar.close, amount: index % 100 }, { low: bar.close, high: bar.high, amount: 100 - index % 100 }] })),
+      id: "heatmap-standalone", label: "Heatmap grid", detail: "Standalone multi-cell map", icon: "chart",
+      preserve_time_spacing: true,
+      series_kind: "heatmap",
+      options: { cell_shader: (amount) => rainbow_color(amount / 36), cell_border_color: "rgba(255,255,255,.22)" },
+      data: () => bars.map((bar, time_index) => ({
+        time: bar.time,
+        cells: Array.from({ length: 10 }, (_, price_index) => ({
+          low: price_index * 10,
+          high: (price_index + 1) * 10,
+          amount: 18 + 18 * Math.sin(time_index * 0.21 + price_index * 0.47),
+        })),
+      })),
+      compose: (chart) => use_official_feature_spacing(chart),
+    },
+    {
+      id: "heatmap-line", label: "Heatmap + line", detail: "Multi-cell distribution around line", icon: "chart",
+      preserve_time_spacing: true,
+      series_kind: "heatmap",
+      options: {
+        cell_border_width: 0,
+        cell_shader: (amount) => {
+          const value = Math.max(0, Math.min(100, amount));
+          return `rgba(${155 - value}, 0, ${155 + value}, ${0.05 + value * 0.01})`;
+        },
+      },
+      data: () => bars.map((bar) => ({
+        time: bar.time,
+        cells: Array.from({ length: 13 }, (_, index) => {
+          const offset = index - 6;
+          return {
+            low: bar.close + offset * 0.8,
+            high: bar.close + (offset + 1) * 0.8,
+            amount: 100 * Math.exp(-(offset * offset) / 8),
+          };
+        }),
+      })),
+      compose: (chart) => {
+        const restore_spacing = use_official_feature_spacing(chart);
+        const remove_line = add_line_companion(
+          chart,
+          bars.map((bar) => ({ time: bar.time, value: bar.close })),
+        );
+        return () => { remove_line(); restore_spacing(); };
+      },
     },
     {
       id: "hlc-area", label: "HLC area", detail: "High/low envelope", icon: "chart",
@@ -71,9 +170,13 @@ function series_features(bars) {
       data: () => sampled.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })),
     },
     {
-      id: "shaded-background", label: "Shaded backdrop", detail: "Value-driven bands", icon: "chart", overlay: true,
+      id: "shaded-background", label: "Shaded backdrop", detail: "Continuous field + line", icon: "chart",
       series_kind: "background_shade", options: { low_value: Math.min(...closes), high_value: Math.max(...closes) },
-      data: () => sampled.map((bar) => ({ time: bar.time, value: bar.close })),
+      data: () => bars.map((bar) => ({ time: bar.time, value: bar.close })),
+      compose: (chart) => add_line_companion(
+        chart,
+        bars.map((bar) => ({ time: bar.time, value: bar.close })),
+      ),
     },
     {
       id: "stacked-area", label: "Stacked area", detail: "Cumulative layers", icon: "chart",
@@ -172,7 +275,12 @@ export function install_feature_lab({ chart, series, data }) {
           const interaction = feature.interactive === true
             ? enable_brushable_area_interaction(chart, handle)
             : null;
-          active_series = { id: feature.id, handle, cleanup: () => interaction?.detach() };
+          const remove_companion = feature.compose?.(chart, handle) ?? null;
+          active_series = {
+            id: feature.id,
+            handle,
+            cleanup: () => { interaction?.detach(); remove_companion?.(); },
+          };
           series.apply_options({ visible: feature.overlay === true });
           card(feature.id).setAttribute("aria-pressed", "true");
         }
@@ -185,7 +293,9 @@ export function install_feature_lab({ chart, series, data }) {
         cleanups.set(feature.id, typeof cleanup === "function" ? cleanup : () => {});
         card(feature.id).setAttribute("aria-pressed", "true");
       }
-      chart.time_scale().fit_content();
+      if (active_series?.id !== feature.id || feature.preserve_time_spacing !== true) {
+        chart.time_scale().fit_content();
+      }
       chart.render();
       update_status();
     } catch (error) {

@@ -52,6 +52,7 @@ import { create_volume_profile } from "@nucleuscharts/financial";
 const heatmap = chart.add_series("heatmap", {
   cell_border_width: 1,
   cell_border_color: "rgba(255,255,255,.08)",
+  cell_shader: (amount) => `rgba(80,0,255,${Math.min(1, amount / 100)})`,
 });
 heatmap.set_data(heatmap_data);
 
@@ -69,6 +70,9 @@ stacked bars, and box-and-whisker series. Primitive helpers include accessibilit
 official ±10% price bands, delta and ordinary tooltips, expiring/user price alerts, highlighted-bar
 crosshair, image watermark, overlay price scale, partial price line, rectangle/trend/vertical
 drawings, session highlighting, volume profile, and user-defined price lines.
+
+As in the upstream examples, dual-range histogram is composed beneath a normal baseline series,
+while heatmap-around-line and shaded-background examples are composed beneath a normal line series.
 
 Features that Nucleus already owns—drawings, bands, price lines, overlay scales, partial-last-price
 lines, session shading, highlighted bar slots, and time-anchored volume profiles—are thin helpers
