@@ -795,6 +795,16 @@ export interface series_options {
   line_visible?: boolean;
   /** Point-marker disc radius in CSS px (reference `pointMarkersRadius`); unset = auto. */
   point_markers_radius?: number;
+  /** Show the crosshair marker on this series (reference `crosshairMarkerVisible`, default `true`). */
+  crosshair_marker_visible?: boolean;
+  /** Crosshair marker radius in CSS px (reference `crosshairMarkerRadius`, default 4). */
+  crosshair_marker_radius?: number;
+  /** Crosshair marker border color; default `""` follows the chart background. */
+  crosshair_marker_border_color?: string;
+  /** Crosshair marker fill color; default `""` follows the series value color. */
+  crosshair_marker_background_color?: string;
+  /** Crosshair marker border width in CSS px (reference `crosshairMarkerBorderWidth`, default 2). */
+  crosshair_marker_border_width?: number;
   /** Baseline: first gradient fill color above the baseline (reference `topFillColor1`). */
   top_fill_color1?: string;
   /** Baseline: second gradient fill color above the baseline (reference `topFillColor2`). */

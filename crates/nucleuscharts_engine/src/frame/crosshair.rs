@@ -58,6 +58,77 @@ impl ChartEngine {
                 color: horz_color,
             });
         }
+        // reference crosshair-marks-pane-view.ts: one mark per visible line-like series holding a
+        // bar at the crosshair index. Indicator outputs are ordinary engine line series, so they
+        // use this same path without host-specific handling.
+        let background = css_color(
+            &self.options.get().layout.background.color,
+            Color::rgb(0xff, 0xff, 0xff),
+        );
+        for series in &self.series {
+            if !series.visible
+                || !matches!(
+                    series.kind,
+                    SeriesKind::Line | SeriesKind::Area | SeriesKind::Baseline
+                )
+                || !series.crosshair_marker_visible
+                || series.pane_index != pane_index
+            {
+                continue;
+            }
+            let plot = self.data.plot(series.id);
+            let Some(row) = plot.search(index, MismatchDirection::None) else {
+                continue;
+            };
+            let close = plot.value_at(row, PlotValueIndex::Close);
+            if !close.is_finite() {
+                continue;
+            }
+            let scale = pane_scale(pane, series_scale_target(series));
+            if scale.is_empty() {
+                continue;
+            }
+            let Some(base_value) = self.series_base_value(series.id, from) else {
+                continue;
+            };
+            let baseline = if series.kind == SeriesKind::Baseline {
+                self.resolved_baseline_price(series.id, from, to)
+            } else {
+                None
+            };
+            let fill = series
+                .crosshair_marker_background_color
+                .as_deref()
+                .and_then(Color::parse_css)
+                .unwrap_or_else(|| self.series_bar_color(series, row, baseline));
+            let border = series
+                .crosshair_marker_border_color
+                .as_deref()
+                .and_then(Color::parse_css)
+                .unwrap_or(background);
+            let cx = (snapped_x * hpr) as f32;
+            let cy = (scale.price_to_coordinate(close, base_value) * vpr) as f32;
+            if series.crosshair_marker_border_width > 0.0 {
+                out.push(Prim::Circle {
+                    cx,
+                    cy,
+                    radius: ((series.crosshair_marker_radius
+                        + series.crosshair_marker_border_width)
+                        * vpr) as f32,
+                    fill: border,
+                    stroke_width: 0.0,
+                    stroke: border,
+                });
+            }
+            out.push(Prim::Circle {
+                cx,
+                cy,
+                radius: (series.crosshair_marker_radius * vpr) as f32,
+                fill,
+                stroke_width: 0.0,
+                stroke: fill,
+            });
+        }
     }
 
     /// reference `PaneWidget._setCrosshairPosition` (pane-widget.ts:714-719) clamps the cursor into

@@ -202,6 +202,23 @@ impl ChartEngine {
             s.point_markers_radius
                 .map_or(serde_json::Value::Null, Into::into),
         );
+        insert(
+            "crosshair_marker_visible",
+            s.crosshair_marker_visible.into(),
+        );
+        insert("crosshair_marker_radius", s.crosshair_marker_radius.into());
+        insert(
+            "crosshair_marker_border_color",
+            verbatim(&s.crosshair_marker_border_color).into(),
+        );
+        insert(
+            "crosshair_marker_background_color",
+            verbatim(&s.crosshair_marker_background_color).into(),
+        );
+        insert(
+            "crosshair_marker_border_width",
+            s.crosshair_marker_border_width.into(),
+        );
         insert("last_value_visible", s.last_value_visible.into());
         insert("title", s.title.clone().into());
         insert("title_visible", s.title_visible.into());
@@ -250,6 +267,7 @@ impl ChartEngine {
         };
         let finite = |value: &serde_json::Value| value.as_f64().filter(|v| v.is_finite());
         let positive = |value: &serde_json::Value| finite(value).filter(|&v| v > 0.0);
+        let non_negative = |value: &serde_json::Value| finite(value).filter(|&v| v >= 0.0);
         let u8_bounded = |value: &serde_json::Value, max: u8| {
             value
                 .as_u64()
@@ -377,6 +395,27 @@ impl ChartEngine {
                         }
                     }
                 },
+                "crosshair_marker_visible" => {
+                    if let Some(v) = value.as_bool() {
+                        s.crosshair_marker_visible = v;
+                    }
+                }
+                "crosshair_marker_radius" => {
+                    if let Some(v) = non_negative(value) {
+                        s.crosshair_marker_radius = v;
+                    }
+                }
+                "crosshair_marker_border_color" => {
+                    color_string_slot(&mut s.crosshair_marker_border_color, value)
+                }
+                "crosshair_marker_background_color" => {
+                    color_string_slot(&mut s.crosshair_marker_background_color, value)
+                }
+                "crosshair_marker_border_width" => {
+                    if let Some(v) = non_negative(value) {
+                        s.crosshair_marker_border_width = v;
+                    }
+                }
                 "top_fill_color1" => color_string_slot(&mut s.top_fill_color1, value),
                 "top_fill_color2" => color_string_slot(&mut s.top_fill_color2, value),
                 "top_line_color" => color_string_slot(&mut s.top_line_color, value),

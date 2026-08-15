@@ -126,9 +126,13 @@ test("reported plugin scenarios use full data and official line compositions", a
       value_range: [Math.min(...values), Math.max(...values)],
     };
   });
+  const primary = await page.evaluate(async () => {
+    const { default_theme_name, theme_palette } = await import("/dist/nucleuscharts_financial.js");
+    return theme_palette(default_theme_name).primary;
+  });
   expect(shade_state).toMatchObject({
     shade_options: { low_value: 0, high_value: 1000 },
-    line_options: { color: "#000000", line_width: 3, price_line_visible: true },
+    line_options: { color: primary, line_width: 3, price_line_visible: true },
     same_data: true,
   });
   expect(shade_state.value_range[0]).toBeGreaterThan(150);

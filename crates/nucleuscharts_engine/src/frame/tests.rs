@@ -1427,16 +1427,48 @@ fn point_markers_radius_option_overrides_the_reference_auto_default() {
 }
 
 #[test]
-fn the_crosshair_paints_no_hover_marker_on_line_series() {
+fn crosshair_marks_cover_all_line_series_with_per_series_options() {
     let mut chart = two_identical_line_series();
     let x = chart.time_scale.index_to_coordinate(2);
     chart.crosshair = Some((x, 120.0));
-    let frame = chart.build_frame();
-    // The hover marker was removed: no circle prims ride the crosshair anymore.
-    assert!(!frame.panes[0]
-        .main
+    let background = css_color(
+        &chart.options.get().layout.background.color,
+        Color::rgb(0xff, 0xff, 0xff),
+    );
+    let circles = |chart: &mut ChartEngine| {
+        chart.build_frame().panes[0]
+            .main
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Circle { radius, fill, .. } => Some((*radius, *fill)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let marks = circles(&mut chart);
+    assert_eq!(marks.len(), 4, "border and fill for both line series");
+    assert!(marks
         .iter()
-        .any(|p| matches!(p, Prim::Circle { .. })));
+        .any(|&(radius, color)| radius == 6.0 && color == background));
+    assert!(marks
+        .iter()
+        .any(|&(radius, color)| radius == 4.0 && color == LINE));
+
+    chart.series[1].crosshair_marker_visible = false;
+    assert_eq!(circles(&mut chart).len(), 2);
+
+    chart.series[0].crosshair_marker_radius = 7.0;
+    chart.series[0].crosshair_marker_border_width = 3.0;
+    chart.series[0].crosshair_marker_border_color = Some("#010203".to_string());
+    chart.series[0].crosshair_marker_background_color = Some("#040506".to_string());
+    let marks = circles(&mut chart);
+    assert!(marks
+        .iter()
+        .any(|&(radius, color)| radius == 10.0 && color == Color::rgb(1, 2, 3)));
+    assert!(marks
+        .iter()
+        .any(|&(radius, color)| radius == 7.0 && color == Color::rgb(4, 5, 6)));
 }
 
 #[test]

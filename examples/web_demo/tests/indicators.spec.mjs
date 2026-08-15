@@ -121,6 +121,70 @@ test("indicator chips: auto-name on, no countdown, 1px default, style overrides"
   expect(out.after).toEqual({ title: "RSI(14) 1h", title_visible: true, line_style: 1, line_width: 2 });
 });
 
+test("crosshair hover marker paints on an engine-created indicator line and remains configurable", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+  const probe = await page.evaluate(() => {
+    window.__hover_sma = window.__chart.add_sma(window.__main, 5, {
+      color: "#ff9900",
+      crosshair_marker_radius: 6,
+      crosshair_marker_border_width: 3,
+      crosshair_marker_border_color: "#010203",
+      crosshair_marker_background_color: "#040506",
+    });
+    const range = window.__chart.time_scale().get_visible_logical_range();
+    const index = Math.floor((range.from + range.to) / 2);
+    const point = window.__hover_sma.data_by_index(index);
+    window.__chart.set_crosshair_position(point.value, point.time, window.__hover_sma);
+    const options = window.__hover_sma.options();
+    return {
+      x: window.__chart.time_scale().logical_to_coordinate(index),
+      y: window.__hover_sma.price_to_coordinate(point.value),
+      options: {
+        visible: options.crosshair_marker_visible,
+        radius: options.crosshair_marker_radius,
+        border_width: options.crosshair_marker_border_width,
+        border: options.crosshair_marker_border_color,
+        fill: options.crosshair_marker_background_color,
+      },
+    };
+  });
+  expect(probe.options).toEqual({
+    visible: true,
+    radius: 6,
+    border_width: 3,
+    border: "#010203",
+    fill: "#040506",
+  });
+  await wait_grid(page);
+
+  const local_color_count = async (target) => {
+    const { png, dsf } = await shot(page);
+    const cx = Math.round(probe.x * dsf);
+    const cy = Math.round(probe.y * dsf);
+    const reach = Math.ceil(11 * dsf);
+    let count = 0;
+    for (let y = cy - reach; y <= cy + reach; y += 1) {
+      for (let x = cx - reach; x <= cx + reach; x += 1) {
+        const offset = (y * png.width + x) * 4;
+        if (
+          png.data[offset] === target[0]
+          && png.data[offset + 1] === target[1]
+          && png.data[offset + 2] === target[2]
+        ) count += 1;
+      }
+    }
+    return count;
+  };
+  expect(await local_color_count([1, 2, 3]), "marker border pixels").toBeGreaterThan(10);
+  expect(await local_color_count([4, 5, 6]), "marker fill pixels").toBeGreaterThan(10);
+
+  await page.evaluate(() => window.__hover_sma.apply_options({ crosshair_marker_visible: false }));
+  await wait_grid(page);
+  expect(await local_color_count([1, 2, 3]), "disabled marker border").toBe(0);
+  expect(await local_color_count([4, 5, 6]), "disabled marker fill").toBe(0);
+});
+
 test("indicator values inherit source precision at creation", async ({ page }) => {
   await page.goto("/");
   await wait_grid(page);
