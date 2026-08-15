@@ -226,7 +226,7 @@ test("reading frame_stats costs a negligible fraction of a frame", async ({ page
 });
 
 
-test("continuous crosshair stays within the 8 ms CPU budget on 50k bars", async ({ page }) => {
+test("@machine continuous crosshair stays within the 8 ms CPU budget on 50k bars", async ({ page }) => {
   test.setTimeout(120_000);
   await page.goto("/");
   await wait_chart(page);

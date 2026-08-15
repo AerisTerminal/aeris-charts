@@ -152,7 +152,7 @@ jobs:
         id: machine-evidence
         continue-on-error: true
         working-directory: examples/web_demo
-        run: npx playwright test tests/backend-parity.spec.mjs tests/engine-bench.spec.mjs tests/gpui-webgpu-matrix.spec.mjs tests/perf-gate.spec.mjs --project=chromium
+        run: npx playwright test tests/backend-parity.spec.mjs tests/engine-bench.spec.mjs tests/frame-stats.spec.mjs tests/gpui-webgpu-matrix.spec.mjs tests/perf-gate.spec.mjs --project=chromium
       - name: Run machine-sensitive retention-memory evidence
         id: machine-retention-evidence
         continue-on-error: true
