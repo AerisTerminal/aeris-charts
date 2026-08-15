@@ -462,6 +462,7 @@ impl ChartEngine {
                             background_corners: AxisLabelCorners::NONE,
                             measure_extra: 0.0,
                             attach_group: None,
+                            border: None,
                         });
                     }
                 }
@@ -503,6 +504,7 @@ impl ChartEngine {
                             background_corners: AxisLabelCorners::NONE,
                             measure_extra: 0.0,
                             attach_group: None,
+                            border: None,
                         });
                     }
                 }
@@ -546,6 +548,7 @@ impl ChartEngine {
                     background_corners: AxisLabelCorners::NONE,
                     measure_extra: 0.0,
                     attach_group: None,
+                    border: None,
                 });
             }
             self.append_native_vertical_line_labels(&mut out.labels, &measure);
@@ -751,6 +754,7 @@ impl ChartEngine {
                     background_corners: AxisLabelCorners::for_align(align),
                     measure_extra: 0.0,
                     attach_group: None,
+                    border: None,
                 });
             }
         }
@@ -790,6 +794,7 @@ impl ChartEngine {
                     background_corners: AxisLabelCorners::BOTTOM,
                     measure_extra: 0.0,
                     attach_group: None,
+                    border: None,
                 });
             }
         }
@@ -853,6 +858,7 @@ impl ChartEngine {
                     background_corners: AxisLabelCorners::BOTTOM,
                     measure_extra: 0.0,
                     attach_group: None,
+                    border: None,
                 });
             }
         }
@@ -1050,6 +1056,7 @@ impl ChartEngine {
                         background_corners: AxisLabelCorners::for_align(align),
                         measure_extra: 0.0,
                         attach_group: None,
+                        border: None,
                     });
                 }
             }
@@ -1061,52 +1068,66 @@ impl ChartEngine {
         F: Fn(&str) -> f64,
     {
         let font_size = self.options.get().layout.font_size;
-        let mut append =
-            |pane_index: usize, target: crate::TradingPriceScale, price: f64, background: Color| {
-                let Some(pane) = self.panes.get(pane_index) else {
-                    return;
-                };
-                let Some(y) = self.trading_price_coordinate(pane_index, target, price) else {
-                    return;
-                };
-                if y < pane.top || y > pane.top + pane.height {
-                    return;
-                }
-                let target = PriceScaleTarget::from(target);
-                if target == PriceScaleTarget::Overlay {
-                    return;
-                }
-                let text = self.format_trading_price(price);
-                let width = 1.0 + 5.0 + 5.0 + 5.0 + measure(&text);
-                let height = font_size + 5.0;
-                let (x, align, background_x) = if target == PriceScaleTarget::Left {
-                    (
-                        self.pane_left - 10.0,
-                        AxisTextAlign::Right,
-                        self.pane_left - width,
-                    )
-                } else {
-                    (
-                        self.pane_left + self.pane_w + 10.0,
-                        AxisTextAlign::Left,
-                        self.pane_left + self.pane_w,
-                    )
-                };
-                labels.push(AxisLabel {
-                    text,
-                    x,
-                    y,
-                    color: background.contrast_text(),
-                    align,
-                    midpoint: AxisTextMidpoint::Label,
-                    font_scale: 1.0,
-                    bold: true,
-                    background: Some((background_x, y - height / 2.0, width, height, background)),
-                    background_corners: AxisLabelCorners::for_align(align),
-                    measure_extra: 0.0,
-                    attach_group: None,
-                });
+        let fallback = nucleuscharts_core::style::DEFAULT_SURFACE_RGB;
+        let chip_fill = Color::parse_css(&self.options.get().layout.background.color)
+            .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2))
+            .solid();
+        let mut append = |pane_index: usize,
+                          target: crate::TradingPriceScale,
+                          price: f64,
+                          color: Color,
+                          solid: bool| {
+            let Some(pane) = self.panes.get(pane_index) else {
+                return;
             };
+            let Some(y) = self.trading_price_coordinate(pane_index, target, price) else {
+                return;
+            };
+            if y < pane.top || y > pane.top + pane.height {
+                return;
+            }
+            let target = PriceScaleTarget::from(target);
+            if target == PriceScaleTarget::Overlay {
+                return;
+            }
+            let text = self.format_trading_price(price);
+            let width = 1.0 + 5.0 + 5.0 + 5.0 + measure(&text);
+            let height = font_size + 5.0;
+            let (x, align, background_x) = if target == PriceScaleTarget::Left {
+                (
+                    self.pane_left - 10.0,
+                    AxisTextAlign::Right,
+                    self.pane_left - width,
+                )
+            } else {
+                (
+                    self.pane_left + self.pane_w + 10.0,
+                    AxisTextAlign::Left,
+                    self.pane_left + self.pane_w,
+                )
+            };
+            labels.push(AxisLabel {
+                text,
+                x,
+                y,
+                color: if solid { color.contrast_text() } else { color },
+                align,
+                midpoint: AxisTextMidpoint::Label,
+                font_scale: 1.0,
+                bold: true,
+                background: Some((
+                    background_x,
+                    y - height / 2.0,
+                    width,
+                    height,
+                    if solid { color.solid() } else { chip_fill },
+                )),
+                background_corners: AxisLabelCorners::for_align(align),
+                measure_extra: 0.0,
+                attach_group: None,
+                border: (!solid).then_some((1.0, color)),
+            });
+        };
         for position in &self.trading_state.positions {
             let pending = self
                 .trading_state
@@ -1122,6 +1143,7 @@ impl ChartEngine {
                 } else {
                     self.trading_state.style.position
                 },
+                true,
             );
         }
         for order in &self.trading_state.orders {
@@ -1148,10 +1170,17 @@ impl ChartEngine {
                 order.price_scale,
                 self.trading_effective_order_price(order),
                 color,
+                order.role == crate::OrderRole::Working,
             );
             if order.kind == crate::OrderKind::StopLimit {
                 if let Some(stop_price) = order.stop_price {
-                    append(order.pane_index, order.price_scale, stop_price, color);
+                    append(
+                        order.pane_index,
+                        order.price_scale,
+                        stop_price,
+                        color,
+                        false,
+                    );
                 }
             }
         }
@@ -1174,6 +1203,7 @@ impl ChartEngine {
                         crate::OrderStatus::Working,
                     )
                 },
+                preview.role == crate::OrderRole::Working,
             );
         }
     }
@@ -1244,6 +1274,7 @@ impl ChartEngine {
                     background_corners: AxisLabelCorners::for_align(AxisTextAlign::Left),
                     measure_extra: 0.0,
                     attach_group: None,
+                    border: None,
                 });
             }
         }
@@ -1488,6 +1519,7 @@ impl ChartEngine {
                         background_corners: AxisLabelCorners::for_align(align),
                         measure_extra: 0.0,
                         attach_group: None,
+                        border: None,
                     });
                     continue;
                 }
@@ -1609,6 +1641,7 @@ impl ChartEngine {
                 // It lives on the pane, not in the strip: it never widens the axis.
                 measure_extra: 0.0,
                 attach_group: None,
+                border: None,
             });
         }
         // The inside price chip renders only when the price text is present (never an empty box).
@@ -1630,6 +1663,7 @@ impl ChartEngine {
                 // group id is the series id, so the attach never chains into another series'
                 // cluster on the same strip.
                 attach_group: Some(label.group_id),
+                border: None,
             });
         }
         if let Some(countdown) = &label.countdown {
@@ -1667,6 +1701,7 @@ impl ChartEngine {
                 // group id is the series id, so the attach never chains into another series'
                 // cluster on the same strip.
                 attach_group: Some(label.group_id),
+                border: None,
             });
         }
     }
@@ -1778,6 +1813,7 @@ impl ChartEngine {
                         background_corners: AxisLabelCorners::for_align(align),
                         measure_extra: 0.0,
                         attach_group: None,
+                        border: None,
                     });
                 }
             }
@@ -1812,6 +1848,7 @@ impl ChartEngine {
                     background_corners: AxisLabelCorners::BOTTOM,
                     measure_extra: 0.0,
                     attach_group: None,
+                    border: None,
                 });
             }
         }
@@ -1886,6 +1923,7 @@ impl ChartEngine {
                 background_corners: AxisLabelCorners::for_align(align),
                 measure_extra: 0.0,
                 attach_group: None,
+                border: None,
             });
         }
     }

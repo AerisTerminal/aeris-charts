@@ -803,7 +803,44 @@ impl ChartInner {
                 let bh = ((y + h) * dpr).round() - by;
                 last_attach = label.attach_group.map(|group| (group, by + bh));
                 ops += 1;
-                if label.background_corners.is_empty() {
+                if let Some((border_width, border_color)) = label.border {
+                    let line_width = (border_width * dpr).max(1.0);
+                    ctx.set_fill_style_str(&border_color.to_css());
+                    if label.background_corners.is_empty() {
+                        ctx.fill_rect(bx, by, bw, bh);
+                    } else {
+                        fill_boxed_label_background(
+                            ctx,
+                            bx,
+                            by,
+                            bw,
+                            bh,
+                            2.0 * dpr,
+                            label.background_corners,
+                        );
+                    }
+                    ctx.set_fill_style_str(&color.to_css());
+                    let inner_corners = label.background_corners;
+                    if inner_corners.is_empty() {
+                        ctx.fill_rect(
+                            bx + line_width,
+                            by + line_width,
+                            (bw - line_width * 2.0).max(0.0),
+                            (bh - line_width * 2.0).max(0.0),
+                        );
+                    } else {
+                        fill_boxed_label_background(
+                            ctx,
+                            bx + line_width,
+                            by + line_width,
+                            (bw - line_width * 2.0).max(0.0),
+                            (bh - line_width * 2.0).max(0.0),
+                            (2.0 * dpr - line_width).max(0.0),
+                            inner_corners,
+                        );
+                    }
+                    ops += 1;
+                } else if label.background_corners.is_empty() {
                     ctx.fill_rect(bx, by, bw, bh);
                 } else {
                     // TradingView-style side radius: only the engine-selected (axis-facing)

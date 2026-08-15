@@ -1487,6 +1487,7 @@ export type order_status =
   | "rejected"
   | "expired";
 export type trading_price_scale = "right" | "left" | "overlay";
+export type trading_confirmation_mode = "instant" | "manual";
 
 export interface instrument_metadata {
   tick_size?: number;
@@ -1557,6 +1558,8 @@ export interface trading_hit {
     | "cancel_button"
     | "create_stop_button"
     | "create_target_button"
+    | "confirm_button"
+    | "discard_button"
     | "execution_marker";
   distance: number;
 }
@@ -1585,10 +1588,10 @@ export interface trading_intent {
 }
 
 export interface trading_preview {
-  source: "order" | "stop_loss" | "take_profit";
+  source: "order" | "stop_loss" | "take_profit" | "order_stop_loss" | "order_take_profit";
   order_id?: string;
   position_id?: string;
-  phase: "dragging" | "pending";
+  phase: "dragging" | "awaiting_confirmation" | "pending";
   pane_index: number;
   price_scale: trading_price_scale;
   price: number;
@@ -1628,6 +1631,8 @@ export interface trading_api {
   remove_execution(id: string): boolean;
   set_instrument(instrument: instrument_metadata): void;
   apply_options(options: Partial<trading_style_options>): void;
+  /** Choose immediate release intents or an explicit inline Confirm/Discard step. */
+  set_confirmation_mode(mode: trading_confirmation_mode): void;
   hit_at(x: number, y: number): trading_hit | null;
   preview(): trading_preview | null;
   take_intents(): trading_intent[];

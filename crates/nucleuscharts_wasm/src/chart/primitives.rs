@@ -834,6 +834,7 @@ impl ChartInner {
                 background_corners: AxisLabelCorners::for_align(align),
                 measure_extra: 0.0,
                 attach_group: None,
+                border: None,
             });
         }
     }
@@ -900,6 +901,7 @@ impl ChartInner {
                 background_corners: AxisLabelCorners::BOTTOM,
                 measure_extra: 0.0,
                 attach_group: None,
+                border: None,
             });
         }
     }

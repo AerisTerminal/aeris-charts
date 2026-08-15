@@ -535,6 +535,8 @@ pub struct AxisLabel {
     /// box's top edge is the previous box's exact bottom (no per-box rounding gaps between
     /// attached rows like the price chip and its countdown chip).
     pub attach_group: Option<u32>,
+    /// Optional inside border for an axis-label background, in media px.
+    pub border: Option<(f64, Color)>,
 }
 
 /// A backend-neutral rectangle painted beneath axis chrome and labels. Rectangle drawings use

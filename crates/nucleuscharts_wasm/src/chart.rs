@@ -53,8 +53,8 @@ use nucleuscharts_engine::{
     AxisLabelCorners, AxisTextAlign, AxisTextMidpoint, ChartEngine, DrawingKind, DrawingModifiers,
     DrawingPoint, ExecutionId, FeatureSeriesKind, InstrumentMetadata, Marker, OrderId, PaneId,
     PositionId, PriceFormatterFn, PriceScaleTarget, PrimitiveAutoscaleContribution, SeriesKind,
-    TickMarkFormatterFn, TimeFormatterFn, TradingExecution, TradingPosition, TradingSnapshot,
-    TradingStyleOptions, WorkingOrder,
+    TickMarkFormatterFn, TimeFormatterFn, TradingConfirmationMode, TradingExecution,
+    TradingPosition, TradingSnapshot, TradingStyleOptions, WorkingOrder,
 };
 use nucleuscharts_render::canvas2d::{
     execute as execute_canvas2d, Canvas2d, Viewport as CanvasViewport,
@@ -911,6 +911,8 @@ impl NucleusChart {
                     nucleuscharts_engine::TradingHitKind::CreateTargetButton => {
                         "create_target_button"
                     }
+                    nucleuscharts_engine::TradingHitKind::ConfirmButton => "confirm_button",
+                    nucleuscharts_engine::TradingHitKind::DiscardButton => "discard_button",
                     nucleuscharts_engine::TradingHitKind::ExecutionMarker => "execution_marker",
                 };
                 serde_json::json!({
@@ -971,15 +973,22 @@ impl NucleusChart {
         self.inner.borrow_mut().engine.cancel_trading_drag()
     }
 
-    pub fn trading_activate_at_json(&mut self, x_css: f64, y_css: f64) -> String {
-        serde_json::to_string(
-            &self
-                .inner
-                .borrow_mut()
-                .engine
-                .trading_activate_at(x_css, y_css),
-        )
-        .unwrap_or_else(|_| "null".to_string())
+    pub fn trading_activate_at(&mut self, x_css: f64, y_css: f64) -> bool {
+        self.inner
+            .borrow_mut()
+            .engine
+            .trading_activate_at(x_css, y_css)
+    }
+
+    pub fn set_trading_manual_confirmation(&mut self, manual: bool) {
+        self.inner
+            .borrow_mut()
+            .engine
+            .set_trading_confirmation_mode(if manual {
+                TradingConfirmationMode::Manual
+            } else {
+                TradingConfirmationMode::Instant
+            });
     }
 
     pub fn trading_preview_json(&self) -> String {

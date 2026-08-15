@@ -10,8 +10,8 @@ entry point and `./design.css` are the only npm export paths. The supported root
   `packages/charts/src/types.ts`;
 - built-in series, indicators, drawing kinds, options, themes, data ingestion, interactions,
   subscriptions, screenshots, and lifecycle operations declared by those handles;
-- first-party broker-neutral trading state, previews, hit testing, semantic style, and typed intent
-  subscriptions exposed by `chart.trading()`;
+- first-party broker-neutral trading state, instant/manual confirmation, previews, hit testing,
+  semantic style, and typed intent subscriptions exposed by `chart.trading()`;
 - `nucleuscharts_error` and its machine-readable error codes;
 - chart-state persistence V1 through `chart.export_state()` and `chart.import_state()`.
 

@@ -267,7 +267,73 @@ impl ChartEngine {
                 let bw = right - bx;
                 let bh = bottom - by;
                 last_attach = label.attach_group.map(|group| (group, by + bh));
-                if label.background_corners.is_empty() {
+                let border = label
+                    .border
+                    .map(|(width, color)| ((width * dpr).round().max(1.0), color));
+                if let Some((border_width, border_color)) = border {
+                    if label.background_corners.is_empty() {
+                        output.push(Prim::Rect {
+                            rect: IRect {
+                                x: bx as i32,
+                                y: by as i32,
+                                w: bw as i32,
+                                h: bh as i32,
+                            },
+                            color: border_color,
+                        });
+                        output.push(Prim::Rect {
+                            rect: IRect {
+                                x: (bx + border_width) as i32,
+                                y: (by + border_width) as i32,
+                                w: (bw - border_width * 2.0).max(0.0) as i32,
+                                h: (bh - border_width * 2.0).max(0.0) as i32,
+                            },
+                            color,
+                        });
+                    } else {
+                        let corners = label.background_corners;
+                        let radius = (2.0 * dpr) as f32;
+                        output.push(Prim::RoundRect {
+                            x: bx as f32,
+                            y: by as f32,
+                            w: bw as f32,
+                            h: bh as f32,
+                            radii: [
+                                if corners.top_left { radius } else { 0.0 },
+                                if corners.top_right { radius } else { 0.0 },
+                                if corners.bottom_right { radius } else { 0.0 },
+                                if corners.bottom_left { radius } else { 0.0 },
+                            ],
+                            fill: border_color,
+                            border_width: 0.0,
+                            border_color,
+                        });
+                        let inner_radius = (radius - border_width as f32).max(0.0);
+                        output.push(Prim::RoundRect {
+                            x: (bx + border_width) as f32,
+                            y: (by + border_width) as f32,
+                            w: (bw - border_width * 2.0).max(0.0) as f32,
+                            h: (bh - border_width * 2.0).max(0.0) as f32,
+                            radii: [
+                                if corners.top_left { inner_radius } else { 0.0 },
+                                if corners.top_right { inner_radius } else { 0.0 },
+                                if corners.bottom_right {
+                                    inner_radius
+                                } else {
+                                    0.0
+                                },
+                                if corners.bottom_left {
+                                    inner_radius
+                                } else {
+                                    0.0
+                                },
+                            ],
+                            fill: color,
+                            border_width: 0.0,
+                            border_color,
+                        });
+                    }
+                } else if label.background_corners.is_empty() {
                     output.push(Prim::Rect {
                         rect: IRect {
                             x: bx as i32,

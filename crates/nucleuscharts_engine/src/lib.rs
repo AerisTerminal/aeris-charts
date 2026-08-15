@@ -68,10 +68,11 @@ pub use persistence::{
 };
 pub use trading::{
     ExecutionId, ExecutionKind, InstrumentMetadata, OrderId, OrderKind, OrderRole, OrderSide,
-    OrderStatus, PositionId, PositionSide, TradingExecution, TradingGroupId, TradingHit,
-    TradingHitKind, TradingIntent, TradingIntentAction, TradingObjectId, TradingPosition,
-    TradingPreview, TradingPreviewPhase, TradingPreviewSource, TradingPriceScale, TradingSnapshot,
-    TradingStyle, TradingStyleOptions, WorkingOrder, MAX_TRADING_OBJECTS,
+    OrderStatus, PositionId, PositionSide, TradingConfirmationMode, TradingExecution,
+    TradingGroupId, TradingHit, TradingHitKind, TradingIntent, TradingIntentAction,
+    TradingObjectId, TradingPosition, TradingPreview, TradingPreviewPhase, TradingPreviewSource,
+    TradingPriceScale, TradingSnapshot, TradingStyle, TradingStyleOptions, WorkingOrder,
+    MAX_TRADING_OBJECTS,
 };
 pub use workspace::{SplitDirection, Workspace, WorkspaceError, WorkspaceLayout};
 

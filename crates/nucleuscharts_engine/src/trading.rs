@@ -114,6 +114,14 @@ pub enum TradingPriceScale {
     Overlay,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TradingConfirmationMode {
+    #[default]
+    Instant,
+    Manual,
+}
+
 impl From<TradingPriceScale> for PriceScaleTarget {
     fn from(value: TradingPriceScale) -> Self {
         match value {
@@ -248,17 +256,17 @@ impl Default for TradingStyle {
             DEFAULT_PRIMARY_RGB.1,
             DEFAULT_PRIMARY_RGB.2,
         );
-        let buy = Color::rgb(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2);
+        let market_up = Color::rgb(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2);
         let sell = Color::rgb(MARKET_DOWN_RGB.0, MARKET_DOWN_RGB.1, MARKET_DOWN_RGB.2);
         Self {
             position: primary,
             working_order: primary,
-            buy,
+            buy: primary,
             sell,
-            profit: buy,
+            profit: market_up,
             risk: sell,
-            take_profit: buy,
-            stop_loss: sell,
+            take_profit: market_up,
+            stop_loss: Color::rgb(0xf5, 0xa6, 0x23),
             pending: Color::rgb(0xf5, 0xa6, 0x23),
             rejected: Color::rgb(0x78, 0x7b, 0x86),
             control: primary,
@@ -326,6 +334,7 @@ pub struct TradingIntent {
 #[serde(rename_all = "snake_case")]
 pub enum TradingPreviewPhase {
     Dragging,
+    AwaitingConfirmation,
     Pending,
 }
 
@@ -335,6 +344,8 @@ pub enum TradingPreviewSource {
     Order { order_id: OrderId },
     StopLoss { position_id: PositionId },
     TakeProfit { position_id: PositionId },
+    OrderStopLoss { order_id: OrderId },
+    OrderTakeProfit { order_id: OrderId },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -368,6 +379,7 @@ pub(crate) struct TradingState {
     pub orders: Vec<WorkingOrder>,
     pub executions: Vec<TradingExecution>,
     pub style: TradingStyle,
+    pub confirmation_mode: TradingConfirmationMode,
     pub preview: Option<TradingPreview>,
     pub hover: Option<TradingHit>,
     pub pending_position_action: Option<PendingPositionAction>,
@@ -462,6 +474,8 @@ pub enum TradingHitKind {
     CancelButton,
     CreateStopButton,
     CreateTargetButton,
+    ConfirmButton,
+    DiscardButton,
     ExecutionMarker,
 }
 
@@ -577,14 +591,47 @@ impl ChartEngine {
         }
         let pane_index = self.pane_at_y(y_css)?;
         const LINE_TOLERANCE: f64 = 6.0;
-        const CONTROL_WIDTH: f64 = 28.0;
+
+        if let Some(preview) = self.trading_state.preview.as_ref().filter(|preview| {
+            preview.pane_index == pane_index
+                && preview.phase == TradingPreviewPhase::AwaitingConfirmation
+        }) {
+            if let Some(y) =
+                self.trading_price_coordinate(pane_index, preview.price_scale, preview.price)
+            {
+                let distance = (y_css - y).abs();
+                if distance <= LINE_TOLERANCE {
+                    if let Some(kind) = self.trading_confirmation_hit(preview, x_css) {
+                        let object = match &preview.source {
+                            TradingPreviewSource::Order { order_id }
+                            | TradingPreviewSource::OrderStopLoss { order_id }
+                            | TradingPreviewSource::OrderTakeProfit { order_id } => {
+                                TradingObjectId::Order(order_id.clone())
+                            }
+                            TradingPreviewSource::StopLoss { position_id }
+                            | TradingPreviewSource::TakeProfit { position_id } => {
+                                TradingObjectId::Position(position_id.clone())
+                            }
+                        };
+                        return Some(TradingHit {
+                            object,
+                            kind,
+                            distance,
+                        });
+                    }
+                }
+            }
+        }
 
         for order in self.trading_state.orders.iter().rev() {
             if order.pane_index != pane_index {
                 continue;
             }
-            let Some(y) = self.trading_price_coordinate(pane_index, order.price_scale, order.price)
-            else {
+            let Some(y) = self.trading_price_coordinate(
+                pane_index,
+                order.price_scale,
+                self.trading_effective_order_price(order),
+            ) else {
                 continue;
             };
             let distance = (y_css - y).abs();
@@ -593,11 +640,7 @@ impl ChartEngine {
             }
             return Some(TradingHit {
                 object: TradingObjectId::Order(order.id.clone()),
-                kind: if x_css >= self.pane_w - CONTROL_WIDTH {
-                    TradingHitKind::CancelButton
-                } else {
-                    TradingHitKind::OrderLine
-                },
+                kind: self.trading_order_chip_hit(order, x_css),
                 distance,
             });
         }
@@ -617,21 +660,9 @@ impl ChartEngine {
             if distance > LINE_TOLERANCE {
                 continue;
             }
-            let from_right = self.pane_w - x_css;
-            let kind = if from_right <= CONTROL_WIDTH {
-                TradingHitKind::CancelButton
-            } else if from_right <= CONTROL_WIDTH * 2.0 {
-                TradingHitKind::CreateTargetButton
-            } else if from_right <= CONTROL_WIDTH * 3.0 {
-                TradingHitKind::CreateStopButton
-            } else if from_right <= 180.0 {
-                TradingHitKind::QuantityLabel
-            } else {
-                TradingHitKind::PositionLine
-            };
             return Some(TradingHit {
                 object: TradingObjectId::Position(position.id.clone()),
-                kind,
+                kind: self.trading_position_chip_hit(x_css),
                 distance,
             });
         }
@@ -692,95 +723,278 @@ impl ChartEngine {
         (price / tick).round() * tick
     }
 
+    pub(crate) fn trading_preview_relation(&self, preview: &TradingPreview) -> Option<(f64, bool)> {
+        let position_relation = |order: &WorkingOrder| {
+            let position = self
+                .trading_state
+                .positions
+                .iter()
+                .find(|position| order.position_id.as_ref() == Some(&position.id))?;
+            Some((position.average_price, position.side == PositionSide::Long))
+        };
+        let order_relation =
+            |order: &WorkingOrder| Some((order.price, order.side == OrderSide::Buy));
+        match &preview.source {
+            TradingPreviewSource::Order { order_id } => {
+                let order = self
+                    .trading_state
+                    .orders
+                    .iter()
+                    .find(|order| &order.id == order_id)?;
+                position_relation(order).or_else(|| {
+                    order.parent_order_id.as_ref().and_then(|parent_id| {
+                        self.trading_state
+                            .orders
+                            .iter()
+                            .find(|parent| &parent.id == parent_id)
+                            .and_then(order_relation)
+                    })
+                })
+            }
+            TradingPreviewSource::StopLoss { position_id }
+            | TradingPreviewSource::TakeProfit { position_id } => self
+                .trading_state
+                .positions
+                .iter()
+                .find(|position| &position.id == position_id)
+                .map(|position| (position.average_price, position.side == PositionSide::Long)),
+            TradingPreviewSource::OrderStopLoss { order_id }
+            | TradingPreviewSource::OrderTakeProfit { order_id } => self
+                .trading_state
+                .orders
+                .iter()
+                .find(|order| &order.id == order_id)
+                .and_then(order_relation),
+        }
+    }
+
+    fn trading_preview_price_valid(&self, preview: &TradingPreview) -> bool {
+        if preview.role == OrderRole::Working {
+            return true;
+        }
+        self.trading_preview_relation(preview)
+            .is_some_and(|(anchor, long)| match (long, preview.role) {
+                (true, OrderRole::TakeProfit) => preview.price > anchor,
+                (true, OrderRole::StopLoss) => preview.price < anchor,
+                (false, OrderRole::TakeProfit) => preview.price < anchor,
+                (false, OrderRole::StopLoss) => preview.price > anchor,
+                (_, OrderRole::Working) => true,
+            })
+    }
+
+    fn commit_trading_preview(&mut self) -> Option<TradingIntent> {
+        let preview = self.trading_state.preview.as_ref()?;
+        if !matches!(
+            preview.phase,
+            TradingPreviewPhase::Dragging | TradingPreviewPhase::AwaitingConfirmation
+        ) {
+            return None;
+        }
+        let sequence = self.trading_state.next_sequence();
+        let preview = self.trading_state.preview.as_mut().expect("preview exists");
+        preview.phase = TradingPreviewPhase::Pending;
+        preview.intent_sequence = Some(sequence);
+        let (action, order_id, position_id, kind) = match &preview.source {
+            TradingPreviewSource::Order { order_id } => (
+                TradingIntentAction::ModifyOrder,
+                Some(order_id.clone()),
+                None,
+                None,
+            ),
+            TradingPreviewSource::StopLoss { position_id } => (
+                TradingIntentAction::CreateStopLoss,
+                None,
+                Some(position_id.clone()),
+                Some(OrderKind::Stop),
+            ),
+            TradingPreviewSource::TakeProfit { position_id } => (
+                TradingIntentAction::CreateTakeProfit,
+                None,
+                Some(position_id.clone()),
+                Some(OrderKind::Limit),
+            ),
+            TradingPreviewSource::OrderStopLoss { order_id } => (
+                TradingIntentAction::CreateStopLoss,
+                Some(order_id.clone()),
+                None,
+                Some(OrderKind::Stop),
+            ),
+            TradingPreviewSource::OrderTakeProfit { order_id } => (
+                TradingIntentAction::CreateTakeProfit,
+                Some(order_id.clone()),
+                None,
+                Some(OrderKind::Limit),
+            ),
+        };
+        let relationships = order_id.as_ref().and_then(|order_id| {
+            self.trading_state
+                .orders
+                .iter()
+                .find(|order| &order.id == order_id)
+                .map(|order| (order.bracket_id.clone(), order.oco_group_id.clone()))
+        });
+        let intent = TradingIntent {
+            sequence,
+            action,
+            order_id,
+            position_id,
+            side: Some(preview.side),
+            kind,
+            role: Some(preview.role),
+            price: Some(preview.price),
+            stop_price: None,
+            quantity: Some(preview.quantity),
+            bracket_id: relationships.as_ref().and_then(|value| value.0.clone()),
+            oco_group_id: relationships.and_then(|value| value.1),
+            base_revision: preview.base_revision,
+        };
+        self.trading_state.push_intent(intent.clone());
+        self.invalidate_frame_trading();
+        Some(intent)
+    }
+
     pub fn trading_drag_start_at(&mut self, x_css: f64, y_css: f64) -> bool {
         if self.trading_state.preview.is_some()
             || self.trading_state.pending_position_action.is_some()
         {
-            return true;
+            return false;
         }
         let Some(hit) = self.trading_hit_at(x_css, y_css) else {
             return false;
         };
-        let preview = match (&hit.object, hit.kind) {
-            (TradingObjectId::Order(id), TradingHitKind::OrderLine) => {
-                let Some(order) = self
-                    .trading_state
-                    .orders
-                    .iter()
-                    .find(|order| &order.id == id)
-                else {
-                    return false;
-                };
-                if !matches!(
-                    order.status,
-                    OrderStatus::Working | OrderStatus::PartiallyFilled
-                ) {
-                    return false;
+        let preview =
+            match (&hit.object, hit.kind) {
+                (TradingObjectId::Order(id), TradingHitKind::OrderLine) => {
+                    let Some(order) = self
+                        .trading_state
+                        .orders
+                        .iter()
+                        .find(|order| &order.id == id)
+                    else {
+                        return false;
+                    };
+                    if !matches!(
+                        order.status,
+                        OrderStatus::Working | OrderStatus::PartiallyFilled
+                    ) {
+                        return false;
+                    }
+                    TradingPreview {
+                        source: TradingPreviewSource::Order {
+                            order_id: id.clone(),
+                        },
+                        phase: TradingPreviewPhase::Dragging,
+                        pane_index: order.pane_index,
+                        price_scale: order.price_scale,
+                        price: order.price,
+                        quantity: (order.quantity - order.filled_quantity).max(0.0),
+                        side: order.side,
+                        role: order.role,
+                        base_revision: order.revision,
+                        intent_sequence: None,
+                    }
                 }
-                TradingPreview {
-                    source: TradingPreviewSource::Order {
-                        order_id: id.clone(),
-                    },
-                    phase: TradingPreviewPhase::Dragging,
-                    pane_index: order.pane_index,
-                    price_scale: order.price_scale,
-                    price: order.price,
-                    quantity: (order.quantity - order.filled_quantity).max(0.0),
-                    side: order.side,
-                    role: order.role,
-                    base_revision: order.revision,
-                    intent_sequence: None,
-                }
-            }
-            (TradingObjectId::Position(id), TradingHitKind::CreateStopButton)
-            | (TradingObjectId::Position(id), TradingHitKind::CreateTargetButton) => {
-                let Some(position) = self
-                    .trading_state
-                    .positions
-                    .iter()
-                    .find(|position| &position.id == id)
-                else {
-                    return false;
-                };
-                let role = if hit.kind == TradingHitKind::CreateStopButton {
-                    OrderRole::StopLoss
-                } else {
-                    OrderRole::TakeProfit
-                };
-                if self
-                    .trading_state
-                    .orders
-                    .iter()
-                    .any(|order| order.position_id.as_ref() == Some(id) && order.role == role)
-                {
-                    return false;
-                }
-                TradingPreview {
-                    source: if role == OrderRole::StopLoss {
-                        TradingPreviewSource::StopLoss {
-                            position_id: id.clone(),
-                        }
+                (TradingObjectId::Order(id), TradingHitKind::CreateStopButton)
+                | (TradingObjectId::Order(id), TradingHitKind::CreateTargetButton) => {
+                    let Some(order) = self
+                        .trading_state
+                        .orders
+                        .iter()
+                        .find(|order| &order.id == id)
+                    else {
+                        return false;
+                    };
+                    if order.role != OrderRole::Working
+                        || !matches!(
+                            order.status,
+                            OrderStatus::Working | OrderStatus::PartiallyFilled
+                        )
+                    {
+                        return false;
+                    }
+                    let role = if hit.kind == TradingHitKind::CreateStopButton {
+                        OrderRole::StopLoss
                     } else {
-                        TradingPreviewSource::TakeProfit {
-                            position_id: id.clone(),
-                        }
-                    },
-                    phase: TradingPreviewPhase::Dragging,
-                    pane_index: position.pane_index,
-                    price_scale: position.price_scale,
-                    price: position.average_price,
-                    quantity: position.quantity,
-                    side: match position.side {
-                        PositionSide::Long => OrderSide::Sell,
-                        PositionSide::Short => OrderSide::Buy,
-                    },
-                    role,
-                    base_revision: 0,
-                    intent_sequence: None,
+                        OrderRole::TakeProfit
+                    };
+                    if self.trading_state.orders.iter().any(|child| {
+                        child.parent_order_id.as_ref() == Some(id) && child.role == role
+                    }) {
+                        return false;
+                    }
+                    TradingPreview {
+                        source: if role == OrderRole::StopLoss {
+                            TradingPreviewSource::OrderStopLoss {
+                                order_id: id.clone(),
+                            }
+                        } else {
+                            TradingPreviewSource::OrderTakeProfit {
+                                order_id: id.clone(),
+                            }
+                        },
+                        phase: TradingPreviewPhase::Dragging,
+                        pane_index: order.pane_index,
+                        price_scale: order.price_scale,
+                        price: order.price,
+                        quantity: (order.quantity - order.filled_quantity).max(0.0),
+                        side: match order.side {
+                            OrderSide::Buy => OrderSide::Sell,
+                            OrderSide::Sell => OrderSide::Buy,
+                        },
+                        role,
+                        base_revision: order.revision,
+                        intent_sequence: None,
+                    }
                 }
-            }
-            _ => return false,
-        };
+                (TradingObjectId::Position(id), TradingHitKind::CreateStopButton)
+                | (TradingObjectId::Position(id), TradingHitKind::CreateTargetButton) => {
+                    let Some(position) = self
+                        .trading_state
+                        .positions
+                        .iter()
+                        .find(|position| &position.id == id)
+                    else {
+                        return false;
+                    };
+                    let role = if hit.kind == TradingHitKind::CreateStopButton {
+                        OrderRole::StopLoss
+                    } else {
+                        OrderRole::TakeProfit
+                    };
+                    if self
+                        .trading_state
+                        .orders
+                        .iter()
+                        .any(|order| order.position_id.as_ref() == Some(id) && order.role == role)
+                    {
+                        return false;
+                    }
+                    TradingPreview {
+                        source: if role == OrderRole::StopLoss {
+                            TradingPreviewSource::StopLoss {
+                                position_id: id.clone(),
+                            }
+                        } else {
+                            TradingPreviewSource::TakeProfit {
+                                position_id: id.clone(),
+                            }
+                        },
+                        phase: TradingPreviewPhase::Dragging,
+                        pane_index: position.pane_index,
+                        price_scale: position.price_scale,
+                        price: position.average_price,
+                        quantity: position.quantity,
+                        side: match position.side {
+                            PositionSide::Long => OrderSide::Sell,
+                            PositionSide::Short => OrderSide::Buy,
+                        },
+                        role,
+                        base_revision: 0,
+                        intent_sequence: None,
+                    }
+                }
+                _ => return false,
+            };
         self.trading_state.hover = Some(hit);
         self.trading_state.preview = Some(preview);
         self.invalidate_frame_trading();
@@ -831,6 +1045,13 @@ impl ChartEngine {
                 .iter()
                 .find(|position| &position.id == position_id)
                 .map(|position| position.average_price),
+            TradingPreviewSource::OrderStopLoss { order_id }
+            | TradingPreviewSource::OrderTakeProfit { order_id } => self
+                .trading_state
+                .orders
+                .iter()
+                .find(|order| &order.id == order_id)
+                .map(|order| order.price),
         };
         let tolerance = self
             .trading_state
@@ -843,77 +1064,21 @@ impl ChartEngine {
             self.invalidate_frame_trading();
             return None;
         }
-        let valid_side = match &preview.source {
-            TradingPreviewSource::Order { .. } => true,
-            TradingPreviewSource::StopLoss { position_id }
-            | TradingPreviewSource::TakeProfit { position_id } => self
-                .trading_state
-                .positions
-                .iter()
-                .find(|position| &position.id == position_id)
-                .is_some_and(|position| match (position.side, preview.role) {
-                    (PositionSide::Long, OrderRole::TakeProfit) => {
-                        preview.price > position.average_price
-                    }
-                    (PositionSide::Long, OrderRole::StopLoss) => {
-                        preview.price < position.average_price
-                    }
-                    (PositionSide::Short, OrderRole::TakeProfit) => {
-                        preview.price < position.average_price
-                    }
-                    (PositionSide::Short, OrderRole::StopLoss) => {
-                        preview.price > position.average_price
-                    }
-                    (_, OrderRole::Working) => false,
-                }),
-        };
-        if !valid_side {
+        if !self.trading_preview_price_valid(preview) {
             self.trading_state.preview = None;
             self.invalidate_frame_trading();
             return None;
         }
-        let sequence = self.trading_state.next_sequence();
-        let preview = self.trading_state.preview.as_mut().expect("preview exists");
-        preview.phase = TradingPreviewPhase::Pending;
-        preview.intent_sequence = Some(sequence);
-        let (action, order_id, position_id, kind) = match &preview.source {
-            TradingPreviewSource::Order { order_id } => (
-                TradingIntentAction::ModifyOrder,
-                Some(order_id.clone()),
-                None,
-                None,
-            ),
-            TradingPreviewSource::StopLoss { position_id } => (
-                TradingIntentAction::CreateStopLoss,
-                None,
-                Some(position_id.clone()),
-                Some(OrderKind::Stop),
-            ),
-            TradingPreviewSource::TakeProfit { position_id } => (
-                TradingIntentAction::CreateTakeProfit,
-                None,
-                Some(position_id.clone()),
-                Some(OrderKind::Limit),
-            ),
-        };
-        let intent = TradingIntent {
-            sequence,
-            action,
-            order_id,
-            position_id,
-            side: Some(preview.side),
-            kind,
-            role: Some(preview.role),
-            price: Some(preview.price),
-            stop_price: None,
-            quantity: Some(preview.quantity),
-            bracket_id: None,
-            oco_group_id: None,
-            base_revision: preview.base_revision,
-        };
-        self.trading_state.push_intent(intent.clone());
-        self.invalidate_frame_trading();
-        Some(intent)
+        if self.trading_state.confirmation_mode == TradingConfirmationMode::Manual {
+            self.trading_state
+                .preview
+                .as_mut()
+                .expect("preview exists")
+                .phase = TradingPreviewPhase::AwaitingConfirmation;
+            self.invalidate_frame_trading();
+            return None;
+        }
+        self.commit_trading_preview()
     }
 
     pub fn cancel_trading_drag(&mut self) -> bool {
@@ -930,29 +1095,50 @@ impl ChartEngine {
         true
     }
 
-    pub fn trading_activate_at(&mut self, x_css: f64, y_css: f64) -> Option<TradingIntent> {
+    pub fn trading_activate_at(&mut self, x_css: f64, y_css: f64) -> bool {
+        let Some(hit) = self.trading_hit_at(x_css, y_css) else {
+            return false;
+        };
+        if self
+            .trading_state
+            .preview
+            .as_ref()
+            .is_some_and(|preview| preview.phase == TradingPreviewPhase::AwaitingConfirmation)
+        {
+            return match hit.kind {
+                TradingHitKind::ConfirmButton => self.commit_trading_preview().is_some(),
+                TradingHitKind::DiscardButton => {
+                    self.trading_state.preview = None;
+                    self.invalidate_frame_trading();
+                    true
+                }
+                _ => false,
+            };
+        }
         if self.trading_state.preview.is_some()
             || self.trading_state.pending_position_action.is_some()
         {
-            return None;
+            return false;
         }
-        let hit = self.trading_hit_at(x_css, y_css)?;
         if hit.kind != TradingHitKind::CancelButton {
-            return None;
+            return false;
         }
         let sequence = self.trading_state.next_sequence();
         let (intent, pending_preview) = match hit.object {
             TradingObjectId::Order(order_id) => {
-                let order = self
+                let Some(order) = self
                     .trading_state
                     .orders
                     .iter()
-                    .find(|order| order.id == order_id)?;
+                    .find(|order| order.id == order_id)
+                else {
+                    return false;
+                };
                 if !matches!(
                     order.status,
                     OrderStatus::Working | OrderStatus::PartiallyFilled
                 ) {
-                    return None;
+                    return false;
                 }
                 let remaining = (order.quantity - order.filled_quantity).max(0.0);
                 (
@@ -1003,7 +1189,7 @@ impl ChartEngine {
                 },
                 None,
             ),
-            TradingObjectId::Execution(_) => return None,
+            TradingObjectId::Execution(_) => return false,
         };
         if intent.action == TradingIntentAction::ClosePosition {
             self.trading_state.pending_position_action =
@@ -1018,7 +1204,7 @@ impl ChartEngine {
         self.trading_state.preview = pending_preview;
         self.trading_state.push_intent(intent.clone());
         self.invalidate_frame_trading();
-        Some(intent)
+        true
     }
 
     pub fn resolve_trading_intent(&mut self, sequence: u32, accepted: bool) -> bool {
@@ -1094,6 +1280,7 @@ impl ChartEngine {
             orders: snapshot.orders,
             executions: snapshot.executions,
             style: prior.style,
+            confirmation_mode: prior.confirmation_mode,
             preview: prior.preview,
             hover: prior.hover,
             pending_position_action: prior.pending_position_action,
@@ -1178,7 +1365,10 @@ impl ChartEngine {
             if self.trading_state.preview.as_ref().is_some_and(|preview| {
                 matches!(
                     &preview.source,
-                    TradingPreviewSource::Order { order_id } if order_id == id
+                    TradingPreviewSource::Order { order_id }
+                        | TradingPreviewSource::OrderStopLoss { order_id }
+                        | TradingPreviewSource::OrderTakeProfit { order_id }
+                        if order_id == id
                 )
             }) {
                 self.trading_state.preview = None;
@@ -1232,6 +1422,26 @@ impl ChartEngine {
 
     pub fn trading_style(&self) -> TradingStyle {
         self.trading_state.style
+    }
+
+    pub fn trading_confirmation_mode(&self) -> TradingConfirmationMode {
+        self.trading_state.confirmation_mode
+    }
+
+    pub fn set_trading_confirmation_mode(&mut self, mode: TradingConfirmationMode) {
+        if self.trading_state.confirmation_mode == mode {
+            return;
+        }
+        self.trading_state.confirmation_mode = mode;
+        if self
+            .trading_state
+            .preview
+            .as_ref()
+            .is_some_and(|preview| preview.phase == TradingPreviewPhase::AwaitingConfirmation)
+        {
+            self.trading_state.preview = None;
+        }
+        self.invalidate_frame_trading();
     }
 
     pub fn apply_trading_style(&mut self, options: TradingStyleOptions) -> Result<(), ChartError> {
@@ -1306,7 +1516,7 @@ impl ChartEngine {
         let Some(preview) = self.trading_state.preview.as_ref() else {
             return;
         };
-        if preview.phase == TradingPreviewPhase::Dragging {
+        if preview.phase != TradingPreviewPhase::Pending {
             return;
         }
         let tolerance = self
@@ -1345,6 +1555,30 @@ impl ChartEngine {
                     .any(|position| &position.id == position_id)
                     || self.trading_state.orders.iter().any(|order| {
                         order.position_id.as_ref() == Some(position_id)
+                            && order.role == OrderRole::TakeProfit
+                            && (order.price - preview.price).abs() <= tolerance
+                    })
+            }
+            TradingPreviewSource::OrderStopLoss { order_id } => {
+                !self
+                    .trading_state
+                    .orders
+                    .iter()
+                    .any(|order| &order.id == order_id)
+                    || self.trading_state.orders.iter().any(|order| {
+                        order.parent_order_id.as_ref() == Some(order_id)
+                            && order.role == OrderRole::StopLoss
+                            && (order.price - preview.price).abs() <= tolerance
+                    })
+            }
+            TradingPreviewSource::OrderTakeProfit { order_id } => {
+                !self
+                    .trading_state
+                    .orders
+                    .iter()
+                    .any(|order| &order.id == order_id)
+                    || self.trading_state.orders.iter().any(|order| {
+                        order.parent_order_id.as_ref() == Some(order_id)
                             && order.role == OrderRole::TakeProfit
                             && (order.price - preview.price).abs() <= tolerance
                     })
@@ -1489,12 +1723,12 @@ mod tests {
             .unwrap();
         let frame = chart.build_frame();
         let segments = chart.frame_pane_segments(0).unwrap();
-        assert!(segments.trading_regions_end > segments.series_end);
+        assert_eq!(segments.trading_regions_end, segments.series_end);
         assert!(segments.trading_end > segments.drawings_end);
         assert!(
             frame.panes[0].main[segments.series_end..segments.trading_regions_end]
                 .iter()
-                .any(|primitive| matches!(primitive, Prim::Rect { .. }))
+                .all(|primitive| !matches!(primitive, Prim::Rect { .. }))
         );
         let trading = &frame.panes[0].main[segments.drawings_end..segments.trading_end];
         assert!(
@@ -1512,9 +1746,41 @@ mod tests {
             .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "B")));
 
         let axis = chart.build_axis_frame(100.0, |text| text.len() as f64 * 7.0);
-        for price in ["99.00", "101.00", "103.00"] {
-            assert!(axis.labels.iter().any(|label| label.text == price));
+        for (price, color) in [
+            ("99.00", chart.trading_style().stop_loss),
+            ("103.00", chart.trading_style().take_profit),
+        ] {
+            assert!(axis
+                .labels
+                .iter()
+                .any(|label| label.text == price && label.border == Some((1.0, color))));
         }
+        let mut axis_primitives = Vec::new();
+        chart.build_axis_primitives_into(&axis, &mut axis_primitives, |_| 0.0);
+        for (name, color) in [
+            ("SL", chart.trading_style().stop_loss),
+            ("TP", chart.trading_style().take_profit),
+        ] {
+            assert!(
+                axis_primitives.iter().any(|primitive| matches!(
+                    primitive,
+                    Prim::RoundRect { fill, border_width, .. }
+                        if *fill == color && *border_width == 0.0
+                )),
+                "{name} axis tag must paint a same-color outer border"
+            );
+        }
+        let position_label = axis
+            .labels
+            .iter()
+            .find(|label| {
+                label.text == "101.00"
+                    && label
+                        .background
+                        .is_some_and(|(_, _, _, _, color)| color == chart.trading_style().position)
+            })
+            .expect("solid position price label");
+        assert!(position_label.border.is_none());
     }
 
     #[test]
@@ -1542,7 +1808,8 @@ mod tests {
                     .iter()
                     .filter(|primitive| matches!(primitive, Prim::Rect { .. }))
                     .count(),
-                2
+                0,
+                "confirmed protection orders must not leave persistent risk/reward fill"
             );
             let y = chart
                 .trading_price_coordinate(0, TradingPriceScale::Right, take_profit)
@@ -1550,6 +1817,27 @@ mod tests {
             let hit = chart.trading_hit_at(20.0, y).unwrap();
             assert_eq!(hit.kind, TradingHitKind::OrderLine);
             assert!(matches!(hit.object, TradingObjectId::Order(_)));
+            assert!(chart.trading_drag_start_at(20.0, y));
+            let preview_price = if side == PositionSide::Long {
+                take_profit + 0.5
+            } else {
+                take_profit - 0.5
+            };
+            let preview_y = chart
+                .trading_price_coordinate(0, TradingPriceScale::Right, preview_price)
+                .unwrap();
+            assert!(chart.trading_drag_to(preview_y));
+            let frame = chart.build_frame();
+            let segments = chart.frame_pane_segments(0).unwrap();
+            assert_eq!(
+                frame.panes[0].main[segments.series_end..segments.trading_regions_end]
+                    .iter()
+                    .filter(|primitive| matches!(primitive, Prim::Rect { .. }))
+                    .count(),
+                1,
+                "risk/reward fill is transient preview geometry"
+            );
+            assert!(chart.cancel_trading_drag());
         }
     }
 
@@ -1657,7 +1945,7 @@ mod tests {
         let target_y = chart
             .trading_price_coordinate(0, TradingPriceScale::Right, 104.0)
             .unwrap();
-        assert!(chart.trading_drag_start_at(350.0, entry_y));
+        assert!(chart.trading_drag_start_at(chart.trading_position_chip_start() + 15.0, entry_y));
         assert!(matches!(
             chart.trading_preview().unwrap().source,
             TradingPreviewSource::TakeProfit { .. }
@@ -1739,7 +2027,9 @@ mod tests {
         let y = chart
             .trading_price_coordinate(0, TradingPriceScale::Right, 102.0)
             .unwrap();
-        let rejected = chart.trading_activate_at(390.0, y).unwrap();
+        let cancel_x = chart.trading_order_chip_start(&chart.trading_snapshot().orders[0]) + 218.0;
+        assert!(chart.trading_activate_at(cancel_x, y));
+        let rejected = chart.take_trading_intents().pop().unwrap();
         assert_eq!(rejected.action, TradingIntentAction::CancelOrder);
         assert_eq!(
             chart.trading_preview().unwrap().phase,
@@ -1752,7 +2042,8 @@ mod tests {
         assert!(chart.resolve_trading_intent(rejected.sequence, false));
         assert!(chart.trading_preview().is_none());
 
-        let accepted = chart.trading_activate_at(390.0, y).unwrap();
+        assert!(chart.trading_activate_at(cancel_x, y));
+        let accepted = chart.take_trading_intents().pop().unwrap();
         assert!(chart.resolve_trading_intent(accepted.sequence, true));
         assert!(chart.trading_preview().is_some());
         let mut authoritative = order("order-1", OrderRole::Working, 102.0);
@@ -1779,7 +2070,9 @@ mod tests {
         let y = chart
             .trading_price_coordinate(0, TradingPriceScale::Right, 101.0)
             .unwrap();
-        let intent = chart.trading_activate_at(390.0, y).unwrap();
+        let cancel_x = chart.trading_position_chip_start() + 202.0;
+        assert!(chart.trading_activate_at(cancel_x, y));
+        let intent = chart.take_trading_intents().pop().unwrap();
         assert_eq!(intent.action, TradingIntentAction::ClosePosition);
         assert_eq!(chart.trading_snapshot().positions.len(), 1);
         assert_eq!(
@@ -1794,5 +2087,232 @@ mod tests {
         assert!(chart.resolve_trading_intent(intent.sequence, false));
         assert!(chart.trading_state.pending_position_action.is_none());
         assert_eq!(chart.trading_snapshot().positions.len(), 1);
+    }
+
+    #[test]
+    fn working_orders_use_segmented_buy_and_sell_chips() {
+        for (side, kind, expected) in [
+            (OrderSide::Buy, OrderKind::Limit, "Buy Limit"),
+            (OrderSide::Sell, OrderKind::Stop, "Sell Stop"),
+        ] {
+            let mut chart = chart_with_market();
+            let mut working = order("working-1", OrderRole::Working, 102.0);
+            working.position_id = None;
+            working.side = side;
+            working.kind = kind;
+            working.quantity = 1.0;
+            chart.update_working_order(working).unwrap();
+            let frame = chart.build_frame();
+            let segments = chart.frame_pane_segments(0).unwrap();
+            let trading = &frame.panes[0].main[segments.drawings_end..segments.trading_end];
+            let texts = trading
+                .iter()
+                .filter_map(|primitive| match primitive {
+                    Prim::Text { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            for text in ["TP", "SL", "1", expected, "×"] {
+                assert!(texts.contains(&text), "missing segment {text:?}: {texts:?}");
+            }
+            let style = chart.trading_style();
+            let has_colored_outer_box = |color: Color| {
+                trading.iter().any(|primitive| {
+                    matches!(
+                        primitive,
+                        Prim::RoundRect { fill, border_width, .. }
+                            if *fill == color.solid() && *border_width == 0.0
+                    )
+                })
+            };
+            assert!(
+                has_colored_outer_box(style.take_profit),
+                "TP chip must paint a take-profit-colored border"
+            );
+            assert!(
+                has_colored_outer_box(style.stop_loss),
+                "SL chip must paint a stop-loss-colored border"
+            );
+            let expected_height = (chart.options.get().layout.font_size + 5.0) as f32;
+            let round_rect_heights = trading
+                .iter()
+                .filter_map(|primitive| match primitive {
+                    Prim::RoundRect { h, .. } => Some(*h),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                round_rect_heights
+                    .iter()
+                    .filter(|height| (**height - expected_height).abs() < f32::EPSILON)
+                    .count()
+                    >= 3,
+                "visible outer controls must match the axis-label height"
+            );
+            assert!(
+                round_rect_heights
+                    .iter()
+                    .all(|height| *height <= expected_height),
+                "trading controls must not exceed the axis-label height"
+            );
+        }
+    }
+
+    #[test]
+    fn working_order_tp_and_sl_segments_create_linked_intents() {
+        for (x_offset, target_price, action, role) in [
+            (
+                15.0,
+                103.0,
+                TradingIntentAction::CreateTakeProfit,
+                OrderRole::TakeProfit,
+            ),
+            (
+                47.0,
+                101.0,
+                TradingIntentAction::CreateStopLoss,
+                OrderRole::StopLoss,
+            ),
+        ] {
+            let mut chart = chart_with_market();
+            let mut working = order("working-1", OrderRole::Working, 102.0);
+            working.position_id = None;
+            working.side = OrderSide::Buy;
+            chart.update_working_order(working).unwrap();
+            chart.build_frame();
+            let start_y = chart
+                .trading_price_coordinate(0, TradingPriceScale::Right, 102.0)
+                .unwrap();
+            let target_y = chart
+                .trading_price_coordinate(0, TradingPriceScale::Right, target_price)
+                .unwrap();
+            let start_x =
+                chart.trading_order_chip_start(&chart.trading_snapshot().orders[0]) + x_offset;
+            assert!(chart.trading_drag_start_at(start_x, start_y));
+            assert!(chart.trading_drag_to(target_y));
+            let intent = chart.trading_drag_end().expect("instant intent");
+            assert_eq!(intent.action, action);
+            assert_eq!(intent.role, Some(role));
+            assert_eq!(intent.order_id.as_ref().unwrap().as_str(), "working-1");
+            assert_eq!(intent.price, Some(target_price));
+        }
+    }
+
+    #[test]
+    fn manual_confirmation_requires_confirm_and_discard_clears_without_intent() {
+        let mut chart = chart_with_market();
+        let mut working = order("working-1", OrderRole::Working, 102.0);
+        working.position_id = None;
+        working.side = OrderSide::Buy;
+        chart.update_working_order(working).unwrap();
+        chart.set_trading_confirmation_mode(TradingConfirmationMode::Manual);
+        chart.build_frame();
+        let start_y = chart
+            .trading_price_coordinate(0, TradingPriceScale::Right, 102.0)
+            .unwrap();
+        let target_y = chart
+            .trading_price_coordinate(0, TradingPriceScale::Right, 103.0)
+            .unwrap();
+        assert!(chart.trading_drag_start_at(20.0, start_y));
+        assert!(chart.trading_drag_to(target_y));
+        let dragging = chart.build_frame();
+        let segments = chart.frame_pane_segments(0).unwrap();
+        assert!(
+            dragging.panes[0].main[segments.drawings_end..segments.trading_end]
+                .iter()
+                .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "Buy"))
+        );
+        assert!(chart.trading_drag_end().is_none());
+        assert!(chart.take_trading_intents().is_empty());
+        assert_eq!(
+            chart.trading_preview().unwrap().phase,
+            TradingPreviewPhase::AwaitingConfirmation
+        );
+        let frame = chart.build_frame();
+        let segments = chart.frame_pane_segments(0).unwrap();
+        let trading = &frame.panes[0].main[segments.drawings_end..segments.trading_end];
+        for expected in ["Discard", "Confirm", "Limit"] {
+            assert!(trading
+                .iter()
+                .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == expected)));
+        }
+        assert!(trading.iter().any(|primitive| matches!(
+            primitive,
+            Prim::HLine {
+                style: nucleuscharts_render::draw_list::LineStyle::Dotted,
+                ..
+            }
+        )));
+
+        let preview = chart.trading_preview().unwrap().clone();
+        let main_x = chart.trading_preview_chip_start(&preview);
+        assert!(chart.trading_activate_at(main_x - 36.0, target_y));
+        let intents = chart.take_trading_intents();
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].action, TradingIntentAction::ModifyOrder);
+        assert_eq!(
+            chart.trading_preview().unwrap().phase,
+            TradingPreviewPhase::Pending
+        );
+        assert!(chart.resolve_trading_intent(intents[0].sequence, false));
+
+        assert!(chart.trading_drag_start_at(20.0, start_y));
+        assert!(chart.trading_drag_to(target_y));
+        assert!(chart.trading_drag_end().is_none());
+        let preview = chart.trading_preview().unwrap().clone();
+        let main_x = chart.trading_preview_chip_start(&preview);
+        assert!(chart.trading_activate_at(main_x - 97.0, target_y));
+        assert!(chart.trading_preview().is_none());
+        assert!(chart.take_trading_intents().is_empty());
+    }
+
+    #[test]
+    fn manual_confirmation_shows_for_existing_tp_and_sl_adjustments() {
+        for (order_id, role, price, target, expected_role) in [
+            ("tp-1", OrderRole::TakeProfit, 103.0, 103.5, "TP"),
+            ("sl-1", OrderRole::StopLoss, 99.0, 98.5, "SL"),
+        ] {
+            let mut chart = chart_with_market();
+            chart
+                .update_trading_position(position(PositionSide::Long))
+                .unwrap();
+            let mut protection = order(order_id, role, price);
+            protection.position_id = Some(id("position-1", PositionId::new));
+            chart.update_working_order(protection).unwrap();
+            chart.set_trading_confirmation_mode(TradingConfirmationMode::Manual);
+            chart.build_frame();
+
+            let start_y = chart
+                .trading_price_coordinate(0, TradingPriceScale::Right, price)
+                .unwrap();
+            let target_y = chart
+                .trading_price_coordinate(0, TradingPriceScale::Right, target)
+                .unwrap();
+            assert!(chart.trading_drag_start_at(20.0, start_y));
+            assert!(chart.trading_drag_to(target_y));
+            assert!(chart.trading_drag_end().is_none());
+            let preview = chart
+                .trading_preview()
+                .expect("manual protection preview")
+                .clone();
+            assert_eq!(preview.phase, TradingPreviewPhase::AwaitingConfirmation);
+            assert_eq!(preview.role, role);
+
+            let frame = chart.build_frame();
+            let segments = chart.frame_pane_segments(0).unwrap();
+            let trading = &frame.panes[0].main[segments.drawings_end..segments.trading_end];
+            for expected in ["Discard", "Confirm", expected_role] {
+                assert!(trading.iter().any(
+                    |primitive| matches!(primitive, Prim::Text { text, .. } if text == expected)
+                ));
+            }
+
+            let main_x = chart.trading_preview_chip_start(&preview);
+            assert!(chart.trading_activate_at(main_x - 36.0, target_y));
+            let intents = chart.take_trading_intents();
+            assert_eq!(intents.len(), 1);
+            assert_eq!(intents[0].action, TradingIntentAction::ModifyOrder);
+            assert_eq!(intents[0].order_id.as_ref().unwrap().as_str(), order_id);
+        }
     }
 }

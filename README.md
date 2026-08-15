@@ -85,12 +85,14 @@ the engine. Every returned feature handle with `detach()` releases its engine an
 Trading objects are a separate first-party engine domain. The application supplies authoritative
 positions, working orders, bracket/OCO relationships, executions, and instrument metadata; Nucleus
 owns their deterministic visualization, native axis labels, hit testing, risk/reward regions, and
-local interaction previews. A drag never rewrites confirmed broker state. It emits one typed,
-broker-neutral intent on release, and the host reconciles that preview with an accepted state update
-or rejects it explicitly.
+local interaction previews. A drag never rewrites confirmed broker state. Instant mode emits one
+typed, broker-neutral intent on release; manual mode holds the preview behind inline Confirm and
+Discard controls. The host reconciles a confirmed preview with an accepted state update or rejects
+it explicitly. Risk/reward fills belong only to active previews, never confirmed orders.
 
 ```ts
 const trading = chart.trading();
+trading.set_confirmation_mode("manual"); // Optional; the default is "instant".
 trading.apply_snapshot({
   instrument: { tick_size: 0.25, price_precision: 2, point_value: 50, currency: "USD" },
   positions: [{ id: "position-1", side: "long", average_price: 5230, quantity: 2 }],

@@ -25,7 +25,7 @@ import type {
   persistence_restore_result, price_range, price_scale_api, price_scale_options, ring_source_layout,
   series_api, series_change_handler, series_data, series_kind,
   series_marker, series_marker_options, series_options, single_value_data, size_change_handler, time, time_range,
-  time_scale_api, time_scale_options, tracking_mode_options, trading_api, trading_execution, trading_hit,
+  time_scale_api, time_scale_options, tracking_mode_options, trading_api, trading_confirmation_mode, trading_execution, trading_hit,
   trading_intent, trading_intent_handler, trading_position, trading_preview, trading_snapshot,
   trading_style_options, instrument_metadata, working_order,
   visible_logical_range_handler, visible_time_range_handler,
@@ -2205,6 +2205,11 @@ class trading_impl implements trading_api {
     this.chart.repaint();
   }
 
+  set_confirmation_mode(mode: trading_confirmation_mode): void {
+    this.chart.wasm.set_trading_manual_confirmation(mode === "manual");
+    this.chart.repaint();
+  }
+
   hit_at(x: number, y: number): trading_hit | null {
     return JSON.parse(this.chart.wasm.trading_hit_json(x, y)) as trading_hit | null;
   }
@@ -2364,9 +2369,9 @@ export class chart_impl implements chart_api {
   }
 
   trading_activate_at(x: number, y: number): boolean {
-    const intent = JSON.parse(this.wasm.trading_activate_at_json(x, y)) as trading_intent | null;
+    const activated = this.wasm.trading_activate_at(x, y);
     this.trading_handle.dispatch_pending_intents();
-    return intent !== null;
+    return activated;
   }
 
   /** Standard gesture forwarding for the engine-owned delta-tooltip interaction model. */
