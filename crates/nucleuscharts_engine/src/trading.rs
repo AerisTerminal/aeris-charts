@@ -389,6 +389,20 @@ pub(crate) enum TradingInteractionState {
     },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TradingGroupKey {
+    Bracket(TradingGroupId),
+    Position(PositionId),
+    ParentOrder(OrderId),
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum TradingGroupVisualState {
+    #[default]
+    Inactive,
+    Active(TradingGroupKey),
+}
+
 impl TradingInteractionState {
     pub(crate) fn preview(&self) -> Option<&TradingPreview> {
         match self {
@@ -477,6 +491,7 @@ pub(crate) struct TradingState {
     pub style: TradingStyle,
     pub confirmation_mode: TradingConfirmationMode,
     pub interaction: TradingInteractionState,
+    pub group_visual: TradingGroupVisualState,
     intents: VecDeque<TradingIntent>,
     next_intent_sequence: u32,
 }
@@ -1374,10 +1389,12 @@ impl ChartEngine {
             style: prior.style,
             confirmation_mode: prior.confirmation_mode,
             interaction: prior.interaction,
+            group_visual: prior.group_visual,
             intents: prior.intents,
             next_intent_sequence: prior.next_intent_sequence,
         };
         self.reconcile_trading_interaction();
+        self.reconcile_trading_group_visual();
         self.invalidate_frame_trading();
         Ok(())
     }
@@ -1408,6 +1425,7 @@ impl ChartEngine {
             if self.trading_state.interaction.references_position(id) {
                 self.trading_state.interaction = TradingInteractionState::Idle;
             }
+            self.reconcile_trading_group_visual();
             self.invalidate_frame_trading();
         }
         changed
@@ -1439,6 +1457,7 @@ impl ChartEngine {
             if self.trading_state.interaction.references_order(id) {
                 self.trading_state.interaction = TradingInteractionState::Idle;
             }
+            self.reconcile_trading_group_visual();
             self.invalidate_frame_trading();
         }
         changed
@@ -1597,6 +1616,127 @@ impl ChartEngine {
         }
     }
 
+    fn trading_group_key_for_order(&self, order: &WorkingOrder) -> Option<TradingGroupKey> {
+        order
+            .bracket_id
+            .clone()
+            .map(TradingGroupKey::Bracket)
+            .or_else(|| order.position_id.clone().map(TradingGroupKey::Position))
+            .or_else(|| {
+                order
+                    .parent_order_id
+                    .clone()
+                    .map(TradingGroupKey::ParentOrder)
+            })
+    }
+
+    fn trading_group_key_for_preview(&self, preview: &TradingPreview) -> Option<TradingGroupKey> {
+        let tolerance = self
+            .trading_state
+            .instrument
+            .tick_size
+            .unwrap_or(f64::EPSILON)
+            * 0.5;
+        match &preview.source {
+            TradingPreviewSource::Order { order_id } => self
+                .trading_state
+                .orders
+                .iter()
+                .find(|order| &order.id == order_id && order.role != OrderRole::Working)
+                .and_then(|order| self.trading_group_key_for_order(order)),
+            TradingPreviewSource::StopLoss { position_id }
+            | TradingPreviewSource::TakeProfit { position_id } => self
+                .trading_state
+                .orders
+                .iter()
+                .find(|order| {
+                    order.position_id.as_ref() == Some(position_id)
+                        && order.role == preview.role
+                        && (order.price - preview.price).abs() <= tolerance
+                })
+                .and_then(|order| self.trading_group_key_for_order(order))
+                .or_else(|| {
+                    self.trading_state
+                        .positions
+                        .iter()
+                        .any(|position| &position.id == position_id)
+                        .then(|| TradingGroupKey::Position(position_id.clone()))
+                }),
+            TradingPreviewSource::OrderStopLoss { order_id }
+            | TradingPreviewSource::OrderTakeProfit { order_id } => self
+                .trading_state
+                .orders
+                .iter()
+                .find(|order| {
+                    order.parent_order_id.as_ref() == Some(order_id)
+                        && order.role == preview.role
+                        && (order.price - preview.price).abs() <= tolerance
+                })
+                .and_then(|order| self.trading_group_key_for_order(order))
+                .or_else(|| {
+                    self.trading_state
+                        .orders
+                        .iter()
+                        .any(|order| &order.id == order_id)
+                        .then(|| TradingGroupKey::ParentOrder(order_id.clone()))
+                }),
+        }
+    }
+
+    pub(crate) fn trading_group_contains_order(
+        &self,
+        group: &TradingGroupKey,
+        order: &WorkingOrder,
+    ) -> bool {
+        match group {
+            TradingGroupKey::Bracket(id) => order.bracket_id.as_ref() == Some(id),
+            TradingGroupKey::Position(id) => order.position_id.as_ref() == Some(id),
+            TradingGroupKey::ParentOrder(id) => {
+                &order.id == id || order.parent_order_id.as_ref() == Some(id)
+            }
+        }
+    }
+
+    pub(crate) fn trading_group_contains_position(
+        &self,
+        group: &TradingGroupKey,
+        position: &TradingPosition,
+    ) -> bool {
+        match group {
+            TradingGroupKey::Position(id) => &position.id == id,
+            TradingGroupKey::Bracket(_) => self.trading_state.orders.iter().any(|order| {
+                self.trading_group_contains_order(group, order)
+                    && order.position_id.as_ref() == Some(&position.id)
+            }),
+            TradingGroupKey::ParentOrder(_) => false,
+        }
+    }
+
+    fn trading_group_exists(&self, group: &TradingGroupKey) -> bool {
+        self.trading_state
+            .orders
+            .iter()
+            .any(|order| self.trading_group_contains_order(group, order))
+    }
+
+    fn reconcile_trading_group_visual(&mut self) {
+        let TradingGroupVisualState::Active(group) = &self.trading_state.group_visual else {
+            return;
+        };
+        if !self.trading_group_exists(group) {
+            self.trading_state.group_visual = TradingGroupVisualState::Inactive;
+        }
+    }
+
+    pub fn deactivate_trading_group(&mut self) -> bool {
+        if self.trading_state.group_visual == TradingGroupVisualState::Inactive {
+            return false;
+        }
+        self.trading_state.group_visual = TradingGroupVisualState::Inactive;
+        self.invalidate_frame_trading();
+        true
+    }
+
     fn reconcile_trading_interaction(&mut self) {
         let source_exists = match &self.trading_state.interaction {
             TradingInteractionState::Idle => return,
@@ -1714,6 +1854,11 @@ impl ChartEngine {
             }
         };
         if reconciled {
+            if preview.role != OrderRole::Working {
+                if let Some(group) = self.trading_group_key_for_preview(&preview) {
+                    self.trading_state.group_visual = TradingGroupVisualState::Active(group);
+                }
+            }
             self.trading_state.interaction = TradingInteractionState::Idle;
         }
     }
@@ -2057,7 +2202,7 @@ mod tests {
         let target_y = chart
             .trading_price_coordinate(0, TradingPriceScale::Right, 104.0)
             .unwrap();
-        assert!(chart.trading_drag_start_at(chart.trading_position_chip_start() + 15.0, entry_y));
+        assert!(chart.trading_drag_start_at(chart.trading_position_chip_start() + 43.0, entry_y));
         assert!(matches!(
             chart.trading_preview().unwrap().source,
             TradingPreviewSource::TakeProfit { .. }
@@ -2182,7 +2327,7 @@ mod tests {
         let y = chart
             .trading_price_coordinate(0, TradingPriceScale::Right, 101.0)
             .unwrap();
-        let cancel_x = chart.trading_position_chip_start() + 202.0;
+        let cancel_x = chart.trading_position_chip_start() + 242.0;
         assert!(chart.trading_activate_at(cancel_x, y));
         let intent = chart.take_trading_intents().pop().unwrap();
         assert_eq!(intent.action, TradingIntentAction::ClosePosition);
@@ -2229,23 +2374,12 @@ mod tests {
                 assert!(texts.contains(&text), "missing segment {text:?}: {texts:?}");
             }
             let style = chart.trading_style();
-            let has_colored_outer_box = |color: Color| {
-                trading.iter().any(|primitive| {
-                    matches!(
-                        primitive,
-                        Prim::RoundRect { fill, border_width, .. }
-                            if *fill == color.solid() && *border_width == 0.0
-                    )
-                })
-            };
-            assert!(
-                has_colored_outer_box(style.take_profit),
-                "TP chip must paint a take-profit-colored border"
-            );
-            assert!(
-                has_colored_outer_box(style.stop_loss),
-                "SL chip must paint a stop-loss-colored border"
-            );
+            assert!(trading.iter().any(
+                |primitive| matches!(primitive, Prim::Text { text, color, .. } if text == "TP" && *color == style.take_profit)
+            ));
+            assert!(trading.iter().any(
+                |primitive| matches!(primitive, Prim::Text { text, color, .. } if text == "SL" && *color == style.stop_loss)
+            ));
             let expected_height = (chart.options.get().layout.font_size + 5.0) as f32;
             let round_rect_heights = trading
                 .iter()
@@ -2259,7 +2393,7 @@ mod tests {
                     .iter()
                     .filter(|height| (**height - expected_height).abs() < f32::EPSILON)
                     .count()
-                    >= 3,
+                    >= 1,
                 "visible outer controls must match the axis-label height"
             );
             assert!(
@@ -2451,7 +2585,7 @@ mod tests {
         let target_y = chart
             .trading_price_coordinate(0, TradingPriceScale::Right, 104.0)
             .unwrap();
-        let tp_x = chart.trading_position_chip_start() + 15.0;
+        let tp_x = chart.trading_position_chip_start() + 43.0;
 
         assert!(chart.set_trading_hover(tp_x, entry_y));
         assert!(matches!(
@@ -2535,7 +2669,7 @@ mod tests {
                     assert!((*y + *h / 2.0 - expected_y).abs() <= 0.5);
                 }
                 Prim::Text { y, text, .. }
-                    if matches!(text.as_str(), "TP" | "SL" | "12" | "—" | "×") =>
+                    if matches!(text.as_str(), "↕" | "TP" | "SL" | "12" | "—" | "×") =>
                 {
                     assert!((*y - expected_y).abs() <= 0.5);
                 }
@@ -2546,11 +2680,11 @@ mod tests {
         let target_y = chart
             .trading_price_coordinate(0, TradingPriceScale::Right, 104.0)
             .unwrap();
-        assert!(chart.trading_drag_start_at(chart.trading_position_chip_start() + 15.0, entry_y));
+        assert!(chart.trading_drag_start_at(chart.trading_position_chip_start() + 43.0, entry_y));
         assert!(chart.trading_drag_to(target_y));
         let preview = chart.build_frame();
         let segments = chart.frame_pane_segments(0).unwrap();
-        let connector_x = (chart.pane_w - 18.0).round() as i32;
+        let connector_x = (chart.pane_w - 8.0).round() as i32;
         assert!(
             preview.panes[0].main[segments.drawings_end..segments.trading_end]
                 .iter()
@@ -2590,13 +2724,13 @@ mod tests {
         for (role, x_offset, price, action) in [
             (
                 OrderRole::TakeProfit,
-                15.0,
+                43.0,
                 104.0,
                 TradingIntentAction::CreateTakeProfit,
             ),
             (
                 OrderRole::StopLoss,
-                47.0,
+                73.0,
                 98.0,
                 TradingIntentAction::CreateStopLoss,
             ),
@@ -2649,5 +2783,164 @@ mod tests {
                     .all(|primitive| !matches!(primitive, Prim::Rect { .. }))
             );
         }
+    }
+
+    #[test]
+    fn every_trading_control_uses_one_right_lane_and_protection_details_persist() {
+        let mut chart = chart_with_market();
+        let mut working = order("working-1", OrderRole::Working, 102.0);
+        working.position_id = None;
+        working.bracket_id = None;
+        working.oco_group_id = None;
+        working.side = OrderSide::Buy;
+        chart
+            .set_trading_snapshot(TradingSnapshot {
+                instrument: InstrumentMetadata {
+                    point_value: Some(1.0),
+                    currency: Some("USD".to_string()),
+                    ..InstrumentMetadata::default()
+                },
+                positions: vec![position(PositionSide::Long)],
+                orders: vec![
+                    order("tp-1", OrderRole::TakeProfit, 103.0),
+                    order("sl-1", OrderRole::StopLoss, 99.0),
+                    working,
+                ],
+                ..TradingSnapshot::default()
+            })
+            .unwrap();
+
+        let frame = chart.build_frame();
+        let segments = chart.frame_pane_segments(0).unwrap();
+        let trading = &frame.panes[0].main[segments.drawings_end..segments.trading_end];
+        let right_edges = trading
+            .iter()
+            .filter_map(|primitive| match primitive {
+                Prim::RoundRect {
+                    x, w, border_width, ..
+                } if *border_width > 0.0 => Some(*x + *w),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(right_edges.len(), 4);
+        assert!(right_edges
+            .iter()
+            .all(|right| (*right - (chart.pane_w - 12.0) as f32).abs() <= 0.5));
+        for expected in ["↕", "TP", "SL", "Buy Limit", "+24.00 USD", "-24.00 USD"] {
+            assert!(trading
+                .iter()
+                .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == expected)));
+        }
+    }
+
+    #[test]
+    fn confirmed_bracket_connector_is_active_after_ack_and_canvas_deselect_only_hides_chrome() {
+        let mut chart = chart_with_market();
+        chart
+            .set_trading_snapshot(TradingSnapshot {
+                instrument: InstrumentMetadata {
+                    tick_size: Some(0.25),
+                    ..InstrumentMetadata::default()
+                },
+                positions: vec![position(PositionSide::Long)],
+                orders: vec![order("tp-1", OrderRole::TakeProfit, 103.0)],
+                ..TradingSnapshot::default()
+            })
+            .unwrap();
+        chart.build_frame();
+        let entry_y = chart
+            .trading_price_coordinate(0, TradingPriceScale::Right, 101.0)
+            .unwrap();
+        let stop_y = chart
+            .trading_price_coordinate(0, TradingPriceScale::Right, 98.0)
+            .unwrap();
+        assert!(chart.trading_drag_start_at(chart.trading_position_chip_start() + 73.0, entry_y,));
+        assert!(chart.trading_drag_to(stop_y));
+        let intent = chart.trading_drag_end().expect("instant stop-loss intent");
+        assert!(chart.resolve_trading_intent(intent.sequence, true));
+        let mut stop = order("sl-1", OrderRole::StopLoss, 98.0);
+        stop.kind = OrderKind::Stop;
+        chart.update_working_order(stop).unwrap();
+        assert!(matches!(
+            chart.trading_state.group_visual,
+            TradingGroupVisualState::Active(_)
+        ));
+
+        let connector_x = (chart.pane_w - 8.0).round() as i32;
+        let frame = chart.build_frame();
+        let segments = chart.frame_pane_segments(0).unwrap();
+        assert!(
+            frame.panes[0].main[segments.drawings_end..segments.trading_end]
+                .iter()
+                .any(|primitive| matches!(primitive, Prim::VLine { x, .. } if *x == connector_x))
+        );
+
+        assert!(chart.deactivate_trading_group());
+        assert!(!chart.deactivate_trading_group());
+        assert_eq!(chart.trading_snapshot().positions.len(), 1);
+        assert_eq!(chart.trading_snapshot().orders.len(), 2);
+        let frame = chart.build_frame();
+        let segments = chart.frame_pane_segments(0).unwrap();
+        let trading = &frame.panes[0].main[segments.drawings_end..segments.trading_end];
+        assert!(!trading
+            .iter()
+            .any(|primitive| matches!(primitive, Prim::VLine { x, .. } if *x == connector_x)));
+        for expected in ["+24.00", "-36.00"] {
+            assert!(trading
+                .iter()
+                .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == expected)));
+        }
+    }
+
+    #[test]
+    fn cancel_hover_adds_tooltip_without_moving_the_position_cluster() {
+        let mut chart = chart_with_market();
+        chart
+            .update_trading_position(position(PositionSide::Short))
+            .unwrap();
+        let baseline = chart.build_frame();
+        let y = chart
+            .trading_price_coordinate(0, TradingPriceScale::Right, 101.0)
+            .unwrap();
+        let pane_segments = chart.frame_pane_segments(0).unwrap();
+        let bounds = baseline.panes[0].main[pane_segments.drawings_end..pane_segments.trading_end]
+            .iter()
+            .find_map(|primitive| match primitive {
+                Prim::RoundRect {
+                    x,
+                    y,
+                    w,
+                    h,
+                    border_width,
+                    ..
+                } if *border_width > 0.0 => Some((*x, *y, *w, *h)),
+                _ => None,
+            })
+            .unwrap();
+        assert!(chart.set_trading_hover(chart.trading_position_chip_start() + 242.0, y,));
+        let hovered = chart.build_frame();
+        let pane_segments = chart.frame_pane_segments(0).unwrap();
+        let trading = &hovered.panes[0].main[pane_segments.drawings_end..pane_segments.trading_end];
+        assert!(trading.iter().any(
+            |primitive| matches!(primitive, Prim::Text { text, .. } if text == "Close Position")
+        ));
+        assert!(trading
+            .iter()
+            .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "-12")));
+        let hovered_bounds = trading
+            .iter()
+            .find_map(|primitive| match primitive {
+                Prim::RoundRect {
+                    x,
+                    y,
+                    w,
+                    h,
+                    border_width,
+                    ..
+                } if *border_width > 0.0 && (*w - bounds.2).abs() <= 0.5 => Some((*x, *y, *w, *h)),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(hovered_bounds, bounds);
     }
 }

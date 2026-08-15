@@ -424,6 +424,7 @@ export function install_gestures(chart: chart_impl): () => void {
       chart.repaint();
       return;
     }
+    chart.deactivate_trading_group();
     // Drawing tools: an armed tool consumes pane presses (anchors place on click, not drag); a
     // successful drawing grab starts an engine-owned anchor/body drag. Both skip the pan.
     if (chart.creation_armed()) {

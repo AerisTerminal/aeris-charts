@@ -2351,6 +2351,10 @@ export class chart_impl implements chart_api {
     return this.wasm.clear_trading_hover();
   }
 
+  deactivate_trading_group(): boolean {
+    return this.wasm.deactivate_trading_group();
+  }
+
   trading_drag_start_at(x: number, y: number): boolean {
     return this.wasm.trading_drag_start_at(x, y);
   }

@@ -953,6 +953,10 @@ impl NucleusChart {
         self.inner.borrow_mut().engine.clear_trading_hover()
     }
 
+    pub fn deactivate_trading_group(&mut self) -> bool {
+        self.inner.borrow_mut().engine.deactivate_trading_group()
+    }
+
     pub fn trading_drag_start_at(&mut self, x_css: f64, y_css: f64) -> bool {
         self.inner
             .borrow_mut()

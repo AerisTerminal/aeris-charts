@@ -75,12 +75,12 @@ test("trading lines use dedicated hits and render semantic colors through the sh
     const target = trading.state().orders.find((order) => order.id === "demo-target");
     const position = trading.state().positions[0];
     const position_y = window.__main.price_to_coordinate(position.average_price);
-    const position_start = window.__chart.time_scale().width() * 0.75 - 103;
+    const position_start = window.__chart.time_scale().width() - 268;
     return {
       order: trading.hit_at(80, window.__main.price_to_coordinate(target.price)),
-      quantity: trading.hit_at(position_start + 86, position_y),
-      pnl: trading.hit_at(position_start + 150, position_y),
-      close: trading.hit_at(position_start + 206, position_y),
+      quantity: trading.hit_at(position_start + 110, position_y),
+      pnl: trading.hit_at(position_start + 180, position_y),
+      close: trading.hit_at(position_start + 242, position_y),
     };
   });
   expect(probe.order).toMatchObject({
@@ -171,7 +171,7 @@ test("cancel control emits intent without removing authoritative order", async (
     const order = window.__chart.trading().state().orders.find((item) => item.id === "demo-stop");
     const overlay = document.querySelector("#chart_container canvas:last-of-type").getBoundingClientRect();
     return {
-      x: overlay.left + window.__chart.time_scale().width() * 0.3 + 38,
+      x: overlay.left + window.__chart.time_scale().width() - 26,
       y: overlay.top + window.__main.price_to_coordinate(order.price),
     };
   });
@@ -180,6 +180,76 @@ test("cancel control emits intent without removing authoritative order", async (
     expect.objectContaining({ action: "cancel_order", order_id: "demo-stop" }),
   ]);
   expect(await page.evaluate(() => window.__chart.trading().state().orders.some((order) => order.id === "demo-stop"))).toBe(true);
+});
+
+test("confirmed bracket connector deactivates on an empty-canvas click without removing orders", async ({ page }) => {
+  await open_trading_demo(page, "canvas2d");
+  const probe = await page.evaluate(() => {
+    window.__connector_intents = [];
+    const trading = window.__chart.trading();
+    trading.subscribe_intents((intent) => window.__connector_intents.push(intent));
+    const target = trading.state().orders.find((order) => order.id === "demo-target");
+    const overlay = document.querySelector("#chart_container canvas:last-of-type").getBoundingClientRect();
+    return {
+      overlay: { left: overlay.left, top: overlay.top, width: overlay.width, height: overlay.height },
+      pane_width: window.__chart.time_scale().width(),
+      from_y: window.__main.price_to_coordinate(target.price),
+      to_y: window.__main.price_to_coordinate(target.price + 0.5),
+    };
+  });
+  await page.mouse.move(probe.overlay.left + 30, probe.overlay.top + probe.from_y);
+  await page.mouse.down();
+  await page.mouse.move(probe.overlay.left + 30, probe.overlay.top + probe.to_y, { steps: 5 });
+  await page.mouse.up();
+  const active = await page.evaluate(() => {
+    const trading = window.__chart.trading();
+    const intent = window.__connector_intents[0];
+    trading.resolve_intent(intent.sequence, true);
+    const target = trading.state().orders.find((order) => order.id === "demo-target");
+    trading.update_order({ ...target, price: intent.price, revision: target.revision + 1 });
+    const stop = trading.state().orders.find((order) => order.id === "demo-stop");
+    const canvas = window.__chart.take_screenshot();
+    return {
+      url: canvas.toDataURL("image/png"),
+      width: canvas.width,
+      height: canvas.height,
+      top: window.__main.price_to_coordinate(intent.price),
+      bottom: window.__main.price_to_coordinate(stop.price),
+    };
+  });
+
+  await page.mouse.click(probe.overlay.left + probe.pane_width / 2, probe.overlay.top + 20);
+  const inactive = await page.evaluate(() => {
+    const canvas = window.__chart.take_screenshot();
+    return {
+      url: canvas.toDataURL("image/png"),
+      order_ids: window.__chart.trading().state().orders.map((order) => order.id),
+    };
+  });
+  expect(inactive.order_ids).toEqual(["demo-target", "demo-stop", "demo-partial"]);
+
+  const connector_pixels = (url) => {
+    const image = PNG.sync.read(Buffer.from(url.split(",")[1], "base64"));
+    const scale_x = active.width / probe.overlay.width;
+    const scale_y = active.height / probe.overlay.height;
+    const x = Math.round((probe.pane_width - 8) * scale_x);
+    const y0 = Math.round(Math.min(active.top, active.bottom) * scale_y);
+    const y1 = Math.round(Math.max(active.top, active.bottom) * scale_y);
+    let count = 0;
+    for (let y = y0; y <= y1; y += 1) {
+      for (let dx = -2; dx <= 2; dx += 1) {
+        const offset = (y * image.width + x + dx) * 4;
+        if (
+          Math.abs(image.data[offset] - 62) <= 12
+          && Math.abs(image.data[offset + 1] - 99) <= 12
+          && Math.abs(image.data[offset + 2] - 221) <= 12
+          && image.data[offset + 3] > 200
+        ) count += 1;
+      }
+    }
+    return count;
+  };
+  expect(connector_pixels(active.url)).toBeGreaterThan(connector_pixels(inactive.url) + 20);
 });
 
 test("working-order segments own TP, SL, cancel, and manual Confirm/Discard hits", async ({ page }) => {
@@ -198,7 +268,7 @@ test("working-order segments own TP, SL, cancel, and manual Confirm/Discard hits
     trading.subscribe_intents((intent) => window.__manual_intents.push(intent));
     const overlay = document.querySelector("#chart_container canvas:last-of-type").getBoundingClientRect();
     const width = window.__chart.time_scale().width();
-    const chip_start = width * 0.44 - 114;
+    const chip_start = width - 236;
     return {
       overlay: { left: overlay.left, top: overlay.top },
       width,
@@ -209,8 +279,8 @@ test("working-order segments own TP, SL, cancel, and manual Confirm/Discard hits
       sell_target_y: window.__main.price_to_coordinate(97.25),
       hits: {
         tp: trading.hit_at(chip_start + 15, window.__main.price_to_coordinate(100)),
-        sl: trading.hit_at(chip_start + 47, window.__main.price_to_coordinate(100)),
-        cancel: trading.hit_at(chip_start + 214, window.__main.price_to_coordinate(100)),
+        sl: trading.hit_at(chip_start + 45, window.__main.price_to_coordinate(100)),
+        cancel: trading.hit_at(chip_start + 210, window.__main.price_to_coordinate(100)),
       },
     };
   });
@@ -230,7 +300,7 @@ test("working-order segments own TP, SL, cancel, and manual Confirm/Discard hits
     intents: [],
   });
 
-  const manual_main_x = probe.width * 0.5 - 51;
+  const manual_main_x = probe.width - 236;
   await page.mouse.click(probe.overlay.left + manual_main_x - 36, probe.overlay.top + probe.target_y);
   const confirmed = await page.evaluate(() => ({
     preview: window.__chart.trading().preview(),
@@ -294,7 +364,7 @@ test("existing TP and SL adjustments keep manual confirmation controls", async (
       stop_next_y: window.__main.price_to_coordinate(stop.price - 0.75),
     };
   });
-  const manual_main_x = probe.width * 0.5 + 11;
+  const manual_main_x = probe.width - 180;
 
   await page.mouse.move(probe.overlay.left + 30, probe.overlay.top + probe.target_y);
   await page.mouse.down();
@@ -352,12 +422,12 @@ for (const backend of ["canvas2d", "webgpu"]) {
       trading.subscribe_intents((intent) => window.__creation_intents.push(intent));
       const overlay = document.querySelector("#chart_container canvas:last-of-type").getBoundingClientRect();
       const width = window.__chart.time_scale().width();
-      const position_start = width * 0.75 - 103;
+      const position_start = width - 268;
       return {
         overlay: { left: overlay.left, top: overlay.top },
         width,
-        tp_x: position_start + 15,
-        sl_x: position_start + 47,
+        tp_x: position_start + 43,
+        sl_x: position_start + 73,
         entry_y: window.__main.price_to_coordinate(100),
         tp_y: window.__main.price_to_coordinate(102),
         sl_y: window.__main.price_to_coordinate(98),
@@ -424,7 +494,7 @@ for (const backend of ["canvas2d", "webgpu"]) {
     await page.mouse.down();
     await page.mouse.move(probe.overlay.left + probe.sl_x, probe.overlay.top + probe.sl_y, { steps: 6 });
     await page.mouse.up();
-    const manual_main_x = probe.width * 0.5 + 11;
+    const manual_main_x = probe.width - 180;
     const manual_hits = await page.evaluate(({ x, y }) => ({
       confirm: window.__chart.trading().hit_at(x - 36, y),
       discard: window.__chart.trading().hit_at(x - 97, y),

@@ -1138,7 +1138,7 @@ impl ChartEngine {
                 if pending {
                     self.trading_state.style.pending
                 } else {
-                    self.trading_state.style.position
+                    self.trading_position_color(position.side)
                 },
                 true,
             );
