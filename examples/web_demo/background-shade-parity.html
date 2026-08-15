@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Background Shade parity fixture</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: white; font: 12px sans-serif; }
+  main { display: flex; gap: 16px; padding: 16px; }
+  section { display: grid; gap: 6px; }
+  h1 { margin: 0; font-size: 12px; }
+  .chart { width: 600px; height: 320px; overflow: hidden; }
+</style>
+</head>
+<body>
+<main>
+  <section><h1>Nucleus</h1><div class="chart" id="nucleus"></div></section>
+  <section><h1>Lightweight Charts 5.2.0</h1><div class="chart" id="reference"></div></section>
+</main>
+<script type="module">
+import { create_chart } from "./dist/nucleuscharts_financial.js";
+import {
+  LineSeries,
+  createChart,
+  customSeriesDefaultOptions,
+} from "./node_modules/lightweight-charts/dist/lightweight-charts.standalone.production.mjs";
+
+const parity = {};
+document.getElementById("nucleus").__shade_parity = parity;
+
+const width = 600;
+const height = 320;
+const low_color = "rgb(50, 50, 255)";
+const high_color = "rgb(255, 50, 50)";
+const line_color = "#2962ff";
+const whitespace = new Set([9, 31]);
+const start = 1_700_000_000;
+const values = Array.from({ length: 60 }, (_, index) => {
+  if (index === 0) return 0;
+  if (index === 1) return 50;
+  if (index === 2) return 100;
+  return (index * 37 + (index % 5) * 11) % 101;
+});
+const line_data = values.map((value, index) => ({ time: start + index * 86_400, value }));
+const shade_data = line_data.map((point, index) => whitespace.has(index) ? { time: point.time } : point);
+
+// Behavioral copy of the Apache-2.0 upstream example renderer. Product code does not import or
+// transliterate this class; it exists only as the pinned 5.2.0 side-by-side oracle.
+class ReferenceShadeRenderer {
+  data = null;
+  options = null;
+  update(data, options) { this.data = data; this.options = options; }
+  draw(target) {
+    target.useBitmapCoordinateSpace((scope) => {
+      if (this.data === null || this.data.visibleRange === null || this.options === null) return;
+      const low = this.options.lowValue;
+      const range = this.options.highValue - low;
+      const half_width = this.data.barSpacing / 2;
+      for (let index = this.data.visibleRange.from; index < this.data.visibleRange.to; index += 1) {
+        const bar = this.data.bars[index];
+        const ratio = (bar.originalData.value - low) / range;
+        const color = [50, 50, 255].map((channel, channel_index) => Math.round(
+          channel + ([255, 50, 50][channel_index] - channel) * ratio,
+        ));
+        const left = Math.round((bar.x - half_width) * scope.horizontalPixelRatio);
+        const right = Math.round((bar.x + half_width) * scope.horizontalPixelRatio);
+        scope.context.fillStyle = `rgb(${color.join(",")})`;
+        scope.context.fillRect(left, 0, right - left, scope.bitmapSize.height);
+      }
+    });
+  }
+}
+
+class ReferenceShadeSeries {
+  renderer_instance = new ReferenceShadeRenderer();
+  priceValueBuilder() { return [Number.NaN]; }
+  isWhitespace(data) { return data.value === undefined; }
+  renderer() { return this.renderer_instance; }
+  update(data, options) { this.renderer_instance.update(data, options); }
+  defaultOptions() {
+    return {
+      ...customSeriesDefaultOptions,
+      lowColor: low_color,
+      highColor: high_color,
+      lowValue: 0,
+      highValue: 100,
+      opacity: 0.8,
+    };
+  }
+}
+
+const shared_options = {
+  width,
+  height,
+  autoSize: false,
+  layout: { background: { type: "solid", color: "#ffffff" }, textColor: "#191919", attributionLogo: false },
+  grid: { vertLines: { visible: false }, horzLines: { visible: false } },
+  crosshair: { mode: 2 },
+};
+
+const nucleus = await create_chart(document.getElementById("nucleus"), {
+  ...shared_options,
+  backend: "canvas2d",
+});
+nucleus.resize(width, height, devicePixelRatio);
+const nucleus_empty_range = nucleus.price_scale("right").get_visible_range();
+const nucleus_shade = nucleus.add_series("background_shade", {
+  low_color,
+  high_color,
+  low_value: 0,
+  high_value: 100,
+});
+nucleus_shade.set_data(shade_data);
+nucleus.time_scale().fit_content();
+const nucleus_shade_only_range = nucleus.price_scale("right").get_visible_range();
+const nucleus_line = nucleus.add_series("line", { color: line_color });
+nucleus_line.set_data(line_data);
+nucleus.time_scale().fit_content();
+
+const reference = createChart(document.getElementById("reference"), shared_options);
+const reference_empty_range = reference.priceScale("right").getVisibleRange();
+const reference_shade = reference.addCustomSeries(new ReferenceShadeSeries(), {
+  lowValue: 0,
+  highValue: 100,
+});
+reference_shade.setData(shade_data);
+reference.timeScale().fitContent();
+const reference_shade_only_range = reference.priceScale("right").getVisibleRange();
+const reference_line = reference.addSeries(LineSeries, { color: line_color });
+reference_line.setData(line_data);
+reference.timeScale().fitContent();
+
+const render = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+await render();
+const composed_ranges = {
+  nucleus: nucleus.price_scale("right").get_visible_range(),
+  reference: reference.priceScale("right").getVisibleRange(),
+};
+nucleus_shade.apply_options({ visible: false });
+reference_shade.applyOptions({ visible: false });
+await render();
+const line_only_ranges = {
+  nucleus: nucleus.price_scale("right").get_visible_range(),
+  reference: reference.priceScale("right").getVisibleRange(),
+};
+nucleus_shade.apply_options({ visible: true });
+reference_shade.applyOptions({ visible: true });
+const set_range = async (from, to) => {
+  nucleus.time_scale().set_visible_logical_range({ from, to });
+  reference.timeScale().setVisibleLogicalRange({ from, to });
+  nucleus.render();
+  await render();
+};
+const resize = async (next_width, next_height) => {
+  for (const element of [document.getElementById("nucleus"), document.getElementById("reference")]) {
+    element.style.width = `${next_width}px`;
+    element.style.height = `${next_height}px`;
+  }
+  nucleus.resize(next_width, next_height, devicePixelRatio);
+  reference.resize(next_width, next_height);
+  nucleus.render();
+  await render();
+};
+const metrics = () => ({
+  values,
+  nucleus: {
+    logical_range: nucleus.time_scale().get_visible_logical_range(),
+    price_range: nucleus.price_scale("right").get_visible_range(),
+    pane: nucleus.panes()[0].get_geometry(),
+    coordinates: values.map((_, index) => nucleus.time_scale().logical_to_coordinate(index)),
+  },
+  reference: {
+    logical_range: reference.timeScale().getVisibleLogicalRange(),
+    price_range: reference.priceScale("right").getVisibleRange(),
+    pane: { left: 0, top: 0, width: reference.timeScale().width(), height: reference.panes()[0].getHeight() },
+    coordinates: line_data.map((point) => reference.timeScale().timeToCoordinate(point.time)),
+  },
+});
+
+await render();
+Object.assign(parity, {
+  values,
+  whitespace: [...whitespace],
+  empty_ranges: { nucleus: nucleus_empty_range, reference: reference_empty_range },
+  shade_only_ranges: { nucleus: nucleus_shade_only_range, reference: reference_shade_only_range },
+  composed_ranges,
+  line_only_ranges,
+  series: { nucleus_shade, nucleus_line, reference_shade, reference_line },
+  metrics,
+  set_range,
+  resize,
+});
+document.documentElement.dataset.ready = "true";
+</script>
+</body>
+</html>

@@ -241,6 +241,14 @@ test("canvas primitive repaints after auto-resize and chart.resize", async ({ pa
   await settle_frames(page);
   const resized = await painted_alpha();
   expect(resized.painted, "the plugin must repaint after chart.resize").toBeGreaterThan(0);
+  const manual_sizes = await page.evaluate(() => [...document.querySelectorAll("#chart_container canvas")].map((canvas) => ({
+    bitmap: [canvas.width, canvas.height],
+    css: [canvas.getBoundingClientRect().width, canvas.getBoundingClientRect().height],
+  })));
+  expect(manual_sizes).toEqual(Array.from({ length: 4 }, () => ({
+    bitmap: [1350, 900],
+    css: [900, 600],
+  })));
   // The line follows the resized time scale: probe the column the converter now reports.
   const column = await page.evaluate(() => {
     const chart = window.__chart;

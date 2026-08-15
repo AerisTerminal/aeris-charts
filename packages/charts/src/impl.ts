@@ -3686,7 +3686,16 @@ export class chart_impl implements chart_api {
   }
 
   resize(width: number, height: number, dpr?: number): void {
-    this.wasm.resize(width, height, dpr ?? window.devicePixelRatio ?? 1);
+    const ratio = dpr ?? window.devicePixelRatio ?? 1;
+    const bitmap_width = Math.max(1, Math.round(width * ratio));
+    const bitmap_height = Math.max(1, Math.round(height * ratio));
+    for (const canvas of [this.gpu_pane, this.fallback_pane, this.plugin_canvas, this.overlay]) {
+      canvas.width = bitmap_width;
+      canvas.height = bitmap_height;
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+    }
+    this.wasm.resize(width, height, ratio);
     this.repaint();
   }
 

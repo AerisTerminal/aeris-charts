@@ -1199,7 +1199,7 @@ mod tests {
     }
 
     #[test]
-    fn dual_range_columns_and_background_gradient_cover_contiguous_widths() {
+    fn dual_range_columns_and_background_shade_match_official_bar_geometry() {
         let mut dual = ChartEngine::new(800.0, 500.0, 1.0);
         dual.configure_feature_series(
             0,
@@ -1243,24 +1243,55 @@ mod tests {
                 .all(|column| *column == group[0] && column.1 > 1)
         }));
 
-        let mut background = ChartEngine::new(800.0, 500.0, 1.0);
+        let mut background = ChartEngine::new(800.0, 500.0, 2.0);
         background.configure_feature_series(
             0,
             FeatureSeriesKind::BackgroundShade,
-            FeatureSeriesOptionsPatch::default(),
+            FeatureSeriesOptionsPatch {
+                low_value: Some(0.0),
+                high_value: Some(100.0),
+                ..FeatureSeriesOptionsPatch::default()
+            },
         );
         background
             .set_feature_series_data(
                 0,
-                (0..6)
-                    .map(|time| FeatureDataPoint {
-                        time: time as f64,
-                        value: Some(FeatureValue::BackgroundShade {
-                            value: 10.0 + time as f64,
-                        }),
-                    })
-                    .collect(),
+                vec![
+                    FeatureDataPoint {
+                        time: 0.0,
+                        value: Some(FeatureValue::BackgroundShade { value: 0.0 }),
+                    },
+                    FeatureDataPoint {
+                        time: 1.0,
+                        value: Some(FeatureValue::BackgroundShade { value: 50.0 }),
+                    },
+                    FeatureDataPoint {
+                        time: 2.0,
+                        value: Some(FeatureValue::BackgroundShade { value: 100.0 }),
+                    },
+                    FeatureDataPoint {
+                        time: 3.0,
+                        value: None,
+                    },
+                    FeatureDataPoint {
+                        time: 4.0,
+                        value: Some(FeatureValue::BackgroundShade { value: 25.0 }),
+                    },
+                ],
             )
+            .unwrap();
+        background.time_scale.set_width(800.0);
+        background.fit_content();
+        background.build_frame();
+        assert!(background.series_base_value(0, 0).is_none());
+        assert!(background.panes[0].price_scale.price_range().is_none());
+        assert!(background.hit_test_one_series(0, 400.0, 250.0).is_none());
+
+        let line = background.add_series(SeriesKind::Line);
+        let times = [0.0, 1.0, 2.0, 3.0, 4.0];
+        let values = [0.0, 50.0, 100.0, 75.0, 25.0];
+        background
+            .set_series_data(line, &times, &values, &values, &values, &values)
             .unwrap();
         background.time_scale.set_width(800.0);
         background.fit_content();
@@ -1271,7 +1302,7 @@ mod tests {
             .find(|segment| segment.series_id == Some(0))
             .copied()
             .unwrap();
-        let mut fields = frame.panes[0].main[segment.start..segment.end]
+        let fields = frame.panes[0].main[segment.start..segment.end]
             .iter()
             .filter_map(|primitive| match primitive {
                 nucleuscharts_render::draw_list::Prim::Rect { rect, color } => {
@@ -1280,22 +1311,110 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        fields.sort_by_key(|(rect, _)| rect.x);
-        assert!(
-            fields.len() > 6,
-            "the backdrop must interpolate between data colors instead of painting one pocket per bar"
+        assert_eq!(
+            fields.len(),
+            4,
+            "one full-height strip per non-whitespace bar"
+        );
+        assert_eq!(
+            fields.iter().map(|(_, color)| *color).collect::<Vec<_>>(),
+            vec![
+                Color::rgb(50, 50, 255),
+                Color::rgb(153, 50, 153),
+                Color::rgb(255, 50, 50),
+                Color::rgb(101, 50, 204),
+            ]
         );
         assert!(fields
-            .windows(2)
-            .all(|pair| pair[0].0.x + pair[0].0.w == pair[1].0.x));
-        assert!(fields.iter().all(|(rect, _)| rect.h == fields[0].0.h));
-        assert!(fields.windows(2).all(|pair| {
-            let left = pair[0].1;
-            let right = pair[1].1;
-            left.r().abs_diff(right.r()) <= 1
-                && left.g().abs_diff(right.g()) <= 1
-                && left.b().abs_diff(right.b()) <= 1
-        }));
+            .iter()
+            .all(|(rect, _)| rect.y == 0 && rect.h == 1_000));
+        let spacing = background.time_scale.bar_spacing();
+        let expected = [0, 1, 2, 4]
+            .map(|logical| {
+                let x = background.time_scale.index_to_coordinate(logical);
+                let left = ((x - spacing / 2.0) * 2.0).round() as i32;
+                let right = ((x + spacing / 2.0) * 2.0).round() as i32;
+                (left, (right - left).max(1))
+            })
+            .to_vec();
+        assert_eq!(
+            fields
+                .iter()
+                .map(|(rect, _)| (rect.x, rect.w))
+                .collect::<Vec<_>>(),
+            expected,
+            "each value owns exactly its upstream full-bar-width interval"
+        );
+        assert!(
+            fields[2].0.x + fields[2].0.w < fields[3].0.x,
+            "whitespace must remain unshaded"
+        );
+        assert!(background.series_base_value(0, 0).is_none());
+    }
+
+    #[test]
+    fn background_shade_sparse_rows_stay_time_aligned_after_pan() {
+        let mut chart = ChartEngine::new(480.0, 260.0, 2.0);
+        chart.configure_feature_series(
+            0,
+            FeatureSeriesKind::BackgroundShade,
+            FeatureSeriesOptionsPatch::default(),
+        );
+        let values = (0..60)
+            .map(|index| match index {
+                0 => 0.0,
+                1 => 50.0,
+                2 => 100.0,
+                _ => ((index * 37 + (index % 5) * 11) % 101) as f64,
+            })
+            .collect::<Vec<_>>();
+        chart
+            .set_feature_series_data(
+                0,
+                values
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| FeatureDataPoint {
+                        time: index as f64,
+                        value: (![9, 31].contains(&index))
+                            .then_some(FeatureValue::BackgroundShade { value: *value }),
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        let line = chart.add_series(SeriesKind::Line);
+        let times = (0..60).map(|index| index as f64).collect::<Vec<_>>();
+        chart
+            .set_series_data(line, &times, &values, &values, &values, &values)
+            .unwrap();
+        chart.time_scale.set_width(480.0);
+        chart.set_visible_logical_range(20.0, 35.0);
+        let frame = chart.build_frame();
+        let segment = chart
+            .frame_series_segments(0)
+            .iter()
+            .find(|segment| segment.series_id == Some(0))
+            .copied()
+            .unwrap();
+        let colors = frame.panes[0].main[segment.start..segment.end]
+            .iter()
+            .filter_map(|primitive| match primitive {
+                nucleuscharts_render::draw_list::Prim::Rect { color, .. } => Some(*color),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let expected = (20..=35)
+            .filter(|index| *index != 31)
+            .map(|index| {
+                let amount = values[index] / 100.0;
+                Color::rgb(
+                    (50.0 + 205.0 * amount).round() as u8,
+                    50,
+                    (255.0 - 205.0 * amount).round() as u8,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(colors, expected);
     }
 
     #[test]
