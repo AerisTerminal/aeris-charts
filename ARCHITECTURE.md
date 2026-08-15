@@ -154,6 +154,14 @@ host boundary. Extension runtime objects and callbacks are never persisted by th
 their configuration and restoration. The current custom-series and primitive APIs are experimental,
 not a second plugin framework.
 
+The browser package's custom-series and primitive feature modules are first-class compositions of
+these boundaries. Brushable/stacked/specialized series record the same backend-neutral primitive
+commands as any custom series. Drawing, Bollinger-band, price-line, and overlay-scale helpers route
+to their existing engine owners instead of reimplementing them. Tooltip and accessibility helpers
+own bounded DOM state beside the chart, and image watermarking uses the explicit Canvas2D escape
+hatch. Feature handles own and release their host subscriptions, timers, DOM nodes, and extension
+registrations; none of that runtime state enters engine persistence.
+
 ## Performance contract
 
 Performance comes from avoiding work:

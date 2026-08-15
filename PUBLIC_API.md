@@ -23,9 +23,10 @@ declaration file. CI runs `npm run check:api`; after deliberate review, update i
 
 ## Experimental surfaces
 
-Custom series, pane/series/canvas primitives, built-in plugin helpers, offscreen-worker charts,
-split-grid helpers, and shortcut helpers are public experimental APIs. Their current lifecycle and
-containment behavior is tested, but their exact types may change in a pre-1.0 minor release.
+Custom series, pane/series/canvas primitives, the exported custom-series/primitive feature packs,
+built-in plugin helpers, offscreen-worker charts, split-grid helpers, and shortcut helpers are
+public experimental APIs. Their current lifecycle and containment behavior is tested, but their
+exact types may change in a pre-1.0 minor release.
 Extensions run at host render time, must not re-enter a chart mutation from a render callback, own
 their external objects and persistence, and receive teardown exactly once. Callback failures are
 contained at the host boundary so one extension cannot prevent other teardown. Arbitrary extension

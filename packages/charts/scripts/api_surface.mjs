@@ -14,9 +14,9 @@ const walk = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((entry) 
   return entry.isDirectory() ? walk(path) : [path];
 });
 const public_declarations = new Set([
-  "builtin_plugins.d.ts", "canvas_plugins.d.ts", "custom_series.d.ts", "errors.d.ts",
-  "grid.d.ts", "index.d.ts", "offscreen.d.ts", "primitives.d.ts", "shortcuts.d.ts",
-  "theme.d.ts", "types.d.ts",
+  "builtin_plugins.d.ts", "canvas_plugins.d.ts", "custom_series.d.ts",
+  "custom_series_features.d.ts", "errors.d.ts", "grid.d.ts", "index.d.ts", "offscreen.d.ts",
+  "primitive_features.d.ts", "primitives.d.ts", "shortcuts.d.ts", "theme.d.ts", "types.d.ts",
 ]);
 const files = walk(dist)
   .filter((path) => path.endsWith(".d.ts"))
