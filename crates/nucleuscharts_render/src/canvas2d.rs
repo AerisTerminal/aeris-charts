@@ -13,7 +13,7 @@
 //! map onto native 2D path/gradient calls, which the wgpu path approximates with tessellation.
 
 use crate::color::Color;
-use crate::draw_list::{text_font_spec, IRect, LineStyle, LineType, Prim, TextAlign};
+use crate::draw_list::{text_font_spec, IRect, LineStyle, LineType, Prim, RasterImage, TextAlign};
 use crate::line::{expand_line, LinePoint};
 
 /// Abstract 2D drawing target: the subset of `CanvasRenderingContext2D` this executor needs.
@@ -66,6 +66,10 @@ pub trait Canvas2d {
         _align: TextAlign,
     ) {
     }
+
+    /// Draw immutable straight-alpha RGBA8 pixels into a bitmap-space rectangle. Default no-op
+    /// keeps command recorders lightweight; shipping browser/native targets implement it.
+    fn draw_raster_image(&mut self, _image: &RasterImage, _rect: [f32; 4], _opacity: f32) {}
 }
 
 /// The viewport (bitmap px). Carried for target context; every prim now owns its own extent
@@ -373,6 +377,20 @@ pub fn execute(
                         *color,
                         *align,
                     );
+                }
+            }
+            Prim::Image {
+                image,
+                rect,
+                opacity,
+            } => {
+                if image.width > 0
+                    && image.height > 0
+                    && rect[2] > 0.0
+                    && rect[3] > 0.0
+                    && *opacity > 0.0
+                {
+                    target.draw_raster_image(image, *rect, opacity.clamp(0.0, 1.0));
                 }
             }
         }

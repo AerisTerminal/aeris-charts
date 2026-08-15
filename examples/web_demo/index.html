@@ -9,79 +9,183 @@
 <title>Nucleus Charts — @nucleuscharts/financial demo</title>
 <link rel="stylesheet" href="./dist/nucleuscharts.css" />
 <style>
-  html, body { height: 100%; }
-  #wrap { display: flex; flex-direction: column; height: 100%; }
-  #bar { flex: 0 0 auto; font-size: 12px; color: var(--foreground); background: var(--background);
-         border-bottom: 1px solid var(--border); }
-  #app_bar { min-height: 38px; padding: 4px 10px; display: flex; gap: 10px; align-items: center;
-             border-bottom: 1px solid var(--muted-border); }
-  #controls_strip { display: flex; gap: 7px; align-items: stretch; overflow-x: auto; overflow-y: hidden;
-                    padding: 7px 10px 6px; scrollbar-width: thin; scrollbar-color: var(--muted-border) transparent; }
-  #bar .group { position: relative; display: flex; flex: 0 0 auto; gap: 7px; align-items: center; flex-wrap: nowrap;
-                padding: 9px 8px 4px; margin-top: 3px; background: var(--muted);
-                border: 1px solid var(--muted-border); border-radius: var(--radius-df); }
-  /* The flex display above would otherwise beat the UA [hidden] rule (specificity) — the style
-     groups toggle via the `hidden` attribute, so it must win here. */
-  #bar .group[hidden] { display: none; }
-  #bar .group::before { content: attr(data-caption); position: absolute; top: -8px; left: 8px;
-                padding: 0 5px; background: var(--background); font-size: 9.5px; letter-spacing: 0.07em;
-                text-transform: uppercase; color: var(--muted-foreground); }
-  #bar label { display: inline-flex; gap: 4px; align-items: center; white-space: nowrap; }
-  #bar label[hidden] { display: none; }
-  #bar button, #bar select, #bar input[type="text"], #bar input[type="number"] {
-    min-height: 25px; background: var(--input); color: var(--foreground);
-    border: 1px solid var(--muted-border); border-radius: var(--radius-sm);
-  }
-  #bar button { padding: 2px 8px; cursor: pointer; }
-  #bar button:hover { background: var(--accent); }
-  #bar button:focus-visible, #bar select:focus-visible, #bar input:focus-visible { outline-color: var(--primary); }
-  #bar input[type="color"] { width: 24px; height: 23px; padding: 0; border: 1px solid var(--muted-border); border-radius: var(--radius-sm); background: var(--input); cursor: pointer; }
-  #bar input[type="range"] { width: 72px; vertical-align: middle; }
-  #bar .brand { background: var(--primary); color: var(--primary-foreground); padding: 5px 8px; border-radius: var(--radius-sm); }
-  #bar .lab-title { color: var(--muted-foreground); white-space: nowrap; }
-  #control_jump_label { color: var(--muted-foreground); }
-  #quick_actions { display: flex; gap: 5px; align-items: center; margin-left: auto; }
-  #quick_actions button { min-width: 54px; }
-  #bar .hint { color: var(--muted-foreground); font-size: 11px; }
-  #status { color: var(--muted-foreground); font-variant-numeric: tabular-nums; white-space: nowrap; }
-  @media (max-width: 720px) {
-    #bar .lab-title, #status { display: none; }
-    #quick_actions { margin-left: auto; }
-  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; overflow: hidden; background: var(--background); }
+  body { color: var(--foreground); font-family: var(--font-sans, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif); }
+  button, input, select { font: inherit; }
+  #wrap { display: grid; grid-template-rows: 48px minmax(0, 1fr); height: 100dvh; min-width: 0; }
+  #bar { z-index: 20; min-width: 0; color: var(--foreground); background: var(--background); border-bottom: 1px solid var(--border); }
+  #app_bar { height: 48px; padding: 0 10px; display: flex; gap: 8px; align-items: center; min-width: 0; }
+  .brand-lockup { display: flex; align-items: center; gap: 9px; min-width: 184px; }
+  .brand-mark { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: var(--primary); color: var(--primary-foreground); }
+  .brand-mark svg { width: 17px; height: 17px; }
+  .brand-copy { display: grid; line-height: 1.05; }
+  .brand { font-size: 12px; font-weight: 700; letter-spacing: .01em; }
+  .lab-title { margin-top: 3px; color: var(--muted-foreground); font-size: 9px; letter-spacing: .09em; text-transform: uppercase; }
+  .market-summary { display: flex; align-items: center; gap: 9px; min-width: 0; padding-left: 12px; border-left: 1px solid var(--border); }
+  .market-symbol { font-size: 12px; font-weight: 700; }
+  .market-meta { color: var(--muted-foreground); font-size: 10px; white-space: nowrap; }
+  .market-price { color: var(--chart-positive, #089981); font-size: 12px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .market-price[data-direction="down"] { color: var(--chart-negative, #f7525f); }
+  #quick_actions { display: flex; gap: 4px; align-items: center; margin-left: auto; }
+  .icon-button, #quick_actions button, #tool_rail button { display: inline-grid; place-items: center; border: 1px solid transparent; background: transparent; color: var(--muted-foreground); cursor: pointer; }
+  .icon-button, #quick_actions button { width: 32px; height: 32px; padding: 0; border-radius: 7px; }
+  .icon-button:hover, #quick_actions button:hover, #tool_rail button:hover { color: var(--foreground); background: var(--accent); }
+  .icon-button:focus-visible, #quick_actions button:focus-visible, #tool_rail button:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+  .icon-button svg, #quick_actions svg, #tool_rail svg { width: 18px; height: 18px; }
+  #status { max-width: 210px; overflow: hidden; color: var(--muted-foreground); font-size: 10px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+  #theme_toggle [data-theme-icon="dark"] { display: none; }
+  [data-theme="light"] #theme_toggle [data-theme-icon="dark"] { display: inline-flex; }
+  [data-theme="light"] #theme_toggle [data-theme-icon="light"] { display: none; }
+
+  #workspace { display: grid; grid-template-columns: 48px minmax(0, 1fr) minmax(300px, 340px); min-width: 0; min-height: 0; }
+  #workspace[data-inspector-open="false"] { grid-template-columns: 48px minmax(0, 1fr); }
+  #tool_rail { z-index: 12; display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 8px 6px; background: var(--background); border-right: 1px solid var(--border); }
+  #tool_rail button { width: 34px; height: 34px; border-radius: 8px; }
+  #tool_rail button[aria-current="true"] { color: var(--primary); background: color-mix(in srgb, var(--primary) 12%, transparent); }
+  #tool_rail .rail-spacer { flex: 1; }
+
+  #inspector { z-index: 11; display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; background: var(--background); border-left: 1px solid var(--border); }
+  #inspector[data-open="false"] { display: none; }
+  #inspector_header { padding: 11px 12px 10px; border-bottom: 1px solid var(--border); }
+  #inspector_header h1 { margin: 0; font-size: 13px; font-weight: 650; }
+  #inspector_header p { margin: 3px 0 0; color: var(--muted-foreground); font-size: 10px; line-height: 1.35; }
+  #control_jump_label { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; align-items: center; margin-top: 10px; color: var(--muted-foreground); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+  #control_jump { width: 100%; }
+  #controls_strip { min-width: 0; overflow-x: hidden; overflow-y: auto; padding: 9px; scrollbar-width: thin; scrollbar-color: var(--muted-border) transparent; }
+  #inspector .group { position: relative; display: flex; gap: 8px 10px; align-items: center; flex-wrap: wrap; margin: 0 0 8px; padding: 29px 10px 11px; background: var(--muted); border: 1px solid var(--muted-border); border-radius: 9px; }
+  #inspector .group[hidden] { display: none; }
+  #inspector .group::before { content: attr(data-caption); position: absolute; inset: 0 0 auto; height: 22px; padding: 8px 10px 0; color: var(--muted-foreground); font-size: 9px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
+  #inspector label { display: inline-flex; gap: 5px; align-items: center; min-width: 0; color: var(--foreground); font-size: 11px; white-space: nowrap; }
+  #inspector label[hidden] { display: none; }
+  #inspector button, #inspector select, #inspector input[type="text"], #inspector input[type="number"] { min-height: 29px; max-width: 100%; background: var(--input); color: var(--foreground); border: 1px solid var(--muted-border); border-radius: 6px; }
+  #inspector button { padding: 4px 9px; cursor: pointer; }
+  #inspector button:hover { background: var(--accent); }
+  #inspector button:focus-visible, #inspector select:focus-visible, #inspector input:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+  #inspector input[type="color"] { width: 27px; height: 25px; padding: 0; border: 1px solid var(--muted-border); border-radius: 5px; background: var(--input); cursor: pointer; }
+  #inspector input[type="range"] { width: 76px; vertical-align: middle; }
+  #inspector .hint { flex-basis: 100%; color: var(--muted-foreground); font-size: 10px; line-height: 1.4; white-space: normal; }
+
+  #feature_lab_group { display: block !important; padding-top: 31px; }
+  .feature-lab-intro { margin: 0 0 9px; color: var(--muted-foreground); font-size: 10px; line-height: 1.45; }
+  .feature-search-wrap { position: relative; display: block !important; width: 100%; }
+  .feature-search-wrap svg { position: absolute; top: 7px; left: 8px; width: 15px; height: 15px; color: var(--muted-foreground); pointer-events: none; }
+  #feature_search { width: 100%; padding: 5px 8px 5px 29px; }
+  #feature_filters { display: flex; gap: 5px; width: 100%; margin: 8px 0; }
+  #feature_filters button { flex: 1; min-height: 27px; padding: 3px 6px; font-size: 10px; }
+  #feature_filters button[aria-pressed="true"] { border-color: var(--primary); color: var(--primary); background: color-mix(in srgb, var(--primary) 10%, transparent); }
+  #feature_grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; width: 100%; }
+  #feature_grid .feature-card { display: grid; grid-template-columns: 24px minmax(0, 1fr); grid-template-rows: auto auto; gap: 1px 7px; min-height: 54px; padding: 7px; text-align: left; }
+  .feature-card .feature-icon { grid-row: 1 / 3; display: grid; place-items: center; width: 24px; height: 24px; margin-top: 3px; border-radius: 6px; color: var(--muted-foreground); background: var(--background); }
+  .feature-card svg { width: 15px; height: 15px; }
+  .feature-card strong { overflow: hidden; font-size: 10.5px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+  .feature-card small { overflow: hidden; color: var(--muted-foreground); font-size: 8.5px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+  #feature_grid .feature-card[aria-pressed="true"] { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 12%, var(--input)); }
+  #feature_grid .feature-card[aria-pressed="true"] .feature-icon { color: var(--primary); }
+  #feature_grid .feature-card[hidden] { display: none; }
+  #feature_empty { display: none; padding: 16px 4px 6px; color: var(--muted-foreground); font-size: 10px; text-align: center; }
+  #feature_empty[data-visible="true"] { display: block; }
+  #feature_lab_status { display: flex; justify-content: space-between; gap: 8px; width: 100%; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--muted-border); color: var(--muted-foreground); font-size: 9.5px; }
+
   /* The library creates and manages the canvases inside this container. */
-  #chart_wrap { flex: 1; position: relative; min-height: 0; }
+  #chart_wrap { grid-column: 2; grid-row: 1; position: relative; min-width: 0; min-height: 0; background: var(--background); }
   #chart_container { position: absolute; inset: 0; touch-action: none; overscroll-behavior: none; }
   /* crosshair-move legend (top-left, over the pane) driven by subscribe_crosshair_move */
   #legend { position: absolute; top: 8px; left: 8px; z-index: 3; font-size: 12px; color: var(--foreground);
             background: color-mix(in srgb, var(--background) 72%, transparent); padding: 3px 7px; border-radius: var(--radius-sm); pointer-events: none;
             font-variant-numeric: tabular-nums; }
+  #mobile_backdrop { display: none; }
+  [data-runtime-chrome="hidden"] #wrap { grid-template-rows: minmax(0, 1fr); }
+  [data-runtime-chrome="hidden"] #workspace { grid-template-columns: minmax(0, 1fr); }
+  [data-runtime-chrome="hidden"] #tool_rail,
+  [data-runtime-chrome="hidden"] #inspector { display: none; }
+  [data-runtime-chrome="hidden"] #chart_wrap { grid-column: 1; }
+
+  @media (max-width: 1080px) {
+    #workspace { grid-template-columns: 44px minmax(0, 1fr) 300px; }
+    #workspace[data-inspector-open="false"] { grid-template-columns: 44px minmax(0, 1fr); }
+    .market-meta, #status { display: none; }
+  }
+  @media (max-width: 820px) {
+    #workspace { grid-template-columns: 42px minmax(0, 1fr); }
+    #chart_wrap { grid-column: 2; }
+    #inspector, #inspector[data-open="false"] { display: grid; position: fixed; top: 48px; right: 0; bottom: 0; width: min(340px, calc(100vw - 42px)); transform: translateX(100%); transition: transform 160ms ease; box-shadow: -16px 0 32px rgba(0,0,0,.24); }
+    #inspector[data-open="true"] { transform: translateX(0); }
+    #mobile_backdrop { position: fixed; inset: 48px 0 0 42px; z-index: 10; background: rgba(0,0,0,.34); }
+    #mobile_backdrop[data-open="true"] { display: block; }
+    .brand-lockup { min-width: auto; }
+    .brand-copy, .market-summary { display: none; }
+  }
 </style>
 </head>
 <body>
 <div id="wrap">
   <header id="bar">
     <div id="app_bar">
-      <span class="brand">Nucleus Charts</span>
-      <span class="lab-title">interaction training lab</span>
-      <label id="control_jump_label">controls
-        <select id="control_jump" aria-label="Jump to a control section">
-          <option value="type_group">Series</option>
-          <option value="overlays_group">Analysis</option>
-          <option value="multi_chart_group">Workspace</option>
-          <option value="drawings_group">Drawings</option>
-          <option value="chart_group">Appearance</option>
-          <option value="interaction_group">Interaction</option>
-        </select>
-      </label>
+      <div class="brand-lockup">
+        <span class="brand-mark" aria-hidden="true"><span data-icon="activity"></span></span>
+        <span class="brand-copy"><span class="brand">Nucleus Charts</span><span class="lab-title">Market lab</span></span>
+      </div>
+      <div class="market-summary" aria-label="Demo instrument">
+        <span class="market-symbol">NCL · 1H</span>
+        <span class="market-price" id="market_price">—</span>
+        <span class="market-meta">Synthetic market · 1,000 bars</span>
+      </div>
       <nav id="quick_actions" aria-label="Active chart actions">
-        <button id="undo_drawing_btn" type="button" title="Undo the last drawing change in the active chart">undo</button>
-        <button id="redo_drawing_btn" type="button" title="Redo the last drawing change in the active chart">redo</button>
-        <button id="reset_view_btn" type="button" title="Reset the active chart's time and price views">reset view</button>
+        <button id="undo_drawing_btn" type="button" aria-label="Undo drawing" title="Undo the last drawing change in the active chart"><span data-icon="undo"></span></button>
+        <button id="redo_drawing_btn" type="button" aria-label="Redo drawing" title="Redo the last drawing change in the active chart"><span data-icon="redo"></span></button>
+        <button id="reset_view_btn" type="button" aria-label="Reset chart view" title="Reset the active chart's time and price views"><span data-icon="refresh"></span></button>
       </nav>
       <span id="status"></span>
+      <button id="theme_toggle" class="icon-button" type="button" aria-label="Switch to light theme" title="Toggle light and dark theme">
+        <span data-icon="moon" data-theme-icon="dark"></span><span data-icon="sun" data-theme-icon="light"></span>
+      </button>
+      <button id="inspector_toggle" class="icon-button" type="button" aria-label="Toggle chart controls" title="Toggle chart controls"><span data-icon="panel"></span></button>
     </div>
+  </header>
+
+  <div id="workspace" data-inspector-open="true">
+    <nav id="tool_rail" aria-label="Chart workspace sections">
+      <button type="button" data-scroll-target="feature_lab_group" aria-label="Feature lab" title="Feature lab" aria-current="true"><span data-icon="lab"></span></button>
+      <button type="button" data-scroll-target="type_group" aria-label="Series" title="Series"><span data-icon="candles"></span></button>
+      <button type="button" data-scroll-target="overlays_group" aria-label="Analysis" title="Analysis"><span data-icon="analysis"></span></button>
+      <button type="button" data-scroll-target="multi_chart_group" aria-label="Workspace" title="Workspace"><span data-icon="grid"></span></button>
+      <button type="button" data-scroll-target="drawings_group" aria-label="Drawings" title="Drawings"><span data-icon="draw"></span></button>
+      <span class="rail-spacer"></span>
+      <button type="button" data-scroll-target="chart_group" aria-label="Appearance" title="Appearance"><span data-icon="settings"></span></button>
+    </nav>
+
+    <aside id="inspector" aria-label="Chart controls" data-open="true">
+      <div id="inspector_header">
+        <h1>Chart controls</h1>
+        <p>Launch features, style the active series, and test interactions.</p>
+        <label id="control_jump_label">Section
+          <select id="control_jump" aria-label="Jump to a control section">
+            <option value="feature_lab_group">Feature lab</option>
+            <option value="type_group">Series</option>
+            <option value="overlays_group">Analysis</option>
+            <option value="multi_chart_group">Workspace</option>
+            <option value="drawings_group">Drawings</option>
+            <option value="chart_group">Appearance</option>
+            <option value="interaction_group">Interaction</option>
+          </select>
+        </label>
+      </div>
 
     <div id="controls_strip" aria-label="Chart training controls">
+
+    <section class="group" id="feature_lab_group" data-caption="Feature lab">
+      <p class="feature-lab-intro">Every first-class series and primitive is runnable here. Series replace the main visual one at a time; primitives can be combined.</p>
+      <label class="feature-search-wrap"><span data-icon="search"></span><input id="feature_search" type="search" placeholder="Search 29 features" aria-label="Search feature lab"></label>
+      <div id="feature_filters" role="group" aria-label="Filter features">
+        <button type="button" data-feature-filter="all" aria-pressed="true">All</button>
+        <button type="button" data-feature-filter="series" aria-pressed="false">Series</button>
+        <button type="button" data-feature-filter="primitive" aria-pressed="false">Primitives</button>
+      </div>
+      <div id="feature_grid" aria-live="polite"></div>
+      <div id="feature_empty">No matching features.</div>
+      <div id="feature_lab_status"><span id="feature_active_count">No features active</span><button id="feature_clear" type="button">Clear lab</button></div>
+    </section>
 
     <div class="group" id="type_group" data-caption="Series">
       <label><input type="radio" name="series" value="candlestick" checked> candles</label>
@@ -272,12 +376,15 @@
       <span class="hint">drag axes · Ctrl+←→ fast scroll · flick coasts on touch</span>
     </div>
     </div>
-  </header>
-  <div id="chart_wrap">
-    <div id="chart_container"></div>
-    <div id="legend">O — H — L — C —</div>
+    </aside>
+    <main id="chart_wrap">
+      <div id="chart_container"></div>
+      <div id="legend">O — H — L — C —</div>
+    </main>
+    <div id="mobile_backdrop" aria-hidden="true"></div>
   </div>
 </div>
+<script type="module" src="./demo_icons.js"></script>
 <script type="module">
 // Built from the real package distribution. The demo build copies @nucleuscharts/financial' published
 // artifacts; it does not compile or wire an engine of its own.
@@ -287,20 +394,14 @@ import { fixture_theme } from "./fixture_styles.js";
 import { marker_fixture, volume_fixture } from "./fixture_features.js";
 import { rounded_candles_pane_view } from "./fixture_custom_series.js";
 import { vert_line_canvas_primitive } from "./fixture_canvas_plugin.js";
+import { install_feature_lab } from "./feature_lab.js";
 
 const container = document.getElementById("chart_container");
 const status = document.getElementById("status");
 const controls_strip = document.getElementById("controls_strip");
 document.getElementById("control_jump").addEventListener("change", (event) => {
-  document.getElementById(event.target.value).scrollIntoView({ behavior: "smooth", block: "nearest", inline: "start" });
+  document.getElementById(event.target.value).scrollIntoView({ behavior: "smooth", block: "start" });
 });
-// A regular mouse wheel navigates the one-row training ribbon; trackpads keep their native
-// horizontal delta. The chart below never loses vertical space as control groups change.
-controls_strip.addEventListener("wheel", (event) => {
-  if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
-  event.preventDefault();
-  controls_strip.scrollLeft += event.deltaY;
-}, { passive: false });
 
 // Deterministic random-walk OHLC data, as the array-of-objects the public API accepts — the
 // library packs it into typed arrays at the boundary. Runtime fixtures pin the final timestamp so
@@ -348,6 +449,7 @@ const parity_fixture = runtime_test === null
 // backendParity also hides it: its two captures happen on opposite sides of the status-line
 // update, and a taller/wrapped toolbar would change the container height between them.
 if (runtime_test === "presentedFrame" || runtime_test === "backendParity") {
+  document.documentElement.dataset.runtimeChrome = "hidden";
   document.getElementById("bar").style.display = "none";
   document.getElementById("legend").style.display = "none";
 }
@@ -417,6 +519,12 @@ if (parity_fixture !== null) {
 window.__chart = chart; // debug/test handle
 
 const data = generate_data(parity_fixture?.bar_count ?? 1000, parity_fixture ?? {});
+const last_bar = data[data.length - 1];
+if (last_bar !== undefined) {
+  const market_price = document.getElementById("market_price");
+  market_price.textContent = last_bar.close.toFixed(2);
+  market_price.dataset.direction = last_bar.close >= last_bar.open ? "up" : "down";
+}
 // Seed the series title on a clean demo load so the title chip renders immediately (the
 // engine default "" suppresses it). Fixture/purity runs (?feature/?runtimeTest/params) keep
 // the empty title so their pixel baselines stay untouched.
@@ -458,6 +566,7 @@ const sma_series = chart.add_sma(main, 20, { color: "#ff9800", line_width: 2, vi
 // price scale (TradingView-style — no separate pane / divider), colored green/red by bar direction.
 const volume_data = volume_fixture(data);
 let vol_series = null;
+window.__feature_lab = install_feature_lab({ chart, series: main, data });
 
 // Fidelity fixtures use only the package's public handles. The demo supplies data and options;
 // all scale, layout, and rendering behavior remains inside the headless engine.

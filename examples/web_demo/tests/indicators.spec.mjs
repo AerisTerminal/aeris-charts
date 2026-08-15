@@ -25,9 +25,14 @@ function count_color(png, target, tol = 10) {
 
 /** Chart screenshot decoded to a PNG plus a row-crop counter (geometry is CSS px, shots are device px). */
 async function shot(page) {
-  const url = await page.evaluate(() => window.__chart.take_screenshot().toDataURL("image/png"));
+  const { url, chart_width } = await page.evaluate(() => ({
+    url: window.__chart.take_screenshot().toDataURL("image/png"),
+    chart_width: document.getElementById("chart_container").getBoundingClientRect().width,
+  }));
   const png = PNG.sync.read(Buffer.from(url.split(",")[1], "base64"));
-  const dsf = png.width / 1280; // viewport width
+  // The demo has a dockable inspector, so the chart bitmap no longer necessarily spans the
+  // viewport. Pane geometry is in chart-local CSS px; derive its scale from the actual chart.
+  const dsf = png.width / chart_width;
   const crop = (top_css, bottom_css) => {
     const top = Math.max(0, Math.floor(top_css * dsf));
     const bottom = Math.min(png.height, Math.ceil(bottom_css * dsf));

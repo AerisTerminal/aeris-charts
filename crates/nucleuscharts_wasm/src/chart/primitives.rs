@@ -232,6 +232,16 @@ impl ChartInner {
             self.engine.set_hovered_series(None);
             return result(None, None, None);
         };
+        if let Some((series_id, primitive_id, _)) =
+            self.engine.hit_test_user_price_alerts(x_css, y_css)
+        {
+            self.engine.set_hovered_series(Some(series_id));
+            return result(
+                Some(series_id),
+                Some(format!("user-price-alerts:{primitive_id}")),
+                Some("pointer".into()),
+            );
+        }
         // Absolute bitmap px of the whole chart, exactly like the draw context (module
         // docs): the frame build's ratios, plus the integer pane offset on x.
         let nominal_dpr = self.dpr.max(0.01);

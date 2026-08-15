@@ -492,6 +492,9 @@ fn marker_autoscale_margins_are_headless_and_can_be_disabled() {
             shape: marker_shape::CIRCLE,
             color: Color::rgb(0x21, 0x96, 0xf3),
             text: String::new(),
+            id: String::new(),
+            size: 1.0,
+            price: None,
         }],
     );
     chart.time_scale.set_width(800.0);

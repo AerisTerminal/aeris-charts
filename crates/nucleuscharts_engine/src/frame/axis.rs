@@ -548,13 +548,15 @@ impl ChartEngine {
                     attach_group: None,
                 });
             }
-            self.append_marker_labels(&mut out.labels, from, to);
+            self.append_native_vertical_line_labels(&mut out.labels, &measure);
         }
+        self.append_rectangle_drawing_axis_views(&mut out, &measure);
         self.append_price_line_labels(&mut out.labels, &measure);
         self.append_drawing_line_labels(&mut out.labels, &measure);
         self.append_last_value_label(&mut out.labels, &measure);
         if include_transient {
             self.append_crosshair_labels(&mut out.labels, &measure);
+            self.append_native_user_price_alert_crosshair_labels(&mut out.labels, &measure);
         }
         out.separators = self
             .panes
@@ -563,6 +565,296 @@ impl ChartEngine {
             .map(|p| p.top - PANE_SEPARATOR)
             .collect();
         out
+    }
+
+    fn append_rectangle_drawing_axis_views<F>(&self, out: &mut AxisFrame, measure: &F)
+    where
+        F: Fn(&str) -> f64,
+    {
+        for drawing in &self.drawings {
+            if drawing.kind == DrawingKind::Rectangle && drawing.points.len() == 2 {
+                self.append_rectangle_axis_view(drawing, &drawing.points, false, out, measure);
+            }
+        }
+        let Some(pending) = self.pending_drawing() else {
+            return;
+        };
+        if pending.drawing.kind != DrawingKind::Rectangle {
+            return;
+        }
+        let mut points = pending.drawing.points.clone();
+        if points.len() < 2 {
+            if let Some(preview) = pending.preview {
+                points.push(preview);
+            }
+        }
+        if points.len() == 2 {
+            self.append_rectangle_axis_view(&pending.drawing, &points, true, out, measure);
+        }
+    }
+
+    fn append_rectangle_axis_view<F>(
+        &self,
+        drawing: &crate::Drawing,
+        points: &[crate::DrawingPoint],
+        preview: bool,
+        out: &mut AxisFrame,
+        measure: &F,
+    ) where
+        F: Fn(&str) -> f64,
+    {
+        let Some(pane) = self.panes.get(drawing.pane_index) else {
+            return;
+        };
+        let (Some(first), Some(second)) = (
+            self.drawing_to_px_for(drawing.pane_index, drawing.price_scale, points[0]),
+            self.drawing_to_px_for(drawing.pane_index, drawing.price_scale, points[1]),
+        ) else {
+            return;
+        };
+        let stroke = Color::parse_css(&drawing.color).unwrap_or(PRIMARY);
+        let fill = if preview {
+            drawing
+                .preview_fill_color
+                .as_deref()
+                .or(drawing.fill_color.as_deref())
+        } else {
+            drawing.fill_color.as_deref()
+        }
+        .and_then(Color::parse_css)
+        .unwrap_or(Color::rgba(stroke.r(), stroke.g(), stroke.b(), 51));
+        let band_color = Color::rgba(
+            fill.r(),
+            fill.g(),
+            fill.b(),
+            u16::from(fill.a()).div_ceil(2) as u8,
+        );
+
+        if drawing.axis_bands_visible {
+            let top = first.1.min(second.1).max(pane.top);
+            let bottom = first.1.max(second.1).min(pane.top + pane.height);
+            if bottom >= top {
+                let left_visible = self.options.get().left_price_scale.visible
+                    && self.left_axis_w > 0.0
+                    && matches!(
+                        drawing.price_scale,
+                        crate::DrawingPriceScale::Left | crate::DrawingPriceScale::Overlay
+                    );
+                let right_visible = self.options.get().right_price_scale.visible
+                    && self.axis_w > 0.0
+                    && matches!(
+                        drawing.price_scale,
+                        crate::DrawingPriceScale::Right | crate::DrawingPriceScale::Overlay
+                    );
+                if left_visible {
+                    out.bands.push(AxisBand {
+                        x: self.pane_left - self.left_axis_w.min(15.0),
+                        y: top,
+                        width: self.left_axis_w.min(15.0),
+                        height: (bottom - top).max(1.0 / self.dpr),
+                        color: band_color,
+                    });
+                }
+                if right_visible {
+                    out.bands.push(AxisBand {
+                        x: self.pane_left + self.pane_w,
+                        y: top,
+                        width: self.axis_w.min(15.0),
+                        height: (bottom - top).max(1.0 / self.dpr),
+                        color: band_color,
+                    });
+                }
+            }
+            if self.time_axis_visible {
+                let left = first.0.min(second.0).max(0.0);
+                let right = first.0.max(second.0).min(self.pane_w);
+                if right >= left {
+                    out.bands.push(AxisBand {
+                        x: self.pane_left + left,
+                        y: self.pane_h,
+                        width: (right - left).max(1.0 / self.dpr),
+                        height: self.time_axis_height().min(15.0),
+                        color: band_color,
+                    });
+                }
+            }
+        }
+
+        if !drawing.show_labels {
+            return;
+        }
+        let label_background = drawing
+            .label_color
+            .as_deref()
+            .and_then(Color::parse_css)
+            .unwrap_or(stroke);
+        let label_text = drawing
+            .label_text_color
+            .as_deref()
+            .and_then(Color::parse_css)
+            .unwrap_or_else(|| self.primary_text_color());
+        let font_size = self.options.get().layout.font_size;
+        for left_side in [true, false] {
+            let visible = if left_side {
+                self.options.get().left_price_scale.visible
+                    && matches!(
+                        drawing.price_scale,
+                        crate::DrawingPriceScale::Left | crate::DrawingPriceScale::Overlay
+                    )
+            } else {
+                self.options.get().right_price_scale.visible
+                    && matches!(
+                        drawing.price_scale,
+                        crate::DrawingPriceScale::Right | crate::DrawingPriceScale::Overlay
+                    )
+            };
+            if !visible {
+                continue;
+            }
+            for (point, (_, y)) in points.iter().zip([first, second]) {
+                if y < pane.top || y > pane.top + pane.height {
+                    continue;
+                }
+                let text = format!("{:.2}", point.price);
+                let width = 1.0 + 5.0 + 5.0 + 5.0 + measure(&text);
+                let height = font_size + 5.0;
+                let (x, align, background_x) = if left_side {
+                    (
+                        self.pane_left - 10.0,
+                        AxisTextAlign::Right,
+                        self.pane_left - width,
+                    )
+                } else {
+                    (
+                        self.pane_left + self.pane_w + 10.0,
+                        AxisTextAlign::Left,
+                        self.pane_left + self.pane_w,
+                    )
+                };
+                out.labels.push(AxisLabel {
+                    text,
+                    x,
+                    y,
+                    color: label_text,
+                    align,
+                    midpoint: AxisTextMidpoint::Label,
+                    font_scale: 1.0,
+                    bold: false,
+                    background: Some((
+                        background_x,
+                        y - height / 2.0,
+                        width,
+                        height,
+                        label_background,
+                    )),
+                    background_corners: AxisLabelCorners::for_align(align),
+                    measure_extra: 0.0,
+                    attach_group: None,
+                });
+            }
+        }
+        if self.time_axis_visible {
+            const BORDER: f64 = 1.0;
+            const TICK: f64 = 5.0;
+            const PADDING: f64 = 3.0;
+            for (point, (x, _)) in points.iter().zip([first, second]) {
+                if x < 0.0 || x > self.pane_w {
+                    continue;
+                }
+                let logical = point.logical.round() as i64;
+                let Some(&time) = usize::try_from(logical)
+                    .ok()
+                    .and_then(|index| self.data.merged_times().get(index))
+                else {
+                    continue;
+                };
+                let text = format_date_pattern(time, "M/d/yyyy", &self.month_names);
+                let width = measure(&text) + 18.0;
+                let height = BORDER + TICK + PADDING + font_size + PADDING;
+                let chart_x = self.pane_left + x;
+                let box_x = (chart_x - width / 2.0).clamp(
+                    self.pane_left,
+                    (self.pane_left + self.pane_w - width).max(self.pane_left),
+                );
+                out.labels.push(AxisLabel {
+                    text,
+                    x: box_x + width / 2.0,
+                    y: self.pane_h + BORDER + TICK + PADDING + font_size / 2.0,
+                    color: label_text,
+                    align: AxisTextAlign::Center,
+                    midpoint: AxisTextMidpoint::None,
+                    font_scale: 1.0,
+                    bold: false,
+                    background: Some((box_x, self.pane_h, width, height, label_background)),
+                    background_corners: AxisLabelCorners::BOTTOM,
+                    measure_extra: 0.0,
+                    attach_group: None,
+                });
+            }
+        }
+    }
+
+    fn append_native_vertical_line_labels<F>(&self, labels: &mut Vec<AxisLabel>, measure: &F)
+    where
+        F: Fn(&str) -> f64,
+    {
+        if !self.time_axis_visible {
+            return;
+        }
+        let font_size = self.options.get().layout.font_size;
+        const BORDER: f64 = 1.0;
+        const TICK: f64 = 5.0;
+        const PADDING: f64 = 3.0;
+        for series in &self.series {
+            if !series.visible || series.removed {
+                continue;
+            }
+            for primitive in &series.native_primitives {
+                let crate::native_primitives::NativeSeriesPrimitiveKind::VerticalLine {
+                    time,
+                    options,
+                } = &primitive.kind
+                else {
+                    continue;
+                };
+                if !options.show_label {
+                    continue;
+                }
+                let Some(x) = self.time_to_coordinate(*time as f64) else {
+                    continue;
+                };
+                if x < 0.0 || x > self.pane_w {
+                    continue;
+                }
+                let width = measure(&options.label_text) + 9.0 * 2.0;
+                let height = BORDER + TICK + PADDING + font_size + PADDING;
+                let x = self.pane_left + x;
+                let box_x = (x - width / 2.0).clamp(
+                    self.pane_left,
+                    (self.pane_left + self.pane_w - width).max(self.pane_left),
+                );
+                labels.push(AxisLabel {
+                    text: options.label_text.clone(),
+                    x: box_x + width / 2.0,
+                    y: self.pane_h + BORDER + TICK + PADDING + font_size / 2.0,
+                    color: options.label_text_color,
+                    align: AxisTextAlign::Center,
+                    midpoint: AxisTextMidpoint::None,
+                    font_scale: 1.0,
+                    bold: false,
+                    background: Some((
+                        box_x,
+                        self.pane_h,
+                        width,
+                        height,
+                        options.label_background_color,
+                    )),
+                    background_corners: AxisLabelCorners::BOTTOM,
+                    measure_extra: 0.0,
+                    attach_group: None,
+                });
+            }
+        }
     }
 
     /// reference-compatible right-axis width negotiated from engine-formatted labels and host glyph
@@ -671,88 +963,6 @@ impl ChartEngine {
             .ceil()
             .max(minimum_width);
         width + (width as i64 % 2) as f64
-    }
-
-    pub(super) fn append_marker_labels(&self, labels: &mut Vec<AxisLabel>, from: i64, to: i64) {
-        let times = self.data.merged_times();
-        for (pi, pane) in self.panes.iter().enumerate() {
-            for s in &self.series {
-                if !s.visible || s.pane_index != pi {
-                    continue;
-                }
-                let scale = pane_scale(pane, series_scale_target(s));
-                let Some(base_value) = self.series_base_value(s.id, from) else {
-                    continue;
-                };
-                if scale.is_empty() {
-                    continue;
-                }
-                let plot = self.data.plot(s.id);
-                for marker in &s.markers {
-                    if marker.text.is_empty() {
-                        continue;
-                    }
-                    let Ok(pos) = times.binary_search(&marker.time) else {
-                        continue;
-                    };
-                    let index = pos as i64;
-                    if index < from || index > to {
-                        continue;
-                    }
-                    let Some(row) = plot.search(index, MismatchDirection::None) else {
-                        continue;
-                    };
-                    if plot.is_whitespace_row(row) {
-                        continue;
-                    }
-                    let high = plot.value_at(row, PlotValueIndex::High);
-                    let low = plot.value_at(row, PlotValueIndex::Low);
-                    let close = plot.value_at(row, PlotValueIndex::Close);
-                    let x = self.pane_left + self.time_scale.index_to_coordinate(index);
-                    let envelope = marker_envelope_size(self.time_scale.bar_spacing());
-                    let half_envelope = envelope / 2.0;
-                    let margin = marker_margin(self.time_scale.bar_spacing());
-                    let text_height = self.options.get().layout.font_size;
-                    let y = match marker.position {
-                        crate::marker_pos::BELOW => {
-                            scale.price_to_coordinate(low, base_value)
-                                + envelope
-                                + margin * 2.0
-                                + text_height * 0.6
-                        }
-                        crate::marker_pos::ABOVE => {
-                            scale.price_to_coordinate(high, base_value)
-                                - envelope
-                                - margin
-                                - text_height * 0.6
-                        }
-                        _ => {
-                            scale.price_to_coordinate(close, base_value)
-                                + half_envelope
-                                + margin
-                                + text_height * 0.6
-                        }
-                    };
-                    if y >= pane.top && y <= pane.top + pane.height && x >= 0.0 && x <= self.pane_w
-                    {
-                        labels.push(AxisLabel {
-                            text: marker.text.clone(),
-                            x,
-                            y,
-                            color: marker.color,
-                            align: AxisTextAlign::Center,
-                            midpoint: AxisTextMidpoint::None,
-                            font_scale: 1.0,
-                            bold: false,
-                            background: None,
-                            background_corners: AxisLabelCorners::NONE,
-                            measure_extra: 0.0,
-                            attach_group: None,
-                        });
-                    }
-                }
-            }
-        }
     }
 
     pub(super) fn append_price_line_labels<F>(&self, labels: &mut Vec<AxisLabel>, measure: &F)
@@ -1481,6 +1691,79 @@ impl ChartEngine {
                     attach_group: None,
                 });
             }
+        }
+    }
+
+    fn append_native_user_price_alert_crosshair_labels<F>(
+        &self,
+        labels: &mut Vec<AxisLabel>,
+        measure: &F,
+    ) where
+        F: Fn(&str) -> f64,
+    {
+        let Some((_, y)) = self.clamped_crosshair() else {
+            return;
+        };
+        let Some(pane_index) = self.pane_at_y(y) else {
+            return;
+        };
+        for series in self
+            .series
+            .iter()
+            .filter(|series| series.visible && series.pane_index == pane_index)
+        {
+            let Some(state) = series.native_primitives.iter().find_map(|primitive| {
+                let crate::native_primitives::NativeSeriesPrimitiveKind::UserPriceAlerts(state) =
+                    &primitive.kind
+                else {
+                    return None;
+                };
+                Some(state)
+            }) else {
+                continue;
+            };
+            let Some(price) = self.series_coordinate_to_price(series.id, y) else {
+                continue;
+            };
+            let Some(text) = self.series_format_price(series.id, price) else {
+                continue;
+            };
+            let width = measure(&text) + 20.0;
+            let height = 21.0;
+            let left = series_scale_target(series) == PriceScaleTarget::Left;
+            let (x, align, background_x) = if left {
+                (
+                    self.pane_left - 10.0,
+                    AxisTextAlign::Right,
+                    self.pane_left - width,
+                )
+            } else {
+                (
+                    self.pane_left + self.pane_w + 10.0,
+                    AxisTextAlign::Left,
+                    self.pane_left + self.pane_w,
+                )
+            };
+            labels.push(AxisLabel {
+                text,
+                x,
+                y,
+                color: Color::rgb(255, 255, 255),
+                align,
+                midpoint: AxisTextMidpoint::Label,
+                font_scale: 1.0,
+                bold: false,
+                background: Some((
+                    background_x,
+                    y - height * 0.5,
+                    width,
+                    height,
+                    state.options.color,
+                )),
+                background_corners: AxisLabelCorners::for_align(align),
+                measure_extra: 0.0,
+                attach_group: None,
+            });
         }
     }
 }

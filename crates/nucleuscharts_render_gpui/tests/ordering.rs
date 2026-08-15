@@ -51,6 +51,7 @@ fn kinds(plan: &ScenePlan) -> Vec<&'static str> {
             SceneOp::Quad { .. } => "quad",
             SceneOp::Mesh { .. } => "mesh",
             SceneOp::Text(_) => "text",
+            SceneOp::Image { .. } => "image",
         })
         .collect()
 }

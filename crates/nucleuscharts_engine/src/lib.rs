@@ -7,11 +7,13 @@
 
 mod axis_primitives;
 mod drawings;
+mod feature_series;
 mod frame;
 mod hit_test;
 mod host_layout;
 mod indicators;
 mod interaction;
+mod native_primitives;
 mod persistence;
 mod price_line_api;
 mod price_scale_api;
@@ -29,10 +31,14 @@ pub(crate) use drawings::{
 };
 pub use drawings::{
     Drawing, DrawingDragPart, DrawingHit, DrawingId, DrawingKind, DrawingModifiers, DrawingPoint,
-    DrawingWorkStats, TextMeasureFn, DRAWING_DEFAULT_COLOR,
+    DrawingPriceScale, DrawingWorkStats, TextMeasureFn, DRAWING_DEFAULT_COLOR,
+};
+pub use feature_series::{
+    BrushRange, BrushStyle, FeatureDataPoint, FeatureSeriesKind, FeatureSeriesOptionsPatch,
+    FeatureValue, HeatmapCell, StackedAreaColor,
 };
 pub use frame::{
-    AxisFrame, AxisLabel, AxisLabelCorners, AxisTextAlign, AxisTextMidpoint, ChartFrame,
+    AxisBand, AxisFrame, AxisLabel, AxisLabelCorners, AxisTextAlign, AxisTextMidpoint, ChartFrame,
     FrameBuildStats, FramePane, FramePaneSegments, FrameSeriesSegment,
 };
 pub use hit_test::{SeriesHit, SeriesHitKind};
@@ -41,6 +47,16 @@ pub(crate) use indicators::{IndicatorBinding, IndicatorChange};
 pub use interaction::{
     pinch_zoom_scale, wheel_zoom_scale, ScrollAnimation, KINETIC_DUMPING, KINETIC_MAX_SPEED,
     KINETIC_MIN_MOVE, KINETIC_MIN_SPEED, PINCH_ZOOM_INTENSITY, WHEEL_SCROLL_PX_PER_DELTA,
+};
+pub use native_primitives::{
+    AccessibilityFocusOptions, AlertCrossingDirection, AnchoredTextHorizontalAlign,
+    AnchoredTextOptions, AnchoredTextVerticalAlign, BandsIndicatorOptions, DeltaTooltipActiveRange,
+    DeltaTooltipOptions, DeltaTooltipPoint, ExpiringPriceAlert, ExpiringPriceAlertsOptions,
+    ImageWatermarkOptions, NativePrimitiveId, OverlayPriceScaleOptions, OverlayPriceScaleSide,
+    SessionHighlightingData, SessionHighlightingOptions, TextWatermarkLine, TextWatermarkOptions,
+    TooltipOptions, TooltipSnapshot, TrendLineOptions, UserPriceAlert, UserPriceAlertsHit,
+    UserPriceAlertsOptions, UserPriceLinesButtonOptions, VerticalLineOptions, VolumeProfileData,
+    VolumeProfileOptions, VolumeProfilePoint, MAX_RASTER_IMAGE_DIMENSION,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use persistence::PersistenceRestoreProfile;
@@ -89,6 +105,8 @@ pub struct EngineMemoryUsage {
     pub indicator_transfer_capacity_bytes: usize,
     pub retained_frame_capacity_bytes: usize,
     pub drawing_runtime_capacity_bytes: usize,
+    pub feature_series_capacity_bytes: usize,
+    pub native_primitive_capacity_bytes: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -107,6 +125,8 @@ impl EngineMemoryUsage {
             + self.indicator_runtime_bytes
             + self.retained_frame_capacity_bytes
             + self.drawing_runtime_capacity_bytes
+            + self.feature_series_capacity_bytes
+            + self.native_primitive_capacity_bytes
     }
 }
 
@@ -262,6 +282,9 @@ pub enum SeriesKind {
     /// data-layer rows carry times only (whitespace-style); the host renders each item through
     /// the plugin's pane view and records the frame values the built-in chrome needs.
     Custom,
+    /// An engine-owned advanced series. Unlike [`Self::Custom`], its typed data, scaling,
+    /// geometry, and backend-neutral frame primitives never execute host renderer callbacks.
+    Feature,
 }
 
 /// One custom series' last-value record (Phase C-c): the plugin's current value for the item
@@ -355,6 +378,7 @@ impl SeriesKind {
             4 => Self::Histogram,
             5 => Self::Baseline,
             6 => Self::Custom,
+            7 => Self::Feature,
             _ => Self::Candlestick,
         }
     }
@@ -368,6 +392,7 @@ impl SeriesKind {
             Self::Histogram => 4,
             Self::Baseline => 5,
             Self::Custom => 6,
+            Self::Feature => 7,
         }
     }
 
@@ -406,6 +431,15 @@ pub mod marker_pos {
     pub const ABOVE: u8 = 0;
     pub const BELOW: u8 = 1;
     pub const IN_BAR: u8 = 2;
+    pub const AT_PRICE_TOP: u8 = 3;
+    pub const AT_PRICE_BOTTOM: u8 = 4;
+    pub const AT_PRICE_MIDDLE: u8 = 5;
+}
+
+pub mod marker_z_order {
+    pub const NORMAL: u8 = 0;
+    pub const ABOVE_SERIES: u8 = 1;
+    pub const TOP: u8 = 2;
 }
 
 pub mod marker_shape {
@@ -422,6 +456,9 @@ pub struct Marker {
     pub shape: u8,
     pub color: Color,
     pub text: String,
+    pub id: String,
+    pub size: f64,
+    pub price: Option<f64>,
 }
 
 #[derive(Clone)]
@@ -574,6 +611,7 @@ pub struct SeriesEntry {
     pub price_lines: Vec<PriceLine>,
     pub markers: Vec<Marker>,
     pub markers_auto_scale: bool,
+    pub markers_z_order: u8,
     /// Tombstone flag (reference `removeSeries`). The backing slot may later hold another opaque ID.
     /// and this vector, so a removed series keeps its slot (data emptied, hidden) rather than being
     /// compacted; every other series keeps its id. Removed slots are inert in every draw/scale path
@@ -583,6 +621,10 @@ pub struct SeriesEntry {
     /// anchor, the last-value label, and the built-in last-price line). Refreshed per frame by
     /// the host before any layout/frame pass consumes them; unused by other kinds.
     pub custom_frame: CustomSeriesFrameValues,
+    /// Engine-owned advanced-series state. Present only when `kind == SeriesKind::Feature`.
+    pub(crate) feature: Option<feature_series::FeatureSeriesState>,
+    /// First-class financial primitives whose state and geometry live in the shared engine.
+    pub(crate) native_primitives: Vec<native_primitives::NativeSeriesPrimitive>,
     /// Retention ceiling: the series holds at most this many rows, oldest evicted first.
     /// `None` (the default) is unbounded — a series grows for as long as the host appends to it.
     /// See [`ChartEngine::set_series_max_points`] for the eviction schedule.
@@ -654,8 +696,11 @@ impl SeriesEntry {
             price_lines: Vec::new(),
             markers: Vec::new(),
             markers_auto_scale: true,
+            markers_z_order: marker_z_order::NORMAL,
             removed: false,
             custom_frame: CustomSeriesFrameValues::default(),
+            feature: None,
+            native_primitives: Vec::new(),
             max_points: None,
         }
     }
@@ -864,6 +909,8 @@ pub struct ChartEngine {
     pub crosshair_ohlc_magnet: bool,
     pub animation_time: f64,
     pub next_price_line_id: u32,
+    next_native_primitive_id: NativePrimitiveId,
+    native_pane_primitives: Vec<native_primitives::NativePanePrimitive>,
     /// reference `timeScale.timeVisible` — label semantics only: whether axis/crosshair time labels
     /// include the time of day. Strip reservation is [`Self::time_axis_visible`].
     pub time_visible: bool,
@@ -993,6 +1040,8 @@ impl ChartEngine {
             crosshair_ohlc_magnet: false,
             animation_time: 0.0,
             next_price_line_id: 1,
+            next_native_primitive_id: 1,
+            native_pane_primitives: Vec::new(),
             time_visible: true,
             time_axis_visible: true,
             time_ticks_visible: false,
@@ -1087,6 +1136,8 @@ impl ChartEngine {
             indicator_transfer_capacity_bytes,
             retained_frame_capacity_bytes: self.retained_frame.capacity_bytes(),
             drawing_runtime_capacity_bytes: self.drawing_runtime.borrow().capacity_bytes(),
+            feature_series_capacity_bytes: self.feature_series_capacity_bytes(),
+            native_primitive_capacity_bytes: self.native_primitive_capacity_bytes(),
         }
     }
 
@@ -1180,6 +1231,9 @@ impl ChartEngine {
     pub fn convert_series_kind(&mut self, id: SeriesId, kind: SeriesKind) {
         if let Some(s) = self.series.iter_mut().find(|s| s.id == id && !s.removed) {
             s.kind = kind;
+            if kind != SeriesKind::Feature {
+                s.feature = None;
+            }
             self.data
                 .set_rows_count_as_data(id, kind == SeriesKind::Custom);
             self.invalidate_frame_scene();
@@ -1238,6 +1292,8 @@ impl ChartEngine {
                 entry.visible = false;
                 entry.price_lines.clear();
                 entry.markers.clear();
+                entry.feature = None;
+                entry.native_primitives.clear();
             }
             // Release the data slot; its opaque identity is invalid forever and the storage may
             // be reused by a different identity.
@@ -1260,6 +1316,7 @@ impl ChartEngine {
         {
             self.selection = None;
         }
+        self.sync_native_time_points();
         self.sync_time_points();
         // reference chart-model.ts `removeSeries`: prune the pane the series left when it is empty
         // and not preserved (a pane-less index — after an explicit `remove_pane` — prunes
@@ -1336,7 +1393,10 @@ impl ChartEngine {
         if self.panes.len() <= 1 || index >= self.panes.len() {
             return false;
         }
+        let removed_id = self.panes[index].stable_id();
         self.panes.remove(index);
+        self.native_pane_primitives
+            .retain(|primitive| Some(primitive.pane_id) != removed_id);
         for s in &mut self.series {
             if s.pane_index == index {
                 s.pane_index = PANELESS;
@@ -1633,6 +1693,7 @@ impl ChartEngine {
         }
         let previous_generation = self.data.series_generation(id).unwrap_or(0);
         let len = self.data.pop(id, count)?;
+        self.truncate_feature_rows(id, len);
         self.sync_time_points();
         self.update_indicators_after_change(
             id,
@@ -1646,17 +1707,32 @@ impl ChartEngine {
     }
 
     pub fn set_series_markers(&mut self, id: SeriesId, markers: Vec<Marker>) {
-        self.invalidate_frame_scene();
+        self.invalidate_frame_series(id);
         if let Some(series) = self.series_entry_mut(id) {
             series.markers = markers;
         }
     }
 
     pub fn set_series_markers_auto_scale(&mut self, id: SeriesId, enabled: bool) {
-        self.invalidate_frame_scene();
+        self.invalidate_frame_series(id);
         if let Some(series) = self.series_entry_mut(id) {
             series.markers_auto_scale = enabled;
         }
+    }
+
+    pub fn set_series_markers_z_order(&mut self, id: SeriesId, z_order: u8) -> bool {
+        if !matches!(
+            z_order,
+            marker_z_order::NORMAL | marker_z_order::ABOVE_SERIES | marker_z_order::TOP
+        ) {
+            return false;
+        }
+        self.invalidate_frame_series(id);
+        let Some(series) = self.series_entry_mut(id) else {
+            return false;
+        };
+        series.markers_z_order = z_order;
+        true
     }
 
     /// Apply one streaming OHLC update after validating its time and values.
@@ -2009,7 +2085,9 @@ impl ChartEngine {
         // Trim past the ceiling by the hysteresis margin so the next `margin` appends are free.
         // A cap of 0 means "hold nothing"; guard the divisor rather than special-casing it.
         let margin = (max_points / CAP_TRIM_MARGIN_DIVISOR).min(max_points);
-        self.data.trim_front(id, max_points - margin);
+        let keep = max_points - margin;
+        self.data.trim_front(id, keep);
+        self.trim_feature_rows_front(id, keep);
         true
     }
 

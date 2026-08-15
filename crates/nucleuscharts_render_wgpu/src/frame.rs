@@ -32,6 +32,8 @@ pub enum RunPipeline {
     Quad,
     /// Textured instanced quads (label atlas); `first`/`count` are instances.
     TexQuad,
+    /// Raster-image atlas.
+    ImageQuad,
 }
 
 /// One draw call: `count` elements starting at `first` in the pipeline's group buffer.
@@ -54,6 +56,9 @@ pub struct DrawGroup {
     /// [`prims_to_group`]; a buffer populated without any [`RunPipeline::TexQuad`] run keeps
     /// the previous whole-buffer, drawn-last behavior.
     pub tex_quads: Vec<TexQuadInstance>,
+    /// Raster-image textured quads, kept separate from text so a large watermark cannot evict
+    /// labels or force the whole frame onto Canvas2D.
+    pub image_quads: Vec<TexQuadInstance>,
     /// Run-length draw schedule over `tris`/`quads`/`tex_quads`, in Canvas2D paint order.
     pub runs: Vec<DrawRun>,
     /// Semantic content revision. The host increments this only when rebuilding this group;
@@ -72,6 +77,7 @@ impl DrawGroup {
         self.tris.clear();
         self.quads.clear();
         self.tex_quads.clear();
+        self.image_quads.clear();
         self.runs.clear();
         self.revision = self.revision.wrapping_add(1);
     }
@@ -80,6 +86,7 @@ impl DrawGroup {
         self.tris.clear();
         self.quads.clear();
         self.tex_quads.clear();
+        self.image_quads.clear();
         self.runs.clear();
         self.key = key;
         self.source_revision = revision;
@@ -120,6 +127,7 @@ pub fn prims_to_group(
     points: &[[f32; 2]],
     group: &mut DrawGroup,
     resolve_text: &mut dyn FnMut(&Prim) -> Option<TexQuadInstance>,
+    resolve_image: &mut dyn FnMut(&Prim) -> Option<TexQuadInstance>,
 ) {
     for prim in prims {
         match prim {
@@ -141,6 +149,13 @@ pub fn prims_to_group(
                     let first = group.tex_quads.len() as u32;
                     group.tex_quads.push(instance);
                     push_run(&mut group.runs, RunPipeline::TexQuad, first, 1);
+                }
+            }
+            Prim::Image { .. } => {
+                if let Some(instance) = resolve_image(prim) {
+                    let first = group.image_quads.len() as u32;
+                    group.image_quads.push(instance);
+                    push_run(&mut group.runs, RunPipeline::ImageQuad, first, 1);
                 }
             }
             _ => {
@@ -272,6 +287,7 @@ struct GroupBuffers {
     tris: ReusableBuffer,
     quads: ReusableBuffer,
     tex: ReusableBuffer,
+    image: ReusableBuffer,
 }
 
 /// Per-chart retained vertex resources. Capacities grow geometrically and remain at their
@@ -306,6 +322,7 @@ pub fn render_frame(
     clear_color: wgpu::Color,
     quad: &QuadRenderer,
     tex: &TexQuadRenderer,
+    image: &TexQuadRenderer,
     tri: &TriRenderer,
     groups: &[DrawGroup],
     resources: &mut FrameResources,
@@ -315,6 +332,7 @@ pub fn render_frame(
     let mut draw_calls = 0u32;
     quad.write_globals(queue, width_px, height_px);
     tex.write_globals(queue, width_px, height_px);
+    image.write_globals(queue, width_px, height_px);
     tri.write_globals(queue, width_px, height_px);
 
     resources
@@ -327,6 +345,7 @@ pub fn render_frame(
             buffers.tris.uploaded_revision = None;
             buffers.quads.uploaded_revision = None;
             buffers.tex.uploaded_revision = None;
+            buffers.image.uploaded_revision = None;
         }
         buffers.tris.prepare(
             device,
@@ -350,6 +369,14 @@ pub fn render_frame(
             bytemuck::cast_slice(&group.tex_quads),
             group.revision,
             "tex",
+            &mut resources.stats,
+        );
+        buffers.image.prepare(
+            device,
+            queue,
+            bytemuck::cast_slice(&group.image_quads),
+            group.revision,
+            "images",
             &mut resources.stats,
         );
     }
@@ -406,6 +433,12 @@ pub fn render_frame(
                     RunPipeline::TexQuad => {
                         if let Some(b) = &bufs.tex.buffer {
                             tex.draw(&mut pass, b, run.first, run.count);
+                            draw_calls += 1;
+                        }
+                    }
+                    RunPipeline::ImageQuad => {
+                        if let Some(b) = &bufs.image.buffer {
+                            image.draw(&mut pass, b, run.first, run.count);
                             draw_calls += 1;
                         }
                     }

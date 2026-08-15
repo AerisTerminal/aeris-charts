@@ -14,9 +14,10 @@ import type { custom_series_item, custom_series_pane_view } from "./custom_serie
 import { nucleuscharts_error } from "./errors.js";
 import type { nucleuscharts_error_code } from "./errors.js";
 import type {
-  bars_info, chart_api, chart_options, chart_state_v1, data_changed_handler, dbl_click_handler,
-  deep_partial, drawing_api, drawing_info, drawing_kind, drawing_options, drawing_point,
-  frame_stats,
+  any_series_options, bars_info, chart_api, chart_options, chart_state_v1, data_changed_handler, dbl_click_handler,
+  deep_partial, drawing_api, drawing_created_handler, drawing_info, drawing_kind, drawing_options,
+  drawing_point, drawing_tool_change_handler,
+  feature_series_kind, frame_stats,
   ingestion_diagnostics,
   handle_scale_options, handle_scroll_options, indicator_info, kinetic_scroll_options,
   last_value_data, localization_options, logical_range,
@@ -26,7 +27,10 @@ import type {
   series_marker, series_marker_options, series_options, single_value_data, size_change_handler, time, time_range,
   time_scale_api, time_scale_options, tracking_mode_options, visible_logical_range_handler, visible_time_range_handler,
 } from "./types.js";
-import { DRAWING_KIND_TO_U8, KIND_TO_U8, LINE_STYLE_TO_U8, LINE_TYPE_TO_U8 } from "./types.js";
+import {
+  DRAWING_KIND_TO_U8, FEATURE_KIND_TO_U8, KIND_TO_U8, LINE_STYLE_TO_U8, LINE_TYPE_TO_U8,
+  is_feature_series_kind,
+} from "./types.js";
 import { default_theme_name, theme_palette } from "./theme.js";
 
 // ---------------------------------------------------------------------------------------------
@@ -136,6 +140,20 @@ const PRICE_SCALE_JSON_OPTION_KEYS = [
 
 /** Engine kind ordinal → public kind name (index-aligned with `KIND_TO_U8`). */
 const KIND_NAMES = ["candlestick", "bar", "line", "area", "histogram", "baseline", "custom"] as const;
+const FEATURE_KIND_NAMES = [
+  "brushable_area",
+  "dual_range_histogram",
+  "grouped_bars",
+  "heatmap",
+  "hlc_area",
+  "pretty_histogram",
+  "lollipop",
+  "rounded_candles",
+  "background_shade",
+  "stacked_area",
+  "stacked_bars",
+  "whisker_box",
+] as const satisfies readonly feature_series_kind[];
 
 /**
  * Slot layout of the `frame_stats_into` f64 buffer. Must match `crate::telemetry::slot` in
@@ -205,15 +223,15 @@ function pack(data: readonly series_data[]): {
     times[i] = time_to_utc_seconds(d.time);
     if ("value" in d) {
       open[i] = high[i] = low[i] = close[i] = d.value;
-      body_colors = pack_color_channel(body_colors, n, i, d.color);
+      body_colors = pack_color_channel(body_colors, n, i, "color" in d ? d.color : undefined);
     } else if ("open" in d) {
       open[i] = d.open;
       high[i] = d.high;
       low[i] = d.low;
       close[i] = d.close;
-      body_colors = pack_color_channel(body_colors, n, i, d.color);
-      wick_colors = pack_color_channel(wick_colors, n, i, d.wick_color);
-      border_colors = pack_color_channel(border_colors, n, i, d.border_color);
+      body_colors = pack_color_channel(body_colors, n, i, "color" in d ? d.color : undefined);
+      wick_colors = pack_color_channel(wick_colors, n, i, "wick_color" in d ? d.wick_color : undefined);
+      border_colors = pack_color_channel(border_colors, n, i, "border_color" in d ? d.border_color : undefined);
     } else {
       // Whitespace (reference `WhitespaceData`): an explicit empty slot, packed all-NaN. The engine
       // keeps the row as whitespace instead of dropping it.
@@ -422,9 +440,9 @@ class series_impl implements series_api {
     const c = "value" in point ? point.value : "close" in point ? point.close : NaN;
     // undefined = no custom color; on a replace of the last bar this also clears a previously
     // set custom color for that channel. Whitespace points carry no color channels.
-    const body = "value" in point || "open" in point ? point_color_to_u32(point.color) : undefined;
-    const wick = "open" in point ? point_color_to_u32(point.wick_color) : undefined;
-    const border = "open" in point ? point_color_to_u32(point.border_color) : undefined;
+    const body = "color" in point ? point_color_to_u32(point.color) : undefined;
+    const wick = "wick_color" in point ? point_color_to_u32(point.wick_color) : undefined;
+    const border = "border_color" in point ? point_color_to_u32(point.border_color) : undefined;
     // Series-scoped streaming: append a new time point or replace the last on this series.
     const time = time_to_utc_seconds(point.time);
     this.record_single_ingestion(time, [o, h, l, c]);
@@ -442,7 +460,7 @@ class series_impl implements series_api {
     return this.last_ingestion;
   }
 
-  private record_ingestion(json: string | undefined): void {
+  protected record_ingestion(json: string | undefined): void {
     this.last_ingestion = json === undefined ? null : JSON.parse(json) as ingestion_diagnostics;
   }
 
@@ -493,7 +511,7 @@ class series_impl implements series_api {
     return (price: number) => wasm.series_format_price(id, price);
   }
 
-  apply_options(options: Partial<series_options>): void {
+  apply_options(options: Partial<any_series_options>): void {
     this.assert_live();
     if (options.max_points !== undefined) {
       // 0 (and anything below 1) clears the cap back to unbounded, matching the option's docs.
@@ -603,17 +621,17 @@ class series_impl implements series_api {
     this.chart.repaint();
   }
 
-  options(): series_options {
+  options(): any_series_options {
     this.assert_live();
     return JSON.parse(this.chart.wasm.series_options_json(this.id)) as series_options;
   }
 
   set_type(kind: series_kind): void {
     this.assert_live();
-    if (kind === "custom") {
+    if (kind === "custom" || is_feature_series_kind(kind)) {
       throw new nucleuscharts_error(
         "unsupported_operation",
-        "set_type() cannot convert a series to 'custom'; use chart.add_custom_series",
+        "set_type() only converts built-in series; remove and re-add custom or advanced series",
       );
     }
     if (this.id === 0) {
@@ -679,10 +697,18 @@ class series_impl implements series_api {
     if (options?.auto_scale !== undefined) {
       this.chart.wasm.set_series_markers_auto_scale(this.id, options.auto_scale);
     }
+    if (options?.z_order !== undefined) {
+      const z_order = options.z_order === "aboveSeries" ? 1 : options.z_order === "top" ? 2 : 0;
+      if (!this.chart.wasm.set_series_markers_z_order(this.id, z_order)) {
+        throw new Error("Nucleus rejected the series-marker z-order");
+      }
+    }
     // Normalize marker times to UTC seconds so business-day/string forms match their data points
     // (the engine's marker JSON expects a numeric time).
     const normalized = markers.map((mk) => ({ ...mk, time: time_to_utc_seconds(mk.time) }));
-    this.chart.wasm.set_series_markers(this.id, JSON.stringify(normalized));
+    if (!this.chart.wasm.set_series_markers(this.id, JSON.stringify(normalized))) {
+      throw new Error("Nucleus rejected invalid series markers");
+    }
     this.chart.repaint();
   }
 
@@ -690,6 +716,10 @@ class series_impl implements series_api {
     const pane = undef_to_null(this.chart.wasm.series_pane_index(this.id)) ?? 0;
     const target = undef_to_null(this.chart.wasm.series_price_scale_id(this.id)) ?? 0;
     return new price_scale_impl(this.chart, pane, target);
+  }
+  pane_index(): number {
+    this.assert_live();
+    return undef_to_null(this.chart.wasm.series_pane_index(this.id)) ?? 0;
   }
   price_to_coordinate(price: number): number | null {
     return undef_to_null(this.chart.wasm.series_price_to_coordinate(this.id, price));
@@ -786,6 +816,616 @@ class series_impl implements series_api {
     this.chart.repaint();
     return new series_primitive_handle_impl(this.chart, id);
   }
+
+  /** Package-internal boundary for the first-class Rust primitive helpers. */
+  native_add_partial_price_line(): number {
+    this.assert_live();
+    return this.chart.wasm.add_native_partial_price_line(this.id);
+  }
+  native_add_image_watermark(
+    width: number,
+    height: number,
+    pixels: Uint8Array,
+    options_json: string,
+  ): number {
+    this.assert_live();
+    return this.chart.wasm.add_native_image_watermark(
+      this.id,
+      width,
+      height,
+      pixels,
+      options_json,
+    );
+  }
+  native_add_anchored_text(options_json: string): number {
+    this.assert_live();
+    return this.chart.wasm.add_native_anchored_text(this.id, options_json);
+  }
+  native_set_anchored_text_options(id: number, options_json: string): boolean {
+    this.assert_live();
+    const changed = this.chart.wasm.set_native_anchored_text_options(id, options_json);
+    if (changed) this.chart.repaint();
+    return changed;
+  }
+  native_add_bands_indicator(options_json: string): number {
+    this.assert_live();
+    return this.chart.wasm.add_native_bands_indicator(this.id, options_json);
+  }
+  native_set_bands_indicator_options(primitive_id: number, options_json: string): boolean {
+    this.assert_live();
+    const changed = this.chart.wasm.set_native_bands_indicator_options(primitive_id, options_json);
+    if (changed) this.chart.repaint();
+    return changed;
+  }
+  native_add_overlay_price_scale(options_json: string): number {
+    this.assert_live();
+    return this.chart.wasm.add_native_overlay_price_scale(this.id, options_json);
+  }
+  native_set_overlay_price_scale_options(primitive_id: number, options_json: string): boolean {
+    this.assert_live();
+    const changed = this.chart.wasm.set_native_overlay_price_scale_options(primitive_id, options_json);
+    if (changed) this.chart.repaint();
+    return changed;
+  }
+  native_add_accessibility_focus(options_json: string): number {
+    this.assert_live();
+    return this.chart.wasm.add_native_accessibility_focus(this.id, options_json);
+  }
+  native_set_accessibility_focus(primitive_id: number, time: number | null, options_json: string): boolean {
+    this.assert_live();
+    const changed = this.chart.wasm.set_native_accessibility_focus(
+      primitive_id,
+      time ?? Number.NaN,
+      options_json,
+    );
+    if (changed) this.chart.repaint();
+    return changed;
+  }
+  native_add_session_highlighting(options_json: string): number {
+    this.assert_live();
+    return this.chart.wasm.add_native_session_highlighting(this.id, options_json);
+  }
+  native_set_session_highlighting_data(primitive_id: number, highlights_json: string): boolean {
+    this.assert_live();
+    const changed = this.chart.wasm.set_native_session_highlighting_data(primitive_id, highlights_json);
+    if (changed) this.chart.repaint();
+    return changed;
+  }
+  native_add_crosshair_highlight(color: string): number {
+    this.assert_live();
+    return this.chart.wasm.add_native_crosshair_highlight(this.id, color);
+  }
+  native_add_vertical_line(time: number, options_json: string): number {
+    this.assert_live();
+    return this.chart.wasm.add_native_vertical_line(this.id, time, options_json);
+  }
+  native_add_user_price_lines_button(options_json: string): number {
+    this.assert_live();
+    return this.chart.wasm.add_native_user_price_lines_button(this.id, options_json);
+  }
+  native_add_user_price_alerts(options_json: string): number {
+    this.assert_live();
+    return this.chart.wasm.add_native_user_price_alerts(this.id, options_json);
+  }
+  native_add_delta_tooltip(options_json: string): number {
+    this.assert_live();
+    return this.chart.wasm.add_native_delta_tooltip(this.id, options_json);
+  }
+  native_add_tooltip(options_json: string): number {
+    this.assert_live();
+    return this.chart.wasm.add_native_tooltip(this.id, options_json);
+  }
+  native_set_tooltip_options(primitive_id: number, options_json: string): boolean {
+    this.assert_live();
+    const accepted = this.chart.wasm.set_native_tooltip_options(primitive_id, options_json);
+    if (accepted) this.chart.repaint();
+    return accepted;
+  }
+  native_tooltip_snapshot_json(primitive_id: number): string {
+    this.assert_live();
+    return this.chart.wasm.native_tooltip_snapshot_json(primitive_id);
+  }
+  native_delta_tooltip_active_range_json(primitive_id: number): string {
+    this.assert_live();
+    return this.chart.wasm.native_delta_tooltip_active_range_json(primitive_id);
+  }
+  native_add_user_price_alert(primitive_id: number, price: number): number {
+    this.assert_live();
+    const id = this.chart.wasm.add_native_user_price_alert(primitive_id, price);
+    if (id !== 0) this.chart.repaint();
+    return id;
+  }
+  native_remove_user_price_alert(primitive_id: number, alert_id: number): boolean {
+    this.assert_live();
+    const removed = this.chart.wasm.remove_native_user_price_alert(primitive_id, alert_id);
+    if (removed) this.chart.repaint();
+    return removed;
+  }
+  native_user_price_alerts_json(primitive_id: number): string {
+    this.assert_live();
+    return this.chart.wasm.native_user_price_alerts_json(primitive_id);
+  }
+  native_add_trend_line(
+    first_time: number,
+    first_price: number,
+    second_time: number,
+    second_price: number,
+    options_json: string,
+  ): number {
+    this.assert_live();
+    return this.chart.wasm.add_native_trend_line(
+      this.id,
+      first_time,
+      first_price,
+      second_time,
+      second_price,
+      options_json,
+    );
+  }
+  native_add_volume_profile(data_json: string, options_json: string): number {
+    this.assert_live();
+    return this.chart.wasm.add_native_volume_profile(this.id, data_json, options_json);
+  }
+  native_set_volume_profile_data(id: number, data_json: string): boolean {
+    this.assert_live();
+    const changed = this.chart.wasm.set_native_volume_profile_data(id, data_json);
+    if (changed) this.chart.repaint();
+    return changed;
+  }
+  native_add_expiring_price_alerts(options_json: string): number {
+    this.assert_live();
+    return this.chart.wasm.add_native_expiring_price_alerts(this.id, options_json);
+  }
+  native_add_expiring_price_alert(
+    primitive_id: number,
+    price: number,
+    start: number,
+    end: number,
+    title: string,
+    crossing_direction: "up" | "down",
+  ): number {
+    this.assert_live();
+    const id = this.chart.wasm.add_native_expiring_price_alert(
+      primitive_id,
+      price,
+      start,
+      end,
+      title,
+      crossing_direction,
+    );
+    if (id !== 0) this.chart.repaint();
+    return id;
+  }
+  native_remove_expiring_price_alert(primitive_id: number, alert_id: number): boolean {
+    this.assert_live();
+    const removed = this.chart.wasm.remove_native_expiring_price_alert(primitive_id, alert_id);
+    if (removed) this.chart.repaint();
+    return removed;
+  }
+  native_refresh_expiring_price_alerts(
+    primitive_id: number,
+    time: number,
+    value: number,
+    now_ms: number,
+  ): number {
+    this.assert_live();
+    const delay = this.chart.wasm.refresh_native_expiring_price_alerts(
+      primitive_id,
+      time,
+      value,
+      now_ms,
+    );
+    this.chart.repaint();
+    return delay;
+  }
+  native_expiring_price_alerts_json(primitive_id: number): string {
+    this.assert_live();
+    return this.chart.wasm.native_expiring_price_alerts_json(primitive_id);
+  }
+  native_remove_primitive(id: number): void {
+    if (this.chart.wasm.remove_native_primitive(id)) this.chart.repaint();
+  }
+  native_repaint(): void {
+    this.chart.repaint();
+  }
+}
+
+export interface native_primitive_handle {
+  detach(): void;
+}
+
+export interface native_bands_indicator_handle extends native_primitive_handle {
+  set_options_json(options_json: string): boolean;
+}
+
+export interface native_overlay_price_scale_handle extends native_primitive_handle {
+  set_options_json(options_json: string): boolean;
+}
+
+export interface native_volume_profile_handle extends native_primitive_handle {
+  set_data_json(data_json: string): boolean;
+}
+
+export interface native_accessibility_focus_handle extends native_primitive_handle {
+  set(time: number | null, options_json: string): boolean;
+}
+
+export interface native_session_highlighting_handle extends native_primitive_handle {
+  set_data_json(data_json: string): boolean;
+}
+
+export interface native_anchored_text_handle extends native_primitive_handle {
+  set_options_json(options_json: string): boolean;
+}
+
+export interface native_text_watermark_handle extends native_primitive_handle {
+  set_options_json(options_json: string): boolean;
+}
+
+export interface native_expiring_price_alerts_handle extends native_primitive_handle {
+  add(
+    price: number,
+    start: number,
+    end: number,
+    title: string,
+    crossing_direction: "up" | "down",
+  ): number;
+  remove(alert_id: number): boolean;
+  alerts_json(): string;
+}
+
+export interface native_user_price_alerts_handle extends native_primitive_handle {
+  add(price: number): number;
+  remove(alert_id: number): boolean;
+  alerts_json(): string;
+}
+
+export interface native_delta_tooltip_handle extends native_primitive_handle {
+  active_range_json(): string;
+}
+
+export interface native_tooltip_handle extends native_primitive_handle {
+  set_options_json(options_json: string): boolean;
+  snapshot_json(): string;
+}
+
+function native_series(series: series_api): series_impl {
+  if (!(series instanceof series_impl)) {
+    throw new nucleuscharts_error(
+      "invalid_handle",
+      "engine-owned primitives require a series created by this Nucleus chart",
+    );
+  }
+  return series;
+}
+
+function native_handle(series: series_impl, id: number): native_primitive_handle {
+  if (id === 0) throw new nucleuscharts_error("invalid_data", "engine rejected native primitive data or options");
+  series.native_repaint();
+  let attached = true;
+  return {
+    detach() {
+      if (!attached) return;
+      attached = false;
+      series.native_remove_primitive(id);
+    },
+  };
+}
+
+export function attach_native_partial_price_line(series: series_api): native_primitive_handle {
+  const owner = native_series(series);
+  return native_handle(owner, owner.native_add_partial_price_line());
+}
+
+export function attach_native_bands_indicator(
+  series: series_api,
+  options_json: string,
+): native_bands_indicator_handle {
+  const owner = native_series(series);
+  const id = owner.native_add_bands_indicator(options_json);
+  const base = native_handle(owner, id);
+  return {
+    set_options_json(next) {
+      return owner.native_set_bands_indicator_options(id, next);
+    },
+    detach: base.detach,
+  };
+}
+
+export function attach_native_overlay_price_scale(
+  series: series_api,
+  options_json: string,
+): native_overlay_price_scale_handle {
+  const owner = native_series(series);
+  const id = owner.native_add_overlay_price_scale(options_json);
+  const base = native_handle(owner, id);
+  return {
+    set_options_json(next) {
+      return owner.native_set_overlay_price_scale_options(id, next);
+    },
+    detach: base.detach,
+  };
+}
+
+export function attach_native_accessibility_focus(
+  series: series_api,
+  options_json: string,
+): native_accessibility_focus_handle {
+  const owner = native_series(series);
+  const id = owner.native_add_accessibility_focus(options_json);
+  const base = native_handle(owner, id);
+  return {
+    detach: base.detach,
+    set(time, next_options_json) {
+      return owner.native_set_accessibility_focus(id, time, next_options_json);
+    },
+  };
+}
+
+export function attach_native_session_highlighting(
+  series: series_api,
+  options_json: string,
+): native_session_highlighting_handle {
+  const owner = native_series(series);
+  const id = owner.native_add_session_highlighting(options_json);
+  const base = native_handle(owner, id);
+  return {
+    detach: base.detach,
+    set_data_json(data_json) {
+      return owner.native_set_session_highlighting_data(id, data_json);
+    },
+  };
+}
+
+export function attach_native_crosshair_highlight(
+  series: series_api,
+  color: string,
+): native_primitive_handle {
+  const owner = native_series(series);
+  return native_handle(owner, owner.native_add_crosshair_highlight(color));
+}
+
+export function attach_native_vertical_line(
+  series: series_api,
+  time: number,
+  options_json: string,
+): native_primitive_handle {
+  const owner = native_series(series);
+  return native_handle(owner, owner.native_add_vertical_line(time, options_json));
+}
+
+export function attach_native_user_price_lines_button(
+  series: series_api,
+  options_json: string,
+): native_primitive_handle {
+  const owner = native_series(series);
+  return native_handle(owner, owner.native_add_user_price_lines_button(options_json));
+}
+
+export function attach_native_user_price_alerts(
+  series: series_api,
+  options_json: string,
+): native_user_price_alerts_handle {
+  const owner = native_series(series);
+  const id = owner.native_add_user_price_alerts(options_json);
+  const base = native_handle(owner, id);
+  return {
+    add(price) {
+      const alert_id = owner.native_add_user_price_alert(id, price);
+      if (alert_id === 0) {
+        throw new nucleuscharts_error("invalid_data", "engine rejected user price-alert data");
+      }
+      return alert_id;
+    },
+    remove(alert_id) {
+      return owner.native_remove_user_price_alert(id, alert_id);
+    },
+    alerts_json() {
+      return owner.native_user_price_alerts_json(id);
+    },
+    detach: base.detach,
+  };
+}
+
+export function attach_native_delta_tooltip(
+  series: series_api,
+  options_json: string,
+): native_delta_tooltip_handle {
+  const owner = native_series(series);
+  const id = owner.native_add_delta_tooltip(options_json);
+  const base = native_handle(owner, id);
+  return {
+    active_range_json() {
+      return owner.native_delta_tooltip_active_range_json(id);
+    },
+    detach: base.detach,
+  };
+}
+
+export function attach_native_tooltip(
+  series: series_api,
+  options_json: string,
+): native_tooltip_handle {
+  const owner = native_series(series);
+  const id = owner.native_add_tooltip(options_json);
+  const base = native_handle(owner, id);
+  return {
+    set_options_json(next) {
+      return owner.native_set_tooltip_options(id, next);
+    },
+    snapshot_json() {
+      return owner.native_tooltip_snapshot_json(id);
+    },
+    detach: base.detach,
+  };
+}
+
+export function attach_native_trend_line(
+  series: series_api,
+  first_time: number,
+  first_price: number,
+  second_time: number,
+  second_price: number,
+  options_json: string,
+): native_primitive_handle {
+  const owner = native_series(series);
+  return native_handle(owner, owner.native_add_trend_line(
+    first_time,
+    first_price,
+    second_time,
+    second_price,
+    options_json,
+  ));
+}
+
+export function attach_native_volume_profile(
+  series: series_api,
+  data_json: string,
+  options_json: string,
+): native_volume_profile_handle {
+  const owner = native_series(series);
+  const id = owner.native_add_volume_profile(data_json, options_json);
+  const base = native_handle(owner, id);
+  return {
+    detach: base.detach,
+    set_data_json(next) {
+      return owner.native_set_volume_profile_data(id, next);
+    },
+  };
+}
+
+export function attach_native_expiring_price_alerts(
+  series: series_api,
+  options_json: string,
+): native_expiring_price_alerts_handle {
+  const owner = native_series(series);
+  const id = owner.native_add_expiring_price_alerts(options_json);
+  const base = native_handle(owner, id);
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let attached = true;
+  const schedule_refresh = (): void => {
+    if (!attached) return;
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    const last = owner.last_value_data(true);
+    if (last === null) return;
+    const delay = owner.native_refresh_expiring_price_alerts(
+      id,
+      time_to_utc_seconds(last.time),
+      last.value,
+      Date.now(),
+    );
+    if (delay >= 0) {
+      timer = setTimeout(schedule_refresh, Math.max(0, delay));
+    }
+  };
+  owner.subscribe_data_changed(schedule_refresh);
+  return {
+    add(price, start, end, title, crossing_direction) {
+      const alert_id = owner.native_add_expiring_price_alert(
+        id,
+        price,
+        start,
+        end,
+        title,
+        crossing_direction,
+      );
+      if (alert_id === 0) {
+        throw new nucleuscharts_error("invalid_data", "engine rejected expiring price-alert data");
+      }
+      return alert_id;
+    },
+    remove(alert_id) {
+      return owner.native_remove_expiring_price_alert(id, alert_id);
+    },
+    alerts_json() {
+      return owner.native_expiring_price_alerts_json(id);
+    },
+    detach() {
+      if (!attached) return;
+      attached = false;
+      owner.unsubscribe_data_changed(schedule_refresh);
+      if (timer !== null) clearTimeout(timer);
+      base.detach();
+    },
+  };
+}
+
+function native_pane(pane: pane_api): pane_impl {
+  if (!(pane instanceof pane_impl)) {
+    throw new nucleuscharts_error(
+      "invalid_handle",
+      "engine-owned primitives require a pane created by this Nucleus chart",
+    );
+  }
+  return pane;
+}
+
+export function attach_native_image_watermark(
+  series: series_api,
+  width: number,
+  height: number,
+  pixels: Uint8Array,
+  options_json: string,
+): native_primitive_handle {
+  const owner = native_series(series);
+  const id = owner.native_add_image_watermark(width, height, pixels, options_json);
+  if (id === 0) throw new nucleuscharts_error("invalid_data", "engine rejected image watermark data or options");
+  owner.native_repaint();
+  let attached = true;
+  return {
+    detach() {
+      if (!attached) return;
+      attached = false;
+      owner.native_remove_primitive(id);
+    },
+  };
+}
+
+export function attach_native_anchored_text(
+  series: series_api,
+  options_json: string,
+): native_anchored_text_handle {
+  const owner = native_series(series);
+  const id = owner.native_add_anchored_text(options_json);
+  if (id === 0) throw new nucleuscharts_error("invalid_data", "engine rejected anchored-text options");
+  owner.native_repaint();
+  let attached = true;
+  return {
+    set_options_json(next) {
+      if (!attached) return false;
+      return owner.native_set_anchored_text_options(id, next);
+    },
+    detach() {
+      if (!attached) return;
+      attached = false;
+      owner.native_remove_primitive(id);
+    },
+  };
+}
+
+export function attach_native_text_watermark(
+  pane: pane_api,
+  options_json: string,
+): native_text_watermark_handle {
+  const owner = native_pane(pane);
+  const id = owner.native_add_text_watermark(options_json);
+  if (id === 0) throw new nucleuscharts_error("invalid_data", "engine rejected text-watermark options");
+  owner.native_repaint();
+  let attached = true;
+  return {
+    set_options_json(next) {
+      if (!attached) return false;
+      return owner.native_set_text_watermark_options(id, next);
+    },
+    detach() {
+      if (!attached) return;
+      attached = false;
+      owner.native_remove_primitive(id);
+    },
+  };
 }
 
 /**
@@ -861,6 +1501,94 @@ class custom_series_impl extends series_impl {
     // A custom series' type IS the pane view; change it by removing and re-adding the series.
     this.assert_live();
     throw new nucleuscharts_error("unsupported_operation", "set_type() does not apply to a custom series");
+  }
+}
+
+/** A public handle whose payload and renderer are both owned by the Rust feature-series state. */
+class feature_series_impl extends series_impl {
+  constructor(id: number, kind: feature_series_kind, chart: chart_impl) {
+    super(id, kind, chart);
+  }
+
+  set_data(data: readonly series_data[]): void {
+    this.assert_live();
+    const converted = data.map((item) => ({ ...item, time: time_to_utc_seconds(item.time) }));
+    this.record_ingestion(this.chart.wasm.set_feature_series_data(this.id, converted));
+    this.chart.sync_countdown_timer();
+    this.chart.repaint();
+    for (const handler of this.data_changed_subs) handler("full");
+  }
+
+  update(item: series_data): void {
+    this.assert_live();
+    this.record_ingestion(this.chart.wasm.update_feature_series_item(
+      this.id,
+      { ...item, time: time_to_utc_seconds(item.time) },
+    ));
+    if (this.chart.countdown_series_present) this.chart.sync_countdown_timer();
+    this.chart.schedule_repaint();
+    for (const handler of this.data_changed_subs) handler("update");
+  }
+
+  set_data_typed(): void {
+    this.assert_live();
+    throw new nucleuscharts_error(
+      "unsupported_operation",
+      "set_data_typed() does not apply to structured advanced-series payloads",
+    );
+  }
+
+  update_typed(): void {
+    this.assert_live();
+    throw new nucleuscharts_error(
+      "unsupported_operation",
+      "update_typed() does not apply to structured advanced-series payloads",
+    );
+  }
+
+  set_ring_source(): void {
+    this.assert_live();
+    throw new nucleuscharts_error(
+      "unsupported_operation",
+      "set_ring_source() does not apply to structured advanced-series payloads",
+    );
+  }
+
+  data(): readonly series_data[] {
+    this.assert_live();
+    return this.chart.wasm.feature_series_data(this.id) as series_data[];
+  }
+
+  data_by_index(logical_index: number, mismatch_direction: mismatch_direction = 0): series_data | null {
+    this.assert_live();
+    return undef_to_null(
+      this.chart.wasm.feature_series_data_by_index(this.id, logical_index, mismatch_direction),
+    ) as series_data | null;
+  }
+
+  apply_options(options: Partial<any_series_options>): void {
+    super.apply_options(options);
+    this.chart.wasm.apply_feature_series_options(this.id, JSON.stringify(options));
+    this.chart.repaint();
+  }
+
+  options(): any_series_options {
+    return {
+      ...super.options(),
+      ...(JSON.parse(this.chart.wasm.feature_series_options_json(this.id)) as Partial<any_series_options>),
+    };
+  }
+
+  series_type(): feature_series_kind {
+    return this.kind as feature_series_kind;
+  }
+
+  set_type(): void {
+    this.assert_live();
+    throw new nucleuscharts_error(
+      "unsupported_operation",
+      "set_type() does not change an advanced series schema; remove and re-add the series",
+    );
   }
 }
 
@@ -1171,6 +1899,22 @@ class pane_impl implements pane_api {
     // No wasm involvement: the package owns the plugin canvas and the per-frame pass.
     return this.chart.attach_canvas_primitive(this.index(), primitive);
   }
+
+  /** Package-internal boundary for pane-scoped Rust primitives. */
+  native_add_text_watermark(options_json: string): number {
+    return this.chart.wasm.add_native_text_watermark(this.index(), options_json);
+  }
+  native_set_text_watermark_options(id: number, options_json: string): boolean {
+    const changed = this.chart.wasm.set_native_text_watermark_options(id, options_json);
+    if (changed) this.chart.repaint();
+    return changed;
+  }
+  native_remove_primitive(id: number): void {
+    if (this.chart.wasm.remove_native_primitive(id)) this.chart.repaint();
+  }
+  native_repaint(): void {
+    this.chart.repaint();
+  }
 }
 
 /** Detach handle for a registered pane primitive (the wasm registry owns the lifecycle). */
@@ -1393,6 +2137,7 @@ export class chart_impl implements chart_api {
   private readonly series_added_subs = new Set<series_change_handler>();
   private readonly series_removed_subs = new Set<series_change_handler>();
   private readonly options_change_subs = new Set<options_change_handler>();
+  private readonly delta_tooltip_range_listeners = new Set<() => void>();
   private last_visible_logical_range: logical_range | null;
   private last_visible_time_range: time_range | null;
   private last_ts_width: number;
@@ -1404,8 +2149,11 @@ export class chart_impl implements chart_api {
   private hover: { series_id: number | null; object_id: string | null; cursor: string | null } | null = null;
   /** The armed interactive drawing tool (`null` = none) and its options template JSON. */
   private active_tool: drawing_kind | null = null;
+  private active_tool_pane: number | null = null;
   private tool_options_json = "{}";
   private tool_listener: ((tool: drawing_kind | null) => void) | null = null;
+  private readonly tool_change_subs = new Set<drawing_tool_change_handler>();
+  private readonly drawing_created_subs = new Set<drawing_created_handler>();
   /** The text-tool editing session (a contentEditable over the chart, TradingView's typing mode). */
   private text_editor: HTMLElement | null = null;
   private text_editor_id = 0;
@@ -1438,6 +2186,44 @@ export class chart_impl implements chart_api {
   /** The gesture recognizer marks pointer/touch activity (down = true, all-up = false). */
   set_interacting(active: boolean): void {
     this.interacting = active;
+  }
+
+  /** Standard gesture forwarding for the engine-owned delta-tooltip interaction model. */
+  native_delta_tooltip_mouse_down(x: number): void {
+    this.wasm.native_delta_tooltip_mouse_down(x);
+  }
+
+  native_delta_tooltip_mouse_move(x: number): void {
+    if (this.wasm.native_delta_tooltip_mouse_move(x)) this.notify_delta_tooltip_ranges();
+  }
+
+  native_delta_tooltip_mouse_up(): void {
+    this.wasm.native_delta_tooltip_mouse_up();
+  }
+
+  native_delta_tooltip_touch_move(xs: Float64Array): boolean {
+    const changed = this.wasm.native_delta_tooltip_touch_move(xs);
+    if (changed) this.notify_delta_tooltip_ranges();
+    return this.delta_tooltip_range_listeners.size > 0;
+  }
+
+  native_delta_tooltip_touch_active(): boolean {
+    return this.delta_tooltip_range_listeners.size > 0;
+  }
+
+  native_delta_tooltip_leave(): boolean {
+    const changed = this.wasm.native_delta_tooltip_leave();
+    if (changed) this.notify_delta_tooltip_ranges();
+    return changed;
+  }
+
+  add_delta_tooltip_range_listener(listener: () => void): () => void {
+    this.delta_tooltip_range_listeners.add(listener);
+    return () => this.delta_tooltip_range_listeners.delete(listener);
+  }
+
+  private notify_delta_tooltip_ranges(): void {
+    for (const listener of this.delta_tooltip_range_listeners) listener();
   }
   /**
    * Cached "any live series has countdown_visible" flag (refreshed by `sync_countdown_timer`)
@@ -1810,12 +2596,25 @@ export class chart_impl implements chart_api {
     }
   }
 
-  add_series(kind: series_kind, options?: Partial<series_options>): series_api {
+  add_series(kind: series_kind, options?: Partial<any_series_options>): series_api {
     if (kind === "custom") {
       throw new nucleuscharts_error(
         "invalid_options",
         "add_series does not accept 'custom'; use add_custom_series(pane_view)",
       );
+    }
+    if (is_feature_series_kind(kind)) {
+      const adopt_primary = !this.next_extra_series;
+      this.next_extra_series = true;
+      const id = this.wasm.add_feature_series(FEATURE_KIND_TO_U8[kind], adopt_primary, "{}");
+      if (id === 0xffffffff) {
+        throw new nucleuscharts_error("invalid_options", `advanced series '${kind}' was rejected by the engine`);
+      }
+      const series = new feature_series_impl(id, kind, this);
+      this.series_by_id.set(id, series);
+      if (options) series.apply_options(options);
+      this.emit_series_change(this.series_added_subs, series, this.pane_of_series(id));
+      return series;
     }
     // Series 0 is created by the engine at construction; the first add_series adopts it so the
     // common "one chart, one series" path matches reference (add_series returns the primary series).
@@ -1915,7 +2714,14 @@ export class chart_impl implements chart_api {
     let series = this.series_by_id.get(id);
     if (series === undefined) {
       const kind = this.wasm.series_kind(id) ?? KIND_TO_U8.candlestick;
-      series = new series_impl(id, KIND_NAMES[kind] ?? "candlestick", this);
+      if (kind === 7) {
+        const feature_kind = FEATURE_KIND_NAMES[this.wasm.feature_series_kind(id) ?? -1];
+        series = feature_kind === undefined
+          ? new series_impl(id, "candlestick", this)
+          : new feature_series_impl(id, feature_kind, this);
+      } else {
+        series = new series_impl(id, KIND_NAMES[kind] ?? "candlestick", this);
+      }
       this.series_by_id.set(id, series);
     }
     return series;
@@ -2143,6 +2949,7 @@ export class chart_impl implements chart_api {
     // hit-test refreshes at the click point first, so a click without a preceding move still
     // arbitrates correctly.
     this.update_hover(x, y);
+    this.wasm.click_native_primitives_at(x, y);
     // TradingView-style click-to-select, drawings first: a drawing hit selects it and clears
     // the series selection; a miss clears the drawing selection and falls through to the
     // series under the click (or clears that on empty pane space).
@@ -2258,16 +3065,32 @@ export class chart_impl implements chart_api {
     return this.wasm.can_redo_drawing();
   }
 
-  set_drawing_tool(tool: drawing_kind | null, options?: Partial<drawing_options>): void {
-    const changed = this.active_tool !== tool;
+  set_drawing_tool(
+    tool: drawing_kind | null,
+    options?: Partial<drawing_options>,
+    pane_index?: number,
+  ): void {
+    const next_pane = tool === null
+      ? null
+      : (pane_index ?? (this.active_tool === tool ? this.active_tool_pane : null));
+    const changed = this.active_tool !== tool || this.active_tool_pane !== next_pane;
     if (changed) this.close_text_editor(true); // arming another tool commits the edit
     this.active_tool = tool;
-    if (options !== undefined) this.tool_options_json = JSON.stringify(options);
+    this.active_tool_pane = next_pane;
+    if (options !== undefined) {
+      this.tool_options_json = JSON.stringify(options);
+      if (this.wasm.drawing_create_active()) {
+        this.wasm.drawing_create_apply_options(this.tool_options_json);
+      }
+    }
     if (tool === null) {
       this.wasm.drawing_create_cancel();
       this.wasm.brush_create_cancel();
     }
-    if (changed) this.tool_listener?.(tool);
+    if (changed) {
+      this.tool_listener?.(tool);
+      for (const handler of this.tool_change_subs) handler(tool);
+    }
   }
 
   active_drawing_tool(): drawing_kind | null {
@@ -2276,6 +3099,22 @@ export class chart_impl implements chart_api {
 
   set_drawing_tool_listener(listener: ((tool: drawing_kind | null) => void) | null): void {
     this.tool_listener = listener;
+  }
+
+  subscribe_drawing_tool_change(handler: drawing_tool_change_handler): void {
+    this.tool_change_subs.add(handler);
+  }
+
+  unsubscribe_drawing_tool_change(handler: drawing_tool_change_handler): void {
+    this.tool_change_subs.delete(handler);
+  }
+
+  subscribe_drawing_created(handler: drawing_created_handler): void {
+    this.drawing_created_subs.add(handler);
+  }
+
+  unsubscribe_drawing_created(handler: drawing_created_handler): void {
+    this.drawing_created_subs.delete(handler);
   }
 
   selected_drawing(): drawing_api | null {
@@ -2299,6 +3138,7 @@ export class chart_impl implements chart_api {
    * `magnet` snaps the preview anchor to the nearest bar's OHLC, `straighten` constrains a
    * second anchor to 0°/45°/90° (a rectangle to a square). */
   creation_move(x: number, y: number, magnet = false, straighten = false): void {
+    if (this.active_tool_pane !== null && this.pane_index_at(x, y) !== this.active_tool_pane) return;
     this.wasm.drawing_create_move(x, y, magnet, straighten);
   }
 
@@ -2310,15 +3150,22 @@ export class chart_impl implements chart_api {
    * click was consumed (an armed tool over a pane).
    */
   creation_click(x: number, y: number, magnet = false, straighten = false): boolean {
-    if (this.active_tool === null || this.pane_index_at(x, y) === null) return false;
+    const pane = this.pane_index_at(x, y);
+    if (
+      this.active_tool === null || pane === null ||
+      (this.active_tool_pane !== null && pane !== this.active_tool_pane)
+    ) return false;
     if (!this.wasm.drawing_create_active()) {
       if (!this.wasm.drawing_create_begin(DRAWING_KIND_TO_U8[this.active_tool], this.tool_options_json)) {
         this.set_drawing_tool(null);
         return false;
       }
     }
-    if (this.wasm.drawing_create_click(x, y, magnet, straighten) > 0) {
+    const created_id = Number(this.wasm.drawing_create_click(x, y, magnet, straighten));
+    if (created_id > 0) {
       const tool = this.active_tool;
+      const created = new drawing_impl(this, created_id, tool, pane);
+      for (const handler of this.drawing_created_subs) handler(created);
       this.set_drawing_tool(null);
       // The text tool goes straight into typing mode after placement (TradingView parity).
       if (tool === "text") {
@@ -2341,7 +3188,8 @@ export class chart_impl implements chart_api {
    * Returns whether the stroke started (a pane was hit).
    */
   brush_create_start(x: number, y: number): boolean {
-    if (this.pane_index_at(x, y) === null) return false;
+    const pane = this.pane_index_at(x, y);
+    if (pane === null || (this.active_tool_pane !== null && pane !== this.active_tool_pane)) return false;
     return this.wasm.brush_create_start(this.tool_options_json, x, y);
   }
 
@@ -2910,7 +3758,10 @@ export class chart_impl implements chart_api {
     this.series_added_subs.clear();
     this.series_removed_subs.clear();
     this.options_change_subs.clear();
+    this.delta_tooltip_range_listeners.clear();
     this.tool_listener = null;
+    this.tool_change_subs.clear();
+    this.drawing_created_subs.clear();
     this.a11y_live = null;
     wasm.dispose();
     wasm.free();

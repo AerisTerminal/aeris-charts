@@ -21,6 +21,11 @@ pub struct GpuiFrameMetrics {
     pub triangles: u32,
     /// Text runs lowered into the plan.
     pub text_runs: u32,
+    /// Raster-image runs lowered into the plan and successfully submitted to GPUI.
+    pub image_runs: u32,
+    pub image_runs_painted: u32,
+    /// `paint_image` errors surfaced as an exact count rather than silently discarded.
+    pub image_paint_failures: u32,
     /// Text runs GPUI actually shaped and painted (`paint_frame` only).
     pub glyph_runs_painted: u32,
     /// Clip (content-mask) pushes.

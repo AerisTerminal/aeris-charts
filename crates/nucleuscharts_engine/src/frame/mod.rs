@@ -10,7 +10,8 @@ use crate::{
 use nucleuscharts_core::format::percentage_formatter::PercentageFormatter;
 use nucleuscharts_core::format::price_formatter::PriceFormatter;
 use nucleuscharts_core::format::time_formatter::{
-    format_crosshair_time_with, format_tick_label_with, weight_to_tick_mark_type, TickMarkType,
+    format_crosshair_time_with, format_date_pattern, format_tick_label_with,
+    weight_to_tick_mark_type, TickMarkType,
 };
 use nucleuscharts_core::format::volume_formatter::VolumeFormatter;
 use nucleuscharts_core::model::data_layer::{PointColorChannel, SeriesId};
@@ -25,7 +26,7 @@ use nucleuscharts_core::style::{
 use nucleuscharts_render::bars::{build_bars, BarItem, BarsParams};
 use nucleuscharts_render::candles::{build_candles, CandleItem, CandlesParams};
 use nucleuscharts_render::color::Color;
-use nucleuscharts_render::draw_list::{Gradient, IRect, LineStyle, LineType, Prim};
+use nucleuscharts_render::draw_list::{Gradient, IRect, LineStyle, LineType, Prim, TextAlign};
 use nucleuscharts_render::histogram::{build_histogram, HistogramItem, HistogramParams};
 use nucleuscharts_render::line::{dash_split, expand_line, LinePoint};
 
@@ -33,6 +34,8 @@ mod axis;
 pub(crate) mod conflation;
 mod crosshair;
 mod drawings;
+mod feature_geometry;
+mod native_primitive_geometry;
 mod series_geometry;
 #[cfg(test)]
 mod tests;
@@ -126,7 +129,7 @@ fn marker_envelope_size(bar_spacing: f64) -> f64 {
 }
 
 fn marker_shape_size(envelope: f64, coefficient: f64) -> f64 {
-    ceiled_odd(envelope.clamp(12.0, 30.0) * coefficient)
+    ceiled_odd(envelope.max(12.0) * coefficient)
 }
 
 fn marker_margin(bar_spacing: f64) -> f64 {
@@ -214,6 +217,7 @@ pub struct FramePaneSegments {
     pub under_revision: u64,
     pub drawings_revision: u64,
     pub overlay_revision: u64,
+    pub top_revision: u64,
     /// Canonical coordinate revision shared by every coordinate-dependent segment in this pane.
     pub coordinate_revision: u64,
 }
@@ -335,10 +339,14 @@ struct RetainedPane {
     height: f64,
     scissor: [u32; 4],
     under: RetainedLayer,
+    /// Cursor-driven primitives with `bottom` z-order. Kept separate so pointer movement does not
+    /// rebuild static grids or any series geometry.
+    cursor_under: RetainedLayer,
     series_layers: Vec<RetainedSeriesLayer>,
     chrome: RetainedLayer,
     drawings: RetainedLayer,
     overlay: RetainedLayer,
+    top_layer: RetainedLayer,
 }
 
 #[derive(Clone, Default)]
@@ -382,9 +390,11 @@ impl RetainedFrame {
             .iter()
             .map(|pane| {
                 layer_bytes(&pane.under)
+                    + layer_bytes(&pane.cursor_under)
                     + layer_bytes(&pane.chrome)
                     + layer_bytes(&pane.drawings)
                     + layer_bytes(&pane.overlay)
+                    + layer_bytes(&pane.top_layer)
                     + pane.series_layers.capacity() * std::mem::size_of::<RetainedSeriesLayer>()
                     + pane
                         .series_layers
@@ -507,8 +517,20 @@ pub struct AxisLabel {
     pub attach_group: Option<u32>,
 }
 
+/// A backend-neutral rectangle painted beneath axis chrome and labels. Rectangle drawings use
+/// this for the official plugin's 15 CSS px price/time-axis pane shading.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AxisBand {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub color: Color,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AxisFrame {
+    pub bands: Vec<AxisBand>,
     pub labels: Vec<AxisLabel>,
     pub separators: Vec<f64>,
     /// Price-axis tick stubs (reference `ticksVisible`): 5 css px horizontal marks painted from the
@@ -705,7 +727,9 @@ impl ChartEngine {
             // reference custom-series colorer (series-bar-colorer.ts Custom arm): the series `color`
             // option (the data-item color wins in reference; the host folds those into the custom
             // frame values, so this arm is only the exhaustiveness fallback).
-            SeriesKind::Custom => verbatim_color(&series.line_color, crate::DEFAULT_LINE_COLOR),
+            SeriesKind::Custom | SeriesKind::Feature => {
+                verbatim_color(&series.line_color, crate::DEFAULT_LINE_COLOR)
+            }
         }
     }
 }
@@ -728,6 +752,7 @@ fn translate_prims_x(prims: &mut [Prim], dx: i32) {
                 c[0] += dxf;
             }
             Prim::Text { x, .. } => *x += dxf,
+            Prim::Image { rect, .. } => rect[0] += dxf,
             Prim::Polyline { .. }
             | Prim::AreaFill { .. }
             | Prim::BandFill { .. }
@@ -1163,7 +1188,16 @@ impl ChartEngine {
                             &pane.price_scale
                         },
                     );
+                    self.build_native_session_highlighting_frame(
+                        pi,
+                        from,
+                        to,
+                        hpr,
+                        vpr,
+                        &mut cache.under.prims,
+                    );
                 }
+                self.build_native_image_watermark_frame(pi, hpr, vpr, &mut cache.under.prims);
                 cache.under.revision = self.frame_invalidation.scene;
                 cache.under.coordinate_revision = self.frame_invalidation.coordinate;
                 self.frame_build_stats.grid_rebuilds += 1;
@@ -1190,6 +1224,8 @@ impl ChartEngine {
                     .retain(|layer| resolved.iter().any(|rs| rs.id == layer.id));
                 cache.chrome.prims.clear();
                 cache.chrome.points.clear();
+                cache.top_layer.prims.clear();
+                cache.top_layer.points.clear();
                 if let Some((from, to)) = visible {
                     for rs in &resolved {
                         if rs.pane != Some(pi) || !rs.visible {
@@ -1220,6 +1256,16 @@ impl ChartEngine {
                         series_layer.layer.prims.clear();
                         series_layer.layer.points.clear();
                         let scale = pane_scale(pane, rs.scale_target);
+                        self.build_native_series_background_primitives_frame(
+                            *rs,
+                            from,
+                            to,
+                            hpr,
+                            vpr,
+                            &mut series_layer.layer.prims,
+                            &mut series_layer.layer.points,
+                            scale,
+                        );
                         match rs.kind {
                             SeriesKind::Candlestick => self.build_candles_frame(
                                 *rs,
@@ -1295,7 +1341,46 @@ impl ChartEngine {
                                 &mut series_layer.layer.points,
                                 scale,
                             ),
+                            SeriesKind::Feature => self.build_feature_series_frame(
+                                *rs,
+                                from,
+                                to,
+                                hpr,
+                                vpr,
+                                pane.top,
+                                pane.height,
+                                &mut series_layer.layer.prims,
+                                &mut series_layer.layer.points,
+                                scale,
+                            ),
                             SeriesKind::Custom => {}
+                        }
+                        self.build_native_series_primitives_frame(
+                            *rs,
+                            from,
+                            to,
+                            hpr,
+                            vpr,
+                            &mut series_layer.layer.prims,
+                            &mut series_layer.layer.points,
+                            scale,
+                        );
+                        if self
+                            .series
+                            .iter()
+                            .find(|series| series.id == rs.id)
+                            .is_some_and(|series| {
+                                series.markers_z_order == crate::marker_z_order::NORMAL
+                            })
+                        {
+                            self.build_series_markers_frame(
+                                rs.id,
+                                from,
+                                to,
+                                hpr,
+                                vpr,
+                                &mut series_layer.layer.prims,
+                            );
                         }
                         series_layer.scene_generation = self.frame_invalidation.scene;
                         series_layer.source_generation = source_generation;
@@ -1304,7 +1389,34 @@ impl ChartEngine {
                         series_layer.layer.coordinate_revision = self.frame_invalidation.coordinate;
                         self.frame_build_stats.series_rebuilds += 1;
                     }
-                    self.build_markers_frame(pi, from, to, hpr, vpr, &mut cache.chrome.prims);
+                    for rs in &resolved {
+                        if rs.pane != Some(pi) || !rs.visible {
+                            continue;
+                        }
+                        let Some(series) = self.series.iter().find(|series| series.id == rs.id)
+                        else {
+                            continue;
+                        };
+                        match series.markers_z_order {
+                            crate::marker_z_order::ABOVE_SERIES => self.build_series_markers_frame(
+                                rs.id,
+                                from,
+                                to,
+                                hpr,
+                                vpr,
+                                &mut cache.chrome.prims,
+                            ),
+                            crate::marker_z_order::TOP => self.build_series_markers_frame(
+                                rs.id,
+                                from,
+                                to,
+                                hpr,
+                                vpr,
+                                &mut cache.top_layer.prims,
+                            ),
+                            _ => {}
+                        }
+                    }
                     self.build_price_lines_frame(
                         pi,
                         &mut cache.chrome.prims,
@@ -1332,8 +1444,12 @@ impl ChartEngine {
                         self.build_last_pulse_frame(&mut cache.chrome.prims, hpr, vpr);
                     }
                 }
+                self.build_native_anchored_text_frame(pi, hpr, vpr, &mut cache.chrome.prims);
+                self.build_native_text_watermark_frame(pi, hpr, vpr, &mut cache.chrome.prims);
                 cache.chrome.revision = self.frame_invalidation.chrome;
                 cache.chrome.coordinate_revision = self.frame_invalidation.coordinate;
+                cache.top_layer.revision = self.frame_invalidation.chrome;
+                cache.top_layer.coordinate_revision = self.frame_invalidation.coordinate;
             }
 
             if drawings_dirty {
@@ -1353,8 +1469,25 @@ impl ChartEngine {
             }
 
             if overlay_dirty {
+                cache.cursor_under.prims.clear();
+                cache.cursor_under.points.clear();
+                self.build_native_crosshair_highlight_frame(
+                    pi,
+                    hpr,
+                    vpr,
+                    &mut cache.cursor_under.prims,
+                );
+                self.build_native_tooltip_crosshair_frame(
+                    pi,
+                    hpr,
+                    vpr,
+                    &mut cache.cursor_under.prims,
+                );
+                cache.cursor_under.revision = self.frame_invalidation.overlay;
+                cache.cursor_under.coordinate_revision = self.frame_invalidation.coordinate;
                 cache.overlay.prims.clear();
                 cache.overlay.points.clear();
+                self.build_native_accessibility_focus_frame(pi, hpr, vpr, &mut cache.overlay.prims);
                 self.build_selected_drawing_handles_frame(pi, hpr, vpr, &mut cache.overlay.prims);
                 self.build_crosshair_frame(
                     pi,
@@ -1363,6 +1496,20 @@ impl ChartEngine {
                     vpr,
                     &mut cache.overlay.prims,
                 );
+                self.build_native_user_price_lines_button_frame(
+                    pi,
+                    hpr,
+                    vpr,
+                    &mut cache.overlay.prims,
+                );
+                self.build_native_user_price_alerts_frame(
+                    pi,
+                    hpr,
+                    vpr,
+                    &mut cache.overlay.prims,
+                    &mut cache.overlay.points,
+                );
+                self.build_native_delta_tooltip_frame(pi, hpr, vpr, &mut cache.overlay.prims);
                 if let Some((from, _)) = visible {
                     self.build_selection_anchors_frame(
                         pi,
@@ -1383,6 +1530,10 @@ impl ChartEngine {
                 self.frame_invalidation.coordinate
             );
             debug_assert_eq!(
+                cache.cursor_under.coordinate_revision,
+                self.frame_invalidation.coordinate
+            );
+            debug_assert_eq!(
                 cache.chrome.coordinate_revision,
                 self.frame_invalidation.coordinate
             );
@@ -1392,6 +1543,10 @@ impl ChartEngine {
             );
             debug_assert_eq!(
                 cache.overlay.coordinate_revision,
+                self.frame_invalidation.coordinate
+            );
+            debug_assert_eq!(
+                cache.top_layer.coordinate_revision,
                 self.frame_invalidation.coordinate
             );
             debug_assert!(cache
@@ -1418,9 +1573,11 @@ impl ChartEngine {
                     + cache.drawings.prims.len()
                     + cache.overlay.prims.len();
                 let mut point_count = cache.under.points.len()
+                    + cache.cursor_under.points.len()
                     + cache.chrome.points.len()
                     + cache.drawings.points.len()
                     + cache.overlay.points.len();
+                point_count += cache.top_layer.points.len();
                 for rs in &resolved {
                     if rs.pane == Some(pi) && rs.visible {
                         if let Some(layer) =
@@ -1431,11 +1588,13 @@ impl ChartEngine {
                         }
                     }
                 }
-                out.under.reserve(cache.under.prims.len());
+                out.under
+                    .reserve(cache.under.prims.len() + cache.cursor_under.prims.len());
                 out.main.reserve(main_prims);
                 out.points.reserve(point_count);
             }
             append_retained_layer(&cache.under, &mut out.under, &mut out.points);
+            append_retained_layer(&cache.cursor_under, &mut out.under, &mut out.points);
             retained.series_segments[pi].clear();
             for rs in &resolved {
                 if rs.pane != Some(pi) || !rs.visible {
@@ -1468,6 +1627,7 @@ impl ChartEngine {
             let drawings_end = out.main.len();
             append_retained_layer(&cache.overlay, &mut out.main, &mut out.points);
             let overlay_end = out.main.len();
+            append_retained_layer(&cache.top_layer, &mut out.top_prims, &mut out.points);
             if pane_left_px != 0 {
                 translate_prims_x(&mut out.under, pane_left_px as i32);
                 translate_prims_x(&mut out.main, pane_left_px as i32);
@@ -1481,9 +1641,10 @@ impl ChartEngine {
                 series_end,
                 drawings_end,
                 overlay_end,
-                under_revision: cache.under.revision,
+                under_revision: cache.under.revision.max(cache.cursor_under.revision),
                 drawings_revision: cache.drawings.revision,
                 overlay_revision: cache.overlay.revision,
+                top_revision: cache.top_layer.revision,
                 coordinate_revision: self.frame_invalidation.coordinate,
             };
         }
@@ -1610,6 +1771,95 @@ impl ChartEngine {
                 Some(old) => old.merge(Some(&range)),
                 None => range,
             });
+            // Engine-owned volume profiles participate only while their anchored bar span overlaps
+            // the visible logical range, matching the official primitive's autoscaleInfo gate.
+            for primitive in &s.native_primitives {
+                let range = match &primitive.kind {
+                    crate::native_primitives::NativeSeriesPrimitiveKind::BandsIndicator(_) => {
+                        let plot = self.data.plot(s.id);
+                        let mut minimum = f64::INFINITY;
+                        let mut maximum = f64::NEG_INFINITY;
+                        for row in plot.visible_rows(from, to) {
+                            if plot.is_whitespace_row(row) {
+                                continue;
+                            }
+                            let price = plot.value_at(row, PlotValueIndex::Close);
+                            if !price.is_finite() {
+                                continue;
+                            }
+                            let first = price * 0.9;
+                            let second = price * 1.1;
+                            minimum = minimum.min(first.min(second));
+                            maximum = maximum.max(first.max(second));
+                        }
+                        if !minimum.is_finite() || !maximum.is_finite() {
+                            continue;
+                        }
+                        PriceRange::new(minimum, maximum)
+                    }
+                    crate::native_primitives::NativeSeriesPrimitiveKind::VolumeProfile {
+                        data,
+                        ..
+                    } => {
+                        let Some(logical) = self.time_to_index(data.time as f64, false) else {
+                            continue;
+                        };
+                        if to < logical || from as f64 > logical as f64 + data.width {
+                            continue;
+                        }
+                        let (minimum, maximum) = data.profile.iter().fold(
+                            (f64::INFINITY, f64::NEG_INFINITY),
+                            |(minimum, maximum), point| {
+                                (minimum.min(point.price), maximum.max(point.price))
+                            },
+                        );
+                        PriceRange::new(minimum, maximum)
+                    }
+                    crate::native_primitives::NativeSeriesPrimitiveKind::TrendLine {
+                        first_time,
+                        first_price,
+                        second_time,
+                        second_price,
+                        ..
+                    } => {
+                        let (Some(first), Some(second)) = (
+                            self.time_to_index(*first_time as f64, false),
+                            self.time_to_index(*second_time as f64, false),
+                        ) else {
+                            continue;
+                        };
+                        if to < first.min(second) || from > first.max(second) {
+                            continue;
+                        }
+                        PriceRange::new(
+                            first_price.min(*second_price),
+                            first_price.max(*second_price),
+                        )
+                    }
+                    crate::native_primitives::NativeSeriesPrimitiveKind::ExpiringPriceAlerts(
+                        state,
+                    ) => {
+                        let Some(first) = state.alerts.first() else {
+                            continue;
+                        };
+                        let (minimum, maximum) = state.alerts.iter().skip(1).fold(
+                            (first.price, first.price),
+                            |(minimum, maximum), alert| {
+                                (minimum.min(alert.price), maximum.max(alert.price))
+                            },
+                        );
+                        PriceRange::new(minimum, maximum)
+                    }
+                    _ => continue,
+                };
+                let Some(profile_range) = scale.price_range_to_logical(&range, base_value) else {
+                    continue;
+                };
+                *slot = Some(match slot.take() {
+                    Some(old) => old.merge(Some(&profile_range)),
+                    None => profile_range,
+                });
+            }
             if s.markers_auto_scale {
                 let margins = marker_auto_scale_margins(&s.markers, self.time_scale.bar_spacing());
                 let target = match scale_target {

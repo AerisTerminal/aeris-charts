@@ -25,6 +25,7 @@ use nucleuscharts_core::model::data_layer::SeriesId;
 use nucleuscharts_core::model::plot_list::PlotValueIndex;
 use nucleuscharts_render::draw_list::LineType;
 
+use crate::feature_series::{FeatureSeriesKind, FeatureValue};
 use crate::frame::{pane_scale, series_scale_target};
 use crate::{
     ChartEngine, SelectionAnchorSnapshot, SeriesKind, MAX_SELECTION_ANCHORS,
@@ -422,6 +423,101 @@ impl ChartEngine {
                     bar_spacing,
                     HIT_TEST_TOLERANCE,
                 )
+            }
+            SeriesKind::Feature => {
+                let feature = series.feature.as_ref()?;
+                match feature.kind {
+                    FeatureSeriesKind::BackgroundShade => None,
+                    FeatureSeriesKind::BrushableArea => {
+                        let points = plot
+                            .visible_rows(from, to)
+                            .filter_map(|row| {
+                                let FeatureValue::BrushableArea { value } =
+                                    feature.rows.get(row)?.value.as_ref()?
+                                else {
+                                    return None;
+                                };
+                                Some((
+                                    self.time_scale.index_to_coordinate(plot.index_at(row)?),
+                                    scale.price_to_coordinate(*value, base_value),
+                                ))
+                            })
+                            .collect::<Vec<_>>();
+                        hit_test_line_series(
+                            &points,
+                            x_css,
+                            y_css,
+                            LineType::Simple,
+                            feature.options.line_width,
+                            None,
+                            bar_spacing,
+                            HIT_TEST_TOLERANCE,
+                        )
+                    }
+                    FeatureSeriesKind::DualRangeHistogram => {
+                        let maximum = feature
+                            .rows
+                            .iter()
+                            .filter_map(|row| match row.value.as_ref()? {
+                                FeatureValue::DualRangeHistogram { values } => {
+                                    Some(values.as_slice())
+                                }
+                                _ => None,
+                            })
+                            .flatten()
+                            .map(|value| value.abs())
+                            .fold(0.0, f64::max);
+                        let zero = scale.price_to_coordinate(0.0, base_value);
+                        let items = plot
+                            .visible_rows(from, to)
+                            .filter_map(|row| {
+                                let FeatureValue::DualRangeHistogram { values } =
+                                    feature.rows.get(row)?.value.as_ref()?
+                                else {
+                                    return None;
+                                };
+                                let low = values.iter().copied().fold(0.0, f64::min);
+                                let high = values.iter().copied().fold(0.0, f64::max);
+                                let coordinate = |value: f64| {
+                                    if maximum == 0.0 {
+                                        zero
+                                    } else {
+                                        zero - value / maximum * (feature.options.max_height / 2.0)
+                                    }
+                                };
+                                let logical = plot.index_at(row)?;
+                                Some((
+                                    self.time_scale.index_to_coordinate(logical),
+                                    logical,
+                                    coordinate(high),
+                                    coordinate(low),
+                                ))
+                            })
+                            .collect::<Vec<_>>();
+                        hit_test_series_range(&items, x_css, y_css, bar_spacing, HIT_TEST_TOLERANCE)
+                            .map(|distance| (distance, SeriesHitKind::Range))
+                    }
+                    _ => {
+                        let items = plot
+                            .visible_rows(from, to)
+                            .filter_map(|row| {
+                                let projection =
+                                    feature.rows.get(row)?.value.as_ref()?.projection();
+                                let logical = plot.index_at(row)?;
+                                let high = scale.price_to_coordinate(projection[1], base_value);
+                                let low = scale.price_to_coordinate(projection[2], base_value);
+                                (high.is_finite() && low.is_finite()).then_some((
+                                    self.time_scale.index_to_coordinate(logical),
+                                    logical,
+                                    high,
+                                    low,
+                                ))
+                            })
+                            .collect::<Vec<_>>();
+                        hit_test_series_range(&items, x_css, y_css, bar_spacing, HIT_TEST_TOLERANCE)
+                            .map(|distance| (distance, SeriesHitKind::Range))
+                    }
+                }
             }
             // A custom series' geometry is plugin-defined; the engine has no built-in hit for
             // it (the reference's renderer-level `hitTest` is out of scope of the host contract).

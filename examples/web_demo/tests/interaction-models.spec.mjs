@@ -25,6 +25,7 @@ const state = (page) =>
     range: window.__chart.wasm.price_scale_visible_range(0, 0),
     width: window.__chart.wasm.time_scale_width(),
     axis_h: window.__chart.wasm.time_scale_height(),
+    min_spacing: window.__chart.time_scale().options().min_bar_spacing,
   }));
 
 async function chart_box(page) {
@@ -53,7 +54,9 @@ test("interaction models run engine-side with reference behavior", async ({ page
   expect(s.spacing).toBeLessThan(s0.spacing);
   // reference ratio: spacing * (width - x_now) / (width - x_start) = spacing0 * (0.8w-?) ...
   // start length from right = w - 0.6w = 0.4w; current = w - 0.8w = 0.2w -> x0.5
-  expect(s.spacing).toBeCloseTo(s0.spacing * (0.2 * s0.width) / (0.4 * s0.width), 3);
+  // A docked inspector can make fit-content spacing small enough for this gesture to reach the
+  // engine's configured floor. The ratio still applies, bounded by that public option.
+  expect(s.spacing).toBeCloseTo(Math.max(s0.min_spacing, s0.spacing * (0.2 * s0.width) / (0.4 * s0.width)), 3);
   await page.mouse.up();
   // ...and drag LEFT: zoom in by the inverse ratio relative to THIS drag's start spacing.
   const s1 = s.spacing;

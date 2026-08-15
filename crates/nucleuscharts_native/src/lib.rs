@@ -13,11 +13,12 @@ use ab_glyph::{Font, FontArc, PxScale, ScaleFont};
 use nucleuscharts_engine::ChartEngine;
 use nucleuscharts_render::canvas2d::{execute, Canvas2d, Viewport};
 use nucleuscharts_render::color::Color;
-use nucleuscharts_render::draw_list::{Prim, TextAlign};
+use nucleuscharts_render::draw_list::{Prim, RasterImage, TextAlign};
 use std::sync::LazyLock;
 use tiny_skia::{
-    Color as SkColor, FillRule, GradientStop, LinearGradient, Paint, PathBuilder, Pixmap, Point,
-    PremultipliedColorU8, Rect, Shader, SpreadMode, Stroke, StrokeDash, Transform,
+    Color as SkColor, FillRule, FilterQuality, GradientStop, IntSize, LinearGradient, Paint,
+    PathBuilder, Pixmap, PixmapPaint, Point, PremultipliedColorU8, Rect, Shader, SpreadMode,
+    Stroke, StrokeDash, Transform,
 };
 
 /// Bundled Inter face (SIL OFL, <https://github.com/google/fonts>) parsed once. The font is
@@ -352,6 +353,43 @@ impl Canvas2d for TinySkiaCanvas {
             }
         }
     }
+
+    fn draw_raster_image(&mut self, image: &RasterImage, rect: [f32; 4], opacity: f32) {
+        let Some(size) = IntSize::from_wh(image.width, image.height) else {
+            return;
+        };
+        let mut pixels = image.pixels.to_vec();
+        for rgba in pixels.chunks_exact_mut(4) {
+            let alpha = u16::from(rgba[3]);
+            for channel in &mut rgba[..3] {
+                *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
+            }
+        }
+        let Some(source) = Pixmap::from_vec(pixels, size) else {
+            return;
+        };
+        let [x, y, w, h] = rect;
+        let paint = PixmapPaint {
+            opacity: opacity.clamp(0.0, 1.0),
+            quality: FilterQuality::Bicubic,
+            ..PixmapPaint::default()
+        };
+        self.pixmap.draw_pixmap(
+            0,
+            0,
+            source.as_ref(),
+            &paint,
+            Transform::from_row(
+                w / image.width as f32,
+                0.0,
+                0.0,
+                h / image.height as f32,
+                x,
+                y,
+            ),
+            None,
+        );
+    }
 }
 
 /// Convenience: rasterize one layer of prims into a fresh canvas and return it.
@@ -504,6 +542,7 @@ mod tests {
     use super::*;
     use nucleuscharts_engine::SeriesKind;
     use nucleuscharts_render::draw_list::{Gradient, IRect};
+    use std::sync::Arc;
 
     #[test]
     fn fills_a_rect_at_expected_pixels() {
@@ -576,6 +615,30 @@ mod tests {
             bottom[0] > 215,
             "bottom should be near-white, got {bottom:?}"
         );
+    }
+
+    #[test]
+    fn raster_image_scales_and_blends_through_the_shared_executor() {
+        let image = RasterImage {
+            key: 1,
+            width: 1,
+            height: 1,
+            pixels: Arc::<[u8]>::from([255, 0, 0, 255]),
+        };
+        let canvas = render_prims(
+            10,
+            10,
+            Color::rgb(255, 255, 255),
+            &[Prim::Image {
+                image,
+                rect: [2.0, 2.0, 6.0, 6.0],
+                opacity: 0.5,
+            }],
+            &[],
+        );
+        let center = canvas.pixel_rgba(5, 5);
+        assert!(center[0] >= 250 && (120..=135).contains(&center[1]));
+        assert_eq!(canvas.pixel_rgba(0, 0), [255, 255, 255, 255]);
     }
 
     #[test]

@@ -27,6 +27,9 @@ fn marker_autoscale_margins_match_reference_position_rules() {
         shape: crate::marker_shape::CIRCLE,
         color: Color::rgb(0, 0, 0),
         text: String::new(),
+        id: String::new(),
+        size: 1.0,
+        price: None,
     };
     assert_eq!(
         marker_auto_scale_margins(&[marker(crate::marker_pos::ABOVE)], 6.0),
@@ -46,6 +49,144 @@ fn marker_autoscale_margins_match_reference_position_rules() {
         ),
         (21.0, 11.0)
     );
+}
+
+fn reference_marker(time: i64, position: u8, color: Color, text: &str) -> crate::Marker {
+    crate::Marker {
+        time,
+        position,
+        shape: crate::marker_shape::CIRCLE,
+        color,
+        text: text.to_string(),
+        id: String::new(),
+        size: 1.0,
+        price: None,
+    }
+}
+
+#[test]
+fn marker_price_position_time_snapping_and_layers_are_engine_owned() {
+    let mut chart = ChartEngine::new(300.0, 200.0, 1.0);
+    chart
+        .set_series_data(
+            0,
+            &[10.0, 20.0, 30.0],
+            &[100.0, 101.0, 102.0],
+            &[102.0, 103.0, 104.0],
+            &[98.0, 99.0, 100.0],
+            &[101.0, 102.0, 103.0],
+        )
+        .unwrap();
+    chart.time_scale.set_width(300.0);
+    chart.fit_content();
+    let color = Color::rgb(222, 17, 99);
+    let mut marker = reference_marker(15, crate::marker_pos::AT_PRICE_MIDDLE, color, "exact");
+    marker.price = Some(101.5);
+    marker.size = 2.0;
+    chart.set_series_markers(0, vec![marker]);
+
+    let normal = chart.build_frame();
+    let expected_x = chart.time_scale.index_to_coordinate(1).round() as f32 + 0.5;
+    let expected_y = chart.panes[0].price_scale.price_to_coordinate(101.5, 100.0) as f32;
+    let circle_index = normal.panes[0]
+        .main
+        .iter()
+        .position(|prim| {
+            matches!(prim, Prim::Circle { cx, cy, fill, .. }
+            if *fill == color && (*cx - expected_x).abs() < 1e-4 && (*cy - expected_y).abs() < 1e-4)
+        })
+        .expect("marker time 15 must snap to the series bar at time 20");
+    let text_index = normal.panes[0]
+        .main
+        .iter()
+        .position(|prim| {
+            matches!(prim, Prim::Text { text, color: text_color, .. }
+            if text == "exact" && *text_color == color)
+        })
+        .expect("marker label must share the retained frame instead of the axis overlay");
+    let owner = chart
+        .frame_series_segments(0)
+        .iter()
+        .find(|segment| segment.series_id == Some(0))
+        .copied()
+        .unwrap();
+    assert!((owner.start..owner.end).contains(&circle_index));
+    assert!((owner.start..owner.end).contains(&text_index));
+    assert!(normal.panes[0].top_prims.is_empty());
+
+    assert!(chart.set_series_markers_z_order(0, crate::marker_z_order::ABOVE_SERIES));
+    let above = chart.build_frame();
+    let above_index = above.panes[0]
+        .main
+        .iter()
+        .position(|prim| matches!(prim, Prim::Circle { fill, .. } if *fill == color))
+        .unwrap();
+    let owner_end = chart
+        .frame_series_segments(0)
+        .iter()
+        .find(|segment| segment.series_id == Some(0))
+        .unwrap()
+        .end;
+    assert!(
+        above_index >= owner_end,
+        "aboveSeries must paint after every series slot"
+    );
+    assert!(above.panes[0].top_prims.is_empty());
+
+    assert!(chart.set_series_markers_z_order(0, crate::marker_z_order::TOP));
+    let top = chart.build_frame();
+    assert!(!top.panes[0]
+        .main
+        .iter()
+        .any(|prim| matches!(prim, Prim::Circle { fill, .. } if *fill == color)));
+    assert!(top.panes[0]
+        .top_prims
+        .iter()
+        .any(|prim| matches!(prim, Prim::Circle { fill, .. } if *fill == color)));
+    assert!(top.panes[0]
+        .top_prims
+        .iter()
+        .any(|prim| matches!(prim, Prim::Text { text, .. } if text == "exact")));
+}
+
+#[test]
+fn same_bar_markers_stack_with_reference_offsets() {
+    let mut chart = ChartEngine::new(300.0, 200.0, 1.0);
+    chart
+        .set_series_data(
+            0,
+            &[10.0, 20.0],
+            &[100.0, 100.0],
+            &[102.0, 102.0],
+            &[98.0, 98.0],
+            &[101.0, 101.0],
+        )
+        .unwrap();
+    chart.time_scale.set_width(300.0);
+    chart.fit_content();
+    let first = Color::rgb(201, 10, 10);
+    let second = Color::rgb(10, 10, 201);
+    chart.set_series_markers(
+        0,
+        vec![
+            reference_marker(20, crate::marker_pos::ABOVE, first, ""),
+            reference_marker(20, crate::marker_pos::ABOVE, second, ""),
+        ],
+    );
+    let frame = chart.build_frame();
+    let center = |color| {
+        frame.panes[0]
+            .main
+            .iter()
+            .find_map(|prim| match prim {
+                Prim::Circle { cy, fill, .. } if *fill == color => Some(*cy),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let spacing = chart.time_scale.bar_spacing();
+    let expected = marker_envelope_size(spacing) + marker_margin(spacing);
+    assert!(((center(first) - center(second)) as f64 - expected).abs() < 1e-4);
 }
 
 struct TestPlot {

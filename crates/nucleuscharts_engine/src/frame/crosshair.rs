@@ -63,7 +63,7 @@ impl ChartEngine {
     /// reference `PaneWidget._setCrosshairPosition` (pane-widget.ts:714-719) clamps the cursor into
     /// the pane instead of dropping the crosshair: x into `[0, width - 1]`, y into
     /// `[0, height - 1]` (height = the full stacked-pane region).
-    pub(super) fn clamped_crosshair(&self) -> Option<(f64, f64)> {
+    pub(crate) fn clamped_crosshair(&self) -> Option<(f64, f64)> {
         let (x, y) = self.crosshair?;
         Some((
             x.clamp(0.0, (self.pane_w - 1.0).max(0.0)),
@@ -71,7 +71,7 @@ impl ChartEngine {
         ))
     }
 
-    pub(super) fn snapped_crosshair_index(&self, x_css: f64) -> i64 {
+    pub(crate) fn snapped_crosshair_index(&self, x_css: f64) -> i64 {
         // reference `setAndSaveCurrentPosition` clamps into visibleStrictRange — the FULL visible
         // window including the empty area (right offset), NOT the data-bounded range. In the
         // empty area the index lands on a hypothetical slot: the vertical line follows the

@@ -405,6 +405,7 @@ export function install_gestures(chart: chart_impl): () => void {
     // Any active pointer pauses the countdown timer (no mid-gesture repaint/lag).
     if (pointers.size === 1) chart.set_interacting(true);
     if (pointers.size !== 1) return;
+    chart.native_delta_tooltip_mouse_down(p.x);
     press_start = p;
     moved = false;
     const region = arm_press(p);
@@ -454,6 +455,7 @@ export function install_gestures(chart: chart_impl): () => void {
     // hover (buttons === 0) or a left-drag (bit 0 set) passes.
     if (e.buttons !== 0 && (e.buttons & 1) === 0) return;
     const p = local_xy(e);
+    chart.native_delta_tooltip_mouse_move(p.x);
     apply_crosshair_magnet(e);
 
     // active axis drag-to-scale
@@ -557,6 +559,7 @@ export function install_gestures(chart: chart_impl): () => void {
     // Any mouse activity cancels touch tracking mode (reference `_onMouseEvent`).
     touch_tracking = false;
     track_point = null;
+    chart.native_delta_tooltip_mouse_up();
     pointers.delete(e.pointerId);
     if (pointers.size === 0) chart.set_interacting(false);
     if (pointers.size !== 0) return;
@@ -591,6 +594,7 @@ export function install_gestures(chart: chart_impl): () => void {
 
   const on_cancel = (e: PointerEvent) => {
     if (e.pointerType === "touch") return;
+    chart.native_delta_tooltip_mouse_up();
     pointers.delete(e.pointerId);
     if (pointers.size === 0) chart.set_interacting(false);
     if (pointers.size !== 0) return;
@@ -613,6 +617,7 @@ export function install_gestures(chart: chart_impl): () => void {
     if (fires_touch_events(e)) return;
     // reference `mouseLeaveEvent` hides the crosshair; an active captured drag is left alone.
     if (pointers.size > 0) return;
+    chart.native_delta_tooltip_leave();
     set_sep_hover(-1);
     wasm.set_crosshair_ohlc_magnet(false); // release the Ctrl-magnet with the hover
     chart.clear_hover(); // Phase C-d: release the hover hit + hovered-series z-bump
@@ -685,6 +690,12 @@ export function install_gestures(chart: chart_impl): () => void {
     return null;
   };
 
+  const forward_delta_touches = (touches: TouchList): boolean => {
+    const xs = new Float64Array(Math.min(2, touches.length));
+    for (let index = 0; index < xs.length; index++) xs[index] = local_xy(touches[index]!).x;
+    return chart.native_delta_tooltip_touch_move(xs);
+  };
+
   // "Treat the drag as a page scroll" per press region (pane-widget.ts:142-143,
   // price-axis-widget.ts:206-207, time-axis-widget.ts:126-127, pane-separator.ts:154-155).
   const treat_vert_as_page_scroll = (): boolean => {
@@ -743,6 +754,7 @@ export function install_gestures(chart: chart_impl): () => void {
   };
 
   const on_touch_start = (e: TouchEvent) => {
+    if (chart.native_delta_tooltip_touch_active() && e.cancelable) e.preventDefault();
     last_touch_ts = event_ts(e);
     stop_kinetic();
     stop_scroll_anim();
@@ -817,6 +829,11 @@ export function install_gestures(chart: chart_impl): () => void {
   };
 
   const on_touch_move = (e: TouchEvent) => {
+    const delta_tooltip_owns_move = forward_delta_touches(e.targetTouches);
+    if (delta_tooltip_owns_move) {
+      if (e.cancelable) e.preventDefault();
+      chart.repaint();
+    }
     // Pinch runs off the raw event (reference `_initPinch`), ahead of the single-touch machinery.
     if (pinch_active) {
       last_touch_ts = event_ts(e);
@@ -919,6 +936,7 @@ export function install_gestures(chart: chart_impl): () => void {
   };
 
   const on_touch_end = (e: TouchEvent) => {
+    if (e.targetTouches.length === 0 && chart.native_delta_tooltip_leave()) chart.repaint();
     check_pinch_state(e.touches);
     for (const t of Array.from(e.changedTouches)) {
       touch_regions.delete(t.identifier);
@@ -984,6 +1002,7 @@ export function install_gestures(chart: chart_impl): () => void {
   };
 
   const on_touch_cancel = (e: TouchEvent) => {
+    if (e.targetTouches.length === 0 && chart.native_delta_tooltip_leave()) chart.repaint();
     // reference clears the long-tap timeout on touchcancel. Additionally reset the active touch when
     // the browser stole the gesture (e.g. it took over for a page scroll): no touchend follows,
     // and a stuck active id would ignore the next touchstart.
@@ -1104,7 +1123,7 @@ export function install_gestures(chart: chart_impl): () => void {
   if (is_chrome) {
     overlay.addEventListener("mousedown", on_mousedown);
   }
-  overlay.addEventListener("touchstart", on_touch_start, { passive: true });
+  overlay.addEventListener("touchstart", on_touch_start, { passive: false });
   overlay.addEventListener("touchmove", on_touch_move, { passive: false });
   overlay.addEventListener("touchend", on_touch_end, { passive: false });
   overlay.addEventListener("touchcancel", on_touch_cancel, { passive: false });

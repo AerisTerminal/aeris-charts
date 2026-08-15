@@ -72,7 +72,10 @@ test("warmed stable and crosshair frames retain WebGPU resources", async ({ page
   await wait_chart(page);
   expect(await page.evaluate(() => window.__chart.backend())).toBe("webgpu");
 
-  await present_frames(page, 5);
+  // Isolate retained-frame telemetry from the demo's intentional one-second countdown tick.
+  // The test is about explicit stable/crosshair frames, not an unrelated clock invalidation.
+  await page.evaluate(() => window.__main.apply_options({ countdown_visible: false }));
+  await present_frames(page, 8);
   const stable = await page.evaluate(async () => {
     const frames = [];
     for (let i = 0; i < 20; i += 1) {

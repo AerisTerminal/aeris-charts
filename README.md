@@ -40,37 +40,41 @@ candles.set_data([
 chart.time_scale().fit_content();
 ```
 
-## Custom chart features
+## Advanced chart features
 
-The browser package ships the commonly needed custom-series and primitive behaviors as features,
-not as source examples applications must copy. Custom series are added through the ordinary chart
-API and render through the same backend-neutral frame contract as built-in series:
+The advanced financial series are first-class Rust-engine series. Their data, autoscale projection,
+geometry, lifecycle, and rendering are shared by every backend; the browser package only translates
+public data and options at the WASM boundary:
 
 ```ts
-import {
-  create_brushable_area_series,
-  create_heatmap_series,
-  create_volume_profile,
-} from "@nucleuscharts/financial";
+import { create_volume_profile } from "@nucleuscharts/financial";
 
-const heatmap = chart.add_custom_series(create_heatmap_series());
+const heatmap = chart.add_series("heatmap", {
+  cell_border_width: 1,
+  cell_border_color: "rgba(255,255,255,.08)",
+});
 heatmap.set_data(heatmap_data);
 
-const profile = create_volume_profile(candles, price_volume_data);
-// profile.set_data(next_price_volume_data); profile.detach();
+const profile = create_volume_profile(candles, {
+  time: 1735689600,
+  profile: [{ price: 100, vol: 12 }, { price: 101, vol: 28 }],
+  width: 10, // time-scale bar slots
+});
+// profile.set_data(next_time_anchored_profile); profile.detach();
 ```
 
-The custom-series feature set includes brushable area, dual-range histogram, grouped bars,
+The engine-owned feature set includes brushable area, dual-range histogram, grouped bars,
 heatmap, HLC area, pretty histogram, lollipop, rounded candles, shaded background, stacked area,
 stacked bars, and box-and-whisker series. Primitive helpers include accessibility, anchored text,
-Bollinger bands, delta and ordinary tooltips, expiring/user price alerts, highlighted-bar
+official ±10% price bands, delta and ordinary tooltips, expiring/user price alerts, highlighted-bar
 crosshair, image watermark, overlay price scale, partial price line, rectangle/trend/vertical
 drawings, session highlighting, volume profile, and user-defined price lines.
 
-Features that Nucleus already owns—drawings, bands, price lines, and overlay scales—are thin
-helpers over those engine APIs. Rendering extensions use the existing custom-series or primitive
-contracts, and DOM-only behavior such as accessibility and tooltips stays at the browser host
-boundary. Every returned feature handle with `detach()` releases its listeners and host state.
+Features that Nucleus already owns—drawings, bands, price lines, overlay scales, partial-last-price
+lines, session shading, highlighted bar slots, and time-anchored volume profiles—are thin helpers
+over those engine APIs. Accessibility keyboard/ARIA state and tooltip elements remain browser DOM
+chrome, while their exact data lookup, guides, focus geometry, and rendering primitives remain in
+the engine. Every returned feature handle with `detach()` releases its engine and host state.
 
 Give the container an explicit size; the chart canvases fill it.
 

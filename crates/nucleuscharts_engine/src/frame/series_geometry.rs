@@ -759,115 +759,201 @@ impl ChartEngine {
         }
     }
 
-    pub(super) fn build_markers_frame(
+    pub(super) fn build_series_markers_frame(
         &self,
-        pane_index: usize,
+        series_id: SeriesId,
         from: i64,
         to: i64,
         hpr: f64,
         vpr: f64,
         out: &mut Vec<Prim>,
     ) {
-        let pane = &self.panes[pane_index];
-        let times = self.data.merged_times();
-        for series in &self.series {
-            if !series.visible || series.pane_index != pane_index {
-                continue;
-            }
-            let scale = pane_scale(pane, series_scale_target(series));
-            if scale.is_empty() {
-                continue;
-            }
-            let Some(base_value) = self.series_base_value(series.id, from) else {
+        let Some(series) = self
+            .series
+            .iter()
+            .find(|series| series.id == series_id && series.visible && !series.removed)
+        else {
+            return;
+        };
+        let Some(pane) = self.panes.get(series.pane_index) else {
+            return;
+        };
+        let scale = pane_scale(pane, series_scale_target(series));
+        if scale.is_empty() {
+            return;
+        }
+        let Some(base_value) = self.series_base_value(series.id, from) else {
+            return;
+        };
+        let plot = self.data.plot(series.id);
+        let Some(first_data_index) = plot.first_index() else {
+            return;
+        };
+        let spacing = self.time_scale.bar_spacing();
+        let envelope = marker_envelope_size(spacing);
+        let shape_margin = marker_margin(spacing);
+        let font_size = self.options.get().layout.font_size;
+        let font_family = self.options.get().layout.font_family.clone();
+        let correction = (hpr.floor() as i64).rem_euclid(2) as f64 * 0.5;
+        let mut previous_index = None;
+        let mut above_offset = shape_margin;
+        let mut below_offset = shape_margin;
+
+        for marker in &series.markers {
+            let Some(candidate) = self.time_to_index(marker.time as f64, true) else {
                 continue;
             };
-            let plot = self.data.plot(series.id);
-            for marker in &series.markers {
-                let Ok(pos) = times.binary_search(&marker.time) else {
+            let direction = if candidate < first_data_index {
+                MismatchDirection::NearestRight
+            } else {
+                MismatchDirection::NearestLeft
+            };
+            let Some(row) = plot.search(candidate, direction) else {
+                continue;
+            };
+            let Some(index) = plot.index_at(row) else {
+                continue;
+            };
+            if index < from || index > to || plot.is_whitespace_row(row) {
+                continue;
+            }
+            if previous_index != Some(index) {
+                above_offset = shape_margin;
+                below_offset = shape_margin;
+                previous_index = Some(index);
+            }
+
+            let high = plot.value_at(row, PlotValueIndex::High);
+            let low = plot.value_at(row, PlotValueIndex::Low);
+            let close = plot.value_at(row, PlotValueIndex::Close);
+            let exact_price = matches!(
+                marker.position,
+                crate::marker_pos::AT_PRICE_TOP
+                    | crate::marker_pos::AT_PRICE_BOTTOM
+                    | crate::marker_pos::AT_PRICE_MIDDLE
+            );
+            let price = if exact_price {
+                let Some(price) = marker.price else {
                     continue;
                 };
-                let index = pos as i64;
-                if index < from || index > to {
-                    continue;
-                }
-                let Some(row) = plot.search(index, MismatchDirection::None) else {
-                    continue;
-                };
-                // reference markers at a whitespace bar have no price to anchor to
-                // (series-markers pane-view getPrice returns undefined) — nothing is drawn.
-                if plot.is_whitespace_row(row) {
-                    continue;
-                }
-                let high = plot.value_at(row, PlotValueIndex::High);
-                let low = plot.value_at(row, PlotValueIndex::Low);
-                let close = plot.value_at(row, PlotValueIndex::Close);
-                let x = (self.time_scale.index_to_coordinate(index) * hpr) as f32;
-                let envelope = marker_envelope_size(self.time_scale.bar_spacing());
-                let half_envelope = (envelope * 0.5 * vpr) as f32;
-                let margin = (marker_margin(self.time_scale.bar_spacing()) * vpr) as f32;
-                let y = match marker.position {
+                price
+            } else {
+                match marker.position {
                     crate::marker_pos::ABOVE => {
-                        (scale.price_to_coordinate(high, base_value) * vpr) as f32
-                            - half_envelope
-                            - margin
+                        if scale.is_inverted() {
+                            low
+                        } else {
+                            high
+                        }
                     }
                     crate::marker_pos::BELOW => {
-                        (scale.price_to_coordinate(low, base_value) * vpr) as f32
-                            + half_envelope
-                            + margin
+                        if scale.is_inverted() {
+                            high
+                        } else {
+                            low
+                        }
                     }
-                    _ => (scale.price_to_coordinate(close, base_value) * vpr) as f32,
-                };
-                match marker.shape {
-                    crate::marker_shape::SQUARE => {
-                        let size = (marker_shape_size(envelope, 0.7) * vpr) as f32;
-                        out.push(Prim::RoundRect {
-                            x: x - size * 0.5,
-                            y: y - size * 0.5,
-                            w: size,
-                            h: size,
-                            radii: [0.0; 4],
-                            fill: marker.color,
-                            border_width: 0.0,
-                            border_color: marker.color,
-                        });
-                    }
-                    crate::marker_shape::ARROW_UP | crate::marker_shape::ARROW_DOWN => {
-                        let arrow_size = marker_shape_size(envelope, 1.0);
-                        let half_arrow = (((arrow_size - 1.0) * 0.5) * vpr) as f32;
-                        let base_size = ceiled_odd(envelope / 2.0);
-                        let half_base = (((base_size - 1.0) * 0.5) * vpr) as f32;
-                        let up = marker.shape == crate::marker_shape::ARROW_UP;
-                        out.push(Prim::Triangle {
-                            a: [x, y + if up { -half_arrow } else { half_arrow }],
-                            b: [x - half_arrow, y],
-                            c: [x + half_arrow, y],
-                            color: marker.color,
-                        });
-                        out.push(Prim::RoundRect {
-                            x: x - half_base,
-                            y: if up { y } else { y - half_arrow },
-                            w: half_base * 2.0,
-                            h: half_arrow,
-                            radii: [0.0; 4],
-                            fill: marker.color,
-                            border_width: 0.0,
-                            border_color: marker.color,
-                        });
-                    }
-                    _ => {
-                        let radius =
-                            (((marker_shape_size(envelope, 0.8) - 1.0) * 0.5) * vpr) as f32;
-                        out.push(Prim::Circle {
-                            cx: x,
-                            cy: y,
-                            radius,
-                            fill: marker.color,
-                            stroke_width: 0.0,
-                            stroke: marker.color,
-                        });
-                    }
+                    _ => close,
                 }
+            };
+            let size = envelope * marker.size.max(0.0);
+            let half_size = size * 0.5;
+            let price_y = scale.price_to_coordinate(price, base_value);
+            let (y, text_y) = match marker.position {
+                crate::marker_pos::ABOVE | crate::marker_pos::AT_PRICE_TOP => {
+                    let offset = if exact_price { 0.0 } else { above_offset };
+                    let y = price_y - half_size - offset;
+                    let text_y = y - half_size - font_size * 0.6;
+                    if !marker.text.is_empty() {
+                        above_offset += font_size * 1.2;
+                    }
+                    if !exact_price {
+                        above_offset += size + shape_margin;
+                    }
+                    (y, text_y)
+                }
+                crate::marker_pos::BELOW | crate::marker_pos::AT_PRICE_BOTTOM => {
+                    let offset = if exact_price { 0.0 } else { below_offset };
+                    let y = price_y + half_size + offset;
+                    let text_y = y + half_size + shape_margin + font_size * 0.6;
+                    if !marker.text.is_empty() {
+                        below_offset += font_size * 1.2;
+                    }
+                    if !exact_price {
+                        below_offset += size + shape_margin;
+                    }
+                    (y, text_y)
+                }
+                _ => {
+                    let y = price_y;
+                    (y, y + half_size + shape_margin + font_size * 0.6)
+                }
+            };
+            let x = (self.time_scale.index_to_coordinate(index) * hpr).round() + correction;
+            let x = x as f32;
+            let y = (y * vpr) as f32;
+            match marker.shape {
+                crate::marker_shape::SQUARE => {
+                    let shape_size = marker_shape_size(size, 0.7);
+                    let half = ((shape_size - 1.0) * hpr * 0.5) as f32;
+                    out.push(Prim::RoundRect {
+                        x: x - half,
+                        y: y - half,
+                        w: (shape_size * hpr) as f32,
+                        h: (shape_size * hpr) as f32,
+                        radii: [0.0; 4],
+                        fill: marker.color,
+                        border_width: 0.0,
+                        border_color: marker.color,
+                    });
+                }
+                crate::marker_shape::ARROW_UP | crate::marker_shape::ARROW_DOWN => {
+                    let arrow_size = marker_shape_size(size, 1.0);
+                    let half_arrow = (((arrow_size - 1.0) * 0.5) * hpr) as f32;
+                    let base_size = ceiled_odd(size / 2.0);
+                    let half_base = (((base_size - 1.0) * 0.5) * hpr) as f32;
+                    let up = marker.shape == crate::marker_shape::ARROW_UP;
+                    out.push(Prim::Triangle {
+                        a: [x, y + if up { -half_arrow } else { half_arrow }],
+                        b: [x - half_arrow, y],
+                        c: [x + half_arrow, y],
+                        color: marker.color,
+                    });
+                    out.push(Prim::RoundRect {
+                        x: x - half_base,
+                        y: if up { y } else { y - half_arrow },
+                        w: half_base * 2.0,
+                        h: half_arrow,
+                        radii: [0.0; 4],
+                        fill: marker.color,
+                        border_width: 0.0,
+                        border_color: marker.color,
+                    });
+                }
+                _ => {
+                    let radius = (((marker_shape_size(size, 0.8) - 1.0) * 0.5) * hpr) as f32;
+                    out.push(Prim::Circle {
+                        cx: x,
+                        cy: y,
+                        radius,
+                        fill: marker.color,
+                        stroke_width: 0.0,
+                        stroke: marker.color,
+                    });
+                }
+            }
+            if !marker.text.is_empty() {
+                out.push(Prim::Text {
+                    x,
+                    y: (text_y * vpr) as f32,
+                    text: marker.text.clone(),
+                    color: marker.color,
+                    size: (font_size * vpr) as f32,
+                    family: font_family.clone(),
+                    align: TextAlign::Center,
+                    weight: 400,
+                    italic: false,
+                });
             }
         }
     }

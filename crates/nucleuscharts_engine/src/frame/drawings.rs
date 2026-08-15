@@ -82,28 +82,30 @@ impl ChartEngine {
                 self.build_drawing_text(drawing, &px, pane_w_px, vpr, out);
             }
         } else {
-            let (candidates, key) = self.take_drawing_candidates(pane_index, None);
-            if let Some(key) = key {
-                let mut runtime = self.drawing_runtime.borrow_mut();
-                for &id in &candidates {
-                    let Some(position) = runtime.position(id) else {
-                        continue;
-                    };
-                    let Some(drawing) = self.drawings.get(position) else {
-                        continue;
-                    };
-                    let Some(px) = self.drawing_px_cached(drawing, &mut runtime, key) else {
-                        continue;
-                    };
-                    let px = px
-                        .iter()
-                        .map(|&(x, y)| (x * hpr, y * vpr))
-                        .collect::<Vec<_>>();
-                    self.build_drawing_prims(drawing, &px, pane_w_px, vpr, out, points);
-                    self.build_drawing_text(drawing, &px, pane_w_px, vpr, out);
-                    runtime.record_visible();
-                }
+            let candidates = self.take_drawing_candidates(pane_index, None);
+            let mut runtime = self.drawing_runtime.borrow_mut();
+            for &id in &candidates {
+                let Some(position) = runtime.position(id) else {
+                    continue;
+                };
+                let Some(drawing) = self.drawings.get(position) else {
+                    continue;
+                };
+                let Some(key) = self.drawing_coordinate_key(drawing) else {
+                    continue;
+                };
+                let Some(px) = self.drawing_px_cached(drawing, &mut runtime, key) else {
+                    continue;
+                };
+                let px = px
+                    .iter()
+                    .map(|&(x, y)| (x * hpr, y * vpr))
+                    .collect::<Vec<_>>();
+                self.build_drawing_prims(drawing, &px, pane_w_px, vpr, out, points);
+                self.build_drawing_text(drawing, &px, pane_w_px, vpr, out);
+                runtime.record_visible();
             }
+            drop(runtime);
             self.recycle_drawing_candidates(candidates);
         }
         // Live brush stroke: the decimated points so far paint as the same smooth curve the
@@ -136,13 +138,21 @@ impl ChartEngine {
                 if anchors.len() == pending.drawing.kind.anchor_count() {
                     let px: Option<Vec<(f64, f64)>> = anchors
                         .iter()
-                        .map(|&point| self.drawing_to_px(pane_index, point))
+                        .map(|&point| {
+                            self.drawing_to_px_for(pane_index, pending.drawing.price_scale, point)
+                        })
                         .collect();
                     if let Some(px) = px {
                         let px: Vec<(f64, f64)> =
                             px.into_iter().map(|(x, y)| (x * hpr, y * vpr)).collect();
+                        let mut preview_drawing = pending.drawing.clone();
+                        if preview_drawing.kind == DrawingKind::Rectangle {
+                            if let Some(fill) = preview_drawing.preview_fill_color.clone() {
+                                preview_drawing.fill_color = Some(fill);
+                            }
+                        }
                         self.build_drawing_prims(
-                            &pending.drawing,
+                            &preview_drawing,
                             &px,
                             pane_w_px,
                             vpr,
@@ -162,7 +172,9 @@ impl ChartEngine {
                 } else if anchors.len() == 1 {
                     // A one-anchor kind awaiting its click, or a two-anchor kind before the
                     // preview resolves: show the placed anchor as a handle alone.
-                    if let Some((x, y)) = self.drawing_to_px(pane_index, anchors[0]) {
+                    if let Some((x, y)) =
+                        self.drawing_to_px_for(pane_index, pending.drawing.price_scale, anchors[0])
+                    {
                         build_anchor_handles(&[(x * hpr, y * vpr)], vpr, self.anchor_fill(), out);
                     }
                 }
@@ -188,7 +200,7 @@ impl ChartEngine {
         if drawing.pane_index != pane_index {
             return;
         }
-        let Some(key) = self.drawing_coordinate_key(pane_index) else {
+        let Some(key) = self.drawing_coordinate_key(drawing) else {
             return;
         };
         let mut runtime = self.drawing_runtime.borrow_mut();
@@ -270,13 +282,16 @@ impl ChartEngine {
             }
             DrawingKind::Rectangle => {
                 let (a, b) = (px[0], px[1]);
-                let left = a.0.min(b.0).round() as i32;
-                let top = a.1.min(b.1).round() as i32;
-                let width = (a.0 - b.0).abs().round() as i32;
-                let height = (a.1 - b.1).abs().round() as i32;
-                if width <= 0 || height <= 0 {
-                    return;
-                }
+                let ax = a.0.round() as i32;
+                let bx = b.0.round() as i32;
+                let ay = a.1.round() as i32;
+                let by = b.1.round() as i32;
+                let left = ax.min(bx);
+                let top = ay.min(by);
+                // Official `positionsBox`: both endpoint pixels belong to the box, so an
+                // equal-point preview still occupies one bitmap pixel.
+                let width = (ax - bx).abs() + 1;
+                let height = (ay - by).abs() + 1;
                 // reference rectangle-drawing-tool default: the fill is the border color washed
                 // out (its `previewFillColor`/`fillColor` alpha pattern) — 20% here.
                 let fill = drawing
@@ -293,6 +308,9 @@ impl ChartEngine {
                     },
                     color: fill,
                 });
+                if !drawing.border_visible {
+                    return;
+                }
                 if drawing.style == LineStyle::Solid {
                     out.push(Prim::RectFrame {
                         rect: IRect {

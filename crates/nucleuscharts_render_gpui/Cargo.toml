@@ -13,7 +13,7 @@ description = "Optional GPUI executor for the Prim IR: lowers Nucleus's backend-
 # GPUI-free and unit-testable without a window or a GPU.
 [features]
 default = []
-gpui-backend = ["dep:gpui"]
+gpui-backend = ["dep:gpui", "dep:image", "dep:smallvec"]
 
 [dependencies]
 nucleuscharts_core = { path = "../nucleuscharts_core" }
@@ -34,6 +34,8 @@ nucleuscharts_render = { path = "../nucleuscharts_render" }
 gpui = { git = "https://github.com/zed-industries/zed", version = "=0.2.2", optional = true, default-features = false, features = [
     "windows-manifest",
 ] }
+image = { version = "0.25", optional = true, default-features = false }
+smallvec = { version = "1", optional = true }
 
 # The pixel-parity harness diffs GPUI's real output against Nucleus's existing native rasterizer.
 [dev-dependencies]

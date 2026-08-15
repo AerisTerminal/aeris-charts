@@ -21,13 +21,15 @@
 //! inside it to share one order — which would flatten the chart's z-order. Clipping therefore goes
 //! through `with_content_mask`, which affects masking only.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use gpui::{
     fill, linear_color_stop, linear_gradient, point, px, size, App, Background, Bounds,
-    ContentMask, Font, FontStyle, FontWeight, Hsla, Path, Pixels, Rgba, ShapedLine, SharedString,
-    Window,
+    ContentMask, Font, FontStyle, FontWeight, Hsla, Path, Pixels, RenderImage, Rgba, ShapedLine,
+    SharedString, Window,
 };
+use image::{Frame, RgbaImage};
+use smallvec::SmallVec;
 
 use nucleuscharts_render::color::Color;
 
@@ -304,6 +306,55 @@ impl ShapedTextCache {
     }
 }
 
+/// Bounded cache converting the shared straight-alpha RGBA8 payload into GPUI's retained image
+/// resource once per immutable image/opacity pair.
+pub(crate) struct RasterImageCache {
+    entries: HashMap<(u64, u32), (Arc<RenderImage>, u64)>,
+    tick: u64,
+}
+
+impl Default for RasterImageCache {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+            tick: 0,
+        }
+    }
+}
+
+impl RasterImageCache {
+    fn resolve(
+        &mut self,
+        source: &nucleuscharts_render::draw_list::RasterImage,
+        opacity: f32,
+    ) -> Option<Arc<RenderImage>> {
+        self.tick = self.tick.wrapping_add(1);
+        let key = (source.key, opacity.to_bits());
+        if let Some((image, stamp)) = self.entries.get_mut(&key) {
+            *stamp = self.tick;
+            return Some(Arc::clone(image));
+        }
+        let mut pixels = source.pixels.to_vec();
+        for rgba in pixels.chunks_exact_mut(4) {
+            rgba[3] = (f32::from(rgba[3]) * opacity.clamp(0.0, 1.0)).round() as u8;
+        }
+        let buffer = RgbaImage::from_raw(source.width, source.height, pixels)?;
+        let image = Arc::new(RenderImage::new(SmallVec::from_elem(Frame::new(buffer), 1)));
+        if self.entries.len() == 16 {
+            if let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, (_, stamp))| *stamp)
+                .map(|(key, _)| *key)
+            {
+                self.entries.remove(&oldest);
+            }
+        }
+        self.entries.insert(key, (Arc::clone(&image), self.tick));
+        Some(image)
+    }
+}
+
 impl GpuiChartRenderer {
     /// Lower a prepared frame and paint it into `window`.
     ///
@@ -359,6 +410,7 @@ impl GpuiChartRenderer {
             &plan,
             &mut self.text,
             &mut self.shaped_text,
+            &mut self.images,
             viewport,
             scale_factor,
             window,
@@ -397,6 +449,7 @@ impl GpuiChartRenderer {
             &plan,
             &mut self.text,
             &mut self.shaped_text,
+            &mut self.images,
             viewport,
             scale_factor,
             window,
@@ -422,6 +475,7 @@ fn paint_plan(
     plan: &ScenePlan,
     text_cache: &mut crate::text::TextCache,
     shaped_text: &mut ShapedTextCache,
+    images: &mut RasterImageCache,
     viewport: NucleusViewport,
     scale_factor: f32,
     window: &mut Window,
@@ -436,6 +490,7 @@ fn paint_plan(
         transform,
         text_cache,
         shaped_text,
+        images,
         window,
         cx,
         metrics,
@@ -451,6 +506,7 @@ fn paint_range(
     transform: Transform,
     text_cache: &mut crate::text::TextCache,
     shaped_text: &mut ShapedTextCache,
+    images: &mut RasterImageCache,
     window: &mut Window,
     cx: &mut App,
     metrics: &mut GpuiFrameMetrics,
@@ -472,6 +528,7 @@ fn paint_range(
                         transform,
                         text_cache,
                         shaped_text,
+                        images,
                         window,
                         cx,
                         metrics,
@@ -535,6 +592,29 @@ fn paint_range(
             }
             SceneOp::Text(run) => {
                 paint_text(run, transform, text_cache, shaped_text, window, cx, metrics);
+                i += 1;
+            }
+            SceneOp::Image {
+                image,
+                rect,
+                opacity,
+            } => {
+                if let Some(data) = images.resolve(image, *opacity) {
+                    let bounds = transform.bounds(*rect);
+                    match window.paint_image(
+                        bounds,
+                        bounds,
+                        gpui::Corners::default(),
+                        data,
+                        0,
+                        false,
+                    ) {
+                        Ok(()) => metrics.image_runs_painted += 1,
+                        Err(_) => metrics.image_paint_failures += 1,
+                    }
+                } else {
+                    metrics.image_paint_failures += 1;
+                }
                 i += 1;
             }
         }

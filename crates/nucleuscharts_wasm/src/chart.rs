@@ -16,8 +16,11 @@
 //! series maps its data onto merged indices; a series absent at an index is whitespace there.
 
 mod custom_series;
+mod feature_series;
+mod image_runs;
 mod inner_api;
 mod inner_render;
+mod native_primitives;
 mod primitives;
 mod ring;
 mod text_runs;
@@ -48,7 +51,7 @@ use nucleuscharts_core::scale::price_scale_core::PriceScaleMode;
 use nucleuscharts_engine::{
     crosshair_mode_from_u8, line_style_from_u8, marker_pos, marker_shape, AxisFrame, AxisLabel,
     AxisLabelCorners, AxisTextAlign, AxisTextMidpoint, ChartEngine, DrawingKind, DrawingModifiers,
-    DrawingPoint, Marker, PaneId, PriceFormatterFn, PriceScaleTarget,
+    DrawingPoint, FeatureSeriesKind, Marker, PaneId, PriceFormatterFn, PriceScaleTarget,
     PrimitiveAutoscaleContribution, SeriesKind, TickMarkFormatterFn, TimeFormatterFn,
 };
 use nucleuscharts_render::canvas2d::{
@@ -76,8 +79,13 @@ fn validation_diagnostics_json(
     report: &nucleuscharts_core::model::data_validation::ValidationReport,
 ) -> Option<String> {
     (!report.is_clean()).then(|| {
+        let status = if report.accepted == 0 && report.dropped_invalid > 0 {
+            "rejected"
+        } else {
+            "accepted_with_diagnostics"
+        };
         serde_json::json!({
-            "status": "accepted_with_diagnostics",
+            "status": status,
             "accepted": report.accepted,
             "dropped_invalid": report.dropped_invalid,
             "dropped_non_finite": report.dropped_non_finite,
@@ -128,6 +136,16 @@ struct MarkerInput {
     color: String,
     #[serde(default)]
     text: String,
+    #[serde(default)]
+    id: String,
+    #[serde(default = "default_marker_size")]
+    size: f64,
+    #[serde(default)]
+    price: Option<f64>,
+}
+
+fn default_marker_size() -> f64 {
+    1.0
 }
 
 fn price_scale_mode_from_u8(mode: u8) -> PriceScaleMode {
@@ -181,6 +199,7 @@ struct FormatRenderers {
     quad: QuadRenderer,
     tri: TriRenderer,
     tex: TexQuadRenderer,
+    image: TexQuadRenderer,
 }
 
 /// One GPU context shared by every chart instance in the page:
@@ -193,6 +212,7 @@ struct SharedGpu {
     device: wgpu::Device,
     queue: wgpu::Queue,
     atlas: RefCell<LabelAtlas>,
+    image_atlas: RefCell<LabelAtlas>,
     renderers: RefCell<std::collections::HashMap<wgpu::TextureFormat, Rc<FormatRenderers>>>,
     device_lost: Arc<AtomicBool>,
 }
@@ -209,6 +229,12 @@ impl SharedGpu {
                 &self.device,
                 format,
                 self.atlas.borrow().view(),
+                SAMPLE_COUNT,
+            ),
+            image: TexQuadRenderer::new(
+                &self.device,
+                format,
+                self.image_atlas.borrow().view(),
                 SAMPLE_COUNT,
             ),
         });
@@ -258,6 +284,7 @@ struct ChartInner {
     axis_dirty: bool,
     gpu_groups: Vec<DrawGroup>,
     gpu_atlas_epoch: u64,
+    gpu_image_atlas_epoch: u64,
     /// Pane-primitive registry (plugin platform Phase C-a): host-retained JS plugin objects,
     /// drawn into the pane layers during `render`. Ids are never reused within a chart.
     primitives: Vec<PanePrimitiveEntry>,
@@ -282,6 +309,8 @@ struct ChartInner {
     /// canvas + atlas cache). `None` only if the offscreen context could not be created —
     /// the Canvas2D backend draws text directly and never consults this.
     text_runs: Option<TextRunStore>,
+    /// Canvas2D fallback resources for immutable engine raster-image primitives.
+    canvas_images: RefCell<crate::canvas2d_target::CanvasImageStore>,
     /// Host-pinned clock (UTC seconds) for the candle-close countdown labels. `None` = the
     /// render path feeds the browser's system time every frame; `set_now_seconds` pins a value
     /// (the package's 1s countdown timer), which then drives every render until replaced.
@@ -534,6 +563,7 @@ pub async fn create_chart(
         axis_dirty: true,
         gpu_groups: Vec::new(),
         gpu_atlas_epoch: 0,
+        gpu_image_atlas_epoch: 0,
         primitives: Vec::new(),
         series_primitives: Vec::new(),
         next_primitive_id: 1,
@@ -556,6 +586,7 @@ pub async fn create_chart(
                 None
             }
         },
+        canvas_images: RefCell::default(),
     };
     // Drawing-label hit boxes measure through the same axis canvas the engine's own labels use
     // (drawings.rs `TextMeasureFn` — the host-injected formatter-hook pattern, so the engine
@@ -666,6 +697,7 @@ pub async fn create_offscreen_chart(
         axis_dirty: true,
         gpu_groups: Vec::new(),
         gpu_atlas_epoch: 0,
+        gpu_image_atlas_epoch: 0,
         primitives: Vec::new(),
         series_primitives: Vec::new(),
         next_primitive_id: 1,
@@ -684,6 +716,7 @@ pub async fn create_offscreen_chart(
                 None
             }
         },
+        canvas_images: RefCell::default(),
         now_override: None,
         rings: Vec::new(),
         telemetry: FrameTelemetry::default(),
@@ -846,6 +879,383 @@ impl NucleusChart {
     /// Adds a series and returns its id. `kind`: 0 candles, 1 bars, 2 line, 3 area, 4 histogram.
     pub fn add_series(&mut self, kind: u8) -> u32 {
         self.inner.borrow_mut().add_series(kind)
+    }
+
+    /// Add one of Nucleus's engine-owned advanced series. `kind` is [`FeatureSeriesKind::to_u8`];
+    /// the host supplies data and options, while every render/scale semantic stays in Rust.
+    pub fn add_feature_series(&mut self, kind: u8, adopt_primary: bool, options_json: &str) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_feature_series(kind, adopt_primary, options_json)
+    }
+
+    /// Replace an engine-owned advanced series' typed items.
+    pub fn set_feature_series_data(&mut self, id: u32, items: js_sys::Array) -> Option<String> {
+        self.inner.borrow_mut().set_feature_series_data(id, items)
+    }
+
+    pub fn update_feature_series_item(&mut self, id: u32, item: JsValue) -> Option<String> {
+        self.inner.borrow_mut().update_feature_series_item(id, item)
+    }
+
+    pub fn feature_series_data(&self, id: u32) -> JsValue {
+        self.inner.borrow().feature_series_data(id)
+    }
+
+    pub fn feature_series_data_by_index(&self, id: u32, index: f64, mismatch: i8) -> JsValue {
+        self.inner
+            .borrow()
+            .feature_series_data_by_index(id, index, mismatch)
+    }
+
+    pub fn feature_series_kind(&self, id: u32) -> Option<u8> {
+        self.inner
+            .borrow()
+            .engine
+            .feature_series_kind(id)
+            .map(FeatureSeriesKind::to_u8)
+    }
+
+    pub fn feature_series_options_json(&self, id: u32) -> String {
+        self.inner
+            .borrow()
+            .engine
+            .feature_series_options_json(id)
+            .unwrap_or_else(|| "{}".to_string())
+    }
+
+    /// Merge advanced-series options into the engine-owned state.
+    pub fn apply_feature_series_options(&mut self, id: u32, options_json: &str) -> bool {
+        self.inner
+            .borrow_mut()
+            .apply_feature_series_options(id, options_json)
+    }
+
+    /// Attach the official partial-last-price primitive with Rust-owned state and geometry.
+    pub fn add_native_partial_price_line(&mut self, series_id: u32) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_native_partial_price_line(series_id)
+    }
+
+    pub fn add_native_bands_indicator(&mut self, series_id: u32, options_json: &str) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_native_bands_indicator(series_id, options_json)
+    }
+
+    pub fn set_native_bands_indicator_options(&mut self, id: u32, options_json: &str) -> bool {
+        self.inner
+            .borrow_mut()
+            .set_native_bands_indicator_options(id, options_json)
+    }
+
+    pub fn add_native_overlay_price_scale(&mut self, series_id: u32, options_json: &str) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_native_overlay_price_scale(series_id, options_json)
+    }
+
+    pub fn set_native_overlay_price_scale_options(&mut self, id: u32, options_json: &str) -> bool {
+        self.inner
+            .borrow_mut()
+            .set_native_overlay_price_scale_options(id, options_json)
+    }
+
+    /// Attach the shared-engine point focus ring used by the browser accessibility controller.
+    pub fn add_native_accessibility_focus(&mut self, series_id: u32, options_json: &str) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_native_accessibility_focus(series_id, options_json)
+    }
+
+    /// Move, hide, or restyle an accessibility focus ring (`NaN` hides it).
+    pub fn set_native_accessibility_focus(
+        &mut self,
+        primitive_id: u32,
+        time: f64,
+        options_json: &str,
+    ) -> bool {
+        let time = if time.is_nan() {
+            None
+        } else if time.is_finite() && time.fract() == 0.0 {
+            Some(time as i64)
+        } else {
+            return false;
+        };
+        self.inner
+            .borrow_mut()
+            .set_native_accessibility_focus(primitive_id, time, options_json)
+    }
+
+    /// Attach an engine-owned image watermark. The host decodes the source image once and passes
+    /// bounded RGBA8 pixels; placement and execution are shared across every backend.
+    pub fn add_native_image_watermark(
+        &mut self,
+        series_id: u32,
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+        options_json: &str,
+    ) -> u32 {
+        self.inner.borrow_mut().add_native_image_watermark(
+            series_id,
+            width,
+            height,
+            pixels,
+            options_json,
+        )
+    }
+
+    /// Attach viewport-aligned text whose layout and rendering are owned by the Rust frame.
+    pub fn add_native_anchored_text(&mut self, series_id: u32, options_json: &str) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_native_anchored_text(series_id, options_json)
+    }
+
+    /// Transactionally replace all anchored-text options.
+    pub fn set_native_anchored_text_options(&mut self, id: u32, options_json: &str) -> bool {
+        self.inner
+            .borrow_mut()
+            .set_native_anchored_text_options(id, options_json)
+    }
+
+    /// Attach the official multi-line text watermark through the shared frame.
+    pub fn add_native_text_watermark(&mut self, pane_index: usize, options_json: &str) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_native_text_watermark(pane_index, options_json)
+    }
+
+    /// Transactionally replace all text-watermark options.
+    pub fn set_native_text_watermark_options(&mut self, id: u32, options_json: &str) -> bool {
+        self.inner
+            .borrow_mut()
+            .set_native_text_watermark_options(id, options_json)
+    }
+
+    /// Attach the official full-pane vertical line and optional time-axis label.
+    pub fn add_native_vertical_line(
+        &mut self,
+        series_id: u32,
+        time: f64,
+        options_json: &str,
+    ) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_native_vertical_line(series_id, time, options_json)
+    }
+
+    /// Attach the crosshair-following add-price-line button from the official plugin.
+    pub fn add_native_user_price_lines_button(
+        &mut self,
+        series_id: u32,
+        options_json: &str,
+    ) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_native_user_price_lines_button(series_id, options_json)
+    }
+
+    pub fn click_native_primitives_at(&mut self, x: f64, y: f64) -> bool {
+        self.inner
+            .borrow_mut()
+            .engine
+            .click_native_primitives_at(x, y)
+    }
+
+    pub fn add_native_user_price_alerts(&mut self, series_id: u32, options_json: &str) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_native_user_price_alerts(series_id, options_json)
+    }
+
+    pub fn add_native_delta_tooltip(&mut self, series_id: u32, options_json: &str) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_native_delta_tooltip(series_id, options_json)
+    }
+
+    pub fn add_native_tooltip(&mut self, series_id: u32, options_json: &str) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_native_tooltip(series_id, options_json)
+    }
+
+    pub fn set_native_tooltip_options(&mut self, primitive_id: u32, options_json: &str) -> bool {
+        self.inner
+            .borrow_mut()
+            .set_native_tooltip_options(primitive_id, options_json)
+    }
+
+    pub fn native_tooltip_snapshot_json(&self, primitive_id: u32) -> String {
+        self.inner
+            .borrow()
+            .native_tooltip_snapshot_json(primitive_id)
+    }
+
+    pub fn native_delta_tooltip_active_range_json(&self, primitive_id: u32) -> String {
+        self.inner
+            .borrow()
+            .native_delta_tooltip_active_range_json(primitive_id)
+    }
+
+    /// Forward normalized host mouse samples to every engine-owned delta tooltip.
+    pub fn native_delta_tooltip_mouse_down(&mut self, x: f64) -> bool {
+        self.inner.borrow_mut().engine.delta_tooltip_mouse_down(x)
+    }
+
+    pub fn native_delta_tooltip_mouse_move(&mut self, x: f64) -> bool {
+        self.inner.borrow_mut().engine.delta_tooltip_mouse_move(x)
+    }
+
+    pub fn native_delta_tooltip_mouse_up(&mut self) -> bool {
+        self.inner.borrow_mut().engine.delta_tooltip_mouse_up()
+    }
+
+    pub fn native_delta_tooltip_touch_move(&mut self, xs: &[f64]) -> bool {
+        self.inner.borrow_mut().engine.delta_tooltip_touch_move(xs)
+    }
+
+    pub fn native_delta_tooltip_leave(&mut self) -> bool {
+        self.inner.borrow_mut().engine.delta_tooltip_leave()
+    }
+
+    pub fn add_native_user_price_alert(&mut self, primitive_id: u32, price: f64) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_native_user_price_alert(primitive_id, price)
+    }
+
+    pub fn remove_native_user_price_alert(&mut self, primitive_id: u32, alert_id: u32) -> bool {
+        self.inner
+            .borrow_mut()
+            .remove_native_user_price_alert(primitive_id, alert_id)
+    }
+
+    pub fn native_user_price_alerts_json(&self, primitive_id: u32) -> String {
+        self.inner
+            .borrow()
+            .native_user_price_alerts_json(primitive_id)
+    }
+
+    /// Attach the official two-point trend-line primitive with endpoint labels.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_native_trend_line(
+        &mut self,
+        series_id: u32,
+        first_time: f64,
+        first_price: f64,
+        second_time: f64,
+        second_price: f64,
+        options_json: &str,
+    ) -> u32 {
+        self.inner.borrow_mut().add_native_trend_line(
+            series_id,
+            first_time,
+            first_price,
+            second_time,
+            second_price,
+            options_json,
+        )
+    }
+
+    /// Attach declarative session shading; JS only serializes the boundary options.
+    pub fn add_native_session_highlighting(&mut self, series_id: u32, options_json: &str) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_native_session_highlighting(series_id, options_json)
+    }
+
+    /// Replace callback-derived `{time,color}` records for a session-highlighting primitive.
+    pub fn set_native_session_highlighting_data(
+        &mut self,
+        primitive_id: u32,
+        highlights_json: &str,
+    ) -> bool {
+        self.inner
+            .borrow_mut()
+            .set_native_session_highlighting_data(primitive_id, highlights_json)
+    }
+
+    /// Attach a retained-frame bar-slot highlight driven directly by the engine crosshair.
+    pub fn add_native_crosshair_highlight(&mut self, series_id: u32, color: &str) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_native_crosshair_highlight(series_id, color)
+    }
+
+    /// Attach the official time-anchored profile schema (`time`, `profile[{price,vol}]`, `width`).
+    pub fn add_native_volume_profile(
+        &mut self,
+        series_id: u32,
+        data_json: &str,
+        options_json: &str,
+    ) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_native_volume_profile(series_id, data_json, options_json)
+    }
+
+    pub fn set_native_volume_profile_data(&mut self, id: u32, data_json: &str) -> bool {
+        self.inner
+            .borrow_mut()
+            .set_native_volume_profile_data(id, data_json)
+    }
+
+    pub fn add_native_expiring_price_alerts(&mut self, series_id: u32, options_json: &str) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_native_expiring_price_alerts(series_id, options_json)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_native_expiring_price_alert(
+        &mut self,
+        primitive_id: u32,
+        price: f64,
+        start: f64,
+        end: f64,
+        title: &str,
+        crossing_direction: &str,
+    ) -> u32 {
+        self.inner.borrow_mut().add_native_expiring_price_alert(
+            primitive_id,
+            price,
+            start,
+            end,
+            title,
+            crossing_direction,
+        )
+    }
+
+    pub fn remove_native_expiring_price_alert(&mut self, primitive_id: u32, alert_id: u32) -> bool {
+        self.inner
+            .borrow_mut()
+            .remove_native_expiring_price_alert(primitive_id, alert_id)
+    }
+
+    pub fn refresh_native_expiring_price_alerts(
+        &mut self,
+        primitive_id: u32,
+        time: f64,
+        value: f64,
+        now_ms: f64,
+    ) -> f64 {
+        self.inner
+            .borrow_mut()
+            .refresh_native_expiring_price_alerts(primitive_id, time, value, now_ms)
+    }
+
+    pub fn native_expiring_price_alerts_json(&self, primitive_id: u32) -> String {
+        self.inner
+            .borrow()
+            .native_expiring_price_alerts_json(primitive_id)
+    }
+
+    pub fn remove_native_primitive(&mut self, id: u32) -> bool {
+        self.inner.borrow_mut().remove_native_primitive(id)
     }
 
     /// Remove a series (and any indicators derived from it). Returns true if a live series
@@ -1276,14 +1686,20 @@ impl NucleusChart {
     }
 
     /// Replace a series' markers from a JSON array. Call `render()` after (roadmap Phase B4).
-    pub fn set_series_markers(&mut self, series_id: u32, json: &str) {
-        self.inner.borrow_mut().set_series_markers(series_id, json);
+    pub fn set_series_markers(&mut self, series_id: u32, json: &str) -> bool {
+        self.inner.borrow_mut().set_series_markers(series_id, json)
     }
     /// Toggle marker pixel margins in price-scale autoscaling (enabled by default, as in reference).
     pub fn set_series_markers_auto_scale(&mut self, series_id: u32, enabled: bool) {
         self.inner
             .borrow_mut()
             .set_series_markers_auto_scale(series_id, enabled);
+    }
+    /// Set the official marker layer (`normal`, `aboveSeries`, or `top`) by wire value.
+    pub fn set_series_markers_z_order(&mut self, series_id: u32, z_order: u8) -> bool {
+        self.inner
+            .borrow_mut()
+            .set_series_markers_z_order(series_id, z_order)
     }
     /// Whether any series wants the last-price pulse (host uses this to run/stop its rAF loop).
     pub fn wants_animation(&self) -> bool {
@@ -2002,6 +2418,11 @@ impl NucleusChart {
             .borrow_mut()
             .drawing_create_begin(kind, options_json)
     }
+    pub fn drawing_create_apply_options(&mut self, options_json: &str) -> bool {
+        self.inner
+            .borrow_mut()
+            .drawing_create_apply_options(options_json)
+    }
     /// Place the next creation anchor: 0 unarmed, -1 pending more anchors, > 0 the committed
     /// drawing's id (left selected, TradingView-style). `magnet` snaps the anchor to the nearest
     /// bar's OHLC; `straighten` constrains a second anchor to 0°/45°/90° (a rectangle to a
@@ -2403,6 +2824,7 @@ async fn create_shared_gpu(force_fallback_adapter: bool) -> Result<Rc<SharedGpu>
     });
     Ok(Rc::new(SharedGpu {
         atlas: RefCell::new(LabelAtlas::new(&device)),
+        image_atlas: RefCell::new(LabelAtlas::new(&device)),
         renderers: RefCell::new(std::collections::HashMap::new()),
         instance,
         adapter,

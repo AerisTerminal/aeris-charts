@@ -286,6 +286,9 @@ pub struct DataLayer {
     next_series_id: SeriesId,
     merged_times: Vec<i64>,
     merged_times_scratch: Vec<i64>,
+    /// Time-only points contributed by engine-owned primitives. They participate in the shared
+    /// time-axis union but never move [`Self::base_index`], exactly like a whitespace-only series.
+    auxiliary_times: Vec<i64>,
     /// Changes only when the merged timestamp sequence changes. Value-only current-bar updates
     /// leave it untouched, so time-derived consumers can distinguish them without rescanning.
     time_points_generation: u64,
@@ -365,6 +368,7 @@ impl DataLayer {
     pub fn memory_usage(&self) -> DataLayerMemoryUsage {
         let mut usage = DataLayerMemoryUsage {
             merged_time_bytes: self.merged_times.len() * std::mem::size_of::<i64>(),
+            owned_time_bytes: self.auxiliary_times.len() * std::mem::size_of::<i64>(),
             scratch_capacity_bytes: self.merged_times_scratch.capacity()
                 * std::mem::size_of::<i64>(),
             ..DataLayerMemoryUsage::default()
@@ -395,6 +399,7 @@ impl DataLayer {
             usage.dense_index_series += usize::from(series.plot.is_dense());
         }
         usage.allocated_capacity_bytes += self.merged_times.capacity() * std::mem::size_of::<i64>()
+            + self.auxiliary_times.capacity() * std::mem::size_of::<i64>()
             + usage.scratch_capacity_bytes;
         usage
     }
@@ -472,6 +477,20 @@ impl DataLayer {
     /// Union of all series' timestamps, sorted ascending (the time-scale points).
     pub fn merged_times(&self) -> &[i64] {
         &self.merged_times
+    }
+
+    /// Replace the time-only primitive timeline. Input is normalized so callers cannot corrupt
+    /// the merged-time ordering; returns whether the sequence changed.
+    pub fn set_auxiliary_times(&mut self, mut times: Vec<i64>) -> bool {
+        times.sort_unstable();
+        times.dedup();
+        if times == self.auxiliary_times {
+            return false;
+        }
+        self.auxiliary_times = times;
+        self.rebuild_merged();
+        self.reindex_all();
+        true
     }
 
     /// Monotonic identity for the complete merged timestamp sequence.
@@ -1242,7 +1261,8 @@ impl DataLayer {
             .values()
             .filter(|&&slot| self.series[slot].time_alias.is_none())
             .map(|&slot| self.series[slot].times.len())
-            .sum();
+            .sum::<usize>()
+            + self.auxiliary_times.len();
         let all = &mut self.merged_times_scratch;
         all.clear();
         if all.capacity() < total {
@@ -1253,6 +1273,7 @@ impl DataLayer {
                 all.extend_from_slice(&self.series[slot].times);
             }
         }
+        all.extend_from_slice(&self.auxiliary_times);
         all.sort_unstable();
         all.dedup();
         if *all != self.merged_times {
@@ -1870,6 +1891,28 @@ mod tests {
         assert!(dl.plot(a).is_whitespace_row(4));
         // base index = the last point with real data (reference _getBaseIndex), not the trailing ws
         assert_eq!(dl.base_index(), Some(3));
+    }
+
+    #[test]
+    fn auxiliary_times_extend_the_union_without_moving_the_data_base() {
+        let mut layer = DataLayer::new();
+        let series = layer.add_series();
+        assert!(layer.set_data(
+            series,
+            vec![10, 20],
+            vec![1.0, 2.0],
+            vec![1.0, 2.0],
+            vec![1.0, 2.0],
+            vec![1.0, 2.0],
+        ));
+        assert!(layer.set_auxiliary_times(vec![40, 30, 30]));
+        assert_eq!(layer.merged_times(), &[10, 20, 30, 40]);
+        assert_eq!(layer.base_index(), Some(1));
+        assert_eq!(layer.plot(series).indices().collect::<Vec<_>>(), [0, 1]);
+        assert!(!layer.set_auxiliary_times(vec![30, 40]));
+        assert!(layer.set_auxiliary_times(Vec::new()));
+        assert_eq!(layer.merged_times(), &[10, 20]);
+        assert_eq!(layer.base_index(), Some(1));
     }
 
     #[test]

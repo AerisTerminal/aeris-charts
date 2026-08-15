@@ -144,7 +144,7 @@ impl ChartInner {
                 pane_count
             } else {
                 (0..pane_count)
-                    .map(|pane| 3 + self.engine.frame_series_segments(pane).len())
+                    .map(|pane| 4 + self.engine.frame_series_segments(pane).len())
                     .sum()
             };
             self.gpu_groups
@@ -157,9 +157,13 @@ impl ChartInner {
             let renderers = Rc::clone(&gfx.renderers);
             let text_runs = &mut self.text_runs;
             let mut atlas = shared.atlas.borrow_mut();
+            let mut image_atlas = shared.image_atlas.borrow_mut();
             atlas.begin_frame();
+            image_atlas.begin_frame();
             let atlas_changed = self.gpu_atlas_epoch != atlas.epoch();
+            let image_atlas_changed = self.gpu_image_atlas_epoch != image_atlas.epoch();
             self.gpu_atlas_epoch = atlas.epoch();
+            self.gpu_image_atlas_epoch = image_atlas.epoch();
             if !atlas_changed
                 && self
                     .gpu_groups
@@ -167,6 +171,14 @@ impl ChartInner {
                     .any(|group| !group.tex_quads.is_empty())
             {
                 atlas.protect_retained_frame_slots();
+            }
+            if !image_atlas_changed
+                && self
+                    .gpu_groups
+                    .iter()
+                    .any(|group| !group.image_quads.is_empty())
+            {
+                image_atlas.protect_retained_frame_slots();
             }
             let queue = &shared.queue;
             if plugin_active {
@@ -180,23 +192,28 @@ impl ChartInner {
                             .as_mut()
                             .and_then(|runs| runs.resolve(&mut atlas, queue, prim))
                     };
+                    let mut resolve_image =
+                        |prim: &Prim| super::image_runs::resolve(&mut image_atlas, queue, prim);
                     prims_to_group(
                         &pane_frame.under,
                         &pane_frame.points,
                         group,
                         &mut resolve_text,
+                        &mut resolve_image,
                     );
                     prims_to_group(
                         &pane_frame.main,
                         &pane_frame.points,
                         group,
                         &mut resolve_text,
+                        &mut resolve_image,
                     );
                     prims_to_group(
                         &pane_frame.top_prims,
                         &pane_frame.points,
                         group,
                         &mut resolve_text,
+                        &mut resolve_image,
                     );
                 }
             } else {
@@ -207,6 +224,7 @@ impl ChartInner {
                                        prims: &[Prim],
                                        points: &[[f32; 2]]| {
                     if !atlas_changed
+                        && !image_atlas_changed
                         && group.key == key
                         && group.source_revision == source_revision
                         && group.scissor == scissor
@@ -220,7 +238,9 @@ impl ChartInner {
                             .as_mut()
                             .and_then(|runs| runs.resolve(&mut atlas, queue, prim))
                     };
-                    prims_to_group(prims, points, group, &mut resolve_text);
+                    let mut resolve_image =
+                        |prim: &Prim| super::image_runs::resolve(&mut image_atlas, queue, prim);
+                    prims_to_group(prims, points, group, &mut resolve_text, &mut resolve_image);
                 };
                 let mut group_index = 0;
                 for (pane, pane_frame) in engine_frame.panes.iter().enumerate() {
@@ -270,6 +290,15 @@ impl ChartInner {
                         &pane_frame.points,
                     );
                     group_index += 1;
+                    build_group(
+                        &mut self.gpu_groups[group_index],
+                        0x2000_0004 | (pane as u64) << 4,
+                        segments.top_revision,
+                        Some(pane_frame.scissor),
+                        &pane_frame.top_prims,
+                        &pane_frame.points,
+                    );
+                    group_index += 1;
                 }
             }
             // Final unscissored top-layer group: watermark, axis chrome and axis/crosshair labels.
@@ -277,6 +306,7 @@ impl ChartInner {
             // follows a WebGPU frame.
             let axis_group = &mut self.gpu_groups[pane_group_count];
             if atlas_changed
+                || image_atlas_changed
                 || axis_group.key != u64::MAX
                 || axis_group.source_revision != self.axis_revision
             {
@@ -287,10 +317,19 @@ impl ChartInner {
                         .as_mut()
                         .and_then(|runs| runs.resolve(&mut atlas, queue, prim))
                 };
-                prims_to_group(&self.axis_prims, &[], axis_group, &mut resolve_text);
+                let mut resolve_image =
+                    |prim: &Prim| super::image_runs::resolve(&mut image_atlas, queue, prim);
+                prims_to_group(
+                    &self.axis_prims,
+                    &[],
+                    axis_group,
+                    &mut resolve_text,
+                    &mut resolve_image,
+                );
             }
-            let atlas_valid = atlas.frame_valid();
+            let atlas_valid = atlas.frame_valid() && image_atlas.frame_valid();
             drop(atlas);
+            drop(image_atlas);
             if !atlas_valid {
                 PaneRenderOutcome::Canvas2d
             } else {
@@ -347,6 +386,7 @@ impl ChartInner {
                             bg_clear,
                             &renderers.quad,
                             &renderers.tex,
+                            &renderers.image,
                             &renderers.tri,
                             groups,
                             &mut gfx.frame_resources,
@@ -497,6 +537,17 @@ impl ChartInner {
         let time_border = Color::parse_css(&options.time_scale.border_color)
             .unwrap_or(fallback)
             .to_hex();
+
+        for band in &axis_frame.bands {
+            ctx.set_fill_style_str(&band.color.to_css());
+            ctx.fill_rect(
+                (band.x * dpr).round(),
+                (band.y * dpr).round(),
+                (band.width * dpr).round(),
+                (band.height * dpr).round(),
+            );
+            ops += 1;
+        }
 
         if self.left_axis_w > 0.0 && options.left_price_scale.border_visible {
             ctx.set_fill_style_str(&left_border);
@@ -838,7 +889,8 @@ impl ChartInner {
         let bg = self.opts().layout.background.color;
         ctx.set_fill_style_str(&bg);
         ctx.fill_rect(0.0, 0.0, width, height);
-        let mut target = crate::canvas2d_target::WasmCanvas2d::new(ctx);
+        let mut image_store = self.canvas_images.borrow_mut();
+        let mut target = crate::canvas2d_target::WasmCanvas2d::with_images(ctx, &mut image_store);
         let viewport = CanvasViewport {
             width: width as f32,
             height: height as f32,

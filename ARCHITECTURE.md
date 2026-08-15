@@ -52,6 +52,10 @@ Hosts send input and data to the engine. The engine returns query results and a 
 
 Built-in frame geometry and series hit testing share one viewport-density query. Resolvable spacing uses the raw rows unchanged. Below one physical pixel per row, the query chooses the deepest summary level whose group fits the average pixel density, uses aligned summary nodes for pixel-bucket interiors, and refines partial boundaries through lower levels or raw rows. The existing per-kind conflation then preserves chronological line endpoints and close extrema, candle first-open/high/low/last-close semantics, and histogram greatest absolute value. The resulting ordered `ChartFrame` remains the only backend contract. Crosshair data lookup and autoscale remain exact raw/cached canonical queries rather than LOD approximations.
 
+The official advanced-series examples are engine-owned feature series, not browser drawing callbacks. Each retains its complete validated payload beside an OHLC-shaped canonical projection used by the shared time/price-scale and query machinery. Brushable area, dual-range histogram, grouped bars, heatmap, HLC area, pretty histogram, lollipop, rounded candles, background shade, stacked area/bars, and whisker boxes all construct backend-neutral primitives in the same ordered series layer as built-in geometry. Their official defaults, visible-range rules, pixel snapping, autoscale semantics, and source-data lifecycle are therefore identical in browser and native hosts.
+
+Official primitives with chart semantics are likewise retained by the engine. Series primitives follow the source across panes and own their bounded data, hit state, autoscale contribution, and pane/axis views; pane-only primitives retain a stable `PaneId`. A browser may decode an image or evaluate a user-supplied color/format callback at the platform boundary, but it sends the bounded result back to Rust. The engine stores image watermarks as RGBA8 `RasterImage` values and emits one shared `Image` primitive; Canvas2D, WebGPU, GPUI, and native executors only upload/cache and paint that prepared image.
+
 An indicator binding keeps its public definition, compact private runtime, and ordinary canonical output series separate. Sparse runtime checkpoints are tied to source row positions and to the source and optional volume-series generations. A tail mutation advances only bindings that depend on that source and installs only changed output rows; a historical mutation resumes from the nearest valid checkpoint and replaces the affected output suffix, while truncation or complete replacement performs a clean rebuild. Removed source/output series drop the binding and its runtime state together.
 
 Drawing anchors, kinds, styles, pane association, z-order, and metadata remain the only authoritative drawing state. A chart-local derived runtime maps the existing monotonic `DrawingId` values to conservative logical/price bounds, coordinate-keyed media-space anchor geometry, and pane-local z-ordered candidate lists. Candidate queries first reject drawings in semantic space, then test cached conservative screen bounds; only viewport or pointer candidates rebuild coordinate geometry and reach canonical primitive emission or precise hit testing. Full-span horizontal lines, full-height vertical lines, and half-infinite horizontal rays retain explicit unbounded dimensions rather than fake finite extents. Brush bounds are computed once on semantic mutation, padded for curved interpolation, and remain conservatively unbounded during an active brush drag before one exact pointer-up rebuild. Runtime bounds, geometry, counters, and index entries are never serialized.
@@ -143,7 +147,7 @@ The ordered frame contract contains pane backgrounds and grids, series geometry,
 
 ## Plugins and host extensions
 
-Custom series and primitives are explicit host boundaries. The engine owns their identity, layout participation, hit-test context, autoscale contribution, and built-in chrome integration. A host may execute custom drawing callbacks, then records the values the engine needs for the next canonical frame.
+User-defined custom series and primitives remain explicit host boundaries. The engine owns their identity, layout participation, hit-test context, autoscale contribution, and built-in chrome integration. A host may execute an arbitrary user callback, then records the values the engine needs for the next canonical frame. The official plugin implementations above do not use that callback path.
 
 Extensions must not receive unrestricted engine internals or create a second scene graph. Add extension surfaces only for current consumers with a stable semantic need.
 
@@ -154,13 +158,13 @@ host boundary. Extension runtime objects and callbacks are never persisted by th
 their configuration and restoration. The current custom-series and primitive APIs are experimental,
 not a second plugin framework.
 
-The browser package's custom-series and primitive feature modules are first-class compositions of
-these boundaries. Brushable/stacked/specialized series record the same backend-neutral primitive
-commands as any custom series. Drawing, Bollinger-band, price-line, and overlay-scale helpers route
-to their existing engine owners instead of reimplementing them. Tooltip and accessibility helpers
-own bounded DOM state beside the chart, and image watermarking uses the explicit Canvas2D escape
-hatch. Feature handles own and release their host subscriptions, timers, DOM nodes, and extension
-registrations; none of that runtime state enters engine persistence.
+The browser package's official-feature modules are thin lifecycle and platform adapters over these
+engine owners. They normalize public data/options, translate pointer or keyboard events, decode
+browser images, and create optional DOM chrome; they do not simulate financial geometry. Tooltip
+guides/value lookup, accessibility focus geometry, drawings, bands, alerts, price lines, overlay
+labels, image placement, and every specialized series frame are constructed in Rust. Feature
+handles release their engine primitive plus any host subscription, timer, or DOM node exactly once;
+none of that runtime state enters engine persistence.
 
 ## Performance contract
 

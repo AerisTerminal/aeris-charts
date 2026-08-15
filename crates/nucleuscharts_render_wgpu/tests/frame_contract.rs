@@ -7,7 +7,8 @@
 use nucleuscharts_engine::{marker_pos, marker_shape, ChartEngine, Marker, PriceLine, SeriesKind};
 use nucleuscharts_render::canvas2d::{execute, Canvas2d, Viewport};
 use nucleuscharts_render::color::Color;
-use nucleuscharts_render::draw_list::{LineStyle, Prim};
+use nucleuscharts_render::draw_list::{LineStyle, Prim, RasterImage};
+use std::sync::Arc;
 
 use nucleuscharts_render_wgpu::{
     geom_prims_to_tris, prims_to_group, prims_to_instances, DrawGroup, DrawRun, RunPipeline,
@@ -118,6 +119,9 @@ fn fixture() -> ChartEngine {
         shape: marker_shape::SQUARE,
         color: Color::rgb(0x10, 0x80, 0xff),
         text: "BUY".into(),
+        id: String::new(),
+        size: 1.0,
+        price: None,
     });
     chart.series[0].price_lines.push(PriceLine {
         id: 1,
@@ -160,6 +164,7 @@ fn one_engine_frame_is_consumable_by_canvas2d_and_webgpu_adapters() {
     let mut quads = Vec::new();
     let mut fill_tris = Vec::new();
     let mut stroke_tris = Vec::new();
+    let mut saw_marker_text = false;
 
     for pane in &frame.panes {
         execute(
@@ -180,11 +185,11 @@ fn one_engine_frame_is_consumable_by_canvas2d_and_webgpu_adapters() {
                 height: 220.0,
             },
         );
-        assert!(!pane
+        saw_marker_text |= pane
             .under
             .iter()
             .chain(&pane.main)
-            .any(|p| matches!(p, Prim::Text { .. })));
+            .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "BUY"));
         prims_to_instances(&pane.under, &mut quads);
         prims_to_instances(&pane.main, &mut quads);
         geom_prims_to_tris(&pane.main, &pane.points, &mut fill_tris, &mut stroke_tris);
@@ -205,6 +210,10 @@ fn one_engine_frame_is_consumable_by_canvas2d_and_webgpu_adapters() {
     assert!(
         !stroke_tris.is_empty(),
         "WebGPU triangle adapter must receive line/marker primitives"
+    );
+    assert!(
+        saw_marker_text,
+        "the official marker label must remain in the shared frame"
     );
 
     // Integer geometry is intentionally backend-identical: both adapters use the same rect and
@@ -235,6 +244,7 @@ fn assert_runs_tile_buffers(group: &DrawGroup) {
         (RunPipeline::Tri, group.tris.len()),
         (RunPipeline::Quad, group.quads.len()),
         (RunPipeline::TexQuad, group.tex_quads.len()),
+        (RunPipeline::ImageQuad, group.image_quads.len()),
     ] {
         let mut next = 0u32;
         for run in group.runs.iter().filter(|r| r.pipeline == pipeline) {
@@ -301,7 +311,7 @@ fn group_builder_preserves_mixed_prim_order_with_run_length_batching() {
         rect(60), // still the same quad run as rect(50)
     ];
     let mut group = DrawGroup::default();
-    prims_to_group(&prims, &points, &mut group, &mut |_| None);
+    prims_to_group(&prims, &points, &mut group, &mut |_| None, &mut |_| None);
 
     let schedule: Vec<RunPipeline> = group.runs.iter().map(|r| r.pipeline).collect();
     assert_eq!(
@@ -373,7 +383,7 @@ fn group_builder_schedules_resolved_text_quads_in_prim_order() {
     // with each other, mirroring the Canvas2D paint order rect → text → text → rect.
     let prims = [rect(0), text_prim(10.0), text_prim(20.0), rect(30)];
     let mut group = DrawGroup::default();
-    prims_to_group(&prims, &[], &mut group, &mut dummy_quad);
+    prims_to_group(&prims, &[], &mut group, &mut dummy_quad, &mut |_| None);
 
     let schedule: Vec<RunPipeline> = group.runs.iter().map(|r| r.pipeline).collect();
     assert_eq!(
@@ -395,15 +405,59 @@ fn group_builder_schedules_resolved_text_quads_in_prim_order() {
 }
 
 #[test]
+fn group_builder_keeps_images_on_their_dedicated_atlas_pipeline() {
+    let prims = [Prim::Image {
+        image: RasterImage {
+            key: 7,
+            width: 1,
+            height: 1,
+            pixels: Arc::<[u8]>::from([255, 255, 255, 255]),
+        },
+        rect: [4.0, 5.0, 20.0, 10.0],
+        opacity: 0.5,
+    }];
+    let mut group = DrawGroup::default();
+    prims_to_group(&prims, &[], &mut group, &mut |_| None, &mut |_| {
+        Some(TexQuadInstance {
+            rect: [4.0, 5.0, 20.0, 10.0],
+            uv: [0.0, 0.0, 1.0, 1.0],
+            color: [1.0; 4],
+        })
+    });
+    assert!(group.tex_quads.is_empty());
+    assert_eq!(group.image_quads.len(), 1);
+    assert_eq!(group.runs[0].pipeline, RunPipeline::ImageQuad);
+    assert_runs_tile_buffers(&group);
+}
+
+#[test]
 fn group_builder_batches_candle_blocks_and_schedules_markers_after_candles() {
     let mut chart = fixture();
     let frame = chart.build_frame();
     let mut saw_tri_over_quad = false;
     for pane in &frame.panes {
         let mut group = DrawGroup::default();
-        prims_to_group(&pane.under, &pane.points, &mut group, &mut |_| None);
-        prims_to_group(&pane.main, &pane.points, &mut group, &mut |_| None);
-        prims_to_group(&pane.top_prims, &pane.points, &mut group, &mut |_| None);
+        prims_to_group(
+            &pane.under,
+            &pane.points,
+            &mut group,
+            &mut |_| None,
+            &mut |_| None,
+        );
+        prims_to_group(
+            &pane.main,
+            &pane.points,
+            &mut group,
+            &mut |_| None,
+            &mut |_| None,
+        );
+        prims_to_group(
+            &pane.top_prims,
+            &pane.points,
+            &mut group,
+            &mut |_| None,
+            &mut |_| None,
+        );
         assert_runs_tile_buffers(&group);
 
         // Perf contract: the candle/bar/histogram blocks (hundreds of quads) stay a handful

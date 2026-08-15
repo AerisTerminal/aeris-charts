@@ -5,6 +5,8 @@
 //! - integer **bitmap** rects (`Rect`, `RectFrame`, `HLine`, `VLine`) — crisp, no AA;
 //! - float bitmap-space geometry (`Polyline`, `AreaFill`, `RoundRect`, `Circle`, `Text`) — AA'd.
 
+use std::sync::Arc;
+
 use crate::color::Color;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,6 +84,24 @@ pub fn text_font_spec(size: f32, family: &str, weight: u16, italic: bool) -> Str
         size,
         family
     )
+}
+
+/// Immutable straight-alpha RGBA8 pixels shared by retained frames and every executor.
+///
+/// `key` is chart-local and immutable for the lifetime of the pixels. Backends use it to retain
+/// decoded/uploaded image resources without hashing or copying the payload every frame.
+#[derive(Clone, Debug)]
+pub struct RasterImage {
+    pub key: u64,
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Arc<[u8]>,
+}
+
+impl PartialEq for RasterImage {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key && self.width == other.width && self.height == other.height
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -183,6 +203,13 @@ pub enum Prim {
         /// Numeric CSS font weight (100–900; 400 normal, 700 bold).
         weight: u16,
         italic: bool,
+    },
+    /// Straight-alpha RGBA8 image scaled into `rect` in bitmap pixels. Resource decoding belongs
+    /// to the host boundary; placement and rendering remain part of the shared frame contract.
+    Image {
+        image: RasterImage,
+        rect: [f32; 4],
+        opacity: f32,
     },
 }
 

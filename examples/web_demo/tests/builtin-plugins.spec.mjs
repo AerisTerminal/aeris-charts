@@ -152,8 +152,17 @@ test("plugin markers match engine markers on WebGPU", async ({ page }, test_info
 test("plugin markers clear with set_markers([]) and detach; auto_scale expands the scale", async ({ page }) => {
   await goto_fixture(page, "canvas2d");
   const baseline = await screenshot(page);
-  const plain_range = await page.evaluate(() => window.__chart.price_scale("right").get_visible_range());
-  expect(plain_range).not.toBeNull();
+  const data_coordinates = async () => page.evaluate(() => {
+    const high = Math.max(...window.__data.map((bar) => bar.high));
+    const low = Math.min(...window.__data.map((bar) => bar.low));
+    return {
+      top: window.__main.price_to_coordinate(high),
+      bottom: window.__main.price_to_coordinate(low),
+    };
+  });
+  const plain_coordinates = await data_coordinates();
+  expect(plain_coordinates.top).not.toBeNull();
+  expect(plain_coordinates.bottom).not.toBeNull();
 
   await set_plugin_markers(page, true);
   const handle = await page.evaluate(() => window.__plugin_markers_handle() !== null);
@@ -161,19 +170,19 @@ test("plugin markers clear with set_markers([]) and detach; auto_scale expands t
   const with_markers = await screenshot(page);
   expect(count_different(baseline, with_markers), "markers must paint").toBeGreaterThan(0);
 
-  // auto_scale (default true) pushes the scale past the data-driven range on both ends.
-  const expanded_range = await page.evaluate(() => window.__chart.price_scale("right").get_visible_range());
-  expect(expanded_range).not.toBeNull();
-  expect(expanded_range.from, "marker auto_scale must add headroom below the data").toBeLessThan(plain_range.from);
-  expect(expanded_range.to, "marker auto_scale must add headroom above the data").toBeGreaterThan(plain_range.to);
+  // The reference returns pixel autoscale margins, not an expanded price range: both data extrema
+  // move inward so marker shapes have room without changing the scale's raw min/max values.
+  const expanded_coordinates = await data_coordinates();
+  expect(expanded_coordinates.top, "marker auto_scale must add headroom above the data").toBeGreaterThan(plain_coordinates.top);
+  expect(expanded_coordinates.bottom, "marker auto_scale must add headroom below the data").toBeLessThan(plain_coordinates.bottom);
 
   // set_markers([]) removes the markers and their autoscale contribution.
   await page.evaluate(() => window.__plugin_markers_handle().set_markers([]));
   await settle_frames(page);
   expect(count_different(baseline, await screenshot(page))).toBe(0);
-  const cleared_range = await page.evaluate(() => window.__chart.price_scale("right").get_visible_range());
-  expect(cleared_range.from).toBeCloseTo(plain_range.from, 8);
-  expect(cleared_range.to).toBeCloseTo(plain_range.to, 8);
+  const cleared_coordinates = await data_coordinates();
+  expect(cleared_coordinates.top).toBeCloseTo(plain_coordinates.top, 8);
+  expect(cleared_coordinates.bottom).toBeCloseTo(plain_coordinates.bottom, 8);
 
   // Re-set, then detach: same removal, and markers() round-trips the fixture.
   const marker_count = await page.evaluate(() => {

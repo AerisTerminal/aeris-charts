@@ -889,6 +889,180 @@ fn creation_flow_commits_after_the_kinds_anchor_count() {
 }
 
 #[test]
+fn official_rectangle_preview_commit_and_axis_views_are_engine_owned() {
+    let mut chart = settled_chart();
+    chart.axis_w = 80.0;
+    chart.pane_w = 720.0;
+    chart.time_scale.set_width(720.0);
+    chart.fit_content();
+    chart.build_frame();
+    let options = r##"{
+        "fill_color":"rgba(200,50,100,0.75)",
+        "preview_fill_color":"rgba(200,50,100,0.25)",
+        "border_visible":false,
+        "show_labels":true,
+        "axis_bands_visible":true,
+        "label_color":"rgba(200,50,100,1)",
+        "label_text_color":"#ffffff",
+        "snap_time_to_data":true
+    }"##;
+    assert!(chart.drawing_create_begin(DrawingKind::Rectangle, Some(options)));
+    let spacing = x_at(&chart, 3.0) - x_at(&chart, 2.0);
+    let first_x = x_at(&chart, 2.0) + spacing * 0.36;
+    assert_eq!(
+        chart.drawing_create_click(first_x, y_at(&chart, 10.25), DrawingModifiers::default()),
+        -1
+    );
+    chart.drawing_create_move(
+        x_at(&chart, 6.0) + spacing * 0.41,
+        y_at(&chart, 12.25),
+        DrawingModifiers::default(),
+    );
+    let pending = chart.pending_drawing().unwrap();
+    assert_eq!(pending.drawing.points[0].logical, 2.0);
+    assert_eq!(pending.preview.unwrap().logical, 6.0);
+
+    let preview = chart.build_frame();
+    assert!(preview.panes[0].main.iter().any(|primitive| {
+        matches!(primitive, Prim::Rect { color, .. }
+            if *color == Color::rgba(200, 50, 100, 64))
+    }));
+    assert!(!preview.panes[0].main.iter().any(|primitive| {
+        matches!(primitive, Prim::RectFrame { color, .. }
+            if *color == Color::rgb(200, 50, 100))
+    }));
+    let preview_axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    assert_eq!(preview_axis.bands.len(), 2);
+    assert!(preview_axis
+        .bands
+        .iter()
+        .all(|band| band.color == Color::rgba(200, 50, 100, 32)));
+    assert_eq!(
+        preview_axis
+            .labels
+            .iter()
+            .filter(|label| label.background.is_some() && label.color == Color::rgb(255, 255, 255))
+            .count(),
+        4
+    );
+
+    let id = chart.drawing_create_click(
+        x_at(&chart, 6.0) + spacing * 0.41,
+        y_at(&chart, 12.25),
+        DrawingModifiers::default(),
+    );
+    assert!(id > 0);
+    let drawing = chart.drawing(id as DrawingId).unwrap();
+    assert_eq!(drawing.points[0].logical, 2.0);
+    assert_eq!(drawing.points[1].logical, 6.0);
+    assert!(!drawing.border_visible);
+
+    let committed = chart.build_frame();
+    assert!(committed.panes[0].main.iter().any(|primitive| {
+        matches!(primitive, Prim::Rect { color, .. }
+            if *color == Color::rgba(200, 50, 100, 191))
+    }));
+    let committed_axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    assert_eq!(committed_axis.bands.len(), 2);
+    assert!(committed_axis
+        .bands
+        .iter()
+        .all(|band| band.color == Color::rgba(200, 50, 100, 96)));
+    let mut axis_primitives = Vec::new();
+    chart.build_axis_primitives_into(&committed_axis, &mut axis_primitives, |_| 0.0);
+    assert!(axis_primitives.iter().any(|primitive| {
+        matches!(primitive, Prim::Rect { color, .. }
+            if *color == Color::rgba(200, 50, 100, 96))
+    }));
+    assert!(committed_axis
+        .labels
+        .iter()
+        .any(|label| label.text == "10.25"));
+    assert!(committed_axis
+        .labels
+        .iter()
+        .any(|label| label.text == "12.25"));
+    assert_eq!(
+        committed_axis
+            .labels
+            .iter()
+            .filter(|label| label.text == "1/1/1970")
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn official_rectangle_uses_its_attached_left_scale_for_geometry_interaction_and_axis_views() {
+    let mut chart = settled_chart();
+    chart.set_series_price_scale(0, crate::PriceScaleTarget::Left);
+    chart
+        .apply_options(r#"{"leftPriceScale":{"visible":true},"rightPriceScale":{"visible":false}}"#)
+        .unwrap();
+    chart.left_axis_w = 80.0;
+    chart.pane_left = 80.0;
+    chart.pane_w = 720.0;
+    chart.time_scale.set_width(720.0);
+    chart.fit_content();
+    chart.build_frame();
+
+    let first = (x_at(&chart, 2.0), y_at(&chart, 10.25));
+    let second = (x_at(&chart, 6.0), y_at(&chart, 12.25));
+    assert!(chart.drawing_create_begin(
+        DrawingKind::Rectangle,
+        Some(
+            r##"{"price_scale_id":"left","fill_color":"rgba(200,50,100,0.75)","border_visible":false,"show_labels":true,"axis_bands_visible":true}"##,
+        ),
+    ));
+    assert_eq!(
+        chart.drawing_create_click(first.0, first.1, DrawingModifiers::default()),
+        -1
+    );
+    let id = chart.drawing_create_click(second.0, second.1, DrawingModifiers::default());
+    assert!(id > 0);
+    let id = id as DrawingId;
+    let drawing = chart.drawing(id).unwrap();
+    assert_eq!(drawing.price_scale, DrawingPriceScale::Left);
+    assert!((drawing.points[0].price - 10.25).abs() < 1e-9);
+    assert!((drawing.points[1].price - 12.25).abs() < 1e-9);
+    let converted = chart.drawing_point_to_coordinate(id, 0).unwrap();
+    assert!((converted.0 - first.0).abs() < 1e-9);
+    assert!((converted.1 - first.1).abs() < 1e-9);
+
+    let midpoint = ((first.0 + second.0) / 2.0, (first.1 + second.1) / 2.0);
+    chart.set_selected_drawing(Some(id));
+    assert!(chart.drawing_drag_start_at(midpoint.0, midpoint.1));
+    chart.drawing_drag_to(midpoint.0, midpoint.1 + 10.0, DrawingModifiers::default());
+    chart.drawing_drag_end();
+    assert_ne!(chart.drawing(id).unwrap().points[0].price, 10.25);
+
+    let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let price_band = axis
+        .bands
+        .iter()
+        .find(|band| band.y < chart.pane_h)
+        .expect("left price-axis band");
+    assert_eq!(price_band.x, chart.pane_left - 15.0);
+    assert!(price_band.x + price_band.width <= chart.pane_left);
+    assert!(
+        axis.labels
+            .iter()
+            .filter(|label| {
+                label.background.is_some()
+                    && label.align == crate::AxisTextAlign::Right
+                    && label.x < chart.pane_left
+            })
+            .count()
+            >= 2
+    );
+    assert!(!axis.labels.iter().any(|label| {
+        label.background.is_some()
+            && label.align == crate::AxisTextAlign::Left
+            && label.x > chart.pane_left + chart.pane_w
+    }));
+}
+
+#[test]
 fn live_options_update_pending_drawing_without_losing_anchors() {
     let mut chart = settled_chart();
     assert!(!chart.drawing_create_apply_options(r##"{"width":4.0}"##));

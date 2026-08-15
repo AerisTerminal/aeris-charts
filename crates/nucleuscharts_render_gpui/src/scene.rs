@@ -14,6 +14,7 @@
 //! scale factor at the boundary — see [`crate::NucleusViewport`].
 
 use nucleuscharts_render::color::Color;
+use nucleuscharts_render::draw_list::RasterImage;
 
 /// An axis-aligned rectangle in device px.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -140,6 +141,12 @@ pub enum SceneOp {
     },
     /// A shaped-and-painted text run → see [`crate::text`].
     Text(TextRun),
+    /// Shared-frame raster image → `gpui::Window::paint_image`.
+    Image {
+        image: RasterImage,
+        rect: DeviceRect,
+        opacity: f32,
+    },
 }
 
 /// A mesh vertex in device px. Colors live on the owning [`SceneOp::Mesh`]'s [`Paint`], because a

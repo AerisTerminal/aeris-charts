@@ -3118,11 +3118,13 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "gpui_platform",
+ "image",
  "nucleuscharts_core",
  "nucleuscharts_engine",
  "nucleuscharts_native",
  "nucleuscharts_render",
  "sha2",
+ "smallvec",
  "tiny-skia",
 ]
 

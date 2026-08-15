@@ -12,7 +12,7 @@ use nucleuscharts_core::model::data_validation::MAX_SAFE_VALUE;
 use nucleuscharts_render::color::Color;
 use nucleuscharts_render::draw_list::LineStyle;
 
-use crate::drawings::{DrawingTextHAlign, DrawingTextVAlign};
+use crate::drawings::{DrawingPriceScale, DrawingTextHAlign, DrawingTextVAlign};
 use crate::{ChartEngine, ChartError, Drawing, DrawingKind, DrawingPoint, ErrorCode, Pane, PaneId};
 
 pub const PERSISTENCE_SCHEMA_VERSION: u32 = 1;
@@ -106,6 +106,8 @@ struct DrawingV1 {
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 struct DrawingStyleV1 {
     #[serde(skip_serializing_if = "Option::is_none")]
+    price_scale_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     width: Option<f64>,
@@ -113,6 +115,20 @@ struct DrawingStyleV1 {
     line_style: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     fill_color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preview_fill_color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    border_visible: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    show_labels: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    axis_bands_visible: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label_color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label_text_color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snap_time_to_data: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -233,10 +249,19 @@ impl ChartEngine {
                     pane_id: pane_wire_id(persistent_id),
                     anchors: drawing.points.clone(),
                     style: DrawingStyleV1 {
+                        price_scale_id: (drawing.price_scale != DrawingPriceScale::Right)
+                            .then(|| drawing.price_scale.name().to_string()),
                         color: Some(drawing.color.clone()),
                         width: Some(drawing.width),
                         line_style: Some(line_style_name(drawing.style).to_string()),
                         fill_color: drawing.fill_color.clone(),
+                        preview_fill_color: drawing.preview_fill_color.clone(),
+                        border_visible: (!drawing.border_visible).then_some(false),
+                        show_labels: drawing.show_labels.then_some(true),
+                        axis_bands_visible: drawing.axis_bands_visible.then_some(true),
+                        label_color: drawing.label_color.clone(),
+                        label_text_color: drawing.label_text_color.clone(),
+                        snap_time_to_data: drawing.snap_time_to_data.then_some(true),
                         text: (!drawing.text.is_empty()).then(|| drawing.text.clone()),
                         text_color: drawing.text_color.clone(),
                         text_size: drawing.text_size,
@@ -419,6 +444,10 @@ impl ChartEngine {
             })?;
             let mut drawing = Drawing::new(item.id, kind, pane_index, item.anchors);
             let style = item.style;
+            if let Some(scale) = style.price_scale_id {
+                drawing.price_scale = DrawingPriceScale::from_name(&scale)
+                    .ok_or_else(|| invalid(format!("unknown drawing price scale {scale:?}")))?;
+            }
             if let Some(color) = style.color {
                 validate_color(&color, "drawing color")?;
                 if !color.is_empty() {
@@ -436,6 +465,30 @@ impl ChartEngine {
             if let Some(color) = style.fill_color {
                 validate_color(&color, "fill_color")?;
                 drawing.fill_color = (!color.is_empty()).then_some(color);
+            }
+            if let Some(color) = style.preview_fill_color {
+                validate_color(&color, "preview_fill_color")?;
+                drawing.preview_fill_color = (!color.is_empty()).then_some(color);
+            }
+            if let Some(visible) = style.border_visible {
+                drawing.border_visible = visible;
+            }
+            if let Some(visible) = style.show_labels {
+                drawing.show_labels = visible;
+            }
+            if let Some(visible) = style.axis_bands_visible {
+                drawing.axis_bands_visible = visible;
+            }
+            if let Some(color) = style.label_color {
+                validate_color(&color, "label_color")?;
+                drawing.label_color = (!color.is_empty()).then_some(color);
+            }
+            if let Some(color) = style.label_text_color {
+                validate_color(&color, "label_text_color")?;
+                drawing.label_text_color = (!color.is_empty()).then_some(color);
+            }
+            if let Some(snap) = style.snap_time_to_data {
+                drawing.snap_time_to_data = snap;
             }
             if let Some(text) = style.text {
                 if text.len() > MAX_TEXT_BYTES {

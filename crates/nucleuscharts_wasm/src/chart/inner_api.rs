@@ -209,6 +209,9 @@ impl ChartInner {
             web_sys::console::warn_1(&format!("nucleuscharts: set_series_data sanitized data — accepted {}, dropped {} invalid, {} duplicate{}", s.report.accepted, s.report.dropped_invalid, s.report.dropped_duplicate, if s.report.reordered { ", reordered" } else { "" }).into());
         }
         let diagnostics = validation_diagnostics_json(&s.report);
+        if s.report.accepted == 0 && s.report.dropped_invalid > 0 {
+            return diagnostics;
+        }
         self.engine
             .install_series_data(id as SeriesId, s.times, s.open, s.high, s.low, s.close);
         diagnostics
@@ -257,6 +260,9 @@ impl ChartInner {
             web_sys::console::warn_1(&format!("nucleuscharts: update_typed sanitized batch — accepted {}, dropped {} invalid, {} duplicate{}", s.report.accepted, s.report.dropped_invalid, s.report.dropped_duplicate, if s.report.reordered { ", reordered" } else { "" }).into());
         }
         let diagnostics = validation_diagnostics_json(&s.report);
+        if s.report.accepted == 0 && s.report.dropped_invalid > 0 {
+            return diagnostics;
+        }
         self.engine.update_series_bars_sanitized(
             id as SeriesId,
             s.times,
@@ -647,31 +653,68 @@ impl ChartInner {
         self.engine.price_line_options_json(id).unwrap_or_default()
     }
 
-    /// Replace a series' markers from a JSON array `[{time, position, shape, color, text}]`
-    /// (position: above|below|inBar; shape: circle|square|arrowUp|arrowDown). Roadmap Phase B4.
-    pub fn set_series_markers(&mut self, series_id: u32, json: &str) {
-        let inputs: Vec<MarkerInput> = serde_json::from_str(json).unwrap_or_default();
-        let markers: Vec<Marker> = inputs
-            .into_iter()
-            .map(|m| Marker {
-                time: m.time as i64,
-                position: match m.position.as_str() {
-                    "below" | "belowBar" => marker_pos::BELOW,
-                    "inBar" | "in" => marker_pos::IN_BAR,
-                    _ => marker_pos::ABOVE,
-                },
-                shape: match m.shape.as_str() {
-                    "square" => marker_shape::SQUARE,
-                    "arrowUp" | "arrow_up" => marker_shape::ARROW_UP,
-                    "arrowDown" | "arrow_down" => marker_shape::ARROW_DOWN,
-                    _ => marker_shape::CIRCLE,
-                },
-                color: Color::parse_css(&m.color).unwrap_or(Color::rgb(0x21, 0x96, 0xf3)),
-                text: m.text,
-            })
-            .collect();
+    /// Transactionally replace a series' official marker state. Invalid input keeps the previous
+    /// marker set instead of silently clearing it.
+    pub fn set_series_markers(&mut self, series_id: u32, json: &str) -> bool {
+        let Ok(inputs) = serde_json::from_str::<Vec<MarkerInput>>(json) else {
+            return false;
+        };
+        let mut markers = Vec::with_capacity(inputs.len());
+        for marker in inputs {
+            if !marker.time.is_finite()
+                || marker.time.fract() != 0.0
+                || !marker.size.is_finite()
+                || marker.price.is_some_and(|price| !price.is_finite())
+            {
+                return false;
+            }
+            let position = match marker.position.as_str() {
+                "" | "above" | "aboveBar" => marker_pos::ABOVE,
+                "below" | "belowBar" => marker_pos::BELOW,
+                "inBar" | "in" => marker_pos::IN_BAR,
+                "atPriceTop" => marker_pos::AT_PRICE_TOP,
+                "atPriceBottom" => marker_pos::AT_PRICE_BOTTOM,
+                "atPriceMiddle" => marker_pos::AT_PRICE_MIDDLE,
+                _ => return false,
+            };
+            if matches!(
+                position,
+                marker_pos::AT_PRICE_TOP
+                    | marker_pos::AT_PRICE_BOTTOM
+                    | marker_pos::AT_PRICE_MIDDLE
+            ) && marker.price.is_none()
+            {
+                return false;
+            }
+            let shape = match marker.shape.as_str() {
+                "" | "circle" => marker_shape::CIRCLE,
+                "square" => marker_shape::SQUARE,
+                "arrowUp" | "arrow_up" => marker_shape::ARROW_UP,
+                "arrowDown" | "arrow_down" => marker_shape::ARROW_DOWN,
+                _ => return false,
+            };
+            let color = if marker.color.is_empty() {
+                Color::rgb(0x21, 0x96, 0xf3)
+            } else {
+                let Some(color) = Color::parse_css(&marker.color) else {
+                    return false;
+                };
+                color
+            };
+            markers.push(Marker {
+                time: marker.time as i64,
+                position,
+                shape,
+                color,
+                text: marker.text,
+                id: marker.id,
+                size: marker.size.max(0.0),
+                price: marker.price,
+            });
+        }
         self.engine
             .set_series_markers(series_id as SeriesId, markers);
+        true
     }
 
     pub fn set_series_markers_auto_scale(&mut self, series_id: u32, enabled: bool) {
@@ -1797,6 +1840,11 @@ impl ChartInner {
     pub fn drawing_drag_active(&self) -> bool {
         self.engine.drawing_drag_active()
     }
+
+    pub fn set_series_markers_z_order(&mut self, series_id: u32, z_order: u8) -> bool {
+        self.engine
+            .set_series_markers_z_order(series_id as SeriesId, z_order)
+    }
     pub fn undo_drawing(&mut self) -> bool {
         self.engine.undo_drawing()
     }
@@ -1816,6 +1864,9 @@ impl ChartInner {
         };
         let options = (!options_json.is_empty()).then_some(options_json);
         self.engine.drawing_create_begin(kind, options)
+    }
+    pub fn drawing_create_apply_options(&mut self, options_json: &str) -> bool {
+        self.engine.drawing_create_apply_options(options_json)
     }
     /// Place the next creation anchor (modifiers snap it): 0 unarmed, -1 pending more anchors,
     /// > 0 the committed id.

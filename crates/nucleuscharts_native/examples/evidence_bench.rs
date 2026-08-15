@@ -484,6 +484,7 @@ fn dense_upload_breakdown(full_history: bool) -> serde_json::Value {
         &pane.points,
         &mut group,
         &mut |_| None,
+        &mut |_| None,
     );
     let triangle_bytes =
         group.tris.len() * std::mem::size_of::<nucleuscharts_render_wgpu::TriVertex>();

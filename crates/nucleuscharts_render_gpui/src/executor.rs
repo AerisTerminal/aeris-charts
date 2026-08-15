@@ -225,10 +225,7 @@ fn lower_prim(
                 let range = disc_mesh(&mut plan.vertices, *cx, *cy, *radius);
                 push_mesh(plan, metrics, range, Paint::Solid(*fill));
             }
-            // The Canvas2D and native executors stroke the disc after filling it; the wgpu tri
-            // executor currently drops `Circle`'s stroke entirely. We keep the stroke — it is real
-            // in the IR and in the shipping Canvas2D output — and the divergence from the wgpu
-            // executor is recorded in the implementation report rather than papered over.
+            // Stroke after fill, matching Canvas2D, native, and the WebGPU annulus tessellation.
             if *stroke_width > 0.0 {
                 let range = ring_mesh(&mut plan.vertices, *cx, *cy, *radius, *stroke_width);
                 push_mesh(plan, metrics, range, Paint::Solid(*stroke));
@@ -335,6 +332,28 @@ fn lower_prim(
             metrics.text_runs += 1;
             metrics.ops += 1;
         }
+        Prim::Image {
+            image,
+            rect,
+            opacity,
+        } => {
+            let rect = DeviceRect::new(rect[0], rect[1], rect[2], rect[3]);
+            if rect.is_empty()
+                || image.width == 0
+                || image.height == 0
+                || *opacity <= 0.0
+                || image.pixels.len() != (image.width * image.height * 4) as usize
+            {
+                return;
+            }
+            plan.ops.push(SceneOp::Image {
+                image: image.clone(),
+                rect,
+                opacity: opacity.clamp(0.0, 1.0),
+            });
+            metrics.image_runs += 1;
+            metrics.ops += 1;
+        }
     }
 }
 
@@ -401,7 +420,8 @@ pub fn dashes(style: LineStyle, width: f32) -> bool {
 mod tests {
     use super::*;
     use nucleuscharts_render::color::Color;
-    use nucleuscharts_render::draw_list::{Gradient, IRect, LineType, TextAlign};
+    use nucleuscharts_render::draw_list::{Gradient, IRect, LineType, RasterImage, TextAlign};
+    use std::sync::Arc;
 
     const C: Color = Color::rgb(0x10, 0x20, 0x30);
 
@@ -750,6 +770,35 @@ mod tests {
     }
 
     #[test]
+    fn image_carries_shared_pixels_and_placement_into_the_scene() {
+        let (plan, metrics) = run(
+            &[Prim::Image {
+                image: RasterImage {
+                    key: 9,
+                    width: 1,
+                    height: 1,
+                    pixels: Arc::<[u8]>::from([1, 2, 3, 255]),
+                },
+                rect: [10.0, 20.0, 30.0, 40.0],
+                opacity: 0.25,
+            }],
+            &[],
+        );
+        assert_eq!(metrics.image_runs, 1);
+        let SceneOp::Image {
+            image,
+            rect,
+            opacity,
+        } = &plan.ops[0]
+        else {
+            panic!("expected image");
+        };
+        assert_eq!(image.key, 9);
+        assert_eq!(*rect, DeviceRect::new(10.0, 20.0, 30.0, 40.0));
+        assert_eq!(*opacity, 0.25);
+    }
+
+    #[test]
     fn fully_transparent_text_is_dropped() {
         let (plan, _) = run(
             &[Prim::Text {
@@ -810,6 +859,7 @@ mod tests {
                 SceneOp::Quad { .. } => "quad",
                 SceneOp::Mesh { .. } => "mesh",
                 SceneOp::Text(_) => "text",
+                SceneOp::Image { .. } => "image",
                 SceneOp::PushClip(_) => "push",
                 SceneOp::PopClip => "pop",
             })

@@ -129,6 +129,41 @@ fn fill_polygon(
     ]);
 }
 
+fn stroke_circle(
+    center: [f32; 2],
+    radius: f32,
+    width: f32,
+    color: nucleuscharts_render::color::Color,
+    out: &mut Vec<TriVertex>,
+) {
+    const SEGMENTS: usize = 24;
+    if radius <= 0.0 || width <= 0.0 {
+        return;
+    }
+    let outer = radius + width * 0.5;
+    let inner = (radius - width * 0.5).max(0.0);
+    let rgba = [
+        color.r() as f32 / 255.0,
+        color.g() as f32 / 255.0,
+        color.b() as f32 / 255.0,
+        color.a() as f32 / 255.0,
+    ];
+    let vertex = |radius: f32, angle: f32| TriVertex {
+        pos: [
+            center[0] + radius * angle.cos(),
+            center[1] + radius * angle.sin(),
+        ],
+        color: rgba,
+    };
+    for index in 0..SEGMENTS {
+        let a0 = index as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+        let a1 = (index + 1) as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+        let (outer0, outer1) = (vertex(outer, a0), vertex(outer, a1));
+        let (inner0, inner1) = (vertex(inner, a0), vertex(inner, a1));
+        out.extend([outer0, inner0, inner1, outer0, inner1, outer1]);
+    }
+}
+
 #[allow(clippy::too_many_arguments)] // geometry parameters map 1:1 onto the RoundRect prim
 fn round_rect_to_tris(
     x: f32,
@@ -271,11 +306,13 @@ pub fn geom_prim_to_tris(prim: &Prim, points: &[[f32; 2]], out: &mut Vec<TriVert
             cy,
             radius,
             fill: f,
-            ..
+            stroke_width,
+            stroke,
         } => {
             let mut disc = Vec::new();
             build_disc([*cx, *cy], *radius, *f, &mut disc);
             out.extend(disc.iter().map(tri));
+            stroke_circle([*cx, *cy], *radius, *stroke_width, *stroke, out);
         }
         Prim::Triangle { a, b, c, color } => {
             let col = [
@@ -404,6 +441,24 @@ mod tests {
         geom_prims_to_tris(&prims, &[], &mut fill, &mut stroke);
         assert!(fill.is_empty());
         assert!(!stroke.is_empty());
+    }
+
+    #[test]
+    fn circle_stroke_is_retained_as_an_annulus() {
+        let prim = Prim::Circle {
+            cx: 5.0,
+            cy: 5.0,
+            radius: 3.0,
+            fill: Color::rgba(0, 0, 0, 0),
+            stroke_width: 1.0,
+            stroke: Color::rgb(0xff, 0xff, 0xff),
+        };
+        let mut vertices = Vec::new();
+        geom_prim_to_tris(&prim, &[], &mut vertices);
+        assert_eq!(vertices.len(), 24 * 3 + 24 * 6);
+        assert!(vertices[24 * 3..]
+            .iter()
+            .all(|vertex| vertex.color == [1.0, 1.0, 1.0, 1.0]));
     }
 
     #[test]

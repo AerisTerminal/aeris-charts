@@ -433,6 +433,34 @@ pub enum DrawingTextVAlign {
     Bottom,
 }
 
+/// Price scale used to convert a drawing's price anchors. Official series-bound primitives use
+/// the attached series' scale; generic drawings keep the right-scale default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DrawingPriceScale {
+    Right,
+    Left,
+    Overlay,
+}
+
+impl DrawingPriceScale {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Right => "right",
+            Self::Left => "left",
+            Self::Overlay => "overlay",
+        }
+    }
+
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "right" => Self::Right,
+            "left" => Self::Left,
+            "overlay" | "" => Self::Overlay,
+            _ => return None,
+        })
+    }
+}
+
 impl DrawingTextVAlign {
     pub(crate) fn name(self) -> &'static str {
         match self {
@@ -464,6 +492,7 @@ pub struct Drawing {
     pub kind: DrawingKind,
     pub pane_index: usize,
     pub points: Vec<DrawingPoint>,
+    pub price_scale: DrawingPriceScale,
     /// Line/border color CSS string (default [`DRAWING_DEFAULT_COLOR`]).
     pub color: String,
     /// Stroke width in CSS px (default 2; 1 for a rectangle's border).
@@ -472,6 +501,23 @@ pub struct Drawing {
     /// Rectangle fill CSS string; `None` fills with the border color at 20% alpha. Unused by
     /// the line kinds and the text tool.
     pub fill_color: Option<String>,
+    /// Rectangle creation-preview fill; `None` follows `fill_color`. Stored with the drawing so
+    /// re-arming a tool from its options preserves the official preview color.
+    pub preview_fill_color: Option<String>,
+    /// Whether a rectangle paints its outline. The generic drawing defaults to `true`; the
+    /// official rectangle-drawing plugin disables it and paints only the fill.
+    pub border_visible: bool,
+    /// Rectangle endpoint labels on the price and time axes.
+    pub show_labels: bool,
+    /// Whether the rectangle paints the official 15 CSS px bands into both axis panes.
+    pub axis_bands_visible: bool,
+    /// Rectangle endpoint-label background; `None` follows the drawing color.
+    pub label_color: Option<String>,
+    /// Rectangle endpoint-label text; `None` follows the chart foreground.
+    pub label_text_color: Option<String>,
+    /// Snap rectangle time anchors to canonical data times, matching the official plugin's
+    /// `MouseEventParams.time` placement instead of retaining a fractional x coordinate.
+    pub snap_time_to_data: bool,
     /// The tool's text label (`""` = none). The text tool renders the [`TEXT_PLACEHOLDER`]
     /// prompt instead and clicks open the host's editor.
     pub text: String,
@@ -512,6 +558,7 @@ impl Drawing {
             kind,
             pane_index,
             points,
+            price_scale: DrawingPriceScale::Right,
             color: DRAWING_DEFAULT_COLOR.to_string(),
             width: if kind == DrawingKind::Rectangle {
                 1.0
@@ -520,6 +567,13 @@ impl Drawing {
             },
             style: LineStyle::Solid,
             fill_color: None,
+            preview_fill_color: None,
+            border_visible: true,
+            show_labels: false,
+            axis_bands_visible: false,
+            label_color: None,
+            label_text_color: None,
+            snap_time_to_data: false,
             text: String::new(),
             text_color: None,
             text_size: None,
@@ -721,12 +775,28 @@ fn distance_to_segment(x: f64, y: f64, x1: f64, y1: f64, x2: f64, y2: f64) -> f6
 /// keep their current values (reference merge semantics).
 #[derive(Clone, serde::Deserialize, Default)]
 pub(crate) struct DrawingPatch {
+    #[serde(alias = "priceScaleId")]
+    price_scale_id: Option<String>,
     color: Option<String>,
     width: Option<f64>,
     #[serde(alias = "lineStyle")]
     style: Option<serde_json::Value>,
     #[serde(alias = "fillColor")]
     fill_color: Option<String>,
+    #[serde(alias = "previewFillColor")]
+    preview_fill_color: Option<String>,
+    #[serde(alias = "borderVisible")]
+    border_visible: Option<bool>,
+    #[serde(alias = "showLabels")]
+    show_labels: Option<bool>,
+    #[serde(alias = "axisBandsVisible")]
+    axis_bands_visible: Option<bool>,
+    #[serde(alias = "labelColor")]
+    label_color: Option<String>,
+    #[serde(alias = "labelTextColor")]
+    label_text_color: Option<String>,
+    #[serde(alias = "snapTimeToData")]
+    snap_time_to_data: Option<bool>,
     text: Option<String>,
     #[serde(alias = "textColor")]
     text_color: Option<String>,
@@ -796,6 +866,13 @@ fn update_css_slot(slot: &mut Option<String>, value: String) {
 
 impl Drawing {
     fn apply_patch(&mut self, patch: DrawingPatch) {
+        if let Some(scale) = patch
+            .price_scale_id
+            .as_deref()
+            .and_then(DrawingPriceScale::from_name)
+        {
+            self.price_scale = scale;
+        }
         if let Some(css) = patch.color {
             if Color::parse_css(&css).is_some() {
                 self.color = css;
@@ -811,6 +888,27 @@ impl Drawing {
         }
         if let Some(css) = patch.fill_color {
             update_css_slot(&mut self.fill_color, css);
+        }
+        if let Some(css) = patch.preview_fill_color {
+            update_css_slot(&mut self.preview_fill_color, css);
+        }
+        if let Some(visible) = patch.border_visible {
+            self.border_visible = visible;
+        }
+        if let Some(visible) = patch.show_labels {
+            self.show_labels = visible;
+        }
+        if let Some(visible) = patch.axis_bands_visible {
+            self.axis_bands_visible = visible;
+        }
+        if let Some(css) = patch.label_color {
+            update_css_slot(&mut self.label_color, css);
+        }
+        if let Some(css) = patch.label_text_color {
+            update_css_slot(&mut self.label_text_color, css);
+        }
+        if let Some(snap) = patch.snap_time_to_data {
+            self.snap_time_to_data = snap;
         }
         if let Some(text) = patch.text {
             self.text = text;
@@ -864,10 +962,18 @@ impl Drawing {
 
     fn options_json(&self) -> serde_json::Value {
         serde_json::json!({
+            "price_scale_id": self.price_scale.name(),
             "color": self.color,
             "width": self.width,
             "style": style_name(self.style),
             "fill_color": self.fill_color.as_deref().unwrap_or(""),
+            "preview_fill_color": self.preview_fill_color.as_deref().unwrap_or(""),
+            "border_visible": self.border_visible,
+            "show_labels": self.show_labels,
+            "axis_bands_visible": self.axis_bands_visible,
+            "label_color": self.label_color.as_deref().unwrap_or(""),
+            "label_text_color": self.label_text_color.as_deref().unwrap_or(""),
+            "snap_time_to_data": self.snap_time_to_data,
             "text": self.text,
             "text_color": self.text_color.as_deref().unwrap_or(""),
             "text_size": self.text_size,
@@ -1034,7 +1140,20 @@ impl ChartEngine {
     /// The pane's right scale for drawing conversion, `None` for a stale pane index (the pane
     /// was removed after the drawing was placed — like a pane-less series, it draws nowhere).
     pub(crate) fn drawing_scale(&self, pane_index: usize) -> Option<&PriceScaleCore> {
-        let scale = &self.panes.get(pane_index)?.price_scale;
+        self.drawing_scale_for(pane_index, DrawingPriceScale::Right)
+    }
+
+    fn drawing_scale_for(
+        &self,
+        pane_index: usize,
+        target: DrawingPriceScale,
+    ) -> Option<&PriceScaleCore> {
+        let pane = self.panes.get(pane_index)?;
+        let scale = match target {
+            DrawingPriceScale::Right => &pane.price_scale,
+            DrawingPriceScale::Left => &pane.left_scale,
+            DrawingPriceScale::Overlay => &pane.overlay_scale,
+        };
         (!scale.is_empty()).then_some(scale)
     }
 
@@ -1042,14 +1161,22 @@ impl ChartEngine {
     /// visible, non-overlay series bound to the right scale (mirrors the pane-primitive
     /// converters' `pane_scale_base_value`, chart/primitives.rs). Unused by normal/log scales.
     pub(crate) fn drawing_scale_base(&self, pane_index: usize) -> f64 {
+        self.drawing_scale_base_for(pane_index, DrawingPriceScale::Right)
+    }
+
+    fn drawing_scale_base_for(&self, pane_index: usize, target: DrawingPriceScale) -> f64 {
+        let target = match target {
+            DrawingPriceScale::Right => crate::PriceScaleTarget::Right,
+            DrawingPriceScale::Left => crate::PriceScaleTarget::Left,
+            DrawingPriceScale::Overlay => crate::PriceScaleTarget::Overlay,
+        };
         self.visible_range()
             .and_then(|(from, _)| {
                 let series = self.series.iter().find(|s| {
                     s.visible
                         && !s.removed
-                        && !s.overlay
                         && s.pane_index == pane_index
-                        && !s.left_scale
+                        && crate::frame::series_scale_target(s) == target
                 })?;
                 self.series_base_value(series.id, from)
             })
@@ -1063,11 +1190,20 @@ impl ChartEngine {
         pane_index: usize,
         point: DrawingPoint,
     ) -> Option<(f64, f64)> {
-        let scale = self.drawing_scale(pane_index)?;
+        self.drawing_to_px_for(pane_index, DrawingPriceScale::Right, point)
+    }
+
+    pub(crate) fn drawing_to_px_for(
+        &self,
+        pane_index: usize,
+        target: DrawingPriceScale,
+        point: DrawingPoint,
+    ) -> Option<(f64, f64)> {
+        let scale = self.drawing_scale_for(pane_index, target)?;
         if self.data.merged_times().is_empty() {
             return None;
         }
-        let base = self.drawing_scale_base(pane_index);
+        let base = self.drawing_scale_base_for(pane_index, target);
         Some((
             self.time_scale.logical_to_coordinate(point.logical),
             scale.price_to_coordinate(point.price, base),
@@ -1076,14 +1212,24 @@ impl ChartEngine {
 
     /// The anchor under a media-px position on `pane_index` (the drag/creation conversion).
     fn drawing_from_px(&self, pane_index: usize, x: f64, y: f64) -> Option<DrawingPoint> {
+        self.drawing_from_px_for(pane_index, DrawingPriceScale::Right, x, y)
+    }
+
+    fn drawing_from_px_for(
+        &self,
+        pane_index: usize,
+        target: DrawingPriceScale,
+        x: f64,
+        y: f64,
+    ) -> Option<DrawingPoint> {
         if !x.is_finite() || !y.is_finite() {
             return None;
         }
-        let scale = self.drawing_scale(pane_index)?;
+        let scale = self.drawing_scale_for(pane_index, target)?;
         if self.data.merged_times().is_empty() {
             return None;
         }
-        let base = self.drawing_scale_base(pane_index);
+        let base = self.drawing_scale_base_for(pane_index, target);
         Some(DrawingPoint {
             // The time scale's float-index space is offset a half bar from its logical space
             // (bar `i` owns float indexes `(i-1, i]` — coordinate_to_index ceils), so the
@@ -1091,6 +1237,15 @@ impl ChartEngine {
             logical: self.time_scale.coordinate_to_float_index(x) + 0.5,
             price: scale.coordinate_to_price(y, base),
         })
+    }
+
+    fn snap_drawing_time_to_data(&self, mut point: DrawingPoint) -> Option<DrawingPoint> {
+        let logical = point.logical.round() as i64;
+        if logical < 0 || logical as usize >= self.data.merged_times().len() {
+            return None;
+        }
+        point.logical = logical as f64;
+        Some(point)
     }
 
     /// TradingView magnet (Ctrl held): snap an anchor to the nearest bar — the logical index
@@ -1151,12 +1306,13 @@ impl ChartEngine {
     fn straighten_point(
         &self,
         pane_index: usize,
+        price_scale: DrawingPriceScale,
         kind: DrawingKind,
         fixed: DrawingPoint,
         dragged: DrawingPoint,
     ) -> Option<DrawingPoint> {
-        let (fx, fy) = self.drawing_to_px(pane_index, fixed)?;
-        let (dx, dy) = self.drawing_to_px(pane_index, dragged)?;
+        let (fx, fy) = self.drawing_to_px_for(pane_index, price_scale, fixed)?;
+        let (dx, dy) = self.drawing_to_px_for(pane_index, price_scale, dragged)?;
         let (mut vx, mut vy) = (dx - fx, dy - fy);
         match kind {
             DrawingKind::TrendLine => {
@@ -1177,7 +1333,7 @@ impl ChartEngine {
             }
             _ => return Some(dragged),
         }
-        self.drawing_from_px(pane_index, fx + vx, fy + vy)
+        self.drawing_from_px_for(pane_index, price_scale, fx + vx, fy + vy)
     }
 
     /// The anchors of `drawing` in media px (`None` when any anchor fails to resolve), with the
@@ -1186,18 +1342,20 @@ impl ChartEngine {
         drawing
             .points
             .iter()
-            .map(|&point| self.drawing_to_px(drawing.pane_index, point))
+            .map(|&point| self.drawing_to_px_for(drawing.pane_index, drawing.price_scale, point))
             .collect()
     }
 
-    pub(crate) fn drawing_coordinate_key(&self, pane_index: usize) -> Option<[u64; 12]> {
-        let pane = self.panes.get(pane_index)?;
-        let scale = self.drawing_scale(pane_index)?;
+    pub(crate) fn drawing_coordinate_key(&self, drawing: &Drawing) -> Option<[u64; 12]> {
+        let pane = self.panes.get(drawing.pane_index)?;
+        let scale = self.drawing_scale_for(drawing.pane_index, drawing.price_scale)?;
         let range = scale.price_range_for_api()?;
-        let base = self.drawing_scale_base(pane_index);
+        let base = self.drawing_scale_base_for(drawing.pane_index, drawing.price_scale);
         let midpoint = (range.min_value() + range.max_value()) / 2.0;
         Some([
-            scale.mode() as u64 | (u64::from(scale.is_inverted()) << 8),
+            scale.mode() as u64
+                | (u64::from(scale.is_inverted()) << 8)
+                | ((drawing.price_scale as u64) << 16),
             self.time_scale.logical_to_coordinate(0.0).to_bits(),
             self.time_scale.logical_to_coordinate(1.0).to_bits(),
             range.min_value().to_bits(),
@@ -1223,7 +1381,7 @@ impl ChartEngine {
         if entry.screen_valid && entry.bounds_key == key {
             return true;
         }
-        let Some(scale) = self.drawing_scale(drawing.pane_index) else {
+        let Some(scale) = self.drawing_scale_for(drawing.pane_index, drawing.price_scale) else {
             return false;
         };
         if self.data.merged_times().is_empty() {
@@ -1233,11 +1391,11 @@ impl ChartEngine {
         let (left, right) = match entry.bounds.logical {
             LogicalBounds::Full => (0.0, self.pane_w),
             LogicalBounds::From(logical) => {
-                let origin = self.time_scale.logical_to_coordinate(logical);
-                if origin <= self.pane_w || !drawing.text.is_empty() {
-                    (origin, self.pane_w)
+                let start_x = self.time_scale.logical_to_coordinate(logical);
+                if start_x <= self.pane_w || !drawing.text.is_empty() {
+                    (start_x, self.pane_w)
                 } else {
-                    (origin, origin)
+                    (start_x, start_x)
                 }
             }
             LogicalBounds::Finite { min, max } => (
@@ -1290,9 +1448,9 @@ impl ChartEngine {
         let logical_intersects = match bounds.logical {
             LogicalBounds::Full => true,
             // A labeled ray can anchor its right-aligned label at the pane edge even when its
-            // origin sits beyond that edge, so keep it conservative.
+            // start sits beyond that edge, so keep it conservative.
             LogicalBounds::From(_) if !drawing.text.is_empty() => true,
-            LogicalBounds::From(origin) => origin <= visible.1 + logical_pad,
+            LogicalBounds::From(start) => start <= visible.1 + logical_pad,
             LogicalBounds::Finite { min, max } => {
                 min <= visible.1 + logical_pad && max >= visible.0 - logical_pad
             }
@@ -1303,7 +1461,7 @@ impl ChartEngine {
         let (Some(min_price), Some(max_price)) = (bounds.min_price, bounds.max_price) else {
             return true;
         };
-        let Some(scale) = self.drawing_scale(pane_index) else {
+        let Some(scale) = self.drawing_scale_for(pane_index, drawing.price_scale) else {
             return false;
         };
         let first = scale.price_to_coordinate(min_price, base);
@@ -1327,9 +1485,11 @@ impl ChartEngine {
             let entry = runtime.entries.get_mut(&drawing.id)?;
             entry.media_px.clear();
             for &point in &drawing.points {
-                entry
-                    .media_px
-                    .push(self.drawing_to_px(drawing.pane_index, point)?);
+                entry.media_px.push(self.drawing_to_px_for(
+                    drawing.pane_index,
+                    drawing.price_scale,
+                    point,
+                )?);
             }
             entry.geometry_key = key;
             entry.geometry_valid = true;
@@ -1382,17 +1542,16 @@ impl ChartEngine {
         &self,
         pane_index: usize,
         point: Option<(f64, f64)>,
-    ) -> (Vec<DrawingId>, Option<[u64; 12]>) {
-        let Some(key) = self.drawing_coordinate_key(pane_index) else {
-            return (Vec::new(), None);
+    ) -> Vec<DrawingId> {
+        let Some(pane) = self.panes.get(pane_index) else {
+            return Vec::new();
         };
         let viewport = ScreenBounds {
             left: 0.0,
             right: self.pane_w,
-            top: self.panes[pane_index].top,
-            bottom: self.panes[pane_index].top + self.panes[pane_index].height,
+            top: pane.top,
+            bottom: pane.top + pane.height,
         };
-        let base = self.drawing_scale_base(pane_index);
         let (font_size, font_family) = self.cached_drawing_layout();
         let text_key = self.options.generation();
         let first_logical = self.time_scale.coordinate_to_float_index(0.0) + 0.5;
@@ -1415,6 +1574,10 @@ impl ChartEngine {
             let Some(drawing) = self.drawings.get(position) else {
                 continue;
             };
+            let Some(key) = self.drawing_coordinate_key(drawing) else {
+                continue;
+            };
+            let base = self.drawing_scale_base_for(pane_index, drawing.price_scale);
             let Some(entry) = runtime.entries.get_mut(&id) else {
                 continue;
             };
@@ -1442,7 +1605,7 @@ impl ChartEngine {
             }
         }
         runtime.stats.candidates += candidates.len();
-        (candidates, Some(key))
+        candidates
     }
 
     pub(crate) fn recycle_drawing_candidates(&self, mut candidates: Vec<DrawingId>) {
@@ -1452,7 +1615,7 @@ impl ChartEngine {
 
     #[cfg(test)]
     pub(crate) fn drawing_viewport_candidate_reference(&self, drawing: &Drawing) -> bool {
-        let Some(key) = self.drawing_coordinate_key(drawing.pane_index) else {
+        let Some(key) = self.drawing_coordinate_key(drawing) else {
             return false;
         };
         let pane = &self.panes[drawing.pane_index];
@@ -1462,7 +1625,7 @@ impl ChartEngine {
             top: pane.top,
             bottom: pane.top + pane.height,
         };
-        let base = self.drawing_scale_base(drawing.pane_index);
+        let base = self.drawing_scale_base_for(drawing.pane_index, drawing.price_scale);
         let (font_size, font_family) = self.cached_drawing_layout();
         let mut entry = DrawingCache::new(drawing);
         let text_metrics = self.cached_drawing_text_metrics(
@@ -1629,8 +1792,19 @@ impl ChartEngine {
         } else {
             drawing.text_weight.unwrap_or(400)
         };
+        self.measure_text_run(text, size, family, weight, drawing.text_italic)
+    }
+
+    pub(crate) fn measure_text_run(
+        &self,
+        text: &str,
+        size: f64,
+        family: &str,
+        weight: u16,
+        italic: bool,
+    ) -> f64 {
         match &self.text_measure_fn {
-            Some(measure) => measure(text, size, family, weight, drawing.text_italic),
+            Some(measure) => measure(text, size, family, weight, italic),
             None => text.chars().count() as f64 * size * 0.6,
         }
     }
@@ -1823,7 +1997,7 @@ impl ChartEngine {
     pub fn drawing_point_to_coordinate(&self, id: DrawingId, index: usize) -> Option<(f64, f64)> {
         let drawing = self.drawing(id)?;
         let point = drawing.points.get(index)?;
-        self.drawing_to_px(drawing.pane_index, *point)
+        self.drawing_to_px_for(drawing.pane_index, drawing.price_scale, *point)
     }
 
     /// Every drawing as a JSON array of `{id, kind, pane_index, points, ...options}` in z-order.
@@ -1926,9 +2100,11 @@ impl ChartEngine {
                 if drawing.pane_index == pane {
                     if drawing.kind == DrawingKind::Brush && drawing.points.len() > 2 {
                         for &index in &[0, drawing.points.len() - 1] {
-                            if let Some((ax, ay)) =
-                                self.drawing_to_px(drawing.pane_index, drawing.points[index])
-                            {
+                            if let Some((ax, ay)) = self.drawing_to_px_for(
+                                drawing.pane_index,
+                                drawing.price_scale,
+                                drawing.points[index],
+                            ) {
                                 if (x - ax).hypot(y - ay) <= ANCHOR_HIT_RADIUS {
                                     return Some(DrawingHit {
                                         id: selected,
@@ -1984,9 +2160,7 @@ impl ChartEngine {
             return None;
         }
 
-        let (candidates, Some(key)) = self.take_drawing_candidates(pane, Some((x, y))) else {
-            return None;
-        };
+        let candidates = self.take_drawing_candidates(pane, Some((x, y)));
         let mut hit = None;
         {
             let mut runtime = self.drawing_runtime.borrow_mut();
@@ -1995,6 +2169,9 @@ impl ChartEngine {
                     continue;
                 };
                 let Some(drawing) = self.drawings.get(position) else {
+                    continue;
+                };
+                let Some(key) = self.drawing_coordinate_key(drawing) else {
                     continue;
                 };
                 let Some(px) = self.drawing_px_cached(drawing, &mut runtime, key) else {
@@ -2135,11 +2312,16 @@ impl ChartEngine {
         let Some(drawing) = self.drawing(id) else {
             return;
         };
-        let (kind, pane) = (drawing.kind, drawing.pane_index);
+        let (kind, pane, price_scale, snap_time_to_data) = (
+            drawing.kind,
+            drawing.pane_index,
+            drawing.price_scale,
+            drawing.snap_time_to_data,
+        );
         let mut points = start_points;
         let convert = |index: usize, dx: f64, dy: f64| -> Option<DrawingPoint> {
             let (px, py) = start_px.get(index)?;
-            self.drawing_from_px(pane, px + dx, py + dy)
+            self.drawing_from_px_for(pane, price_scale, px + dx, py + dy)
         };
         match part {
             DrawingDragPart::Anchor(index) => {
@@ -2150,13 +2332,21 @@ impl ChartEngine {
                     // identity — crossing the opposite side flips visually at render (the box
                     // normalizes), it never reorders the anchors or slides the fixed side
                     // (TradingView parity).
-                    let Some(mut cursor_pt) = self.drawing_from_px(pane, x, y) else {
+                    let Some(mut cursor_pt) = self.drawing_from_px_for(pane, price_scale, x, y)
+                    else {
                         return;
                     };
+                    if snap_time_to_data {
+                        let Some(snapped) = self.snap_drawing_time_to_data(cursor_pt) else {
+                            return;
+                        };
+                        cursor_pt = snapped;
+                    }
                     if modifiers.magnet {
                         cursor_pt = self.magnet_snap_point(pane, cursor_pt);
                     }
-                    let Some((mx, my)) = self.drawing_to_px(pane, cursor_pt) else {
+                    let Some((mx, my)) = self.drawing_to_px_for(pane, price_scale, cursor_pt)
+                    else {
                         return;
                     };
                     let (a, b) = (start_px[0], start_px[1]);
@@ -2200,12 +2390,22 @@ impl ChartEngine {
                         5 => ys[usize::from(a.1 < b.1)] = my, // bottom edge
                         _ => xs[usize::from(a.0 > b.0)] = mx, // left edge (7)
                     }
-                    let (Some(p0), Some(p1)) = (
-                        self.drawing_from_px(pane, xs[0], ys[0]),
-                        self.drawing_from_px(pane, xs[1], ys[1]),
+                    let (Some(mut p0), Some(mut p1)) = (
+                        self.drawing_from_px_for(pane, price_scale, xs[0], ys[0]),
+                        self.drawing_from_px_for(pane, price_scale, xs[1], ys[1]),
                     ) else {
                         return;
                     };
+                    if snap_time_to_data {
+                        let (Some(snapped0), Some(snapped1)) = (
+                            self.snap_drawing_time_to_data(p0),
+                            self.snap_drawing_time_to_data(p1),
+                        ) else {
+                            return;
+                        };
+                        p0 = snapped0;
+                        p1 = snapped1;
+                    }
                     points[0] = p0;
                     points[1] = p1;
                     if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
@@ -2229,13 +2429,21 @@ impl ChartEngine {
                 let Some(mut point) = convert(index, dx, dy) else {
                     return;
                 };
+                if snap_time_to_data {
+                    let Some(snapped) = self.snap_drawing_time_to_data(point) else {
+                        return;
+                    };
+                    point = snapped;
+                }
                 if modifiers.magnet {
                     point = self.magnet_snap_point(pane, point);
                 }
                 if modifiers.straighten && points.len() == 2 {
                     // The other anchor is the fixed one (only the dragged anchor moves).
                     let fixed = points[1 - index];
-                    if let Some(snapped) = self.straighten_point(pane, kind, fixed, point) {
+                    if let Some(snapped) =
+                        self.straighten_point(pane, price_scale, kind, fixed, point)
+                    {
                         point = snapped;
                     }
                 }
@@ -2262,6 +2470,12 @@ impl ChartEngine {
                     let Some(mut point) = convert(index, dx, dy) else {
                         return;
                     };
+                    if snap_time_to_data {
+                        let Some(snapped) = self.snap_drawing_time_to_data(point) else {
+                            return;
+                        };
+                        point = snapped;
+                    }
                     // Single-anchor kinds drag by their line, not a handle — the body drag IS
                     // the anchor drag, so the magnet applies here too (a Ctrl-dragged vertical
                     // line snaps to bar centers, a horizontal one to the nearest OHLC price).
@@ -2356,6 +2570,7 @@ impl ChartEngine {
         let Some(pending) = &self.pending_drawing else {
             return 0;
         };
+        let price_scale = pending.drawing.price_scale;
         let bound_pane = (!pending.drawing.points.is_empty()).then_some(pending.drawing.pane_index);
         let pane = match bound_pane {
             Some(pane) => pane,
@@ -2367,10 +2582,10 @@ impl ChartEngine {
         if bound_pane.is_some() && self.pane_at_y(y) != Some(pane) {
             return -1;
         }
-        let Some(mut point) = self.drawing_from_px(pane, x, y) else {
+        let Some(mut point) = self.drawing_from_px_for(pane, price_scale, x, y) else {
             return -1;
         };
-        let (anchor_count, kind, fixed) = {
+        let (anchor_count, kind, fixed, snap_time_to_data) = {
             let Some(pending) = &self.pending_drawing else {
                 return 0;
             };
@@ -2378,14 +2593,22 @@ impl ChartEngine {
                 pending.drawing.kind.anchor_count(),
                 pending.drawing.kind,
                 pending.drawing.points.last().copied(),
+                pending.drawing.snap_time_to_data,
             )
         };
+        if snap_time_to_data {
+            let Some(snapped) = self.snap_drawing_time_to_data(point) else {
+                return -1;
+            };
+            point = snapped;
+        }
         if modifiers.magnet {
             point = self.magnet_snap_point(pane, point);
         }
         if modifiers.straighten {
             if let Some(fixed) = fixed {
-                if let Some(snapped) = self.straighten_point(pane, kind, fixed, point) {
+                if let Some(snapped) = self.straighten_point(pane, price_scale, kind, fixed, point)
+                {
                     point = snapped;
                 }
             }
@@ -2428,6 +2651,7 @@ impl ChartEngine {
         };
         let unplaced = pending.drawing.points.is_empty();
         let bound_pane = pending.drawing.pane_index;
+        let price_scale = pending.drawing.price_scale;
         // With nothing placed yet the preview follows the cursor in whichever pane it is over;
         // afterwards it stays bound to the first click's pane.
         let pane = if unplaced {
@@ -2438,9 +2662,15 @@ impl ChartEngine {
         } else {
             bound_pane
         };
-        let Some(mut point) = self.drawing_from_px(pane, x, y) else {
+        let Some(mut point) = self.drawing_from_px_for(pane, price_scale, x, y) else {
             return;
         };
+        if pending.drawing.snap_time_to_data {
+            let Some(snapped) = self.snap_drawing_time_to_data(point) else {
+                return;
+            };
+            point = snapped;
+        }
         if modifiers.magnet {
             point = self.magnet_snap_point(pane, point);
         }
@@ -2448,7 +2678,7 @@ impl ChartEngine {
             if let Some(pending) = &self.pending_drawing {
                 if let Some(&fixed) = pending.drawing.points.last() {
                     if let Some(snapped) =
-                        self.straighten_point(pane, pending.drawing.kind, fixed, point)
+                        self.straighten_point(pane, price_scale, pending.drawing.kind, fixed, point)
                     {
                         point = snapped;
                     }

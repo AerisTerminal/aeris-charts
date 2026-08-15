@@ -99,6 +99,16 @@ impl ChartEngine {
                 }
             };
 
+            for band in &axis_frame.bands {
+                rect(
+                    band.x * dpr,
+                    band.y * dpr,
+                    band.width * dpr,
+                    band.height * dpr,
+                    band.color,
+                );
+            }
+
             if self.left_axis_w > 0.0 && left_scale.border_visible {
                 rect(
                     (pane_left * dpr).round() - f64::from(border_w),

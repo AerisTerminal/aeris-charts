@@ -213,6 +213,8 @@ pub struct GpuiChartRenderer {
     /// GPUI-owned shaped lines are feature-local so the default build remains GPUI-free.
     #[cfg(feature = "gpui-backend")]
     shaped_text: backend::ShapedTextCache,
+    #[cfg(feature = "gpui-backend")]
+    images: backend::RasterImageCache,
     /// Reusable tessellation buffers. Held here rather than rebuilt per frame: see
     /// [`geometry::Scratch`].
     scratch: geometry::Scratch,
@@ -236,6 +238,8 @@ impl GpuiChartRenderer {
             text: TextCache::default(),
             #[cfg(feature = "gpui-backend")]
             shaped_text: backend::ShapedTextCache::default(),
+            #[cfg(feature = "gpui-backend")]
+            images: backend::RasterImageCache::default(),
             scratch: geometry::Scratch::default(),
         }
     }
@@ -524,6 +528,7 @@ mod tests {
                 SceneOp::Quad { .. } => "quad",
                 SceneOp::Mesh { .. } => "mesh",
                 SceneOp::Text(_) => "text",
+                SceneOp::Image { .. } => "image",
             })
             .collect();
         assert_eq!(

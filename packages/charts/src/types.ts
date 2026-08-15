@@ -16,7 +16,29 @@ import type { custom_series_pane_view } from "./custom_series.js";
  * REPORTED (by {@link series_api.series_type} for a custom series); it is not accepted by
  * {@link chart_api.add_series} — custom series are created with {@link chart_api.add_custom_series}.
  */
-export type series_kind = "candlestick" | "bar" | "line" | "area" | "histogram" | "baseline" | "custom";
+export type feature_series_kind =
+  | "brushable_area"
+  | "dual_range_histogram"
+  | "grouped_bars"
+  | "heatmap"
+  | "hlc_area"
+  | "pretty_histogram"
+  | "lollipop"
+  | "rounded_candles"
+  | "background_shade"
+  | "stacked_area"
+  | "stacked_bars"
+  | "whisker_box";
+
+export type series_kind =
+  | "candlestick"
+  | "bar"
+  | "line"
+  | "area"
+  | "histogram"
+  | "baseline"
+  | feature_series_kind
+  | "custom";
 
 /** Calendar day (reference `BusinessDay`), interpreted at UTC midnight. `month`/`day` are 1-based. */
 export interface business_day {
@@ -80,7 +102,40 @@ export interface whitespace_data {
   time: time;
 }
 
-export type series_data = ohlc_data | single_value_data | whitespace_data;
+export interface brushable_area_data { time: time; value: number }
+export interface dual_range_histogram_data { time: time; values: readonly number[] }
+export interface grouped_bars_data { time: time; values: readonly number[] }
+export interface heatmap_cell { low: number; high: number; amount: number }
+export interface heatmap_data { time: time; cells: readonly heatmap_cell[] }
+export interface hlc_area_data { time: time; high: number; low: number; close: number }
+export interface pretty_histogram_data { time: time; value: number; color?: string }
+export interface lollipop_data { time: time; value: number }
+export interface rounded_candle_data { time: time; open: number; high: number; low: number; close: number }
+export interface background_shade_data { time: time; value: number }
+export interface stacked_area_data { time: time; values: readonly number[] }
+export interface stacked_bars_data { time: time; values: readonly number[] }
+export interface whisker_box_data {
+  time: time;
+  /** `[low whisker, lower quartile, median, upper quartile, high whisker]`. */
+  quartiles: readonly [number, number, number, number, number];
+  outliers?: readonly number[];
+}
+
+export type feature_series_data =
+  | brushable_area_data
+  | dual_range_histogram_data
+  | grouped_bars_data
+  | heatmap_data
+  | hlc_area_data
+  | pretty_histogram_data
+  | lollipop_data
+  | rounded_candle_data
+  | background_shade_data
+  | stacked_area_data
+  | stacked_bars_data
+  | whisker_box_data;
+
+export type series_data = ohlc_data | single_value_data | feature_series_data | whitespace_data;
 
 /**
  * Columnar input for {@link series_api.set_data_typed} and {@link series_api.update_typed}: one
@@ -781,6 +836,52 @@ export interface series_options {
     | { type: "custom"; formatter: (price: number) => string; min_move?: number };
 }
 
+export interface feature_brush_style {
+  line_color: string;
+  top_color: string;
+  bottom_color: string;
+  line_width: number;
+}
+
+export interface feature_brush_range {
+  /** Logical range; `from` is inclusive and `to` is exclusive. */
+  range: logical_range;
+  style: feature_brush_style;
+}
+
+/** Rust-engine options shared by the advanced financial series. Irrelevant keys are ignored. */
+export interface feature_series_options {
+  colors: readonly string[] | readonly { line: string; area: string }[];
+  line_color: string;
+  top_color: string;
+  bottom_color: string;
+  base_price: number;
+  brush_ranges: readonly feature_brush_range[];
+  border_radius: readonly number[];
+  max_height: number;
+  cell_border_width: number;
+  cell_border_color: string;
+  high_line_color: string;
+  low_line_color: string;
+  close_line_color: string;
+  high_line_width: number;
+  low_line_width: number;
+  close_line_width: number;
+  width_percent: number;
+  radius: number;
+  low_color: string;
+  high_color: string;
+  low_value: number;
+  high_value: number;
+  opacity: number;
+  whisker_color: string;
+  lower_quartile_fill: string;
+  upper_quartile_fill: string;
+  outlier_color: string;
+}
+
+export type any_series_options = series_options & Partial<feature_series_options>;
+
 export const LINE_TYPE_TO_U8: Record<NonNullable<series_options["line_type"]>, number> = {
   simple: 0,
   stepped: 1,
@@ -830,18 +931,26 @@ export interface series_marker {
   /** Bar time (must match a data point's time). Accepts the same forms as data `time`. */
   time: time;
   /** Placement relative to the bar. reference names are canonical; short aliases remain compatible. */
-  position?: "aboveBar" | "belowBar" | "inBar" | "above" | "below";
+  position?: "aboveBar" | "belowBar" | "inBar" | "atPriceTop" | "atPriceBottom" | "atPriceMiddle" | "above" | "below";
   /** Marker shape. Default `"circle"`. */
   shape?: "circle" | "square" | "arrowUp" | "arrowDown";
   /** Fill color (any CSS color the engine parses). Default series color. */
   color?: string;
   /** Optional label rendered beside the marker. */
   text?: string;
+  /** Optional object ID reported by marker hit testing. */
+  id?: string;
+  /** Marker-size multiplier. Default `1`; negative values clamp to zero like the reference. */
+  size?: number;
+  /** Exact price, required by `atPriceTop`, `atPriceBottom`, and `atPriceMiddle`. */
+  price?: number;
 }
 
 export interface series_marker_options {
   /** Expand price-scale pixel margins so marker shapes remain visible. Default `true` (reference). */
   auto_scale: boolean;
+  /** Official marker stacking order. Default `normal`. */
+  z_order: "normal" | "aboveSeries" | "top";
 }
 
 export const KIND_TO_U8: Record<series_kind, number> = {
@@ -851,8 +960,39 @@ export const KIND_TO_U8: Record<series_kind, number> = {
   area: 3,
   histogram: 4,
   baseline: 5,
+  brushable_area: 7,
+  dual_range_histogram: 7,
+  grouped_bars: 7,
+  heatmap: 7,
+  hlc_area: 7,
+  pretty_histogram: 7,
+  lollipop: 7,
+  rounded_candles: 7,
+  background_shade: 7,
+  stacked_area: 7,
+  stacked_bars: 7,
+  whisker_box: 7,
   custom: 6,
 };
+
+export const FEATURE_KIND_TO_U8: Record<feature_series_kind, number> = {
+  brushable_area: 0,
+  dual_range_histogram: 1,
+  grouped_bars: 2,
+  heatmap: 3,
+  hlc_area: 4,
+  pretty_histogram: 5,
+  lollipop: 6,
+  rounded_candles: 7,
+  background_shade: 8,
+  stacked_area: 9,
+  stacked_bars: 10,
+  whisker_box: 11,
+};
+
+export function is_feature_series_kind(kind: series_kind): kind is feature_series_kind {
+  return kind !== "custom" && KIND_TO_U8[kind] === 7;
+}
 
 // ---------------------------------------------------------------------------------------------
 // Drawing tools (engine-owned drawing objects; nucleuscharts_engine drawings.rs)
@@ -902,11 +1042,13 @@ export type drawing_text_v_align = "top" | "middle" | "bottom";
 /**
  * A drawing's options (engine `Drawing`). Every tool can carry a text label placed by the
  * 3×3 `text_h_align`/`text_v_align` against the tool's geometry. Colors parse per the engine's
- * CSS rules; `""` for `fill_color`/`text_color` means "follow the default" (the border color at
+ * CSS rules; `""` for optional colors means "follow the default" (the border color at
  * 20% alpha for a rectangle's fill, the chart's `layout.textColor` for labels), and
  * `text_size: null` follows `layout.fontSize`.
  */
 export interface drawing_options {
+  /** Price scale used for price-coordinate conversion (`overlay` is the pane's overlay scale). */
+  price_scale_id: "left" | "right" | "overlay";
   /** Line/border color (default: the canonical primary token). */
   color: string;
   /** Stroke width in CSS px (default 2; 1 for a rectangle's border). */
@@ -915,6 +1057,20 @@ export interface drawing_options {
   style: line_style;
   /** Rectangle fill (default `""` = the border color at 20% alpha). Unused by other kinds. */
   fill_color: string;
+  /** Interactive rectangle preview fill (`""` = `fill_color`). */
+  preview_fill_color: string;
+  /** Rectangle outline visibility (generic drawings default true; official plugin false). */
+  border_visible: boolean;
+  /** Rectangle endpoint labels on the price and time axes. */
+  show_labels: boolean;
+  /** Official 15 CSS px rectangle shading in the price/time axis panes. */
+  axis_bands_visible: boolean;
+  /** Rectangle endpoint-label background (`""` = drawing color). */
+  label_color: string;
+  /** Rectangle endpoint-label text (`""` = chart foreground). */
+  label_text_color: string;
+  /** Snap rectangle x anchors to canonical data times. */
+  snap_time_to_data: boolean;
   /** The tool's text label (`""` = none). */
   text: string;
   /** Label color (default `""` = the chart's `layout.textColor`). */
@@ -958,10 +1114,18 @@ export interface persisted_pane_v1 {
 
 /** Stable semantic drawing style persisted by schema V1. Omitted fields restore defaults. */
 export interface persisted_drawing_style_v1 {
+  price_scale_id?: "left" | "right" | "overlay";
   color?: string;
   width?: number;
   line_style?: line_style;
   fill_color?: string;
+  preview_fill_color?: string;
+  border_visible?: boolean;
+  show_labels?: boolean;
+  axis_bands_visible?: boolean;
+  label_color?: string;
+  label_text_color?: string;
+  snap_time_to_data?: boolean;
   text?: string;
   text_color?: string;
   text_size?: number;
@@ -1015,6 +1179,9 @@ export interface drawing_api {
   /** Remove the drawing from the chart. */
   remove(): void;
 }
+
+export type drawing_created_handler = (drawing: drawing_api) => void;
+export type drawing_tool_change_handler = (tool: drawing_kind | null) => void;
 
 
 // ---------------------------------------------------------------------------------------------
@@ -1139,10 +1306,12 @@ export interface series_api {
    * the bare format function `(price) => string`.
    */
   price_formatter(): (price: number) => string;
+  /** Current pane index of this live series. */
+  pane_index(): number;
   /** Apply series options (currently: `color`). */
-  apply_options(options: Partial<series_options>): void;
+  apply_options(options: Partial<any_series_options>): void;
   /** The current (deep-merged) options of this series (reference `ISeriesApi.options`). */
-  options(): series_options;
+  options(): any_series_options;
   /** Change how the primary series is drawn (candlestick/bar/line/area/histogram). */
   set_type(kind: series_kind): void;
   /** Move this series into stacked pane `pane_index` (0 = price pane), creating it if needed. */
@@ -1306,7 +1475,7 @@ export interface chart_api {
    * The first call arms WebGPU GPU-time collection; see {@link frame_stats.gpu_ms}.
    */
   frame_stats(): frame_stats;
-  add_series(kind: series_kind, options?: Partial<series_options>): series_api;
+  add_series(kind: series_kind, options?: Partial<any_series_options>): series_api;
   /**
    * Add a custom series (plugin platform Phase C-c; reference `IChartApi.addCustomSeries`): a
    * user-defined series type rendered by the pane view's `render(ctx)` through backend-neutral
@@ -1466,11 +1635,21 @@ export interface chart_api {
    * the tool disarms after each commit (listen with {@link chart_api.set_drawing_tool_listener}
    * to sync a toolbar).
    */
-  set_drawing_tool(tool: drawing_kind | null, options?: Partial<drawing_options>): void;
+  set_drawing_tool(
+    tool: drawing_kind | null,
+    options?: Partial<drawing_options>,
+    pane_index?: number,
+  ): void;
   /** The armed interactive tool, or `null`. */
   active_drawing_tool(): drawing_kind | null;
   /** Register a listener for armed-tool changes (including the auto-disarm after a commit). */
   set_drawing_tool_listener(listener: ((tool: drawing_kind | null) => void) | null): void;
+  /** Additive drawing-tool state subscription used by toolbar/controller features. */
+  subscribe_drawing_tool_change(handler: drawing_tool_change_handler): void;
+  unsubscribe_drawing_tool_change(handler: drawing_tool_change_handler): void;
+  /** Fire after an engine-owned interactive drawing is committed. */
+  subscribe_drawing_created(handler: drawing_created_handler): void;
+  unsubscribe_drawing_created(handler: drawing_created_handler): void;
   /** The currently selected drawing (click-to-select; Delete/Backspace removes it), or `null`. */
   selected_drawing(): drawing_api | null;
   /** Fire after the visible logical range changes. */

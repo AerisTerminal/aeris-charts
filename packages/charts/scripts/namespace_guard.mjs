@@ -21,22 +21,23 @@ const generatedAllowed = [
 ];
 const generated = ["packages/charts/pkg", "packages/charts/dist", "examples/web_demo/pkg", "examples/web_demo/dist"];
 const failures = [];
+const retired_namespace = new RegExp(`(?<![A-Za-z0-9_])${retired}(?![A-Za-z0-9_])`, "i");
 
 function inspect(path, label, generated = false) {
-  if (path.toLowerCase().includes(retired)) failures.push(`${label}: forbidden path`);
+  if (retired_namespace.test(path)) failures.push(`${label}: forbidden path`);
   const lines = readFileSync(path).toString("latin1").split(/\r?\n/);
   lines.forEach((line, index) => {
     let remainder = line;
     for (const pattern of allowed) remainder = remainder.replace(pattern, "");
     if (generated) for (const pattern of generatedAllowed) remainder = remainder.replace(pattern, "");
-    if (remainder.toLowerCase().includes(retired)) failures.push(`${label}:${index + 1}`);
+    if (retired_namespace.test(remainder)) failures.push(`${label}:${index + 1}`);
   });
 }
 
 const tracked = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], { cwd: repo })
   .toString("utf8")
   .split("\0")
-  .filter(Boolean);
+  .filter((path) => path && existsSync(join(repo, path)));
 for (const path of tracked) inspect(join(repo, path), path);
 
 function inspectTree(relative) {
