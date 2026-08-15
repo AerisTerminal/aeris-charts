@@ -973,6 +973,10 @@ impl NucleusChart {
         self.inner.borrow_mut().engine.cancel_trading_drag()
     }
 
+    pub fn discard_trading_interaction(&mut self) -> bool {
+        self.inner.borrow_mut().engine.discard_trading_interaction()
+    }
+
     pub fn trading_activate_at(&mut self, x_css: f64, y_css: f64) -> bool {
         self.inner
             .borrow_mut()

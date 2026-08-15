@@ -2368,6 +2368,10 @@ export class chart_impl implements chart_api {
     this.wasm.cancel_trading_drag();
   }
 
+  discard_trading_interaction(): boolean {
+    return this.wasm.discard_trading_interaction();
+  }
+
   trading_activate_at(x: number, y: number): boolean {
     const activated = this.wasm.trading_activate_at(x, y);
     this.trading_handle.dispatch_pending_intents();

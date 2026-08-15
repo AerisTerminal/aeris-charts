@@ -18,7 +18,10 @@
 //! consume triangles. Those are exactly the prims the existing WebGPU-vs-Canvas2D reference already
 //! records a bounded residual for.
 
-use nucleuscharts_engine::{ChartEngine, SeriesKind};
+use nucleuscharts_engine::{
+    ChartEngine, OrderId, OrderKind, OrderRole, OrderSide, OrderStatus, PositionId, PositionSide,
+    SeriesKind, TradingPosition, TradingPriceScale, WorkingOrder,
+};
 use nucleuscharts_render::canvas2d::{execute as canvas_execute, Canvas2d, Viewport};
 use nucleuscharts_render::color::Color;
 use nucleuscharts_render::draw_list::{Gradient, IRect, LineStyle, LineType, Prim, TextAlign};
@@ -655,6 +658,44 @@ fn real_engine_frame(dpr: f64) -> ChartEngine {
     engine.time_scale.set_width(900.0);
     engine.fit_content();
     engine.crosshair = Some((450.0, 260.0));
+    let position_id = PositionId::new("gpui-position").unwrap();
+    engine
+        .update_trading_position(TradingPosition {
+            id: position_id.clone(),
+            pane_index: 0,
+            price_scale: TradingPriceScale::Right,
+            side: PositionSide::Long,
+            average_price: 105.0,
+            quantity: 2.0,
+            display_pnl: Some(14.0),
+            currency: Some("USD".into()),
+        })
+        .unwrap();
+    for (id, role, kind, price) in [
+        ("gpui-tp", OrderRole::TakeProfit, OrderKind::Limit, 112.0),
+        ("gpui-sl", OrderRole::StopLoss, OrderKind::Stop, 96.0),
+    ] {
+        engine
+            .update_working_order(WorkingOrder {
+                id: OrderId::new(id).unwrap(),
+                pane_index: 0,
+                price_scale: TradingPriceScale::Right,
+                side: OrderSide::Sell,
+                kind,
+                role,
+                status: OrderStatus::Working,
+                price,
+                stop_price: None,
+                quantity: 2.0,
+                filled_quantity: 0.0,
+                position_id: Some(position_id.clone()),
+                parent_order_id: None,
+                bracket_id: None,
+                oco_group_id: None,
+                revision: 1,
+            })
+            .unwrap();
+    }
     engine
 }
 

@@ -99,7 +99,7 @@ impl ChartEngine {
     }
 
     fn trading_order_preview(&self, order: &crate::WorkingOrder) -> Option<&crate::TradingPreview> {
-        self.trading_state.preview.as_ref().filter(|preview| {
+        self.trading_state.interaction.preview().filter(|preview| {
             matches!(
                 &preview.source,
                 crate::TradingPreviewSource::Order { order_id } if order_id == &order.id
@@ -451,14 +451,11 @@ impl ChartEngine {
             ) else {
                 continue;
             };
-            let hovered = self.trading_state.hover.as_ref().is_some_and(|hit| {
+            let hovered = self.trading_state.interaction.hover().is_some_and(|hit| {
                 matches!(&hit.object, crate::TradingObjectId::Position(id) if id == &position.id)
             });
-            let pending = self
-                .trading_state
-                .pending_position_action
-                .as_ref()
-                .is_some_and(|action| action.position_id == position.id);
+            let pending =
+                self.trading_state.interaction.pending_position_id() == Some(&position.id);
             let position_color = if pending {
                 self.trading_state.style.pending
             } else {
@@ -529,7 +526,7 @@ impl ChartEngine {
                 ) => Color::rgba(base_color.r(), base_color.g(), base_color.b(), 176),
                 None => base_color,
             };
-            let hovered = self.trading_state.hover.as_ref().is_some_and(
+            let hovered = self.trading_state.interaction.hover().is_some_and(
                 |hit| matches!(&hit.object, crate::TradingObjectId::Order(id) if id == &order.id),
             );
             lines.push(Prim::HLine {
@@ -719,8 +716,8 @@ impl ChartEngine {
 
         if let Some(preview) = self
             .trading_state
-            .preview
-            .as_ref()
+            .interaction
+            .preview()
             .filter(|preview| preview.pane_index == pane_index)
         {
             if let Some(preview_y) =
@@ -901,7 +898,7 @@ impl ChartEngine {
                 OrderSide::Buy => self.trading_state.style.buy,
                 OrderSide::Sell => self.trading_state.style.sell,
             };
-            let hovered = self.trading_state.hover.as_ref().is_some_and(|hit| {
+            let hovered = self.trading_state.interaction.hover().is_some_and(|hit| {
                 matches!(&hit.object, crate::TradingObjectId::Execution(id) if id == &execution.id)
             });
             lines.push(Prim::Circle {

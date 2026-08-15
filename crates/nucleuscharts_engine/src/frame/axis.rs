@@ -1129,11 +1129,8 @@ impl ChartEngine {
             });
         };
         for position in &self.trading_state.positions {
-            let pending = self
-                .trading_state
-                .pending_position_action
-                .as_ref()
-                .is_some_and(|action| action.position_id == position.id);
+            let pending =
+                self.trading_state.interaction.pending_position_id() == Some(&position.id);
             append(
                 position.pane_index,
                 position.price_scale,
@@ -1147,7 +1144,7 @@ impl ChartEngine {
             );
         }
         for order in &self.trading_state.orders {
-            let preview = self.trading_state.preview.as_ref().filter(|preview| {
+            let preview = self.trading_state.interaction.preview().filter(|preview| {
                 matches!(
                     &preview.source,
                     crate::TradingPreviewSource::Order { order_id } if order_id == &order.id
@@ -1185,7 +1182,7 @@ impl ChartEngine {
             }
         }
         if let Some(preview) =
-            self.trading_state.preview.as_ref().filter(|preview| {
+            self.trading_state.interaction.preview().filter(|preview| {
                 !matches!(preview.source, crate::TradingPreviewSource::Order { .. })
             })
         {

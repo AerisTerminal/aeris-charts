@@ -1158,8 +1158,8 @@ export function install_gestures(chart: chart_impl): () => void {
         handled = wasm.remove_selected_drawing();
         break;
       case "Escape":
-        // Disarm a drawing tool / cancel a pending creation and deselect any drawing, then
-        // the existing crosshair clear.
+        // Discard a local trading preview before clearing the remaining transient interactions.
+        chart.discard_trading_interaction();
         chart.cancel_drawing_interaction();
         wasm.clear_crosshair();
         chart.repaint();

@@ -338,3 +338,109 @@ test("existing TP and SL adjustments keep manual confirmation controls", async (
     intent_count: window.__protection_intents.length,
   }))).toEqual({ preview: null, intent_count: 1 });
 });
+
+for (const backend of ["canvas2d", "webgpu"]) {
+  test(`${backend} protection creation follows one-click, manual, Escape, and host reconciliation`, async ({ page }) => {
+    await open_trading_demo(page, backend);
+    const probe = await page.evaluate(() => {
+      const trading = window.__chart.trading();
+      trading.apply_snapshot({
+        instrument: { tick_size: 0.25, price_precision: 2, quantity_precision: 0 },
+        positions: [{ id: "position-only", side: "long", average_price: 100, quantity: 2 }],
+      });
+      window.__creation_intents = [];
+      trading.subscribe_intents((intent) => window.__creation_intents.push(intent));
+      const overlay = document.querySelector("#chart_container canvas:last-of-type").getBoundingClientRect();
+      const width = window.__chart.time_scale().width();
+      const position_start = width * 0.75 - 103;
+      return {
+        overlay: { left: overlay.left, top: overlay.top },
+        width,
+        tp_x: position_start + 15,
+        sl_x: position_start + 47,
+        entry_y: window.__main.price_to_coordinate(100),
+        tp_y: window.__main.price_to_coordinate(102),
+        sl_y: window.__main.price_to_coordinate(98),
+      };
+    });
+
+    await page.mouse.move(probe.overlay.left + probe.tp_x, probe.overlay.top + probe.entry_y);
+    await page.mouse.down();
+    await page.mouse.move(probe.overlay.left + probe.tp_x, probe.overlay.top + probe.tp_y, { steps: 6 });
+    await page.mouse.up();
+    const one_click = await page.evaluate(() => ({
+      intents: window.__creation_intents,
+      preview: window.__chart.trading().preview(),
+      authoritative: window.__chart.trading().state(),
+    }));
+    expect(one_click.intents).toEqual([
+      expect.objectContaining({
+        action: "create_take_profit",
+        position_id: "position-only",
+        price: 102,
+      }),
+    ]);
+    expect(one_click.preview).toMatchObject({ phase: "pending", price: 102 });
+    expect(one_click.authoritative.orders).toEqual([]);
+
+    await page.evaluate(() => {
+      const trading = window.__chart.trading();
+      const intent = window.__creation_intents[0];
+      trading.resolve_intent(intent.sequence, true);
+      trading.update_order({
+        id: "confirmed-tp",
+        side: "sell",
+        kind: "limit",
+        role: "take_profit",
+        status: "working",
+        price: 102,
+        quantity: 2,
+        position_id: "position-only",
+        revision: 1,
+      });
+      trading.set_confirmation_mode("manual");
+    });
+    expect(await page.evaluate(() => window.__chart.trading().preview())).toBeNull();
+
+    await page.mouse.move(probe.overlay.left + probe.sl_x, probe.overlay.top + probe.entry_y);
+    await page.mouse.down();
+    await page.mouse.move(probe.overlay.left + probe.sl_x, probe.overlay.top + probe.sl_y, { steps: 6 });
+    await page.mouse.up();
+    expect(await page.evaluate(() => ({
+      preview: window.__chart.trading().preview(),
+      intent_count: window.__creation_intents.length,
+    }))).toMatchObject({
+      preview: { source: "stop_loss", phase: "awaiting_confirmation", price: 98 },
+      intent_count: 1,
+    });
+
+    await page.keyboard.press("Escape");
+    expect(await page.evaluate(() => ({
+      preview: window.__chart.trading().preview(),
+      intent_count: window.__creation_intents.length,
+    }))).toEqual({ preview: null, intent_count: 1 });
+
+    await page.mouse.move(probe.overlay.left + probe.sl_x, probe.overlay.top + probe.entry_y);
+    await page.mouse.down();
+    await page.mouse.move(probe.overlay.left + probe.sl_x, probe.overlay.top + probe.sl_y, { steps: 6 });
+    await page.mouse.up();
+    const manual_main_x = probe.width * 0.5 + 11;
+    const manual_hits = await page.evaluate(({ x, y }) => ({
+      confirm: window.__chart.trading().hit_at(x - 36, y),
+      discard: window.__chart.trading().hit_at(x - 97, y),
+    }), { x: manual_main_x, y: probe.sl_y });
+    expect(manual_hits).toMatchObject({
+      confirm: { kind: "confirm_button" },
+      discard: { kind: "discard_button" },
+    });
+    await page.mouse.click(probe.overlay.left + manual_main_x - 36, probe.overlay.top + probe.sl_y);
+    expect(await page.evaluate(() => window.__creation_intents)).toEqual([
+      expect.objectContaining({ action: "create_take_profit" }),
+      expect.objectContaining({
+        action: "create_stop_loss",
+        position_id: "position-only",
+        price: 98,
+      }),
+    ]);
+  });
+}
