@@ -4,7 +4,11 @@ const port = Number.parseInt(process.env.NUCLEUSCHARTS_TEST_PORT ?? "4174", 10);
 const portable_browser = process.env.NUCLEUSCHARTS_PORTABLE_BROWSER === "1";
 const headed_browser = process.env.NUCLEUSCHARTS_HEADED_BROWSER === "1";
 const linux_webgpu_args = process.platform === "linux"
-  ? ["--use-angle=vulkan", "--enable-features=Vulkan", "--disable-vulkan-surface"]
+  ? [
+      "--use-angle=vulkan",
+      "--enable-features=Vulkan",
+      ...(!headed_browser ? ["--disable-vulkan-surface"] : []),
+    ]
   : [];
 
 export default defineConfig({
