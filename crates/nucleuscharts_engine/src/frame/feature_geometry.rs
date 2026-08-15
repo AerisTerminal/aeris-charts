@@ -789,30 +789,82 @@ impl ChartEngine {
         out: &mut Vec<Prim>,
     ) {
         let span = options.high_value - options.low_value;
-        for bar in bars {
-            let FeatureValue::BackgroundShade { value } = bar.value else {
+        let samples = bars
+            .iter()
+            .filter_map(|bar| {
+                let FeatureValue::BackgroundShade { value } = bar.value else {
+                    return None;
+                };
+                let amount = if span == 0.0 {
+                    0.0
+                } else {
+                    (*value - options.low_value) / span
+                };
+                // The official example exposes `opacity` but its renderer paints the
+                // interpolated RGB value directly; preserve that observable behavior.
+                let color = mix_color(options.low_color, options.high_color, amount);
+                Some((bar.x_media, Color::rgb(color.r(), color.g(), color.b())))
+            })
+            .collect::<Vec<_>>();
+        let Some(&(first_x, first_color)) = samples.first() else {
+            return;
+        };
+        let Some(&(last_x, last_color)) = samples.last() else {
+            return;
+        };
+
+        let spacing = self.time_scale.bar_spacing();
+        let (first_left, _) = full_bar_width(first_x, spacing, hpr);
+        let (last_left, last_width) = full_bar_width(last_x, spacing, hpr);
+        let field_top = (pane_top * vpr).round() as i32;
+        let field_height = (pane_height * vpr).round().max(1.0) as i32;
+        let mut run_start = first_left;
+        let mut run_color = first_color;
+        let push_run = |out: &mut Vec<Prim>, start: i32, end: i32, color: Color| {
+            if end > start {
+                out.push(Prim::Rect {
+                    rect: IRect {
+                        x: start,
+                        y: field_top,
+                        w: end - start,
+                        h: field_height,
+                    },
+                    color,
+                });
+            }
+        };
+
+        // Interpolate in bitmap space so the backdrop is a continuous field whose work remains
+        // bounded by the physical viewport width, not one flat color pocket per source bar.
+        for pair in samples.windows(2) {
+            let [(left_x, left_color), (right_x, right_color)] = pair else {
                 continue;
             };
-            let amount = if span == 0.0 {
-                0.0
-            } else {
-                (*value - options.low_value) / span
-            };
-            // The official example exposes `opacity` but its renderer paints the interpolated
-            // RGB value directly; preserve that observable behavior.
-            let color = mix_color(options.low_color, options.high_color, amount);
-            let color = Color::rgb(color.r(), color.g(), color.b());
-            let (left, width) = full_bar_width(bar.x_media, self.time_scale.bar_spacing(), hpr);
-            out.push(Prim::Rect {
-                rect: IRect {
-                    x: left,
-                    y: (pane_top * vpr).round() as i32,
-                    w: width,
-                    h: (pane_height * vpr).round().max(1.0) as i32,
-                },
-                color,
-            });
+            let left = (*left_x * hpr).round() as i32;
+            let right = (*right_x * hpr).round() as i32;
+            if right <= left {
+                continue;
+            }
+            for x in left.max(run_start)..right {
+                let color = mix_color(
+                    *left_color,
+                    *right_color,
+                    (x - left) as f64 / (right - left) as f64,
+                );
+                if color != run_color {
+                    push_run(out, run_start, x, run_color);
+                    run_start = x;
+                    run_color = color;
+                }
+            }
         }
+        let last_center = (last_x * hpr).round() as i32;
+        if run_color != last_color {
+            push_run(out, run_start, last_center, run_color);
+            run_start = last_center;
+            run_color = last_color;
+        }
+        push_run(out, run_start, last_left + last_width, run_color);
     }
 
     #[allow(clippy::too_many_arguments)]

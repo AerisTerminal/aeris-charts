@@ -1199,7 +1199,7 @@ mod tests {
     }
 
     #[test]
-    fn dual_range_and_background_columns_use_contiguous_official_widths() {
+    fn dual_range_columns_and_background_gradient_cover_contiguous_widths() {
         let mut dual = ChartEngine::new(800.0, 500.0, 1.0);
         dual.configure_feature_series(
             0,
@@ -1274,16 +1274,28 @@ mod tests {
         let mut fields = frame.panes[0].main[segment.start..segment.end]
             .iter()
             .filter_map(|primitive| match primitive {
-                nucleuscharts_render::draw_list::Prim::Rect { rect, .. } => Some(*rect),
+                nucleuscharts_render::draw_list::Prim::Rect { rect, color } => {
+                    Some((*rect, *color))
+                }
                 _ => None,
             })
             .collect::<Vec<_>>();
-        fields.sort_by_key(|rect| rect.x);
-        assert_eq!(fields.len(), 6);
+        fields.sort_by_key(|(rect, _)| rect.x);
+        assert!(
+            fields.len() > 6,
+            "the backdrop must interpolate between data colors instead of painting one pocket per bar"
+        );
         assert!(fields
             .windows(2)
-            .all(|pair| pair[0].x + pair[0].w == pair[1].x));
-        assert!(fields.iter().all(|rect| rect.h == fields[0].h));
+            .all(|pair| pair[0].0.x + pair[0].0.w == pair[1].0.x));
+        assert!(fields.iter().all(|(rect, _)| rect.h == fields[0].0.h));
+        assert!(fields.windows(2).all(|pair| {
+            let left = pair[0].1;
+            let right = pair[1].1;
+            left.r().abs_diff(right.r()) <= 1
+                && left.g().abs_diff(right.g()) <= 1
+                && left.b().abs_diff(right.b()) <= 1
+        }));
     }
 
     #[test]

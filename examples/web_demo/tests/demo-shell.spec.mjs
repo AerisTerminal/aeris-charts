@@ -106,11 +106,19 @@ test("reported plugin scenarios use full data and official line compositions", a
     first_cells: 13,
   });
   expect(series.filter((item) => item.type === "line")).toHaveLength(initial_lines + 1);
+  expect(await page.evaluate(async () => {
+    const { default_theme_name, theme_palette } = await import("/dist/nucleuscharts_financial.js");
+    return window.__chart.series_order().at(-1).options().color === theme_palette(default_theme_name).primary;
+  })).toBe(true);
 
   await page.evaluate(() => window.__feature_lab.activate("shaded-background"));
   series = await inspect();
   expect(series.find((item) => item.type === "background_shade")?.points).toBe(await page.evaluate(() => window.__data.length));
   expect(series.filter((item) => item.type === "line")).toHaveLength(initial_lines + 1);
+  expect(await page.evaluate(async () => {
+    const { default_theme_name, theme_palette } = await import("/dist/nucleuscharts_financial.js");
+    return window.__chart.series_order().at(-1).options().color === theme_palette(default_theme_name).primary;
+  })).toBe(true);
 });
 
 test("brushable area writes a logical range whose color follows chronological delta in either drag direction", async ({ page }) => {

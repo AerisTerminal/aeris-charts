@@ -15,10 +15,14 @@ import {
   create_user_price_lines,
   create_vertical_line,
   create_volume_profile,
+  default_theme_name,
   enable_accessibility,
   enable_brushable_area_interaction,
+  theme_palette,
 } from "./dist/nucleuscharts_financial.js";
 import { hydrate_icons } from "./demo_icons.js";
+
+const PRIMARY_BLUE = theme_palette(default_theme_name).primary;
 
 function rainbow_color(value) {
   const t = Math.max(0, Math.min(1, value));
@@ -148,6 +152,7 @@ function series_features(bars) {
         const remove_line = add_line_companion(
           chart,
           bars.map((bar) => ({ time: bar.time, value: bar.close })),
+          { color: PRIMARY_BLUE },
         );
         return () => { remove_line(); restore_spacing(); };
       },
@@ -174,6 +179,7 @@ function series_features(bars) {
       compose: (chart) => add_line_companion(
         chart,
         bars.map((bar) => ({ time: bar.time, value: bar.close })),
+        { color: PRIMARY_BLUE },
       ),
     },
     {
