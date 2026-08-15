@@ -37,9 +37,11 @@ mod series_geometry;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+use conflation::{visible_histogram_rows, visible_ohlc};
 use conflation::{
-    visible_histogram_rows, visible_histogram_rows_with_work, visible_line_rows,
-    visible_line_rows_with_work, visible_ohlc, visible_ohlc_with_work,
+    visible_histogram_rows_with_work, visible_line_rows, visible_line_rows_with_work,
+    visible_ohlc_with_work,
 };
 
 const UP: Color = Color::rgb(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2);
@@ -1361,11 +1363,10 @@ impl ChartEngine {
                     vpr,
                     &mut cache.overlay.prims,
                 );
-                if let Some((from, to)) = visible {
+                if let Some((from, _)) = visible {
                     self.build_selection_anchors_frame(
                         pi,
                         from,
-                        to,
                         hpr,
                         vpr,
                         &mut cache.overlay.prims,

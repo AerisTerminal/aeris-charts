@@ -327,6 +327,15 @@ pub struct SeriesDataPoint {
     pub close: f64,
 }
 
+const SELECTION_ANCHOR_SPACING_CSS: f64 = 96.0;
+const MAX_SELECTION_ANCHORS: usize = 12;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SelectionAnchorSnapshot {
+    series: SeriesId,
+    times: Vec<i64>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BarsInLogicalRange {
     pub bars_before: f64,
@@ -907,10 +916,9 @@ pub struct ChartEngine {
     /// from their hover pipeline. When `hoveredSeriesOnTop` holds, the frame build paints
     /// this series topmost (reference `hoveredSourceOnTopOrder`) without touching `series_order`.
     hovered_series: Option<SeriesId>,
-    /// The series the host last clicked (TradingView-style selection): while set, the frame
-    /// build paints anchor points on its drawn data points (theme-derived fill, accent-blue
-    /// border). Clicking empty pane space clears it.
-    selected_series: Option<SeriesId>,
+    /// The series the host last clicked plus the canonical source timestamps sampled on the
+    /// unselected -> selected transition. Coordinate changes only reproject this snapshot.
+    selection: Option<SelectionAnchorSnapshot>,
     /// Series-primitive autoscale contributions for the current frame build (Phase C-b).
     /// Hosts clear and re-record them per frame, before any layout/autoscale pass runs;
     /// `autoscale_for_frame` unions them into the owning scales.
@@ -1007,7 +1015,7 @@ impl ChartEngine {
             month_names: MonthNames::default(),
             series_order: vec![main],
             hovered_series: None,
-            selected_series: None,
+            selection: None,
             primitive_autoscale: Vec::new(),
             drawings: Vec::new(),
             drawing_runtime: RefCell::new(DrawingRuntime::default()),
@@ -1240,10 +1248,11 @@ impl ChartEngine {
         }
         // A selected series leaving the chart drops its anchor points with it.
         if self
-            .selected_series
-            .is_some_and(|selected| tombstones.contains(&selected))
+            .selection
+            .as_ref()
+            .is_some_and(|selection| tombstones.contains(&selection.series))
         {
-            self.selected_series = None;
+            self.selection = None;
         }
         self.sync_time_points();
         // reference chart-model.ts `removeSeries`: prune the pane the series left when it is empty
@@ -1844,6 +1853,7 @@ impl ChartEngine {
         self.enforce_series_cap(id);
         self.sync_time_points();
         self.recompute_indicators_for(id);
+        self.restart_selection_anchor_snapshot_after_replacement(id);
         Ok(report)
     }
 
@@ -1880,6 +1890,7 @@ impl ChartEngine {
         self.enforce_series_cap(id);
         self.sync_time_points();
         self.recompute_indicators_for(id);
+        self.restart_selection_anchor_snapshot_after_replacement(id);
         Ok(report)
     }
 
@@ -1906,6 +1917,7 @@ impl ChartEngine {
         self.enforce_series_cap(id);
         self.sync_time_points();
         self.recompute_indicators_for(id);
+        self.restart_selection_anchor_snapshot_after_replacement(id);
         true
     }
 
@@ -2682,5 +2694,6 @@ impl ChartEngine {
         self.synced_first_time = times.first().copied();
         self.time_scale.set_points_len(times.len());
         self.time_scale.set_base_index(self.data.base_index());
+        self.prune_selection_anchor_snapshot();
     }
 }

@@ -26,7 +26,10 @@ use nucleuscharts_core::model::plot_list::PlotValueIndex;
 use nucleuscharts_render::draw_list::LineType;
 
 use crate::frame::{pane_scale, series_scale_target};
-use crate::{ChartEngine, SeriesKind};
+use crate::{
+    ChartEngine, SelectionAnchorSnapshot, SeriesKind, MAX_SELECTION_ANCHORS,
+    SELECTION_ANCHOR_SPACING_CSS,
+};
 
 /// reference `SeriesOptionsCommon.hitTestTolerance` default (series-options-defaults.ts:15).
 const HIT_TEST_TOLERANCE: f64 = 3.0;
@@ -473,18 +476,142 @@ impl ChartEngine {
     }
 
     /// The selected series the frame build paints anchor points on (TradingView-style
-    /// click-to-select). Hosts refresh it from their click pipeline (empty-space clicks pass
-    /// `None`); a removed id never sticks.
+    /// click-to-select). The unselected -> selected transition samples canonical timestamps once;
+    /// empty-space clicks discard that snapshot and a removed id never sticks.
     pub fn set_selected_series(&mut self, id: Option<SeriesId>) {
         let next = id.filter(|&sid| self.series.iter().any(|s| s.id == sid && !s.removed));
-        if self.selected_series != next {
-            self.selected_series = next;
+        if self.selected_series() != next {
+            self.selection = next.map(|series| SelectionAnchorSnapshot {
+                series,
+                times: self.sample_selection_anchor_times(series),
+            });
             self.invalidate_frame_overlay();
         }
     }
 
     pub fn selected_series(&self) -> Option<SeriesId> {
-        self.selected_series
+        self.selection.as_ref().map(|selection| selection.series)
+    }
+
+    /// Canonical timestamp identities retained for the current series/indicator selection.
+    /// Internal hosts expose this only as a deterministic interaction-test hook.
+    #[doc(hidden)]
+    pub fn selection_anchor_identities(&self) -> &[i64] {
+        self.selection
+            .as_ref()
+            .map_or(&[], |selection| selection.times.as_slice())
+    }
+
+    fn sample_selection_anchor_times(&self, series: SeriesId) -> Vec<i64> {
+        let Some(entry) = self.series_entry(series) else {
+            return Vec::new();
+        };
+        if entry.kind == SeriesKind::Custom {
+            return Vec::new();
+        }
+        let plot = self.data.plot(series);
+        let Some((times, _)) = self.data.series_data(series) else {
+            return Vec::new();
+        };
+        let Some(first_index) = plot.first_index() else {
+            return Vec::new();
+        };
+        let Some(last_index) = plot.last_index() else {
+            return Vec::new();
+        };
+        let Some(first_row) = plot.first_non_whitespace_row(first_index) else {
+            return Vec::new();
+        };
+        let Some(last_row) = plot.last_non_whitespace_row(last_index) else {
+            return Vec::new();
+        };
+        if first_row == last_row {
+            return times.get(first_row).copied().into_iter().collect();
+        }
+
+        let first_x = plot
+            .index_at(first_row)
+            .map(|index| self.time_scale.index_to_coordinate(index));
+        let last_x = plot
+            .index_at(last_row)
+            .map(|index| self.time_scale.index_to_coordinate(index));
+        let extent = first_x
+            .zip(last_x)
+            .map_or(0.0, |(first, last)| (last - first).abs());
+        let count = ((extent / SELECTION_ANCHOR_SPACING_CSS).round() as usize)
+            .clamp(2, MAX_SELECTION_ANCHORS)
+            .min(last_row - first_row + 1);
+
+        let mut rows = Vec::with_capacity(count);
+        for slot in 0..count {
+            let target = first_row + slot * (last_row - first_row) / (count - 1);
+            let row = if slot == 0 {
+                first_row
+            } else if slot + 1 == count {
+                last_row
+            } else {
+                let index = plot.index_at(target).unwrap_or(i64::MAX);
+                let left = plot
+                    .last_non_whitespace_row(index)
+                    .filter(|row| *row >= first_row);
+                let right = plot
+                    .first_non_whitespace_row(index)
+                    .filter(|row| *row <= last_row);
+                match (left, right) {
+                    (Some(left), Some(right)) => {
+                        if target - left <= right - target {
+                            left
+                        } else {
+                            right
+                        }
+                    }
+                    (Some(left), None) => left,
+                    (None, Some(right)) => right,
+                    (None, None) => continue,
+                }
+            };
+            rows.push(row);
+        }
+        rows.sort_unstable();
+        rows.dedup();
+        rows.into_iter()
+            .filter_map(|row| times.get(row).copied())
+            .collect()
+    }
+
+    pub(crate) fn prune_selection_anchor_snapshot(&mut self) {
+        let data = &self.data;
+        let Some(selection) = self.selection.as_mut() else {
+            return;
+        };
+        let Some((times, _)) = data.series_data(selection.series) else {
+            self.selection = None;
+            return;
+        };
+        selection
+            .times
+            .retain(|time| times.binary_search(time).is_ok());
+    }
+
+    pub(crate) fn restart_selection_anchor_snapshot_after_replacement(
+        &mut self,
+        replaced: SeriesId,
+    ) {
+        let Some(selected) = self.selected_series() else {
+            return;
+        };
+        if selected == replaced
+            || self
+                .indicator_changes
+                .iter()
+                .any(|&(series, _)| series == selected)
+        {
+            self.selection = Some(SelectionAnchorSnapshot {
+                series: selected,
+                times: self.sample_selection_anchor_times(selected),
+            });
+            self.invalidate_frame_overlay();
+        }
     }
 }
 

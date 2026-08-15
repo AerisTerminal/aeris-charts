@@ -73,10 +73,53 @@ function count_color(png, target, tol = 30) {
   return n;
 }
 
-/** The anchor disc's fill pixel at a bar close (screenshot px == CSS px here). */
+/** The anchor disc's fill pixel at a projected point (screenshot px == CSS px here). */
 function fill_pixel_at(png, x, y) {
   const o = (Math.round(y) * png.width + Math.round(x)) * 4;
   return [png.data[o], png.data[o + 1], png.data[o + 2]];
+}
+
+function has_color_near(png, x, y, target, radius = 6, tol = 30) {
+  for (let py = Math.max(0, Math.floor(y - radius)); py <= Math.min(png.height - 1, Math.ceil(y + radius)); py++) {
+    for (let px = Math.max(0, Math.floor(x - radius)); px <= Math.min(png.width - 1, Math.ceil(x + radius)); px++) {
+      const o = (py * png.width + px) * 4;
+      if (
+        Math.abs(png.data[o] - target[0]) <= tol
+        && Math.abs(png.data[o + 1] - target[1]) <= tol
+        && Math.abs(png.data[o + 2] - target[2]) <= tol
+      ) return true;
+    }
+  }
+  return false;
+}
+
+async function selection_state(page) {
+  return page.evaluate(() => {
+    const bounds = document.getElementById("chart_container").getBoundingClientRect();
+    const identities = JSON.parse(window.__chart.wasm.selection_anchor_identities_json());
+    const points = identities.map((time) => {
+      const index = window.__chart.time_scale().time_to_index(time);
+      const bar = index === null ? null : window.__main.data_by_index(index);
+      return {
+        time,
+        x: window.__chart.time_scale().time_to_coordinate(time),
+        y: bar ? window.__main.price_to_coordinate((bar.open + bar.close) / 2) : null,
+      };
+    });
+    return {
+      identities,
+      points,
+      width: window.__chart.wasm.time_scale_width(),
+      height: bounds.height - window.__chart.wasm.time_scale_height(),
+      chart_width: bounds.width,
+      chart_height: bounds.height,
+      pane_left: window.__chart.wasm.pane_left(),
+    };
+  });
+}
+
+async function next_frame(page) {
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 }
 
 test("series hover shows the pointer cursor; off the geometry it stays crosshair", async ({ page }) => {
@@ -98,16 +141,19 @@ test("click selects a series with theme-derived anchors; empty click deselects",
 
   // Click the bar: accent-blue anchor borders appear, with WHITE fills on the light chart.
   await page.mouse.click(spot.x, spot.y);
+  const selected = await selection_state(page);
+  const body = selected.points.find((point) => point.x !== null && point.y !== null && point.x >= 0 && point.x <= selected.width);
+  expect(body, "a selected candle body midpoint is visible").toBeTruthy();
   const light = await capture(page);
   expect(count_color(light, BLUE), "anchor borders after click").toBeGreaterThan(50);
-  expect(fill_pixel_at(light, spot.x, spot.y), "light-theme anchor fill").toEqual([255, 255, 255]);
+  expect(fill_pixel_at(light, body.x, body.y), "light-theme anchor fill").toEqual([255, 255, 255]);
 
   // Dark background: fills track the background luminance to black, blue borders stay.
   await page.evaluate(() => window.__chart.apply_options({ layout: { background: { color: "#0d0d0d" } } }));
   await page.waitForTimeout(100);
   const dark = await capture(page);
   expect(count_color(dark, BLUE), "anchor borders persist on dark").toBeGreaterThan(50);
-  const fill = fill_pixel_at(dark, spot.x, spot.y);
+  const fill = fill_pixel_at(dark, body.x, body.y);
   expect(fill[0] < 60 && fill[1] < 60 && fill[2] < 60, `dark-theme anchor fill ${fill}`).toBe(true);
 
   // Click empty pane space: the selection (and its anchors) clears.
@@ -116,4 +162,51 @@ test("click selects a series with theme-derived anchors; empty click deselects",
   await page.mouse.click(empty.x, empty.y);
   const cleared = await capture(page);
   expect(count_color(cleared, BLUE), "anchors gone after empty click").toBe(0);
+});
+
+test("selected anchor identities survive real wheel zoom, pan, and resize while reprojecting", async ({ page }) => {
+  await goto_fixture(page);
+  const spot = await bar_close_spot(page);
+  await page.mouse.click(spot.x, spot.y);
+  const selected = await selection_state(page);
+  expect(selected.identities.length).toBeGreaterThanOrEqual(2);
+  expect(selected.identities.length).toBeLessThanOrEqual(12);
+
+  await page.mouse.move(spot.x, spot.y);
+  await page.mouse.wheel(0, -120);
+  await next_frame(page);
+  const zoomed = await selection_state(page);
+  expect(zoomed.identities).toEqual(selected.identities);
+  expect(zoomed.points.some((point, index) => point.x !== selected.points[index].x)).toBe(true);
+
+  await page.mouse.move(spot.x, spot.y);
+  await page.mouse.down();
+  await page.mouse.move(spot.x - 120, spot.y);
+  await page.mouse.up();
+  await next_frame(page);
+  const panned = await selection_state(page);
+  expect(panned.identities).toEqual(selected.identities);
+  expect(panned.points.some((point, index) => point.x !== zoomed.points[index].x)).toBe(true);
+
+  const visible = panned.points.find((point) =>
+    point.x !== null && point.y !== null
+    && point.x >= 0 && point.x <= panned.width
+    && point.y >= 0 && point.y <= panned.height
+  );
+  expect(visible, "at least one retained identity remains visible").toBeTruthy();
+  const rendered = await capture(page);
+  expect(
+    has_color_near(
+      rendered,
+      (panned.pane_left + visible.x) * rendered.width / panned.chart_width,
+      visible.y * rendered.height / panned.chart_height,
+      BLUE,
+    ),
+    "retained anchor is painted at its source candle's current projection",
+  ).toBe(true);
+
+  await page.setViewportSize({ width: 1100, height: 720 });
+  await next_frame(page);
+  const resized = await selection_state(page);
+  expect(resized.identities).toEqual(selected.identities);
 });

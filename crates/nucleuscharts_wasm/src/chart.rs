@@ -1867,14 +1867,20 @@ impl NucleusChart {
         self.inner.borrow_mut().engine.set_hovered_series(None);
     }
     /// TradingView-style click-to-select: the host's click pipeline sets the series under the
-    /// click (`None` on empty pane space); while set, the frame build paints anchor points on
-    /// its drawn data points (theme-derived fill, accent-blue border). Call `render()`
-    /// afterwards.
+    /// click (`None` on empty pane space); the engine snapshots sparse canonical anchor identities
+    /// and reprojects them until deselection. Call `render()` afterwards.
     pub fn set_selected_series(&mut self, id: Option<u32>) {
         self.inner
             .borrow_mut()
             .engine
             .set_selected_series(id.map(|id| id as SeriesId));
+    }
+
+    /// Deterministic browser-test hook for the transient canonical selection-anchor timestamps.
+    #[doc(hidden)]
+    pub fn selection_anchor_identities_json(&self) -> String {
+        serde_json::to_string(self.inner.borrow().engine.selection_anchor_identities())
+            .unwrap_or_else(|_| "[]".to_string())
     }
 
     // --- drawing tools (engine-owned drawing objects; nucleuscharts_engine drawings.rs) ---

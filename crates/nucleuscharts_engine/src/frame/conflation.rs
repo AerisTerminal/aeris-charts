@@ -333,6 +333,7 @@ pub(crate) fn visible_ohlc_raw_reference(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn visible_ohlc(
     plot: PlotListView<'_>,
     from: i64,
@@ -442,6 +443,7 @@ pub(crate) fn visible_histogram_rows_raw_reference(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn visible_histogram_rows(
     plot: PlotListView<'_>,
     from: i64,

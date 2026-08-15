@@ -2620,6 +2620,40 @@ fn frame_discs(chart: &mut ChartEngine) -> Vec<(f32, f32, Color)> {
         .collect()
 }
 
+fn selection_border_positions(chart: &mut ChartEngine) -> Vec<(f32, f32)> {
+    chart.build_frame().panes[0]
+        .main
+        .iter()
+        .filter_map(|prim| match prim {
+            Prim::Circle {
+                cx,
+                cy,
+                radius,
+                fill,
+                ..
+            } if *fill == PRIMARY && (*radius - 5.0 * chart.dpr as f32).abs() < 1e-4 => {
+                Some((*cx, *cy))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn dense_anchor_chart(count: usize) -> ChartEngine {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times: Vec<f64> = (0..count).map(|i| (i * 60) as f64).collect();
+    let opens: Vec<f64> = (0..count).map(|i| 10.0 + (i as f64 * 0.05).sin()).collect();
+    let highs: Vec<f64> = opens.iter().map(|o| o + 0.5).collect();
+    let lows: Vec<f64> = opens.iter().map(|o| o - 0.5).collect();
+    let closes: Vec<f64> = opens.iter().map(|o| o + 0.2).collect();
+    chart
+        .set_series_data(0, &times, &opens, &highs, &lows, &closes)
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    chart
+}
+
 #[test]
 fn selection_anchors_paint_theme_derived_discs_on_the_selected_series() {
     const BLUE: Color = PRIMARY;
@@ -2628,13 +2662,13 @@ fn selection_anchors_paint_theme_derived_discs_on_the_selected_series() {
     assert!(frame_discs(&mut chart).is_empty());
     chart.set_selected_series(Some(0));
     let discs = frame_discs(&mut chart);
-    // One border disc (blue, radius 2.5 + 1.5 at dpr 1) + one fill disc (radius 2.5) per bar.
+    // One border disc (blue, radius 3.5 + 1.5 at dpr 1) + one fill disc (radius 3.5) per bar.
     let borders: Vec<_> = discs.iter().copied().filter(|d| d.2 == BLUE).collect();
     let fills: Vec<_> = discs.iter().copied().filter(|d| d.2 != BLUE).collect();
     assert_eq!(borders.len(), 5);
     assert_eq!(fills.len(), 5);
-    assert!(borders.iter().all(|d| (d.1 - 4.0).abs() < 1e-4));
-    assert!(fills.iter().all(|d| (d.1 - 2.5).abs() < 1e-4));
+    assert!(borders.iter().all(|d| (d.1 - 5.0).abs() < 1e-4));
+    assert!(fills.iter().all(|d| (d.1 - 3.5).abs() < 1e-4));
     // Nucleus defaults dark: black fills, each paired with a border disc at the same x.
     assert!(fills.iter().all(|d| d.2 == Color::rgb(0, 0, 0)));
     for fill in &fills {
@@ -2673,6 +2707,11 @@ fn selection_anchors_decimate_to_a_sparse_hint_at_tight_spacing() {
     chart.time_scale.set_width(800.0);
     chart.fit_content();
     chart.set_selected_series(Some(0));
+    assert_eq!(chart.selection_anchor_identities().first(), Some(&0));
+    assert_eq!(
+        chart.selection_anchor_identities().last(),
+        Some(&((n as i64 - 1) * 60))
+    );
     let discs = frame_discs(&mut chart);
     let blue = PRIMARY;
     let borders: Vec<_> = discs.iter().copied().filter(|d| d.2 == blue).collect();
@@ -2693,6 +2732,183 @@ fn selection_anchors_decimate_to_a_sparse_hint_at_tight_spacing() {
         "kept anchors respect the 96 px gap: {xs:?}"
     );
     chart.set_selected_series(None);
+}
+
+#[test]
+fn selection_anchor_membership_survives_every_coordinate_change() {
+    let mut chart = dense_anchor_chart(200);
+    chart.set_selected_series(Some(0));
+    let selected = chart.selection_anchor_identities().to_vec();
+    assert!((2..=crate::MAX_SELECTION_ANCHORS).contains(&selected.len()));
+
+    chart.time_scale_start_scroll(400.0);
+    chart.time_scale_scroll_to(250.0);
+    chart.time_scale_end_scroll();
+    chart.build_frame();
+    assert_eq!(chart.selection_anchor_identities(), selected);
+
+    assert!(chart.update_series_bar(0, selected[0] as f64, [11.0; 4]));
+    assert_eq!(chart.selection_anchor_identities(), selected);
+
+    assert!(chart.update_series_bar(0, 30.0, [10.5; 4]));
+    assert_eq!(chart.selection_anchor_identities(), selected);
+
+    chart.time_scale_zoom(400.0, 1.0);
+    chart.build_frame();
+    assert_eq!(chart.selection_anchor_identities(), selected);
+
+    chart.set_price_scale_visible_range_for(0, PriceScaleTarget::Right, 5.0, 20.0);
+    chart.build_frame();
+    assert_eq!(chart.selection_anchor_identities(), selected);
+
+    chart.css_width = 640.0;
+    chart.css_height = 420.0;
+    chart.pane_w = 640.0;
+    chart.pane_h = 420.0;
+    chart.time_scale.set_width(640.0);
+    chart.build_frame();
+    assert_eq!(chart.selection_anchor_identities(), selected);
+}
+
+#[test]
+fn deselect_reselect_resamples_full_extent_and_offscreen_anchors_return() {
+    let mut chart = dense_anchor_chart(200);
+    chart.set_visible_logical_range(0.0, 199.0);
+    chart.set_selected_series(Some(0));
+    let first_ids = chart.selection_anchor_identities().to_vec();
+    let first_positions = selection_border_positions(&mut chart);
+    assert!(!first_positions.is_empty());
+
+    let first_gap = first_ids[1] / 60 - first_ids[0] / 60;
+    assert!(first_gap > 4);
+    chart.set_visible_logical_range(1.0, (first_gap - 1) as f64);
+    assert!(selection_border_positions(&mut chart).is_empty());
+    assert_eq!(chart.selection_anchor_identities(), first_ids);
+
+    chart.set_visible_logical_range(0.0, 199.0);
+    assert_eq!(selection_border_positions(&mut chart), first_positions);
+    assert_eq!(chart.selection_anchor_identities(), first_ids);
+
+    chart.set_selected_series(None);
+    assert!(chart.selection_anchor_identities().is_empty());
+    chart.set_visible_logical_range(100.0, 199.0);
+    chart.set_selected_series(Some(0));
+    let second_ids = chart.selection_anchor_identities();
+    assert_eq!(second_ids.first(), Some(&0));
+    assert_eq!(second_ids.last(), Some(&(199 * 60)));
+    assert_eq!(first_ids.first(), second_ids.first());
+    assert_eq!(first_ids.last(), second_ids.last());
+}
+
+#[test]
+fn candle_selection_anchors_use_the_body_midpoint() {
+    let mut chart = anchor_chart();
+    chart.set_price_scale_visible_range_for(0, PriceScaleTarget::Right, 0.0, 20.0);
+    chart.set_selected_series(Some(0));
+    let positions = selection_border_positions(&mut chart);
+    let expected = chart
+        .series_price_to_coordinate(0, (10.0 + 11.0) / 2.0)
+        .unwrap();
+    let close = chart.series_price_to_coordinate(0, 11.0).unwrap();
+    assert!((positions[0].1 as f64 - expected).abs() < 1e-4);
+    assert!((positions[0].1 as f64 - close).abs() > 1.0);
+}
+
+#[test]
+fn selected_realtime_identity_is_stable_while_values_reproject_and_new_bars_do_not_join() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart
+        .set_series_data(0, &[60.0], &[10.0], &[11.0], &[9.0], &[10.0])
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    chart.set_price_scale_visible_range_for(0, PriceScaleTarget::Right, 0.0, 30.0);
+    chart.set_selected_series(Some(0));
+    let identities = chart.selection_anchor_identities().to_vec();
+    let before_y = selection_border_positions(&mut chart)[0].1;
+
+    assert!(chart.update_series_bar(0, 60.0, [20.0, 21.0, 19.0, 20.0]));
+    let after_y = selection_border_positions(&mut chart)[0].1;
+    assert_eq!(chart.selection_anchor_identities(), identities);
+    assert_ne!(after_y, before_y);
+
+    assert!(chart.update_series_bar(0, 120.0, [21.0, 22.0, 20.0, 21.0]));
+    assert_eq!(chart.selection_anchor_identities(), identities);
+}
+
+#[test]
+fn selection_anchor_membership_is_lod_independent() {
+    let mut chart = dense_anchor_chart(20_000);
+    chart.set_min_bar_spacing(0.000_001);
+    chart.set_visible_logical_range(0.0, 19_999.0);
+    chart.set_selected_series(Some(0));
+    let identities = chart.selection_anchor_identities().to_vec();
+    chart.build_frame();
+    assert!(chart.lod_work_stats().selected_level > 0);
+
+    chart.set_visible_logical_range(10_000.0, 10_100.0);
+    chart.build_frame();
+    assert_eq!(chart.lod_work_stats().selected_level, 0);
+    assert_eq!(chart.selection_anchor_identities(), identities);
+}
+
+#[test]
+fn source_and_indicator_snapshots_prune_retention_without_replacement() {
+    let mut chart = dense_anchor_chart(200);
+    let sma = chart.add_sma(0, 10).unwrap();
+    let rsi = chart.add_rsi(0, 14).unwrap();
+    let macd = chart.add_macd(0, 12, 26, 9);
+
+    for selected in [sma, rsi, macd[1]] {
+        chart.set_selected_series(None);
+        chart.set_selected_series(Some(selected));
+        let identities = chart.selection_anchor_identities().to_vec();
+        assert!(!identities.is_empty());
+        chart.time_scale_zoom(400.0, -1.0);
+        chart.time_scale_start_scroll(400.0);
+        chart.time_scale_scroll_to(300.0);
+        chart.time_scale_end_scroll();
+        chart.build_frame();
+        assert_eq!(chart.selected_series(), Some(selected));
+        assert_eq!(chart.selection_anchor_identities(), identities);
+    }
+
+    chart.set_selected_series(None);
+    chart.set_visible_logical_range(0.0, 199.0);
+    chart.set_selected_series(Some(0));
+    let before = chart.selection_anchor_identities().to_vec();
+    assert!(chart.set_series_max_points(0, Some(100)));
+    let retained_times: std::collections::HashSet<_> = chart
+        .series_data(0)
+        .into_iter()
+        .map(|point| point.time)
+        .collect();
+    let expected: Vec<_> = before
+        .into_iter()
+        .filter(|time| retained_times.contains(time))
+        .collect();
+    assert_eq!(chart.selection_anchor_identities(), expected);
+}
+
+#[test]
+fn full_dataset_replacement_restarts_snapshot_without_retargeting() {
+    let mut chart = dense_anchor_chart(200);
+    chart.set_selected_series(Some(0));
+    let before = chart.selection_anchor_identities().to_vec();
+    let times: Vec<f64> = (1_000..1_200).map(|time| time as f64 * 60.0).collect();
+    let values = vec![20.0; times.len()];
+    chart
+        .set_series_data(0, &times, &values, &values, &values, &values)
+        .unwrap();
+    let after = chart.selection_anchor_identities();
+    assert!(!after.is_empty());
+    assert!(after.iter().all(|time| *time >= 1_000 * 60));
+    assert!(after.iter().all(|time| !before.contains(time)));
+
+    chart.set_series_data(0, &[], &[], &[], &[], &[]).unwrap();
+    assert!(chart.selection_anchor_identities().is_empty());
+    assert!(chart.update_series_bar(0, 2_000.0 * 60.0, [30.0; 4]));
+    assert!(chart.selection_anchor_identities().is_empty());
 }
 
 fn retained_two_series_chart() -> ChartEngine {

@@ -1086,25 +1086,24 @@ impl ChartEngine {
         });
     }
 
-    /// TradingView-style SELECTION ANCHORS: while a series is selected (host click-to-select),
-    /// every drawn data point carries a small disc — a theme-derived fill with the TradingView
-    /// accent-blue border. The fill tracks the chart background's luminance instead of being a
-    /// pinned color: white on light backgrounds, black on dark ones.
+    /// TradingView-style SELECTION ANCHORS: canonical timestamps sampled when the series was
+    /// selected are resolved against current values and coordinates, then clipped to the pane.
+    /// Each carries a theme-derived fill with the TradingView accent-blue border.
     pub(super) fn build_selection_anchors_frame(
         &self,
         pane_index: usize,
         from: i64,
-        to: i64,
         hpr: f64,
         vpr: f64,
         out: &mut Vec<Prim>,
     ) {
-        const ANCHOR_RADIUS: f64 = 2.5;
+        const ANCHOR_RADIUS: f64 = 3.5;
         const ANCHOR_BORDER_WIDTH: f64 = 1.5;
         const ANCHOR_BORDER: Color = PRIMARY;
-        let Some(selected) = self.selected_series else {
+        let Some(selection) = self.selection.as_ref() else {
             return;
         };
+        let selected = selection.series;
         let pane = &self.panes[pane_index];
         for series in &self.series {
             if series.id != selected || !series.visible || series.pane_index != pane_index {
@@ -1128,76 +1127,37 @@ impl ChartEngine {
             } else {
                 Color::rgb(0, 0, 0)
             };
-            let bar_spacing = self.time_scale.bar_spacing();
-            let x_at = |index| self.time_scale.index_to_coordinate(index) * hpr;
-            // One anchor per DRAWN item (the same conflated set the kind's geometry and hit
-            // test use), at the item's close/value coordinate.
-            let anchors: Vec<(f32, f32)> = match series.kind {
-                SeriesKind::Candlestick | SeriesKind::Bar => {
-                    visible_ohlc(plot, from, to, bar_spacing, hpr, x_at)
-                        .into_iter()
-                        .map(|bar| {
-                            (
-                                bar.x_px as f32,
-                                (scale.price_to_coordinate(bar.close, base_value) * vpr) as f32,
-                            )
-                        })
-                        .collect()
-                }
-                SeriesKind::Histogram => {
-                    visible_histogram_rows(plot, from, to, bar_spacing, hpr, x_at)
-                        .into_iter()
-                        .map(|row| {
-                            (
-                                row.x_px as f32,
-                                (scale.price_to_coordinate(
-                                    plot.value_at(row.source_row, PlotValueIndex::Close),
-                                    base_value,
-                                ) * vpr) as f32,
-                            )
-                        })
-                        .collect()
-                }
-                SeriesKind::Line | SeriesKind::Area | SeriesKind::Baseline => {
-                    visible_line_rows(plot, from, to, bar_spacing, hpr, x_at)
-                        .into_iter()
-                        .map(|row| {
-                            (
-                                (self.time_scale.index_to_coordinate(
-                                    plot.index_at(row).expect("anchor row index"),
-                                ) * hpr) as f32,
-                                (scale.price_to_coordinate(
-                                    plot.value_at(row, PlotValueIndex::Close),
-                                    base_value,
-                                ) * vpr) as f32,
-                            )
-                        })
-                        .collect()
-                }
-                // A custom series draws host-side: the engine has no geometry to anchor to.
-                SeriesKind::Custom => Vec::new(),
+            let Some((times, _)) = self.data.series_data(selected) else {
+                continue;
             };
-            // TradingView shows anchors as a sparse selection HINT — a handful of discs across
-            // the pane, never one per bar. Decimate the drawn set to one anchor per
-            // MIN_ANCHOR_GAP css px (first and last always kept so the range reads selected
-            // end to end).
-            const MIN_ANCHOR_GAP: f32 = 96.0;
-            let last_anchor = anchors.last().copied();
-            let mut sparse: Vec<(f32, f32)> = Vec::with_capacity(anchors.len() / 4 + 2);
-            for anchor in anchors {
-                if sparse
-                    .last()
-                    .is_none_or(|&(last_x, _)| (anchor.0 - last_x).abs() >= MIN_ANCHOR_GAP)
+            for time in &selection.times {
+                let Ok(row) = times.binary_search(time) else {
+                    continue;
+                };
+                if plot.is_whitespace_row(row) {
+                    continue;
+                }
+                let Some(index) = plot.index_at(row) else {
+                    continue;
+                };
+                let cx = (self.time_scale.index_to_coordinate(index) * hpr) as f32;
+                let value = if series.kind == SeriesKind::Candlestick {
+                    (plot.value_at(row, PlotValueIndex::Open)
+                        + plot.value_at(row, PlotValueIndex::Close))
+                        / 2.0
+                } else {
+                    plot.value_at(row, PlotValueIndex::Close)
+                };
+                let cy = (scale.price_to_coordinate(value, base_value) * vpr) as f32;
+                if !cx.is_finite()
+                    || !cy.is_finite()
+                    || cx < 0.0
+                    || cx > (self.pane_w * hpr) as f32
+                    || cy < (pane.top * vpr) as f32
+                    || cy > ((pane.top + pane.height) * vpr) as f32
                 {
-                    sparse.push(anchor);
+                    continue;
                 }
-            }
-            if let (Some(last), Some(&kept_last)) = (last_anchor, sparse.last()) {
-                if last != kept_last && (last.0 - kept_last.0).abs() >= MIN_ANCHOR_GAP / 2.0 {
-                    sparse.push(last);
-                }
-            }
-            for (cx, cy) in sparse {
                 // The crosshair-marks disc idiom: the border is a larger filled disc underneath.
                 out.push(Prim::Circle {
                     cx,
