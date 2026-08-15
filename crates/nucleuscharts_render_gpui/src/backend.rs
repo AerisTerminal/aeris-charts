@@ -321,7 +321,30 @@ impl GpuiChartRenderer {
         window: &mut Window,
         cx: &mut App,
     ) -> Result<GpuiFrameMetrics, GpuiRenderError> {
-        let mut metrics = self.plan_frame(prepared, scale_factor)?;
+        let metrics = self.plan_frame(prepared, scale_factor)?;
+        self.paint_planned_frame(prepared, viewport, scale_factor, window, cx, metrics)
+    }
+
+    /// Paint the already-lowered plan again without rebuilding it. Hosts use this when GPUI asks
+    /// for presentation but neither the canonical engine frame nor renderer options changed.
+    pub fn paint_planned_frame(
+        &mut self,
+        prepared: &PreparedNucleusFrame<'_>,
+        viewport: NucleusViewport,
+        scale_factor: f32,
+        window: &mut Window,
+        cx: &mut App,
+        mut metrics: GpuiFrameMetrics,
+    ) -> Result<GpuiFrameMetrics, GpuiRenderError> {
+        if !scale_factor.is_finite() || scale_factor <= 0.0 {
+            return Err(GpuiRenderError::InvalidScaleFactor(scale_factor));
+        }
+        if (prepared.frame.pixel_ratio - f64::from(scale_factor)).abs() > crate::SCALE_EPSILON {
+            return Err(GpuiRenderError::ScaleFactorMismatch {
+                frame: prepared.frame.pixel_ratio,
+                window: scale_factor,
+            });
+        }
         let started = std::time::Instant::now();
         self.shaped_text.reset_counters();
         let background_bounds = Bounds {

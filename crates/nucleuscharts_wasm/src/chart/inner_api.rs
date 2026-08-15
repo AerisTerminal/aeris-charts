@@ -1405,16 +1405,16 @@ impl ChartInner {
 
     pub fn zoom(&mut self, x_css: f64, scale: f64) {
         let x = x_css.max(1.0).min(self.time_scale.width());
-        self.time_scale.zoom(x, scale);
+        self.time_scale_zoom(x, scale);
     }
     pub fn scroll_start(&mut self, x_css: f64) {
-        self.time_scale.start_scroll(x_css);
+        self.time_scale_start_scroll(x_css);
     }
     pub fn scroll_move(&mut self, x_css: f64) {
-        self.time_scale.scroll_to(x_css);
+        self.time_scale_scroll_to(x_css);
     }
     pub fn scroll_end(&mut self) {
-        self.time_scale.end_scroll();
+        self.time_scale_end_scroll();
     }
 
     // --- engine-owned interaction models (kinetic, axis drag-to-scale, price pan, eased

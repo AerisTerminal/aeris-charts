@@ -69,6 +69,24 @@ impl ScrollAnimation {
 }
 
 impl ChartEngine {
+    // --- canonical time-scale mutation boundary ---
+
+    pub fn time_scale_zoom(&mut self, x: f64, scale: f64) {
+        self.time_scale.zoom(x, scale);
+    }
+
+    pub fn time_scale_start_scroll(&mut self, x: f64) {
+        self.time_scale.start_scroll(x);
+    }
+
+    pub fn time_scale_scroll_to(&mut self, x: f64) {
+        self.time_scale.scroll_to(x);
+    }
+
+    pub fn time_scale_end_scroll(&mut self) {
+        self.time_scale.end_scroll();
+    }
+
     // --- kinetic (momentum) scroll ---
 
     /// Open a kinetic sampling session alongside a drag-scroll (reference creates a fresh

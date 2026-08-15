@@ -3,6 +3,10 @@
 //! This is intentionally independent of WebGPU, Canvas2D, and DOM types. Hosts may convert the
 //! returned primitives into any raster backend, or inspect them in tests.
 
+use crate::drawings::DrawingKind;
+use crate::{
+    ChartEngine, PriceFormatKind, PriceScaleTarget, SeriesKind, SeriesPriceFormat, PANE_SEPARATOR,
+};
 use nucleuscharts_core::format::percentage_formatter::PercentageFormatter;
 use nucleuscharts_core::format::price_formatter::PriceFormatter;
 use nucleuscharts_core::format::time_formatter::{
@@ -24,12 +28,6 @@ use nucleuscharts_render::color::Color;
 use nucleuscharts_render::draw_list::{Gradient, IRect, LineStyle, LineType, Prim};
 use nucleuscharts_render::histogram::{build_histogram, HistogramItem, HistogramParams};
 use nucleuscharts_render::line::{dash_split, expand_line, LinePoint};
-use std::hash::{Hash, Hasher};
-
-use crate::drawings::DrawingKind;
-use crate::{
-    ChartEngine, PriceFormatKind, PriceScaleTarget, SeriesKind, SeriesPriceFormat, PANE_SEPARATOR,
-};
 
 mod axis;
 pub(crate) mod conflation;
@@ -212,9 +210,10 @@ pub struct FramePaneSegments {
     pub drawings_end: usize,
     pub overlay_end: usize,
     pub under_revision: u64,
-    pub series_revision: u64,
     pub drawings_revision: u64,
     pub overlay_revision: u64,
+    /// Canonical coordinate revision shared by every coordinate-dependent segment in this pane.
+    pub coordinate_revision: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -223,12 +222,14 @@ pub struct FrameSeriesSegment {
     pub start: usize,
     pub end: usize,
     pub revision: u64,
+    pub coordinate_revision: u64,
 }
 
 #[derive(Default)]
 pub(crate) struct FrameInvalidation {
     clock: u64,
     layout: u64,
+    coordinate: u64,
     scene: u64,
     drawings: u64,
     overlay: u64,
@@ -247,6 +248,7 @@ impl FrameInvalidation {
     fn all(&mut self) {
         let generation = self.tick();
         self.layout = generation;
+        self.coordinate = generation;
         self.scene = generation;
         self.chrome = generation;
         self.drawings = generation;
@@ -267,11 +269,17 @@ impl FrameInvalidation {
 
     fn coordinates(&mut self) {
         let generation = self.tick();
+        self.coordinate = generation;
         self.scene = generation;
         self.chrome = generation;
         self.drawings = generation;
         self.overlay = generation;
         self.axis = generation;
+    }
+
+    fn time_coordinates(&mut self) {
+        self.coordinates();
+        self.autoscale = self.clock;
     }
 
     fn series(&mut self, id: SeriesId) {
@@ -316,6 +324,7 @@ struct RetainedLayer {
     prims: Vec<Prim>,
     points: Vec<[f32; 2]>,
     revision: u64,
+    coordinate_revision: u64,
 }
 
 #[derive(Clone, Default)]
@@ -324,8 +333,6 @@ struct RetainedPane {
     height: f64,
     scissor: [u32; 4],
     under: RetainedLayer,
-    series: RetainedLayer,
-    series_paint_marks: Vec<(SeriesId, usize)>,
     series_layers: Vec<RetainedSeriesLayer>,
     chrome: RetainedLayer,
     drawings: RetainedLayer,
@@ -335,7 +342,7 @@ struct RetainedPane {
 #[derive(Clone, Default)]
 struct RetainedSeriesLayer {
     id: SeriesId,
-    coordinate_generation: u64,
+    scene_generation: u64,
     source_generation: u64,
     layer: RetainedLayer,
 }
@@ -353,10 +360,13 @@ pub(crate) struct RetainedFrame {
     overlay_generation: u64,
     autoscale_generation: u64,
     axis_generation: u64,
+    coordinate_generation: u64,
     last_layout_key: Option<[u64; 9]>,
     last_overlay_key: Option<[u64; 6]>,
     last_options_generation: u64,
-    last_series_style_key: u64,
+    last_series_revision: u64,
+    last_time_scale_revision: u64,
+    last_price_scale_revisions: Vec<[u64; 3]>,
 }
 
 impl RetainedFrame {
@@ -370,11 +380,9 @@ impl RetainedFrame {
             .iter()
             .map(|pane| {
                 layer_bytes(&pane.under)
-                    + layer_bytes(&pane.series)
                     + layer_bytes(&pane.chrome)
                     + layer_bytes(&pane.drawings)
                     + layer_bytes(&pane.overlay)
-                    + pane.series_paint_marks.capacity() * std::mem::size_of::<(SeriesId, usize)>()
                     + pane.series_layers.capacity() * std::mem::size_of::<RetainedSeriesLayer>()
                     + pane
                         .series_layers
@@ -391,6 +399,7 @@ impl RetainedFrame {
                 .iter()
                 .map(|segments| segments.capacity() * std::mem::size_of::<FrameSeriesSegment>())
                 .sum::<usize>()
+            + self.last_price_scale_revisions.capacity() * std::mem::size_of::<[u64; 3]>()
     }
 }
 
@@ -596,132 +605,6 @@ pub(crate) fn verbatim_color(value: &Option<String>, fallback: Color) -> Color {
         .unwrap_or(fallback)
 }
 
-fn series_style_key(series: &[crate::SeriesEntry]) -> u64 {
-    let mut hash = std::collections::hash_map::DefaultHasher::new();
-    for s in series {
-        s.id.hash(&mut hash);
-        s.kind.to_u8().hash(&mut hash);
-        for color in [
-            &s.line_color,
-            &s.up_color,
-            &s.down_color,
-            &s.wick_up_color,
-            &s.wick_down_color,
-            &s.border_up_color,
-            &s.border_down_color,
-            &s.area_top_color,
-            &s.area_bottom_color,
-            &s.price_line_color,
-            &s.top_fill_color1,
-            &s.top_fill_color2,
-            &s.top_line_color,
-            &s.bottom_fill_color1,
-            &s.bottom_fill_color2,
-            &s.bottom_line_color,
-        ] {
-            color.hash(&mut hash);
-        }
-        for value in [
-            s.line_width,
-            s.baseline,
-            Some(s.price_line_width),
-            s.bid,
-            s.ask,
-            Some(s.bid_ask_line_width),
-            s.point_markers_radius,
-            s.top_line_width,
-            s.bottom_line_width,
-            Some(s.base),
-        ] {
-            value.map(f64::to_bits).hash(&mut hash);
-        }
-        s.wick_visible.hash(&mut hash);
-        s.border_visible.hash(&mut hash);
-        s.histogram_updown.hash(&mut hash);
-        s.overlay.hash(&mut hash);
-        s.left_scale.hash(&mut hash);
-        s.pane_index.hash(&mut hash);
-        (match s.line_type {
-            LineType::Simple => 0_u8,
-            LineType::WithSteps => 1,
-            LineType::Curved => 2,
-        })
-        .hash(&mut hash);
-        for flag in [
-            s.point_markers,
-            s.visible,
-            s.last_price_animation,
-            s.last_value_visible,
-            s.title_visible,
-            s.countdown_visible,
-            s.price_line_visible,
-            s.bid_ask_visible,
-            s.line_visible,
-            s.invert_filled_area,
-            s.open_visible,
-            s.thin_bars,
-            s.markers_auto_scale,
-            s.removed,
-        ] {
-            flag.hash(&mut hash);
-        }
-        for value in [
-            s.price_line_source,
-            s.price_line_style,
-            s.bid_ask_line_style,
-            s.line_style,
-            s.top_line_style,
-            s.bottom_line_style,
-        ] {
-            value.hash(&mut hash);
-        }
-        s.title.hash(&mut hash);
-        s.bid_color.hash(&mut hash);
-        s.ask_color.hash(&mut hash);
-        s.price_lines.len().hash(&mut hash);
-        for line in &s.price_lines {
-            line.id.hash(&mut hash);
-            line.price.to_bits().hash(&mut hash);
-            line.color.hash(&mut hash);
-            line.width.hash(&mut hash);
-            line.title.hash(&mut hash);
-            line.line_visible.hash(&mut hash);
-            line.axis_label_visible.hash(&mut hash);
-        }
-        s.markers.len().hash(&mut hash);
-        for marker in &s.markers {
-            marker.time.hash(&mut hash);
-            marker.position.hash(&mut hash);
-            marker.shape.hash(&mut hash);
-            marker.color.hash(&mut hash);
-            marker.text.hash(&mut hash);
-        }
-        s.custom_frame.first_value.map(f64::to_bits).hash(&mut hash);
-        for last in [s.custom_frame.last, s.custom_frame.last_visible]
-            .into_iter()
-            .flatten()
-        {
-            last.value.to_bits().hash(&mut hash);
-            last.color.hash(&mut hash);
-            last.time.hash(&mut hash);
-        }
-    }
-    hash.finish()
-}
-
-fn price_scale_coordinate_key(panes: &[crate::Pane]) -> u64 {
-    let mut hash = std::collections::hash_map::DefaultHasher::new();
-    for pane in panes {
-        for scale in [&pane.price_scale, &pane.left_scale, &pane.overlay_scale] {
-            scale
-                .price_range()
-                .map(|range| (range.min_value().to_bits(), range.max_value().to_bits()))
-                .hash(&mut hash);
-        }
-    }
-    hash.finish()
-}
-
 impl ChartEngine {
     /// The Baseline series' effective baseline price: the pinned `baseline_value` option, or
     /// the visible-range close midpoint (the engine's auto mode when the option is unset).
@@ -916,6 +799,10 @@ impl ChartEngine {
             .unwrap_or(&[])
     }
 
+    pub fn frame_coordinate_revision(&self) -> u64 {
+        self.retained_frame.coordinate_generation
+    }
+
     pub fn frame_requires_layout(&self) -> bool {
         self.retained_frame.layout_generation != self.frame_invalidation.layout
             || self.retained_frame.autoscale_generation != self.frame_invalidation.autoscale
@@ -954,13 +841,36 @@ impl ChartEngine {
     /// `build_frame` calls it as well so standalone backends remain correct.
     pub fn autoscale_visible(&mut self) {
         self.frame_build_stats.autoscale_runs += 1;
-        let before = price_scale_coordinate_key(&self.panes);
+        let mut before = std::mem::take(&mut self.retained_frame.last_price_scale_revisions);
+        before.clear();
+        before.extend(self.panes.iter().map(|pane| {
+            [
+                pane.price_scale.revision(),
+                pane.left_scale.revision(),
+                pane.overlay_scale.revision(),
+            ]
+        }));
         if let Some((from, to)) = self.visible_range_for_frame() {
             self.autoscale_for_frame(from, to);
         }
-        if price_scale_coordinate_key(&self.panes) != before {
+        if self.panes.iter().zip(&before).any(|(pane, before)| {
+            [
+                pane.price_scale.revision(),
+                pane.left_scale.revision(),
+                pane.overlay_scale.revision(),
+            ] != *before
+        }) {
             self.frame_invalidation.coordinates();
         }
+        before.clear();
+        before.extend(self.panes.iter().map(|pane| {
+            [
+                pane.price_scale.revision(),
+                pane.left_scale.revision(),
+                pane.overlay_scale.revision(),
+            ]
+        }));
+        self.retained_frame.last_price_scale_revisions = before;
         self.retained_frame.autoscale_generation = self.frame_invalidation.autoscale;
     }
 
@@ -1012,20 +922,52 @@ impl ChartEngine {
             self.separator_hover.map_or(u64::MAX, |index| index as u64),
         ];
         let options_generation = self.options.generation();
-        let series_style_key = series_style_key(&self.series);
+        let series_revision = self.series.revision();
         if self.retained_frame.last_layout_key != Some(layout_key)
             || self.retained_frame.last_options_generation != options_generation
         {
             self.frame_invalidation.all();
-        } else if self.retained_frame.last_series_style_key != series_style_key {
+        } else if self.retained_frame.last_series_revision != series_revision {
             self.frame_invalidation.scene();
         } else if self.retained_frame.last_overlay_key != Some(overlay_key) {
             self.frame_invalidation.overlay();
         }
+        let time_scale_revision = self.time_scale.revision();
+        if self.retained_frame.last_time_scale_revision != time_scale_revision {
+            self.frame_invalidation.time_coordinates();
+        }
+        let price_scales_changed = self.retained_frame.last_price_scale_revisions.len()
+            != self.panes.len()
+            || self
+                .panes
+                .iter()
+                .zip(&self.retained_frame.last_price_scale_revisions)
+                .any(|(pane, revisions)| {
+                    *revisions
+                        != [
+                            pane.price_scale.revision(),
+                            pane.left_scale.revision(),
+                            pane.overlay_scale.revision(),
+                        ]
+                });
+        if price_scales_changed {
+            self.frame_invalidation.coordinates();
+        }
         self.retained_frame.last_layout_key = Some(layout_key);
         self.retained_frame.last_overlay_key = Some(overlay_key);
         self.retained_frame.last_options_generation = options_generation;
-        self.retained_frame.last_series_style_key = series_style_key;
+        self.retained_frame.last_series_revision = series_revision;
+        self.retained_frame.last_time_scale_revision = time_scale_revision;
+        self.retained_frame.last_price_scale_revisions.clear();
+        self.retained_frame
+            .last_price_scale_revisions
+            .extend(self.panes.iter().map(|pane| {
+                [
+                    pane.price_scale.revision(),
+                    pane.left_scale.revision(),
+                    pane.overlay_scale.revision(),
+                ]
+            }));
     }
 
     /// Build pane geometry without resetting work already recorded by host layout preparation.
@@ -1221,6 +1163,7 @@ impl ChartEngine {
                     );
                 }
                 cache.under.revision = self.frame_invalidation.scene;
+                cache.under.coordinate_revision = self.frame_invalidation.coordinate;
                 self.frame_build_stats.grid_rebuilds += 1;
             }
 
@@ -1235,14 +1178,11 @@ impl ChartEngine {
                             .iter()
                             .find(|layer| layer.id == rs.id)
                             .is_none_or(|layer| {
-                                layer.coordinate_generation != self.frame_invalidation.scene
+                                layer.scene_generation != self.frame_invalidation.scene
                                     || layer.source_generation != source_generation
                             })
                     });
             if series_layers_dirty || chrome_dirty {
-                cache.series.prims.clear();
-                cache.series.points.clear();
-                cache.series_paint_marks.clear();
                 cache
                     .series_layers
                     .retain(|layer| resolved.iter().any(|rs| rs.id == layer.id));
@@ -1270,7 +1210,7 @@ impl ChartEngine {
                         };
                         let series_layer = &mut cache.series_layers[layer_index];
                         let rebuild_series = scene_dirty
-                            || series_layer.coordinate_generation != self.frame_invalidation.scene
+                            || series_layer.scene_generation != self.frame_invalidation.scene
                             || series_layer.source_generation != source_generation;
                         if !rebuild_series {
                             continue;
@@ -1355,10 +1295,11 @@ impl ChartEngine {
                             ),
                             SeriesKind::Custom => {}
                         }
-                        series_layer.coordinate_generation = self.frame_invalidation.scene;
+                        series_layer.scene_generation = self.frame_invalidation.scene;
                         series_layer.source_generation = source_generation;
                         series_layer.layer.revision =
                             self.frame_invalidation.scene.max(source_generation);
+                        series_layer.layer.coordinate_revision = self.frame_invalidation.coordinate;
                         self.frame_build_stats.series_rebuilds += 1;
                     }
                     self.build_markers_frame(pi, from, to, hpr, vpr, &mut cache.chrome.prims);
@@ -1390,31 +1331,7 @@ impl ChartEngine {
                     }
                 }
                 cache.chrome.revision = self.frame_invalidation.chrome;
-                for rs in &resolved {
-                    if rs.pane != Some(pi) || !rs.visible {
-                        continue;
-                    }
-                    if let Some(layer) = cache.series_layers.iter().find(|layer| layer.id == rs.id)
-                    {
-                        append_retained_layer(
-                            &layer.layer,
-                            &mut cache.series.prims,
-                            &mut cache.series.points,
-                        );
-                    }
-                    cache
-                        .series_paint_marks
-                        .push((rs.id, cache.series.prims.len()));
-                }
-                append_retained_layer(
-                    &cache.chrome,
-                    &mut cache.series.prims,
-                    &mut cache.series.points,
-                );
-                cache.series.revision = self
-                    .frame_invalidation
-                    .scene
-                    .max(self.frame_invalidation.chrome);
+                cache.chrome.coordinate_revision = self.frame_invalidation.coordinate;
             }
 
             if drawings_dirty {
@@ -1429,6 +1346,7 @@ impl ChartEngine {
                     &mut cache.drawings.points,
                 );
                 cache.drawings.revision = self.frame_invalidation.drawings;
+                cache.drawings.coordinate_revision = self.frame_invalidation.coordinate;
                 self.frame_build_stats.drawing_rebuilds += 1;
             }
 
@@ -1454,10 +1372,36 @@ impl ChartEngine {
                     );
                 }
                 cache.overlay.revision = self.frame_invalidation.overlay;
+                cache.overlay.coordinate_revision = self.frame_invalidation.coordinate;
                 self.frame_build_stats.overlay_rebuilds += 1;
             }
 
             let out = &mut output.panes[pi];
+            debug_assert_eq!(
+                cache.under.coordinate_revision,
+                self.frame_invalidation.coordinate
+            );
+            debug_assert_eq!(
+                cache.chrome.coordinate_revision,
+                self.frame_invalidation.coordinate
+            );
+            debug_assert_eq!(
+                cache.drawings.coordinate_revision,
+                self.frame_invalidation.coordinate
+            );
+            debug_assert_eq!(
+                cache.overlay.coordinate_revision,
+                self.frame_invalidation.coordinate
+            );
+            debug_assert!(cache
+                .series_layers
+                .iter()
+                .filter(|layer| resolved.iter().any(|series| {
+                    series.id == layer.id && series.pane == Some(pi) && series.visible
+                }))
+                .all(|layer| {
+                    layer.layer.coordinate_revision == self.frame_invalidation.coordinate
+                }));
             out.top = cache.top;
             out.height = cache.height;
             out.scissor = cache.scissor;
@@ -1504,6 +1448,7 @@ impl ChartEngine {
                         start,
                         end: out.main.len(),
                         revision: layer.layer.revision,
+                        coordinate_revision: layer.layer.coordinate_revision,
                     });
                 }
                 out.series_paint_marks.push((rs.id, out.main.len()));
@@ -1515,6 +1460,7 @@ impl ChartEngine {
                 start: chrome_start,
                 end: out.main.len(),
                 revision: cache.chrome.revision,
+                coordinate_revision: cache.chrome.coordinate_revision,
             });
             let series_end = out.main.len();
             append_retained_layer(&cache.drawings, &mut out.main, &mut out.points);
@@ -1535,9 +1481,9 @@ impl ChartEngine {
                 drawings_end,
                 overlay_end,
                 under_revision: cache.under.revision,
-                series_revision: cache.series.revision,
                 drawings_revision: cache.drawings.revision,
                 overlay_revision: cache.overlay.revision,
+                coordinate_revision: self.frame_invalidation.coordinate,
             };
         }
         retained.layout_generation = self.frame_invalidation.layout;
@@ -1546,6 +1492,17 @@ impl ChartEngine {
         retained.drawings_generation = self.frame_invalidation.drawings;
         retained.overlay_generation = self.frame_invalidation.overlay;
         retained.autoscale_generation = self.frame_invalidation.autoscale;
+        retained.coordinate_generation = self.frame_invalidation.coordinate;
+        retained.last_price_scale_revisions.clear();
+        retained
+            .last_price_scale_revisions
+            .extend(self.panes.iter().map(|pane| {
+                [
+                    pane.price_scale.revision(),
+                    pane.left_scale.revision(),
+                    pane.overlay_scale.revision(),
+                ]
+            }));
         retained.initialized = true;
         self.retained_frame = retained;
     }

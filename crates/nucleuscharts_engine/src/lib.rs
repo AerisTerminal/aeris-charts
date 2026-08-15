@@ -22,6 +22,7 @@ mod workspace;
 
 use std::cell::{Cell, RefCell};
 use std::num::NonZeroU32;
+use std::ops::{Deref, DerefMut};
 
 pub(crate) use drawings::{BrushCapture, DrawingDrag, DrawingRuntime, PendingDrawing};
 pub use drawings::{
@@ -649,6 +650,69 @@ impl SeriesEntry {
     }
 }
 
+/// Canonical owner of series presentation state.
+///
+/// Read access behaves like the former `Vec<SeriesEntry>`. Any mutable access advances the
+/// revision before exposing the entries, so retained-frame invalidation cannot be bypassed by a
+/// Rust host that edits a public series entry directly.
+pub struct SeriesStore {
+    entries: Vec<SeriesEntry>,
+    revision: u64,
+}
+
+impl SeriesStore {
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    fn changed(&mut self) {
+        self.revision = self.revision.wrapping_add(1).max(1);
+    }
+}
+
+impl From<Vec<SeriesEntry>> for SeriesStore {
+    fn from(entries: Vec<SeriesEntry>) -> Self {
+        Self {
+            entries,
+            revision: 1,
+        }
+    }
+}
+
+impl Deref for SeriesStore {
+    type Target = Vec<SeriesEntry>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
+}
+
+impl DerefMut for SeriesStore {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.changed();
+        &mut self.entries
+    }
+}
+
+impl<'a> IntoIterator for &'a SeriesStore {
+    type Item = &'a SeriesEntry;
+    type IntoIter = std::slice::Iter<'a, SeriesEntry>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.entries.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut SeriesStore {
+    type Item = &'a mut SeriesEntry;
+    type IntoIter = std::slice::IterMut<'a, SeriesEntry>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.changed();
+        self.entries.iter_mut()
+    }
+}
+
 pub const PANE_SEPARATOR: f64 = 1.0;
 
 /// `pane_index` sentinel for a series whose pane was removed (reference `removePane` orphans the
@@ -775,7 +839,7 @@ pub struct ChartEngine {
     pub panes: Vec<Pane>,
     pub price_formatter: PriceFormatter,
     data: DataLayer,
-    pub series: Vec<SeriesEntry>,
+    pub series: SeriesStore,
     tick_marks: TimeTickMarks,
     next_pane_id: u32,
     next_persistent_pane_id: u32,
@@ -907,7 +971,7 @@ impl ChartEngine {
             panes: vec![Pane::with_chart_ids(PaneId(NonZeroU32::MIN), 1)],
             price_formatter: PriceFormatter::default(),
             data,
-            series: vec![SeriesEntry::new(main, SeriesKind::Candlestick)],
+            series: vec![SeriesEntry::new(main, SeriesKind::Candlestick)].into(),
             tick_marks: TimeTickMarks::new(),
             next_pane_id: 2,
             next_persistent_pane_id: 2,

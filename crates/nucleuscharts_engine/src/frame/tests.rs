@@ -2807,10 +2807,119 @@ fn countdown_tick_invalidates_axis_without_rebuilding_pane_layers() {
 
 fn assert_retained_frame_matches_clean_rebuild(chart: &mut ChartEngine) {
     let incremental = chart.build_frame();
+    let coordinate_revision = chart.frame_coordinate_revision();
+    for pane in 0..incremental.panes.len() {
+        assert_eq!(
+            chart.frame_pane_segments(pane).unwrap().coordinate_revision,
+            coordinate_revision
+        );
+        assert!(chart
+            .frame_series_segments(pane)
+            .iter()
+            .all(|segment| segment.coordinate_revision == coordinate_revision));
+    }
     chart.retained_frame = RetainedFrame::default();
     chart.frame_invalidation.all();
     let rebuilt = chart.build_frame();
     assert_eq!(incremental, rebuilt);
+}
+
+#[test]
+fn direct_host_time_scale_mutation_cannot_leave_retained_coordinates_stale() {
+    let count = 500usize;
+    let times = (0..count).map(|row| row as f64).collect::<Vec<_>>();
+    let values = (0..count)
+        .map(|row| 100.0 + (row as f64 * 0.1).sin() * 10.0)
+        .collect::<Vec<_>>();
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart
+        .set_series_data(0, &times, &values, &values, &values, &values)
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.set_visible_logical_range(200.0, 300.0);
+    chart.set_crosshair_at(400.0, 200.0);
+    let before = chart.build_frame();
+
+    chart.time_scale.zoom(400.0, 1.0);
+    let zoomed = chart.build_frame();
+    assert_ne!(
+        before, zoomed,
+        "zoom changed state but retained historical pixels stayed stale"
+    );
+    assert!(chart.frame_build_stats().grid_rebuilds > 0);
+    assert!(chart.frame_build_stats().series_rebuilds > 0);
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+
+    let before_pan = chart.build_frame();
+    chart.time_scale.start_scroll(400.0);
+    chart.time_scale.scroll_to(320.0);
+    let panned = chart.build_frame();
+    chart.time_scale.end_scroll();
+    assert_ne!(
+        before_pan, panned,
+        "pan changed state but retained historical pixels stayed stale"
+    );
+    assert!(chart.frame_build_stats().grid_rebuilds > 0);
+    assert!(chart.frame_build_stats().series_rebuilds > 0);
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+}
+
+#[test]
+fn direct_host_series_mutation_advances_canonical_revision_without_hashing_state() {
+    let mut chart = retained_two_series_chart();
+    let before = chart.build_frame();
+    let revision = chart.series.revision();
+
+    chart.series[0].up_color = Some("#ff00ff".to_string());
+
+    assert!(chart.series.revision() > revision);
+    let restyled = chart.build_frame();
+    assert_ne!(before, restyled);
+    assert!(chart.frame_build_stats().series_rebuilds > 0);
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+}
+
+#[test]
+fn hit_tests_and_drawing_handles_follow_the_current_coordinate_revision() {
+    use crate::drawings::{DrawingKind, DrawingPoint};
+
+    let count = 500usize;
+    let times = (0..count).map(|row| row as f64).collect::<Vec<_>>();
+    let values = (0..count)
+        .map(|row| 100.0 + (row as f64 * 0.1).sin() * 10.0)
+        .collect::<Vec<_>>();
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart
+        .set_series_data(0, &times, &values, &values, &values, &values)
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.set_visible_logical_range(200.0, 300.0);
+    chart.build_frame();
+
+    let logical = 250.0;
+    let price = values[logical as usize];
+    let drawing = chart
+        .add_drawing(
+            DrawingKind::HorizontalLine,
+            0,
+            vec![DrawingPoint { logical, price }],
+            None,
+        )
+        .unwrap();
+    chart.set_selected_drawing(Some(drawing));
+    chart.time_scale.zoom(400.0, 1.0);
+    chart.time_scale.start_scroll(400.0);
+    chart.time_scale.scroll_to(360.0);
+    chart.time_scale.end_scroll();
+    chart.build_frame();
+
+    let x = chart.logical_to_coordinate(logical).unwrap();
+    let y = chart.series_price_to_coordinate(0, price).unwrap();
+    assert_eq!(chart.hit_test_series(x, y), Some(0));
+    chart.set_selected_series(Some(0));
+    assert!(chart.hit_test_drawing(x, y).is_some());
+    assert!(chart.drawing_drag_start_at(x, y));
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
 }
 
 #[test]

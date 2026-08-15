@@ -97,6 +97,8 @@ pub struct PriceScaleCore {
     scale_start_point: Option<f64>,
     scroll_start_point: Option<f64>,
     price_range_snapshot: Option<PriceRange>,
+    /// Canonical source revision for coordinate and axis-presentation state.
+    revision: u64,
 }
 
 impl PriceScaleCore {
@@ -113,7 +115,16 @@ impl PriceScaleCore {
             scale_start_point: None,
             scroll_start_point: None,
             price_range_snapshot: None,
+            revision: 1,
         }
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    fn changed(&mut self) {
+        self.revision = self.revision.wrapping_add(1).max(1);
     }
 
     pub fn options(&self) -> &PriceScaleCoreOptions {
@@ -154,6 +165,7 @@ impl PriceScaleCore {
                 self.price_range = None;
             }
         }
+        self.changed();
     }
 
     pub fn is_log(&self) -> bool {
@@ -173,40 +185,59 @@ impl PriceScaleCore {
     }
 
     pub fn set_invert_scale(&mut self, inverted: bool) {
-        self.options.invert_scale = inverted;
+        if self.options.invert_scale != inverted {
+            self.options.invert_scale = inverted;
+            self.changed();
+        }
     }
 
     /// reference `alignLabels` — gate the axis' label overlap resolution.
     pub fn set_align_labels(&mut self, align: bool) {
-        self.options.align_labels = align;
+        if self.options.align_labels != align {
+            self.options.align_labels = align;
+            self.changed();
+        }
     }
 
     /// reference `ticksVisible` — draw small tick marks beside the axis labels.
     pub fn set_ticks_visible(&mut self, visible: bool) {
-        self.options.ticks_visible = visible;
+        if self.options.ticks_visible != visible {
+            self.options.ticks_visible = visible;
+            self.changed();
+        }
     }
 
     /// reference `entireTextOnly` — skip corner tick marks whose label would be clipped.
     pub fn set_entire_text_only(&mut self, entire: bool) {
-        self.options.entire_text_only = entire;
+        if self.options.entire_text_only != entire {
+            self.options.entire_text_only = entire;
+            self.changed();
+        }
     }
 
     /// reference `minimumWidth` — floor for the axis strip width (non-negative, finite).
     pub fn set_minimum_width(&mut self, width: f64) {
-        if width.is_finite() && width >= 0.0 {
+        if width.is_finite() && width >= 0.0 && self.options.minimum_width != width {
             self.options.minimum_width = width;
+            self.changed();
         }
     }
 
     /// reference `textColor` — `None` follows `layout.textColor`; stored verbatim, parsed at
     /// render time.
     pub fn set_text_color(&mut self, css: Option<String>) {
-        self.options.text_color = css;
+        if self.options.text_color != css {
+            self.options.text_color = css;
+            self.changed();
+        }
     }
 
     /// Nucleus extension (TradingView-style, default true): bold round-figure tick labels.
     pub fn set_bold_round_labels(&mut self, bold: bool) {
-        self.options.bold_round_labels = bold;
+        if self.options.bold_round_labels != bold {
+            self.options.bold_round_labels = bold;
+            self.changed();
+        }
     }
 
     pub fn is_auto_scale(&self) -> bool {
@@ -214,7 +245,10 @@ impl PriceScaleCore {
     }
 
     pub fn set_auto_scale(&mut self, v: bool) {
-        self.options.auto_scale = v;
+        if self.options.auto_scale != v {
+            self.options.auto_scale = v;
+            self.changed();
+        }
     }
 
     pub fn log_formula(&self) -> &LogFormula {
@@ -226,7 +260,10 @@ impl PriceScaleCore {
     }
 
     pub fn set_height(&mut self, height: f64) {
-        self.height = height;
+        if self.height != height {
+            self.height = height;
+            self.changed();
+        }
     }
 
     /// Set the height the FRACTIONAL scale margins (`scale_margins.top/bottom`) are computed
@@ -235,7 +272,10 @@ impl PriceScaleCore {
     /// the pixel internal margins), so taking the fractions of the full height would subtract
     /// up to 30% of the WHOLE chart from a small pane and invert its coordinate mapping.
     pub fn set_margins_height(&mut self, height: f64) {
-        self.margins_height = height;
+        if self.margins_height != height {
+            self.margins_height = height;
+            self.changed();
+        }
     }
 
     /// The height the fractional margins resolve against (the scale's own height unless a
@@ -282,19 +322,32 @@ impl PriceScaleCore {
     }
 
     pub fn set_price_range(&mut self, range: Option<PriceRange>) {
-        self.price_range = range;
+        if self.price_range != range {
+            self.price_range = range;
+            self.changed();
+        }
     }
 
     pub fn set_internal_margins(&mut self, above_px: f64, below_px: f64) {
-        self.margin_above = above_px;
-        self.margin_below = below_px;
+        if (self.margin_above, self.margin_below) != (above_px, below_px) {
+            self.margin_above = above_px;
+            self.margin_below = below_px;
+            self.changed();
+        }
     }
 
     /// Set the fractional scale margins (`top`/`bottom` as fractions of scale height). Used to pin
     /// an overlay scale to a band of the pane (e.g. volume in the bottom fifth).
     pub fn set_scale_margins(&mut self, top: f64, bottom: f64) {
-        self.options.scale_margins.top = top;
-        self.options.scale_margins.bottom = bottom;
+        if (
+            self.options.scale_margins.top,
+            self.options.scale_margins.bottom,
+        ) != (top, bottom)
+        {
+            self.options.scale_margins.top = top;
+            self.options.scale_margins.bottom = bottom;
+            self.changed();
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -508,6 +561,7 @@ impl PriceScaleCore {
             return;
         };
 
+        let before = (self.options.auto_scale, self.price_range);
         self.options.auto_scale = false;
 
         let x = (self.height - x).max(0.0);
@@ -522,6 +576,9 @@ impl PriceScaleCore {
         scale_coeff = scale_coeff.max(0.1);
         new_price_range.scale_around_center(scale_coeff);
         self.price_range = Some(new_price_range);
+        if before != (self.options.auto_scale, self.price_range) {
+            self.changed();
+        }
     }
 
     pub fn end_scale(&mut self) {
@@ -550,10 +607,14 @@ impl PriceScaleCore {
         };
         // base_value is only read by the percentage/indexed modes, which bail above.
         let anchor = self.coordinate_to_price(y, 0.0);
+        let before = (self.options.auto_scale, self.price_range);
         self.options.auto_scale = false;
         let mut new_range = range;
         new_range.scale_around_point(anchor, factor);
         self.price_range = Some(new_range);
+        if before != (self.options.auto_scale, self.price_range) {
+            self.changed();
+        }
     }
 
     // --- axis-drag scroll ---
@@ -594,7 +655,10 @@ impl PriceScaleCore {
 
         let price_delta = pixel_delta * price_units_per_pixel;
         new_price_range.shift(price_delta);
-        self.price_range = Some(new_price_range);
+        if self.price_range != Some(new_price_range) {
+            self.price_range = Some(new_price_range);
+            self.changed();
+        }
     }
 
     pub fn end_scroll(&mut self) {
@@ -613,6 +677,7 @@ impl PriceScaleCore {
     /// Applies a merged source range (already in logical space for the current mode).
     /// `min_move` = 1/base of the formatter source (e.g. 0.01).
     pub fn apply_autoscale_range(&mut self, merged: Option<PriceRange>, min_move: f64) {
+        let before = (self.min_move, self.price_range, self.log_formula);
         if min_move.is_finite() && min_move > 0.0 {
             self.min_move = min_move;
         }
@@ -621,6 +686,9 @@ impl PriceScaleCore {
             if self.price_range.is_none() {
                 self.price_range = Some(PriceRange::new(-0.5, 0.5));
                 self.log_formula = log_formula::log_formula_for_price_range(None);
+            }
+            if before != (self.min_move, self.price_range, self.log_formula) {
+                self.changed();
             }
             return;
         };
@@ -660,6 +728,9 @@ impl PriceScaleCore {
         }
 
         self.price_range = Some(price_range);
+        if before != (self.min_move, self.price_range, self.log_formula) {
+            self.changed();
+        }
     }
 
     // --- tick marks (port of PriceTickMarkBuilder) ---

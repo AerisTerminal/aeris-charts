@@ -78,6 +78,10 @@ pub struct TimeScaleCore {
     /// `_isAllScalingAndScrollingDisabled`, time-scale.ts:975-986): label alignment only —
     /// never consulted by the spacing/offset math, which reads the raw fix-edge options.
     interaction_disabled: bool,
+    /// Canonical source revision for every value that can affect time coordinates or time-axis
+    /// presentation. Mutators advance this intrinsically so hosts cannot change scale state while
+    /// leaving retained geometry on an older transform.
+    revision: u64,
 }
 
 impl TimeScaleCore {
@@ -95,7 +99,16 @@ impl TimeScaleCore {
             scale_start_point: None,
             common_transition_start_state: None,
             interaction_disabled: false,
+            revision: 1,
         }
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    fn changed(&mut self) {
+        self.revision = self.revision.wrapping_add(1).max(1);
     }
 
     pub fn options(&self) -> &TimeScaleOptions {
@@ -128,14 +141,22 @@ impl TimeScaleCore {
     }
 
     pub fn set_points_len(&mut self, len: usize) {
+        let before = (self.points_len, self.bar_spacing, self.right_offset);
         self.points_len = len;
         self.correct_offset();
+        if before != (self.points_len, self.bar_spacing, self.right_offset) {
+            self.changed();
+        }
     }
 
     pub fn set_base_index(&mut self, base_index: Option<TimePointIndex>) {
+        let before = (self.base_index, self.bar_spacing, self.right_offset);
         self.base_index = base_index;
         self.correct_offset();
         self.do_fix_left_edge();
+        if before != (self.base_index, self.bar_spacing, self.right_offset) {
+            self.changed();
+        }
     }
 
     fn first_index(&self) -> Option<TimePointIndex> {
@@ -245,11 +266,13 @@ impl TimeScaleCore {
         // bar spacing first: right offset correction depends on it
         self.correct_bar_spacing();
         self.correct_offset();
+        self.changed();
     }
 
     // --- bar spacing / offset mutation ---
 
     pub fn set_bar_spacing(&mut self, new_bar_spacing: f64) {
+        let before = (self.bar_spacing, self.right_offset);
         let old_bar_spacing = self.bar_spacing;
         self.set_bar_spacing_internal(new_bar_spacing);
         if self.options.right_offset_pixels.is_some() && old_bar_spacing != 0.0 {
@@ -257,6 +280,9 @@ impl TimeScaleCore {
             self.right_offset = self.right_offset * old_bar_spacing / self.bar_spacing;
         }
         self.correct_offset();
+        if before != (self.bar_spacing, self.right_offset) {
+            self.changed();
+        }
     }
 
     fn set_bar_spacing_internal(&mut self, new_bar_spacing: f64) {
@@ -265,8 +291,12 @@ impl TimeScaleCore {
     }
 
     pub fn set_right_offset(&mut self, offset: f64) {
+        let before = self.right_offset;
         self.right_offset = offset;
         self.correct_offset();
+        if before != self.right_offset {
+            self.changed();
+        }
     }
 
     // --- option mutation (reference `applyOptions({ timeScale })`) ---
@@ -275,9 +305,23 @@ impl TimeScaleCore {
     /// Re-clamps the current spacing/offset against the new floor.
     pub fn set_min_bar_spacing(&mut self, min_bar_spacing: f64) {
         if min_bar_spacing.is_finite() && min_bar_spacing > 0.0 {
+            let before = (
+                self.options.min_bar_spacing,
+                self.bar_spacing,
+                self.right_offset,
+            );
             self.options.min_bar_spacing = min_bar_spacing;
             self.correct_bar_spacing();
             self.correct_offset();
+            if before
+                != (
+                    self.options.min_bar_spacing,
+                    self.bar_spacing,
+                    self.right_offset,
+                )
+            {
+                self.changed();
+            }
         }
     }
 
@@ -285,16 +329,24 @@ impl TimeScaleCore {
     /// gestures use `set_bar_spacing`, which deliberately leaves the configured option alone.
     pub fn apply_bar_spacing_option(&mut self, bar_spacing: f64) {
         if bar_spacing.is_finite() && bar_spacing > 0.0 {
+            let changed = self.options.bar_spacing != bar_spacing;
             self.options.bar_spacing = bar_spacing;
             self.set_bar_spacing(bar_spacing);
+            if changed {
+                self.changed();
+            }
         }
     }
 
     /// reference `applyOptions({ rightOffset })`: write the option *and* apply it live.
     pub fn apply_right_offset_option(&mut self, offset: f64) {
         if offset.is_finite() {
+            let changed = self.options.right_offset != offset;
             self.options.right_offset = offset;
             self.set_right_offset(offset);
+            if changed {
+                self.changed();
+            }
         }
     }
 
@@ -303,9 +355,23 @@ impl TimeScaleCore {
     /// spacing/offset against the new cap.
     pub fn set_max_bar_spacing(&mut self, max_bar_spacing: f64) {
         if max_bar_spacing.is_finite() && max_bar_spacing >= 0.0 {
+            let before = (
+                self.options.max_bar_spacing,
+                self.bar_spacing,
+                self.right_offset,
+            );
             self.options.max_bar_spacing = max_bar_spacing;
             self.correct_bar_spacing();
             self.correct_offset();
+            if before
+                != (
+                    self.options.max_bar_spacing,
+                    self.bar_spacing,
+                    self.right_offset,
+                )
+            {
+                self.changed();
+            }
         }
     }
 
@@ -316,52 +382,93 @@ impl TimeScaleCore {
         if !pixels.is_finite() {
             return;
         }
+        let changed = self.options.right_offset_pixels != Some(pixels);
         self.options.right_offset_pixels = Some(pixels);
         if self.bar_spacing > 0.0 {
             self.set_right_offset(pixels / self.bar_spacing);
+        }
+        if changed {
+            self.changed();
         }
     }
 
     /// reference `fixLeftEdge`: prevent scrolling past the first data point on the left.
     pub fn set_fix_left_edge(&mut self, fix: bool) {
+        let before = (
+            self.options.fix_left_edge,
+            self.bar_spacing,
+            self.right_offset,
+        );
         self.options.fix_left_edge = fix;
         self.do_fix_left_edge();
         self.correct_bar_spacing();
         self.correct_offset();
+        if before
+            != (
+                self.options.fix_left_edge,
+                self.bar_spacing,
+                self.right_offset,
+            )
+        {
+            self.changed();
+        }
     }
 
     /// reference `fixRightEdge`: prevent scrolling past the last data point on the right.
     pub fn set_fix_right_edge(&mut self, fix: bool) {
+        let before = (self.options.fix_right_edge, self.right_offset);
         self.options.fix_right_edge = fix;
         self.correct_offset();
+        if before != (self.options.fix_right_edge, self.right_offset) {
+            self.changed();
+        }
     }
 
     /// reference `lockVisibleTimeRangeOnResize`: keep the visible range constant across width changes by
     /// rescaling bar spacing (applied on the next `set_width`).
     pub fn set_lock_visible_time_range_on_resize(&mut self, lock: bool) {
-        self.options.lock_visible_time_range_on_resize = lock;
+        if self.options.lock_visible_time_range_on_resize != lock {
+            self.options.lock_visible_time_range_on_resize = lock;
+            self.changed();
+        }
     }
 
     /// reference `rightBarStaysOnScroll`.
     pub fn set_right_bar_stays_on_scroll(&mut self, stays: bool) {
-        self.options.right_bar_stays_on_scroll = stays;
+        if self.options.right_bar_stays_on_scroll != stays {
+            self.options.right_bar_stays_on_scroll = stays;
+            self.changed();
+        }
     }
 
     /// reference `shiftVisibleRangeOnNewBar` (time-scale.ts:165-171). Read by the data-sync
     /// compensation in the engine (chart-model.ts:968-983).
     pub fn set_shift_visible_range_on_new_bar(&mut self, shift: bool) {
-        self.options.shift_visible_range_on_new_bar = shift;
+        if self.options.shift_visible_range_on_new_bar != shift {
+            self.options.shift_visible_range_on_new_bar = shift;
+            self.changed();
+        }
     }
 
     /// reference `allowShiftVisibleRangeOnWhitespaceReplacement` (time-scale.ts:173-181).
     pub fn set_allow_shift_visible_range_on_whitespace_replacement(&mut self, allow: bool) {
-        self.options
-            .allow_shift_visible_range_on_whitespace_replacement = allow;
+        if self
+            .options
+            .allow_shift_visible_range_on_whitespace_replacement
+            != allow
+        {
+            self.options
+                .allow_shift_visible_range_on_whitespace_replacement = allow;
+            self.changed();
+        }
     }
 
     /// reference `timeScale.allowBoldLabels` (default true): bold the major time tick labels.
     pub fn set_allow_bold_labels(&mut self, allow: bool) {
-        self.options.allow_bold_labels = allow;
+        if self.options.allow_bold_labels != allow {
+            self.options.allow_bold_labels = allow;
+            self.changed();
+        }
     }
 
     /// Host-pushed "all scaling and scrolling disabled" flag (reference
@@ -371,7 +478,10 @@ impl TimeScaleCore {
     /// fixRightEdge options. The flag is stored for the label path and must not alter spacing
     /// or offsets — a non-interactive chart must not react to resizes.
     pub fn set_interaction_disabled(&mut self, disabled: bool) {
-        self.interaction_disabled = disabled;
+        if self.interaction_disabled != disabled {
+            self.interaction_disabled = disabled;
+            self.changed();
+        }
     }
 
     /// Whether the host has disabled every scroll/scale gesture (the reference's
@@ -546,9 +656,13 @@ impl TimeScaleCore {
         };
 
         let shift_in_logical = (scroll_start_point - x) / self.bar_spacing;
+        let before = self.right_offset;
         self.right_offset = start_state.right_offset + shift_in_logical;
 
         self.correct_offset();
+        if before != self.right_offset {
+            self.changed();
+        }
     }
 
     pub fn end_scroll(&mut self) {
@@ -563,6 +677,7 @@ impl TimeScaleCore {
 
     /// Port of `setVisibleRange` (without the invalidation side effects).
     pub fn set_visible_range(&mut self, range: StrictRange, apply_default_offset: bool) {
+        let before = (self.bar_spacing, self.right_offset);
         let length = range.count() as f64;
         let pixel_offset = if apply_default_offset {
             self.options.right_offset_pixels.unwrap_or(0.0)
@@ -579,6 +694,9 @@ impl TimeScaleCore {
             };
         }
         self.correct_offset();
+        if before != (self.bar_spacing, self.right_offset) {
+            self.changed();
+        }
     }
 
     pub fn fit_content(&mut self) {

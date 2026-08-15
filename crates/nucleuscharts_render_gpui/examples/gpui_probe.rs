@@ -406,6 +406,7 @@ struct Probe {
     /// Size and DPR the frame was last built for, so resize and scale changes are detected.
     built_for: (f32, f32, f32),
     dirty: bool,
+    plan_dirty: bool,
     fitted: bool,
     viewport_offset: (f32, f32),
     gesture_config: GestureConfig,
@@ -483,6 +484,7 @@ impl Probe {
             focus_handle: None,
             built_for: (0.0, 0.0, 0.0),
             dirty: true,
+            plan_dirty: true,
             fitted: false,
             viewport_offset: (0.0, 0.0),
             gesture_config: GestureConfig::default(),
@@ -1005,7 +1007,7 @@ impl Probe {
                 .recompute_layout_with_measure(true, |text| measure(text));
         }
 
-        let layout = self.engine.options.get().layout;
+        let layout = self.engine.options.get().layout.clone();
         let max_label_width = (layout.font_size + 4.0) * 5.0 / 8.0
             * f64::from(self.engine.tick_mark_max_character_length.max(1));
         let axis_frame = self
@@ -1017,6 +1019,7 @@ impl Probe {
         // ascent/descent. The browser needs a Canvas ink-box correction; GPUI correctly supplies 0.
         self.engine
             .build_axis_primitives_into(&axis_frame, &mut self.axis, |_| 0.0);
+        self.plan_dirty = true;
 
         let content_h = self.engine.pane_h;
         let pane = self
@@ -1065,7 +1068,7 @@ impl Probe {
         {
             return;
         }
-        let layout = self.engine.options.get().layout;
+        let layout = self.engine.options.get().layout.clone();
         let mut drawing_widths = HashMap::new();
         for drawing in self.engine.drawings() {
             let text = drawing.display_text();
@@ -1175,6 +1178,10 @@ impl Probe {
         self.started.elapsed().as_secs_f64() * 1_000.0
     }
 
+    fn needs_animation_frame(&self) -> bool {
+        self.frame_budget.is_some() || self.kinetic_active || self.engine.scroll_animation_active()
+    }
+
     fn local_position(&self, position: gpui::Point<gpui::Pixels>) -> (f64, f64, f64) {
         let window_x: f32 = position.x.into();
         let window_y: f32 = position.y.into();
@@ -1244,7 +1251,7 @@ impl Probe {
     fn cancel_kinetic_scroll(&mut self) {
         self.engine.kinetic_stop();
         if self.kinetic_active {
-            self.engine.time_scale.end_scroll();
+            self.engine.time_scale_end_scroll();
         }
         self.kinetic_active = false;
     }
@@ -1252,8 +1259,8 @@ impl Probe {
     fn begin_mouse_pan(&mut self, pane_x: f64) {
         // Close any stale snapshot first. In particular, clicking during a previous coast must not
         // let the next `scroll_to` reuse that coast's source start point.
-        self.engine.time_scale.end_scroll();
-        self.engine.time_scale.start_scroll(pane_x);
+        self.engine.time_scale_end_scroll();
+        self.engine.time_scale_start_scroll(pane_x);
         self.engine.kinetic_begin_sampling(
             self.gesture_config.kinetic_mouse,
             pane_x,
@@ -1266,7 +1273,7 @@ impl Probe {
             self.gesture_config.kinetic_mouse && self.engine.kinetic_release(pane_x, self.now_ms());
         if !self.kinetic_active {
             self.engine.kinetic_stop();
-            self.engine.time_scale.end_scroll();
+            self.engine.time_scale_end_scroll();
         }
     }
 
@@ -1317,7 +1324,7 @@ impl Probe {
                 if let Some((pane, target)) = price_pan {
                     self.engine.price_axis_end_scroll(pane, target);
                 }
-                self.engine.time_scale.end_scroll();
+                self.engine.time_scale_end_scroll();
             }
             Some(DragMode::TimeAxis) => self.engine.time_axis_end_scale(),
             Some(DragMode::PriceAxis { pane, target }) => {
@@ -1367,7 +1374,7 @@ impl Probe {
         }
         self.cancel_kinetic_scroll();
         // Recover defensively from a stale scroll snapshot left by an interrupted host gesture.
-        self.engine.time_scale.end_scroll();
+        self.engine.time_scale_end_scroll();
         self.engine.cancel_scroll_animation();
         let (chart_x, pane_x, y) = self.local_position(event.position);
         self.update_crosshair_modifier(event.modifiers.control, event.modifiers.platform);
@@ -1491,7 +1498,7 @@ impl Probe {
         }
         match self.drag {
             Some(DragMode::Pan { price_pan }) if event.dragging() => {
-                self.engine.time_scale.scroll_to(pane_x);
+                self.engine.time_scale_scroll_to(pane_x);
                 self.engine.kinetic_add_sample(pane_x, self.now_ms());
                 if let Some((pane, target)) = price_pan {
                     self.engine.price_axis_scroll_to(pane, target, y);
@@ -1646,15 +1653,15 @@ impl Probe {
                 self.engine
                     .price_axis_wheel_zoom(pane, PriceScaleTarget::Right, y, zoom);
             } else {
-                self.engine.time_scale.zoom(pane_x, zoom);
+                self.engine.time_scale_zoom(pane_x, zoom);
             }
         }
         if normalized_x != 0.0 && self.gesture_config.wheel_scroll {
-            self.engine.time_scale.start_scroll(0.0);
-            self.engine
-                .time_scale
-                .scroll_to(nucleuscharts_engine::WHEEL_SCROLL_PX_PER_DELTA * normalized_x);
-            self.engine.time_scale.end_scroll();
+            self.engine.time_scale_start_scroll(0.0);
+            self.engine.time_scale_scroll_to(
+                nucleuscharts_engine::WHEEL_SCROLL_PX_PER_DELTA * normalized_x,
+            );
+            self.engine.time_scale_end_scroll();
         }
         self.update_pointer_feedback(chart_x, pane_x, y);
         cx.stop_propagation();
@@ -1686,11 +1693,11 @@ impl Probe {
                 true
             }
             "+" | "=" if self.gesture_config.wheel_zoom => {
-                self.engine.time_scale.zoom(center, 0.5);
+                self.engine.time_scale_zoom(center, 0.5);
                 true
             }
             "-" | "_" if self.gesture_config.wheel_zoom => {
-                self.engine.time_scale.zoom(center, -0.5);
+                self.engine.time_scale_zoom(center, -0.5);
                 true
             }
             "home" => {
@@ -1723,11 +1730,11 @@ impl Probe {
         let now = self.now_ms();
         if self.kinetic_active {
             if self.engine.kinetic_finished(now) {
-                self.engine.time_scale.end_scroll();
+                self.engine.time_scale_end_scroll();
                 self.engine.kinetic_stop();
                 self.kinetic_active = false;
             } else if let Some(x) = self.engine.kinetic_position(now) {
-                self.engine.time_scale.scroll_to(x);
+                self.engine.time_scale_scroll_to(x);
                 self.dirty = true;
             }
         }
@@ -1814,6 +1821,9 @@ fn paint_probe(probe: &mut Probe, bounds: Bounds<gpui::Pixels>, window: &mut Win
         bounds.size.height.into(),
     );
     let scale_factor = window.scale_factor();
+    let plan_dirty = probe.plan_dirty;
+    let mut cached_metrics = probe.last;
+    cached_metrics.plan_nanos = 0;
 
     // Disjoint field borrows: the adapter reads `frame` while mutating `renderer`.
     let Probe {
@@ -1824,8 +1834,23 @@ fn paint_probe(probe: &mut Probe, bounds: Bounds<gpui::Pixels>, window: &mut Win
         ..
     } = probe;
     let prepared = PreparedNucleusFrame::from_engine(frame, engine).with_axis(axis, &[]);
-    match renderer.paint_frame(&prepared, viewport, scale_factor, window, cx) {
-        Ok(metrics) => probe.record_frame_metrics(metrics),
+    let result = if plan_dirty {
+        renderer.paint_frame(&prepared, viewport, scale_factor, window, cx)
+    } else {
+        renderer.paint_planned_frame(
+            &prepared,
+            viewport,
+            scale_factor,
+            window,
+            cx,
+            cached_metrics,
+        )
+    };
+    match result {
+        Ok(metrics) => {
+            probe.plan_dirty = false;
+            probe.record_frame_metrics(metrics);
+        }
         Err(e) => eprintln!("nucleuscharts probe: frame skipped: {e}"),
     }
 }
@@ -1835,8 +1860,9 @@ impl Render for Probe {
         let entity: Entity<Probe> = cx.entity();
         let prepaint_entity = entity.clone();
 
-        // Keep frames coming so resize, DPR change and live append all get exercised, and the
-        // metrics describe steady state rather than one cold frame.
+        // Finite probes deliberately sample consecutive frames. Interactive charts request a
+        // follow-up only while an engine-owned animation is active; ordinary input/resize/data
+        // mutations already notify GPUI and an idle chart must stay idle.
         let done = self
             .frame_budget
             .is_some_and(|budget| self.painted >= budget);
@@ -1846,7 +1872,7 @@ impl Render for Probe {
                 self.reported = true;
             }
             cx.quit();
-        } else {
+        } else if self.needs_animation_frame() {
             window.request_animation_frame();
         }
 
@@ -2085,6 +2111,7 @@ struct InteractiveDemo {
     maximized: Option<u64>,
     theme: DemoTheme,
     max_index: usize,
+    max_charts: Option<usize>,
     split_asset_seq: usize,
     focus_initialized: bool,
     _root_observer: Subscription,
@@ -2103,12 +2130,13 @@ impl InteractiveDemo {
         });
         let root_observer = cx.observe(&chart, |_, _, cx| cx.notify());
         Self {
-            workspace: Workspace::new(0.0),
+            workspace: Workspace::new(),
             cells: vec![DemoCell { id: 1, chart }],
             active: 1,
             maximized: None,
             theme: DemoTheme::Light,
             max_index: 0,
+            max_charts: None,
             split_asset_seq: 0,
             focus_initialized: false,
             _root_observer: root_observer,
@@ -2163,11 +2191,18 @@ impl InteractiveDemo {
     }
 
     fn split(&mut self, direction: SplitDirection, activate_new: bool, cx: &mut Context<Self>) {
+        if self
+            .max_charts
+            .is_some_and(|max| self.workspace.chart_count() >= max)
+        {
+            self.status = "split rejected: host chart limit reached".into();
+            return;
+        }
         let end_time = self
             .root_chart()
             .and_then(|chart| chart.read(cx).source_bars.times.last().copied())
             .unwrap_or(1_600_000_000.0);
-        match self.workspace.split(self.active, direction, 0.0) {
+        match self.workspace.split(self.active, direction) {
             Ok(id) => {
                 self.maximized = None;
                 self.split_asset_seq += 1;
@@ -2372,7 +2407,7 @@ impl InteractiveDemo {
             DemoAction::Cap => {
                 self.max_index = (self.max_index + 1) % 4;
                 let cap = [None, Some(2), Some(3), Some(4)][self.max_index];
-                self.workspace.set_max_charts(cap);
+                self.max_charts = cap;
                 self.status = format!("max charts: {}", cap.map_or("∞".into(), |v| v.to_string()));
             }
             DemoAction::Drawing(kind) => self.update_root(cx, |p| p.arm_drawing(kind)),
@@ -2416,7 +2451,7 @@ impl InteractiveDemo {
                 p.engine.crosshair_mode = crosshair_mode_from_u8(next);
             }),
             DemoAction::CrosshairColor => self.update_root(cx, |p| {
-                let current = p.engine.options.get().crosshair.vert_line.color;
+                let current = &p.engine.options.get().crosshair.vert_line.color;
                 let color = if current == nucleuscharts_core::style::DEFAULT_CROSSHAIR_CSS {
                     "#2962ff"
                 } else {
@@ -2434,7 +2469,7 @@ impl InteractiveDemo {
                 p.engine.options.apply_str(&format!(r#"{{"crosshair":{{"vertLine":{{"style":{style}}},"horzLine":{{"style":{style}}}}}}}"#)).unwrap();
             }),
             DemoAction::CrosshairLabelBackground => self.update_root(cx, |p| {
-                let current = p.engine.options.get().crosshair.vert_line.label_background_color;
+                let current = &p.engine.options.get().crosshair.vert_line.label_background_color;
                 let color = if current == nucleuscharts_core::style::DEFAULT_CROSSHAIR_CSS {
                     "#2962ff"
                 } else {
@@ -2466,7 +2501,7 @@ impl InteractiveDemo {
                 p.engine.options.apply_str(&format!(r#"{{"grid":{{"vertLines":{{"style":{style}}},"horzLines":{{"style":{style}}}}}}}"#)).unwrap();
             }),
             DemoAction::Font => self.update_root(cx, |p| {
-                let current = p.engine.options.get().layout.font_family;
+                let current = &p.engine.options.get().layout.font_family;
                 let family = if current.contains("mono") {
                     "Georgia, serif"
                 } else if current.contains("Georgia") {
@@ -2504,14 +2539,14 @@ impl InteractiveDemo {
                 self.update_root(cx, move |p| p.toggle_separator_pin(theme));
             }
             DemoAction::Watermark => self.update_root(cx, |p| {
-                let watermark = p.engine.options.get().watermark;
+                let watermark = &p.engine.options.get().watermark;
                 let on = !watermark.visible;
                 let text = if watermark.text.is_empty() { "NUCLEUS" } else { &watermark.text };
                 let color = if watermark.color == "rgba(0, 0, 0, 0)" { "#b0b8c480" } else { &watermark.color };
                 p.engine.options.apply_str(&format!(r#"{{"watermark":{{"visible":{on},"text":"{text}","color":"{color}"}}}}"#)).unwrap();
             }),
-            DemoAction::WatermarkText => self.update_root(cx, |p| { let current = p.engine.options.get().watermark.text; let text = if current == "NUCLEUS" { "@nucleuscharts/financial" } else { "NUCLEUS" }; p.engine.options.apply_str(&format!(r#"{{"watermark":{{"text":"{text}"}}}}"#)).unwrap(); }),
-            DemoAction::WatermarkColor => self.update_root(cx, |p| { let current = p.engine.options.get().watermark.color; let color = if current == "#b0b8c480" { "#2962ff80" } else { "#b0b8c480" }; p.engine.options.apply_str(&format!(r#"{{"watermark":{{"color":"{color}"}}}}"#)).unwrap(); }),
+            DemoAction::WatermarkText => self.update_root(cx, |p| { let current = &p.engine.options.get().watermark.text; let text = if current == "NUCLEUS" { "@nucleuscharts/financial" } else { "NUCLEUS" }; p.engine.options.apply_str(&format!(r#"{{"watermark":{{"text":"{text}"}}}}"#)).unwrap(); }),
+            DemoAction::WatermarkColor => self.update_root(cx, |p| { let current = &p.engine.options.get().watermark.color; let color = if current == "#b0b8c480" { "#2962ff80" } else { "#b0b8c480" }; p.engine.options.apply_str(&format!(r#"{{"watermark":{{"color":"{color}"}}}}"#)).unwrap(); }),
             DemoAction::WatermarkSize => self.update_root(cx, |p| { let current = p.engine.options.get().watermark.font_size; let size = if current >= 160.0 { 16.0 } else { current + 4.0 }; p.engine.options.apply_str(&format!(r#"{{"watermark":{{"fontSize":{size}}}}}"#)).unwrap(); }),
             DemoAction::AxisScaling => self.update_root(cx, |p| { p.gesture_config.axis_scale_price = !p.gesture_config.axis_scale_price; p.gesture_config.axis_scale_time = p.gesture_config.axis_scale_price; }),
             DemoAction::Kinetic => self.update_root(cx, |p| p.gesture_config.kinetic_mouse = !p.gesture_config.kinetic_mouse),
@@ -2526,14 +2561,16 @@ impl InteractiveDemo {
                 _ => p.fixtures.vertical_line = !p.fixtures.vertical_line,
             }),
         }
-        let usage = self.workspace.usage(0.0);
+        let chart_count = self.workspace.chart_count();
         if !matches!(
             action,
             DemoAction::Split(_) | DemoAction::Close | DemoAction::Cap
         ) {
             self.status = format!(
                 "active {} · {} charts · {} splits",
-                self.active, usage.chart_count, usage.split_count
+                self.active,
+                chart_count,
+                chart_count.saturating_sub(1)
             );
         }
         cx.notify();
@@ -2994,7 +3031,7 @@ impl Render for InteractiveDemo {
                 self.focus_initialized = true;
             }
         }
-        let usage = self.workspace.usage(0.0);
+        let chart_count = self.workspace.chart_count();
         let mut b = |label, action| self.button(label, action, cx);
         let toolbar = vec![
             self.group(
@@ -3046,9 +3083,9 @@ impl Render for InteractiveDemo {
                         .text_color(rgb(0x787b86))
                         .child(format!(
                             "{} chart{} · {} splits",
-                            usage.chart_count,
-                            if usage.chart_count == 1 { "" } else { "s" },
-                            usage.split_count
+                            chart_count,
+                            if chart_count == 1 { "" } else { "s" },
+                            chart_count.saturating_sub(1)
                         ))
                         .into_any_element(),
                 ],
@@ -3408,7 +3445,7 @@ mod tests {
         let initial = probe.engine.scroll_position();
 
         probe.begin_mouse_pan(200.0);
-        probe.engine.time_scale.scroll_to(160.0);
+        probe.engine.time_scale_scroll_to(160.0);
         probe.end_mouse_pan(160.0);
         let after_first_pan = probe.engine.scroll_position();
         let first_delta = after_first_pan - initial;
@@ -3425,7 +3462,7 @@ mod tests {
         // A fresh 20px drag must start at `after_click`, rather than reusing the first drag's saved
         // state. It therefore moves half as far as the first 40px drag at unchanged bar spacing.
         probe.begin_mouse_pan(120.0);
-        probe.engine.time_scale.scroll_to(100.0);
+        probe.engine.time_scale_scroll_to(100.0);
         probe.end_mouse_pan(100.0);
         let after_second_pan = probe.engine.scroll_position();
         let expected = after_click + first_delta / 2.0;
@@ -3652,6 +3689,18 @@ mod semantic_regressions {
     }
 
     #[test]
+    fn idle_interactive_probe_stops_requesting_frames() {
+        let mut interactive = Probe::new(8, None);
+        assert!(!interactive.needs_animation_frame());
+        interactive.kinetic_active = true;
+        assert!(interactive.needs_animation_frame());
+        interactive.kinetic_active = false;
+        interactive.engine.start_scroll_animation(3.0, 160.0, 0.0);
+        assert!(interactive.needs_animation_frame());
+        assert!(Probe::new(8, Some(2)).needs_animation_frame());
+    }
+
+    #[test]
     fn finite_live_append_occurs_once_per_epoch_before_the_frame_budget() {
         let mut probe = Probe::new(8, Some(120));
         probe.painted = 59;
@@ -3733,11 +3782,9 @@ mod semantic_regressions {
 
     #[test]
     fn workspace_snapshot_helpers_follow_authoritative_layout() {
-        let mut workspace = Workspace::new(0.0);
-        let second = workspace.split(1, SplitDirection::Horizontal, 1.0).unwrap();
-        let third = workspace
-            .split(second, SplitDirection::Vertical, 2.0)
-            .unwrap();
+        let mut workspace = Workspace::new();
+        let second = workspace.split(1, SplitDirection::Horizontal).unwrap();
+        let third = workspace.split(second, SplitDirection::Vertical).unwrap();
         let layout = workspace.layout();
         assert_eq!(layout_first(&layout), 1);
         assert_eq!(layout_last(&layout), third);
