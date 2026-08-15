@@ -2,6 +2,9 @@ import { defineConfig, devices } from "@playwright/test";
 
 const port = Number.parseInt(process.env.NUCLEUSCHARTS_TEST_PORT ?? "4174", 10);
 const portable_browser = process.env.NUCLEUSCHARTS_PORTABLE_BROWSER === "1";
+const linux_webgpu_args = process.platform === "linux"
+  ? ["--use-angle=vulkan", "--enable-features=Vulkan", "--disable-vulkan-surface"]
+  : [];
 
 export default defineConfig({
   testDir: "./tests",
@@ -36,6 +39,7 @@ export default defineConfig({
             "--enable-unsafe-webgpu",
             "--enable-unsafe-swiftshader",
             "--use-webgpu-adapter=swiftshader",
+            ...linux_webgpu_args,
             "--enable-dawn-features=allow_unsafe_apis",
             "--disable-dawn-features=use_dxc",
             "--enable-webgpu-developer-features",
