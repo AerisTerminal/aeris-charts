@@ -21,7 +21,6 @@ pub enum FeatureSeriesKind {
     Heatmap,
     HlcArea,
     PrettyHistogram,
-    Lollipop,
     RoundedCandles,
     BackgroundShade,
     StackedArea,
@@ -38,12 +37,11 @@ impl FeatureSeriesKind {
             3 => Self::Heatmap,
             4 => Self::HlcArea,
             5 => Self::PrettyHistogram,
-            6 => Self::Lollipop,
-            7 => Self::RoundedCandles,
-            8 => Self::BackgroundShade,
-            9 => Self::StackedArea,
-            10 => Self::StackedBars,
-            11 => Self::WhiskerBox,
+            6 => Self::RoundedCandles,
+            7 => Self::BackgroundShade,
+            8 => Self::StackedArea,
+            9 => Self::StackedBars,
+            10 => Self::WhiskerBox,
             _ => return None,
         })
     }
@@ -56,12 +54,11 @@ impl FeatureSeriesKind {
             Self::Heatmap => 3,
             Self::HlcArea => 4,
             Self::PrettyHistogram => 5,
-            Self::Lollipop => 6,
-            Self::RoundedCandles => 7,
-            Self::BackgroundShade => 8,
-            Self::StackedArea => 9,
-            Self::StackedBars => 10,
-            Self::WhiskerBox => 11,
+            Self::RoundedCandles => 6,
+            Self::BackgroundShade => 7,
+            Self::StackedArea => 8,
+            Self::StackedBars => 9,
+            Self::WhiskerBox => 10,
         }
     }
 }
@@ -120,9 +117,6 @@ pub enum FeatureValue {
         value: f64,
         color: Option<Color>,
     },
-    Lollipop {
-        value: f64,
-    },
     RoundedCandles {
         open: f64,
         high: f64,
@@ -153,7 +147,6 @@ impl FeatureValue {
             Self::Heatmap { .. } => FeatureSeriesKind::Heatmap,
             Self::HlcArea { .. } => FeatureSeriesKind::HlcArea,
             Self::PrettyHistogram { .. } => FeatureSeriesKind::PrettyHistogram,
-            Self::Lollipop { .. } => FeatureSeriesKind::Lollipop,
             Self::RoundedCandles { .. } => FeatureSeriesKind::RoundedCandles,
             Self::BackgroundShade { .. } => FeatureSeriesKind::BackgroundShade,
             Self::StackedArea { .. } => FeatureSeriesKind::StackedArea,
@@ -168,7 +161,6 @@ impl FeatureValue {
         match self {
             Self::BrushableArea { value }
             | Self::PrettyHistogram { value, .. }
-            | Self::Lollipop { value }
             | Self::BackgroundShade { value } => safe(*value),
             Self::DualRangeHistogram { values }
             | Self::GroupedBars { values }
@@ -235,7 +227,6 @@ impl FeatureValue {
                 [mid, high, low, mid]
             }
             Self::HlcArea { high, low, close } => [*close, *high, *low, *close],
-            Self::Lollipop { value } => [0.0, value.max(0.0), value.min(0.0), *value],
             Self::RoundedCandles {
                 open,
                 high,
@@ -426,9 +417,6 @@ impl FeatureSeriesOptions {
                 rgb(0xfc, 0xca, 0xcd),
                 rgb(0xf7, 0x7c, 0x80),
             ];
-        }
-        if kind == FeatureSeriesKind::Lollipop {
-            options.color = rgb(0x21, 0x96, 0xf3);
         }
         options
     }
@@ -984,7 +972,6 @@ mod tests {
             FeatureSeriesKind::PrettyHistogram => {
                 FeatureValue::PrettyHistogram { value, color: None }
             }
-            FeatureSeriesKind::Lollipop => FeatureValue::Lollipop { value },
             FeatureSeriesKind::RoundedCandles => FeatureValue::RoundedCandles {
                 open: value - 1.0,
                 high: value + 2.0,
@@ -1070,7 +1057,7 @@ mod tests {
                 0,
                 vec![FeatureDataPoint {
                     time: 1.0,
-                    value: Some(FeatureValue::Lollipop { value: 10.0 }),
+                    value: Some(FeatureValue::BrushableArea { value: 10.0 }),
                 }],
             )
             .unwrap();
@@ -1118,7 +1105,6 @@ mod tests {
             FeatureSeriesKind::Heatmap,
             FeatureSeriesKind::HlcArea,
             FeatureSeriesKind::PrettyHistogram,
-            FeatureSeriesKind::Lollipop,
             FeatureSeriesKind::RoundedCandles,
             FeatureSeriesKind::BackgroundShade,
             FeatureSeriesKind::StackedArea,
@@ -1302,16 +1288,6 @@ mod tests {
 
     #[test]
     fn official_feature_defaults_and_shader_colors_are_preserved() {
-        let mut lollipop = ChartEngine::new(800.0, 500.0, 1.0);
-        lollipop.configure_feature_series(
-            0,
-            FeatureSeriesKind::Lollipop,
-            FeatureSeriesOptionsPatch::default(),
-        );
-        let options: serde_json::Value =
-            serde_json::from_str(&lollipop.feature_series_options_json(0).unwrap()).unwrap();
-        assert_eq!(options["color"], "#2196f3");
-
         let mut heatmap = ChartEngine::new(800.0, 500.0, 1.0);
         heatmap.configure_feature_series(
             0,

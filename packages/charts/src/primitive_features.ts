@@ -405,7 +405,6 @@ export function use_overlay_price_scale(series: series_api): price_scale_api {
 
 export interface overlay_price_scale_options {
   text_color?: string;
-  background_color?: string;
   side?: "left" | "right";
 }
 
@@ -414,7 +413,7 @@ export interface overlay_price_scale_api extends detachable_feature {
   price_scale(): price_scale_api;
 }
 
-/** Official in-pane overlay price-scale labels, backed by the attached series' engine scale. */
+/** In-pane overlay price-scale text, backed by the attached series' engine scale. */
 export function create_overlay_price_scale(
   series: series_api,
   options: overlay_price_scale_options = {},

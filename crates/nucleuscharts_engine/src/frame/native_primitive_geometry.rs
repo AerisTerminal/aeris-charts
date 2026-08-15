@@ -1250,11 +1250,8 @@ impl ChartEngine {
                 NativeSeriesPrimitiveKind::OverlayPriceScale(options) => {
                     const TICK_SPACING: f64 = 40.0;
                     const HALF_TICK: f64 = 10.0;
-                    const HORIZONTAL_PADDING: f64 = 3.0;
-                    const VERTICAL_PADDING: f64 = 2.0;
                     const SIDE_MARGIN: f64 = 10.0;
                     const FONT_SIZE: f64 = 12.0;
-                    const RADIUS: f32 = 4.0;
                     const FAMILY: &str = "-apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
                     let pane = &self.panes[series.pane_index];
                     let mut labels = Vec::new();
@@ -1276,26 +1273,14 @@ impl ChartEngine {
                     }
                     let test_label = "0".repeat(max_label_length);
                     let width = self.measure_text_run(&test_label, FONT_SIZE, FAMILY, 400, false);
-                    let x = match options.side {
-                        OverlayPriceScaleSide::Left => SIDE_MARGIN,
-                        OverlayPriceScaleSide::Right => self.pane_w - SIDE_MARGIN - width,
+                    let text_x = match options.side {
+                        OverlayPriceScaleSide::Left => SIDE_MARGIN + width / 2.0,
+                        OverlayPriceScaleSide::Right => self.pane_w - SIDE_MARGIN - width / 2.0,
                     };
-                    let text_x = x + HORIZONTAL_PADDING + (width / 2.0).round();
                     for (position, label) in labels {
-                        let top_y = pane.top + position - FONT_SIZE / 2.0;
-                        out.push(Prim::RoundRect {
-                            x: (x * hpr) as f32,
-                            y: (top_y * vpr) as f32,
-                            w: ((width + HORIZONTAL_PADDING * 2.0) * hpr) as f32,
-                            h: ((FONT_SIZE + VERTICAL_PADDING * 2.0) * vpr) as f32,
-                            radii: [RADIUS * hpr as f32; 4],
-                            fill: options.background_color,
-                            border_width: 0.0,
-                            border_color: options.background_color,
-                        });
                         out.push(Prim::Text {
                             x: (text_x * hpr) as f32,
-                            y: ((top_y + VERTICAL_PADDING + FONT_SIZE / 2.0) * vpr) as f32,
+                            y: ((pane.top + position) * vpr) as f32,
                             text: label,
                             color: options.text_color,
                             size: (FONT_SIZE * vpr) as f32,

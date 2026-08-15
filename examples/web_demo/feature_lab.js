@@ -72,6 +72,8 @@ function series_features(bars) {
       data: () => bars.map((bar, index) => ({ time: bar.time, values: [12 + index % 17, 6 + index % 9, -(8 + index % 13), -(4 + index % 7)] })),
       compose: (chart, histogram) => {
         const restore_spacing = use_official_feature_spacing(chart);
+        const hovered_series_on_top = chart.options().hoveredSeriesOnTop;
+        chart.apply_options({ hoveredSeriesOnTop: false });
         const values = bars.map((bar) => bar.close);
         const middle = (Math.min(...values) + Math.max(...values)) / 2;
         const remove_baseline = add_line_companion(
@@ -94,6 +96,7 @@ function series_features(bars) {
           resize_observer.disconnect();
           scale.apply_options({ scale_margins: previous_margins });
           remove_baseline();
+          chart.apply_options({ hoveredSeriesOnTop: hovered_series_on_top });
           restore_spacing();
         };
       },
@@ -157,11 +160,6 @@ function series_features(bars) {
     {
       id: "pretty-histogram", label: "Pretty histogram", detail: "Rounded columns", icon: "chart",
       series_kind: "pretty_histogram", options: { base_price: base, color: "#a459d1", width_percent: 64 },
-      data: () => sampled.map((bar) => ({ time: bar.time, value: bar.close, color: bar.close >= bar.open ? "#089981" : "#f7525f" })),
-    },
-    {
-      id: "lollipop", label: "Lollipop", detail: "Stem and disc", icon: "chart",
-      series_kind: "lollipop", options: { base_price: base },
       data: () => sampled.map((bar) => ({ time: bar.time, value: bar.close, color: bar.close >= bar.open ? "#089981" : "#f7525f" })),
     },
     {

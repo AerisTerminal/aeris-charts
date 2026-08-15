@@ -23,7 +23,6 @@ test("all advanced series render through the shared Rust engine", async ({ page 
       ["heatmap", {}, bars.map((bar, index) => ({ time: bar.time, cells: [{ low: bar.low, high: bar.close, amount: index * 5 }, { low: bar.close, high: bar.high, amount: 100 - index * 5 }] }))],
       ["hlc_area", {}, bars.map((bar) => ({ time: bar.time, high: bar.high, low: bar.low, close: bar.close }))],
       ["pretty_histogram", { base_price: 90 }, bars.map((bar) => ({ time: bar.time, value: bar.close }))],
-      ["lollipop", { base_price: 90 }, bars.map((bar) => ({ time: bar.time, value: bar.close }))],
       ["rounded_candles", {}, bars.map(({ time, open, high, low, close }) => ({ time, open, high, low, close }))],
       ["background_shade", { low_value: 90, high_value: 120 }, bars.map((bar) => ({ time: bar.time, value: bar.close }))],
       ["stacked_area", {}, bars.map((bar, index) => ({ time: bar.time, values: [10 + index, 5 + index / 2, 3] }))],
@@ -41,10 +40,10 @@ test("all advanced series render through the shared Rust engine", async ({ page 
     return { count: series.length, kinds: series.map((item) => item.series_type()) };
   });
   const after = await page.screenshot();
-  expect(result.count).toBe(12);
+  expect(result.count).toBe(11);
   expect(new Set(result.kinds)).toEqual(new Set([
     "brushable_area", "dual_range_histogram", "grouped_bars", "heatmap", "hlc_area",
-    "pretty_histogram", "lollipop", "rounded_candles", "background_shade", "stacked_area",
+    "pretty_histogram", "rounded_candles", "background_shade", "stacked_area",
     "stacked_bars", "whisker_box",
   ]));
   expect(after.equals(before)).toBe(false);

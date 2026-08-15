@@ -82,7 +82,6 @@ fn parse_overlay_price_scale_options(json: &str) -> Option<OverlayPriceScaleOpti
     };
     Some(OverlayPriceScaleOptions {
         text_color: json_color(&value, "text_color", defaults.text_color),
-        background_color: json_color(&value, "background_color", defaults.background_color),
         side,
     })
 }

@@ -234,15 +234,6 @@ impl ChartEngine {
                 scale,
                 rs.base_value,
             ),
-            FeatureSeriesKind::Lollipop => self.build_lollipop_feature(
-                &bars,
-                &feature.options,
-                hpr,
-                vpr,
-                out,
-                scale,
-                rs.base_value,
-            ),
             FeatureSeriesKind::RoundedCandles => self.build_rounded_candles_feature(
                 &bars,
                 &feature.rows,
@@ -698,47 +689,6 @@ impl ChartEngine {
                 fill: color.unwrap_or(options.color),
                 border_width: 0.0,
                 border_color: Color::rgba(0, 0, 0, 0),
-            });
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn build_lollipop_feature(
-        &self,
-        bars: &[VisibleFeatureBar<'_>],
-        options: &FeatureSeriesOptions,
-        hpr: f64,
-        vpr: f64,
-        out: &mut Vec<Prim>,
-        scale: &nucleuscharts_core::scale::price_scale_core::PriceScaleCore,
-        base: f64,
-    ) {
-        let zero = scale.price_to_coordinate(0.0, base);
-        let radius = (self.time_scale.bar_spacing() / 2.0).floor() * hpr;
-        let line_width = options.line_width.min(self.time_scale.bar_spacing());
-        for bar in bars {
-            let FeatureValue::Lollipop { value } = bar.value else {
-                continue;
-            };
-            let y = scale.price_to_coordinate(*value, base);
-            let (x, width) = positions_line(bar.x_media, hpr, line_width);
-            let (top, height) = positions_box(zero, y, vpr);
-            out.push(Prim::Rect {
-                rect: IRect {
-                    x,
-                    y: top,
-                    w: width,
-                    h: height,
-                },
-                color: options.color,
-            });
-            out.push(Prim::Circle {
-                cx: (bar.x_media * hpr) as f32,
-                cy: (y * vpr) as f32,
-                radius: radius as f32,
-                fill: options.color,
-                stroke_width: 0.0,
-                stroke: options.color,
             });
         }
     }

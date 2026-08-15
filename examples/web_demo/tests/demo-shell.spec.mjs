@@ -26,8 +26,8 @@ test("demo shell is responsive, icon-led, and has no horizontal control ribbon",
 
 test("feature lab exposes every first-class helper and manages series lifecycle", async ({ page }) => {
   await open_demo(page);
-  // The 29 official plugins expose 30 demo scenarios because Heat Map has two upstream examples.
-  await expect(page.locator("#feature_grid .feature-card")).toHaveCount(30);
+  // The 28 official plugins expose 29 demo scenarios because Heat Map has two upstream examples.
+  await expect(page.locator("#feature_grid .feature-card")).toHaveCount(29);
   await expect(page.locator('[data-feature-id="heatmap-standalone"]')).toBeVisible();
   await expect(page.locator('[data-feature-id="heatmap-line"]')).toBeVisible();
 
@@ -75,6 +75,8 @@ test("reported plugin scenarios use full data and official line compositions", a
   let series = await inspect();
   expect(series.find((item) => item.type === "dual_range_histogram")?.points).toBe(await page.evaluate(() => window.__data.length));
   expect(series.filter((item) => item.type === "baseline")).toHaveLength(1);
+  expect(series.at(-1)?.type).toBe("baseline");
+  expect(await page.evaluate(() => window.__chart.options().hoveredSeriesOnTop)).toBe(false);
   expect(await page.evaluate(() => {
     const range = window.__chart.time_scale().get_visible_logical_range();
     return range.to - range.from;
@@ -85,6 +87,7 @@ test("reported plugin scenarios use full data and official line compositions", a
   expect(dual_margins.bottom).toBe(dual_margins.top);
 
   await page.evaluate(() => window.__feature_lab.activate("heatmap-standalone"));
+  expect(await page.evaluate(() => window.__chart.options().hoveredSeriesOnTop)).toBe(true);
   series = await inspect();
   expect(series.find((item) => item.type === "heatmap")).toMatchObject({
     points: await page.evaluate(() => window.__data.length),

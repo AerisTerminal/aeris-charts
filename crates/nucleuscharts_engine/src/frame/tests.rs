@@ -1518,6 +1518,34 @@ fn baseline_quadrant_options_flow_into_fills_and_strokes() {
 }
 
 #[test]
+fn baseline_fill_uses_one_continuous_area_per_quadrant_run() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart.series[0].kind = SeriesKind::Baseline;
+    let times = [1.0, 2.0, 3.0, 4.0];
+    let values = [10.0, 13.0, 11.0, 14.0];
+    chart
+        .set_series_data(0, &times, &values, &values, &values, &values)
+        .unwrap();
+    chart.series[0].baseline = Some(0.0);
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+
+    let fills = chart.build_frame().panes[0]
+        .main
+        .iter()
+        .filter_map(|primitive| match primitive {
+            Prim::AreaFill { point_count, .. } => Some(*point_count),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        fills,
+        [4],
+        "a continuous quadrant must not be split into gradient pockets"
+    );
+}
+
+#[test]
 fn histogram_base_offsets_the_column_level() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     let histogram = chart.add_series(SeriesKind::Histogram);

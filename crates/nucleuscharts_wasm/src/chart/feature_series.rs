@@ -38,7 +38,6 @@ fn parse_feature_value(kind: FeatureSeriesKind, item: &JsValue) -> Option<Featur
     let payload_present = match kind {
         FeatureSeriesKind::BrushableArea
         | FeatureSeriesKind::PrettyHistogram
-        | FeatureSeriesKind::Lollipop
         | FeatureSeriesKind::BackgroundShade => has_any(item, &["value"]),
         FeatureSeriesKind::DualRangeHistogram
         | FeatureSeriesKind::GroupedBars
@@ -88,9 +87,6 @@ fn parse_feature_value(kind: FeatureSeriesKind, item: &JsValue) -> Option<Featur
         FeatureSeriesKind::PrettyHistogram => FeatureValue::PrettyHistogram {
             value: number(item, "value").unwrap_or(f64::NAN),
             color: color(item, "color"),
-        },
-        FeatureSeriesKind::Lollipop => FeatureValue::Lollipop {
-            value: number(item, "value").unwrap_or(f64::NAN),
         },
         FeatureSeriesKind::RoundedCandles => FeatureValue::RoundedCandles {
             open: number(item, "open").unwrap_or(f64::NAN),
@@ -145,9 +141,9 @@ fn feature_point_to_js(point: FeatureDataPoint) -> JsValue {
         return object.into();
     };
     match value {
-        FeatureValue::BrushableArea { value }
-        | FeatureValue::Lollipop { value }
-        | FeatureValue::BackgroundShade { value } => set_property(&object, "value", value),
+        FeatureValue::BrushableArea { value } | FeatureValue::BackgroundShade { value } => {
+            set_property(&object, "value", value)
+        }
         FeatureValue::PrettyHistogram { value, color } => {
             set_property(&object, "value", value);
             if let Some(color) = color {

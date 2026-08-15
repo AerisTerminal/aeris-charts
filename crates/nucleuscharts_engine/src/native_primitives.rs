@@ -157,7 +157,6 @@ pub enum OverlayPriceScaleSide {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OverlayPriceScaleOptions {
     pub text_color: Color,
-    pub background_color: Color,
     pub side: OverlayPriceScaleSide,
 }
 
@@ -165,7 +164,6 @@ impl Default for OverlayPriceScaleOptions {
     fn default() -> Self {
         Self {
             text_color: Color::rgb(0, 0, 0),
-            background_color: Color::rgba(255, 255, 255, 153),
             side: OverlayPriceScaleSide::Left,
         }
     }
@@ -2169,33 +2167,16 @@ mod tests {
     }
 
     #[test]
-    fn overlay_price_scale_emits_official_in_pane_tick_boxes_and_updates_side() {
+    fn overlay_price_scale_emits_unboxed_in_pane_text_and_updates_side() {
         let mut chart = chart();
         chart.set_series_price_scale(0, crate::PriceScaleTarget::Overlay);
         let defaults = OverlayPriceScaleOptions::default();
         let id = chart.add_overlay_price_scale(0, defaults).unwrap();
         let frame = chart.build_frame();
-        let boxes = frame.panes[0]
+        assert!(!frame.panes[0]
             .main
             .iter()
-            .filter_map(|primitive| match primitive {
-                Prim::RoundRect {
-                    x,
-                    y,
-                    w,
-                    h,
-                    fill,
-                    radii,
-                    ..
-                } if *fill == defaults.background_color => Some((*x, *y, *w, *h, *radii)),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(boxes.len(), 13);
-        assert_eq!(boxes[0].0, 10.0);
-        assert_eq!(boxes[0].1, 4.0);
-        assert_eq!(boxes[0].3, 16.0);
-        assert_eq!(boxes[0].4, [4.0; 4]);
+            .any(|primitive| matches!(primitive, Prim::RoundRect { .. })));
         let labels = frame.panes[0]
             .main
             .iter()
@@ -2208,19 +2189,13 @@ mod tests {
 
         let right = OverlayPriceScaleOptions {
             text_color: Color::rgb(1, 2, 3),
-            background_color: Color::rgba(4, 5, 6, 153),
             side: OverlayPriceScaleSide::Right,
         };
         assert!(chart.set_overlay_price_scale_options(id, right));
         let frame = chart.build_frame();
         assert!(frame.panes[0].main.iter().any(|primitive| {
-            matches!(primitive, Prim::RoundRect { x, w, fill, .. }
-                if *fill == right.background_color
-                    && (*x as f64 + *w as f64) <= chart.pane_w - 10.0 + 6.1
-                    && *x > 700.0)
-        }));
-        assert!(frame.panes[0].main.iter().any(|primitive| {
-            matches!(primitive, Prim::Text { color, .. } if *color == right.text_color)
+            matches!(primitive, Prim::Text { x, color, .. }
+                if *color == right.text_color && *x > 700.0)
         }));
     }
 

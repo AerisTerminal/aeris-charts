@@ -147,7 +147,6 @@ const FEATURE_KIND_NAMES = [
   "heatmap",
   "hlc_area",
   "pretty_histogram",
-  "lollipop",
   "rounded_candles",
   "background_shade",
   "stacked_area",

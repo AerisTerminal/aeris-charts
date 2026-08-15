@@ -23,7 +23,6 @@ export type feature_series_kind =
   | "heatmap"
   | "hlc_area"
   | "pretty_histogram"
-  | "lollipop"
   | "rounded_candles"
   | "background_shade"
   | "stacked_area"
@@ -110,7 +109,6 @@ export interface heatmap_data { time: time; cells: readonly heatmap_cell[] }
 export type heatmap_cell_shader = (amount: number) => string;
 export interface hlc_area_data { time: time; high: number; low: number; close: number }
 export interface pretty_histogram_data { time: time; value: number; color?: string }
-export interface lollipop_data { time: time; value: number }
 export interface rounded_candle_data { time: time; open: number; high: number; low: number; close: number }
 export interface background_shade_data { time: time; value: number }
 export interface stacked_area_data { time: time; values: readonly number[] }
@@ -129,7 +127,6 @@ export type feature_series_data =
   | heatmap_data
   | hlc_area_data
   | pretty_histogram_data
-  | lollipop_data
   | rounded_candle_data
   | background_shade_data
   | stacked_area_data
@@ -969,7 +966,6 @@ export const KIND_TO_U8: Record<series_kind, number> = {
   heatmap: 7,
   hlc_area: 7,
   pretty_histogram: 7,
-  lollipop: 7,
   rounded_candles: 7,
   background_shade: 7,
   stacked_area: 7,
@@ -985,12 +981,11 @@ export const FEATURE_KIND_TO_U8: Record<feature_series_kind, number> = {
   heatmap: 3,
   hlc_area: 4,
   pretty_histogram: 5,
-  lollipop: 6,
-  rounded_candles: 7,
-  background_shade: 8,
-  stacked_area: 9,
-  stacked_bars: 10,
-  whisker_box: 11,
+  rounded_candles: 6,
+  background_shade: 7,
+  stacked_area: 8,
+  stacked_bars: 9,
+  whisker_box: 10,
 };
 
 export function is_feature_series_kind(kind: series_kind): kind is feature_series_kind {

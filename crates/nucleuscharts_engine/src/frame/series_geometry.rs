@@ -631,11 +631,8 @@ impl ChartEngine {
             return;
         };
         let baseline_y = scale.price_to_coordinate(baseline_price, rs.base_value);
-        // Per-quadrant stroke polylines (device px), accumulated across segments so a dashed
-        // style walks the whole quadrant path instead of restarting per segment (reference strokes
-        // one path per side of the baseline).
-        let mut top_stroke: Vec<[f32; 2]> = Vec::new();
-        let mut bottom_stroke: Vec<[f32; 2]> = Vec::new();
+        let mut top_runs: Vec<Vec<[f32; 2]>> = Vec::new();
+        let mut bottom_runs: Vec<Vec<[f32; 2]>> = Vec::new();
         for pair in rows.windows(2) {
             let a_row = pair[0];
             let b_row = pair[1];
@@ -657,68 +654,74 @@ impl ChartEngine {
             }
             for (s0, s1) in segments {
                 let above = (s0.1 + s1.1) * 0.5 < baseline_y;
-                let first = points.len() as u32;
-                points.push([(s0.0 * hpr) as f32, (s0.1 * vpr) as f32]);
-                points.push([(s1.0 * hpr) as f32, (s1.1 * vpr) as f32]);
-                // reference baselineStyleDefaults: each quadrant fills with a two-stop gradient —
-                // color1 at the line, color2 at the baseline. Below the baseline the gradient
-                // runs from the baseline (bottomFillColor1) down to the line
-                // (bottomFillColor2), which the shared area-fill mechanism expresses with the
-                // same geometric top-to-bottom stops.
-                let gradient = if above {
-                    Gradient {
-                        top: rs.top_fill1,
-                        bottom: rs.top_fill2,
-                    }
+                let p0 = [(s0.0 * hpr) as f32, (s0.1 * vpr) as f32];
+                let p1 = [(s1.0 * hpr) as f32, (s1.1 * vpr) as f32];
+                let runs = if above {
+                    &mut top_runs
                 } else {
-                    Gradient {
-                        top: rs.bottom_fill1,
-                        bottom: rs.bottom_fill2,
-                    }
+                    &mut bottom_runs
                 };
+                if let Some(run) = runs.last_mut().filter(|run| run.last() == Some(&p0)) {
+                    run.push(p1);
+                } else {
+                    runs.push(vec![p0, p1]);
+                }
+            }
+        }
+
+        // One area primitive per uninterrupted quadrant keeps the gradient continuous instead of
+        // restarting it at every source segment and producing visible rectangular pockets.
+        for (runs, gradient) in [
+            (
+                &top_runs,
+                Gradient {
+                    top: rs.top_fill1,
+                    bottom: rs.top_fill2,
+                },
+            ),
+            (
+                &bottom_runs,
+                Gradient {
+                    top: rs.bottom_fill1,
+                    bottom: rs.bottom_fill2,
+                },
+            ),
+        ] {
+            for run in runs {
+                let first = points.len() as u32;
+                points.extend_from_slice(run);
                 out.push(Prim::AreaFill {
                     first_point: first,
-                    point_count: 2,
+                    point_count: run.len() as u32,
                     base_y: (baseline_y * vpr) as f32,
                     line_type: LineType::Simple,
                     gradient,
                 });
-                if rs.line_visible {
-                    let stroke = if above {
-                        &mut top_stroke
-                    } else {
-                        &mut bottom_stroke
-                    };
-                    let p0 = [(s0.0 * hpr) as f32, (s0.1 * vpr) as f32];
-                    if stroke
-                        .last()
-                        .is_none_or(|last| last[0] != p0[0] || last[1] != p0[1])
-                    {
-                        stroke.push(p0);
-                    }
-                    stroke.push([(s1.0 * hpr) as f32, (s1.1 * vpr) as f32]);
-                }
             }
         }
         if rs.line_visible {
-            push_line_stroke(
-                out,
-                points,
-                &top_stroke,
-                (rs.top_line_width * vpr) as f32,
-                rs.top_line_style,
-                LineType::Simple,
-                rs.top_line,
-            );
-            push_line_stroke(
-                out,
-                points,
-                &bottom_stroke,
-                (rs.bottom_line_width * vpr) as f32,
-                rs.bottom_line_style,
-                LineType::Simple,
-                rs.bottom_line,
-            );
+            for run in &top_runs {
+                push_line_stroke(
+                    out,
+                    points,
+                    run,
+                    (rs.top_line_width * vpr) as f32,
+                    rs.top_line_style,
+                    LineType::Simple,
+                    rs.top_line,
+                );
+            }
+            for run in &bottom_runs {
+                push_line_stroke(
+                    out,
+                    points,
+                    run,
+                    (rs.bottom_line_width * vpr) as f32,
+                    rs.bottom_line_style,
+                    LineType::Simple,
+                    rs.bottom_line,
+                );
+            }
         }
     }
 
