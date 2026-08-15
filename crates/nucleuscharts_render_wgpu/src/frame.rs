@@ -389,6 +389,7 @@ pub fn render_frame(
             label: Some("frame_pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: msaa_view,
+                depth_slice: None,
                 resolve_target: Some(resolve_view),
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(clear_color),

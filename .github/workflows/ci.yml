@@ -118,7 +118,7 @@ jobs:
 
   browser:
     name: Browser runtime & parity (Playwright)
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -129,7 +129,7 @@ jobs:
         with:
           node-version: 22
       - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        run: cargo install wasm-pack --locked
       - name: Install package deps
         working-directory: packages/charts
         run: npm ci
@@ -145,10 +145,9 @@ jobs:
       - name: Run required portable browser suite
         id: portable-browser-suite
         working-directory: examples/web_demo
-        run: xvfb-run -a npx playwright test
+        run: npx playwright test
         env:
           NUCLEUSCHARTS_PORTABLE_BROWSER: "1"
-          NUCLEUSCHARTS_HEADED_BROWSER: "1"
       - name: Run machine-sensitive pixel/GPU/performance evidence
         id: machine-evidence
         continue-on-error: true

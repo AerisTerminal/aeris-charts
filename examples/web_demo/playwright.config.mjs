@@ -2,16 +2,6 @@ import { defineConfig, devices } from "@playwright/test";
 
 const port = Number.parseInt(process.env.NUCLEUSCHARTS_TEST_PORT ?? "4174", 10);
 const portable_browser = process.env.NUCLEUSCHARTS_PORTABLE_BROWSER === "1";
-const headed_browser = process.env.NUCLEUSCHARTS_HEADED_BROWSER === "1";
-const linux_webgpu_args = process.platform === "linux"
-  ? [
-      "--use-angle=vulkan",
-      "--enable-features=Vulkan",
-      "--use-vulkan=swiftshader",
-      "--disable-vulkan-fallback-to-gl-for-testing",
-      ...(!headed_browser ? ["--disable-vulkan-surface"] : []),
-    ]
-  : [];
 
 export default defineConfig({
   testDir: "./tests",
@@ -21,7 +11,6 @@ export default defineConfig({
   outputDir: "test-results",
   use: {
     baseURL: `http://127.0.0.1:${port}`,
-    headless: !headed_browser,
     viewport: { width: 1280, height: 720 },
     deviceScaleFactor: 1.5,
     colorScheme: "light",
@@ -47,7 +36,6 @@ export default defineConfig({
             "--enable-unsafe-webgpu",
             "--enable-unsafe-swiftshader",
             "--use-webgpu-adapter=swiftshader",
-            ...linux_webgpu_args,
             "--enable-dawn-features=allow_unsafe_apis",
             "--disable-dawn-features=use_dxc",
             "--enable-webgpu-developer-features",
