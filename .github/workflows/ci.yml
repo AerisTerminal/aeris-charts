@@ -3,7 +3,8 @@ name: CI
 on:
   push:
     branches: [master, main]
-    tags: ["v*"]
+    paths-ignore:
+      - ".github/workflows/**"
   pull_request:
 
 env:
@@ -82,39 +83,6 @@ jobs:
       - name: Pack smoke test (tarball installs and imports)
         working-directory: packages/charts
         run: npm run test:pack
-
-  publish:
-    name: GitHub Packages publish (tags v*)
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [rust, package, browser]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          registry-url: https://npm.pkg.github.com
-          scope: "@nucleuscharts"
-      - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-      - name: Install package deps
-        working-directory: packages/charts
-        run: npm ci
-      - name: Verify tag matches package version
-        working-directory: packages/charts
-        run: node -e "const p=require('./package.json');if(process.env.GITHUB_REF_NAME !== 'v'+p.version)throw new Error('tag '+process.env.GITHUB_REF_NAME+' does not match package v'+p.version)"
-      - name: Publish (prepublishOnly rebuilds + pack-smokes first)
-        working-directory: packages/charts
-        run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   browser:
     name: Browser runtime & parity (Playwright)
