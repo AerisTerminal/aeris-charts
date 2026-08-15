@@ -33,17 +33,18 @@ const width = 600;
 const height = 320;
 const low_color = "rgb(50, 50, 255)";
 const high_color = "rgb(255, 50, 50)";
-const line_color = "#2962ff";
-const whitespace = new Set([9, 31]);
+const line_color = "#000000";
 const start = 1_700_000_000;
-const values = Array.from({ length: 60 }, (_, index) => {
-  if (index === 0) return 0;
-  if (index === 1) return 50;
-  if (index === 2) return 100;
-  return (index * 37 + (index % 5) * 11) % 101;
-});
+// Exact upstream sample formula with randomFactor pinned to the midpoint of its 25..50 range.
+const values = Array.from({ length: 500 }, (_, index) => index * (
+  0.5
+  + Math.sin(index / 10) * 0.2
+  + Math.sin(index / 20) * 0.4
+  + Math.sin(index / 37.5) * 0.8
+  + Math.sin(index / 500) * 0.5
+) + 200);
 const line_data = values.map((value, index) => ({ time: start + index * 86_400, value }));
-const shade_data = line_data.map((point, index) => whitespace.has(index) ? { time: point.time } : point);
+const shade_data = line_data;
 
 // Behavioral copy of the Apache-2.0 upstream example renderer. Product code does not import or
 // transliterate this class; it exists only as the pinned 5.2.0 side-by-side oracle.
@@ -97,6 +98,9 @@ const shared_options = {
   layout: { background: { type: "solid", color: "#ffffff" }, textColor: "#191919", attributionLogo: false },
   grid: { vertLines: { visible: false }, horzLines: { visible: false } },
   crosshair: { mode: 2 },
+  leftPriceScale: { visible: false },
+  rightPriceScale: { visible: false },
+  timeScale: { visible: false },
 };
 
 const nucleus = await create_chart(document.getElementById("nucleus"), {
@@ -109,7 +113,7 @@ const nucleus_shade = nucleus.add_series("background_shade", {
   low_color,
   high_color,
   low_value: 0,
-  high_value: 100,
+  high_value: 1000,
 });
 nucleus_shade.set_data(shade_data);
 nucleus.time_scale().fit_content();
@@ -122,7 +126,7 @@ const reference = createChart(document.getElementById("reference"), shared_optio
 const reference_empty_range = reference.priceScale("right").getVisibleRange();
 const reference_shade = reference.addCustomSeries(new ReferenceShadeSeries(), {
   lowValue: 0,
-  highValue: 100,
+  highValue: 1000,
 });
 reference_shade.setData(shade_data);
 reference.timeScale().fitContent();
@@ -181,7 +185,6 @@ const metrics = () => ({
 await render();
 Object.assign(parity, {
   values,
-  whitespace: [...whitespace],
   empty_ranges: { nucleus: nucleus_empty_range, reference: reference_empty_range },
   shade_only_ranges: { nucleus: nucleus_shade_only_range, reference: reference_shade_only_range },
   composed_ranges,

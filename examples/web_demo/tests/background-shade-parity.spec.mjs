@@ -2,9 +2,9 @@ import { test, expect } from "@playwright/test";
 import { PNG } from "pngjs";
 
 const rgb = (value) => [
-  Math.round(50 + 205 * value / 100),
+  Math.round(50 + 205 * value / 1000),
   50,
-  Math.round(255 - 205 * value / 100),
+  Math.round(255 - 205 * value / 1000),
 ];
 
 function pixel(image, x, y) {
@@ -53,43 +53,37 @@ async function assert_strips(page, indices) {
         expect_color(pixel(image, x, Math.round(y * scale)), expected, `${name} strip ${index} at x=${x} y=${y}`);
       }
     }
-    if (name === "nucleus") {
-      for (let offset = 1; offset < indices.length; offset += 1) {
-        const left_index = indices[offset - 1];
-        const right_index = indices[offset];
-        if (right_index !== left_index + 1) continue;
-        const left = Math.round((pane.left + state[name].coordinates[left_index]) * scale);
-        const right = Math.round((pane.left + state[name].coordinates[right_index]) * scale);
-        const x = Math.floor((left + right) / 2);
-        const t = (x - left) / (right - left);
-        const left_color = rgb(state.values[left_index]);
-        const right_color = rgb(state.values[right_index]);
-        const expected = left_color.map((channel, channel_index) => Math.round(
-          channel + (right_color[channel_index] - channel) * t,
-        ));
-        expect_color(
-          pixel(image, x, Math.round((pane.top + 3) * scale)),
-          expected,
-          `nucleus interpolated shade ${left_index}-${right_index}`,
-        );
-      }
-    }
-    for (const index of [9, 31]) {
-      const coordinate = state[name].coordinates[index];
-      if (coordinate === null || coordinate < 0 || coordinate >= pane.width) continue;
-      const x = Math.round((pane.left + coordinate) * scale);
-      expect_color(
-        pixel(image, x, Math.round((pane.top + 3) * scale)),
-        [255, 255, 255],
-        `${name} whitespace ${index}`,
-      );
-    }
   }
   expect(state.nucleus.logical_range.from).toBeCloseTo(state.reference.logical_range.from, 7);
   expect(state.nucleus.logical_range.to).toBeCloseTo(state.reference.logical_range.to, 7);
 }
 
-test("background shade preserves upstream anchors and fills continuously between them", async ({ browser }) => {
+async function assert_scanline_parity(page) {
+  const state = await page.locator("#nucleus").evaluate((element) => element.__shade_parity.metrics());
+  const nucleus_locator = page.locator("#nucleus");
+  const reference_locator = page.locator("#reference");
+  const nucleus_box = await nucleus_locator.boundingBox();
+  const reference_box = await reference_locator.boundingBox();
+  const nucleus = PNG.sync.read(await nucleus_locator.screenshot({ animations: "disabled" }));
+  const reference = PNG.sync.read(await reference_locator.screenshot({ animations: "disabled" }));
+  const nucleus_scale = nucleus.width / nucleus_box.width;
+  const reference_scale = reference.width / reference_box.width;
+  const width = Math.min(
+    Math.round(state.nucleus.pane.width * nucleus_scale),
+    Math.round(state.reference.pane.width * reference_scale),
+  );
+  const nucleus_y = Math.round((state.nucleus.pane.top + 3) * nucleus_scale);
+  const reference_y = Math.round((state.reference.pane.top + 3) * reference_scale);
+  for (let x = 0; x < width; x += 1) {
+    expect_color(
+      pixel(nucleus, Math.round(state.nucleus.pane.left * nucleus_scale) + x, nucleus_y),
+      pixel(reference, Math.round(state.reference.pane.left * reference_scale) + x, reference_y),
+      `full LWC shade scanline at x=${x}`,
+    );
+  }
+}
+
+test("background shade matches the exact LWC example data and per-bar renderer", async ({ browser }) => {
   for (const dpr of [1, 2]) {
     const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: dpr });
     const page = await context.newPage();
@@ -102,26 +96,29 @@ test("background shade preserves upstream anchors and fills continuously between
     expect(initial.shade_only_ranges.reference).toEqual({ from: -0.5, to: 0.5 });
     expect(initial.composed_ranges).toEqual(initial.line_only_ranges);
     expect(initial.nucleus_types).toEqual(["background_shade", "line"]);
-    expect(initial.nucleus_lengths).toEqual([60, 60]);
-    expect(initial.reference_lengths).toEqual([58, 60]);
+    expect(initial.nucleus_lengths).toEqual([500, 500]);
+    expect(initial.reference_lengths).toEqual([500, 500]);
 
-    await assert_strips(page, [0, 1, 2, 3]);
+    await assert_scanline_parity(page);
 
-    await page.locator("#nucleus").evaluate((element) => element.__shade_parity.set_range(0, 10));
-    await assert_strips(page, [0, 1, 2, 3]);
+    await page.locator("#nucleus").evaluate((element) => element.__shade_parity.set_range(0, 20));
+    await assert_strips(page, [2, 10, 18]);
+    await assert_scanline_parity(page);
     const clipped = await page.locator("#nucleus").evaluate((element) => element.__shade_parity.metrics());
-    expect(clipped.nucleus.coordinates[20]).toBeGreaterThan(clipped.nucleus.pane.width);
-    expect(clipped.reference.coordinates[20]).toBeGreaterThan(clipped.reference.pane.width);
+    expect(clipped.nucleus.coordinates[100]).toBeGreaterThan(clipped.nucleus.pane.width);
+    expect(clipped.reference.coordinates[100]).toBeGreaterThan(clipped.reference.pane.width);
 
-    await page.locator("#nucleus").evaluate((element) => element.__shade_parity.set_range(20, 35));
-    await assert_strips(page, [22, 23, 24]);
+    await page.locator("#nucleus").evaluate((element) => element.__shade_parity.set_range(200, 260));
+    await assert_strips(page, [205, 230, 255]);
+    await assert_scanline_parity(page);
 
-    await page.locator("#nucleus").evaluate((element) => element.__shade_parity.set_range(0, 59));
-    await assert_strips(page, [0, 1, 2, 3]);
+    await page.locator("#nucleus").evaluate((element) => element.__shade_parity.set_range(0, 499));
+    await assert_scanline_parity(page);
 
     await page.locator("#nucleus").evaluate((element) => element.__shade_parity.resize(480, 260));
-    await page.locator("#nucleus").evaluate((element) => element.__shade_parity.set_range(20, 35));
-    await assert_strips(page, [22, 23, 24]);
+    await page.locator("#nucleus").evaluate((element) => element.__shade_parity.set_range(200, 260));
+    await assert_strips(page, [205, 230, 255]);
+    await assert_scanline_parity(page);
     await context.close();
   }
 });

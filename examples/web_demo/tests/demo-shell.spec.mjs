@@ -115,10 +115,24 @@ test("reported plugin scenarios use full data and official line compositions", a
   series = await inspect();
   expect(series.find((item) => item.type === "background_shade")?.points).toBe(await page.evaluate(() => window.__data.length));
   expect(series.filter((item) => item.type === "line")).toHaveLength(initial_lines + 1);
-  expect(await page.evaluate(async () => {
-    const { default_theme_name, theme_palette } = await import("/dist/nucleuscharts_financial.js");
-    return window.__chart.series_order().at(-1).options().color === theme_palette(default_theme_name).primary;
-  })).toBe(true);
+  const shade_state = await page.evaluate(() => {
+    const shade = window.__chart.series_order().find((item) => item.series_type() === "background_shade");
+    const line = window.__chart.series_order().at(-1);
+    const values = shade.data().map((point) => point.value);
+    return {
+      shade_options: shade.options(),
+      line_options: line.options(),
+      same_data: JSON.stringify(shade.data()) === JSON.stringify(line.data()),
+      value_range: [Math.min(...values), Math.max(...values)],
+    };
+  });
+  expect(shade_state).toMatchObject({
+    shade_options: { low_value: 0, high_value: 1000 },
+    line_options: { color: "#000000", line_width: 3, price_line_visible: true },
+    same_data: true,
+  });
+  expect(shade_state.value_range[0]).toBeGreaterThan(150);
+  expect(shade_state.value_range[1]).toBeLessThan(900);
 });
 
 test("brushable area writes a logical range whose color follows chronological delta in either drag direction", async ({ page }) => {

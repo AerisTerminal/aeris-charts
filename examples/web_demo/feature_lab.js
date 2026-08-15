@@ -58,9 +58,27 @@ function use_official_feature_spacing(chart) {
   });
 }
 
+function background_shade_data(bars) {
+  const last = bars.length - 1;
+  return bars.map((bar, index) => {
+    // The upstream example uses this smooth sample signal over 500 points. Stretch the same
+    // domain across the demo's timestamps and pin randomFactor to its 25..50 midpoint.
+    const i = last <= 0 ? 0 : index * 499 / last;
+    const value = i * (
+      0.5
+      + Math.sin(i / 10) * 0.2
+      + Math.sin(i / 20) * 0.4
+      + Math.sin(i / 37.5) * 0.8
+      + Math.sin(i / 500) * 0.5
+    ) + 200;
+    return { time: bar.time, value };
+  });
+}
+
 function series_features(bars) {
   const sampled = bars.filter((_, index) => index % 5 === 0);
   const closes = sampled.map((bar) => bar.close);
+  const shade_data = background_shade_data(bars);
   const base = Math.floor(Math.min(...closes) - 2);
   return [
     {
@@ -173,13 +191,13 @@ function series_features(bars) {
       data: () => sampled.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })),
     },
     {
-      id: "shaded-background", label: "Shaded backdrop", detail: "Continuous field + line", icon: "chart",
-      series_kind: "background_shade", options: { low_value: Math.min(...closes), high_value: Math.max(...closes) },
-      data: () => bars.map((bar) => ({ time: bar.time, value: bar.close })),
+      id: "shaded-background", label: "Shaded backdrop", detail: "LWC shade field + line", icon: "chart",
+      series_kind: "background_shade", options: { low_value: 0, high_value: 1000 },
+      data: () => shade_data,
       compose: (chart) => add_line_companion(
         chart,
-        bars.map((bar) => ({ time: bar.time, value: bar.close })),
-        { color: PRIMARY_BLUE },
+        shade_data,
+        { color: "#000000", line_width: 3, price_line_visible: true },
       ),
     },
     {
