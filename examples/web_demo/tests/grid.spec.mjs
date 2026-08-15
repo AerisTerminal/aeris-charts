@@ -546,8 +546,33 @@ test("drawing tools and history route only to the stable active cell", async ({ 
   expect(stable.counts.find(([id]) => id === stable.chart4)[1]).toBe(0);
   expect(stable.counts.find(([id]) => id === 2)[1]).toBe(1);
   expect(stable.chart2_can_undo).toBe(true);
-  await page.evaluate(() => window.__grid.redo_drawing());
+  await expect(page.locator("#undo_drawing_btn")).toBeVisible();
+  await expect(page.locator("#redo_drawing_btn")).toBeVisible();
+  await page.click("#redo_drawing_btn");
   expect(await page.evaluate(() => window.__grid.active_cell().chart.drawings()[0].kind())).toBe("rectangle");
+  await page.click("#undo_drawing_btn");
+  expect(await page.evaluate(() => window.__grid.active_cell().chart.drawings().length)).toBe(0);
+  await page.click("#redo_drawing_btn");
+  expect(await page.evaluate(() => window.__grid.active_cell().chart.drawings()[0].kind())).toBe("rectangle");
+});
+
+test("reset view targets only the active chart", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+  await page.click("#split_h");
+  await wait_cell_charts(page);
+
+  await page.evaluate(() => {
+    const grid = window.__grid;
+    const [first, second] = grid.cells();
+    first.chart.wasm.set_bar_spacing(18);
+    second.chart.wasm.set_bar_spacing(22);
+    grid.set_active_cell(second);
+  });
+  await page.click("#reset_view_btn");
+
+  expect(await page.evaluate(() => window.__grid.cells().map((cell) => cell.chart.wasm.bar_spacing())))
+    .toEqual([18, 6]);
 });
 
 test("workspace state composes chart persistence V1 and restores stable ownership at a new size", async ({ page }) => {

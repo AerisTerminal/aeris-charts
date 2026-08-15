@@ -128,6 +128,8 @@ export interface chart_grid {
   set_drawing_tool_listener(listener: ((tool: drawing_kind | null) => void) | null): void;
   undo_drawing(): boolean;
   redo_drawing(): boolean;
+  /** Reset the active chart's time and price views. */
+  reset_view(): void;
   /** Compose layout and each cell's existing chart persistence V1 for host-owned storage. */
   export_state(): chart_workspace_state_v1;
   /** Maximize a cell to the full container (the others + dividers hide), or pass `null` to
@@ -620,6 +622,7 @@ export async function create_chart_grid(
     },
     undo_drawing: () => cells.get(active_id)!.chart.undo_drawing(),
     redo_drawing: () => cells.get(active_id)!.chart.redo_drawing(),
+    reset_view: () => cells.get(active_id)!.chart.reset_view(),
     export_state: () => ({
       schema: "nucleuscharts-workspace",
       schema_version: 1,

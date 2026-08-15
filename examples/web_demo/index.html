@@ -11,11 +11,14 @@
 <style>
   html, body { height: 100%; }
   #wrap { display: flex; flex-direction: column; height: 100%; }
-  #bar { max-height: 30vh; overflow-y: auto; padding: 8px 10px; font-size: 12px; color: var(--foreground);
-         background: var(--background); border-bottom: 1px solid var(--border); display: flex;
-         gap: 8px; align-items: stretch; align-content: flex-start; flex-wrap: wrap; }
-  #bar .group { position: relative; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
-                padding: 10px 9px 5px; margin-top: 3px; background: var(--muted);
+  #bar { flex: 0 0 auto; font-size: 12px; color: var(--foreground); background: var(--background);
+         border-bottom: 1px solid var(--border); }
+  #app_bar { min-height: 38px; padding: 4px 10px; display: flex; gap: 10px; align-items: center;
+             border-bottom: 1px solid var(--muted-border); }
+  #controls_strip { display: flex; gap: 7px; align-items: stretch; overflow-x: auto; overflow-y: hidden;
+                    padding: 7px 10px 6px; scrollbar-width: thin; scrollbar-color: var(--muted-border) transparent; }
+  #bar .group { position: relative; display: flex; flex: 0 0 auto; gap: 7px; align-items: center; flex-wrap: nowrap;
+                padding: 9px 8px 4px; margin-top: 3px; background: var(--muted);
                 border: 1px solid var(--muted-border); border-radius: var(--radius-df); }
   /* The flex display above would otherwise beat the UA [hidden] rule (specificity) — the style
      groups toggle via the `hidden` attribute, so it must win here. */
@@ -33,9 +36,17 @@
   #bar button:focus-visible, #bar select:focus-visible, #bar input:focus-visible { outline-color: var(--primary); }
   #bar input[type="color"] { width: 24px; height: 23px; padding: 0; border: 1px solid var(--muted-border); border-radius: var(--radius-sm); background: var(--input); cursor: pointer; }
   #bar input[type="range"] { width: 72px; vertical-align: middle; }
-  #bar .brand { align-self: center; background: var(--primary); color: var(--primary-foreground); padding: 5px 8px; border-radius: var(--radius-sm); }
+  #bar .brand { background: var(--primary); color: var(--primary-foreground); padding: 5px 8px; border-radius: var(--radius-sm); }
+  #bar .lab-title { color: var(--muted-foreground); white-space: nowrap; }
+  #control_jump_label { color: var(--muted-foreground); }
+  #quick_actions { display: flex; gap: 5px; align-items: center; margin-left: auto; }
+  #quick_actions button { min-width: 54px; }
   #bar .hint { color: var(--muted-foreground); font-size: 11px; }
-  #status { align-self: center; margin-left: auto; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+  #status { color: var(--muted-foreground); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  @media (max-width: 720px) {
+    #bar .lab-title, #status { display: none; }
+    #quick_actions { margin-left: auto; }
+  }
   /* The library creates and manages the canvases inside this container. */
   #chart_wrap { flex: 1; position: relative; min-height: 0; }
   #chart_container { position: absolute; inset: 0; touch-action: none; overscroll-behavior: none; }
@@ -48,7 +59,28 @@
 <body>
 <div id="wrap">
   <header id="bar">
-    <span class="brand">@nucleuscharts/financial</span>
+    <div id="app_bar">
+      <span class="brand">Nucleus Charts</span>
+      <span class="lab-title">interaction training lab</span>
+      <label id="control_jump_label">controls
+        <select id="control_jump" aria-label="Jump to a control section">
+          <option value="type_group">Series</option>
+          <option value="overlays_group">Analysis</option>
+          <option value="multi_chart_group">Workspace</option>
+          <option value="drawings_group">Drawings</option>
+          <option value="chart_group">Appearance</option>
+          <option value="interaction_group">Interaction</option>
+        </select>
+      </label>
+      <nav id="quick_actions" aria-label="Active chart actions">
+        <button id="undo_drawing_btn" type="button" title="Undo the last drawing change in the active chart">undo</button>
+        <button id="redo_drawing_btn" type="button" title="Redo the last drawing change in the active chart">redo</button>
+        <button id="reset_view_btn" type="button" title="Reset the active chart's time and price views">reset view</button>
+      </nav>
+      <span id="status"></span>
+    </div>
+
+    <div id="controls_strip" aria-label="Chart training controls">
 
     <div class="group" id="type_group" data-caption="Series">
       <label><input type="radio" name="series" value="candlestick" checked> candles</label>
@@ -82,7 +114,7 @@
       <label>fill <input type="color" id="area_top" value="#2edc87"></label>
     </div>
 
-    <div class="group" data-caption="Overlays">
+    <div class="group" id="overlays_group" data-caption="Overlays">
       <label><input type="checkbox" id="sma_toggle"> SMA(20)</label>
       <label><input type="checkbox" id="vol_toggle"> volume</label>
     </div>
@@ -91,7 +123,7 @@
       <label title="RSI(14) oscillator in its own stacked pane (series.move_to_pane): dedicated price scale, draggable separator, crosshair + selection anchors work across panes; unchecking prunes the empty pane"><input type="checkbox" id="rsi_toggle"> RSI(14)</label>
     </div>
 
-    <div class="group" data-caption="Multi-chart" title="Split into independent charts (engine workspace): each cell is a full chart with its own scales, type, and data. Click a chart to make it active — split/close, series type, and style then act on it; drag the divider to resize.">
+    <div class="group" id="multi_chart_group" data-caption="Multi-chart" title="Split into independent charts (engine workspace): each cell is a full chart with its own scales, type, and data. Click a chart to make it active — split/close, series type, and style then act on it; drag the divider to resize.">
       <button id="split_h" type="button" title="Split the active chart side by side">split ↔</button>
       <button id="split_v" type="button" title="Split the active chart stacked">split ↕</button>
       <button id="close_cell" type="button" title="Close the active chart (not the primary one)">close</button>
@@ -174,7 +206,7 @@
       <label><input type="checkbox" id="cross_label_visible" checked> labels</label>
     </div>
 
-    <div class="group" data-caption="Chart">
+    <div class="group" id="chart_group" data-caption="Chart">
       <label>theme
         <select id="theme_select">
           <option value="light" selected>light</option>
@@ -236,11 +268,9 @@
     <div class="group" id="interaction_group" data-caption="Interaction" title="Drag a price/time axis to scale it; keyboard: arrows pan (Ctrl = fast), +/- zoom, Home fit, Esc clear">
       <label><input type="checkbox" id="axis_scale_toggle" checked> axis drag-scale</label>
       <label><input type="checkbox" id="kinetic_toggle"> mouse kinetic</label>
-      <button id="reset_view_btn" type="button" title="Reset the view (TradingView-style): default bar spacing/right offset and autoscale restored on every pane's price scales — a manually contracted scale fits the data again">reset view</button>
       <span class="hint">drag axes · Ctrl+←→ fast scroll · flick coasts on touch</span>
     </div>
-
-    <span id="status"></span>
+    </div>
   </header>
   <div id="chart_wrap">
     <div id="chart_container"></div>
@@ -259,6 +289,17 @@ import { vert_line_canvas_primitive } from "./fixture_canvas_plugin.js";
 
 const container = document.getElementById("chart_container");
 const status = document.getElementById("status");
+const controls_strip = document.getElementById("controls_strip");
+document.getElementById("control_jump").addEventListener("change", (event) => {
+  document.getElementById(event.target.value).scrollIntoView({ behavior: "smooth", block: "nearest", inline: "start" });
+});
+// A regular mouse wheel navigates the one-row training ribbon; trackpads keep their native
+// horizontal delta. The chart below never loses vertical space as control groups change.
+controls_strip.addEventListener("wheel", (event) => {
+  if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+  event.preventDefault();
+  controls_strip.scrollLeft += event.deltaY;
+}, { passive: false });
 
 // Deterministic random-walk OHLC data, as the array-of-objects the public API accepts — the
 // library packs it into typed arrays at the boundary. Runtime fixtures pin the final timestamp so
@@ -692,8 +733,8 @@ window.__plugin_canvas = () => container.querySelectorAll("canvas")[2]; // test 
 // empties the store. Selection, anchor/body dragging, and Delete/Backspace live in the engine
 // and gesture layer, not here.
 const drawing_tool_buttons = [...document.querySelectorAll("#drawings_group [data-tool]")];
-const drawing_router = grid ?? chart;
-const active_drawing_chart = () => grid?.active_cell().chart ?? chart;
+const active_chart_router = grid ?? chart;
+const active_chart = () => grid?.active_cell().chart ?? chart;
 function sync_drawing_tool_buttons(tool) {
   for (const button of drawing_tool_buttons) {
     const active = button.dataset.tool === tool;
@@ -716,13 +757,13 @@ function drawing_options_from_inputs() {
   };
 }
 function arm_drawing_tool(kind) {
-  const tool = drawing_router.active_drawing_tool() === kind ? null : kind;
-  drawing_router.set_drawing_tool(tool, drawing_options_from_inputs());
+  const tool = active_chart_router.active_drawing_tool() === kind ? null : kind;
+  active_chart_router.set_drawing_tool(tool, drawing_options_from_inputs());
 }
 for (const button of drawing_tool_buttons) {
   button.addEventListener("click", () => arm_drawing_tool(button.dataset.tool));
 }
-drawing_router.set_drawing_tool_listener(sync_drawing_tool_buttons);
+active_chart_router.set_drawing_tool_listener(sync_drawing_tool_buttons);
 // The toolbar mirrors the SELECTION (TradingView's settings panel): clicking a drawing loads
 // its style into the inputs, so a later change applies on top of the drawing's current style
 // instead of resetting the rest. (#rrggbb needed for the color inputs; other CSS forms skip.)
@@ -734,7 +775,7 @@ function css_to_hex(css) {
   return "#" + [m[1], m[2], m[3]].map((n) => Number(n).toString(16).padStart(2, "0")).join("");
 }
 function sync_drawing_inputs_from_selection() {
-  const selected = active_drawing_chart().selected_drawing();
+  const selected = active_chart().selected_drawing();
   if (selected === null) return;
   const o = selected.options();
   const set = (id, value) => { if (value !== null && value !== undefined) document.getElementById(id).value = value; };
@@ -753,11 +794,11 @@ for (const id of ["drawing_color", "drawing_style", "drawing_width", "drawing_te
   document.getElementById(id).addEventListener("change", () => {
     const options = drawing_options_from_inputs();
     // Re-template the armed tool (the next drawing picks the new settings up).
-    const tool = drawing_router.active_drawing_tool();
-    if (tool !== null) drawing_router.set_drawing_tool(tool, options);
+    const tool = active_chart_router.active_drawing_tool();
+    if (tool !== null) active_chart_router.set_drawing_tool(tool, options);
     // Apply live to the selected drawing, if any — but NEVER write an empty template label
     // over a drawing's real text (an empty `text` would wipe it back to the placeholder).
-    const selected = active_drawing_chart().selected_drawing();
+    const selected = active_chart().selected_drawing();
     if (selected !== null) {
       const patch = { ...options };
       if (patch.text === "") delete patch.text;
@@ -768,7 +809,9 @@ for (const id of ["drawing_color", "drawing_style", "drawing_width", "drawing_te
 document.getElementById("drawing_width").addEventListener("input", (e) => {
   document.getElementById("drawing_width_val").textContent = e.target.value;
 });
-document.getElementById("clear_drawings").addEventListener("click", () => active_drawing_chart().clear_drawings());
+document.getElementById("clear_drawings").addEventListener("click", () => active_chart().clear_drawings());
+document.getElementById("undo_drawing_btn").addEventListener("click", () => active_chart_router.undo_drawing());
+document.getElementById("redo_drawing_btn").addEventListener("click", () => active_chart_router.redo_drawing());
 sync_drawing_tool_buttons(null);
 
 status.textContent = `1000 bars · ${chart.backend()} · dpr ${(window.devicePixelRatio || 1).toFixed(3)}`;
@@ -876,7 +919,7 @@ document.getElementById("grid_style").addEventListener("change", apply_grid_styl
 // Built-in last-price line + last-value label toggles (active cell's series).
 document.getElementById("price_line_toggle").addEventListener("change", (e) => active_series().apply_options({ price_line_visible: e.target.checked }));
 document.getElementById("price_line_style").addEventListener("change", (e) => active_series().apply_options({ price_line_style: Number(e.target.value) }));
-document.getElementById("reset_view_btn").addEventListener("click", () => chart.reset_view());
+document.getElementById("reset_view_btn").addEventListener("click", () => active_chart_router.reset_view());
 document.getElementById("last_value_toggle").addEventListener("change", (e) => active_series().apply_options({ last_value_visible: e.target.checked }));
 // TradingView-style last-value cluster: title chip (darker shade, left of the price) and a
 // candle-close countdown row below. Typing a title or toggling either control applies the trio;

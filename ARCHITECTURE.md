@@ -72,11 +72,11 @@ callbacks, and every runtime cache remain host-owned or derived. Unknown version
 fail structurally without mutation.
 
 The browser split grid is the active-chart router. Its stable workspace cell ID decides which
-independent chart receives a global drawing tool or document shortcut; the receiving chart retains
-all drawing selection, hit testing, mutation semantics, and history. An armed toolbar tool migrates
-between active cells, but drawing selection never does. The grid's host-facing workspace state is a
-small composition of the validated generic split layout, optional active/stable cell identity, and
-one unchanged chart persistence V1 document per cell. Optional instrument identities are opaque
+independent chart receives a global drawing tool, document shortcut, or view reset; the receiving
+chart retains all drawing selection, hit testing, mutation semantics, and history. An armed toolbar
+tool migrates between active cells, but drawing selection never does. The grid's host-facing
+workspace state is a small composition of the validated generic split layout, optional active/stable
+cell identity, and one unchanged chart persistence V1 document per cell. Optional instrument identities are opaque
 host strings. The host stores this composition and restores market history, subscriptions, and
 host-owned series/indicator definitions after the grid restores each Nucleus chart document.
 
