@@ -173,21 +173,6 @@ input[type="number"] {
   color: var(--foreground);
 }
 
-.nc-demo-frame {
-  padding: 4px;
-  background: var(--muted);
-  border: 1px solid var(--muted-border);
-  border-radius: var(--radius-df);
-}
-
-.nc-demo-surface {
-  overflow: hidden;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-df);
-  color: var(--card-foreground);
-}
-
 .nc-text-primary { color: var(--foreground); }
 .nc-text-muted { color: var(--muted-foreground); }
 .nc-text-disabled { color: var(--disabled-foreground); }

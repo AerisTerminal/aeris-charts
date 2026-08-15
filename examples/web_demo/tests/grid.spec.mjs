@@ -58,8 +58,14 @@ test("portable design tokens and disabled controls match the brand contract", as
   const tokens = () => page.evaluate(() => {
     const style = getComputedStyle(document.documentElement);
     return Object.fromEntries([
+      "font-sans",
       "background",
+      "foreground",
       "card",
+      "card-foreground",
+      "primary",
+      "primary-foreground",
+      "primary-hover",
       "muted",
       "muted-foreground",
       "disabled-foreground",
@@ -67,12 +73,27 @@ test("portable design tokens and disabled controls match the brand contract", as
       "border",
       "muted-border",
       "input",
+      "ring",
+      "overlay",
+      "positive",
+      "negative",
+      "destructive",
+      "warning",
+      "radius-sm",
+      "radius-df",
+      "radius-lg",
     ].map((name) => [name, style.getPropertyValue(`--${name}`).trim()]));
   });
 
   expect(await tokens()).toEqual({
+    "font-sans": '"Inter", sans-serif',
     background: "#070a0f",
+    foreground: "oklch(0.985 0 0)",
     card: "#070a0f",
+    "card-foreground": "oklch(0.985 0 0)",
+    primary: "oklch(0.54375 0.191015 267.005)",
+    "primary-foreground": "oklch(0.97 0.014 254.604)",
+    "primary-hover": "oklch(0.603683 0.191341 267.047)",
     muted: "#0c1115",
     "muted-foreground": "#9da3aa",
     "disabled-foreground": "oklch(0.52 0 0)",
@@ -80,15 +101,43 @@ test("portable design tokens and disabled controls match the brand contract", as
     border: "#16191f",
     "muted-border": "#131519",
     input: "#0c1115",
+    ring: "oklch(0.556 0 0)",
+    overlay: "oklch(0 0 0 / 50%)",
+    positive: "#089981",
+    negative: "#f7525f",
+    destructive: "#f7525f",
+    warning: "oklch(0.768578 0.164801 70.108)",
+    "radius-sm": "4px",
+    "radius-df": "6px",
+    "radius-lg": "999px",
   });
 
   await page.selectOption("#theme_select", "light");
-  expect(await tokens()).toMatchObject({
+  expect(await tokens()).toEqual({
+    "font-sans": '"Inter", sans-serif',
     background: "oklch(1 0 0)",
+    foreground: "oklch(0.321093 0 0)",
     card: "oklch(1 0 0)",
+    "card-foreground": "oklch(0.321093 0 0)",
+    primary: "oklch(0.54375 0.191015 267.005)",
+    "primary-foreground": "oklch(0.97 0.014 254.604)",
+    "primary-hover": "oklch(0.483663 0.190265 267.018)",
+    muted: "oklch(0.991063 0 0)",
+    "muted-foreground": "oklch(0.556 0 0)",
     "disabled-foreground": "oklch(0.74 0 0)",
+    accent: "oklch(0.97 0 0)",
     border: "#f3f3f3",
     "muted-border": "#f5f5f5",
+    input: "oklch(0.991063 0 0)",
+    ring: "oklch(0.708 0 0)",
+    overlay: "oklch(0 0 0 / 50%)",
+    positive: "#089981",
+    negative: "#f7525f",
+    destructive: "#f7525f",
+    warning: "oklch(0.768578 0.164801 70.108)",
+    "radius-sm": "4px",
+    "radius-df": "6px",
+    "radius-lg": "999px",
   });
 
   await page.evaluate(() => {
