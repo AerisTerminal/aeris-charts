@@ -7,6 +7,8 @@ const linux_webgpu_args = process.platform === "linux"
   ? [
       "--use-angle=vulkan",
       "--enable-features=Vulkan",
+      "--use-vulkan=swiftshader",
+      "--disable-vulkan-fallback-to-gl-for-testing",
       ...(!headed_browser ? ["--disable-vulkan-surface"] : []),
     ]
   : [];
