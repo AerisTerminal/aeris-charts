@@ -34,6 +34,7 @@ export default defineConfig({
         launchOptions: {
           args: [
             "--enable-unsafe-webgpu",
+            "--enable-unsafe-swiftshader",
             "--use-webgpu-adapter=swiftshader",
             "--enable-dawn-features=allow_unsafe_apis",
             "--disable-dawn-features=use_dxc",
