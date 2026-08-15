@@ -2236,6 +2236,28 @@ export class chart_impl implements chart_api {
     this.repaint();
   }
 
+  undo_drawing(): boolean {
+    this.close_text_editor(true);
+    const changed = this.wasm.undo_drawing();
+    if (changed) this.repaint();
+    return changed;
+  }
+
+  redo_drawing(): boolean {
+    this.close_text_editor(true);
+    const changed = this.wasm.redo_drawing();
+    if (changed) this.repaint();
+    return changed;
+  }
+
+  can_undo_drawing(): boolean {
+    return this.wasm.can_undo_drawing();
+  }
+
+  can_redo_drawing(): boolean {
+    return this.wasm.can_redo_drawing();
+  }
+
   set_drawing_tool(tool: drawing_kind | null, options?: Partial<drawing_options>): void {
     const changed = this.active_tool !== tool;
     if (changed) this.close_text_editor(true); // arming another tool commits the edit

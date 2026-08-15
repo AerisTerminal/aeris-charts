@@ -63,6 +63,11 @@ impl NucleusWorkspace {
     pub fn layout_json(&self) -> String {
         self.workspace.layout_json()
     }
+
+    /// Atomically restore a validated split layout with its stable cell ids and ratios.
+    pub fn restore_layout_json(&mut self, json: &str) -> bool {
+        self.workspace.restore_layout_json(json).is_ok()
+    }
 }
 
 /// Maps engine rejections to the host convention (-1 / false); kept for future richer errors.
@@ -71,5 +76,6 @@ fn _err_code(err: WorkspaceError) -> i64 {
     match err {
         WorkspaceError::NotFound => -2,
         WorkspaceError::LastCell => -3,
+        WorkspaceError::InvalidLayout => -4,
     }
 }

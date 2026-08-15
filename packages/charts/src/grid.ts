@@ -17,10 +17,43 @@ import { nucleuscharts_error } from "./errors.js";
 import { DEFAULT_SHORTCUTS, install_shortcuts } from "./shortcuts.js";
 import type { shortcut_action } from "./shortcuts.js";
 import { default_theme_name, theme_palette } from "./theme.js";
-import type { chart_api, chart_options, deep_partial } from "./types.js";
+import type {
+  chart_api,
+  chart_options,
+  chart_state_v1,
+  deep_partial,
+  drawing_kind,
+  drawing_options,
+} from "./types.js";
 
 /** `horizontal` places the two charts side by side; `vertical` stacks them. */
 export type split_direction = "horizontal" | "vertical";
+
+export type workspace_layout =
+  | { kind: "cell"; id: number }
+  | {
+      kind: "split";
+      direction: split_direction;
+      ratio: number;
+      a: workspace_layout;
+      b: workspace_layout;
+    };
+
+export interface workspace_cell_state_v1 {
+  stable_cell_id: number;
+  /** Opaque host-owned identity (symbol/instrument key); NucleusCharts never interprets it. */
+  host_chart_identity?: string;
+  chart_state: chart_state_v1;
+}
+
+/** Host-storable composition of generic layout plus each chart's existing persistence V1. */
+export interface chart_workspace_state_v1 {
+  schema: "nucleuscharts-workspace";
+  schema_version: 1;
+  layout: workspace_layout;
+  active_cell?: number;
+  cells: workspace_cell_state_v1[];
+}
 
 /** Host-owned usage snapshot, emitted on every topology change. */
 export interface grid_usage {
@@ -36,6 +69,9 @@ export interface grid_cell {
   /** The cell's flex slot; per-cell chrome (buttons, legends) attaches here. */
   readonly element: HTMLDivElement;
   readonly created_at: number;
+  /** Optional opaque host identity included by workspace export/restore. */
+  readonly host_chart_identity: string | null;
+  set_host_chart_identity(identity: string | null): void;
   /**
    * Split this cell in two: the existing chart keeps its state in the first half and a fresh
    * chart (same base options) is created in the second. Resolves to the NEW cell, or `null`
@@ -69,6 +105,10 @@ export interface chart_grid_options {
   /** Fired for every cell created by a split (button or shortcut path): the platform's hook
    *  to seed/configure the fresh chart (data, theme, chrome). */
   on_cell_added?: (cell: grid_cell) => void;
+  /** Restore a fresh grid from generic topology plus composed chart persistence V1 documents. */
+  initial_state?: chart_workspace_state_v1;
+  /** Fired for every restored cell after its Nucleus chart state has been installed. */
+  on_cell_restored?: (cell: grid_cell) => void;
 }
 
 export interface chart_grid {
@@ -80,6 +120,16 @@ export interface chart_grid {
   set_divider_color(color: string | null): void;
   /** The active cell (the last one pointer-pressed) — the target of the split shortcuts. */
   active_cell(): grid_cell;
+  /** Explicitly activate a live cell by stable identity (toolbar/programmatic routing). */
+  set_active_cell(cell: grid_cell): void;
+  /** Arm/disarm the drawing tool on the active chart; the grid migrates an armed tool on focus. */
+  set_drawing_tool(tool: drawing_kind | null, options?: Partial<drawing_options>): void;
+  active_drawing_tool(): drawing_kind | null;
+  set_drawing_tool_listener(listener: ((tool: drawing_kind | null) => void) | null): void;
+  undo_drawing(): boolean;
+  redo_drawing(): boolean;
+  /** Compose layout and each cell's existing chart persistence V1 for host-owned storage. */
+  export_state(): chart_workspace_state_v1;
   /** Maximize a cell to the full container (the others + dividers hide), or pass `null` to
    *  restore. Ctrl/Cmd+click on a cell toggles this (TradingView's maximize pane). */
   maximize(cell: grid_cell | null): void;
@@ -94,6 +144,7 @@ interface cell_record {
   host: HTMLDivElement;
   chart: chart_api;
   created_at: number;
+  host_chart_identity: string | null;
   handle: handle_record;
 }
 
@@ -104,14 +155,8 @@ type handle_record = Omit<grid_cell, "chart"> & { chart: chart_api };
 const FLEX_CHILD = "flex:1 1 0;min-width:0;min-height:0;position:relative;";
 const now_seconds = () => Date.now() / 1000;
 
-interface layout_node {
-  kind: "cell" | "split";
-  id?: number;
-  direction?: "horizontal" | "vertical";
-  ratio?: number;
-  a?: layout_node;
-  b?: layout_node;
-}
+type layout_node = workspace_layout;
+type split_layout_node = Extract<workspace_layout, { kind: "split" }>;
 
 /**
  * @experimental Split-grid topology is public but not part of the frozen stable surface.
@@ -130,12 +175,67 @@ export async function create_chart_grid(
   }
 
   const workspace = new NucleusWorkspace(now_seconds());
+  const initial_state = options.initial_state ?? null;
+  if (
+    initial_state !== null &&
+    (initial_state.schema !== "nucleuscharts-workspace" || initial_state.schema_version !== 1)
+  ) {
+    throw new nucleuscharts_error("persistence_version_error", "unsupported workspace state version");
+  }
+  if (initial_state !== null) {
+    let layout_json: string;
+    try {
+      layout_json = JSON.stringify(initial_state.layout);
+    } catch (error) {
+      throw new nucleuscharts_error("serialization_error", `workspace layout is not JSON-serializable: ${error}`);
+    }
+    if (!workspace.restore_layout_json(layout_json)) {
+      throw new nucleuscharts_error("invalid_data", "workspace layout is malformed or contains invalid cell identities");
+    }
+  }
+  const layout_ids = JSON.parse(workspace.cell_ids_json()) as number[];
+  const restored_cells = new Map<number, workspace_cell_state_v1>();
+  if (initial_state !== null) {
+    for (const cell of initial_state.cells) {
+      if (restored_cells.has(cell.stable_cell_id)) {
+        throw new nucleuscharts_error("invalid_data", `duplicate workspace cell ${cell.stable_cell_id}`);
+      }
+      restored_cells.set(cell.stable_cell_id, cell);
+    }
+    if (
+      restored_cells.size !== layout_ids.length ||
+      layout_ids.some((id) => !restored_cells.has(id))
+    ) {
+      throw new nucleuscharts_error("invalid_data", "workspace cells do not match the restored layout");
+    }
+    if (initial_state.active_cell !== undefined && !layout_ids.includes(initial_state.active_cell)) {
+      throw new nucleuscharts_error("invalid_data", "workspace active cell is not present in the restored layout");
+    }
+  }
   const cells = new Map<number, cell_record>();
   const started_at = Date.now();
-  let split_count = 0;
+  let split_count = Math.max(0, layout_ids.length - 1);
   let max_charts = options.max_charts ?? null;
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   let divider_color: string | null = options.divider_color ?? null;
+  let active_id =
+    initial_state?.active_cell !== undefined && layout_ids.includes(initial_state.active_cell)
+      ? initial_state.active_cell
+      : (layout_ids[0] as number);
+  let workspace_tool: drawing_kind | null = null;
+  let workspace_tool_options: Partial<drawing_options> | undefined;
+  let workspace_tool_listener: ((tool: drawing_kind | null) => void) | null = null;
+
+  const activate = (id: number) => {
+    if (id === active_id || !cells.has(id)) return;
+    const previous = cells.get(active_id);
+    active_id = id;
+    // Move only the globally armed tool template. Selection and all drawing state stay local.
+    previous?.chart?.set_drawing_tool(null);
+    if (workspace_tool !== null) {
+      cells.get(id)?.chart?.set_drawing_tool(workspace_tool, workspace_tool_options);
+    }
+  };
 
   /** The divider line color: the pinned value, or the first chart's axis border color when
    *  following (default) — the divider is axis chrome and tracks the same token. */
@@ -209,7 +309,7 @@ export async function create_chart_grid(
    *  under any DPR and any host-page `box-sizing` reset. Dragging adjusts the two sides' flex
    *  weights live and persists the final ratio engine-side on release. */
   const make_divider = (
-    node: layout_node,
+    node: split_layout_node,
     horizontal: boolean,
     a_el: HTMLElement,
     b_el: HTMLElement,
@@ -265,7 +365,7 @@ export async function create_chart_grid(
     return { slot, host };
   };
 
-  const add_chart = async (id: number): Promise<cell_record> => {
+  const prepare_cell = (id: number, host_chart_identity: string | null): cell_record => {
     const { slot, host } = make_slot();
     const record: cell_record = {
       id,
@@ -273,6 +373,7 @@ export async function create_chart_grid(
       host,
       chart: null as unknown as chart_api,
       created_at: Date.now(),
+      host_chart_identity,
       handle: null as unknown as grid_cell,
     };
     record.handle = {
@@ -280,6 +381,12 @@ export async function create_chart_grid(
       chart: null as unknown as chart_api,
       element: slot,
       created_at: record.created_at,
+      get host_chart_identity() {
+        return record.host_chart_identity;
+      },
+      set_host_chart_identity: (identity) => {
+        record.host_chart_identity = identity;
+      },
       split: (direction) => split(record, direction),
       remove: () => remove(record),
     } as handle_record;
@@ -289,21 +396,40 @@ export async function create_chart_grid(
     // armed on it — a Ctrl+click there is a magnet anchor placement). CAPTURE phase: the
     // chart's gesture layer stops propagation on bubble, which would otherwise eat both.
     slot.addEventListener("pointerdown", (e) => {
-      active_id = id;
+      activate(id);
       if ((e.ctrlKey || e.metaKey) && record.chart !== null && record.chart.active_drawing_tool() === null) {
         toggle_maximize(id);
       }
     }, true);
+    return record;
+  };
+
+  const initialize_chart = async (
+    record: cell_record,
+    state?: chart_state_v1,
+  ): Promise<cell_record> => {
+    const { id, host } = record;
     // The slot must be ATTACHED (real size) before the chart measures its container: a
     // detached host reads 0×0, the first fit packs at minimum spacing, and the later
     // auto-resize explodes the visible range.
-    reconcile();
     record.chart = await create_chart(host, { autoSize: true, ...options.chart_options });
     record.handle.chart = record.chart;
+    if (state !== undefined) record.chart.import_state(state);
+    record.chart.set_drawing_tool_listener((tool) => {
+      if (id !== active_id) return;
+      workspace_tool = tool;
+      workspace_tool_listener?.(tool);
+    });
     // The divider follows the first chart's axis border token live: any apply_options on any
     // cell (theme switch, explicit borderColor) repaints the dividers without a topology change.
     record.chart.subscribe_options_change(restyle_dividers);
     return record;
+  };
+
+  const add_chart = async (id: number): Promise<cell_record> => {
+    const record = prepare_cell(id, null);
+    reconcile();
+    return initialize_chart(record);
   };
 
   /** Mirror the engine's layout tree into the DOM, reusing cell slots by id (chart DOM/state
@@ -388,23 +514,47 @@ export async function create_chart_grid(
 
   const remove = (cell: cell_record): boolean => {
     if (!workspace.remove(cell.id)) return false; // unknown id or the last chart
+    if (active_id === cell.id) {
+      const next_id = (JSON.parse(workspace.cell_ids_json()) as number[])[0] as number;
+      activate(next_id);
+    }
     cell.chart.unsubscribe_options_change(restyle_dividers);
+    cell.chart.set_drawing_tool_listener(null);
     cell.chart.remove();
     cell.slot.remove();
     cells.delete(cell.id);
-    // The active target moves to a surviving cell when the active one leaves.
-    if (active_id === cell.id) {
-      active_id = cells.keys().next().value as number;
-    }
     reconcile();
     emit_usage();
     return true;
   };
 
-  // The root chart (engine cell id 1).
-  const root_id = (JSON.parse(workspace.cell_ids_json()) as number[])[0] as number;
-  let active_id = root_id;
-  await add_chart(root_id);
+  if (initial_state === null) {
+    await add_chart(layout_ids[0] as number);
+  } else {
+    // Prepare every stable slot before measuring any chart so the restored layout is complete
+    // and every host has its real final flex size during chart construction.
+    for (const id of layout_ids) {
+      const restored = restored_cells.get(id) as workspace_cell_state_v1;
+      prepare_cell(id, restored.host_chart_identity ?? null);
+    }
+    reconcile();
+    try {
+      for (const id of layout_ids) {
+        const restored = restored_cells.get(id) as workspace_cell_state_v1;
+        await initialize_chart(cells.get(id) as cell_record, restored.chart_state);
+      }
+      for (const id of layout_ids) options.on_cell_restored?.((cells.get(id) as cell_record).handle);
+    } catch (error) {
+      for (const cell of cells.values()) {
+        if (cell.chart !== null) cell.chart.remove();
+      }
+      cells.clear();
+      container.replaceChildren();
+      container.style.display = "";
+      container.style.overflow = "";
+      throw error;
+    }
+  }
   reconcile();
 
   // A window resize or DPR change (moving across monitors) shifts every divider off the
@@ -418,14 +568,17 @@ export async function create_chart_grid(
     options.shortcuts === false
       ? null
       : install_shortcuts(
-          (["grid.split_horizontal", "grid.split_vertical"] as const).map((action) => ({
+          (["grid.split_horizontal", "grid.split_vertical", "drawing.undo", "drawing.redo"] as const).map((action) => ({
             combo:
               (typeof options.shortcuts === "object" ? options.shortcuts[action] : undefined) ??
               DEFAULT_SHORTCUTS[action].combo,
             run: () => {
               const cell = cells.get(active_id);
-              if (cell !== undefined) {
+              if (cell !== undefined && action.startsWith("grid.")) {
                 void split(cell, action === "grid.split_horizontal" ? "horizontal" : "vertical");
+              } else if (cell !== undefined) {
+                if (action === "drawing.undo") cell.chart.undo_drawing();
+                else cell.chart.redo_drawing();
               }
             },
           })),
@@ -449,6 +602,40 @@ export async function create_chart_grid(
       reconcile();
     },
     active_cell: () => cells.get(active_id)!.handle,
+    set_active_cell: (cell) => {
+      const record = cells.get(cell.id);
+      if (record?.handle !== cell) {
+        throw new nucleuscharts_error("invalid_handle", "cell does not belong to this live grid");
+      }
+      activate(cell.id);
+    },
+    set_drawing_tool: (tool, tool_options) => {
+      workspace_tool = tool;
+      if (tool_options !== undefined) workspace_tool_options = { ...tool_options };
+      cells.get(active_id)!.chart.set_drawing_tool(tool, tool_options);
+    },
+    active_drawing_tool: () => workspace_tool,
+    set_drawing_tool_listener: (listener) => {
+      workspace_tool_listener = listener;
+    },
+    undo_drawing: () => cells.get(active_id)!.chart.undo_drawing(),
+    redo_drawing: () => cells.get(active_id)!.chart.redo_drawing(),
+    export_state: () => ({
+      schema: "nucleuscharts-workspace",
+      schema_version: 1,
+      layout: JSON.parse(workspace.layout_json()) as workspace_layout,
+      active_cell: active_id,
+      cells: (JSON.parse(workspace.cell_ids_json()) as number[]).map((id) => {
+        const cell = cells.get(id)!;
+        return {
+          stable_cell_id: id,
+          ...(cell.host_chart_identity === null
+            ? {}
+            : { host_chart_identity: cell.host_chart_identity }),
+          chart_state: cell.chart.export_state(),
+        };
+      }),
+    }),
     maximize: (cell) => set_maximized(cell === null ? null : cell.id),
     maximized_cell: () => {
       const record = maximized_id === null ? undefined : cells.get(maximized_id);
@@ -460,6 +647,7 @@ export async function create_chart_grid(
       detach_shortcuts?.();
       for (const cell of cells.values()) {
         cell.chart.unsubscribe_options_change(restyle_dividers);
+        cell.chart.set_drawing_tool_listener(null);
         cell.chart.remove();
       }
       cells.clear();

@@ -1797,6 +1797,18 @@ impl ChartInner {
     pub fn drawing_drag_active(&self) -> bool {
         self.engine.drawing_drag_active()
     }
+    pub fn undo_drawing(&mut self) -> bool {
+        self.engine.undo_drawing()
+    }
+    pub fn redo_drawing(&mut self) -> bool {
+        self.engine.redo_drawing()
+    }
+    pub fn can_undo_drawing(&self) -> bool {
+        self.engine.can_undo_drawing()
+    }
+    pub fn can_redo_drawing(&self) -> bool {
+        self.engine.can_redo_drawing()
+    }
     /// Arm interactive creation of a tool kind ("" options = defaults).
     pub fn drawing_create_begin(&mut self, kind: u8, options_json: &str) -> bool {
         let Some(kind) = DrawingKind::from_u8(kind) else {

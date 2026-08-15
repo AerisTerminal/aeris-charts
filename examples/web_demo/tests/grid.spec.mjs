@@ -484,3 +484,156 @@ test("Ctrl+click maximizes a cell to full container and restores", async ({ page
   expect(restored[1].width).toBeLessThan(restored[0].width + 20);
   expect(await page.evaluate(() => window.__grid.maximized_cell())).toBeNull();
 });
+
+test("drawing tools and history route only to the stable active cell", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+  await page.evaluate(async () => {
+    const grid = window.__grid;
+    let active = grid.active_cell();
+    for (const direction of ["horizontal", "vertical", "horizontal"]) {
+      const created = await active.split(direction);
+      if (created === null) throw new Error("split rejected");
+      active = created;
+      grid.set_active_cell(active);
+    }
+  });
+  await page.waitForFunction(() => window.__grid.chart_count() === 4);
+  await wait_cell_charts(page);
+
+  const draw_in = async (index, tool) => {
+    const points = await page.evaluate((i) => {
+      const grid = window.__grid;
+      const cell = grid.cells()[i];
+      grid.set_active_cell(cell);
+      const rect = cell.element.getBoundingClientRect();
+      return [
+        { x: rect.left + rect.width * 0.3, y: rect.top + rect.height * 0.35 },
+        { x: rect.left + rect.width * 0.65, y: rect.top + rect.height * 0.65 },
+      ];
+    }, index);
+    await page.click(`#drawings_group [data-tool='${tool}']`);
+    await page.mouse.click(points[0].x, points[0].y);
+    await page.mouse.click(points[1].x, points[1].y);
+    await wait_grid(page);
+  };
+
+  await draw_in(1, "trend_line");
+  expect(await page.evaluate(() => window.__grid.cells().map((cell) => cell.chart.drawings().length)))
+    .toEqual([0, 1, 0, 0]);
+
+  await draw_in(3, "rectangle");
+  expect(await page.evaluate(() => window.__grid.cells().map((cell) => cell.chart.drawings().map((d) => d.kind()))))
+    .toEqual([[], ["trend_line"], [], ["rectangle"]]);
+
+  // Remove a different stable id and split the root; the retained Chart 4 handle remains the
+  // target, and undo affects only its own history.
+  const stable = await page.evaluate(async () => {
+    const grid = window.__grid;
+    const chart4 = grid.cells()[3];
+    grid.cells()[2].remove();
+    await grid.cells()[0].split("vertical");
+    grid.set_active_cell(chart4);
+    grid.undo_drawing();
+    return {
+      active: grid.active_cell().id,
+      chart4: chart4.id,
+      counts: grid.cells().map((cell) => [cell.id, cell.chart.drawings().length]),
+      chart2_can_undo: grid.cells().find((cell) => cell.id === 2).chart.can_undo_drawing(),
+    };
+  });
+  expect(stable.active).toBe(stable.chart4);
+  expect(stable.counts.find(([id]) => id === stable.chart4)[1]).toBe(0);
+  expect(stable.counts.find(([id]) => id === 2)[1]).toBe(1);
+  expect(stable.chart2_can_undo).toBe(true);
+  await page.evaluate(() => window.__grid.redo_drawing());
+  expect(await page.evaluate(() => window.__grid.active_cell().chart.drawings()[0].kind())).toBe("rectangle");
+});
+
+test("workspace state composes chart persistence V1 and restores stable ownership at a new size", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+  const result = await page.evaluate(async () => {
+    const { create_chart_grid } = await import("/dist/nucleuscharts_financial.js");
+    const make_host = (width, height) => {
+      const host = document.createElement("div");
+      host.style.cssText = `position:absolute;left:-10000px;top:0;width:${width}px;height:${height}px`;
+      document.body.append(host);
+      return host;
+    };
+    const bars = Array.from({ length: 30 }, (_, i) => ({ time: i + 1, value: 100 + i }));
+    const seed = (cell) => {
+      const series = cell.chart.add_series("line");
+      series.set_data(bars);
+      cell.chart.time_scale().fit_content();
+      cell.chart.__workspace_series = series;
+    };
+
+    const first_host = make_host(900, 540);
+    const first = await create_chart_grid(first_host, { shortcuts: false, on_cell_added: seed });
+    seed(first.cells()[0]);
+    const second = await first.cells()[0].split("horizontal");
+    const third = await second.split("vertical");
+    first.cells()[0].set_host_chart_identity("BTC-USD");
+    second.set_host_chart_identity("ETH-USD");
+    third.set_host_chart_identity("SOL-USD");
+    first.cells()[0].chart.add_drawing("horizontal_line", [{ logical: 6, price: 106 }], { color: "#ff0000" });
+    second.chart.add_drawing("trend_line", [
+      { logical: 4, price: 104 }, { logical: 12, price: 112 },
+    ], { style: "dashed", width: 4 });
+    third.chart.add_drawing("rectangle", [
+      { logical: 8, price: 108 }, { logical: 18, price: 118 },
+    ], { color: "#00aa00", fill_color: "rgba(0,170,0,0.2)" });
+    first.set_active_cell(third);
+    const first_projection = {
+      x: third.chart.time_scale().logical_to_coordinate(8),
+      y: third.chart.__workspace_series.price_to_coordinate(108),
+    };
+    const state = first.export_state();
+    first.destroy();
+    first_host.remove();
+
+    const second_host = make_host(620, 360);
+    const restored = await create_chart_grid(second_host, {
+      shortcuts: false,
+      initial_state: state,
+      on_cell_restored: seed,
+    });
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const roundtrip = restored.export_state();
+    const restored_cell = restored.cells().find((cell) => cell.id === state.active_cell);
+    const second_projection = {
+      x: restored_cell.chart.time_scale().logical_to_coordinate(8),
+      y: restored_cell.chart.__workspace_series.price_to_coordinate(108),
+    };
+    const out = {
+      state,
+      roundtrip,
+      active: restored.active_cell().id,
+      identities: restored.cells().map((cell) => cell.host_chart_identity),
+      drawings: restored.cells().map((cell) => cell.chart.drawings().map((drawing) => ({
+        kind: drawing.kind(), points: drawing.points(), options: drawing.options(),
+      }))),
+      first_projection,
+      second_projection,
+      histories_empty: restored.cells().every((cell) => !cell.chart.can_undo_drawing() && !cell.chart.can_redo_drawing()),
+    };
+    restored.destroy();
+    second_host.remove();
+    return out;
+  });
+
+  expect(result.roundtrip).toEqual(result.state);
+  expect(result.active).toBe(result.state.active_cell);
+  expect(result.identities).toEqual(["BTC-USD", "ETH-USD", "SOL-USD"]);
+  expect(result.drawings.map((drawings) => drawings.map((drawing) => drawing.kind)))
+    .toEqual([["horizontal_line"], ["trend_line"], ["rectangle"]]);
+  expect(result.drawings[1][0].points).toEqual([
+    { logical: 4, price: 104 }, { logical: 12, price: 112 },
+  ]);
+  expect(result.drawings[1][0].options).toMatchObject({ style: "dashed", width: 4 });
+  expect(result.histories_empty).toBe(true);
+  expect(result.second_projection.x).not.toBeCloseTo(result.first_projection.x, 3);
+  // Price projection may remain similar under autoscale, but semantic anchors are exact above.
+  expect(Number.isFinite(result.second_projection.y)).toBe(true);
+});

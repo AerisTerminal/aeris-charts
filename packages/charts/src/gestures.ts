@@ -1038,6 +1038,15 @@ export function install_gestures(chart: chart_impl): () => void {
     const step = e.ctrlKey || e.shiftKey ? 10 : 1;
     const center = wasm.time_scale_width() / 2;
     let handled = true;
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "z") {
+      handled = e.shiftKey ? chart.redo_drawing() : chart.undo_drawing();
+      if (handled) {
+        e.preventDefault();
+        stop_kinetic();
+        chart.announce_view();
+      }
+      return;
+    }
     switch (e.key) {
       // TradingView: Left scrolls back in time (older data), Right forward (newer data);
       // Ctrl/Shift steps 10 bars. reference rightOffset grows toward newer data, hence the signs.

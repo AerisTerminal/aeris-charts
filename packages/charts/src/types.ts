@@ -1450,6 +1450,14 @@ export interface chart_api {
   import_state(state: chart_state_v1 | string): persistence_restore_result;
   /** Remove every drawing (the "clear all" action) and repaint. */
   clear_drawings(): void;
+  /** Undo one committed drawing create/delete/move/style operation in this chart only. */
+  undo_drawing(): boolean;
+  /** Redo one previously undone drawing operation in this chart only. */
+  redo_drawing(): boolean;
+  /** Whether this chart currently has a drawing operation to undo. */
+  can_undo_drawing(): boolean;
+  /** Whether this chart currently has a drawing operation to redo. */
+  can_redo_drawing(): boolean;
   /**
    * Arm an interactive drawing tool (TradingView-style), or disarm with `null`. While armed,
    * pane clicks place the tool's anchors through the engine's creation flow — one click for the

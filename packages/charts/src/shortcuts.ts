@@ -8,7 +8,11 @@
  */
 
 /** Action ids the package ships shortcuts for. */
-export type shortcut_action = "grid.split_horizontal" | "grid.split_vertical";
+export type shortcut_action =
+  | "grid.split_horizontal"
+  | "grid.split_vertical"
+  | "drawing.undo"
+  | "drawing.redo";
 
 export interface shortcut_binding {
   /** Default key combo: `"ctrl+h"`, `"ctrl+shift+x"`, `"alt+1"` (ctrl ≡ ctrl/cmd on any OS). */
@@ -25,6 +29,14 @@ export const DEFAULT_SHORTCUTS: Record<shortcut_action, shortcut_binding> = {
   "grid.split_vertical": {
     combo: "ctrl+v",
     description: "Split the active chart vertically (stacked)",
+  },
+  "drawing.undo": {
+    combo: "ctrl+z",
+    description: "Undo the active chart's last drawing operation",
+  },
+  "drawing.redo": {
+    combo: "ctrl+shift+z",
+    description: "Redo the active chart's last drawing operation",
   },
 };
 
@@ -84,7 +96,7 @@ export function install_shortcuts(bindings: resolved_shortcut[]): () => void {
     })
     .filter((b): b is NonNullable<typeof b> => b !== null);
   const on_keydown = (e: KeyboardEvent) => {
-    if (e.repeat || is_editing_target(e.target)) return;
+    if (e.defaultPrevented || e.repeat || is_editing_target(e.target)) return;
     const wants_ctrl = e.ctrlKey || e.metaKey;
     for (const binding of parsed) {
       if (

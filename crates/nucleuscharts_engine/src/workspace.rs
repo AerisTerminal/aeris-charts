@@ -10,7 +10,7 @@
 //! only the generic, rendering-agnostic layout primitive.
 
 /// Split orientation: `Horizontal` places the two charts side by side, `Vertical` stacks them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SplitDirection {
     Horizontal,
@@ -20,7 +20,7 @@ pub enum SplitDirection {
 /// Immutable snapshot of a workspace tree: either a chart cell or a split of two subtrees.
 /// The split's `ratio` is the `a` subtree's share of the space (0..1, default 0.5); dragging
 /// the divider between two adjacent cells adjusts it via [`Workspace::resize_between`].
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum WorkspaceLayout {
     /// A leaf containing one chart cell.
@@ -74,6 +74,8 @@ pub enum WorkspaceError {
     NotFound,
     /// The last remaining cell cannot be removed.
     LastCell,
+    /// Malformed, duplicate, out-of-range, or unreasonably deep persisted layout.
+    InvalidLayout,
 }
 
 /// The split-grid model: an authoritative binary tree with stable cell identities.
@@ -95,6 +97,23 @@ impl Workspace {
             root: WorkspaceLayout::Cell { id: 1 },
             next_id: 2,
         }
+    }
+
+    /// Restore only the generic split topology and stable cell identities. Chart state remains
+    /// independently owned by each host-created chart and is composed by the browser grid.
+    pub fn from_layout_json(json: &str) -> Result<Self, WorkspaceError> {
+        let root = serde_json::from_str::<WorkspaceLayout>(json)
+            .map_err(|_| WorkspaceError::InvalidLayout)?;
+        let mut ids = std::collections::HashSet::new();
+        let max_id = validate_layout(&root, 0, &mut ids)?;
+        let next_id = max_id.checked_add(1).ok_or(WorkspaceError::InvalidLayout)?;
+        Ok(Self { root, next_id })
+    }
+
+    /// Atomically replace this workspace's topology with a validated persisted layout.
+    pub fn restore_layout_json(&mut self, json: &str) -> Result<(), WorkspaceError> {
+        *self = Self::from_layout_json(json)?;
+        Ok(())
     }
 
     /// Leaf cell ids in layout order (left-to-right, top-to-bottom).
@@ -160,6 +179,35 @@ impl Workspace {
     /// This preserves the serialized shape of [`Workspace::layout`].
     pub fn layout_json(&self) -> String {
         serde_json::to_string(&self.root).unwrap_or_else(|_| "{}".to_string())
+    }
+}
+
+const MAX_RESTORED_CELLS: usize = 1024;
+const MAX_RESTORED_DEPTH: usize = 64;
+
+fn validate_layout(
+    node: &WorkspaceLayout,
+    depth: usize,
+    ids: &mut std::collections::HashSet<u64>,
+) -> Result<u64, WorkspaceError> {
+    if depth > MAX_RESTORED_DEPTH || ids.len() >= MAX_RESTORED_CELLS {
+        return Err(WorkspaceError::InvalidLayout);
+    }
+    match node {
+        WorkspaceLayout::Cell { id } => {
+            if *id == 0 || *id > u64::from(u32::MAX) || !ids.insert(*id) {
+                return Err(WorkspaceError::InvalidLayout);
+            }
+            Ok(*id)
+        }
+        WorkspaceLayout::Split { ratio, a, b, .. } => {
+            if !ratio.is_finite() || !(0.05..=0.95).contains(ratio) {
+                return Err(WorkspaceError::InvalidLayout);
+            }
+            let a_max = validate_layout(a, depth + 1, ids)?;
+            let b_max = validate_layout(b, depth + 1, ids)?;
+            Ok(a_max.max(b_max))
+        }
     }
 }
 
@@ -240,6 +288,29 @@ mod tests {
         assert!(layout.contains(r#""direction":"vertical""#));
         assert_eq!(ws.chart_count(), 3);
         assert_eq!(third, 3);
+    }
+
+    #[test]
+    fn persisted_layout_restores_stable_ids_ratios_and_next_identity() {
+        let json = r#"{"kind":"split","direction":"horizontal","ratio":0.3,"a":{"kind":"cell","id":4},"b":{"kind":"cell","id":9}}"#;
+        let mut ws = Workspace::from_layout_json(json).unwrap();
+        assert_eq!(ws.cell_ids(), [4, 9]);
+        assert_eq!(ws.layout_json(), json);
+        assert_eq!(ws.split(4, SplitDirection::Vertical).unwrap(), 10);
+    }
+
+    #[test]
+    fn persisted_layout_rejects_duplicate_ids_and_invalid_ratios() {
+        let duplicate = r#"{"kind":"split","direction":"horizontal","ratio":0.5,"a":{"kind":"cell","id":1},"b":{"kind":"cell","id":1}}"#;
+        let bad_ratio = r#"{"kind":"split","direction":"horizontal","ratio":1.0,"a":{"kind":"cell","id":1},"b":{"kind":"cell","id":2}}"#;
+        assert_eq!(
+            Workspace::from_layout_json(duplicate).err(),
+            Some(WorkspaceError::InvalidLayout)
+        );
+        assert_eq!(
+            Workspace::from_layout_json(bad_ratio).err(),
+            Some(WorkspaceError::InvalidLayout)
+        );
     }
 
     #[test]

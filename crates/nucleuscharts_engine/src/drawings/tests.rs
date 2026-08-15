@@ -49,6 +49,136 @@ fn add_trend(chart: &mut ChartEngine) -> DrawingId {
 }
 
 #[test]
+fn drawing_history_reverses_create_delete_points_and_style() {
+    let mut chart = settled_chart();
+    let id = add_trend(&mut chart);
+    let initial_drawing = chart.drawing(id).unwrap().clone();
+
+    assert!(chart.undo_drawing());
+    assert!(chart.drawing(id).is_none());
+    assert!(chart.redo_drawing());
+    assert_eq!(chart.drawing(id), Some(&initial_drawing));
+
+    assert!(chart.drawing_apply_options(id, r##"{"color":"#ff0000","width":5}"##));
+    let styled = chart.drawing(id).unwrap().clone();
+    assert_ne!(styled, initial_drawing);
+    assert!(chart.undo_drawing());
+    assert_eq!(chart.drawing(id), Some(&initial_drawing));
+    assert!(chart.redo_drawing());
+    assert_eq!(chart.drawing(id), Some(&styled));
+
+    let moved_points = vec![
+        DrawingPoint {
+            logical: 3.0,
+            price: 11.0,
+        },
+        DrawingPoint {
+            logical: 8.0,
+            price: 13.0,
+        },
+    ];
+    assert!(chart.drawing_set_points(id, &serde_json::to_string(&moved_points).unwrap()));
+    assert_eq!(chart.drawing(id).unwrap().points, moved_points);
+    assert!(chart.undo_drawing());
+    assert_eq!(chart.drawing(id), Some(&styled));
+    assert!(chart.redo_drawing());
+    assert_eq!(chart.drawing(id).unwrap().points, moved_points);
+
+    assert!(chart.remove_drawing(id));
+    assert!(chart.drawing(id).is_none());
+    assert!(chart.undo_drawing());
+    assert_eq!(chart.drawing(id).unwrap().points, moved_points);
+    assert!(chart.redo_drawing());
+    assert!(chart.drawing(id).is_none());
+}
+
+#[test]
+fn drawing_drag_is_one_history_entry_and_new_mutation_invalidates_redo() {
+    let mut chart = settled_chart();
+    let id = add_trend(&mut chart);
+    let before = chart.drawing(id).unwrap().points.clone();
+    let x = (x_at(&chart, before[0].logical) + x_at(&chart, before[1].logical)) / 2.0;
+    let y = (y_at(&chart, before[0].price) + y_at(&chart, before[1].price)) / 2.0;
+    assert!(chart.drawing_drag_start_at(x, y));
+    for step in 1..=50 {
+        chart.drawing_drag_to(
+            x + f64::from(step),
+            y + f64::from(step) / 2.0,
+            DrawingModifiers::default(),
+        );
+    }
+    chart.drawing_drag_end();
+    let after = chart.drawing(id).unwrap().points.clone();
+    assert_ne!(after, before);
+
+    assert!(chart.undo_drawing());
+    assert_eq!(chart.drawing(id).unwrap().points, before);
+    // A second undo removes the creation, proving the 50 move samples coalesced into one entry.
+    assert!(chart.undo_drawing());
+    assert!(chart.drawing(id).is_none());
+    assert!(chart.redo_drawing());
+    assert_eq!(chart.drawing(id).unwrap().points, before);
+
+    assert!(chart.drawing_apply_options(id, r##"{"color":"#00ff00"}"##));
+    assert!(!chart.can_redo_drawing());
+    assert!(!chart.redo_drawing());
+}
+
+#[test]
+fn drawing_history_is_bounded_to_one_hundred_operations() {
+    let mut chart = settled_chart();
+    for offset in 0..101 {
+        chart
+            .add_drawing(
+                DrawingKind::HorizontalLine,
+                0,
+                vec![DrawingPoint {
+                    logical: f64::from(offset),
+                    price: 10.0,
+                }],
+                None,
+            )
+            .unwrap();
+    }
+    let mut undone = 0;
+    while chart.undo_drawing() {
+        undone += 1;
+    }
+    assert_eq!(undone, 100);
+    assert_eq!(chart.drawings().len(), 1);
+}
+
+#[test]
+fn delete_undo_restores_prior_drawing_order() {
+    let mut chart = settled_chart();
+    let ids = (0..3)
+        .map(|offset| {
+            chart
+                .add_drawing(
+                    DrawingKind::HorizontalLine,
+                    0,
+                    vec![DrawingPoint {
+                        logical: f64::from(offset),
+                        price: 10.0 + f64::from(offset),
+                    }],
+                    None,
+                )
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert!(chart.remove_drawing(ids[1]));
+    assert!(chart.undo_drawing());
+    assert_eq!(
+        chart
+            .drawings()
+            .iter()
+            .map(|drawing| drawing.id)
+            .collect::<Vec<_>>(),
+        ids
+    );
+}
+
+#[test]
 fn add_drawing_validates_inputs() {
     let mut chart = settled_chart();
     // Wrong anchor counts are rejected.

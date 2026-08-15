@@ -458,7 +458,7 @@ pub const DRAWING_DEFAULT_COLOR: &str = nucleuscharts_core::style::DEFAULT_PRIMA
 /// An engine-owned drawing. Colors follow the series pattern: stored verbatim as CSS strings
 /// and parsed at render time (`None`/unparseable falls back to the follow behavior documented
 /// per field).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Drawing {
     pub id: DrawingId,
     pub kind: DrawingKind,
@@ -592,6 +592,43 @@ pub(crate) struct DrawingDrag {
     pub(crate) start_points: Vec<DrawingPoint>,
     /// Anchors converted to media px at drag start (the body-drag translation base).
     pub(crate) start_px: Vec<(f64, f64)>,
+}
+
+const DRAWING_HISTORY_LIMIT: usize = 100;
+
+#[derive(Clone)]
+enum DrawingCommand {
+    Create {
+        drawing: Drawing,
+        index: usize,
+    },
+    Delete {
+        drawing: Drawing,
+        index: usize,
+    },
+    Update {
+        before: Drawing,
+        after: Box<Drawing>,
+    },
+    Clear {
+        drawings: Vec<Drawing>,
+    },
+}
+
+/// Runtime-only, chart-local drawing history. Commands carry only the semantic drawing state
+/// needed to reverse one committed action; previews, hit indexes, selection, and render caches
+/// never enter the stack.
+#[derive(Default)]
+pub(crate) struct DrawingHistory {
+    undo: Vec<DrawingCommand>,
+    redo: Vec<DrawingCommand>,
+}
+
+impl DrawingHistory {
+    pub(crate) fn clear(&mut self) {
+        self.undo.clear();
+        self.redo.clear();
+    }
 }
 
 /// Interactive creation in progress (the reference rectangle-drawing-tool's `_drawing` state,
@@ -858,6 +895,123 @@ pub(crate) struct TextBox {
 }
 
 impl ChartEngine {
+    fn record_drawing_command(&mut self, command: DrawingCommand) {
+        if self.drawing_history.undo.len() == DRAWING_HISTORY_LIMIT {
+            self.drawing_history.undo.remove(0);
+        }
+        self.drawing_history.undo.push(command);
+        self.drawing_history.redo.clear();
+    }
+
+    fn insert_drawing_snapshot(&mut self, drawing: Drawing, index: usize) {
+        let id = drawing.id;
+        let index = index.min(self.drawings.len());
+        self.drawings.insert(index, drawing);
+        self.drawing_runtime
+            .borrow_mut()
+            .rebuild_panes(&self.drawings, self.panes.len());
+        self.selected_drawing = Some(id);
+    }
+
+    fn remove_drawing_snapshot(&mut self, id: DrawingId) -> Option<(Drawing, usize)> {
+        let index = self.drawings.iter().position(|drawing| drawing.id == id)?;
+        let drawing = self.drawings.remove(index);
+        self.drawing_runtime.borrow_mut().remove(id, &self.drawings);
+        if self.selected_drawing == Some(id) {
+            self.selected_drawing = None;
+        }
+        if self.drawing_drag.as_ref().is_some_and(|drag| drag.id == id) {
+            self.drawing_drag = None;
+        }
+        if self.editing_drawing == Some(id) {
+            self.editing_drawing = None;
+        }
+        Some((drawing, index))
+    }
+
+    fn replace_drawing_snapshot(&mut self, snapshot: &Drawing) -> bool {
+        let Some(drawing) = self
+            .drawings
+            .iter_mut()
+            .find(|drawing| drawing.id == snapshot.id)
+        else {
+            return false;
+        };
+        *drawing = snapshot.clone();
+        self.update_drawing_runtime(snapshot.id);
+        true
+    }
+
+    fn apply_drawing_command(&mut self, command: &DrawingCommand, undo: bool) {
+        match command {
+            DrawingCommand::Create { drawing, index } => {
+                if undo {
+                    self.remove_drawing_snapshot(drawing.id);
+                } else {
+                    self.insert_drawing_snapshot(drawing.clone(), *index);
+                }
+            }
+            DrawingCommand::Delete { drawing, index } => {
+                if undo {
+                    self.insert_drawing_snapshot(drawing.clone(), *index);
+                } else {
+                    self.remove_drawing_snapshot(drawing.id);
+                }
+            }
+            DrawingCommand::Update { before, after } => {
+                self.replace_drawing_snapshot(if undo { before } else { after.as_ref() });
+            }
+            DrawingCommand::Clear { drawings } => {
+                if undo {
+                    self.drawings = drawings.clone();
+                    self.drawing_runtime
+                        .borrow_mut()
+                        .rebuild_all(&self.drawings, self.panes.len());
+                } else {
+                    self.drawings.clear();
+                    self.drawing_runtime.borrow_mut().clear();
+                }
+                self.selected_drawing = None;
+                self.drawing_drag = None;
+                self.editing_drawing = None;
+            }
+        }
+    }
+
+    /// Undo one committed drawing-semantic operation for this chart only.
+    pub fn undo_drawing(&mut self) -> bool {
+        let Some(command) = self.drawing_history.undo.pop() else {
+            return false;
+        };
+        self.invalidate_frame_drawings();
+        self.pending_drawing = None;
+        self.brush_capture = None;
+        self.apply_drawing_command(&command, true);
+        self.drawing_history.redo.push(command);
+        true
+    }
+
+    /// Redo one previously undone drawing-semantic operation for this chart only.
+    pub fn redo_drawing(&mut self) -> bool {
+        let Some(command) = self.drawing_history.redo.pop() else {
+            return false;
+        };
+        self.invalidate_frame_drawings();
+        self.pending_drawing = None;
+        self.brush_capture = None;
+        self.apply_drawing_command(&command, false);
+        self.drawing_history.undo.push(command);
+        true
+    }
+
+    pub fn can_undo_drawing(&self) -> bool {
+        !self.drawing_history.undo.is_empty()
+    }
+
+    pub fn can_redo_drawing(&self) -> bool {
+        !self.drawing_history.redo.is_empty()
+    }
+
     // --- store access ---
 
     /// Every live drawing in z-order (bottom first — a later entry overpaints the earlier ones
@@ -1565,6 +1719,11 @@ impl ChartEngine {
         }
         self.drawings.push(drawing);
         self.insert_drawing_runtime(id);
+        let index = self.drawings.len() - 1;
+        self.record_drawing_command(DrawingCommand::Create {
+            drawing: self.drawings[index].clone(),
+            index,
+        });
         Some(id)
     }
 
@@ -1575,11 +1734,20 @@ impl ChartEngine {
         let Ok(patch) = serde_json::from_str::<DrawingPatch>(json) else {
             return false;
         };
-        let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) else {
+        let Some(index) = self.drawings.iter().position(|drawing| drawing.id == id) else {
             return false;
         };
+        let before = self.drawings[index].clone();
+        let drawing = &mut self.drawings[index];
         drawing.apply_patch(patch);
+        let after = drawing.clone();
         self.update_drawing_runtime(id);
+        if before != after {
+            self.record_drawing_command(DrawingCommand::Update {
+                before,
+                after: Box::new(after),
+            });
+        }
         true
     }
 
@@ -1590,9 +1758,10 @@ impl ChartEngine {
         let Ok(points) = serde_json::from_str::<Vec<DrawingPoint>>(json) else {
             return false;
         };
-        let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) else {
+        let Some(index) = self.drawings.iter().position(|drawing| drawing.id == id) else {
             return false;
         };
+        let drawing = &self.drawings[index];
         if !drawing.kind.valid_point_count(points.len())
             || points
                 .iter()
@@ -1600,8 +1769,16 @@ impl ChartEngine {
         {
             return false;
         }
-        drawing.points = points;
+        let before = drawing.clone();
+        self.drawings[index].points = points;
+        let after = self.drawings[index].clone();
         self.update_drawing_runtime(id);
+        if before != after {
+            self.record_drawing_command(DrawingCommand::Update {
+                before,
+                after: Box::new(after),
+            });
+        }
         true
     }
 
@@ -1609,28 +1786,24 @@ impl ChartEngine {
     /// pointing at it is released.
     pub fn remove_drawing(&mut self, id: DrawingId) -> bool {
         self.invalidate_frame_drawings();
-        let before = self.drawings.len();
-        self.drawings.retain(|d| d.id != id);
-        let removed = self.drawings.len() != before;
-        if removed {
-            self.drawing_runtime.borrow_mut().remove(id, &self.drawings);
-            if self.selected_drawing == Some(id) {
-                self.selected_drawing = None;
-            }
-            if self.drawing_drag.as_ref().is_some_and(|drag| drag.id == id) {
-                self.drawing_drag = None;
-            }
-        }
-        removed
+        let Some((drawing, index)) = self.remove_drawing_snapshot(id) else {
+            return false;
+        };
+        self.record_drawing_command(DrawingCommand::Delete { drawing, index });
+        true
     }
 
     /// Remove every drawing (the demo's "clear all") and release the selection/drag state.
     pub fn clear_drawings(&mut self) {
         self.invalidate_frame_drawings();
-        self.drawings.clear();
+        if self.drawings.is_empty() {
+            return;
+        }
+        let drawings = std::mem::take(&mut self.drawings);
         self.drawing_runtime.borrow_mut().clear();
         self.selected_drawing = None;
         self.drawing_drag = None;
+        self.record_drawing_command(DrawingCommand::Clear { drawings });
     }
 
     /// The drawing's full options as a snake_case JSON object (reference `options`). `None` for
@@ -2123,10 +2296,20 @@ impl ChartEngine {
     /// Close the drag session (pointer up/cancel).
     pub fn drawing_drag_end(&mut self) {
         self.invalidate_frame_overlay();
-        if let Some(id) = self.drawing_drag.as_ref().map(|drag| drag.id) {
+        if let Some(drag) = self.drawing_drag.take() {
+            let id = drag.id;
             self.update_drawing_runtime(id);
+            if let Some(after) = self.drawing(id).cloned() {
+                let mut before = after.clone();
+                before.points = drag.start_points;
+                if before != after {
+                    self.record_drawing_command(DrawingCommand::Update {
+                        before,
+                        after: Box::new(after),
+                    });
+                }
+            }
         }
-        self.drawing_drag = None;
     }
 
     pub fn drawing_drag_active(&self) -> bool {
@@ -2228,6 +2411,11 @@ impl ChartEngine {
         self.drawings.push(drawing);
         self.insert_drawing_runtime(id);
         self.selected_drawing = Some(id);
+        let index = self.drawings.len() - 1;
+        self.record_drawing_command(DrawingCommand::Create {
+            drawing: self.drawings[index].clone(),
+            index,
+        });
         i64::from(id)
     }
 
@@ -2403,6 +2591,11 @@ impl ChartEngine {
         self.drawings.push(drawing);
         self.insert_drawing_runtime(id);
         self.selected_drawing = Some(id);
+        let index = self.drawings.len() - 1;
+        self.record_drawing_command(DrawingCommand::Create {
+            drawing: self.drawings[index].clone(),
+            index,
+        });
         id
     }
 

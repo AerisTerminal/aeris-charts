@@ -1981,6 +1981,20 @@ impl NucleusChart {
     pub fn drawing_drag_active(&self) -> bool {
         self.inner.borrow().drawing_drag_active()
     }
+    /// Undo one committed drawing mutation in this chart's bounded semantic history.
+    pub fn undo_drawing(&mut self) -> bool {
+        self.inner.borrow_mut().undo_drawing()
+    }
+    /// Redo one previously undone drawing mutation in this chart.
+    pub fn redo_drawing(&mut self) -> bool {
+        self.inner.borrow_mut().redo_drawing()
+    }
+    pub fn can_undo_drawing(&self) -> bool {
+        self.inner.borrow().can_undo_drawing()
+    }
+    pub fn can_redo_drawing(&self) -> bool {
+        self.inner.borrow().can_redo_drawing()
+    }
     /// Arm interactive creation of a tool kind ("" options = defaults): the next clicks place
     /// anchors through `drawing_create_click`, moves preview through `drawing_create_move`.
     pub fn drawing_create_begin(&mut self, kind: u8, options_json: &str) -> bool {

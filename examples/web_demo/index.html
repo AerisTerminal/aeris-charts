@@ -692,6 +692,8 @@ window.__plugin_canvas = () => container.querySelectorAll("canvas")[2]; // test 
 // empties the store. Selection, anchor/body dragging, and Delete/Backspace live in the engine
 // and gesture layer, not here.
 const drawing_tool_buttons = [...document.querySelectorAll("#drawings_group [data-tool]")];
+const drawing_router = grid ?? chart;
+const active_drawing_chart = () => grid?.active_cell().chart ?? chart;
 function sync_drawing_tool_buttons(tool) {
   for (const button of drawing_tool_buttons) {
     const active = button.dataset.tool === tool;
@@ -714,13 +716,13 @@ function drawing_options_from_inputs() {
   };
 }
 function arm_drawing_tool(kind) {
-  const tool = chart.active_drawing_tool() === kind ? null : kind;
-  chart.set_drawing_tool(tool, drawing_options_from_inputs());
+  const tool = drawing_router.active_drawing_tool() === kind ? null : kind;
+  drawing_router.set_drawing_tool(tool, drawing_options_from_inputs());
 }
 for (const button of drawing_tool_buttons) {
   button.addEventListener("click", () => arm_drawing_tool(button.dataset.tool));
 }
-chart.set_drawing_tool_listener(sync_drawing_tool_buttons);
+drawing_router.set_drawing_tool_listener(sync_drawing_tool_buttons);
 // The toolbar mirrors the SELECTION (TradingView's settings panel): clicking a drawing loads
 // its style into the inputs, so a later change applies on top of the drawing's current style
 // instead of resetting the rest. (#rrggbb needed for the color inputs; other CSS forms skip.)
@@ -732,7 +734,7 @@ function css_to_hex(css) {
   return "#" + [m[1], m[2], m[3]].map((n) => Number(n).toString(16).padStart(2, "0")).join("");
 }
 function sync_drawing_inputs_from_selection() {
-  const selected = chart.selected_drawing();
+  const selected = active_drawing_chart().selected_drawing();
   if (selected === null) return;
   const o = selected.options();
   const set = (id, value) => { if (value !== null && value !== undefined) document.getElementById(id).value = value; };
@@ -751,11 +753,11 @@ for (const id of ["drawing_color", "drawing_style", "drawing_width", "drawing_te
   document.getElementById(id).addEventListener("change", () => {
     const options = drawing_options_from_inputs();
     // Re-template the armed tool (the next drawing picks the new settings up).
-    const tool = chart.active_drawing_tool();
-    if (tool !== null) chart.set_drawing_tool(tool, options);
+    const tool = drawing_router.active_drawing_tool();
+    if (tool !== null) drawing_router.set_drawing_tool(tool, options);
     // Apply live to the selected drawing, if any — but NEVER write an empty template label
     // over a drawing's real text (an empty `text` would wipe it back to the placeholder).
-    const selected = chart.selected_drawing();
+    const selected = active_drawing_chart().selected_drawing();
     if (selected !== null) {
       const patch = { ...options };
       if (patch.text === "") delete patch.text;
@@ -766,7 +768,7 @@ for (const id of ["drawing_color", "drawing_style", "drawing_width", "drawing_te
 document.getElementById("drawing_width").addEventListener("input", (e) => {
   document.getElementById("drawing_width_val").textContent = e.target.value;
 });
-document.getElementById("clear_drawings").addEventListener("click", () => chart.clear_drawings());
+document.getElementById("clear_drawings").addEventListener("click", () => active_drawing_chart().clear_drawings());
 sync_drawing_tool_buttons(null);
 
 status.textContent = `1000 bars · ${chart.backend()} · dpr ${(window.devicePixelRatio || 1).toFixed(3)}`;
@@ -836,7 +838,7 @@ function apply_main_style() {
 // The toolbar's series controls (type + style) act on the ACTIVE grid cell's primary series —
 // the root chart's `main` or a split cell's seeded series — never always the primary chart.
 function active_series() {
-  return (grid !== null && active_cell ? active_cell.chart.__seed_series : main) ?? main;
+  return (grid?.active_cell().chart.__seed_series ?? main);
 }
 
 // Reflect the active chart in the toolbar: its series type selects the matching radio and
@@ -1012,7 +1014,6 @@ document.getElementById("rsi_toggle").addEventListener("change", (e) => {
 // ---- Multi-chart (engine workspace): the main chart is the first cell; the toolbar acts on
 // the ACTIVE cell (last clicked) — split/close from the Multi-chart group, series type and
 // style from the rest of the toolbar. New cells are seeded as distinct assets and follow the theme.
-let active_cell = grid ? grid.cells()[0] : null;
 let split_asset_seq = 0;
 function seed_split_cell(cell) {
   split_asset_seq += 1;
@@ -1033,19 +1034,13 @@ function data_end_time() {
   return data[data.length - 1].time;
 }
 if (grid !== null) {
-  container.addEventListener("pointerdown", (e) => {
-    const hit = grid.cells().find((c) => c.element.contains(e.target));
-    if (hit && hit !== active_cell) {
-      active_cell = hit;
-      sync_active_toolbar();
-    }
-  }, true);
+  container.addEventListener("pointerdown", () => setTimeout(sync_active_toolbar, 0), true);
   const split_active = async (direction) => {
-    if (!active_cell) return;
+    const active_cell = grid.active_cell();
     // The grid's on_cell_added hook seeds the new cell (shared with the shortcut path).
     const next = await active_cell.split(direction);
     if (next) {
-      active_cell = next;
+      grid.set_active_cell(next);
       sync_active_toolbar();
     }
   };
@@ -1053,8 +1048,8 @@ if (grid !== null) {
   document.getElementById("split_v").addEventListener("click", () => split_active("vertical"));
   document.getElementById("close_cell").addEventListener("click", () => {
     // The primary cell hosts all the toolbar wiring — it cannot be closed from here.
-    if (active_cell && active_cell.id !== grid.cells()[0].id && active_cell.remove()) {
-      active_cell = grid.cells()[0];
+    const active_cell = grid.active_cell();
+    if (active_cell.id !== grid.cells()[0].id && active_cell.remove()) {
       sync_active_toolbar();
     }
   });

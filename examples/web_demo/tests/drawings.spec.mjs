@@ -366,6 +366,11 @@ test("anchor drag re-anchors one point; body drag moves the whole drawing", asyn
   // The shape (anchor spacing) is preserved exactly by the coordinate-space translation.
   expect(moved.points[1].logical - moved.points[0].logical)
     .toBeCloseTo(reanchored.points[1].logical - reanchored.points[0].logical, 6);
+  // Each multi-sample pointer drag is one semantic history entry.
+  await page.evaluate(() => window.__chart.undo_drawing());
+  expect((await drawings(page))[0].points).toEqual(reanchored.points);
+  await page.evaluate(() => window.__chart.undo_drawing());
+  expect((await drawings(page))[0].points).toEqual(before.points);
   // The drawing stayed selected through the drags.
   expect(await page.evaluate(() => window.__chart.selected_drawing()?.id ?? null)).toBe(moved.id);
 });
@@ -523,6 +528,48 @@ test("Delete and Backspace remove the selected drawing", async ({ page }) => {
   await page.keyboard.press("Delete");
   await page.keyboard.press("Backspace");
   expect(await drawings(page)).toHaveLength(0);
+});
+
+test("public drawing history reverses create, delete, anchors, and style with conventional shortcuts", async ({ page }) => {
+  await goto_fixture(page);
+  const s = await anchor_spots(page);
+  const initial = [
+    { logical: s.l0, price: s.p_lo },
+    { logical: s.l1, price: s.p_hi },
+  ];
+  await page.evaluate(({ initial }) => {
+    window.__chart.add_drawing("trend_line", initial, { color: "#112233", width: 2 });
+  }, { initial });
+  await focus_overlay(page);
+  expect(await page.evaluate(() => window.__chart.can_undo_drawing())).toBe(true);
+
+  await page.keyboard.press("Control+z");
+  expect(await drawings(page)).toHaveLength(0);
+  await page.keyboard.press("Control+Shift+z");
+  expect((await drawings(page))[0].points).toEqual(initial);
+
+  await page.evaluate(() => window.__chart.drawings()[0].apply_options({ color: "#ff00ff", width: 5 }));
+  expect((await page.evaluate(() => window.__chart.drawings()[0].options())).width).toBe(5);
+  await page.evaluate(() => window.__chart.undo_drawing());
+  expect(await page.evaluate(() => window.__chart.drawings()[0].options())).toMatchObject({ color: "#112233", width: 2 });
+  await page.evaluate(() => window.__chart.redo_drawing());
+  expect(await page.evaluate(() => window.__chart.drawings()[0].options())).toMatchObject({ color: "#ff00ff", width: 5 });
+
+  const moved = initial.map((point) => ({ logical: point.logical + 2, price: point.price + 1 }));
+  await page.evaluate(({ moved }) => window.__chart.drawings()[0].set_points(moved), { moved });
+  await page.evaluate(() => window.__chart.undo_drawing());
+  expect((await drawings(page))[0].points).toEqual(initial);
+  await page.evaluate(() => window.__chart.redo_drawing());
+  expect((await drawings(page))[0].points).toEqual(moved);
+
+  await page.evaluate(() => window.__chart.drawings()[0].remove());
+  expect(await drawings(page)).toHaveLength(0);
+  await page.evaluate(() => window.__chart.undo_drawing());
+  expect((await drawings(page))[0].points).toEqual(moved);
+  await page.evaluate(() => {
+    window.__chart.drawings()[0].apply_options({ width: 3 });
+  });
+  expect(await page.evaluate(() => window.__chart.can_redo_drawing())).toBe(false);
 });
 
 test("drawing tools render pixel-identical on WebGPU and Canvas2D (AA coverage steps aside)", async ({ page }, test_info) => {

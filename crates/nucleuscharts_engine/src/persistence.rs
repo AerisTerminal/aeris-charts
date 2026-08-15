@@ -555,6 +555,7 @@ impl ChartEngine {
         }
         self.selected_drawing = None;
         self.drawing_drag = None;
+        self.drawing_history = crate::DrawingHistory::default();
         self.pending_drawing = None;
         self.brush_capture = None;
         self.editing_drawing = None;

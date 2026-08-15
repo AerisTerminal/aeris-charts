@@ -56,6 +56,12 @@ An indicator binding keeps its public definition, compact private runtime, and o
 
 Drawing anchors, kinds, styles, pane association, z-order, and metadata remain the only authoritative drawing state. A chart-local derived runtime maps the existing monotonic `DrawingId` values to conservative logical/price bounds, coordinate-keyed media-space anchor geometry, and pane-local z-ordered candidate lists. Candidate queries first reject drawings in semantic space, then test cached conservative screen bounds; only viewport or pointer candidates rebuild coordinate geometry and reach canonical primitive emission or precise hit testing. Full-span horizontal lines, full-height vertical lines, and half-infinite horizontal rays retain explicit unbounded dimensions rather than fake finite extents. Brush bounds are computed once on semantic mutation, padded for curved interpolation, and remain conservatively unbounded during an active brush drag before one exact pointer-up rebuild. Runtime bounds, geometry, counters, and index entries are never serialized.
 
+Each chart also owns a bounded runtime-only drawing history of the last 100 committed semantic
+create, delete, anchor, style, and clear operations. Pointer-move samples mutate the active drag
+snapshot without adding commands; pointer-up records one start-to-end update. Undo/redo rebuilds
+only the affected drawing runtime state, a new mutation clears the redo branch, and persistence
+never contains either history stack.
+
 Versioned persistence is an engine-owned semantic DTO boundary, never serialization of live engine
 structs. V1 contains ordered pane topology and built-in drawings only. Pane persistence identity is
 separate from live `PaneId`: import preserves document references while issuing fresh monotonic live
@@ -64,6 +70,15 @@ parsed, and validated before one transactional install; drawing bounds, candidat
 rebuilt once from anchors. Market history, series/indicator definitions, chart options, extensions,
 callbacks, and every runtime cache remain host-owned or derived. Unknown versions and semantic kinds
 fail structurally without mutation.
+
+The browser split grid is the active-chart router. Its stable workspace cell ID decides which
+independent chart receives a global drawing tool or document shortcut; the receiving chart retains
+all drawing selection, hit testing, mutation semantics, and history. An armed toolbar tool migrates
+between active cells, but drawing selection never does. The grid's host-facing workspace state is a
+small composition of the validated generic split layout, optional active/stable cell identity, and
+one unchanged chart persistence V1 document per cell. Optional instrument identities are opaque
+host strings. The host stores this composition and restores market history, subscriptions, and
+host-owned series/indicator definitions after the grid restores each Nucleus chart document.
 
 ### `nucleuscharts_render`
 
@@ -178,9 +193,10 @@ Chart math must be deterministic for the same state, viewport, and device scale.
 
 OHLC ingestion preserves structurally valid numeric input rather than silently rewriting financial values. Impossible relationships are accepted for compatibility but counted in structured diagnostics alongside accepted, dropped, deduplicated, reordered, non-finite, and out-of-range rows. Clean ingestion returns no diagnostic object on the browser hot path. Predictable boundary failures carry stable error categories rather than relying on console text.
 
-The generic `Workspace` engine type owns only split-tree topology. Subscription caps, billing-tier
-vetoes, cumulative split usage, and cell-age metering live in the browser grid host; persistence and
-the shared engine have no commercial-policy knowledge.
+The generic `Workspace` engine type owns only split-tree topology, stable cell identities, ratios,
+and bounded validation of a restored layout. Subscription caps, billing-tier vetoes, cumulative
+split usage, storage, provider identity, and cell-age metering live in the browser grid host; the
+shared engine has no commercial-policy or account knowledge.
 
 Changes to geometry, snapping, scales, interactions, or execution require the narrowest relevant combination of unit tests, frame-contract tests, golden images, draw-stream parity, replay stability, browser tests, and release performance evidence. A backend-specific screenshot alone is not proof of shared-engine correctness.
 

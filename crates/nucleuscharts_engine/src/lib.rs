@@ -24,7 +24,9 @@ use std::cell::{Cell, RefCell};
 use std::num::NonZeroU32;
 use std::ops::{Deref, DerefMut};
 
-pub(crate) use drawings::{BrushCapture, DrawingDrag, DrawingRuntime, PendingDrawing};
+pub(crate) use drawings::{
+    BrushCapture, DrawingDrag, DrawingHistory, DrawingRuntime, PendingDrawing,
+};
 pub use drawings::{
     Drawing, DrawingDragPart, DrawingHit, DrawingId, DrawingKind, DrawingModifiers, DrawingPoint,
     DrawingWorkStats, TextMeasureFn, DRAWING_DEFAULT_COLOR,
@@ -937,6 +939,9 @@ pub struct ChartEngine {
     /// Active anchor/body drag session on a drawing (drawings.rs; the interaction.rs session
     /// pattern — the engine owns the start snapshot and the math).
     drawing_drag: Option<DrawingDrag>,
+    /// Bounded chart-local semantic history for committed drawing mutations. Runtime-only:
+    /// persistence stores the current drawings, never this stack.
+    drawing_history: DrawingHistory,
     /// Interactive drawing creation in progress (drawings.rs): committed anchors plus a
     /// preview point following the mouse.
     pending_drawing: Option<PendingDrawing>,
@@ -1022,6 +1027,7 @@ impl ChartEngine {
             next_drawing_id: 1,
             selected_drawing: None,
             drawing_drag: None,
+            drawing_history: DrawingHistory::default(),
             pending_drawing: None,
             brush_capture: None,
             editing_drawing: None,
@@ -1348,6 +1354,7 @@ impl ChartEngine {
         self.drawing_runtime
             .borrow_mut()
             .rebuild_panes(&self.drawings, self.panes.len());
+        self.drawing_history.clear();
         self.invalidate_frame_all();
         true
     }
@@ -1357,6 +1364,9 @@ impl ChartEngine {
     pub fn swap_panes(&mut self, first: usize, second: usize) -> bool {
         if first >= self.panes.len() || second >= self.panes.len() {
             return false;
+        }
+        if first == second {
+            return true;
         }
         self.panes.swap(first, second);
         for s in &mut self.series {
@@ -1376,6 +1386,7 @@ impl ChartEngine {
         self.drawing_runtime
             .borrow_mut()
             .rebuild_panes(&self.drawings, self.panes.len());
+        self.drawing_history.clear();
         self.invalidate_frame_all();
         true
     }
@@ -1424,6 +1435,7 @@ impl ChartEngine {
         self.drawing_runtime
             .borrow_mut()
             .rebuild_panes(&self.drawings, self.panes.len());
+        self.drawing_history.clear();
         self.invalidate_frame_all();
         true
     }
