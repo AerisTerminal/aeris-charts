@@ -236,6 +236,11 @@ test("the toolbar's series type and style act on the ACTIVE cell, not always the
   expect(await type_of(0), "primary cell untouched").toBe("candlestick");
   // The area fill style group appears for the area-typed active chart.
   await expect(page.locator("#area_style")).toBeVisible();
+  await expect(page.locator("#area_top")).toHaveValue("#089981");
+  expect(await page.evaluate(() => {
+    const options = window.__grid.cells()[1].chart.__seed_series.options();
+    return [options.color, options.area_top_color, options.area_bottom_color];
+  })).toEqual(["#089981", "#089981", "#08998100"]);
 
   // The toolbar tracks the active cell: back on the primary, its type is selected again and
   // changes land there instead.

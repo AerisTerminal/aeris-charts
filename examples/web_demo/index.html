@@ -27,6 +27,7 @@
                 padding: 0 5px; background: var(--background); font-size: 9.5px; letter-spacing: 0.07em;
                 text-transform: uppercase; color: var(--muted-foreground); }
   #bar label { display: inline-flex; gap: 4px; align-items: center; white-space: nowrap; }
+  #bar label[hidden] { display: none; }
   #bar button, #bar select, #bar input[type="text"], #bar input[type="number"] {
     min-height: 25px; background: var(--input); color: var(--foreground);
     border: 1px solid var(--muted-border); border-radius: var(--radius-sm);
@@ -105,13 +106,13 @@
 
     <!-- line/area stroke -->
     <div class="group" id="line_style" data-caption="Line style" hidden>
-      <label>color <input type="color" id="line_color" value="#2196f3"></label>
+      <label id="line_color_label">color <input type="color" id="line_color" value="#2196f3"></label>
       <label>width <input type="range" id="line_width" min="1" max="8" step="1" value="3"><span id="line_width_val">3</span></label>
     </div>
 
     <!-- area fill -->
     <div class="group" id="area_style" data-caption="Area style" hidden>
-      <label>fill <input type="color" id="area_top" value="#2edc87"></label>
+      <label>color <input type="color" id="area_top" value="#089981"></label>
     </div>
 
     <div class="group" id="overlays_group" data-caption="Overlays">
@@ -850,6 +851,7 @@ if (runtime_test === "screenshot") {
 function sync_style_visibility(kind) {
   document.getElementById("candle_style").hidden = !(kind === "candlestick" || kind === "bar");
   document.getElementById("line_style").hidden = !(kind === "line" || kind === "area" || kind === "baseline");
+  document.getElementById("line_color_label").hidden = kind === "area";
   document.getElementById("area_style").hidden = kind !== "area";
 }
 
@@ -860,12 +862,13 @@ const candle_part_touched = { wick_up: false, wick_down: false, border_up: false
 
 // Re-apply the current control values to the active cell's series (used after a type change).
 function apply_main_style() {
+  const kind = active_series().series_type();
   const options = {
     up_color: document.getElementById("up_color").value,
     down_color: document.getElementById("down_color").value,
     wick_visible: document.getElementById("wick_visible").checked,
     border_visible: document.getElementById("border_visible").checked,
-    color: document.getElementById("line_color").value,
+    color: kind === "area" ? document.getElementById("area_top").value : document.getElementById("line_color").value,
     line_width: Number(document.getElementById("line_width").value),
     area_top_color: document.getElementById("area_top").value,
     // fade the fill to fully-transparent at the base (standard area look)
@@ -986,7 +989,7 @@ document.getElementById("line_width").addEventListener("input", (e) => {
   active_series().apply_options({ line_width: Number(e.target.value) });
 });
 document.getElementById("area_top").addEventListener("input", (e) => {
-  active_series().apply_options({ area_top_color: e.target.value, area_bottom_color: e.target.value + "00" });
+  active_series().apply_options({ color: e.target.value, area_top_color: e.target.value, area_bottom_color: e.target.value + "00" });
 });
 
 document.getElementById("sma_toggle").addEventListener("change", (e) => {

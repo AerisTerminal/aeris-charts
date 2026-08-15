@@ -1734,6 +1734,13 @@ fn line_per_point_colors_split_the_stroke_and_color_markers() {
 }
 
 #[test]
+fn area_defaults_share_the_positive_candle_hue() {
+    assert_eq!(AREA_LINE, UP);
+    assert_eq!(AREA_TOP, Color::rgba(UP.r(), UP.g(), UP.b(), 102));
+    assert_eq!(AREA_BOTTOM, Color::rgba(UP.r(), UP.g(), UP.b(), 0));
+}
+
+#[test]
 fn area_per_point_colors_split_only_the_stroke() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     chart.series[0].kind = SeriesKind::Area;

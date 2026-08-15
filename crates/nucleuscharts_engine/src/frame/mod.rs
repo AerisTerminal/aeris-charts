@@ -57,9 +57,9 @@ const GRID: Color = Color::rgb(
     DEFAULT_BORDER_RGB.2,
 );
 const LINE: Color = Color::rgb(0x21, 0x96, 0xf3);
-const AREA_LINE: Color = Color::rgb(0x33, 0xd7, 0x78);
-const AREA_TOP: Color = Color::rgba(0x2e, 0xdc, 0x87, 102);
-const AREA_BOTTOM: Color = Color::rgba(0x28, 0xdd, 0x64, 0);
+const AREA_LINE: Color = UP;
+const AREA_TOP: Color = Color::rgba(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2, 102);
+const AREA_BOTTOM: Color = Color::rgba(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2, 0);
 const HISTOGRAM: Color = Color::rgba(
     MARKET_UP_RGB.0,
     MARKET_UP_RGB.1,

@@ -2394,8 +2394,13 @@ impl InteractiveDemo {
             }),
             DemoAction::AreaColor => self.update_active(cx, |p| {
                 let s = &mut p.engine.series[0];
-                let alternate = s.area_top_color.as_deref() == Some("#2edc87");
-                let top = if alternate { "#2962ff" } else { "#2edc87" };
+                let alternate = s.area_top_color.as_deref()
+                    == Some(nucleuscharts_core::style::MARKET_UP_CSS);
+                let top = if alternate {
+                    "#2962ff"
+                } else {
+                    nucleuscharts_core::style::MARKET_UP_CSS
+                };
                 s.area_top_color = Some(top.into());
                 s.area_bottom_color = Some(format!("{top}00"));
             }),
