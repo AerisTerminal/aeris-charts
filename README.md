@@ -19,7 +19,7 @@ npm install @nucleuscharts/financial
 ```
 
 Version tags publish automatically when the tag matches `packages/charts/package.json` exactly
-(for example, package version `0.8.13` is released from tag `v0.8.13`).
+(for example, package version `0.8.14` is released from tag `v0.8.14`).
 
 Create a chart with the asynchronous, snake-case API:
 
