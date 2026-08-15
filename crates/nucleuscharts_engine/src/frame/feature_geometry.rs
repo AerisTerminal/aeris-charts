@@ -792,9 +792,9 @@ impl ChartEngine {
         let spacing = self.time_scale.bar_spacing();
         let field_top = (pane_top * vpr).round() as i32;
         let field_height = (pane_height * vpr).round().max(1.0) as i32;
-        for bar in bars {
+        let color_for = |bar: &VisibleFeatureBar<'_>| {
             let FeatureValue::BackgroundShade { value } = bar.value else {
-                continue;
+                unreachable!("background-shade builder received another feature kind")
             };
             let amount = if span == 0.0 {
                 0.0
@@ -804,16 +804,70 @@ impl ChartEngine {
             // The official example exposes `opacity` but its renderer paints the
             // interpolated RGB value directly; preserve that observable behavior.
             let mixed = mix_color(options.low_color, options.high_color, amount);
-            let (x, width) = full_bar_width(bar.x_media, spacing, hpr);
+            Color::rgb(mixed.r(), mixed.g(), mixed.b())
+        };
+        let push_rect = |out: &mut Vec<Prim>, start: i32, end: i32, color: Color| {
+            if end <= start {
+                return;
+            }
             out.push(Prim::Rect {
                 rect: IRect {
-                    x,
+                    x: start,
                     y: field_top,
-                    w: width,
+                    w: end - start,
                     h: field_height,
                 },
-                color: Color::rgb(mixed.r(), mixed.g(), mixed.b()),
+                color,
             });
+        };
+
+        // The reference assigns one color to each full-width bar. Interpolate those same color
+        // anchors in bitmap space so the backdrop reads as one shaded field rather than a row of
+        // flat pockets. Split at real whitespace, and keep the work bounded by painted pixels.
+        let mut first = 0;
+        while first < bars.len() {
+            let mut end = first + 1;
+            while end < bars.len() && bars[end].logical == bars[end - 1].logical.saturating_add(1) {
+                end += 1;
+            }
+            let run = &bars[first..end];
+            let (run_left, _) = full_bar_width(run[0].x_media, spacing, hpr);
+            let (last_left, last_width) = full_bar_width(run[run.len() - 1].x_media, spacing, hpr);
+            let run_right = last_left + last_width;
+            let mut rect_start = run_left;
+            let mut rect_color = color_for(&run[0]);
+
+            for pair in run.windows(2) {
+                let left = (pair[0].x_media * hpr).round() as i32;
+                let right = (pair[1].x_media * hpr).round() as i32;
+                if right <= left {
+                    continue;
+                }
+                let left_color = color_for(&pair[0]);
+                let right_color = color_for(&pair[1]);
+                for x in left.max(rect_start)..right.min(run_right) {
+                    let color = mix_color(
+                        left_color,
+                        right_color,
+                        (x - left) as f64 / (right - left) as f64,
+                    );
+                    if color != rect_color {
+                        push_rect(out, rect_start, x, rect_color);
+                        rect_start = x;
+                        rect_color = color;
+                    }
+                }
+            }
+
+            let last_center = (run[run.len() - 1].x_media * hpr).round() as i32;
+            let last_color = color_for(&run[run.len() - 1]);
+            if rect_color != last_color {
+                push_rect(out, rect_start, last_center, rect_color);
+                rect_start = last_center;
+                rect_color = last_color;
+            }
+            push_rect(out, rect_start, run_right, rect_color);
+            first = end;
         }
     }
 

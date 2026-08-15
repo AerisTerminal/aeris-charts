@@ -1199,7 +1199,7 @@ mod tests {
     }
 
     #[test]
-    fn dual_range_columns_and_background_shade_match_official_bar_geometry() {
+    fn dual_range_columns_and_background_shade_form_continuous_runs() {
         let mut dual = ChartEngine::new(800.0, 500.0, 1.0);
         dual.configure_feature_series(
             0,
@@ -1311,20 +1311,7 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(
-            fields.len(),
-            4,
-            "one full-height strip per non-whitespace bar"
-        );
-        assert_eq!(
-            fields.iter().map(|(_, color)| *color).collect::<Vec<_>>(),
-            vec![
-                Color::rgb(50, 50, 255),
-                Color::rgb(153, 50, 153),
-                Color::rgb(255, 50, 50),
-                Color::rgb(101, 50, 204),
-            ]
-        );
+        assert!(fields.len() > 4, "adjacent anchors must be interpolated");
         assert!(fields
             .iter()
             .all(|(rect, _)| rect.y == 0 && rect.h == 1_000));
@@ -1337,16 +1324,35 @@ mod tests {
                 (left, (right - left).max(1))
             })
             .to_vec();
-        assert_eq!(
+        let color_at = |x| {
             fields
                 .iter()
-                .map(|(rect, _)| (rect.x, rect.w))
-                .collect::<Vec<_>>(),
-            expected,
-            "each value owns exactly its upstream full-bar-width interval"
-        );
+                .find(|(rect, _)| rect.x <= x && x < rect.x + rect.w)
+                .map(|(_, color)| *color)
+        };
+        for (logical, color) in [
+            (0, Color::rgb(50, 50, 255)),
+            (1, Color::rgb(153, 50, 153)),
+            (2, Color::rgb(255, 50, 50)),
+            (4, Color::rgb(101, 50, 204)),
+        ] {
+            let center = (background.time_scale.index_to_coordinate(logical) * 2.0).round() as i32;
+            assert_eq!(color_at(center), Some(color));
+        }
+        assert!(fields.windows(2).all(|pair| {
+            let contiguous = pair[0].0.x + pair[0].0.w == pair[1].0.x;
+            !contiguous
+                || (pair[0].1.r().abs_diff(pair[1].1.r()) <= 1
+                    && pair[0].1.g().abs_diff(pair[1].1.g()) <= 1
+                    && pair[0].1.b().abs_diff(pair[1].1.b()) <= 1)
+        }));
+        let first_run_right = expected[2].0 + expected[2].1;
+        let second_run_left = expected[3].0;
         assert!(
-            fields[2].0.x + fields[2].0.w < fields[3].0.x,
+            first_run_right < second_run_left
+                && fields.iter().all(
+                    |(rect, _)| rect.x + rect.w <= first_run_right || rect.x >= second_run_left
+                ),
             "whitespace must remain unshaded"
         );
         assert!(background.series_base_value(0, 0).is_none());
@@ -1396,25 +1402,34 @@ mod tests {
             .find(|segment| segment.series_id == Some(0))
             .copied()
             .unwrap();
-        let colors = frame.panes[0].main[segment.start..segment.end]
+        let fields = frame.panes[0].main[segment.start..segment.end]
             .iter()
             .filter_map(|primitive| match primitive {
-                nucleuscharts_render::draw_list::Prim::Rect { color, .. } => Some(*color),
+                nucleuscharts_render::draw_list::Prim::Rect { rect, color } => {
+                    Some((*rect, *color))
+                }
                 _ => None,
             })
             .collect::<Vec<_>>();
-        let expected = (20..=35)
-            .filter(|index| *index != 31)
-            .map(|index| {
-                let amount = values[index] / 100.0;
-                Color::rgb(
+        let color_at = |logical| {
+            let x = (chart.time_scale.index_to_coordinate(logical) * 2.0).round() as i32;
+            fields
+                .iter()
+                .find(|(rect, _)| rect.x <= x && x < rect.x + rect.w)
+                .map(|(_, color)| *color)
+        };
+        for index in (20..=35).filter(|index| *index != 31) {
+            let amount = values[index] / 100.0;
+            assert_eq!(
+                color_at(index as i64),
+                Some(Color::rgb(
                     (50.0 + 205.0 * amount).round() as u8,
                     50,
                     (255.0 - 205.0 * amount).round() as u8,
-                )
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(colors, expected);
+                ))
+            );
+        }
+        assert_eq!(color_at(31), None, "panned whitespace must remain clear");
     }
 
     #[test]
