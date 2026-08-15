@@ -80,6 +80,36 @@ over those engine APIs. Accessibility keyboard/ARIA state and tooltip elements r
 chrome, while their exact data lookup, guides, focus geometry, and rendering primitives remain in
 the engine. Every returned feature handle with `detach()` releases its engine and host state.
 
+## Trading and order management
+
+Trading objects are a separate first-party engine domain. The application supplies authoritative
+positions, working orders, bracket/OCO relationships, executions, and instrument metadata; Nucleus
+owns their deterministic visualization, native axis labels, hit testing, risk/reward regions, and
+local interaction previews. A drag never rewrites confirmed broker state. It emits one typed,
+broker-neutral intent on release, and the host reconciles that preview with an accepted state update
+or rejects it explicitly.
+
+```ts
+const trading = chart.trading();
+trading.apply_snapshot({
+  instrument: { tick_size: 0.25, price_precision: 2, point_value: 50, currency: "USD" },
+  positions: [{ id: "position-1", side: "long", average_price: 5230, quantity: 2 }],
+  orders: [{
+    id: "target-1", side: "sell", kind: "limit", role: "take_profit", status: "working",
+    price: 5240, quantity: 2, position_id: "position-1", oco_group_id: "bracket-1", revision: 4,
+  }],
+});
+
+trading.subscribe_intents(async (intent) => {
+  const accepted = await route_to_broker(intent);
+  trading.resolve_intent(intent.sequence, accepted);
+  // On acceptance, push the resulting authoritative order/position update through this API.
+});
+```
+
+Live trading objects, previews, and intent queues are chart-local runtime state and are deliberately
+excluded from `chart.export_state()`.
+
 Give the container an explicit size; the chart canvases fill it.
 
 Import the portable design system once in browser hosts:

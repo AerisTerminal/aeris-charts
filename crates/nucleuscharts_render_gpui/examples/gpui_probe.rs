@@ -758,6 +758,9 @@ impl Probe {
                     shape: marker_shape::ARROW_DOWN,
                     color: Color::rgb(0xef, 0x53, 0x50),
                     text: "Native A".into(),
+                    id: "native-a".into(),
+                    size: 1.0,
+                    price: None,
                 },
                 Marker {
                     time: self.source_bars.times[n * 2 / 3] as i64,
@@ -765,6 +768,9 @@ impl Probe {
                     shape: marker_shape::ARROW_UP,
                     color: Color::rgb(0x26, 0xa6, 0x9a),
                     text: "Native B".into(),
+                    id: "native-b".into(),
+                    size: 1.0,
+                    price: None,
                 },
             ]
         } else {

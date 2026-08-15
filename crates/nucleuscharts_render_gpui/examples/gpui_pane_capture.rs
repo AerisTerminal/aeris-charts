@@ -72,8 +72,8 @@ impl Capture {
             });
         let feature = std::env::var("NUCLEUSCHARTS_GPUI_FEATURE").unwrap_or_else(|_| "base".into());
         assert!(
-            matches!(feature.as_str(), "base" | "markers"),
-            "NUCLEUSCHARTS_GPUI_FEATURE must be base or markers"
+            matches!(feature.as_str(), "base" | "markers" | "trading"),
+            "NUCLEUSCHARTS_GPUI_FEATURE must be base, markers, or trading"
         );
 
         let mut engine = nucleuscharts_native::engine_scene::parity_engine();
@@ -103,6 +103,9 @@ impl Capture {
                 shape,
                 color: Color::parse_css(color).expect("built-in marker color is valid"),
                 text: text.into(),
+                id: format!("capture-{index}"),
+                size: 1.0,
+                price: None,
             };
             engine.set_series_markers(
                 0,
@@ -138,6 +141,9 @@ impl Capture {
                 ],
             );
             engine.set_series_markers_auto_scale(0, true);
+        }
+        if feature == "trading" {
+            nucleuscharts_native::engine_scene::install_trading_fixture(&mut engine);
         }
         let background_color = nucleuscharts_render::color::Color::parse_css(
             &engine.options.get().layout.background.color,

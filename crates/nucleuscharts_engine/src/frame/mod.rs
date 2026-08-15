@@ -39,6 +39,7 @@ mod native_primitive_geometry;
 mod series_geometry;
 #[cfg(test)]
 mod tests;
+mod trading_geometry;
 
 #[cfg(test)]
 use conflation::{visible_histogram_rows, visible_ohlc};
@@ -206,16 +207,20 @@ pub struct FrameBuildStats {
     pub series_rebuilds: u64,
     pub drawing_rebuilds: u64,
     pub overlay_rebuilds: u64,
+    pub trading_rebuilds: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FramePaneSegments {
     pub under_end: usize,
     pub series_end: usize,
+    pub trading_regions_end: usize,
     pub drawings_end: usize,
+    pub trading_end: usize,
     pub overlay_end: usize,
     pub under_revision: u64,
     pub drawings_revision: u64,
+    pub trading_revision: u64,
     pub overlay_revision: u64,
     pub top_revision: u64,
     /// Canonical coordinate revision shared by every coordinate-dependent segment in this pane.
@@ -238,6 +243,7 @@ pub(crate) struct FrameInvalidation {
     coordinate: u64,
     scene: u64,
     drawings: u64,
+    trading: u64,
     overlay: u64,
     axis: u64,
     autoscale: u64,
@@ -258,6 +264,7 @@ impl FrameInvalidation {
         self.scene = generation;
         self.chrome = generation;
         self.drawings = generation;
+        self.trading = generation;
         self.overlay = generation;
         self.axis = generation;
         self.autoscale = generation;
@@ -268,6 +275,7 @@ impl FrameInvalidation {
         self.scene = generation;
         self.chrome = generation;
         self.drawings = generation;
+        self.trading = generation;
         self.overlay = generation;
         self.axis = generation;
         self.autoscale = generation;
@@ -279,6 +287,7 @@ impl FrameInvalidation {
         self.scene = generation;
         self.chrome = generation;
         self.drawings = generation;
+        self.trading = generation;
         self.overlay = generation;
         self.axis = generation;
     }
@@ -314,6 +323,12 @@ impl FrameInvalidation {
         self.axis = generation;
     }
 
+    fn trading(&mut self) {
+        let generation = self.tick();
+        self.trading = generation;
+        self.axis = generation;
+    }
+
     fn overlay(&mut self) {
         let generation = self.tick();
         self.overlay = generation;
@@ -344,7 +359,9 @@ struct RetainedPane {
     cursor_under: RetainedLayer,
     series_layers: Vec<RetainedSeriesLayer>,
     chrome: RetainedLayer,
+    trading_regions: RetainedLayer,
     drawings: RetainedLayer,
+    trading: RetainedLayer,
     overlay: RetainedLayer,
     top_layer: RetainedLayer,
 }
@@ -367,6 +384,7 @@ pub(crate) struct RetainedFrame {
     scene_generation: u64,
     chrome_generation: u64,
     drawings_generation: u64,
+    trading_generation: u64,
     overlay_generation: u64,
     autoscale_generation: u64,
     axis_generation: u64,
@@ -392,7 +410,9 @@ impl RetainedFrame {
                 layer_bytes(&pane.under)
                     + layer_bytes(&pane.cursor_under)
                     + layer_bytes(&pane.chrome)
+                    + layer_bytes(&pane.trading_regions)
                     + layer_bytes(&pane.drawings)
+                    + layer_bytes(&pane.trading)
                     + layer_bytes(&pane.overlay)
                     + layer_bytes(&pane.top_layer)
                     + pane.series_layers.capacity() * std::mem::size_of::<RetainedSeriesLayer>()
@@ -802,6 +822,10 @@ impl ChartEngine {
         self.frame_invalidation.drawings();
     }
 
+    pub(crate) fn invalidate_frame_trading(&mut self) {
+        self.frame_invalidation.trading();
+    }
+
     pub(crate) fn invalidate_frame_overlay(&mut self) {
         self.frame_invalidation.overlay();
     }
@@ -1016,6 +1040,8 @@ impl ChartEngine {
         let scene_dirty = self.retained_frame.scene_generation != self.frame_invalidation.scene;
         let drawings_dirty =
             self.retained_frame.drawings_generation != self.frame_invalidation.drawings;
+        let trading_dirty = !self.retained_frame.initialized
+            || self.retained_frame.trading_generation != self.frame_invalidation.trading;
         let overlay_dirty =
             self.retained_frame.overlay_generation != self.frame_invalidation.overlay;
         let chrome_dirty = self.retained_frame.chrome_generation != self.frame_invalidation.chrome;
@@ -1468,6 +1494,25 @@ impl ChartEngine {
                 self.frame_build_stats.drawing_rebuilds += 1;
             }
 
+            if trading_dirty {
+                cache.trading_regions.prims.clear();
+                cache.trading_regions.points.clear();
+                cache.trading.prims.clear();
+                cache.trading.points.clear();
+                self.build_trading_frame(
+                    pi,
+                    hpr,
+                    vpr,
+                    &mut cache.trading_regions.prims,
+                    &mut cache.trading.prims,
+                );
+                cache.trading_regions.revision = self.frame_invalidation.trading;
+                cache.trading_regions.coordinate_revision = self.frame_invalidation.coordinate;
+                cache.trading.revision = self.frame_invalidation.trading;
+                cache.trading.coordinate_revision = self.frame_invalidation.coordinate;
+                self.frame_build_stats.trading_rebuilds += 1;
+            }
+
             if overlay_dirty {
                 cache.cursor_under.prims.clear();
                 cache.cursor_under.points.clear();
@@ -1542,6 +1587,14 @@ impl ChartEngine {
                 self.frame_invalidation.coordinate
             );
             debug_assert_eq!(
+                cache.trading_regions.coordinate_revision,
+                self.frame_invalidation.coordinate
+            );
+            debug_assert_eq!(
+                cache.trading.coordinate_revision,
+                self.frame_invalidation.coordinate
+            );
+            debug_assert_eq!(
                 cache.overlay.coordinate_revision,
                 self.frame_invalidation.coordinate
             );
@@ -1570,12 +1623,16 @@ impl ChartEngine {
             // historical installs pay one retained-to-contract copy, not repeated Vec growth.
             if initial_build {
                 let mut main_prims = cache.chrome.prims.len()
+                    + cache.trading_regions.prims.len()
                     + cache.drawings.prims.len()
+                    + cache.trading.prims.len()
                     + cache.overlay.prims.len();
                 let mut point_count = cache.under.points.len()
                     + cache.cursor_under.points.len()
                     + cache.chrome.points.len()
+                    + cache.trading_regions.points.len()
                     + cache.drawings.points.len()
+                    + cache.trading.points.len()
                     + cache.overlay.points.len();
                 point_count += cache.top_layer.points.len();
                 for rs in &resolved {
@@ -1623,8 +1680,12 @@ impl ChartEngine {
                 coordinate_revision: cache.chrome.coordinate_revision,
             });
             let series_end = out.main.len();
+            append_retained_layer(&cache.trading_regions, &mut out.main, &mut out.points);
+            let trading_regions_end = out.main.len();
             append_retained_layer(&cache.drawings, &mut out.main, &mut out.points);
             let drawings_end = out.main.len();
+            append_retained_layer(&cache.trading, &mut out.main, &mut out.points);
+            let trading_end = out.main.len();
             append_retained_layer(&cache.overlay, &mut out.main, &mut out.points);
             let overlay_end = out.main.len();
             append_retained_layer(&cache.top_layer, &mut out.top_prims, &mut out.points);
@@ -1639,10 +1700,13 @@ impl ChartEngine {
             retained.segments[pi] = FramePaneSegments {
                 under_end: out.under.len(),
                 series_end,
+                trading_regions_end,
                 drawings_end,
+                trading_end,
                 overlay_end,
                 under_revision: cache.under.revision.max(cache.cursor_under.revision),
                 drawings_revision: cache.drawings.revision,
+                trading_revision: cache.trading.revision,
                 overlay_revision: cache.overlay.revision,
                 top_revision: cache.top_layer.revision,
                 coordinate_revision: self.frame_invalidation.coordinate,
@@ -1652,6 +1716,7 @@ impl ChartEngine {
         retained.scene_generation = self.frame_invalidation.scene;
         retained.chrome_generation = self.frame_invalidation.chrome;
         retained.drawings_generation = self.frame_invalidation.drawings;
+        retained.trading_generation = self.frame_invalidation.trading;
         retained.overlay_generation = self.frame_invalidation.overlay;
         retained.autoscale_generation = self.frame_invalidation.autoscale;
         retained.coordinate_generation = self.frame_invalidation.coordinate;

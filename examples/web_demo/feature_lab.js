@@ -244,6 +244,84 @@ function primitive_features(chart, series, bars) {
   ];
 }
 
+function trading_features(chart, bars) {
+  const middle = bars[Math.floor(bars.length * 0.62)];
+  const entry = middle.close;
+  const target = entry + Math.max(entry * 0.018, 1);
+  const stop = entry - Math.max(entry * 0.012, 0.75);
+  return [{
+    id: "trading-bracket",
+    label: "Trading bracket",
+    detail: "Position, OCO orders, partial fill",
+    icon: "analysis",
+    activate: () => {
+      const trading = chart.trading();
+      trading.apply_snapshot({
+        instrument: {
+          tick_size: 0.01,
+          price_precision: 2,
+          quantity_precision: 0,
+          point_value: 1,
+          currency: "USD",
+        },
+        positions: [{
+          id: "demo-position",
+          side: "long",
+          average_price: entry,
+          quantity: 12,
+          display_pnl: 184.5,
+        }],
+        orders: [
+          {
+            id: "demo-target",
+            side: "sell",
+            kind: "limit",
+            role: "take_profit",
+            status: "working",
+            price: target,
+            quantity: 12,
+            position_id: "demo-position",
+            bracket_id: "demo-bracket",
+            oco_group_id: "demo-oco",
+          },
+          {
+            id: "demo-stop",
+            side: "sell",
+            kind: "stop",
+            role: "stop_loss",
+            status: "working",
+            price: stop,
+            quantity: 12,
+            position_id: "demo-position",
+            bracket_id: "demo-bracket",
+            oco_group_id: "demo-oco",
+          },
+          {
+            id: "demo-partial",
+            side: "buy",
+            kind: "limit",
+            status: "partially_filled",
+            price: entry - Math.max(entry * 0.006, 0.4),
+            quantity: 12,
+            filled_quantity: 5,
+          },
+        ],
+        executions: [{
+          id: "demo-fill",
+          side: "buy",
+          kind: "partial_fill",
+          time: middle.time,
+          price: entry,
+          quantity: 5,
+          order_id: "demo-partial",
+          position_id: "demo-position",
+        }],
+      });
+      return () => trading.apply_snapshot({});
+    },
+  }];
+}
+
 export function install_feature_lab({ chart, series, data }) {
   const grid = document.getElementById("feature_grid");
   const search = document.getElementById("feature_search");
@@ -251,7 +329,8 @@ export function install_feature_lab({ chart, series, data }) {
   const active_count = document.getElementById("feature_active_count");
   const series_items = series_features(data).map((feature) => ({ ...feature, kind: "series" }));
   const primitive_items = primitive_features(chart, series, data).map((feature) => ({ ...feature, kind: "primitive" }));
-  const features = [...series_items, ...primitive_items];
+  const trading_items = trading_features(chart, data).map((feature) => ({ ...feature, kind: "trading" }));
+  const features = [...series_items, ...primitive_items, ...trading_items];
   const cleanups = new Map();
   let active_series = null;
   let filter = "all";

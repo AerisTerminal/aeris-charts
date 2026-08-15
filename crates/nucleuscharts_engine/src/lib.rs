@@ -20,6 +20,7 @@ mod price_scale_api;
 mod series_query_api;
 #[cfg(test)]
 mod tests;
+mod trading;
 mod workspace;
 
 use std::cell::{Cell, RefCell};
@@ -65,6 +66,13 @@ pub use persistence::{
     PERSISTENCE_MAX_DRAWINGS, PERSISTENCE_MAX_PANES, PERSISTENCE_MAX_POINTS_PER_DRAWING,
     PERSISTENCE_MAX_TOTAL_POINTS, PERSISTENCE_SCHEMA_VERSION,
 };
+pub use trading::{
+    ExecutionId, ExecutionKind, InstrumentMetadata, OrderId, OrderKind, OrderRole, OrderSide,
+    OrderStatus, PositionId, PositionSide, TradingExecution, TradingGroupId, TradingHit,
+    TradingHitKind, TradingIntent, TradingIntentAction, TradingObjectId, TradingPosition,
+    TradingPreview, TradingPreviewPhase, TradingPreviewSource, TradingPriceScale, TradingSnapshot,
+    TradingStyle, TradingStyleOptions, WorkingOrder, MAX_TRADING_OBJECTS,
+};
 pub use workspace::{SplitDirection, Workspace, WorkspaceError, WorkspaceLayout};
 
 use nucleuscharts_core::format::price_formatter::PriceFormatter;
@@ -107,6 +115,7 @@ pub struct EngineMemoryUsage {
     pub drawing_runtime_capacity_bytes: usize,
     pub feature_series_capacity_bytes: usize,
     pub native_primitive_capacity_bytes: usize,
+    pub trading_capacity_bytes: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -127,6 +136,7 @@ impl EngineMemoryUsage {
             + self.drawing_runtime_capacity_bytes
             + self.feature_series_capacity_bytes
             + self.native_primitive_capacity_bytes
+            + self.trading_capacity_bytes
     }
 }
 
@@ -926,6 +936,7 @@ pub struct ChartEngine {
     pub next_price_line_id: u32,
     next_native_primitive_id: NativePrimitiveId,
     native_pane_primitives: Vec<native_primitives::NativePanePrimitive>,
+    trading_state: trading::TradingState,
     /// reference `timeScale.timeVisible` — label semantics only: whether axis/crosshair time labels
     /// include the time of day. Strip reservation is [`Self::time_axis_visible`].
     pub time_visible: bool,
@@ -1057,6 +1068,7 @@ impl ChartEngine {
             next_price_line_id: 1,
             next_native_primitive_id: 1,
             native_pane_primitives: Vec::new(),
+            trading_state: trading::TradingState::default(),
             time_visible: true,
             time_axis_visible: true,
             time_ticks_visible: false,
@@ -1153,6 +1165,7 @@ impl ChartEngine {
             drawing_runtime_capacity_bytes: self.drawing_runtime.borrow().capacity_bytes(),
             feature_series_capacity_bytes: self.feature_series_capacity_bytes(),
             native_primitive_capacity_bytes: self.native_primitive_capacity_bytes(),
+            trading_capacity_bytes: self.trading_state.estimated_bytes(),
         }
     }
 
@@ -1426,6 +1439,7 @@ impl ChartEngine {
                 drawing.pane_index -= 1;
             }
         }
+        self.remove_trading_pane(index);
         self.drawing_runtime
             .borrow_mut()
             .rebuild_panes(&self.drawings, self.panes.len());

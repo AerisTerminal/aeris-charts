@@ -38,6 +38,7 @@ const FRAME_STATS_SLOT = {
   overlay_rebuilds: 16,
   axis_rebuilds: 17,
   text_resolutions: 18,
+  trading_rebuilds: 19,
 } as const;
 
 const UNSUPPORTED_WORKER_OPTIONS = [
@@ -440,6 +441,7 @@ export class offscreen_chart {
       overlay_rebuilds: out[FRAME_STATS_SLOT.overlay_rebuilds] as number,
       axis_rebuilds: out[FRAME_STATS_SLOT.axis_rebuilds] as number,
       text_resolutions: out[FRAME_STATS_SLOT.text_resolutions] as number,
+      trading_rebuilds: out[FRAME_STATS_SLOT.trading_rebuilds] as number,
     };
   }
 

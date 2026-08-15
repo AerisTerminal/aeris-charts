@@ -58,7 +58,19 @@ const matrix_cases = [
     exact: false,
     webgpu_rgba_sha256: "48221c47757b6ffd7b3d2fa6d629015b3d9550343326f501d3abd4d32136078c",
   },
+  {
+    name: "dpr-1_5-spacing-fit-light-trading",
+    theme: "light",
+    spacing: null,
+    feature: "trading",
+    exact: false,
+    webgpu_rgba_sha256: "58c663f83403bbf31d34d0ec7939838aef9a4656c8f278ba616d3b2433321a9d",
+  },
 ];
+const requested_case = process.env.NUCLEUSCHARTS_GPUI_CASE;
+const selected_cases = requested_case === undefined
+  ? matrix_cases
+  : matrix_cases.filter((matrix_case) => matrix_case.name === requested_case);
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -176,7 +188,8 @@ test.describe("GPUI versus presented WebGPU matrix", () => {
     ];
     const matrix_report = [];
 
-    for (const matrix_case of matrix_cases) {
+    expect(selected_cases, `unknown NUCLEUSCHARTS_GPUI_CASE ${requested_case}`).not.toHaveLength(0);
+    for (const matrix_case of selected_cases) {
       await test.step(matrix_case.name, async () => {
         const presented_png = await capture_webgpu(page, matrix_case);
         const presented = PNG.sync.read(presented_png);

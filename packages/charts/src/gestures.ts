@@ -43,6 +43,10 @@ export function install_gestures(chart: chart_impl): () => void {
   // Engine-owned drawing drag (anchor re-anchor or body move) started by a pane press on a
   // drawing (drawings.rs); mutually exclusive with a pan `dragging` session.
   let drawing_dragging = false;
+  // Trading controls own the pointer before drawings and chart pan. Moves update only the
+  // engine's local preview; confirmed broker state is never mutated by this gesture path.
+  let trading_dragging = false;
+  let trading_press = false;
   // Freehand brush capture in progress (the engine decimates/simplifies the stroke).
   let brush_drawing = false;
   // A text-tool press that already committed (mousedown placement) — the trailing click is
@@ -128,6 +132,7 @@ export function install_gestures(chart: chart_impl): () => void {
     // Phase C-d: refresh the hover hit-test (primitives + series) before the repaint that
     // follows, so a hovered series' `hoveredSeriesOnTop` z-bump lands on the same frame.
     chart.update_hover(x, y);
+    chart.trading_hover_at(x, y);
     chart.emit_crosshair(x, y);
   };
 
@@ -231,6 +236,7 @@ export function install_gestures(chart: chart_impl): () => void {
     if (!dragging) return;
     dragging = false;
     touch_scrolling = false;
+    trading_press = false;
     disarm_price_pan();
     const cfg = chart.gesture_config();
     const enabled =
@@ -411,6 +417,13 @@ export function install_gestures(chart: chart_impl): () => void {
     moved = false;
     const region = arm_press(p);
     if (region !== "pane") return;
+    const trading_hit = chart.trading_hit_at(p.x, p.y);
+    if (trading_hit !== null) {
+      trading_dragging = chart.trading_drag_start_at(p.x, p.y);
+      set_crosshair(p.x, p.y);
+      chart.repaint();
+      return;
+    }
     // Drawing tools: an armed tool consumes pane presses (anchors place on click, not drag); a
     // successful drawing grab starts an engine-owned anchor/body drag. Both skip the pan.
     if (chart.creation_armed()) {
@@ -492,7 +505,9 @@ export function install_gestures(chart: chart_impl): () => void {
       moved = Math.abs(p.x - press_start.x) + Math.abs(p.y - press_start.y) >= SLOP_MANHATTAN;
     }
 
-    if (brush_drawing) {
+    if (trading_dragging) {
+      chart.trading_drag_to(p.y);
+    } else if (brush_drawing) {
       // Freehand brush: the engine decimates and captures the stroke points (drawings.rs).
       wasm.brush_create_add(p.x, p.y);
     } else if (drawing_dragging) {
@@ -546,7 +561,7 @@ export function install_gestures(chart: chart_impl): () => void {
       // region cursor off the geometry.
       overlay.style.cursor =
         region_cursor === "crosshair"
-          ? (chart.hover_cursor() ??
+          ? (chart.trading_cursor_at(p.x, p.y) ?? chart.hover_cursor() ??
             (chart.hover_series_id() !== null ? "pointer" : region_cursor))
           : region_cursor;
     }
@@ -579,6 +594,12 @@ export function install_gestures(chart: chart_impl): () => void {
       chart.repaint();
       return;
     }
+    if (trading_dragging) {
+      trading_dragging = false;
+      chart.trading_drag_end();
+      chart.repaint();
+      return;
+    }
     if (drawing_dragging) {
       // End the engine's drawing drag (no coast, no scroll session to close — the pan path
       // never started). The click that follows (no move) routes to selection.
@@ -605,6 +626,10 @@ export function install_gestures(chart: chart_impl): () => void {
       brush_drawing = false;
       wasm.brush_create_cancel();
     }
+    if (trading_dragging) {
+      trading_dragging = false;
+      chart.cancel_trading_drag();
+    }
     if (drawing_dragging) {
       drawing_dragging = false;
       wasm.drawing_drag_end();
@@ -622,6 +647,7 @@ export function install_gestures(chart: chart_impl): () => void {
     set_sep_hover(-1);
     wasm.set_crosshair_ohlc_magnet(false); // release the Ctrl-magnet with the hover
     chart.clear_hover(); // Phase C-d: release the hover hit + hovered-series z-bump
+    chart.clear_trading_hover();
     wasm.clear_crosshair();
     chart.emit_crosshair_left();
     chart.repaint();
@@ -661,6 +687,11 @@ export function install_gestures(chart: chart_impl): () => void {
     // placement opened the typing-mode editor).
     if (text_tool_press_committed) {
       text_tool_press_committed = false;
+      return;
+    }
+    if (chart.trading_hit_at(p.x, p.y) !== null) {
+      chart.trading_activate_at(p.x, p.y);
+      chart.repaint();
       return;
     }
     // An armed drawing tool consumes pane clicks for anchor placement (engine-owned creation);
@@ -773,6 +804,11 @@ export function install_gestures(chart: chart_impl): () => void {
       disarm_price_pan();
       end_axis_drag();
       sep_drag = null;
+      if (trading_dragging) {
+        trading_dragging = false;
+        chart.cancel_trading_drag();
+      }
+      trading_press = false;
       if (dragging) {
         dragging = false;
         touch_scrolling = false;
@@ -803,6 +839,12 @@ export function install_gestures(chart: chart_impl): () => void {
     // reference `longTapEvent` timer (Delay.LongTap); touchstart is passive — never preventDefault.
     clear_longpress();
     longpress_timer = setTimeout(on_longpress, LONGPRESS_MS);
+
+    if (touch_region === "pane" && chart.trading_hit_at(p.x, p.y) !== null) {
+      trading_press = true;
+      trading_dragging = chart.trading_drag_start_at(p.x, p.y);
+      clear_longpress();
+    }
 
     arm_press(p); // deferred: scroll/scale state only engages on the first owned move
 
@@ -878,6 +920,7 @@ export function install_gestures(chart: chart_impl): () => void {
       touch_moved = true;
       const corrected_x = dx * 0.5;
       const chart_owns =
+        trading_press ||
         (dy >= corrected_x && !treat_vert_as_page_scroll()) ||
         (corrected_x > dy && !treat_horz_as_page_scroll());
       clear_longpress();
@@ -898,6 +941,13 @@ export function install_gestures(chart: chart_impl): () => void {
 
     if (e.cancelable) e.preventDefault(); // the chart owns the gesture — keep the page still
     const p = local_xy(touch);
+
+    if (trading_dragging) {
+      chart.trading_drag_to(p.y);
+      set_crosshair(p.x, p.y);
+      chart.repaint();
+      return;
+    }
 
     if (touch_tracking) {
       // Tracking mode: the drag moves the crosshair relative to its anchor (reference `touchMoveEvent`)
@@ -968,7 +1018,12 @@ export function install_gestures(chart: chart_impl): () => void {
       wasm.clear_crosshair();
       chart.emit_crosshair_left();
     }
-    end_drag("touch");
+    if (trading_dragging) {
+      trading_dragging = false;
+      chart.trading_drag_end();
+    } else {
+      end_drag("touch");
+    }
     chart.repaint();
 
     // Tap / double-tap (reference `_touchEndHandler`).
@@ -985,7 +1040,10 @@ export function install_gestures(chart: chart_impl): () => void {
     } else if (was_tap) {
       // A tap: emit the click and suppress the synthetic one (reference preventDefault after tapEvent).
       const p = local_xy(touch);
-      if (chart.creation_armed() && chart.creation_click(p.x, p.y, false, false)) {
+      if (trading_press && chart.trading_hit_at(p.x, p.y) !== null) {
+        chart.trading_activate_at(p.x, p.y);
+        chart.repaint();
+      } else if (chart.creation_armed() && chart.creation_click(p.x, p.y, false, false)) {
         chart.repaint();
       } else {
         chart.emit_click(p.x, p.y);
@@ -1000,6 +1058,7 @@ export function install_gestures(chart: chart_impl): () => void {
       long_tap_active = false;
       if (e.cancelable) e.preventDefault(); // prevent the native click after a long-tap
     }
+    trading_press = false;
   };
 
   const on_touch_cancel = (e: TouchEvent) => {
@@ -1022,6 +1081,11 @@ export function install_gestures(chart: chart_impl): () => void {
         wasm.kinetic_stop();
         wasm.scroll_end();
       }
+      if (trading_dragging) {
+        trading_dragging = false;
+        chart.cancel_trading_drag();
+      }
+      trading_press = false;
     }
   };
 

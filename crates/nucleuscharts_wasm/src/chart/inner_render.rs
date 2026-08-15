@@ -144,7 +144,7 @@ impl ChartInner {
                 pane_count
             } else {
                 (0..pane_count)
-                    .map(|pane| 4 + self.engine.frame_series_segments(pane).len())
+                    .map(|pane| 6 + self.engine.frame_series_segments(pane).len())
                     .sum()
             };
             self.gpu_groups
@@ -272,11 +272,31 @@ impl ChartInner {
                     }
                     build_group(
                         &mut self.gpu_groups[group_index],
+                        0x2000_0005 | (pane as u64) << 4,
+                        segments.trading_revision,
+                        Some(pane_frame.scissor),
+                        &main[segments.series_end.min(main.len())
+                            ..segments.trading_regions_end.min(main.len())],
+                        &pane_frame.points,
+                    );
+                    group_index += 1;
+                    build_group(
+                        &mut self.gpu_groups[group_index],
                         0x2000_0002 | (pane as u64) << 4,
                         segments.drawings_revision,
                         Some(pane_frame.scissor),
-                        &main[segments.series_end.min(main.len())
+                        &main[segments.trading_regions_end.min(main.len())
                             ..segments.drawings_end.min(main.len())],
+                        &pane_frame.points,
+                    );
+                    group_index += 1;
+                    build_group(
+                        &mut self.gpu_groups[group_index],
+                        0x2000_0006 | (pane as u64) << 4,
+                        segments.trading_revision,
+                        Some(pane_frame.scissor),
+                        &main[segments.drawings_end.min(main.len())
+                            ..segments.trading_end.min(main.len())],
                         &pane_frame.points,
                     );
                     group_index += 1;
@@ -285,7 +305,7 @@ impl ChartInner {
                         0x2000_0003 | (pane as u64) << 4,
                         segments.overlay_revision,
                         Some(pane_frame.scissor),
-                        &main[segments.drawings_end.min(main.len())
+                        &main[segments.trading_end.min(main.len())
                             ..segments.overlay_end.min(main.len())],
                         &pane_frame.points,
                     );

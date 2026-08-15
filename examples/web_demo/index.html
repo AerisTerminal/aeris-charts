@@ -175,12 +175,13 @@
     <div id="controls_strip" aria-label="Chart training controls">
 
     <section class="group" id="feature_lab_group" data-caption="Feature lab">
-      <p class="feature-lab-intro">Every first-class series and primitive is runnable here. Series replace the main visual one at a time; primitives can be combined.</p>
-      <label class="feature-search-wrap"><span data-icon="search"></span><input id="feature_search" type="search" placeholder="Search 29 scenarios" aria-label="Search feature lab"></label>
+      <p class="feature-lab-intro">Every first-class series, primitive, and trading overlay is runnable here. Series replace the main visual one at a time; overlays can be combined.</p>
+      <label class="feature-search-wrap"><span data-icon="search"></span><input id="feature_search" type="search" placeholder="Search 30 scenarios" aria-label="Search feature lab"></label>
       <div id="feature_filters" role="group" aria-label="Filter features">
         <button type="button" data-feature-filter="all" aria-pressed="true">All</button>
         <button type="button" data-feature-filter="series" aria-pressed="false">Series</button>
         <button type="button" data-feature-filter="primitive" aria-pressed="false">Primitives</button>
+        <button type="button" data-feature-filter="trading" aria-pressed="false">Trading</button>
       </div>
       <div id="feature_grid" aria-live="polite"></div>
       <div id="feature_empty">No matching features.</div>
@@ -567,6 +568,7 @@ const sma_series = chart.add_sma(main, 20, { color: "#ff9800", line_width: 2, vi
 const volume_data = volume_fixture(data);
 let vol_series = null;
 window.__feature_lab = install_feature_lab({ chart, series: main, data });
+if (requested_feature === "trading") window.__feature_lab.activate("trading-bracket");
 
 // Fidelity fixtures use only the package's public handles. The demo supplies data and options;
 // all scale, layout, and rendering behavior remains inside the headless engine.

@@ -10,6 +10,8 @@ entry point and `./design.css` are the only npm export paths. The supported root
   `packages/charts/src/types.ts`;
 - built-in series, indicators, drawing kinds, options, themes, data ingestion, interactions,
   subscriptions, screenshots, and lifecycle operations declared by those handles;
+- first-party broker-neutral trading state, previews, hit testing, semantic style, and typed intent
+  subscriptions exposed by `chart.trading()`;
 - `nucleuscharts_error` and its machine-readable error codes;
 - chart-state persistence V1 through `chart.export_state()` and `chart.import_state()`.
 
@@ -55,10 +57,11 @@ Persistence schema versioning is independent of the npm package version. V1 cont
 - ordered pane identities, stretch factors, and preserve-empty flags;
 - ordered built-in drawings with persistent ID, kind, pane reference, semantic anchors, and style.
 
-Host market history, series and indicator definitions, chart options, custom extensions, callbacks,
-subscriptions, selections, interaction sessions, generations, LOD, drawing bounds/indexes, retained
-frames, and GPU resources are not persisted. Hosts restore V1 into a fresh chart, then reinstall
-host-owned data, series/indicator configuration, options, and extensions.
+Host market history, series and indicator definitions, chart options, trading positions/orders/
+executions/previews/intents, custom extensions, callbacks, subscriptions, selections, interaction
+sessions, generations, LOD, drawing bounds/indexes, retained frames, and GPU resources are not
+persisted. Hosts restore V1 into a fresh chart, then reinstall host-owned data, series/indicator
+configuration, trading state, options, and extensions.
 
 Import checks the whole document before mutation and installs it as one transaction. Imported panes
 receive fresh live handle IDs while retaining separate persistent pane IDs; pre-import pane and

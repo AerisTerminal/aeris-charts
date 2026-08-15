@@ -554,6 +554,7 @@ impl ChartEngine {
         self.append_price_line_labels(&mut out.labels, &measure);
         self.append_drawing_line_labels(&mut out.labels, &measure);
         self.append_last_value_label(&mut out.labels, &measure);
+        self.append_trading_axis_labels(&mut out.labels, &measure);
         if include_transient {
             self.append_crosshair_labels(&mut out.labels, &measure);
             self.append_native_user_price_alert_crosshair_labels(&mut out.labels, &measure);
@@ -1052,6 +1053,128 @@ impl ChartEngine {
                     });
                 }
             }
+        }
+    }
+
+    fn append_trading_axis_labels<F>(&self, labels: &mut Vec<AxisLabel>, measure: &F)
+    where
+        F: Fn(&str) -> f64,
+    {
+        let font_size = self.options.get().layout.font_size;
+        let mut append =
+            |pane_index: usize, target: crate::TradingPriceScale, price: f64, background: Color| {
+                let Some(pane) = self.panes.get(pane_index) else {
+                    return;
+                };
+                let Some(y) = self.trading_price_coordinate(pane_index, target, price) else {
+                    return;
+                };
+                if y < pane.top || y > pane.top + pane.height {
+                    return;
+                }
+                let target = PriceScaleTarget::from(target);
+                if target == PriceScaleTarget::Overlay {
+                    return;
+                }
+                let text = self.format_trading_price(price);
+                let width = 1.0 + 5.0 + 5.0 + 5.0 + measure(&text);
+                let height = font_size + 5.0;
+                let (x, align, background_x) = if target == PriceScaleTarget::Left {
+                    (
+                        self.pane_left - 10.0,
+                        AxisTextAlign::Right,
+                        self.pane_left - width,
+                    )
+                } else {
+                    (
+                        self.pane_left + self.pane_w + 10.0,
+                        AxisTextAlign::Left,
+                        self.pane_left + self.pane_w,
+                    )
+                };
+                labels.push(AxisLabel {
+                    text,
+                    x,
+                    y,
+                    color: background.contrast_text(),
+                    align,
+                    midpoint: AxisTextMidpoint::Label,
+                    font_scale: 1.0,
+                    bold: true,
+                    background: Some((background_x, y - height / 2.0, width, height, background)),
+                    background_corners: AxisLabelCorners::for_align(align),
+                    measure_extra: 0.0,
+                    attach_group: None,
+                });
+            };
+        for position in &self.trading_state.positions {
+            let pending = self
+                .trading_state
+                .pending_position_action
+                .as_ref()
+                .is_some_and(|action| action.position_id == position.id);
+            append(
+                position.pane_index,
+                position.price_scale,
+                position.average_price,
+                if pending {
+                    self.trading_state.style.pending
+                } else {
+                    self.trading_state.style.position
+                },
+            );
+        }
+        for order in &self.trading_state.orders {
+            let preview = self.trading_state.preview.as_ref().filter(|preview| {
+                matches!(
+                    &preview.source,
+                    crate::TradingPreviewSource::Order { order_id } if order_id == &order.id
+                )
+            });
+            let color = if preview
+                .is_some_and(|preview| preview.phase == crate::TradingPreviewPhase::Pending)
+            {
+                self.trading_state.style.pending
+            } else {
+                super::trading_geometry::trading_order_color(
+                    &self.trading_state.style,
+                    order.role,
+                    order.side,
+                    order.status,
+                )
+            };
+            append(
+                order.pane_index,
+                order.price_scale,
+                self.trading_effective_order_price(order),
+                color,
+            );
+            if order.kind == crate::OrderKind::StopLimit {
+                if let Some(stop_price) = order.stop_price {
+                    append(order.pane_index, order.price_scale, stop_price, color);
+                }
+            }
+        }
+        if let Some(preview) =
+            self.trading_state.preview.as_ref().filter(|preview| {
+                !matches!(preview.source, crate::TradingPreviewSource::Order { .. })
+            })
+        {
+            append(
+                preview.pane_index,
+                preview.price_scale,
+                preview.price,
+                if preview.phase == crate::TradingPreviewPhase::Pending {
+                    self.trading_state.style.pending
+                } else {
+                    super::trading_geometry::trading_order_color(
+                        &self.trading_state.style,
+                        preview.role,
+                        preview.side,
+                        crate::OrderStatus::Working,
+                    )
+                },
+            );
         }
     }
 

@@ -25,7 +25,10 @@ import type {
   persistence_restore_result, price_range, price_scale_api, price_scale_options, ring_source_layout,
   series_api, series_change_handler, series_data, series_kind,
   series_marker, series_marker_options, series_options, single_value_data, size_change_handler, time, time_range,
-  time_scale_api, time_scale_options, tracking_mode_options, visible_logical_range_handler, visible_time_range_handler,
+  time_scale_api, time_scale_options, tracking_mode_options, trading_api, trading_execution, trading_hit,
+  trading_intent, trading_intent_handler, trading_position, trading_preview, trading_snapshot,
+  trading_style_options, instrument_metadata, working_order,
+  visible_logical_range_handler, visible_time_range_handler,
 } from "./types.js";
 import {
   DRAWING_KIND_TO_U8, FEATURE_KIND_TO_U8, KIND_TO_U8, LINE_STYLE_TO_U8, LINE_TYPE_TO_U8,
@@ -184,6 +187,7 @@ const FRAME_STATS_SLOT = {
   overlay_rebuilds: 16,
   axis_rebuilds: 17,
   text_resolutions: 18,
+  trading_rebuilds: 19,
 } as const;
 
 /**
@@ -1032,6 +1036,13 @@ class series_impl implements series_api {
   native_repaint(): void {
     this.chart.repaint();
   }
+}
+
+function assert_trading_result(json: string): void {
+  const result = JSON.parse(json) as
+    | { ok: true }
+    | { ok: false; error: { code: nucleuscharts_error_code; message: string } };
+  if (!result.ok) throw new nucleuscharts_error(result.error.code, result.error.message);
 }
 
 export interface native_primitive_handle {
@@ -2137,6 +2148,97 @@ function apply_tracking(v: tracking_mode_options, cfg: resolved_gestures): void 
   cfg.tracking_exit_mode = v.exit_mode ?? cfg.tracking_exit_mode;
 }
 
+class trading_impl implements trading_api {
+  private readonly intent_handlers = new Set<trading_intent_handler>();
+
+  constructor(private readonly chart: chart_impl) {}
+
+  apply_snapshot(snapshot: trading_snapshot): void {
+    assert_trading_result(this.chart.wasm.set_trading_snapshot_json(JSON.stringify(snapshot)));
+    this.chart.repaint();
+  }
+
+  state(): Required<trading_snapshot> {
+    return JSON.parse(this.chart.wasm.trading_snapshot_json()) as Required<trading_snapshot>;
+  }
+
+  update_position(position: trading_position): void {
+    assert_trading_result(this.chart.wasm.update_trading_position_json(JSON.stringify(position)));
+    this.chart.repaint();
+  }
+
+  remove_position(id: string): boolean {
+    const changed = this.chart.wasm.remove_trading_position(id);
+    if (changed) this.chart.repaint();
+    return changed;
+  }
+
+  update_order(order: working_order): void {
+    assert_trading_result(this.chart.wasm.update_working_order_json(JSON.stringify(order)));
+    this.chart.repaint();
+  }
+
+  remove_order(id: string): boolean {
+    const changed = this.chart.wasm.remove_working_order(id);
+    if (changed) this.chart.repaint();
+    return changed;
+  }
+
+  apply_execution(execution: trading_execution): void {
+    assert_trading_result(this.chart.wasm.apply_trading_execution_json(JSON.stringify(execution)));
+    this.chart.repaint();
+  }
+
+  remove_execution(id: string): boolean {
+    const changed = this.chart.wasm.remove_trading_execution(id);
+    if (changed) this.chart.repaint();
+    return changed;
+  }
+
+  set_instrument(instrument: instrument_metadata): void {
+    assert_trading_result(this.chart.wasm.set_instrument_metadata_json(JSON.stringify(instrument)));
+    this.chart.repaint();
+  }
+
+  apply_options(options: Partial<trading_style_options>): void {
+    assert_trading_result(this.chart.wasm.apply_trading_style_json(JSON.stringify(options)));
+    this.chart.repaint();
+  }
+
+  hit_at(x: number, y: number): trading_hit | null {
+    return JSON.parse(this.chart.wasm.trading_hit_json(x, y)) as trading_hit | null;
+  }
+
+  preview(): trading_preview | null {
+    return JSON.parse(this.chart.wasm.trading_preview_json()) as trading_preview | null;
+  }
+
+  take_intents(): trading_intent[] {
+    return JSON.parse(this.chart.wasm.take_trading_intents_json()) as trading_intent[];
+  }
+
+  resolve_intent(sequence: number, accepted: boolean): boolean {
+    const changed = this.chart.wasm.resolve_trading_intent(sequence, accepted);
+    if (changed) this.chart.repaint();
+    return changed;
+  }
+
+  subscribe_intents(handler: trading_intent_handler): void {
+    this.intent_handlers.add(handler);
+  }
+
+  unsubscribe_intents(handler: trading_intent_handler): void {
+    this.intent_handlers.delete(handler);
+  }
+
+  dispatch_pending_intents(): void {
+    for (const intent of this.take_intents()) {
+      this.chart.announce_trading_intent(intent);
+      for (const handler of this.intent_handlers) handler(intent);
+    }
+  }
+}
+
 export class chart_impl implements chart_api {
   private wasm_instance: NucleusChart | null;
   private next_extra_series = false;
@@ -2158,6 +2260,7 @@ export class chart_impl implements chart_api {
   };
   private a11y_live: HTMLElement | null = null;
   private readonly ts = new time_scale_impl(this);
+  private readonly trading_handle = new trading_impl(this);
   private observer: ResizeObserver | null = null;
   private detach_gestures: (() => void) | null = null;
   private removed = false;
@@ -2220,6 +2323,50 @@ export class chart_impl implements chart_api {
   /** The gesture recognizer marks pointer/touch activity (down = true, all-up = false). */
   set_interacting(active: boolean): void {
     this.interacting = active;
+  }
+
+  trading(): trading_api {
+    return this.trading_handle;
+  }
+
+  trading_hover_at(x: number, y: number): boolean {
+    return this.wasm.trading_hover_at(x, y);
+  }
+
+  trading_hit_at(x: number, y: number): trading_hit | null {
+    return this.trading_handle.hit_at(x, y);
+  }
+
+  trading_cursor_at(x: number, y: number): string | null {
+    const cursor = this.wasm.trading_cursor_at(x, y);
+    return cursor === 2 ? "grab" : cursor === 1 ? "pointer" : null;
+  }
+
+  clear_trading_hover(): boolean {
+    return this.wasm.clear_trading_hover();
+  }
+
+  trading_drag_start_at(x: number, y: number): boolean {
+    return this.wasm.trading_drag_start_at(x, y);
+  }
+
+  trading_drag_to(y: number): boolean {
+    return this.wasm.trading_drag_to(y);
+  }
+
+  trading_drag_end(): void {
+    this.wasm.trading_drag_end_json();
+    this.trading_handle.dispatch_pending_intents();
+  }
+
+  cancel_trading_drag(): void {
+    this.wasm.cancel_trading_drag();
+  }
+
+  trading_activate_at(x: number, y: number): boolean {
+    const intent = JSON.parse(this.wasm.trading_activate_at_json(x, y)) as trading_intent | null;
+    this.trading_handle.dispatch_pending_intents();
+    return intent !== null;
   }
 
   /** Standard gesture forwarding for the engine-owned delta-tooltip interaction model. */
@@ -3077,6 +3224,13 @@ export class chart_impl implements chart_api {
     this.repaint();
   }
 
+  announce_trading_intent(intent: trading_intent): void {
+    if (!this.a11y_live) return;
+    const target = intent.order_id ?? intent.position_id ?? "trading object";
+    const price = intent.price === undefined ? "" : ` at ${intent.price}`;
+    this.a11y_live.textContent = `Trading request ${intent.action.replaceAll("_", " ")} for ${target}${price}, awaiting confirmation`;
+  }
+
   undo_drawing(): boolean {
     this.close_text_editor(true);
     const changed = this.wasm.undo_drawing();
@@ -3619,6 +3773,7 @@ export class chart_impl implements chart_api {
       overlay_rebuilds: out[FRAME_STATS_SLOT.overlay_rebuilds] as number,
       axis_rebuilds: out[FRAME_STATS_SLOT.axis_rebuilds] as number,
       text_resolutions: out[FRAME_STATS_SLOT.text_resolutions] as number,
+      trading_rebuilds: out[FRAME_STATS_SLOT.trading_rebuilds] as number,
     };
   }
 

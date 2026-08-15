@@ -222,6 +222,8 @@ export interface frame_stats {
   series_rebuilds: number;
   /** Retained drawing layers rebuilt for the most recent frame. */
   drawing_rebuilds: number;
+  /** Retained first-party trading layers rebuilt for the most recent frame. */
+  trading_rebuilds: number;
   /** Retained grid/underlay layers rebuilt for the most recent frame. */
   grid_rebuilds: number;
   /** Retained interaction-overlay layers rebuilt for the most recent frame. */
@@ -1470,6 +1472,170 @@ export interface pane_api {
   price_scale(id: "left" | "right" | ""): price_scale_api;
 }
 
+export type position_side = "long" | "short";
+export type order_side = "buy" | "sell";
+export type order_kind = "limit" | "stop" | "stop_limit";
+export type order_role = "working" | "stop_loss" | "take_profit";
+export type order_status =
+  | "pending_submit"
+  | "working"
+  | "pending_modify"
+  | "partially_filled"
+  | "filled"
+  | "pending_cancel"
+  | "cancelled"
+  | "rejected"
+  | "expired";
+export type trading_price_scale = "right" | "left" | "overlay";
+
+export interface instrument_metadata {
+  tick_size?: number;
+  price_precision?: number;
+  quantity_precision?: number;
+  minimum_quantity?: number;
+  point_value?: number;
+  currency?: string;
+}
+
+export interface trading_position {
+  id: string;
+  pane_index?: number;
+  price_scale?: trading_price_scale;
+  side: position_side;
+  average_price: number;
+  quantity: number;
+  display_pnl?: number;
+  currency?: string;
+}
+
+export interface working_order {
+  id: string;
+  pane_index?: number;
+  price_scale?: trading_price_scale;
+  side: order_side;
+  kind: order_kind;
+  role?: order_role;
+  status: order_status;
+  price: number;
+  stop_price?: number;
+  quantity: number;
+  filled_quantity?: number;
+  position_id?: string;
+  parent_order_id?: string;
+  bracket_id?: string;
+  oco_group_id?: string;
+  revision?: number;
+}
+
+export interface trading_execution {
+  id: string;
+  pane_index?: number;
+  price_scale?: trading_price_scale;
+  side: order_side;
+  kind: "entry" | "partial_fill" | "exit";
+  time: number;
+  price: number;
+  quantity: number;
+  order_id?: string;
+  position_id?: string;
+}
+
+export interface trading_snapshot {
+  instrument?: instrument_metadata;
+  positions?: trading_position[];
+  orders?: working_order[];
+  executions?: trading_execution[];
+}
+
+export interface trading_hit {
+  object_type: "position" | "order" | "execution";
+  id: string;
+  kind:
+    | "position_line"
+    | "order_line"
+    | "quantity_label"
+    | "cancel_button"
+    | "create_stop_button"
+    | "create_target_button"
+    | "execution_marker";
+  distance: number;
+}
+
+export type trading_intent_action =
+  | "modify_order"
+  | "cancel_order"
+  | "create_stop_loss"
+  | "create_take_profit"
+  | "close_position";
+
+export interface trading_intent {
+  sequence: number;
+  action: trading_intent_action;
+  order_id?: string;
+  position_id?: string;
+  side?: order_side;
+  kind?: order_kind;
+  role?: order_role;
+  price?: number;
+  stop_price?: number;
+  quantity?: number;
+  bracket_id?: string;
+  oco_group_id?: string;
+  base_revision: number;
+}
+
+export interface trading_preview {
+  source: "order" | "stop_loss" | "take_profit";
+  order_id?: string;
+  position_id?: string;
+  phase: "dragging" | "pending";
+  pane_index: number;
+  price_scale: trading_price_scale;
+  price: number;
+  quantity: number;
+  side: order_side;
+  role: order_role;
+  base_revision: number;
+  intent_sequence?: number;
+}
+
+export type trading_intent_handler = (intent: trading_intent) => void;
+
+export interface trading_style_options {
+  position: string;
+  working_order: string;
+  buy: string;
+  sell: string;
+  profit: string;
+  risk: string;
+  take_profit: string;
+  stop_loss: string;
+  pending: string;
+  rejected: string;
+  control: string;
+  label: string;
+}
+
+/** First-party, broker-neutral runtime trading state. Live objects are never chart-persisted. */
+export interface trading_api {
+  apply_snapshot(snapshot: trading_snapshot): void;
+  state(): Required<trading_snapshot>;
+  update_position(position: trading_position): void;
+  remove_position(id: string): boolean;
+  update_order(order: working_order): void;
+  remove_order(id: string): boolean;
+  apply_execution(execution: trading_execution): void;
+  remove_execution(id: string): boolean;
+  set_instrument(instrument: instrument_metadata): void;
+  apply_options(options: Partial<trading_style_options>): void;
+  hit_at(x: number, y: number): trading_hit | null;
+  preview(): trading_preview | null;
+  take_intents(): trading_intent[];
+  resolve_intent(sequence: number, accepted: boolean): boolean;
+  subscribe_intents(handler: trading_intent_handler): void;
+  unsubscribe_intents(handler: trading_intent_handler): void;
+}
+
 /** The chart. Create with {@link create_chart}. */
 export interface chart_api {
   /** Active pane backend: `webgpu` when available, otherwise the shared `canvas2d` fallback. */
@@ -1483,6 +1649,8 @@ export interface chart_api {
    * The first call arms WebGPU GPU-time collection; see {@link frame_stats.gpu_ms}.
    */
   frame_stats(): frame_stats;
+  /** The chart-local first-party trading domain. Broker state remains host-authoritative. */
+  trading(): trading_api;
   add_series(kind: series_kind, options?: Partial<any_series_options>): series_api;
   /**
    * Add a custom series (plugin platform Phase C-c; reference `IChartApi.addCustomSeries`): a

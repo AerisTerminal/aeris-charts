@@ -21,7 +21,7 @@ use std::cell::Cell;
 /// `f64` slots written by `NucleusChart::frame_stats_into`. The TypeScript façade owns one
 /// scratch `Float64Array` of this length and re-reads it every frame, so a `frame_stats()` call
 /// allocates nothing on either side of the boundary.
-pub const FRAME_STATS_LEN: usize = 19;
+pub const FRAME_STATS_LEN: usize = 20;
 
 /// Slot indices in the `frame_stats_into` buffer. Kept in lockstep with `read_frame_stats` in
 /// `packages/charts/src/impl.ts` — append only, never reorder (the package pins `^0.8`).
@@ -46,6 +46,7 @@ pub mod slot {
     pub const OVERLAY_REBUILDS: usize = 16;
     pub const AXIS_REBUILDS: usize = 17;
     pub const TEXT_RESOLUTIONS: usize = 18;
+    pub const TRADING_REBUILDS: usize = 19;
 }
 
 #[derive(Default)]
@@ -81,6 +82,7 @@ pub struct FrameTelemetry {
     autoscale_runs: Cell<u64>,
     series_rebuilds: Cell<u64>,
     drawing_rebuilds: Cell<u64>,
+    trading_rebuilds: Cell<u64>,
     grid_rebuilds: Cell<u64>,
     overlay_rebuilds: Cell<u64>,
     axis_rebuilds: Cell<u64>,
@@ -116,6 +118,7 @@ impl FrameTelemetry {
         self.autoscale_runs.set(stats.autoscale_runs);
         self.series_rebuilds.set(stats.series_rebuilds);
         self.drawing_rebuilds.set(stats.drawing_rebuilds);
+        self.trading_rebuilds.set(stats.trading_rebuilds);
         self.grid_rebuilds.set(stats.grid_rebuilds);
         self.overlay_rebuilds.set(stats.overlay_rebuilds);
     }
@@ -185,6 +188,7 @@ impl FrameTelemetry {
         out[slot::OVERLAY_REBUILDS] = self.overlay_rebuilds.get() as f64;
         out[slot::AXIS_REBUILDS] = self.axis_rebuilds.get() as f64;
         out[slot::TEXT_RESOLUTIONS] = self.text_resolutions.get() as f64;
+        out[slot::TRADING_REBUILDS] = self.trading_rebuilds.get() as f64;
     }
 }
 
@@ -260,6 +264,7 @@ mod tests {
             grid_rebuilds: 6,
             series_rebuilds: 7,
             drawing_rebuilds: 8,
+            trading_rebuilds: 12,
             overlay_rebuilds: 9,
         });
         telemetry.set_browser_rebuilds(10, 11);
@@ -267,7 +272,7 @@ mod tests {
         telemetry.write_into(&mut out, None);
         assert_eq!(
             &out[slot::GPU_BUFFER_ALLOCATIONS..],
-            &[1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 8.0, 6.0, 9.0, 10.0, 11.0]
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 8.0, 6.0, 9.0, 10.0, 11.0, 12.0]
         );
     }
 

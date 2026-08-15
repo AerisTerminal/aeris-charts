@@ -51,8 +51,10 @@ use nucleuscharts_core::scale::price_scale_core::PriceScaleMode;
 use nucleuscharts_engine::{
     crosshair_mode_from_u8, line_style_from_u8, marker_pos, marker_shape, AxisFrame, AxisLabel,
     AxisLabelCorners, AxisTextAlign, AxisTextMidpoint, ChartEngine, DrawingKind, DrawingModifiers,
-    DrawingPoint, FeatureSeriesKind, Marker, PaneId, PriceFormatterFn, PriceScaleTarget,
-    PrimitiveAutoscaleContribution, SeriesKind, TickMarkFormatterFn, TimeFormatterFn,
+    DrawingPoint, ExecutionId, FeatureSeriesKind, InstrumentMetadata, Marker, OrderId, PaneId,
+    PositionId, PriceFormatterFn, PriceScaleTarget, PrimitiveAutoscaleContribution, SeriesKind,
+    TickMarkFormatterFn, TimeFormatterFn, TradingExecution, TradingPosition, TradingSnapshot,
+    TradingStyleOptions, WorkingOrder,
 };
 use nucleuscharts_render::canvas2d::{
     execute as execute_canvas2d, Canvas2d, Viewport as CanvasViewport,
@@ -111,6 +113,20 @@ fn rejected_diagnostics_json(reason: impl core::fmt::Display) -> String {
         "reason": reason.to_string(),
     })
     .to_string()
+}
+
+fn trading_result_json(result: Result<(), nucleuscharts_engine::ChartError>) -> String {
+    match result {
+        Ok(()) => r#"{"ok":true}"#.to_string(),
+        Err(error) => serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": error.code().name(),
+                "message": error.message(),
+            }
+        })
+        .to_string(),
+    }
 }
 
 fn broadcast_gpu_loss() {
@@ -752,6 +768,237 @@ pub async fn create_offscreen_chart(
 /// delegate straight through to the inner chart.
 #[wasm_bindgen]
 impl NucleusChart {
+    /// Replace the chart-local, host-authoritative runtime trading state transactionally.
+    pub fn set_trading_snapshot_json(&mut self, snapshot_json: &str) -> String {
+        let snapshot = match serde_json::from_str::<TradingSnapshot>(snapshot_json) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                return trading_result_json(Err(nucleuscharts_engine::ChartError::new(
+                    nucleuscharts_engine::ErrorCode::InvalidData,
+                    error.to_string(),
+                )))
+            }
+        };
+        trading_result_json(
+            self.inner
+                .borrow_mut()
+                .engine
+                .set_trading_snapshot(snapshot),
+        )
+    }
+
+    pub fn trading_snapshot_json(&self) -> String {
+        serde_json::to_string(&self.inner.borrow().engine.trading_snapshot())
+            .unwrap_or_else(|_| "{}".to_string())
+    }
+
+    pub fn update_trading_position_json(&mut self, position_json: &str) -> String {
+        let position = match serde_json::from_str::<TradingPosition>(position_json) {
+            Ok(position) => position,
+            Err(error) => {
+                return trading_result_json(Err(nucleuscharts_engine::ChartError::new(
+                    nucleuscharts_engine::ErrorCode::InvalidData,
+                    error.to_string(),
+                )))
+            }
+        };
+        trading_result_json(
+            self.inner
+                .borrow_mut()
+                .engine
+                .update_trading_position(position),
+        )
+    }
+
+    pub fn remove_trading_position(&mut self, id: &str) -> bool {
+        PositionId::new(id)
+            .is_ok_and(|id| self.inner.borrow_mut().engine.remove_trading_position(&id))
+    }
+
+    pub fn update_working_order_json(&mut self, order_json: &str) -> String {
+        let order = match serde_json::from_str::<WorkingOrder>(order_json) {
+            Ok(order) => order,
+            Err(error) => {
+                return trading_result_json(Err(nucleuscharts_engine::ChartError::new(
+                    nucleuscharts_engine::ErrorCode::InvalidData,
+                    error.to_string(),
+                )))
+            }
+        };
+        trading_result_json(self.inner.borrow_mut().engine.update_working_order(order))
+    }
+
+    pub fn remove_working_order(&mut self, id: &str) -> bool {
+        OrderId::new(id).is_ok_and(|id| self.inner.borrow_mut().engine.remove_working_order(&id))
+    }
+
+    pub fn apply_trading_execution_json(&mut self, execution_json: &str) -> String {
+        let execution = match serde_json::from_str::<TradingExecution>(execution_json) {
+            Ok(execution) => execution,
+            Err(error) => {
+                return trading_result_json(Err(nucleuscharts_engine::ChartError::new(
+                    nucleuscharts_engine::ErrorCode::InvalidData,
+                    error.to_string(),
+                )))
+            }
+        };
+        trading_result_json(
+            self.inner
+                .borrow_mut()
+                .engine
+                .apply_trading_execution(execution),
+        )
+    }
+
+    pub fn remove_trading_execution(&mut self, id: &str) -> bool {
+        ExecutionId::new(id)
+            .is_ok_and(|id| self.inner.borrow_mut().engine.remove_trading_execution(&id))
+    }
+
+    pub fn set_instrument_metadata_json(&mut self, instrument_json: &str) -> String {
+        let instrument = match serde_json::from_str::<InstrumentMetadata>(instrument_json) {
+            Ok(instrument) => instrument,
+            Err(error) => {
+                return trading_result_json(Err(nucleuscharts_engine::ChartError::new(
+                    nucleuscharts_engine::ErrorCode::InvalidData,
+                    error.to_string(),
+                )))
+            }
+        };
+        trading_result_json(
+            self.inner
+                .borrow_mut()
+                .engine
+                .set_instrument_metadata(instrument),
+        )
+    }
+
+    pub fn apply_trading_style_json(&mut self, options_json: &str) -> String {
+        let options = match serde_json::from_str::<TradingStyleOptions>(options_json) {
+            Ok(options) => options,
+            Err(error) => {
+                return trading_result_json(Err(nucleuscharts_engine::ChartError::new(
+                    nucleuscharts_engine::ErrorCode::InvalidData,
+                    error.to_string(),
+                )))
+            }
+        };
+        trading_result_json(self.inner.borrow_mut().engine.apply_trading_style(options))
+    }
+
+    pub fn trading_hit_json(&self, x_css: f64, y_css: f64) -> String {
+        let hit = self.inner.borrow().engine.trading_hit_at(x_css, y_css);
+        match hit {
+            None => "null".to_string(),
+            Some(hit) => {
+                let (object_type, id) = match hit.object {
+                    nucleuscharts_engine::TradingObjectId::Position(id) => {
+                        ("position", id.as_str().to_string())
+                    }
+                    nucleuscharts_engine::TradingObjectId::Order(id) => {
+                        ("order", id.as_str().to_string())
+                    }
+                    nucleuscharts_engine::TradingObjectId::Execution(id) => {
+                        ("execution", id.as_str().to_string())
+                    }
+                };
+                let kind = match hit.kind {
+                    nucleuscharts_engine::TradingHitKind::PositionLine => "position_line",
+                    nucleuscharts_engine::TradingHitKind::OrderLine => "order_line",
+                    nucleuscharts_engine::TradingHitKind::QuantityLabel => "quantity_label",
+                    nucleuscharts_engine::TradingHitKind::CancelButton => "cancel_button",
+                    nucleuscharts_engine::TradingHitKind::CreateStopButton => "create_stop_button",
+                    nucleuscharts_engine::TradingHitKind::CreateTargetButton => {
+                        "create_target_button"
+                    }
+                    nucleuscharts_engine::TradingHitKind::ExecutionMarker => "execution_marker",
+                };
+                serde_json::json!({
+                    "object_type": object_type,
+                    "id": id,
+                    "kind": kind,
+                    "distance": hit.distance,
+                })
+                .to_string()
+            }
+        }
+    }
+
+    pub fn trading_hover_at(&mut self, x_css: f64, y_css: f64) -> bool {
+        self.inner
+            .borrow_mut()
+            .engine
+            .set_trading_hover(x_css, y_css)
+    }
+
+    pub fn trading_cursor_at(&self, x_css: f64, y_css: f64) -> u8 {
+        match self.inner.borrow().engine.trading_hit_at(x_css, y_css) {
+            None => 0,
+            Some(hit)
+                if matches!(
+                    hit.kind,
+                    nucleuscharts_engine::TradingHitKind::OrderLine
+                        | nucleuscharts_engine::TradingHitKind::PositionLine
+                ) =>
+            {
+                2
+            }
+            Some(_) => 1,
+        }
+    }
+
+    pub fn clear_trading_hover(&mut self) -> bool {
+        self.inner.borrow_mut().engine.clear_trading_hover()
+    }
+
+    pub fn trading_drag_start_at(&mut self, x_css: f64, y_css: f64) -> bool {
+        self.inner
+            .borrow_mut()
+            .engine
+            .trading_drag_start_at(x_css, y_css)
+    }
+
+    pub fn trading_drag_to(&mut self, y_css: f64) -> bool {
+        self.inner.borrow_mut().engine.trading_drag_to(y_css)
+    }
+
+    pub fn trading_drag_end_json(&mut self) -> String {
+        serde_json::to_string(&self.inner.borrow_mut().engine.trading_drag_end())
+            .unwrap_or_else(|_| "null".to_string())
+    }
+
+    pub fn cancel_trading_drag(&mut self) -> bool {
+        self.inner.borrow_mut().engine.cancel_trading_drag()
+    }
+
+    pub fn trading_activate_at_json(&mut self, x_css: f64, y_css: f64) -> String {
+        serde_json::to_string(
+            &self
+                .inner
+                .borrow_mut()
+                .engine
+                .trading_activate_at(x_css, y_css),
+        )
+        .unwrap_or_else(|_| "null".to_string())
+    }
+
+    pub fn trading_preview_json(&self) -> String {
+        serde_json::to_string(&self.inner.borrow().engine.trading_preview())
+            .unwrap_or_else(|_| "null".to_string())
+    }
+
+    pub fn resolve_trading_intent(&mut self, sequence: u32, accepted: bool) -> bool {
+        self.inner
+            .borrow_mut()
+            .engine
+            .resolve_trading_intent(sequence, accepted)
+    }
+
+    pub fn take_trading_intents_json(&mut self) -> String {
+        serde_json::to_string(&self.inner.borrow_mut().engine.take_trading_intents())
+            .unwrap_or_else(|_| "[]".to_string())
+    }
+
     /// Explicit, idempotent pre-drop cleanup. The TypeScript owner calls this immediately before
     /// wasm-bindgen `free()` so retained JS handles cannot retain chart, extension, ring, or GPU
     /// resources through garbage-collection timing.
