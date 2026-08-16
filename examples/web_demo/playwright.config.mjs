@@ -5,6 +5,9 @@ const portable_browser = process.env.NUCLEUSCHARTS_PORTABLE_BROWSER === "1";
 
 export default defineConfig({
   testDir: "./tests",
+  // GitHub's shared Windows runners are substantially slower than release developer machines.
+  // Keep the local feedback ceiling tight while allowing the same assertions to finish in CI.
+  timeout: process.env.CI ? 60_000 : 30_000,
   fullyParallel: false,
   workers: 1,
   reporter: [["list"], ["html", { open: "never" }]],
