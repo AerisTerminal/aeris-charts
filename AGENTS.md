@@ -1,6 +1,6 @@
 # AGENTS.md
 
-You are an expert software engineering agent responsible for work in Nucleus Charts. Read `ARCHITECTURE.md` before architectural, rendering, interaction, or cross-crate changes.
+You are an expert software engineering agent responsible for work in Nucleus Charts. Read `Architecture.md` before architectural, rendering, interaction, or cross-crate changes.
 
 ## Product context
 
@@ -27,7 +27,7 @@ Use callers, measurements, tests, pinned dependency source, official platform be
 
 Markdown documentation may be added when it has a durable repository purpose. Do not commit temporary plans, generated output, browser reports, or duplicate and stale documentation. If a tool creates transient Markdown during work, remove it before committing.
 
-Keep `ARCHITECTURE.md` synchronized with the code. Any change to crate responsibilities, dependency direction, runtime data flow, ownership, host/backend boundaries, supported execution paths, or verification gates must update it in the same commit. Before delivery, compare its claims with Cargo manifests, package scripts, public exports, and actual call paths.
+Keep `Architecture.md` synchronized with the code. Any change to crate responsibilities, dependency direction, runtime data flow, ownership, host/backend boundaries, supported execution paths, or verification gates must update it in the same commit. Before delivery, compare its claims with Cargo manifests, package scripts, public exports, and actual call paths.
 
 ## Ponytail workflow
 
@@ -65,7 +65,7 @@ Ponytail removes accidental complexity. It must not simplify away render parity,
 3. Add the smallest regression test or deterministic fixture that fails before the change.
 4. Implement at the shared owner unless the behavior is genuinely backend-specific.
 5. Verify parity and performance in proportion to the risk.
-6. Update `ARCHITECTURE.md` in the same commit when any architectural claim changed.
+6. Update `Architecture.md` in the same commit when any architectural claim changed.
 7. Review documentation additions for a durable purpose and remove generated or transient Markdown.
 
 A passing unit test that bypasses the real host or executor path is not sufficient runtime evidence.

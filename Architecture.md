@@ -127,7 +127,7 @@ The package also ships `design.css` and Inter as the portable host design system
 The package uses `snake_case` publicly. Data crosses into WebAssembly in typed columns or bounded shared-ring layouts rather than per-point object calls on hot paths. Typed update batches transfer their sanitized owned columns to the engine's batch entry point; the browser wrapper never loops through the single-row engine API. `examples/web_demo` is an integration and parity test host, not part of the library architecture.
 
 The supported, experimental, internal-but-exposed, and legacy surfaces are classified in
-`PUBLIC_API.md`. Predictable browser failures use `nucleuscharts_error` with stable category codes;
+`Public_api.md`. Predictable browser failures use `nucleuscharts_error` with stable category codes;
 clean ingestion retains a null diagnostics fast path. The generated WASM surface and benchmark/test
 hooks are internal even when visible to developer tools. A deterministic declaration manifest makes
 supported TypeScript surface changes explicit in CI.

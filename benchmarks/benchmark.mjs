@@ -158,7 +158,7 @@ async function claims() {
     if (/\.(?:png|ttf|wasm|lock)$/i.test(relative)
       || relative.startsWith("benchmarks/")
       || relative === "AGENTS.md"
-      || relative === "ARCHITECTURE.md"
+      || relative === "Architecture.md"
       || relative.includes("/tests/")
       || relative.endsWith("/examples/perf_gate.rs")) continue;
     const text = await readFile(path.join(repository_root, relative), "utf8").catch(() => "");

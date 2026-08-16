@@ -147,8 +147,8 @@ for crosshair lines, and muted for crosshair-label surfaces.
 - `packages/charts` — TypeScript browser package.
 - `examples/web_demo` — browser integration and parity test host; it is not a published package.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for ownership, data flow, and backend boundaries.
-See [PUBLIC_API.md](PUBLIC_API.md) for supported/experimental surfaces, persistence, errors, and
+See [Architecture.md](Architecture.md) for ownership, data flow, and backend boundaries.
+See [Public_api.md](Public_api.md) for supported/experimental surfaces, persistence, errors, and
 version policy. Workspace Rust crates are internal exact-revision components, not crates.io products.
 
 ## Development
