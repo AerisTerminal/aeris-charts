@@ -1727,7 +1727,10 @@ impl Probe {
             timestamp_ms: self.now_ms(),
         }
         .intent(self.gesture_config.wheel_behavior);
-        if intent == WheelIntent::Zoom && normalized_y != 0.0 && self.gesture_config.wheel_zoom {
+        if matches!(intent, WheelIntent::Zoom | WheelIntent::PanAndZoom)
+            && normalized_y != 0.0
+            && self.gesture_config.wheel_zoom
+        {
             let zoom = nucleuscharts_engine::wheel_zoom_scale(normalized_y);
             let pane = self.engine.pane_index_at_y(y);
             if chart_x < self.engine.pane_left {
@@ -1740,12 +1743,17 @@ impl Probe {
                 self.engine.time_scale_zoom(pane_x, zoom);
             }
         }
-        let pan_delta = if normalized_x.abs() >= normalized_y.abs() {
+        let pan_delta = if self.gesture_config.wheel_behavior == WheelBehavior::Auto {
+            normalized_x
+        } else if normalized_x.abs() >= normalized_y.abs() {
             normalized_x
         } else {
             normalized_y
         };
-        if intent == WheelIntent::Pan && pan_delta != 0.0 && self.gesture_config.wheel_scroll {
+        if matches!(intent, WheelIntent::Pan | WheelIntent::PanAndZoom)
+            && pan_delta != 0.0
+            && self.gesture_config.wheel_scroll
+        {
             self.engine.time_scale_start_scroll(0.0);
             self.engine
                 .time_scale_scroll_to(nucleuscharts_engine::WHEEL_SCROLL_PX_PER_DELTA * pan_delta);

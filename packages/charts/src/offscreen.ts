@@ -416,10 +416,12 @@ export class offscreen_chart {
     const pane_left = this.wasm.pane_left();
     const pane_width = this.wasm.time_scale_width();
     const behavior = this.wheel_behavior === "pan" ? 1 : this.wheel_behavior === "zoom" ? 2 : 0;
-    const mode = this.wasm.classify_wheel(behavior, event.delta_mode ?? 0, event.ctrl_key === true) === 2
-      ? "zoom" : "pan";
-    const pan_delta = Math.abs(delta_x) >= Math.abs(delta_y) ? delta_x : -delta_y;
-    if (mode === "zoom" && delta_y !== 0) {
+    const intent = this.wasm.classify_wheel(
+      behavior, delta_x, delta_y, event.delta_mode ?? 0, event.ctrl_key === true,
+    );
+    const pan_delta = this.wheel_behavior === "auto"
+      ? delta_x : Math.abs(delta_x) >= Math.abs(delta_y) ? delta_x : -delta_y;
+    if ((intent & 2) !== 0 && delta_y !== 0) {
       if (event.x < pane_left || event.x > pane_left + pane_width) {
         this.wasm.price_axis_wheel_zoom(
           this.wasm.pane_index_at_y(event.y),
@@ -431,7 +433,7 @@ export class offscreen_chart {
         this.wasm.zoom(event.x - pane_left, this.wasm.wheel_zoom_scale(delta_y));
       }
     }
-    if (mode === "pan" && pan_delta !== 0) {
+    if ((intent & 1) !== 0 && pan_delta !== 0) {
       this.wasm.scroll_start(0);
       this.wasm.scroll_move(this.wasm.wheel_scroll_delta(pan_delta));
       this.wasm.scroll_end();

@@ -419,10 +419,11 @@ export function install_gestures(chart: chart_impl): () => void {
     const delta_x = (adj * e.deltaX) / 100;
     const delta_y = -(adj * e.deltaY) / 100;
     const behavior = cfg.wheel_behavior === "pan" ? 1 : cfg.wheel_behavior === "zoom" ? 2 : 0;
-    const mode = wasm.classify_wheel(behavior, e.deltaMode, e.ctrlKey) === 2 ? "zoom" : "pan";
-    const pan_delta = Math.abs(delta_x) >= Math.abs(delta_y) ? delta_x : -delta_y;
-    const do_zoom = mode === "zoom" && delta_y !== 0 && cfg.wheel_zoom;
-    const do_scroll = mode === "pan" && pan_delta !== 0 && cfg.wheel_scroll;
+    const intent = wasm.classify_wheel(behavior, delta_x, delta_y, e.deltaMode, e.ctrlKey);
+    const pan_delta = cfg.wheel_behavior === "auto"
+      ? delta_x : Math.abs(delta_x) >= Math.abs(delta_y) ? delta_x : -delta_y;
+    const do_zoom = (intent & 2) !== 0 && delta_y !== 0 && cfg.wheel_zoom;
+    const do_scroll = (intent & 1) !== 0 && pan_delta !== 0 && cfg.wheel_scroll;
     if (!do_zoom && !do_scroll) return; // let the page scroll
     if (e.cancelable) e.preventDefault();
     if (do_zoom) {
@@ -753,7 +754,6 @@ export function install_gestures(chart: chart_impl): () => void {
     }
     const trading_hit = chart.trading_hit_at(p.x, p.y);
     if (trading_hit !== null) {
-      chart.focus_accessibility(pane_of(p.y), `${trading_hit.object_type}:${trading_hit.id}`);
       chart.trading_activate_at(p.x, p.y);
       chart.repaint();
       return;
@@ -765,11 +765,6 @@ export function install_gestures(chart: chart_impl): () => void {
       return;
     }
     chart.emit_click(p.x, p.y);
-    // Clicking an existing text drawing opens its contenteditable editor. Moving focus to the
-    // semantic drawing target here would immediately blur and commit that editor.
-    if (chart.text_editor_active()) return;
-    const drawing = chart.selected_drawing();
-    chart.focus_accessibility(pane_of(p.y), drawing === null ? undefined : `drawing:${drawing.id}`);
   };
 
   // reference `preventScrollByWheelClick` (helpers/events.ts): suppress Chrome's middle-click
@@ -828,7 +823,6 @@ export function install_gestures(chart: chart_impl): () => void {
     stop_kinetic();
     stop_scroll_anim();
     const p = local_xy(e);
-    chart.focus_accessibility(pane_of(p.y));
     try { overlay.setPointerCapture(e.pointerId); } catch { /* synthetic pointer */ }
     pointers.set(e.pointerId, p);
     chart.set_interacting(true);
@@ -1065,14 +1059,11 @@ export function install_gestures(chart: chart_impl): () => void {
     } else if (was_tap) {
       const trading_hit = chart.trading_hit_at_device(p.x, p.y, InputDeviceCode.Touch);
       if (trading_press && trading_hit !== null) {
-        chart.focus_accessibility(pane_of(p.y), `${trading_hit.object_type}:${trading_hit.id}`);
         chart.trading_activate_at(p.x, p.y);
       } else if (chart.creation_armed() && chart.creation_click(p.x, p.y, false, false)) {
         // creation handled
       } else {
         chart.emit_click(p.x, p.y);
-        const drawing = chart.selected_drawing();
-        chart.focus_accessibility(pane_of(p.y), drawing === null ? undefined : `drawing:${drawing.id}`);
       }
     }
     suppress_compatibility_click = true;

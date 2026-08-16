@@ -85,8 +85,8 @@ with `detach()` releases its engine and host state.
 
 Browser input uses Pointer Events for mouse, touch, and pen. The engine owns the bounded gesture
 state, live-centroid pinch behavior, cancellation, and device-aware hit tolerances. Wheel policy is
-configurable with `wheel_behavior: "auto" | "pan" | "zoom"`; auto preserves high-resolution
-trackpad deltas as pan while treating discrete wheels and browser pinch signals as zoom.
+configurable with `wheel_behavior: "auto" | "pan" | "zoom"`; matching Lightweight Charts, auto
+zooms from vertical deltas and pans from horizontal deltas without requiring a modifier key.
 
 ## Trading and order management
 

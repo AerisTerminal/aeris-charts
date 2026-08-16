@@ -61,6 +61,7 @@ pub enum WheelIntent {
     Ignore = 0,
     Pan = 1,
     Zoom = 2,
+    PanAndZoom = 3,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -79,13 +80,12 @@ impl WheelSample {
         match behavior {
             WheelBehavior::Pan => WheelIntent::Pan,
             WheelBehavior::Zoom => WheelIntent::Zoom,
-            WheelBehavior::Auto => {
-                if self.modifiers.control || self.delta_mode != WheelDeltaMode::Pixel {
-                    WheelIntent::Zoom
-                } else {
-                    WheelIntent::Pan
-                }
-            }
+            WheelBehavior::Auto => match (self.delta_x != 0.0, self.delta_y != 0.0) {
+                (true, true) => WheelIntent::PanAndZoom,
+                (true, false) => WheelIntent::Pan,
+                (false, true) => WheelIntent::Zoom,
+                (false, false) => WheelIntent::Ignore,
+            },
         }
     }
 }
@@ -849,17 +849,18 @@ mod tests {
     }
 
     #[test]
-    fn wheel_auto_preserves_trackpad_pan_and_classifies_pinch_and_discrete_zoom() {
+    fn wheel_auto_matches_reference_axis_semantics_without_a_modifier() {
         let mut sample = WheelSample {
             delta_y: -0.125,
             ..WheelSample::default()
         };
-        assert_eq!(sample.intent(WheelBehavior::Auto), WheelIntent::Pan);
+        assert_eq!(sample.intent(WheelBehavior::Auto), WheelIntent::Zoom);
         sample.modifiers.control = true;
         assert_eq!(sample.intent(WheelBehavior::Auto), WheelIntent::Zoom);
-        sample.modifiers.control = false;
-        sample.delta_mode = WheelDeltaMode::Line;
-        assert_eq!(sample.intent(WheelBehavior::Auto), WheelIntent::Zoom);
+        sample.delta_x = 0.25;
+        assert_eq!(sample.intent(WheelBehavior::Auto), WheelIntent::PanAndZoom);
+        sample.delta_y = 0.0;
+        assert_eq!(sample.intent(WheelBehavior::Auto), WheelIntent::Pan);
         assert_eq!(sample.intent(WheelBehavior::Pan), WheelIntent::Pan);
     }
 

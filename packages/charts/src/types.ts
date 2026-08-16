@@ -662,7 +662,7 @@ export interface chart_options {
   handle_scale: boolean | handle_scale_options;
   /** Momentum scroll after a pan flick (reference `kineticScroll`). Default touch-only. Package-level. */
   kinetic_scroll: boolean | kinetic_scroll_options;
-  /** Wheel/trackpad policy. `auto` pans continuous pixel deltas and zooms discrete wheels/pinches. */
+  /** Wheel/trackpad policy. `auto` zooms vertical deltas and pans horizontal deltas. */
   wheel_behavior: "auto" | "pan" | "zoom";
   /** Chart-owned keyboard and assistive-technology surface. Enabled by default. */
   accessibility: boolean | accessibility_options;

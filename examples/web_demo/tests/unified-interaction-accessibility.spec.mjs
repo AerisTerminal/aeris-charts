@@ -6,6 +6,43 @@ async function open_chart(page) {
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 }
 
+test("default wheel behavior matches Lightweight Charts axis semantics", async ({ page }) => {
+  await open_chart(page);
+  const box = await page.locator("#chart_container canvas:last-of-type").boundingBox();
+  const state = () => page.evaluate(() => ({
+    spacing: window.__chart.wasm.bar_spacing(),
+    offset: window.__chart.wasm.scroll_position(),
+  }));
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+
+  const beforeZoom = await state();
+  await page.mouse.wheel(0, -24);
+  const afterZoom = await state();
+  expect(afterZoom.spacing).toBeGreaterThan(beforeZoom.spacing);
+
+  const beforePan = await state();
+  await page.mouse.wheel(24, 0);
+  const afterPan = await state();
+  expect(afterPan.spacing).toBeCloseTo(beforePan.spacing, 8);
+  expect(afterPan.offset).not.toBeCloseTo(beforePan.offset, 8);
+});
+
+test("pointer interaction does not move focus into the accessibility application", async ({ page }) => {
+  await open_chart(page);
+  const overlay = page.locator("#chart_container canvas:last-of-type");
+  const box = await overlay.boundingBox();
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  const state = await page.evaluate(() => {
+    const layer = window.__chart.chart_element().querySelector(".nucleuscharts-a11y-layer");
+    return {
+      accessibilityFocused: layer.contains(document.activeElement),
+      outline: getComputedStyle(layer).outlineStyle,
+    };
+  });
+  expect(state.accessibilityFocused).toBe(false);
+  expect(state.outline).toBe("none");
+});
+
 test("Pointer Events pinch around the live centroid and continue with the surviving pointer", async ({ page }) => {
   await open_chart(page);
   const result = await page.evaluate(() => {

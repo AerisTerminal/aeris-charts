@@ -2360,11 +2360,6 @@ export class chart_impl implements chart_api {
     this.accessibility_handle = handle;
   }
 
-  focus_accessibility(pane_index: number, target?: string): void {
-    if (target === undefined) this.accessibility_handle?.focus(pane_index);
-    else this.accessibility_handle?.focus_target(target, pane_index);
-  }
-
   trading_hover_at(x: number, y: number): boolean {
     return this.wasm.trading_hover_at(x, y);
   }
@@ -3482,11 +3477,6 @@ export class chart_impl implements chart_api {
   // Text-tool editing session (TradingView's typing mode — package-owned host DOM; the engine
   // renders the label, the placeholder, and the container, and stays DOM-free)
   // ---------------------------------------------------------------------------------------------
-
-  /** Whether the text editor is currently open. */
-  text_editor_active(): boolean {
-    return this.text_editor !== null;
-  }
 
   /**
    * Open the typing-mode editor for a text drawing (TradingView's editing chrome): a square,

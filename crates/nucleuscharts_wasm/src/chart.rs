@@ -2605,7 +2605,14 @@ impl NucleusChart {
         write_input_update(out, self.inner.borrow_mut().input.cancel())
     }
 
-    pub fn classify_wheel(&self, behavior: u8, delta_mode: u8, control: bool) -> u8 {
+    pub fn classify_wheel(
+        &self,
+        behavior: u8,
+        delta_x: f64,
+        delta_y: f64,
+        delta_mode: u8,
+        control: bool,
+    ) -> u8 {
         let behavior = match behavior {
             1 => nucleuscharts_engine::WheelBehavior::Pan,
             2 => nucleuscharts_engine::WheelBehavior::Zoom,
@@ -2617,6 +2624,8 @@ impl NucleusChart {
             _ => nucleuscharts_engine::WheelDeltaMode::Pixel,
         };
         nucleuscharts_engine::WheelSample {
+            delta_x,
+            delta_y,
             delta_mode,
             modifiers: nucleuscharts_engine::InputModifiers {
                 control,
