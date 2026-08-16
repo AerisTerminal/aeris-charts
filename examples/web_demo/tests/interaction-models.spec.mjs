@@ -77,8 +77,8 @@ test("interaction models run engine-side with reference behavior", async ({ page
   expect(mid1).toBeCloseTo(mid0, 6); // center-pinned
   await page.mouse.up();
 
-  // 3) vertical price pan: grabbing the autoscaled candle unlocks its scale, then shifts the
-  // range with a constant span.
+  // 3) vertical price pan: grabbing an autoscaled candle preserves the lock. Once the scale is
+  // explicitly manual, the same grab shifts its range with a constant span.
   const grab = await page.evaluate(async () => {
     window.__chart.price_scale("right").set_auto_scale(true);
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -90,10 +90,20 @@ test("interaction models run engine-side with reference behavior", async ({ page
       y: window.__main.price_to_coordinate((bar.high + bar.low) / 2),
     };
   });
-  const pre_pan = await state(page);
-  expect(pre_pan.auto_scale).toBe(true);
+  const locked_before = await state(page);
+  expect(locked_before.auto_scale).toBe(true);
   const grab_x = box.x + pane_left + grab.x;
   const candle_y = box.y + grab.y;
+  await page.mouse.move(grab_x, candle_y);
+  await page.mouse.down();
+  await page.mouse.move(grab_x, candle_y + 40, { steps: 6 });
+  await page.mouse.up();
+  const locked_after = await state(page);
+  expect(locked_after.auto_scale).toBe(true);
+  expect(locked_after.range).toEqual(locked_before.range);
+
+  await page.evaluate(() => window.__chart.price_scale("right").set_auto_scale(false));
+  const pre_pan = await state(page);
   await page.mouse.move(grab_x, candle_y);
   await page.mouse.down();
   await page.mouse.move(grab_x, candle_y + 40, { steps: 6 });

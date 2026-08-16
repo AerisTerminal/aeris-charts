@@ -867,13 +867,12 @@ const drawing_tool_buttons = [...document.querySelectorAll("#drawings_group [dat
 const active_chart_router = grid ?? chart;
 const active_chart = () => grid?.active_cell().chart ?? chart;
 
-// Header comparison controls create real pane-local named scales. The fixtures occupy different
-// vertical bands so each symbol is easy to grab while testing independent price-scale movement.
+// Header comparison controls create real pane-local named scales using ordinary full-pane
+// autoscale. Test-only fixtures isolate drag targets separately; the user-facing demo stays dense.
 const comparison_configs = {
   MOON: {
     scale_id: "demo-comparison-moon",
     side: "left",
-    margins: { top: 0.08, bottom: 0.55 },
     seed: 871,
     start_price: 58,
     close_span: 1.8,
@@ -884,7 +883,6 @@ const comparison_configs = {
   ORBIT: {
     scale_id: "demo-comparison-orbit",
     side: "right",
-    margins: { top: 0.55, bottom: 0.08 },
     seed: 1499,
     start_price: 184,
     close_span: 3.6,
@@ -918,16 +916,16 @@ function add_demo_comparison(symbol, target = active_chart()) {
   if (existing_scale) {
     target.price_scale(config.scale_id).apply_options({
       visible: true,
-      minimum_width: 72,
-      scale_margins: config.margins,
+      minimum_width: 0,
+      scale_margins: { top: 0, bottom: 0 },
     });
   } else {
     target.add_price_scale({
       id: config.scale_id,
       side: config.side,
       visible: true,
-      minimum_width: 72,
-      scale_margins: config.margins,
+      minimum_width: 0,
+      scale_margins: { top: 0, bottom: 0 },
     });
   }
   const series = target.add_series("candlestick", {

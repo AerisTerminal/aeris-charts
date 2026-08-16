@@ -1706,8 +1706,7 @@ impl ChartInner {
         self.engine
             .price_axis_end_scale(pane, price_scale_target_from_u32(target));
     }
-    /// Vertical price pan (reference `startScrollPrice`/`scrollPriceTo`). Starting the session
-    /// promotes the resolved scale from autoscale to a manual range.
+    /// Vertical price pan (reference `startScrollPrice`/`scrollPriceTo`); autoscale remains locked.
     pub fn price_axis_start_scroll(&mut self, pane: usize, target: u32, y_css: f64) {
         self.engine
             .price_axis_start_scroll(pane, price_scale_target_from_u32(target), y_css);

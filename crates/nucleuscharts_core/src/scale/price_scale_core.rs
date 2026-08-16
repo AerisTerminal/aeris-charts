@@ -627,17 +627,14 @@ impl PriceScaleCore {
     // --- axis-drag scroll ---
 
     pub fn start_scroll(&mut self, x: f64) {
+        if self.is_auto_scale() {
+            return;
+        }
         if self.scroll_start_point.is_some() || self.price_range_snapshot.is_some() {
             return;
         }
         if self.is_empty() {
             return;
-        }
-        if self.is_auto_scale() {
-            // A direct pane drag is an explicit request to unlock this scale. The engine has
-            // already produced the current autoscaled range before pointer interaction begins.
-            self.options.auto_scale = false;
-            self.changed();
         }
         self.scroll_start_point = Some(x);
         self.price_range_snapshot = self.price_range;
@@ -1009,11 +1006,15 @@ mod tests {
     }
 
     #[test]
-    fn scroll_unlocks_autoscale_and_reset_cancels_the_session() {
+    fn scroll_requires_manual_scale_and_reset_cancels_the_session() {
         let mut s = scale_with_range(100.0, 0.0, 10.0);
         assert!(s.is_auto_scale());
         s.start_scroll(10.0);
-        assert!(!s.is_auto_scale());
+        s.scroll_to(20.0);
+        assert_eq!(s.price_range().unwrap(), &PriceRange::new(0.0, 10.0));
+
+        s.set_auto_scale(false);
+        s.start_scroll(10.0);
         s.scroll_to(20.0);
         assert_ne!(s.price_range().unwrap(), &PriceRange::new(0.0, 10.0));
 
@@ -1022,6 +1023,7 @@ mod tests {
         assert!(s.price_range_snapshot.is_none());
 
         let reset_range = *s.price_range().unwrap();
+        s.set_auto_scale(false);
         s.scroll_to(30.0);
         assert_eq!(s.price_range().unwrap(), &reset_range);
     }

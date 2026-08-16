@@ -25,6 +25,10 @@ test("header comparison controls add and clear independently scaled symbols", as
     scales: window.__chart.price_scales().filter((scale) => scale.id.startsWith("demo-comparison-")),
     moon_type: window.__chart.__demo_comparisons.get("MOON").series.series_type(),
     orbit_type: window.__chart.__demo_comparisons.get("ORBIT").series.series_type(),
+    moon_margins: window.__chart.price_scale("demo-comparison-moon").options().scale_margins,
+    orbit_margins: window.__chart.price_scale("demo-comparison-orbit").options().scale_margins,
+    moon_minimum_width: window.__chart.price_scale("demo-comparison-moon").options().minimum_width,
+    orbit_minimum_width: window.__chart.price_scale("demo-comparison-orbit").options().minimum_width,
   }));
   expect(added.count).toBe(2);
   expect(added.scales.map((scale) => [scale.id, scale.side, scale.series_ids.length])).toEqual([
@@ -33,7 +37,30 @@ test("header comparison controls add and clear independently scaled symbols", as
   ]);
   expect(added.moon_type).toBe("candlestick");
   expect(added.orbit_type).toBe("candlestick");
+  expect(added.moon_margins).toEqual({ top: 0, bottom: 0 });
+  expect(added.orbit_margins).toEqual({ top: 0, bottom: 0 });
+  expect(added.moon_minimum_width).toBe(0);
+  expect(added.orbit_minimum_width).toBe(0);
   await expect(page.locator("#comparison_clear")).toContainText("2");
+
+  const narrowed = await page.evaluate(async () => {
+    const chart = window.__chart;
+    const series = chart.__demo_comparisons.get("MOON").series;
+    const rows = series.data();
+    chart.time_scale().set_visible_logical_range({ from: rows.length - 80, to: rows.length - 1 });
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const logical = chart.time_scale().get_visible_logical_range();
+    const visible = rows.slice(Math.max(0, Math.floor(logical.from)), Math.ceil(logical.to) + 1);
+    return {
+      data_min: Math.min(...visible.map((row) => row.low)),
+      data_max: Math.max(...visible.map((row) => row.high)),
+      scale: chart.price_scale("demo-comparison-moon").get_visible_range(),
+      logical,
+    };
+  });
+  console.log("narrowed comparison autoscale:", JSON.stringify(narrowed));
+  expect(narrowed.scale.from).toBeLessThanOrEqual(narrowed.data_min);
+  expect(narrowed.scale.to).toBeGreaterThanOrEqual(narrowed.data_max);
 
   await page.click("#comparison_clear");
   expect(await page.evaluate(() => window.__chart.__demo_comparisons.size)).toBe(0);

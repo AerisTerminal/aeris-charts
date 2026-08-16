@@ -2796,7 +2796,7 @@ impl NucleusChart {
     pub fn price_axis_end_scroll(&mut self, pane: usize, target: u32) {
         self.inner.borrow_mut().price_axis_end_scroll(pane, target);
     }
-    /// Resolve the intended series scale, unlock it when autoscaled, and begin its drag session.
+    /// Resolve the intended series scale and begin its drag session when already manual.
     pub fn begin_price_pan_at(&mut self, pane: usize, x_css: f64, y_css: f64) -> Option<u32> {
         self.inner
             .borrow_mut()

@@ -721,8 +721,8 @@ impl ChartEngine {
         Some(target)
     }
 
-    /// Resolve and begin one pane price-pan session. Starting a drag explicitly unlocks only the
-    /// intended series' scale, preserving its current autoscaled range as the manual snapshot.
+    /// Resolve and begin one pane price-pan session on the intended series' already-manual scale.
+    /// Autoscaled scales stay locked; grabbing series geometry never changes that state.
     pub fn begin_price_pan_at(
         &mut self,
         pane: usize,
@@ -735,7 +735,6 @@ impl ChartEngine {
         if scale.is_auto_scale() {
             return None;
         }
-        self.invalidate_frame_all();
         Some(target)
     }
 
@@ -1015,20 +1014,19 @@ mod tests {
     }
 
     #[test]
-    fn price_pan_unlocks_the_autoscaled_target_before_moving_it() {
+    fn price_pan_preserves_the_autoscale_lock() {
         let mut chart = chart_with_data(400.0, 300.0);
         let (from, to) = chart.price_scale_visible_range(0, false).unwrap();
         chart.price_axis_start_scroll(0, PriceScaleTarget::Right, 100.0);
-        assert_eq!(chart.price_scale_auto_scale(0, false), Some(false));
+        assert_eq!(chart.price_scale_auto_scale(0, false), Some(true));
         chart.price_axis_scroll_to(0, PriceScaleTarget::Right, 120.0);
         let (new_from, new_to) = chart.price_scale_visible_range(0, false).unwrap();
-        assert_ne!((new_from, new_to), (from, to));
-        assert!((new_to - new_from - (to - from)).abs() < 1e-9);
+        assert_eq!((new_from, new_to), (from, to));
         chart.price_axis_end_scroll(0, PriceScaleTarget::Right);
     }
 
     #[test]
-    fn every_builtin_series_hit_unlocks_its_own_autoscaled_scale() {
+    fn every_builtin_series_hit_preserves_its_autoscale_lock() {
         for kind in [
             SeriesKind::Candlestick,
             SeriesKind::Bar,
@@ -1041,13 +1039,8 @@ mod tests {
             chart.autoscale_visible();
             let x = chart.time_scale.index_to_coordinate(4);
             let y = chart.series_price_to_coordinate(0, 14.5).unwrap();
-            assert_eq!(
-                chart.begin_price_pan_at(0, x, y),
-                Some(PriceScaleTarget::Right),
-                "{kind:?}"
-            );
-            assert_eq!(chart.price_scale_auto_scale(0, false), Some(false));
-            chart.price_axis_end_scroll(0, PriceScaleTarget::Right);
+            assert_eq!(chart.begin_price_pan_at(0, x, y), None, "{kind:?}");
+            assert_eq!(chart.price_scale_auto_scale(0, false), Some(true));
         }
     }
 
@@ -1110,11 +1103,8 @@ mod tests {
             chart.price_pan_target_at(0, x, comparison_y),
             Some(comparison)
         );
-        assert_eq!(
-            chart.begin_price_pan_at(0, x, comparison_y),
-            Some(comparison)
-        );
-        assert_eq!(chart.price_scale_auto_scale_for(0, comparison), Some(false));
+        assert_eq!(chart.begin_price_pan_at(0, x, comparison_y), None);
+        assert_eq!(chart.price_scale_auto_scale_for(0, comparison), Some(true));
         assert_eq!(
             chart.price_scale_auto_scale_for(0, PriceScaleTarget::Right),
             Some(true)
@@ -1169,7 +1159,7 @@ mod tests {
             .add_price_scale(0, "indicator-pan", PriceScaleSide::Left, Some(0), true)
             .unwrap();
         chart.set_series_price_scale(sma, indicator_scale);
-        chart.autoscale_visible();
+        chart.set_price_scale_visible_range_for(0, indicator_scale, 0.0, 40.0);
 
         let x = chart.time_scale.index_to_coordinate(4);
         let y = chart.series_price_to_coordinate(sma, 14.0).unwrap();
