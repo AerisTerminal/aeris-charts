@@ -176,10 +176,10 @@ test("removed pane handles never retarget a replacement pane", async ({ page }) 
   expect(result.scale_error).toMatchObject({ code: "stale_handle" });
 });
 
-test("neighboring unsupported series operations throw the public typed error", async ({ page }) => {
+test("built-in series convert in place while unsupported custom operations stay typed", async ({ page }) => {
   await page.goto("/?backend=canvas2d");
   await wait_for_chart(page);
-  const errors = await page.evaluate(() => {
+  const result = await page.evaluate(() => {
     const chart = window.__chart;
     const secondary = chart.add_series("line");
     const custom = chart.add_custom_series({ price_value_builder: () => [1], render() {} });
@@ -192,10 +192,10 @@ test("neighboring unsupported series operations throw the public typed error", a
         captured.push({ name: error.name, code: error.code });
       }
     }
-    return captured;
+    return { captured, converted_type: secondary.series_type() };
   });
-  expect(errors).toEqual([
-    { name: "NucleusChartsError", code: "unsupported_operation" },
+  expect(result.converted_type).toBe("area");
+  expect(result.captured).toEqual([
     { name: "NucleusChartsError", code: "unsupported_operation" },
   ]);
 });

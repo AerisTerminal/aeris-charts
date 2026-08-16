@@ -180,11 +180,9 @@ export function install_gestures(chart: chart_impl): () => void {
     chart.repaint();
   };
 
-  /** Price-axis target under `p` (0 = right, 1 = left), or null if not over a price axis. */
+  /** Exact price-axis target under `p`, including pane-local named scales. */
   const price_axis_target_at = (p: { x: number; y: number }): number | null => {
-    if (p.x < 0) return 1;
-    if (p.x > wasm.time_scale_width()) return 0;
-    return null;
+    return wasm.price_axis_target_at(pane_of(p.y), p.x) ?? null;
   };
   const is_time_axis = (p: { x: number; y: number }): boolean =>
     p.y > overlay.getBoundingClientRect().height - wasm.time_scale_height();
@@ -279,7 +277,17 @@ export function install_gestures(chart: chart_impl): () => void {
    *  scale, falls back to the left; skipped under autoscale (the engine's own no-op gate). */
   const arm_price_pan = (pane: number, start_y: number) => {
     disarm_price_pan();
-    for (const target of [0, 1]) {
+    const scales = JSON.parse(wasm.price_scales_json(pane)) as {
+      id: string; side: "left" | "right" | null; order: number | null; visible: boolean;
+    }[];
+    scales.sort((a, b) =>
+      (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER)
+      || (a.side === "right" ? -1 : 1)
+    );
+    for (const scale of scales) {
+      if (!scale.visible || scale.side === null) continue;
+      const target = wasm.price_scale_target_by_id(pane, scale.id) ?? null;
+      if (target === null) continue;
       if (wasm.price_scale_auto_scale(pane, target) === false) {
         price_pan = { pane, target };
         wasm.price_axis_start_scroll(pane, target, start_y);
@@ -428,14 +436,15 @@ export function install_gestures(chart: chart_impl): () => void {
     if (e.cancelable) e.preventDefault();
     if (do_zoom) {
       const pane_left = wasm.pane_left();
-      const pane_w = wasm.time_scale_width();
       const x = e.offsetX;
-      if (x < pane_left || x > pane_left + pane_w) {
+      const pane = wasm.pane_index_at_y(e.offsetY);
+      const target = wasm.price_axis_target_at(pane, x - pane_left) ?? null;
+      if (target !== null) {
         // TradingView-style price-axis wheel zoom (the reference has no price wheel; the time
         // axis wheel is `_onMousewheel` → `zoomTime`): anchored at the cursor's price.
         wasm.price_axis_wheel_zoom(
-          wasm.pane_index_at_y(e.offsetY),
-          x < pane_left ? 1 : 0,
+          pane,
+          target,
           e.offsetY,
           wasm.wheel_zoom_scale(delta_y),
         );

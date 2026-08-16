@@ -8,6 +8,9 @@ entry point and `./design.css` are the only npm export paths. The supported root
 - chart creation and initialization;
 - chart, series, time-scale, pane, price-scale, price-line, and drawing handles declared in
   `packages/charts/src/types.ts`;
+- pane-local named price scales through `chart.add_price_scale()`, `chart.price_scales()`,
+  `chart.move_price_scale()`, `chart.remove_price_scale()`, arbitrary string IDs in
+  `chart.price_scale()`/`pane.price_scale()`, and series scale identity/rebinding;
 - built-in series, indicators, drawing kinds, options, themes, data ingestion, interactions,
   subscriptions, screenshots, and lifecycle operations declared by those handles;
 - first-party broker-neutral trading state, instant/manual confirmation, previews, hit testing,
@@ -50,6 +53,11 @@ after removal. Identity fields already held by the caller may still be read. Rem
 drawings, panes, and price scales throw `stale_handle`; a stale handle never targets a replacement.
 Extension cleanup exceptions remain contained and are reported as development warnings.
 
+Named price-scale creation rejects empty/reserved/duplicate/overlong IDs, missing panes, and the
+per-pane resource limit without partial mutation. Rebinding to an unknown scale throws
+`invalid_options`; removing a built-in or populated scale throws `unsupported_operation`. Named
+scale IDs are case-sensitive, pane-local UTF-8 strings of 1-128 bytes, with at most 16 per pane.
+
 Clean batch/current-bar ingestion retains its allocation-free/null diagnostic path. Repaired,
 dropped, reordered, deduplicated, rejected, or semantically anomalous input is available through
 `series.last_ingestion_diagnostics()`; OHLC anomalies are reported without rewriting values.
@@ -66,6 +74,9 @@ executions/previews/intents, custom extensions, callbacks, subscriptions, select
 sessions, generations, LOD, drawing bounds/indexes, retained frames, and GPU resources are not
 persisted. Hosts restore V1 into a fresh chart, then reinstall host-owned data, series/indicator
 configuration, trading state, options, and extensions.
+
+Named price-scale descriptors and series-to-scale bindings are also host-owned. Hosts recreate
+named scales in each pane before restoring comparison-series bindings; chart-state V1 is unchanged.
 
 Import checks the whole document before mutation and installs it as one transaction. Imported panes
 receive fresh live handle IDs while retaining separate persistent pane IDs; pre-import pane and

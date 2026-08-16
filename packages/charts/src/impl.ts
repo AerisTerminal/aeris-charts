@@ -27,7 +27,8 @@ import type {
   handle_scale_options, handle_scroll_options, indicator_info, kinetic_scroll_options,
   last_value_data, localization_options, logical_range,
   mismatch_direction, mouse_event_handler, mouse_event_params, ohlc_columns, ohlc_data, options_change_handler, pane_api, pane_geometry, price_line_api, price_line_options,
-  persistence_restore_result, price_range, price_scale_api, price_scale_options, ring_source_layout,
+  persistence_restore_result, price_range, price_scale_api, price_scale_create_options,
+  price_scale_info, price_scale_options, ring_source_layout,
   series_api, series_change_handler, series_data, series_kind,
   series_marker, series_marker_options, series_options, single_value_data, size_change_handler, time, time_range,
   time_scale_api, time_scale_options, tracking_mode_options, trading_api, trading_confirmation_mode, trading_execution, trading_hit,
@@ -149,6 +150,7 @@ const PRICE_SCALE_JSON_OPTION_KEYS = [
   "minimum_width",
   "text_color",
   "bold_round_labels",
+  "visible",
 ] as const;
 
 /** Engine kind ordinal → public kind name (index-aligned with `KIND_TO_U8`). */
@@ -570,9 +572,6 @@ class series_impl implements series_api {
     if (options.histogram_updown !== undefined) {
       this.chart.wasm.set_series_histogram_updown(this.id, options.histogram_updown);
     }
-    if (options.pane !== undefined && options.pane > 0) {
-      this.chart.wasm.set_series_pane(this.id, options.pane, options.pane_stretch ?? 1);
-    }
     if (options.line_type !== undefined) {
       this.chart.wasm.set_series_line_type(this.id, LINE_TYPE_TO_U8[options.line_type]);
     }
@@ -582,14 +581,24 @@ class series_impl implements series_api {
     if (options.baseline_value !== undefined) {
       this.chart.wasm.set_series_baseline(this.id, options.baseline_value);
     }
-    if (options.overlay) {
-      const m = options.scale_margins ?? { top: 0.8, bottom: 0 };
-      this.chart.wasm.set_series_overlay(this.id, m.top, m.bottom);
-    } else if (options.price_scale_id !== undefined || options.priceScaleId !== undefined) {
-      const id = options.priceScaleId ?? options.price_scale_id;
-      const target = id === "left" ? 1 : id === "" ? 2 : 0;
-      this.chart.wasm.set_series_price_scale(this.id, target);
-      if (target === 2) {
+    const requested_scale = options.overlay
+      ? ""
+      : options.priceScaleId ?? options.price_scale_id;
+    if (options.pane !== undefined || requested_scale !== undefined) {
+      const pane = options.pane ?? this.pane_index();
+      const scale = requested_scale ?? this.price_scale_id();
+      if (!this.chart.wasm.try_set_series_pane_and_scale(
+        this.id,
+        pane,
+        options.pane_stretch ?? 1,
+        scale,
+      )) {
+        throw new nucleuscharts_error(
+          "invalid_options",
+          `price scale '${scale}' does not exist in pane ${pane}`,
+        );
+      }
+      if (scale === "") {
         const m = options.scale_margins ?? { top: 0.8, bottom: 0 };
         this.chart.wasm.set_series_overlay(this.id, m.top, m.bottom);
       }
@@ -647,20 +656,20 @@ class series_impl implements series_api {
         "set_type() only converts built-in series; remove and re-add custom or advanced series",
       );
     }
-    if (this.id === 0) {
-      this.chart.wasm.set_series_type(KIND_TO_U8[kind]);
-    } else {
-      throw new nucleuscharts_error(
-        "unsupported_operation",
-        "set_type() currently supports the primary series only",
-      );
+    if (!this.chart.wasm.set_series_kind(this.id, KIND_TO_U8[kind])) {
+      throw new nucleuscharts_error("stale_handle", "this series has been removed from the chart");
     }
     this.chart.repaint();
   }
 
   move_to_pane(pane_index: number, stretch = 1): void {
     this.assert_live();
-    this.chart.wasm.set_series_pane(this.id, pane_index, stretch);
+    if (!this.chart.wasm.try_set_series_pane(this.id, pane_index, stretch)) {
+      throw new nucleuscharts_error(
+        "invalid_options",
+        `pane ${pane_index} does not contain price scale '${this.price_scale_id()}'`,
+      );
+    }
     this.chart.repaint();
   }
 
@@ -727,8 +736,21 @@ class series_impl implements series_api {
 
   price_scale(): price_scale_api {
     const pane = undef_to_null(this.chart.wasm.series_pane_index(this.id)) ?? 0;
-    const target = undef_to_null(this.chart.wasm.series_price_scale_id(this.id)) ?? 0;
-    return new price_scale_impl(this.chart, pane, target);
+    return new price_scale_impl(this.chart, pane, this.price_scale_id());
+  }
+  price_scale_id(): string {
+    this.assert_live();
+    return this.chart.wasm.series_price_scale_name(this.id);
+  }
+  move_to_price_scale(id: string): void {
+    this.assert_live();
+    if (!this.chart.wasm.set_series_price_scale_by_name(this.id, id)) {
+      throw new nucleuscharts_error(
+        "invalid_options",
+        `price scale '${id}' does not exist in pane ${this.pane_index()}`,
+      );
+    }
+    this.chart.repaint();
   }
   pane_index(): number {
     this.assert_live();
@@ -1054,6 +1076,14 @@ function assert_trading_result(json: string): void {
     | { ok: true }
     | { ok: false; error: { code: nucleuscharts_error_code; message: string } };
   if (!result.ok) throw new nucleuscharts_error(result.error.code, result.error.message);
+}
+
+function parse_engine_result<T extends object>(json: string): T {
+  const result = JSON.parse(json) as
+    | ({ ok: true } & T)
+    | { ok: false; error: { code: nucleuscharts_error_code; message: string } };
+  if (!result.ok) throw new nucleuscharts_error(result.error.code, result.error.message);
+  return result;
 }
 
 export interface native_primitive_handle {
@@ -1798,13 +1828,16 @@ class price_scale_impl implements price_scale_api {
   constructor(
     private readonly chart: chart_impl,
     pane: number,
-    private readonly target: number,
+    private readonly id: string,
   ) {
     const pane_id = undef_to_null(chart.wasm.pane_stable_id(pane));
     if (pane_id === null) {
       throw new nucleuscharts_error("invalid_handle", `pane index ${pane} does not identify a live price scale`);
     }
     this.pane_id = pane_id;
+    if (undef_to_null(chart.wasm.price_scale_target_by_id(pane, id)) === null) {
+      throw new nucleuscharts_error("invalid_handle", `price scale '${id}' does not exist in pane ${pane}`);
+    }
   }
 
   private pane(): number {
@@ -1813,21 +1846,27 @@ class price_scale_impl implements price_scale_api {
     return pane;
   }
 
+  private target(): number {
+    const target = undef_to_null(this.chart.wasm.price_scale_target_by_id(this.pane(), this.id));
+    if (target === null) throw new nucleuscharts_error("stale_handle", "price scale has been removed");
+    return target;
+  }
+
   apply_options(options: deep_partial<price_scale_options>): void {
     if (options.mode !== undefined) {
-      this.chart.wasm.set_price_scale_mode(this.pane(), this.target, options.mode);
+      this.chart.wasm.set_price_scale_mode(this.pane(), this.target(), options.mode);
     }
     if (options.auto_scale !== undefined) {
-      this.chart.wasm.set_price_scale_auto_scale(this.pane(), this.target, options.auto_scale);
+      this.chart.wasm.set_price_scale_auto_scale(this.pane(), this.target(), options.auto_scale);
     }
     if (options.invert_scale !== undefined) {
-      this.chart.wasm.set_price_scale_inverted(this.pane(), this.target, options.invert_scale);
+      this.chart.wasm.set_price_scale_inverted(this.pane(), this.target(), options.invert_scale);
     }
     if (options.scale_margins !== undefined) {
       const current = this.options().scale_margins;
       this.chart.wasm.set_price_scale_margins(
         this.pane(),
-        this.target,
+        this.target(),
         options.scale_margins.top ?? current.top,
         options.scale_margins.bottom ?? current.bottom,
       );
@@ -1839,31 +1878,31 @@ class price_scale_impl implements price_scale_api {
       if (value !== undefined) json_patch[key] = value;
     }
     if (Object.keys(json_patch).length > 0) {
-      this.chart.wasm.price_scale_apply_options_json(this.pane(), this.target, JSON.stringify(json_patch));
+      this.chart.wasm.price_scale_apply_options_json(this.pane(), this.target(), JSON.stringify(json_patch));
     }
     this.chart.repaint();
   }
 
   options(): price_scale_options {
-    return JSON.parse(this.chart.wasm.price_scale_options_json(this.pane(), this.target)) as price_scale_options;
+    return JSON.parse(this.chart.wasm.price_scale_options_json(this.pane(), this.target())) as price_scale_options;
   }
 
   width(): number {
-    return this.chart.wasm.price_scale_width(this.pane(), this.target);
+    return this.chart.wasm.price_scale_width(this.pane(), this.target());
   }
 
   set_visible_range(range: price_range): void {
-    this.chart.wasm.set_price_scale_visible_range(this.pane(), this.target, range.from, range.to);
+    this.chart.wasm.set_price_scale_visible_range(this.pane(), this.target(), range.from, range.to);
     this.chart.repaint();
   }
 
   get_visible_range(): price_range | null {
-    const range = this.chart.wasm.price_scale_visible_range(this.pane(), this.target);
+    const range = this.chart.wasm.price_scale_visible_range(this.pane(), this.target());
     return range.length === 2 ? { from: range[0]!, to: range[1]! } : null;
   }
 
   set_auto_scale(on: boolean): void {
-    this.chart.wasm.set_price_scale_auto_scale(this.pane(), this.target, on);
+    this.chart.wasm.set_price_scale_auto_scale(this.pane(), this.target(), on);
     this.chart.repaint();
   }
 }
@@ -1929,7 +1968,7 @@ class pane_impl implements pane_api {
     }
     return out;
   }
-  price_scale(id: "left" | "right" | ""): price_scale_api {
+  price_scale(id: string): price_scale_api {
     return this.chart.price_scale(id, this.index());
   }
 
@@ -3887,9 +3926,40 @@ export class chart_impl implements chart_api {
     return this.ts;
   }
 
-  price_scale(price_scale_id: "left" | "right" | "" = "right", pane_index = 0): price_scale_api {
-    const target = price_scale_id === "left" ? 1 : price_scale_id === "" ? 2 : 0;
-    return new price_scale_impl(this, pane_index, target);
+  price_scale(price_scale_id = "right", pane_index = 0): price_scale_api {
+    return new price_scale_impl(this, pane_index, price_scale_id);
+  }
+
+  add_price_scale(options: price_scale_create_options, pane_index = 0): price_scale_api {
+    parse_engine_result<{ target: number }>(
+      this.wasm.add_price_scale_result_json(pane_index, JSON.stringify(options)),
+    );
+    this.repaint();
+    return new price_scale_impl(this, pane_index, options.id);
+  }
+
+  price_scales(pane_index = 0): price_scale_info[] {
+    return JSON.parse(this.wasm.price_scales_json(pane_index)) as price_scale_info[];
+  }
+
+  move_price_scale(id: string, side: "left" | "right", order: number, pane_index = 0): void {
+    const target = undef_to_null(this.wasm.price_scale_target_by_id(pane_index, id));
+    if (target === null) {
+      throw new nucleuscharts_error("invalid_handle", `price scale '${id}' does not exist in pane ${pane_index}`);
+    }
+    parse_engine_result<object>(
+      this.wasm.move_price_scale_result_json(pane_index, target, side, order),
+    );
+    this.repaint();
+  }
+
+  remove_price_scale(id: string, pane_index = 0): void {
+    const target = undef_to_null(this.wasm.price_scale_target_by_id(pane_index, id));
+    if (target === null) {
+      throw new nucleuscharts_error("invalid_handle", `price scale '${id}' does not exist in pane ${pane_index}`);
+    }
+    parse_engine_result<object>(this.wasm.remove_price_scale_result_json(pane_index, target));
+    this.repaint();
   }
 
   panes(): pane_api[] {

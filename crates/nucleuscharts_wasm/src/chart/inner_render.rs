@@ -604,19 +604,24 @@ impl ChartInner {
         let right_ticks = options.right_price_scale.border_visible;
         let left_ticks = options.left_price_scale.border_visible;
         for tick in &axis_frame.price_ticks {
-            let (color, x) = if tick.left {
+            let color = if tick.left {
                 if !left_ticks {
                     continue;
                 }
-                (&left_border, ((pane_left - 5.0) * dpr).round())
+                &left_border
             } else {
                 if !right_ticks {
                     continue;
                 }
-                (&right_border, ((pane_left + pane_w) * dpr).round())
+                &right_border
             };
             ctx.set_fill_style_str(color);
-            ctx.fill_rect(x, (tick.y * dpr).round() - tick_off, tick_len, tick_h);
+            ctx.fill_rect(
+                (tick.x * dpr).round(),
+                (tick.y * dpr).round() - tick_off,
+                tick_len,
+                tick_h,
+            );
             ops += 1;
         }
 

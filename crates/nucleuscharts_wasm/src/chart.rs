@@ -53,9 +53,10 @@ use nucleuscharts_engine::{
     AxisLabelCorners, AxisTextAlign, AxisTextMidpoint, ChartEngine, DrawingKind, DrawingModifiers,
     DrawingPoint, ExecutionId, FeatureSeriesKind, GestureResolver, GestureUpdate, InputDevice,
     InputModifiers, InputTarget, InstrumentMetadata, Marker, OrderId, PaneId, PointerSample,
-    PositionId, PriceFormatterFn, PriceScaleTarget, PrimitiveAutoscaleContribution, SeriesKind,
-    TickMarkFormatterFn, TimeFormatterFn, TradingConfirmationMode, TradingExecution,
-    TradingPosition, TradingSnapshot, TradingStyleOptions, WorkingOrder,
+    PositionId, PriceFormatterFn, PriceScaleId, PriceScaleSide, PriceScaleTarget,
+    PrimitiveAutoscaleContribution, SeriesKind, TickMarkFormatterFn, TimeFormatterFn,
+    TradingConfirmationMode, TradingExecution, TradingPosition, TradingSnapshot,
+    TradingStyleOptions, WorkingOrder,
 };
 use nucleuscharts_render::canvas2d::{
     execute as execute_canvas2d, Canvas2d, Viewport as CanvasViewport,
@@ -257,19 +258,23 @@ fn price_scale_mode_to_u8(mode: PriceScaleMode) -> u8 {
     }
 }
 
-fn price_scale_target_from_u8(target: u8) -> PriceScaleTarget {
+fn price_scale_target_from_u32(target: u32) -> PriceScaleTarget {
     match target {
         1 => PriceScaleTarget::Left,
         2 => PriceScaleTarget::Overlay,
+        3.. => PriceScaleId::try_from(target - 2)
+            .map(PriceScaleTarget::Named)
+            .unwrap_or(PriceScaleTarget::Right),
         _ => PriceScaleTarget::Right,
     }
 }
 
-fn price_scale_target_to_u8(target: PriceScaleTarget) -> u8 {
+fn price_scale_target_to_u32(target: PriceScaleTarget) -> u32 {
     match target {
         PriceScaleTarget::Right => 0,
         PriceScaleTarget::Left => 1,
         PriceScaleTarget::Overlay => 2,
+        PriceScaleTarget::Named(id) => id.get() + 2,
     }
 }
 
@@ -2112,6 +2117,25 @@ impl NucleusChart {
             .borrow_mut()
             .set_series_pane(id, pane_index, stretch_factor);
     }
+    pub fn try_set_series_pane(&mut self, id: u32, pane_index: usize, stretch_factor: f64) -> bool {
+        self.inner
+            .borrow_mut()
+            .try_set_series_pane(id, pane_index, stretch_factor)
+    }
+    pub fn try_set_series_pane_and_scale(
+        &mut self,
+        id: u32,
+        pane_index: usize,
+        stretch_factor: f64,
+        price_scale_id: &str,
+    ) -> bool {
+        self.inner.borrow_mut().try_set_series_pane_and_scale(
+            id,
+            pane_index,
+            stretch_factor,
+            price_scale_id,
+        )
+    }
 
     /// Number of stacked panes.
     pub fn pane_count(&self) -> usize {
@@ -2288,7 +2312,7 @@ impl NucleusChart {
     /// `priceScale.applyOptions`; unknown keys ignored). Keys: `mode`, `auto_scale`,
     /// `invert_scale`, `scale_margins`, `align_labels`, `ticks_visible`, `entire_text_only`,
     /// `minimum_width`, `text_color` (`""`/`null` = follow `layout.textColor`).
-    pub fn price_scale_apply_options_json(&mut self, pane: u32, target: u8, json: &str) {
+    pub fn price_scale_apply_options_json(&mut self, pane: u32, target: u32, json: &str) {
         self.inner
             .borrow_mut()
             .price_scale_apply_options_json(pane, target, json);
@@ -2296,13 +2320,44 @@ impl NucleusChart {
 
     /// One pane scale's full options as a snake_case JSON string (reference `priceScale.options()`;
     /// "" for an unknown pane/target).
-    pub fn price_scale_options_json(&self, pane: u32, target: u8) -> String {
+    pub fn price_scale_options_json(&self, pane: u32, target: u32) -> String {
         self.inner.borrow().price_scale_options_json(pane, target)
+    }
+
+    pub fn add_price_scale_result_json(&mut self, pane: u32, json: &str) -> String {
+        self.inner
+            .borrow_mut()
+            .add_price_scale_result_json(pane, json)
+    }
+    pub fn price_scales_json(&self, pane: u32) -> String {
+        self.inner.borrow().price_scales_json(pane)
+    }
+    pub fn price_scale_target_by_id(&self, pane: u32, id: &str) -> Option<u32> {
+        self.inner.borrow().price_scale_target_by_id(pane, id)
+    }
+    pub fn move_price_scale_result_json(
+        &mut self,
+        pane: u32,
+        target: u32,
+        side: &str,
+        order: usize,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .move_price_scale_result_json(pane, target, side, order)
+    }
+    pub fn remove_price_scale_result_json(&mut self, pane: u32, target: u32) -> String {
+        self.inner
+            .borrow_mut()
+            .remove_price_scale_result_json(pane, target)
     }
 
     /// 0 = candlestick, 1 = OHLC bars, 2 = line, 3 = area, 4 = histogram (sets the main series).
     pub fn set_series_type(&mut self, kind: u8) {
         self.inner.borrow_mut().set_series_type(kind);
+    }
+    pub fn set_series_kind(&mut self, id: u32, kind: u8) -> bool {
+        self.inner.borrow_mut().set_series_kind(id, kind)
     }
 
     pub fn set_time_visible(&mut self, visible: bool) {
@@ -2691,20 +2746,20 @@ impl NucleusChart {
         self.inner.borrow_mut().time_axis_end_scale();
     }
     /// Whether a price-axis drag can scale this scale (false in percentage/indexed modes).
-    pub fn price_axis_scalable(&self, pane: usize, target: u8) -> bool {
+    pub fn price_axis_scalable(&self, pane: usize, target: u32) -> bool {
         self.inner.borrow().price_axis_scalable(pane, target)
     }
-    pub fn price_axis_start_scale(&mut self, pane: usize, target: u8, y_css: f64) {
+    pub fn price_axis_start_scale(&mut self, pane: usize, target: u32, y_css: f64) {
         self.inner
             .borrow_mut()
             .price_axis_start_scale(pane, target, y_css);
     }
-    pub fn price_axis_scale_to(&mut self, pane: usize, target: u8, y_css: f64) {
+    pub fn price_axis_scale_to(&mut self, pane: usize, target: u32, y_css: f64) {
         self.inner
             .borrow_mut()
             .price_axis_scale_to(pane, target, y_css);
     }
-    pub fn price_axis_end_scale(&mut self, pane: usize, target: u8) {
+    pub fn price_axis_end_scale(&mut self, pane: usize, target: u32) {
         self.inner.borrow_mut().price_axis_end_scale(pane, target);
     }
     /// TradingView-style bid/ask quotes: push the current values for a series (NaN clears that
@@ -2719,26 +2774,26 @@ impl NucleusChart {
     }
     /// TradingView-style wheel zoom on the price axis: `scale` is the normalized wheel
     /// increment (`wheel_zoom_scale`); anchored at the cursor's price. Call `render()` after.
-    pub fn price_axis_wheel_zoom(&mut self, pane: usize, target: u8, y_css: f64, scale: f64) {
+    pub fn price_axis_wheel_zoom(&mut self, pane: usize, target: u32, y_css: f64, scale: f64) {
         self.inner.borrow_mut().engine.price_axis_wheel_zoom(
             pane,
-            price_scale_target_from_u8(target),
+            price_scale_target_from_u32(target),
             y_css,
             scale,
         );
     }
     /// Vertical price pan (reference `startScrollPrice`/`scrollPriceTo`).
-    pub fn price_axis_start_scroll(&mut self, pane: usize, target: u8, y_css: f64) {
+    pub fn price_axis_start_scroll(&mut self, pane: usize, target: u32, y_css: f64) {
         self.inner
             .borrow_mut()
             .price_axis_start_scroll(pane, target, y_css);
     }
-    pub fn price_axis_scroll_to(&mut self, pane: usize, target: u8, y_css: f64) {
+    pub fn price_axis_scroll_to(&mut self, pane: usize, target: u32, y_css: f64) {
         self.inner
             .borrow_mut()
             .price_axis_scroll_to(pane, target, y_css);
     }
-    pub fn price_axis_end_scroll(&mut self, pane: usize, target: u8) {
+    pub fn price_axis_end_scroll(&mut self, pane: usize, target: u32) {
         self.inner.borrow_mut().price_axis_end_scroll(pane, target);
     }
 
@@ -2758,6 +2813,9 @@ impl NucleusChart {
     /// Index of the stacked pane containing content-y `y` (engine-owned pane bounds).
     pub fn pane_index_at_y(&self, y_css: f64) -> usize {
         self.inner.borrow().pane_index_at_y(y_css)
+    }
+    pub fn price_axis_target_at(&self, pane: usize, x_css: f64) -> Option<u32> {
+        self.inner.borrow().price_axis_target_at(pane, x_css)
     }
     pub fn fit_content(&mut self) {
         self.inner.borrow_mut().fit_content();
@@ -3049,45 +3107,45 @@ impl NucleusChart {
     pub fn time_scale_height(&self) -> f64 {
         self.inner.borrow().time_scale_height()
     }
-    pub fn price_scale_width(&self, pane: usize, target: u8) -> f64 {
+    pub fn price_scale_width(&self, pane: usize, target: u32) -> f64 {
         self.inner.borrow().price_scale_width(pane, target)
     }
-    pub fn price_scale_visible_range(&self, pane: usize, target: u8) -> Vec<f64> {
+    pub fn price_scale_visible_range(&self, pane: usize, target: u32) -> Vec<f64> {
         self.inner.borrow().price_scale_visible_range(pane, target)
     }
-    pub fn set_price_scale_visible_range(&mut self, pane: usize, target: u8, from: f64, to: f64) {
+    pub fn set_price_scale_visible_range(&mut self, pane: usize, target: u32, from: f64, to: f64) {
         self.inner
             .borrow_mut()
             .set_price_scale_visible_range(pane, target, from, to);
     }
-    pub fn price_scale_auto_scale(&self, pane: usize, target: u8) -> Option<bool> {
+    pub fn price_scale_auto_scale(&self, pane: usize, target: u32) -> Option<bool> {
         self.inner.borrow().price_scale_auto_scale(pane, target)
     }
-    pub fn set_price_scale_auto_scale(&mut self, pane: usize, target: u8, enabled: bool) {
+    pub fn set_price_scale_auto_scale(&mut self, pane: usize, target: u32, enabled: bool) {
         self.inner
             .borrow_mut()
             .set_price_scale_auto_scale(pane, target, enabled);
     }
-    pub fn price_scale_inverted(&self, pane: usize, target: u8) -> Option<bool> {
+    pub fn price_scale_inverted(&self, pane: usize, target: u32) -> Option<bool> {
         self.inner.borrow().price_scale_inverted(pane, target)
     }
-    pub fn set_price_scale_inverted(&mut self, pane: usize, target: u8, inverted: bool) {
+    pub fn set_price_scale_inverted(&mut self, pane: usize, target: u32, inverted: bool) {
         self.inner
             .borrow_mut()
             .set_price_scale_inverted(pane, target, inverted);
     }
-    pub fn price_scale_margins(&self, pane: usize, target: u8) -> Vec<f64> {
+    pub fn price_scale_margins(&self, pane: usize, target: u32) -> Vec<f64> {
         self.inner.borrow().price_scale_margins(pane, target)
     }
-    pub fn set_price_scale_margins(&mut self, pane: usize, target: u8, top: f64, bottom: f64) {
+    pub fn set_price_scale_margins(&mut self, pane: usize, target: u32, top: f64, bottom: f64) {
         self.inner
             .borrow_mut()
             .set_price_scale_margins(pane, target, top, bottom);
     }
-    pub fn price_scale_mode(&self, pane: usize, target: u8) -> Option<u8> {
+    pub fn price_scale_mode(&self, pane: usize, target: u32) -> Option<u8> {
         self.inner.borrow().price_scale_mode(pane, target)
     }
-    pub fn set_price_scale_mode(&mut self, pane: usize, target: u8, mode: u8) {
+    pub fn set_price_scale_mode(&mut self, pane: usize, target: u32, mode: u8) {
         self.inner
             .borrow_mut()
             .set_price_scale_mode(pane, target, mode);
@@ -3098,10 +3156,18 @@ impl NucleusChart {
     pub fn series_is_overlay(&self, id: u32) -> Option<bool> {
         self.inner.borrow().series_is_overlay(id)
     }
-    pub fn series_price_scale_id(&self, id: u32) -> Option<u8> {
+    pub fn series_price_scale_id(&self, id: u32) -> Option<u32> {
         self.inner.borrow().series_price_scale_id(id)
     }
-    pub fn set_series_price_scale(&mut self, id: u32, target: u8) {
+    pub fn series_price_scale_name(&self, id: u32) -> String {
+        self.inner.borrow().series_price_scale_name(id)
+    }
+    pub fn set_series_price_scale_by_name(&mut self, id: u32, name: &str) -> bool {
+        self.inner
+            .borrow_mut()
+            .set_series_price_scale_by_name(id, name)
+    }
+    pub fn set_series_price_scale(&mut self, id: u32, target: u32) {
         self.inner.borrow_mut().set_series_price_scale(id, target);
     }
     pub fn series_price_to_coordinate(&self, id: u32, price: f64) -> Option<f64> {

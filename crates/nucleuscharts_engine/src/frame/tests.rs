@@ -959,6 +959,185 @@ fn crosshair_labels_share_y_across_crosshair_and_scale_modes() {
 }
 
 #[test]
+fn named_scale_crosshair_labels_use_exact_strips_ranges_and_formatters() {
+    let mut chart = ChartEngine::new(900.0, 500.0, 1.0);
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0, 3.0],
+            &[100.0, 105.0, 110.0],
+            &[100.0, 105.0, 110.0],
+            &[100.0, 105.0, 110.0],
+            &[100.0, 105.0, 110.0],
+        )
+        .unwrap();
+    let outer_series = chart.add_series(SeriesKind::Line);
+    let left_series = chart.add_series(SeriesKind::Line);
+    chart
+        .set_series_data(
+            outer_series,
+            &[1.0, 2.0, 3.0],
+            &[1_000.0, 1_050.0, 1_100.0],
+            &[1_000.0, 1_050.0, 1_100.0],
+            &[1_000.0, 1_050.0, 1_100.0],
+            &[1_000.0, 1_050.0, 1_100.0],
+        )
+        .unwrap();
+    chart
+        .set_series_data(
+            left_series,
+            &[1.0, 2.0, 3.0],
+            &[10.0, 10.5, 11.0],
+            &[10.0, 10.5, 11.0],
+            &[10.0, 10.5, 11.0],
+            &[10.0, 10.5, 11.0],
+        )
+        .unwrap();
+    let outer = chart
+        .add_price_scale(0, "outer", PriceScaleSide::Right, None, true)
+        .unwrap();
+    let left = chart
+        .add_price_scale(0, "comparison-left", PriceScaleSide::Left, Some(0), true)
+        .unwrap();
+    chart.set_series_price_scale(outer_series, outer);
+    chart.set_series_price_scale(left_series, left);
+    chart.set_price_scale_mode_for(0, outer, PriceScaleMode::Logarithmic);
+    chart.set_price_scale_inverted_for(0, outer, true);
+    chart.set_price_scale_mode_for(0, left, PriceScaleMode::Percentage);
+    assert!(
+        chart.series_apply_price_format_json(0, r#"{"type":"price","precision":0,"min_move":1}"#)
+    );
+    assert!(chart.series_apply_price_format_json(
+        outer_series,
+        r#"{"type":"price","precision":2,"min_move":0.01}"#
+    ));
+    assert!(chart.series_apply_price_format_json(
+        left_series,
+        r#"{"type":"price","precision":3,"min_move":0.001}"#
+    ));
+    chart
+        .apply_options(r##"{"crosshair":{"horzLine":{"labelBackgroundColor":"#00ffff"}}}"##)
+        .unwrap();
+    chart.fit_content();
+    chart.recompute_layout_with_measure(true, |text| text.len() as f64 * 7.0);
+    chart.build_frame();
+    chart.crosshair = Some((chart.time_scale.index_to_coordinate(1), 210.0));
+
+    let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let cyan = Color::rgb(0x00, 0xff, 0xff);
+    let crosshair: Vec<_> = axis
+        .labels
+        .iter()
+        .filter(|label| {
+            label.midpoint == AxisTextMidpoint::Label
+                && matches!(label.background, Some((.., color)) if color == cyan)
+        })
+        .collect();
+    assert_eq!(crosshair.len(), 3);
+    assert!(crosshair
+        .iter()
+        .all(|label| (label.y - crosshair[0].y).abs() < 1e-9));
+    assert!(crosshair.iter().any(|label| !label.text.contains('.')));
+    assert!(crosshair.iter().any(|label| label.text.ends_with('%')));
+    assert!(crosshair
+        .iter()
+        .any(|label| label.text.contains('.') && !label.text.ends_with('%')));
+
+    for target in [PriceScaleTarget::Right, outer, left] {
+        let (side, strip_x, strip_width) = chart
+            .price_scale_axis_geometry(0, target)
+            .expect("visible scale geometry");
+        assert!(crosshair.iter().any(|label| {
+            let Some((background_x, _, width, _, _)) = label.background else {
+                return false;
+            };
+            match side {
+                PriceScaleSide::Right => (background_x - strip_x).abs() < 1e-9,
+                PriceScaleSide::Left => {
+                    (background_x + width - (strip_x + strip_width)).abs() < 1e-9
+                }
+            }
+        }));
+    }
+
+    chart.set_price_scale_visible_for(0, left, false);
+    let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    assert_eq!(
+        axis.labels
+            .iter()
+            .filter(|label| matches!(label.background, Some((.., color)) if color == cyan))
+            .count(),
+        2
+    );
+    chart
+        .set_series_data(outer_series, &[], &[], &[], &[], &[])
+        .unwrap();
+    chart.build_frame();
+    let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    assert_eq!(
+        axis.labels
+            .iter()
+            .filter(|label| matches!(label.background, Some((.., color)) if color == cyan))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn grid_uses_the_innermost_populated_scale_and_prefers_right_on_equal_order() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0, 3.0],
+            &[100.0, 105.0, 110.0],
+            &[100.0, 105.0, 110.0],
+            &[100.0, 105.0, 110.0],
+            &[100.0, 105.0, 110.0],
+        )
+        .unwrap();
+    let left_series = chart.add_series(SeriesKind::Line);
+    chart
+        .set_series_data(
+            left_series,
+            &[1.0, 2.0, 3.0],
+            &[1_000.0, 1_500.0, 2_000.0],
+            &[1_000.0, 1_500.0, 2_000.0],
+            &[1_000.0, 1_500.0, 2_000.0],
+            &[1_000.0, 1_500.0, 2_000.0],
+        )
+        .unwrap();
+    let left = chart
+        .add_price_scale(0, "left-grid", PriceScaleSide::Left, Some(0), true)
+        .unwrap();
+    chart.set_series_price_scale(left_series, left);
+    chart
+        .apply_options(
+            r##"{"grid":{"vertLines":{"visible":false},"horzLines":{"visible":true,"color":"#010203"}}}"##,
+        )
+        .unwrap();
+    chart.fit_content();
+    chart.build_frame();
+
+    let expected: Vec<i32> = chart.panes[0]
+        .price_scale
+        .build_tick_marks(chart.scale_tick_base(0, PriceScaleTarget::Right), 0.0)
+        .into_iter()
+        .map(|mark| mark.coord.round() as i32)
+        .collect();
+    let grid_color = Color::rgb(0x01, 0x02, 0x03);
+    let actual: Vec<i32> = chart.build_frame().panes[0]
+        .under
+        .iter()
+        .filter_map(|prim| match prim {
+            Prim::HLine { y, color, .. } if *color == grid_color => Some(*y),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn do_not_snap_to_hidden_series_indices_moves_to_a_visible_bar() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     // Primary (visible) bars sit at merged indices 0, 1, 3; a hidden series owns index 2.
@@ -2830,13 +3009,14 @@ fn boxed_axis_labels_select_the_axis_facing_corners() {
     assert_eq!(right_x, chart.pane_left + chart.pane_w);
 
     // The same label on the left strip rounds the left corners.
-    chart.series[0].left_scale = true;
+    chart.set_price_scale_visible_for(0, PriceScaleTarget::Left, true);
+    chart.set_series_price_scale(0, PriceScaleTarget::Left);
     let labels = boxed_labels(&mut chart);
     assert_eq!(labels.len(), 1);
     assert_eq!(labels[0].background_corners, AxisLabelCorners::LEFT);
     let (left_x, _, left_w, _, _) = labels[0].background.expect("left boxed label");
     assert_eq!(left_x + left_w, chart.pane_left);
-    chart.series[0].left_scale = false;
+    chart.set_series_price_scale(0, PriceScaleTarget::Right);
 
     // The crosshair price label follows its strip; the time label rounds the bottom corners.
     chart.crosshair = Some((400.0, 250.0));
@@ -2916,7 +3096,8 @@ fn boxed_axis_labels_select_the_axis_facing_corners() {
     assert_eq!(corners_of("12.50"), AxisLabelCorners::RIGHT);
 
     // On the left strip the chip (leftmost top-row box) carries the axis-facing corners.
-    chart.series[0].left_scale = true;
+    chart.set_price_scale_visible_for(0, PriceScaleTarget::Left, true);
+    chart.set_series_price_scale(0, PriceScaleTarget::Left);
     chart.series[0].countdown_visible = true;
     let labels = boxed_labels(&mut chart);
     let corners_of = |text: &str| {

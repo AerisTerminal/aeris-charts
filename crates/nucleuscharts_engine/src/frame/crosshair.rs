@@ -212,10 +212,11 @@ impl ChartEngine {
         pane_index: usize,
         from: i64,
     ) -> (&PriceScaleCore, f64) {
-        let series = self
-            .series
-            .iter()
-            .find(|s| s.visible && !s.overlay && s.pane_index == pane_index);
+        let series = self.series.iter().find(|s| {
+            s.visible
+                && s.price_scale_target != PriceScaleTarget::Overlay
+                && s.pane_index == pane_index
+        });
         let target = series
             .map(series_scale_target)
             .unwrap_or(PriceScaleTarget::Right);
@@ -244,7 +245,7 @@ impl ChartEngine {
         for series in &self.series {
             if !series.visible
                 || series.removed
-                || series.overlay
+                || series.price_scale_target == PriceScaleTarget::Overlay
                 || series.pane_index != pane_index
             {
                 continue;

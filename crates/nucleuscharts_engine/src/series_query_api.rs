@@ -114,13 +114,11 @@ impl ChartEngine {
             LineType::Curved => "curved",
             LineType::Simple => "simple",
         };
-        let price_scale_id = if s.overlay {
-            ""
-        } else if s.left_scale {
-            "left"
-        } else {
-            "right"
-        };
+        let price_scale_id = self
+            .panes
+            .get(s.pane_index)
+            .and_then(|pane| pane.public_id_for_target(s.price_scale_target))
+            .unwrap_or("right");
         // reference PriceFormat wire form; a custom format's fn is not serializable (reference `options()`
         // returns it, but the JSON boundary carries only the declarative keys).
         let price_format = match s.price_format.kind {

@@ -984,6 +984,71 @@ mod tests {
     }
 
     #[test]
+    fn named_axis_hit_testing_and_gestures_touch_only_the_selected_strip() {
+        let mut chart = chart_with_data(600.0, 300.0);
+        let comparison_series = chart.add_series(SeriesKind::Line);
+        chart
+            .set_series_data(
+                comparison_series,
+                &[0.0, 1.0, 2.0, 3.0],
+                &[1_000.0, 1_010.0, 1_020.0, 1_030.0],
+                &[1_000.0, 1_010.0, 1_020.0, 1_030.0],
+                &[1_000.0, 1_010.0, 1_020.0, 1_030.0],
+                &[1_000.0, 1_010.0, 1_020.0, 1_030.0],
+            )
+            .unwrap();
+        let comparison = chart
+            .add_price_scale(0, "comparison", PriceScaleSide::Right, Some(0), true)
+            .unwrap();
+        chart.set_series_price_scale(comparison_series, comparison);
+        chart.set_price_scale_visible_range_for(0, PriceScaleTarget::Right, 5.0, 25.0);
+        chart.set_price_scale_visible_range_for(0, comparison, 990.0, 1_040.0);
+        chart.recompute_layout_with_measure(true, |text| text.len() as f64 * 7.0);
+
+        let (_, comparison_x, comparison_width) = chart
+            .price_scale_axis_geometry(0, comparison)
+            .expect("named scale strip");
+        let (_, right_x, right_width) = chart
+            .price_scale_axis_geometry(0, PriceScaleTarget::Right)
+            .expect("built-in strip");
+        assert_eq!(comparison_x, chart.pane_left + chart.pane_w);
+        assert_eq!(right_x, comparison_x + comparison_width);
+        assert_eq!(
+            chart.price_axis_target_at(0, comparison_x + comparison_width / 2.0 - chart.pane_left,),
+            Some(comparison)
+        );
+        assert_eq!(
+            chart.price_axis_target_at(0, right_x + right_width / 2.0 - chart.pane_left),
+            Some(PriceScaleTarget::Right)
+        );
+
+        let right_before = chart
+            .price_scale_visible_range_for(0, PriceScaleTarget::Right)
+            .unwrap();
+        let named_before = chart.price_scale_visible_range_for(0, comparison).unwrap();
+        chart.price_axis_start_scale(0, comparison, 250.0);
+        chart.price_axis_scale_to(0, comparison, 200.0);
+        chart.price_axis_end_scale(0, comparison);
+        assert_ne!(
+            chart.price_scale_visible_range_for(0, comparison),
+            Some(named_before)
+        );
+        assert_eq!(
+            chart.price_scale_visible_range_for(0, PriceScaleTarget::Right),
+            Some(right_before)
+        );
+
+        chart.set_price_scale_visible_for(0, comparison, false);
+        chart.recompute_layout_with_measure(true, |text| text.len() as f64 * 7.0);
+        assert!(chart.price_scale_axis_geometry(0, comparison).is_none());
+        assert!(chart.price_scale_visible_range_for(0, comparison).is_some());
+        let (_, moved_right_x, _) = chart
+            .price_scale_axis_geometry(0, PriceScaleTarget::Right)
+            .expect("right strip remains");
+        assert_eq!(moved_right_x, chart.pane_left + chart.pane_w);
+    }
+
+    #[test]
     fn wheel_and_pinch_increments_match_the_reference_coefficients() {
         assert_eq!(wheel_zoom_scale(0.42), 0.42);
         assert_eq!(wheel_zoom_scale(-3.7), -1.0);

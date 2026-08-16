@@ -4,17 +4,275 @@
 use super::*;
 
 impl ChartEngine {
+    pub fn price_scale_axis_width(&self, pane: usize, target: PriceScaleTarget) -> Option<f64> {
+        self.panes.get(pane)?.scale(target)?;
+        if !self.price_scale_visible_for(pane, target) {
+            return Some(0.0);
+        }
+        Some(match target {
+            PriceScaleTarget::Right => self.right_builtin_axis_w,
+            PriceScaleTarget::Left => self.left_builtin_axis_w,
+            PriceScaleTarget::Overlay => 0.0,
+            PriceScaleTarget::Named(id) => self.panes[pane].named_scale(id)?.width,
+        })
+    }
+
+    pub fn price_scale_axis_geometry(
+        &self,
+        pane_index: usize,
+        target: PriceScaleTarget,
+    ) -> Option<(PriceScaleSide, f64, f64)> {
+        let pane = self.panes.get(pane_index)?;
+        let side = pane.scale_side(target)?;
+        if !self.price_scale_visible_for(pane_index, target) {
+            return None;
+        }
+        let targets = pane.ordered_side_targets(side);
+        let mut offset = 0.0;
+        for candidate in targets {
+            if !self.price_scale_visible_for(pane_index, candidate) {
+                continue;
+            }
+            let width = self.price_scale_axis_width(pane_index, candidate)?;
+            if candidate == target {
+                let x = match side {
+                    PriceScaleSide::Right => self.pane_left + self.pane_w + offset,
+                    PriceScaleSide::Left => self.pane_left - offset - width,
+                };
+                return Some((side, x, width));
+            }
+            offset += width;
+        }
+        None
+    }
+
+    pub fn price_axis_target_at(
+        &self,
+        pane_index: usize,
+        plot_relative_x: f64,
+    ) -> Option<PriceScaleTarget> {
+        let absolute_x = self.pane_left + plot_relative_x;
+        let pane = self.panes.get(pane_index)?;
+        pane.scale_targets().find(|target| {
+            self.price_scale_axis_geometry(pane_index, *target)
+                .is_some_and(|(_, x, width)| absolute_x >= x && absolute_x <= x + width)
+        })
+    }
+
+    pub fn price_scale_target_for_id(&self, pane: usize, id: &str) -> Option<PriceScaleTarget> {
+        self.panes.get(pane)?.target_for_public_id(id)
+    }
+
+    pub fn price_scale_id_for_target(&self, pane: usize, target: PriceScaleTarget) -> Option<&str> {
+        self.panes.get(pane)?.public_id_for_target(target)
+    }
+
+    pub fn add_price_scale(
+        &mut self,
+        pane_index: usize,
+        public_id: &str,
+        side: PriceScaleSide,
+        order: Option<usize>,
+        visible: bool,
+    ) -> Result<PriceScaleTarget, ChartError> {
+        if public_id.is_empty() || public_id == "left" || public_id == "right" {
+            return Err(ChartError::new(
+                ErrorCode::InvalidOptions,
+                "named price scale id is reserved or empty",
+            ));
+        }
+        if public_id.len() > MAX_PRICE_SCALE_ID_BYTES {
+            return Err(ChartError::new(
+                ErrorCode::InvalidOptions,
+                format!("price scale id exceeds {MAX_PRICE_SCALE_ID_BYTES} UTF-8 bytes"),
+            ));
+        }
+        let Some(pane) = self.panes.get_mut(pane_index) else {
+            return Err(ChartError::new(
+                ErrorCode::InvalidHandle,
+                "price scale pane is not live",
+            ));
+        };
+        if pane.target_for_public_id(public_id).is_some() {
+            return Err(ChartError::new(
+                ErrorCode::InvalidOptions,
+                "price scale id already exists in this pane",
+            ));
+        }
+        if pane.named_scales.len() >= MAX_NAMED_PRICE_SCALES_PER_PANE {
+            return Err(ChartError::new(
+                ErrorCode::ResourceLimit,
+                format!(
+                    "pane already has the maximum of {MAX_NAMED_PRICE_SCALES_PER_PANE} named price scales"
+                ),
+            ));
+        }
+        let id = PriceScaleId::try_from(pane.next_price_scale_id)?;
+        pane.next_price_scale_id = pane.next_price_scale_id.checked_add(1).ok_or_else(|| {
+            ChartError::new(
+                ErrorCode::ResourceLimit,
+                "price scale identity space is exhausted",
+            )
+        })?;
+        let target = PriceScaleTarget::Named(id);
+        pane.named_scales.push(NamedPriceScale {
+            id,
+            public_id: public_id.to_string(),
+            side,
+            order: pane.ordered_side_targets(side).len(),
+            visible,
+            width: 0.0,
+            marker_margin_above: 0.0,
+            marker_margin_below: 0.0,
+            scale: PriceScaleCore::new(PriceScaleCoreOptions::default()),
+        });
+        pane.move_axis_target(target, side, order.unwrap_or(usize::MAX));
+        pane.layout(self.pane_h);
+        self.invalidate_frame_all();
+        Ok(target)
+    }
+
+    pub fn move_price_scale(
+        &mut self,
+        pane_index: usize,
+        target: PriceScaleTarget,
+        side: PriceScaleSide,
+        order: usize,
+    ) -> bool {
+        let Some(pane) = self.panes.get_mut(pane_index) else {
+            return false;
+        };
+        if !pane.move_axis_target(target, side, order) {
+            return false;
+        }
+        self.invalidate_frame_all();
+        true
+    }
+
+    pub fn remove_price_scale(
+        &mut self,
+        pane_index: usize,
+        target: PriceScaleTarget,
+    ) -> Result<(), ChartError> {
+        let PriceScaleTarget::Named(id) = target else {
+            return Err(ChartError::new(
+                ErrorCode::UnsupportedOperation,
+                "built-in price scales cannot be removed",
+            ));
+        };
+        if self.series.iter().any(|series| {
+            !series.removed
+                && series.pane_index == pane_index
+                && series.price_scale_target == target
+        }) {
+            return Err(ChartError::new(
+                ErrorCode::UnsupportedOperation,
+                "move or remove attached series before removing this price scale",
+            ));
+        }
+        let Some(pane) = self.panes.get_mut(pane_index) else {
+            return Err(ChartError::new(
+                ErrorCode::InvalidHandle,
+                "price scale pane is not live",
+            ));
+        };
+        let Some(index) = pane.named_scales.iter().position(|entry| entry.id == id) else {
+            return Err(ChartError::new(
+                ErrorCode::StaleHandle,
+                "price scale has been removed",
+            ));
+        };
+        let side = pane.named_scales[index].side;
+        pane.named_scales.remove(index);
+        let targets = pane.ordered_side_targets(side);
+        for (order, candidate) in targets.into_iter().enumerate() {
+            pane.set_scale_order(candidate, order);
+        }
+        self.invalidate_frame_all();
+        Ok(())
+    }
+
+    pub fn price_scales(&self, pane_index: usize) -> Option<Vec<PriceScaleInfo>> {
+        let pane = self.panes.get(pane_index)?;
+        let mut targets: Vec<_> = pane.scale_targets().collect();
+        targets.sort_by_key(|target| match pane.scale_side(*target) {
+            Some(PriceScaleSide::Left) => (0, pane.scale_order(*target).unwrap_or(0)),
+            Some(PriceScaleSide::Right) => (1, pane.scale_order(*target).unwrap_or(0)),
+            None => (2, 0),
+        });
+        Some(
+            targets
+                .into_iter()
+                .map(|target| PriceScaleInfo {
+                    id: pane.public_id_for_target(target).unwrap_or("").to_string(),
+                    side: pane.scale_side(target),
+                    order: pane.scale_order(target),
+                    visible: self.price_scale_visible_for(pane_index, target),
+                    built_in: !matches!(target, PriceScaleTarget::Named(_)),
+                    pane_index,
+                    series_ids: self
+                        .series
+                        .iter()
+                        .filter(|series| {
+                            !series.removed
+                                && series.pane_index == pane_index
+                                && series.price_scale_target == target
+                        })
+                        .map(|series| series.id)
+                        .collect(),
+                })
+                .collect(),
+        )
+    }
+
+    pub fn price_scale_visible_for(&self, pane: usize, target: PriceScaleTarget) -> bool {
+        match target {
+            PriceScaleTarget::Right => self.options.get().right_price_scale.visible,
+            PriceScaleTarget::Left => self.options.get().left_price_scale.visible,
+            PriceScaleTarget::Overlay => false,
+            PriceScaleTarget::Named(id) => self
+                .panes
+                .get(pane)
+                .and_then(|pane| pane.named_scale(id))
+                .is_some_and(|entry| entry.visible),
+        }
+    }
+
+    pub fn set_price_scale_visible_for(
+        &mut self,
+        pane: usize,
+        target: PriceScaleTarget,
+        visible: bool,
+    ) -> bool {
+        match target {
+            PriceScaleTarget::Right => self
+                .options
+                .apply(&serde_json::json!({"rightPriceScale": {"visible": visible}})),
+            PriceScaleTarget::Left => self
+                .options
+                .apply(&serde_json::json!({"leftPriceScale": {"visible": visible}})),
+            PriceScaleTarget::Overlay => return !visible,
+            PriceScaleTarget::Named(id) => {
+                let Some(entry) = self
+                    .panes
+                    .get_mut(pane)
+                    .and_then(|pane| pane.named_scale_mut(id))
+                else {
+                    return false;
+                };
+                entry.visible = visible;
+            }
+        }
+        self.invalidate_frame_all();
+        true
+    }
+
     pub fn price_scale_for(
         &self,
         pane: usize,
         target: PriceScaleTarget,
     ) -> Option<&PriceScaleCore> {
-        let pane = self.panes.get(pane)?;
-        Some(match target {
-            PriceScaleTarget::Right => &pane.price_scale,
-            PriceScaleTarget::Left => &pane.left_scale,
-            PriceScaleTarget::Overlay => &pane.overlay_scale,
-        })
+        self.panes.get(pane)?.scale(target)
     }
 
     pub fn price_scale_for_mut(
@@ -22,12 +280,7 @@ impl ChartEngine {
         pane: usize,
         target: PriceScaleTarget,
     ) -> Option<&mut PriceScaleCore> {
-        let pane = self.panes.get_mut(pane)?;
-        Some(match target {
-            PriceScaleTarget::Right => &mut pane.price_scale,
-            PriceScaleTarget::Left => &mut pane.left_scale,
-            PriceScaleTarget::Overlay => &mut pane.overlay_scale,
-        })
+        self.panes.get_mut(pane)?.scale_mut(target)
     }
 
     /// Current visible raw-value range for a pane price scale.
@@ -276,10 +529,19 @@ impl ChartEngine {
     }
 
     pub fn set_series_price_scale(&mut self, id: SeriesId, target: PriceScaleTarget) {
-        self.invalidate_frame_scene();
+        let Some(pane_index) = self.series_entry(id).map(|series| series.pane_index) else {
+            return;
+        };
+        if !self
+            .panes
+            .get(pane_index)
+            .is_some_and(|pane| pane.scale(target).is_some())
+        {
+            return;
+        }
+        self.invalidate_frame_all();
         if let Some(series) = self.series_entry_mut(id) {
-            series.overlay = target == PriceScaleTarget::Overlay;
-            series.left_scale = target == PriceScaleTarget::Left;
+            series.price_scale_target = target;
         }
     }
 
@@ -300,15 +562,20 @@ impl ChartEngine {
         else {
             return false;
         };
-        let Some(scale) = self.price_scale_for_mut(pane, target) else {
-            return false;
-        };
         let flag = |key: &str| patch.get(key).and_then(serde_json::Value::as_bool);
         let finite = |key: &str| {
             patch
                 .get(key)
                 .and_then(serde_json::Value::as_f64)
                 .filter(|v| v.is_finite())
+        };
+        if let Some(visible) = flag("visible") {
+            if !self.set_price_scale_visible_for(pane, target, visible) {
+                return false;
+            }
+        }
+        let Some(scale) = self.price_scale_for_mut(pane, target) else {
+            return false;
         };
         if let Some(mode) = patch.get("mode").and_then(serde_json::Value::as_u64) {
             scale.set_mode(match mode {
@@ -406,22 +673,15 @@ impl ChartEngine {
                 "minimum_width": options.minimum_width,
                 "text_color": options.text_color,
                 "bold_round_labels": options.bold_round_labels,
+                "visible": self.price_scale_visible_for(pane, target),
             })
             .to_string(),
         )
     }
 
     pub fn series_price_scale(&self, id: SeriesId) -> Option<(usize, PriceScaleTarget)> {
-        self.series_entry(id).map(|series| {
-            let target = if series.overlay {
-                PriceScaleTarget::Overlay
-            } else if series.left_scale {
-                PriceScaleTarget::Left
-            } else {
-                PriceScaleTarget::Right
-            };
-            (series.pane_index, target)
-        })
+        self.series_entry(id)
+            .map(|series| (series.pane_index, series.price_scale_target))
     }
 
     /// First close at or to the right of the visible left edge, matching reference series first-value

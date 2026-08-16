@@ -336,14 +336,43 @@ pub struct CustomSeriesFrameValues {
     pub last_visible: Option<CustomSeriesLastValue>,
 }
 
-/// The price scale that owns a series. Left and right are visible pane axes; overlay is the
-/// axis-less independent scale used by volume and other pane overlays.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Opaque pane-local identity for a host-created price scale.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PriceScaleId(NonZeroU32);
+
+impl PriceScaleId {
+    pub fn get(self) -> u32 {
+        self.0.get()
+    }
+}
+
+impl TryFrom<u32> for PriceScaleId {
+    type Error = ChartError;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        NonZeroU32::new(value).map(Self).ok_or_else(|| {
+            ChartError::new(ErrorCode::InvalidHandle, "price scale id zero is invalid")
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PriceScaleSide {
+    Left,
+    Right,
+}
+
+/// The price scale that owns a series. Named identities are stable across side/order changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PriceScaleTarget {
     Right,
     Left,
     Overlay,
+    Named(PriceScaleId),
 }
+
+pub const MAX_NAMED_PRICE_SCALES_PER_PANE: usize = 16;
+pub const MAX_PRICE_SCALE_ID_BYTES: usize = 128;
 
 /// One series primitive's autoscale contribution for the frame being built (plugin platform
 /// Phase C-b; reference `ISeriesPrimitiveBase.autoscaleInfo` merged into the owning series' price
@@ -361,6 +390,17 @@ pub struct PrimitiveAutoscaleContribution {
     /// Raw price bounds to union into the scale's range.
     pub min: f64,
     pub max: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PriceScaleInfo {
+    pub id: String,
+    pub side: Option<PriceScaleSide>,
+    pub order: Option<usize>,
+    pub visible: bool,
+    pub built_in: bool,
+    pub pane_index: usize,
+    pub series_ids: Vec<SeriesId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -528,8 +568,7 @@ pub struct SeriesEntry {
     pub area_top_color: Option<String>,
     pub area_bottom_color: Option<String>,
     pub histogram_updown: bool,
-    pub overlay: bool,
-    pub left_scale: bool,
+    pub price_scale_target: PriceScaleTarget,
     pub pane_index: usize,
     pub line_type: LineType,
     pub point_markers: bool,
@@ -679,8 +718,7 @@ impl SeriesEntry {
             area_top_color: None,
             area_bottom_color: None,
             histogram_updown: false,
-            overlay: false,
-            left_scale: false,
+            price_scale_target: PriceScaleTarget::Right,
             pane_index: 0,
             line_type: LineType::Simple,
             point_markers: false,
@@ -822,6 +860,10 @@ pub struct Pane {
     pub price_scale: PriceScaleCore,
     pub left_scale: PriceScaleCore,
     pub overlay_scale: PriceScaleCore,
+    pub(crate) named_scales: Vec<NamedPriceScale>,
+    next_price_scale_id: u32,
+    right_scale_order: usize,
+    left_scale_order: usize,
     pub stretch_factor: f64,
     pub overlay_top: f64,
     pub overlay_bottom: f64,
@@ -863,6 +905,10 @@ impl Pane {
             price_scale: main_scale,
             left_scale: PriceScaleCore::new(PriceScaleCoreOptions::default()),
             overlay_scale,
+            named_scales: Vec::new(),
+            next_price_scale_id: 1,
+            right_scale_order: 0,
+            left_scale_order: 0,
             stretch_factor: 1.0,
             overlay_top: 0.8,
             overlay_bottom: 0.0,
@@ -890,12 +936,18 @@ impl Pane {
         self.price_scale.set_height(content_h);
         self.left_scale.set_height(content_h);
         self.overlay_scale.set_height(content_h);
+        for entry in &mut self.named_scales {
+            entry.scale.set_height(content_h);
+        }
         // Fractional scale margins (top 0.2 / bottom 0.1) resolve against the pane's OWN slot,
         // not the full content height — a small pane would otherwise go negative inside and
         // flip its coordinate mapping (a dragged-short pane inverting its scale).
         self.price_scale.set_margins_height(self.height);
         self.left_scale.set_margins_height(self.height);
         self.overlay_scale.set_margins_height(self.height);
+        for entry in &mut self.named_scales {
+            entry.scale.set_margins_height(self.height);
+        }
         self.refresh_internal_margins();
     }
 
@@ -914,6 +966,190 @@ impl Pane {
             self.top + self.overlay_marker_margin_above,
             below + self.overlay_marker_margin_below,
         );
+        for entry in &mut self.named_scales {
+            entry.scale.set_internal_margins(
+                self.top + entry.marker_margin_above,
+                below + entry.marker_margin_below,
+            );
+        }
+    }
+}
+
+pub(crate) struct NamedPriceScale {
+    pub id: PriceScaleId,
+    pub public_id: String,
+    pub side: PriceScaleSide,
+    pub order: usize,
+    pub visible: bool,
+    pub width: f64,
+    pub marker_margin_above: f64,
+    pub marker_margin_below: f64,
+    pub scale: PriceScaleCore,
+}
+
+impl Pane {
+    pub(crate) fn scale(&self, target: PriceScaleTarget) -> Option<&PriceScaleCore> {
+        match target {
+            PriceScaleTarget::Right => Some(&self.price_scale),
+            PriceScaleTarget::Left => Some(&self.left_scale),
+            PriceScaleTarget::Overlay => Some(&self.overlay_scale),
+            PriceScaleTarget::Named(id) => self
+                .named_scales
+                .iter()
+                .find(|entry| entry.id == id)
+                .map(|entry| &entry.scale),
+        }
+    }
+
+    pub(crate) fn scale_mut(&mut self, target: PriceScaleTarget) -> Option<&mut PriceScaleCore> {
+        match target {
+            PriceScaleTarget::Right => Some(&mut self.price_scale),
+            PriceScaleTarget::Left => Some(&mut self.left_scale),
+            PriceScaleTarget::Overlay => Some(&mut self.overlay_scale),
+            PriceScaleTarget::Named(id) => self
+                .named_scales
+                .iter_mut()
+                .find(|entry| entry.id == id)
+                .map(|entry| &mut entry.scale),
+        }
+    }
+
+    pub(crate) fn target_for_public_id(&self, id: &str) -> Option<PriceScaleTarget> {
+        match id {
+            "right" => Some(PriceScaleTarget::Right),
+            "left" => Some(PriceScaleTarget::Left),
+            "" => Some(PriceScaleTarget::Overlay),
+            _ => self
+                .named_scales
+                .iter()
+                .find(|entry| entry.public_id == id)
+                .map(|entry| PriceScaleTarget::Named(entry.id)),
+        }
+    }
+
+    pub(crate) fn public_id_for_target(&self, target: PriceScaleTarget) -> Option<&str> {
+        match target {
+            PriceScaleTarget::Right => Some("right"),
+            PriceScaleTarget::Left => Some("left"),
+            PriceScaleTarget::Overlay => Some(""),
+            PriceScaleTarget::Named(id) => self
+                .named_scales
+                .iter()
+                .find(|entry| entry.id == id)
+                .map(|entry| entry.public_id.as_str()),
+        }
+    }
+
+    pub(crate) fn named_scale(&self, id: PriceScaleId) -> Option<&NamedPriceScale> {
+        self.named_scales.iter().find(|entry| entry.id == id)
+    }
+
+    pub(crate) fn named_scale_mut(&mut self, id: PriceScaleId) -> Option<&mut NamedPriceScale> {
+        self.named_scales.iter_mut().find(|entry| entry.id == id)
+    }
+
+    pub(crate) fn scale_targets(&self) -> impl Iterator<Item = PriceScaleTarget> + '_ {
+        [
+            PriceScaleTarget::Right,
+            PriceScaleTarget::Left,
+            PriceScaleTarget::Overlay,
+        ]
+        .into_iter()
+        .chain(
+            self.named_scales
+                .iter()
+                .map(|entry| PriceScaleTarget::Named(entry.id)),
+        )
+    }
+
+    pub(crate) fn scale_revisions(&self) -> Vec<u64> {
+        self.scale_targets()
+            .filter_map(|target| self.scale(target).map(PriceScaleCore::revision))
+            .collect()
+    }
+
+    pub(crate) fn scale_side(&self, target: PriceScaleTarget) -> Option<PriceScaleSide> {
+        match target {
+            PriceScaleTarget::Right => Some(PriceScaleSide::Right),
+            PriceScaleTarget::Left => Some(PriceScaleSide::Left),
+            PriceScaleTarget::Overlay => None,
+            PriceScaleTarget::Named(id) => self.named_scale(id).map(|entry| entry.side),
+        }
+    }
+
+    pub(crate) fn scale_order(&self, target: PriceScaleTarget) -> Option<usize> {
+        match target {
+            PriceScaleTarget::Right => Some(self.right_scale_order),
+            PriceScaleTarget::Left => Some(self.left_scale_order),
+            PriceScaleTarget::Overlay => None,
+            PriceScaleTarget::Named(id) => self.named_scale(id).map(|entry| entry.order),
+        }
+    }
+
+    fn set_scale_order(&mut self, target: PriceScaleTarget, order: usize) {
+        match target {
+            PriceScaleTarget::Right => self.right_scale_order = order,
+            PriceScaleTarget::Left => self.left_scale_order = order,
+            PriceScaleTarget::Overlay => {}
+            PriceScaleTarget::Named(id) => {
+                if let Some(entry) = self.named_scale_mut(id) {
+                    entry.order = order;
+                }
+            }
+        }
+    }
+
+    pub(crate) fn ordered_side_targets(&self, side: PriceScaleSide) -> Vec<PriceScaleTarget> {
+        let mut targets = Vec::with_capacity(self.named_scales.len() + 1);
+        targets.push(match side {
+            PriceScaleSide::Left => PriceScaleTarget::Left,
+            PriceScaleSide::Right => PriceScaleTarget::Right,
+        });
+        targets.extend(
+            self.named_scales
+                .iter()
+                .filter(|entry| entry.side == side)
+                .map(|entry| PriceScaleTarget::Named(entry.id)),
+        );
+        targets.sort_by_key(|target| self.scale_order(*target).unwrap_or(usize::MAX));
+        targets
+    }
+
+    pub(crate) fn move_axis_target(
+        &mut self,
+        target: PriceScaleTarget,
+        side: PriceScaleSide,
+        requested_order: usize,
+    ) -> bool {
+        let Some(old_side) = self.scale_side(target) else {
+            return false;
+        };
+        if matches!(target, PriceScaleTarget::Right) && side != PriceScaleSide::Right
+            || matches!(target, PriceScaleTarget::Left) && side != PriceScaleSide::Left
+        {
+            return false;
+        }
+        if self.scale_order(target).is_none() {
+            return false;
+        }
+        let mut old_targets = self.ordered_side_targets(old_side);
+        old_targets.retain(|candidate| *candidate != target);
+        for (order, candidate) in old_targets.into_iter().enumerate() {
+            self.set_scale_order(candidate, order);
+        }
+        if let PriceScaleTarget::Named(id) = target {
+            if let Some(entry) = self.named_scale_mut(id) {
+                entry.side = side;
+            }
+        }
+        let mut targets = self.ordered_side_targets(side);
+        targets.retain(|candidate| *candidate != target);
+        let order = requested_order.min(targets.len());
+        targets.insert(order, target);
+        for (index, candidate) in targets.into_iter().enumerate() {
+            self.set_scale_order(candidate, index);
+        }
+        true
     }
 }
 
@@ -982,6 +1218,8 @@ pub struct ChartEngine {
     pub pane_left: f64,
     pub left_axis_w: f64,
     pub axis_w: f64,
+    pub(crate) left_builtin_axis_w: f64,
+    pub(crate) right_builtin_axis_w: f64,
     indicators: Vec<IndicatorBinding>,
     indicator_changes: Vec<(SeriesId, IndicatorChange)>,
     synced_points_len: usize,
@@ -1096,6 +1334,8 @@ impl ChartEngine {
             pane_left: 0.0,
             left_axis_w: 0.0,
             axis_w: 0.0,
+            left_builtin_axis_w: 0.0,
+            right_builtin_axis_w: 0.0,
             indicators: Vec::new(),
             indicator_changes: Vec::new(),
             synced_points_len: 0,
@@ -1572,12 +1812,46 @@ impl ChartEngine {
     /// The pane the series left collapses when empty and not preserved (reference
     /// `_cleanupIfPaneIsEmpty`, chart-model.ts:1135).
     pub fn set_series_pane(&mut self, id: SeriesId, pane_index: usize, stretch_factor: f64) {
-        if self.series_entry(id).is_none() {
-            return;
+        self.try_set_series_pane(id, pane_index, stretch_factor);
+    }
+
+    pub fn try_set_series_pane(
+        &mut self,
+        id: SeriesId,
+        pane_index: usize,
+        stretch_factor: f64,
+    ) -> bool {
+        let Some((from, current_target)) = self
+            .series_entry(id)
+            .map(|series| (series.pane_index, series.price_scale_target))
+        else {
+            return false;
+        };
+        let named_public_id = match current_target {
+            PriceScaleTarget::Named(_) => self
+                .panes
+                .get(from)
+                .and_then(|pane| pane.public_id_for_target(current_target))
+                .map(str::to_string),
+            _ => None,
+        };
+        if named_public_id.is_some() && pane_index >= self.panes.len() {
+            return false;
         }
+        let destination_target = named_public_id
+            .as_deref()
+            .map(|public_id| {
+                self.panes
+                    .get(pane_index)
+                    .and_then(|pane| pane.target_for_public_id(public_id))
+            })
+            .unwrap_or(Some(current_target));
+        let Some(destination_target) = destination_target else {
+            return false;
+        };
         while self.panes.len() <= pane_index {
             let Some((stable_id, persistent_id)) = self.take_pane_ids() else {
-                return;
+                return false;
             };
             let mut pane = Pane::with_chart_ids(stable_id, persistent_id);
             pane.stretch_factor = stretch_factor.max(0.01);
@@ -1585,17 +1859,56 @@ impl ChartEngine {
             self.panes.push(pane);
         }
         let Some(series) = self.series.iter_mut().find(|s| s.id == id && !s.removed) else {
-            return;
+            return false;
         };
-        let from = series.pane_index;
         if from == pane_index {
-            return;
+            return true;
         }
         series.pane_index = pane_index;
+        series.price_scale_target = destination_target;
         if from != PANELESS {
             self.cleanup_if_pane_is_empty(from);
         }
         self.invalidate_frame_all();
+        true
+    }
+
+    pub fn try_set_series_pane_and_scale(
+        &mut self,
+        id: SeriesId,
+        pane_index: usize,
+        stretch_factor: f64,
+        price_scale_id: &str,
+    ) -> bool {
+        let Some(from) = self.series_entry(id).map(|series| series.pane_index) else {
+            return false;
+        };
+        let built_in = matches!(price_scale_id, "left" | "right" | "");
+        if !built_in && pane_index >= self.panes.len() {
+            return false;
+        }
+        while self.panes.len() <= pane_index {
+            let Some((stable_id, persistent_id)) = self.take_pane_ids() else {
+                return false;
+            };
+            let mut pane = Pane::with_chart_ids(stable_id, persistent_id);
+            pane.stretch_factor = stretch_factor.max(0.01);
+            self.apply_chart_scale_options(&mut pane);
+            self.panes.push(pane);
+        }
+        let Some(target) = self.panes[pane_index].target_for_public_id(price_scale_id) else {
+            return false;
+        };
+        let Some(series) = self.series_entry_mut(id) else {
+            return false;
+        };
+        series.pane_index = pane_index;
+        series.price_scale_target = target;
+        if from != pane_index && from != PANELESS {
+            self.cleanup_if_pane_is_empty(from);
+        }
+        self.invalidate_frame_all();
+        true
     }
 
     /// Port of reference chart-model.ts `_cleanupIfPaneIsEmpty`: a pane left without any live
@@ -1606,6 +1919,9 @@ impl ChartEngine {
             return false;
         }
         if self.panes[pane_index].preserve_empty {
+            return false;
+        }
+        if !self.panes[pane_index].named_scales.is_empty() {
             return false;
         }
         // reference checks `pane.dataSources().length === 0`: hidden series still occupy their
@@ -2406,6 +2722,9 @@ impl ChartEngine {
         for pane in &mut self.panes {
             pane.price_scale.set_auto_scale(true);
             pane.left_scale.set_auto_scale(true);
+            for entry in &mut pane.named_scales {
+                entry.scale.set_auto_scale(true);
+            }
         }
     }
 
@@ -2531,7 +2850,7 @@ impl ChartEngine {
                 let scale = match target {
                     PriceScaleTarget::Left => &mut pane.left_scale,
                     PriceScaleTarget::Right => &mut pane.price_scale,
-                    PriceScaleTarget::Overlay => continue,
+                    PriceScaleTarget::Overlay | PriceScaleTarget::Named(_) => continue,
                 };
                 if let Some(align) = flag("alignLabels") {
                     scale.set_align_labels(align);

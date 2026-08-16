@@ -140,22 +140,14 @@ impl ChartEngine {
             let tick_len = (5.0 * dpr).round();
             let tick_off = (dpr * 0.5).floor();
             for tick in &axis_frame.price_ticks {
-                let (enabled, color, x) = if tick.left {
-                    (
-                        left_scale.border_visible,
-                        left_border,
-                        ((pane_left - 5.0) * dpr).round(),
-                    )
+                let (enabled, color) = if tick.left {
+                    (left_scale.border_visible, left_border)
                 } else {
-                    (
-                        right_scale.border_visible,
-                        right_border,
-                        ((pane_left + pane_w) * dpr).round(),
-                    )
+                    (right_scale.border_visible, right_border)
                 };
                 if enabled {
                     rect(
-                        x,
+                        (tick.x * dpr).round(),
                         (tick.y * dpr).round() - tick_off,
                         tick_len,
                         f64::from(border_w),

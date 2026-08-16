@@ -5,6 +5,14 @@ use super::inner_render::measure_text_ctx;
 use super::*;
 
 impl ChartInner {
+    fn price_scale_error_json(error: nucleuscharts_engine::ChartError) -> String {
+        serde_json::json!({
+            "ok": false,
+            "error": {"code": error.code().name(), "message": error.message()}
+        })
+        .to_string()
+    }
+
     pub(super) fn dispose_extensions(&mut self) {
         let pane_ids = self
             .primitives
@@ -748,8 +756,7 @@ impl ChartInner {
     pub fn set_series_overlay(&mut self, id: u32, top: f64, bottom: f64) {
         let mut pane_index = 0;
         if let Some(s) = self.series.iter_mut().find(|s| s.id == id as SeriesId) {
-            s.overlay = true;
-            s.left_scale = false;
+            s.price_scale_target = PriceScaleTarget::Overlay;
             pane_index = s.pane_index;
         }
         if let Some(p) = self.panes.get_mut(pane_index) {
@@ -766,6 +773,35 @@ impl ChartInner {
     pub fn set_series_pane(&mut self, id: u32, pane_index: usize, stretch_factor: f64) {
         self.engine
             .set_series_pane(id as SeriesId, pane_index, stretch_factor);
+    }
+
+    pub fn try_set_series_pane(&mut self, id: u32, pane_index: usize, stretch_factor: f64) -> bool {
+        let changed = self
+            .engine
+            .try_set_series_pane(id as SeriesId, pane_index, stretch_factor);
+        if changed {
+            self.recompute_layout(true);
+        }
+        changed
+    }
+
+    pub fn try_set_series_pane_and_scale(
+        &mut self,
+        id: u32,
+        pane_index: usize,
+        stretch_factor: f64,
+        price_scale_id: &str,
+    ) -> bool {
+        let changed = self.engine.try_set_series_pane_and_scale(
+            id as SeriesId,
+            pane_index,
+            stretch_factor,
+            price_scale_id,
+        );
+        if changed {
+            self.recompute_layout(true);
+        }
+        changed
     }
 
     /// Number of stacked panes.
@@ -1082,10 +1118,10 @@ impl ChartInner {
     /// Merge a snake_case JSON patch of price-scale options into one pane scale (reference
     /// `priceScale.applyOptions`; unknown keys are ignored). Mode/width-affecting keys force
     /// a full axis-width renegotiation like `set_price_scale_mode`.
-    pub fn price_scale_apply_options_json(&mut self, pane: u32, target: u8, json: &str) {
+    pub fn price_scale_apply_options_json(&mut self, pane: u32, target: u32, json: &str) {
         if !self.engine.price_scale_apply_options_json(
             pane as usize,
-            price_scale_target_from_u8(target),
+            price_scale_target_from_u32(target),
             json,
         ) {
             web_sys::console::warn_1(
@@ -1098,16 +1134,156 @@ impl ChartInner {
 
     /// One pane scale's full options as a snake_case JSON string ("" for an unknown
     /// pane/target) — reference `priceScale.options()`.
-    pub fn price_scale_options_json(&self, pane: u32, target: u8) -> String {
+    pub fn price_scale_options_json(&self, pane: u32, target: u32) -> String {
         self.engine
-            .price_scale_options_json(pane as usize, price_scale_target_from_u8(target))
+            .price_scale_options_json(pane as usize, price_scale_target_from_u32(target))
             .unwrap_or_default()
+    }
+
+    pub fn add_price_scale_result_json(&mut self, pane: u32, json: &str) -> String {
+        let value: serde_json::Value = match serde_json::from_str(json) {
+            Ok(value) => value,
+            Err(error) => {
+                return Self::price_scale_error_json(nucleuscharts_engine::ChartError::new(
+                    nucleuscharts_engine::ErrorCode::InvalidOptions,
+                    format!("malformed price scale options: {error}"),
+                ));
+            }
+        };
+        let Some(object) = value.as_object() else {
+            return Self::price_scale_error_json(nucleuscharts_engine::ChartError::new(
+                nucleuscharts_engine::ErrorCode::InvalidOptions,
+                "price scale options must be an object",
+            ));
+        };
+        let Some(id) = object.get("id").and_then(serde_json::Value::as_str) else {
+            return Self::price_scale_error_json(nucleuscharts_engine::ChartError::new(
+                nucleuscharts_engine::ErrorCode::InvalidOptions,
+                "price scale id is required",
+            ));
+        };
+        let side = match object.get("side").and_then(serde_json::Value::as_str) {
+            Some("left") => PriceScaleSide::Left,
+            Some("right") => PriceScaleSide::Right,
+            _ => {
+                return Self::price_scale_error_json(nucleuscharts_engine::ChartError::new(
+                    nucleuscharts_engine::ErrorCode::InvalidOptions,
+                    "price scale side must be left or right",
+                ));
+            }
+        };
+        let order = object
+            .get("order")
+            .and_then(serde_json::Value::as_u64)
+            .map(|value| value.min(usize::MAX as u64) as usize);
+        let visible = object
+            .get("visible")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true);
+        let target = match self
+            .engine
+            .add_price_scale(pane as usize, id, side, order, visible)
+        {
+            Ok(target) => target,
+            Err(error) => return Self::price_scale_error_json(error),
+        };
+        self.engine
+            .price_scale_apply_options_json(pane as usize, target, json);
+        self.recompute_layout(true);
+        serde_json::json!({"ok": true, "target": price_scale_target_to_u32(target)}).to_string()
+    }
+
+    pub fn price_scales_json(&self, pane: u32) -> String {
+        let Some(scales) = self.engine.price_scales(pane as usize) else {
+            return "[]".to_string();
+        };
+        serde_json::Value::Array(
+            scales
+                .into_iter()
+                .map(|info| {
+                    serde_json::json!({
+                        "id": info.id,
+                        "side": match info.side {
+                            Some(PriceScaleSide::Left) => Some("left"),
+                            Some(PriceScaleSide::Right) => Some("right"),
+                            None => None,
+                        },
+                        "order": info.order,
+                        "visible": info.visible,
+                        "built_in": info.built_in,
+                        "pane_index": info.pane_index,
+                        "series_ids": info.series_ids,
+                    })
+                })
+                .collect(),
+        )
+        .to_string()
+    }
+
+    pub fn price_scale_target_by_id(&self, pane: u32, id: &str) -> Option<u32> {
+        self.engine
+            .price_scale_target_for_id(pane as usize, id)
+            .map(price_scale_target_to_u32)
+    }
+
+    pub fn move_price_scale_result_json(
+        &mut self,
+        pane: u32,
+        target: u32,
+        side: &str,
+        order: usize,
+    ) -> String {
+        let side = match side {
+            "left" => PriceScaleSide::Left,
+            "right" => PriceScaleSide::Right,
+            _ => {
+                return Self::price_scale_error_json(nucleuscharts_engine::ChartError::new(
+                    nucleuscharts_engine::ErrorCode::InvalidOptions,
+                    "price scale side must be left or right",
+                ));
+            }
+        };
+        if !self.engine.move_price_scale(
+            pane as usize,
+            price_scale_target_from_u32(target),
+            side,
+            order,
+        ) {
+            return Self::price_scale_error_json(nucleuscharts_engine::ChartError::new(
+                nucleuscharts_engine::ErrorCode::InvalidHandle,
+                "price scale is not live or cannot move to that side",
+            ));
+        }
+        self.recompute_layout(true);
+        r#"{"ok":true}"#.to_string()
+    }
+
+    pub fn remove_price_scale_result_json(&mut self, pane: u32, target: u32) -> String {
+        match self
+            .engine
+            .remove_price_scale(pane as usize, price_scale_target_from_u32(target))
+        {
+            Ok(()) => {
+                self.recompute_layout(true);
+                r#"{"ok":true}"#.to_string()
+            }
+            Err(error) => Self::price_scale_error_json(error),
+        }
     }
 
     /// 0 = candlestick, 1 = OHLC bars, 2 = line, 3 = area, 4 = histogram (sets the main series).
     pub fn set_series_type(&mut self, kind: u8) {
         self.engine
             .convert_series_kind(0, SeriesKind::from_u8(kind));
+    }
+
+    pub fn set_series_kind(&mut self, id: u32, kind: u8) -> bool {
+        if self.engine.series_kind(id as SeriesId).is_none() {
+            return false;
+        }
+        self.engine
+            .convert_series_kind(id as SeriesId, SeriesKind::from_u8(kind));
+        true
     }
 
     pub fn set_time_visible(&mut self, visible: bool) {
@@ -1514,34 +1690,34 @@ impl ChartInner {
     }
     /// Whether a price-axis drag can scale this scale (false in percentage/indexed-to-100
     /// modes or with no range — reference `PriceScale.scaleTo` no-ops there).
-    pub fn price_axis_scalable(&self, pane: usize, target: u8) -> bool {
+    pub fn price_axis_scalable(&self, pane: usize, target: u32) -> bool {
         self.engine
-            .price_axis_scalable(pane, price_scale_target_from_u8(target))
+            .price_axis_scalable(pane, price_scale_target_from_u32(target))
     }
-    pub fn price_axis_start_scale(&mut self, pane: usize, target: u8, y_css: f64) {
+    pub fn price_axis_start_scale(&mut self, pane: usize, target: u32, y_css: f64) {
         self.engine
-            .price_axis_start_scale(pane, price_scale_target_from_u8(target), y_css);
+            .price_axis_start_scale(pane, price_scale_target_from_u32(target), y_css);
     }
-    pub fn price_axis_scale_to(&mut self, pane: usize, target: u8, y_css: f64) {
+    pub fn price_axis_scale_to(&mut self, pane: usize, target: u32, y_css: f64) {
         self.engine
-            .price_axis_scale_to(pane, price_scale_target_from_u8(target), y_css);
+            .price_axis_scale_to(pane, price_scale_target_from_u32(target), y_css);
     }
-    pub fn price_axis_end_scale(&mut self, pane: usize, target: u8) {
+    pub fn price_axis_end_scale(&mut self, pane: usize, target: u32) {
         self.engine
-            .price_axis_end_scale(pane, price_scale_target_from_u8(target));
+            .price_axis_end_scale(pane, price_scale_target_from_u32(target));
     }
     /// Vertical price pan (reference `startScrollPrice`/`scrollPriceTo`; no-ops in autoscale).
-    pub fn price_axis_start_scroll(&mut self, pane: usize, target: u8, y_css: f64) {
+    pub fn price_axis_start_scroll(&mut self, pane: usize, target: u32, y_css: f64) {
         self.engine
-            .price_axis_start_scroll(pane, price_scale_target_from_u8(target), y_css);
+            .price_axis_start_scroll(pane, price_scale_target_from_u32(target), y_css);
     }
-    pub fn price_axis_scroll_to(&mut self, pane: usize, target: u8, y_css: f64) {
+    pub fn price_axis_scroll_to(&mut self, pane: usize, target: u32, y_css: f64) {
         self.engine
-            .price_axis_scroll_to(pane, price_scale_target_from_u8(target), y_css);
+            .price_axis_scroll_to(pane, price_scale_target_from_u32(target), y_css);
     }
-    pub fn price_axis_end_scroll(&mut self, pane: usize, target: u8) {
+    pub fn price_axis_end_scroll(&mut self, pane: usize, target: u32) {
         self.engine
-            .price_axis_end_scroll(pane, price_scale_target_from_u8(target));
+            .price_axis_end_scroll(pane, price_scale_target_from_u32(target));
     }
 
     /// Eased scroll-to-position (cubic ease-out): the engine owns the easing and applies each
@@ -1564,6 +1740,12 @@ impl ChartInner {
     /// Index of the stacked pane containing content-y `y` (engine-owned pane bounds).
     pub fn pane_index_at_y(&self, y_css: f64) -> usize {
         self.engine.pane_index_at_y(y_css)
+    }
+
+    pub fn price_axis_target_at(&self, pane: usize, x_css: f64) -> Option<u32> {
+        self.engine
+            .price_axis_target_at(pane, x_css)
+            .map(price_scale_target_to_u32)
     }
 
     pub fn fit_content(&mut self) {
@@ -1589,75 +1771,70 @@ impl ChartInner {
         // is false, else the auto height floored at `minimumHeight`).
         self.engine.time_axis_height()
     }
-    pub fn price_scale_width(&self, pane: usize, target: u8) -> f64 {
-        if pane >= self.panes.len() {
-            return 0.0;
-        }
-        match price_scale_target_from_u8(target) {
-            PriceScaleTarget::Right => self.axis_w,
-            PriceScaleTarget::Left => self.left_axis_w,
-            PriceScaleTarget::Overlay => 0.0,
-        }
-    }
-    pub fn price_scale_visible_range(&self, pane: usize, target: u8) -> Vec<f64> {
+    pub fn price_scale_width(&self, pane: usize, target: u32) -> f64 {
         self.engine
-            .price_scale_visible_range_for(pane, price_scale_target_from_u8(target))
+            .price_scale_axis_width(pane, price_scale_target_from_u32(target))
+            .unwrap_or(0.0)
+    }
+    pub fn price_scale_visible_range(&self, pane: usize, target: u32) -> Vec<f64> {
+        self.engine
+            .price_scale_visible_range_for(pane, price_scale_target_from_u32(target))
             .map(|(from, to)| vec![from, to])
             .unwrap_or_default()
     }
-    pub fn set_price_scale_visible_range(&mut self, pane: usize, target: u8, from: f64, to: f64) {
+    pub fn set_price_scale_visible_range(&mut self, pane: usize, target: u32, from: f64, to: f64) {
         self.engine.set_price_scale_visible_range_for(
             pane,
-            price_scale_target_from_u8(target),
+            price_scale_target_from_u32(target),
             from,
             to,
         );
     }
-    pub fn price_scale_auto_scale(&self, pane: usize, target: u8) -> Option<bool> {
+    pub fn price_scale_auto_scale(&self, pane: usize, target: u32) -> Option<bool> {
         self.engine
-            .price_scale_auto_scale_for(pane, price_scale_target_from_u8(target))
+            .price_scale_auto_scale_for(pane, price_scale_target_from_u32(target))
     }
-    pub fn set_price_scale_auto_scale(&mut self, pane: usize, target: u8, enabled: bool) {
+    pub fn set_price_scale_auto_scale(&mut self, pane: usize, target: u32, enabled: bool) {
         self.engine.set_price_scale_auto_scale_for(
             pane,
-            price_scale_target_from_u8(target),
+            price_scale_target_from_u32(target),
             enabled,
         );
     }
-    pub fn price_scale_inverted(&self, pane: usize, target: u8) -> Option<bool> {
+    pub fn price_scale_inverted(&self, pane: usize, target: u32) -> Option<bool> {
         self.engine
-            .price_scale_inverted_for(pane, price_scale_target_from_u8(target))
+            .price_scale_inverted_for(pane, price_scale_target_from_u32(target))
     }
-    pub fn set_price_scale_inverted(&mut self, pane: usize, target: u8, inverted: bool) {
+    pub fn set_price_scale_inverted(&mut self, pane: usize, target: u32, inverted: bool) {
         self.engine.set_price_scale_inverted_for(
             pane,
-            price_scale_target_from_u8(target),
+            price_scale_target_from_u32(target),
             inverted,
         );
     }
-    pub fn price_scale_margins(&self, pane: usize, target: u8) -> Vec<f64> {
+    pub fn price_scale_margins(&self, pane: usize, target: u32) -> Vec<f64> {
         self.engine
-            .price_scale_margins_for(pane, price_scale_target_from_u8(target))
+            .price_scale_margins_for(pane, price_scale_target_from_u32(target))
             .map(|(top, bottom)| vec![top, bottom])
             .unwrap_or_default()
     }
-    pub fn set_price_scale_margins(&mut self, pane: usize, target: u8, top: f64, bottom: f64) {
+    pub fn set_price_scale_margins(&mut self, pane: usize, target: u32, top: f64, bottom: f64) {
         self.engine.set_price_scale_margins_for(
             pane,
-            price_scale_target_from_u8(target),
+            price_scale_target_from_u32(target),
             top,
             bottom,
         );
     }
-    pub fn price_scale_mode(&self, pane: usize, target: u8) -> Option<u8> {
+    pub fn price_scale_mode(&self, pane: usize, target: u32) -> Option<u8> {
         self.engine
-            .price_scale_mode_for(pane, price_scale_target_from_u8(target))
+            .price_scale_mode_for(pane, price_scale_target_from_u32(target))
             .map(price_scale_mode_to_u8)
     }
-    pub fn set_price_scale_mode(&mut self, pane: usize, target: u8, mode: u8) {
+    pub fn set_price_scale_mode(&mut self, pane: usize, target: u32, mode: u8) {
         self.engine.set_price_scale_mode_for(
             pane,
-            price_scale_target_from_u8(target),
+            price_scale_target_from_u32(target),
             price_scale_mode_from_u8(mode),
         );
         // A mode change is a full layout invalidation in reference: label formatting can become wider
@@ -1675,14 +1852,34 @@ impl ChartInner {
             .series_price_scale(id as SeriesId)
             .map(|(_, target)| target == PriceScaleTarget::Overlay)
     }
-    pub fn series_price_scale_id(&self, id: u32) -> Option<u8> {
+    pub fn series_price_scale_id(&self, id: u32) -> Option<u32> {
         self.engine
             .series_price_scale(id as SeriesId)
-            .map(|(_, target)| price_scale_target_to_u8(target))
+            .map(|(_, target)| price_scale_target_to_u32(target))
     }
-    pub fn set_series_price_scale(&mut self, id: u32, target: u8) {
+    pub fn series_price_scale_name(&self, id: u32) -> String {
+        let Some((pane, target)) = self.engine.series_price_scale(id as SeriesId) else {
+            return String::new();
+        };
         self.engine
-            .set_series_price_scale(id as SeriesId, price_scale_target_from_u8(target));
+            .price_scale_id_for_target(pane, target)
+            .unwrap_or("")
+            .to_string()
+    }
+    pub fn set_series_price_scale_by_name(&mut self, id: u32, name: &str) -> bool {
+        let Some((pane, _)) = self.engine.series_price_scale(id as SeriesId) else {
+            return false;
+        };
+        let Some(target) = self.engine.price_scale_target_for_id(pane, name) else {
+            return false;
+        };
+        self.engine.set_series_price_scale(id as SeriesId, target);
+        self.recompute_layout(true);
+        true
+    }
+    pub fn set_series_price_scale(&mut self, id: u32, target: u32) {
+        self.engine
+            .set_series_price_scale(id as SeriesId, price_scale_target_from_u32(target));
         self.recompute_layout(true);
     }
     pub fn series_price_to_coordinate(&self, id: u32, price: f64) -> Option<f64> {

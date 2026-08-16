@@ -199,6 +199,18 @@ test("a whitespace item renders nothing at its slot", async ({ page }) => {
     window.__main.apply_options({ visible: false });
     window.__custom.apply_options({ price_line_visible: false, last_value_visible: false });
     window.__custom.set_data(items);
+    // Keep the right scale populated without painting series geometry. Named-scale grid policy
+    // intentionally removes a grid when its last visible source is hidden, which would otherwise
+    // make the hidden-series comparison measure the grid lifecycle instead of the whitespace slot.
+    window.__ws_grid_source = window.__chart.add_series("line", {
+      line_visible: false,
+      price_line_visible: false,
+      last_value_visible: false,
+    });
+    window.__ws_grid_source.set_data([
+      { time: items[0].time, value: 90 },
+      { time: items[items.length - 1].time, value: 115 },
+    ]);
     // Pin the scale so toggling the custom series cannot shift the grid between captures.
     window.__chart.price_scale("right").set_visible_range({ from: 90, to: 115 });
     window.__chart.time_scale().fit_content();

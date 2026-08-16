@@ -5,7 +5,8 @@
 
 use crate::drawings::DrawingKind;
 use crate::{
-    ChartEngine, PriceFormatKind, PriceScaleTarget, SeriesKind, SeriesPriceFormat, PANE_SEPARATOR,
+    ChartEngine, PriceFormatKind, PriceScaleSide, PriceScaleTarget, SeriesKind, SeriesPriceFormat,
+    PANE_SEPARATOR,
 };
 use nucleuscharts_core::format::percentage_formatter::PercentageFormatter;
 use nucleuscharts_core::format::price_formatter::PriceFormatter;
@@ -394,7 +395,7 @@ pub(crate) struct RetainedFrame {
     last_options_generation: u64,
     last_series_revision: u64,
     last_time_scale_revision: u64,
-    last_price_scale_revisions: Vec<[u64; 3]>,
+    last_price_scale_revisions: Vec<Vec<u64>>,
 }
 
 impl RetainedFrame {
@@ -431,7 +432,12 @@ impl RetainedFrame {
                 .iter()
                 .map(|segments| segments.capacity() * std::mem::size_of::<FrameSeriesSegment>())
                 .sum::<usize>()
-            + self.last_price_scale_revisions.capacity() * std::mem::size_of::<[u64; 3]>()
+            + self.last_price_scale_revisions.capacity() * std::mem::size_of::<Vec<u64>>()
+            + self
+                .last_price_scale_revisions
+                .iter()
+                .map(|revisions| revisions.capacity() * std::mem::size_of::<u64>())
+                .sum::<usize>()
     }
 }
 
@@ -572,6 +578,8 @@ pub struct AxisFrame {
 pub struct PriceAxisTick {
     /// Media-y of the tick mark (same coordinate as its label).
     pub y: f64,
+    /// Media-x of the tick's left edge inside its exact price-scale strip.
+    pub x: f64,
     /// Which strip the tick belongs to (`true` = left axis, `false` = right).
     pub left: bool,
 }
@@ -620,21 +628,12 @@ struct ResolvedSeries {
 }
 
 pub(crate) fn series_scale_target(series: &crate::SeriesEntry) -> PriceScaleTarget {
-    if series.overlay {
-        PriceScaleTarget::Overlay
-    } else if series.left_scale {
-        PriceScaleTarget::Left
-    } else {
-        PriceScaleTarget::Right
-    }
+    series.price_scale_target
 }
 
 pub(crate) fn pane_scale(pane: &crate::Pane, target: PriceScaleTarget) -> &PriceScaleCore {
-    match target {
-        PriceScaleTarget::Right => &pane.price_scale,
-        PriceScaleTarget::Left => &pane.left_scale,
-        PriceScaleTarget::Overlay => &pane.overlay_scale,
-    }
+    pane.scale(target)
+        .expect("live series and primitives reference a live pane price scale")
 }
 
 fn css_color(value: &str, fallback: Color) -> Color {
@@ -896,33 +895,20 @@ impl ChartEngine {
         self.frame_build_stats.autoscale_runs += 1;
         let mut before = std::mem::take(&mut self.retained_frame.last_price_scale_revisions);
         before.clear();
-        before.extend(self.panes.iter().map(|pane| {
-            [
-                pane.price_scale.revision(),
-                pane.left_scale.revision(),
-                pane.overlay_scale.revision(),
-            ]
-        }));
+        before.extend(self.panes.iter().map(crate::Pane::scale_revisions));
         if let Some((from, to)) = self.visible_range_for_frame() {
             self.autoscale_for_frame(from, to);
         }
-        if self.panes.iter().zip(&before).any(|(pane, before)| {
-            [
-                pane.price_scale.revision(),
-                pane.left_scale.revision(),
-                pane.overlay_scale.revision(),
-            ] != *before
-        }) {
+        if self
+            .panes
+            .iter()
+            .zip(&before)
+            .any(|(pane, before)| pane.scale_revisions() != *before)
+        {
             self.frame_invalidation.coordinates();
         }
         before.clear();
-        before.extend(self.panes.iter().map(|pane| {
-            [
-                pane.price_scale.revision(),
-                pane.left_scale.revision(),
-                pane.overlay_scale.revision(),
-            ]
-        }));
+        before.extend(self.panes.iter().map(crate::Pane::scale_revisions));
         self.retained_frame.last_price_scale_revisions = before;
         self.retained_frame.autoscale_generation = self.frame_invalidation.autoscale;
     }
@@ -995,14 +981,7 @@ impl ChartEngine {
                 .panes
                 .iter()
                 .zip(&self.retained_frame.last_price_scale_revisions)
-                .any(|(pane, revisions)| {
-                    *revisions
-                        != [
-                            pane.price_scale.revision(),
-                            pane.left_scale.revision(),
-                            pane.overlay_scale.revision(),
-                        ]
-                });
+                .any(|(pane, revisions)| pane.scale_revisions() != *revisions);
         if price_scales_changed {
             self.frame_invalidation.coordinates();
         }
@@ -1014,13 +993,7 @@ impl ChartEngine {
         self.retained_frame.last_price_scale_revisions.clear();
         self.retained_frame
             .last_price_scale_revisions
-            .extend(self.panes.iter().map(|pane| {
-                [
-                    pane.price_scale.revision(),
-                    pane.left_scale.revision(),
-                    pane.overlay_scale.revision(),
-                ]
-            }));
+            .extend(self.panes.iter().map(crate::Pane::scale_revisions));
     }
 
     /// Build pane geometry without resetting work already recorded by host layout preparation.
@@ -1200,24 +1173,39 @@ impl ChartEngine {
                     cache.under.prims.push(background);
                 }
                 if let Some((from, to)) = visible {
-                    let (grid_scale, grid_target) = if pane.price_scale.is_empty() {
-                        (&pane.left_scale, PriceScaleTarget::Left)
-                    } else {
-                        (&pane.price_scale, PriceScaleTarget::Right)
-                    };
-                    self.build_grid_frame(
-                        &mut cache.under.prims,
-                        &time_marks,
-                        from,
-                        to,
-                        pane_w_px as i32,
-                        top_px as i32,
-                        height_px as i32,
-                        hpr,
-                        vpr,
-                        grid_scale,
-                        self.scale_tick_base(pi, grid_target),
-                    );
+                    let mut grid_targets: Vec<_> = pane
+                        .scale_targets()
+                        .filter(|target| {
+                            *target != PriceScaleTarget::Overlay
+                                && self.price_scale_visible_for(pi, *target)
+                                && self.scale_formatter_source(pi, *target).is_some()
+                        })
+                        .collect();
+                    grid_targets.sort_by_key(|target| {
+                        let order = pane.scale_order(*target).unwrap_or(usize::MAX);
+                        let side = match pane.scale_side(*target) {
+                            Some(PriceScaleSide::Right) => 0,
+                            Some(PriceScaleSide::Left) => 1,
+                            None => 2,
+                        };
+                        (order, side)
+                    });
+                    if let Some(grid_target) = grid_targets.first().copied() {
+                        let grid_scale = pane_scale(pane, grid_target);
+                        self.build_grid_frame(
+                            &mut cache.under.prims,
+                            &time_marks,
+                            from,
+                            to,
+                            pane_w_px as i32,
+                            top_px as i32,
+                            height_px as i32,
+                            hpr,
+                            vpr,
+                            grid_scale,
+                            self.scale_tick_base(pi, grid_target),
+                        );
+                    }
                     self.build_native_session_highlighting_frame(
                         pi,
                         from,
@@ -1727,13 +1715,7 @@ impl ChartEngine {
         retained.last_price_scale_revisions.clear();
         retained
             .last_price_scale_revisions
-            .extend(self.panes.iter().map(|pane| {
-                [
-                    pane.price_scale.revision(),
-                    pane.left_scale.revision(),
-                    pane.overlay_scale.revision(),
-                ]
-            }));
+            .extend(self.panes.iter().map(crate::Pane::scale_revisions));
         retained.initialized = true;
         self.retained_frame = retained;
     }
@@ -1795,6 +1777,13 @@ impl ChartEngine {
     }
 
     fn autoscale_for_frame(&mut self, from: i64, to: i64) {
+        struct NamedAutoscale {
+            target: PriceScaleTarget,
+            range: Option<PriceRange>,
+            margins: (f64, f64),
+            min_move: f64,
+        }
+
         let n = self.panes.len().max(1);
         let scale_min_moves: Vec<[f64; 3]> = (0..n)
             .map(|pane| {
@@ -1811,6 +1800,25 @@ impl ChartEngine {
         let mut main_marker_margins = vec![(0.0_f64, 0.0_f64); n];
         let mut left_marker_margins = vec![(0.0_f64, 0.0_f64); n];
         let mut overlay_marker_margins = vec![(0.0_f64, 0.0_f64); n];
+        let mut named: Vec<Vec<NamedAutoscale>> = self
+            .panes
+            .iter()
+            .enumerate()
+            .map(|(pane_index, pane)| {
+                pane.named_scales
+                    .iter()
+                    .map(|entry| {
+                        let target = PriceScaleTarget::Named(entry.id);
+                        NamedAutoscale {
+                            target,
+                            range: None,
+                            margins: (0.0, 0.0),
+                            min_move: self.scale_autoscale_min_move(pane_index, target),
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
         for s in &self.series {
             // Hidden series remain engine-owned so they can be toggled back on, but—matching
             // reference—they must not contribute to the active price-scale autoscale range. A
@@ -1844,6 +1852,15 @@ impl ChartEngine {
                 PriceScaleTarget::Right => &mut main[pane_index],
                 PriceScaleTarget::Left => &mut left[pane_index],
                 PriceScaleTarget::Overlay => &mut overlay[pane_index],
+                PriceScaleTarget::Named(_) => {
+                    let Some(entry) = named[pane_index]
+                        .iter_mut()
+                        .find(|entry| entry.target == scale_target)
+                    else {
+                        continue;
+                    };
+                    &mut entry.range
+                }
             };
             *slot = Some(match slot.take() {
                 Some(old) => old.merge(Some(&range)),
@@ -1944,6 +1961,15 @@ impl ChartEngine {
                     PriceScaleTarget::Right => &mut main_marker_margins[pane_index],
                     PriceScaleTarget::Left => &mut left_marker_margins[pane_index],
                     PriceScaleTarget::Overlay => &mut overlay_marker_margins[pane_index],
+                    PriceScaleTarget::Named(_) => {
+                        let Some(entry) = named[pane_index]
+                            .iter_mut()
+                            .find(|entry| entry.target == scale_target)
+                        else {
+                            continue;
+                        };
+                        &mut entry.margins
+                    }
                 };
                 target.0 = target.0.max(margins.0);
                 target.1 = target.1.max(margins.1);
@@ -1979,6 +2005,15 @@ impl ChartEngine {
                 PriceScaleTarget::Right => &mut main[contribution.pane],
                 PriceScaleTarget::Left => &mut left[contribution.pane],
                 PriceScaleTarget::Overlay => &mut overlay[contribution.pane],
+                PriceScaleTarget::Named(_) => {
+                    let Some(entry) = named[contribution.pane]
+                        .iter_mut()
+                        .find(|entry| entry.target == contribution.target)
+                    else {
+                        continue;
+                    };
+                    &mut entry.range
+                }
             };
             *slot = Some(match slot.take() {
                 Some(old) => old.merge(Some(&range)),
@@ -2040,6 +2075,25 @@ impl ChartEngine {
                     );
                 }
             }
+            for autoscale in &mut named[i] {
+                let PriceScaleTarget::Named(id) = autoscale.target else {
+                    continue;
+                };
+                let Some(entry) = pane.named_scale_mut(id) else {
+                    continue;
+                };
+                let auto = entry.scale.is_auto_scale();
+                entry.marker_margin_above = if auto { autoscale.margins.0 } else { 0.0 };
+                entry.marker_margin_below = if auto { autoscale.margins.1 } else { 0.0 };
+                if auto {
+                    if let Some(range) = autoscale.range.take() {
+                        entry
+                            .scale
+                            .apply_autoscale_range(Some(range), autoscale.min_move);
+                    }
+                }
+            }
+            pane.refresh_internal_margins();
         }
     }
 

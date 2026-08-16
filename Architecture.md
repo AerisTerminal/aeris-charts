@@ -48,6 +48,21 @@ Pure technical-indicator calculations over numeric slices. Warm-up gaps are expl
 
 The headless owner of chart behavior and mutable chart state. It owns series, panes, scales, workspace layout, drawings, hit testing, interaction models, indicator bindings, price lines, and frame construction.
 
+Each pane owns one unified price-scale collection: reserved `left`, `right`, and overlay (`""`)
+scales plus at most sixteen host-created named scales. Named IDs are case-sensitive and pane-local;
+each visible side scale retains its own options, range, formatter source, autoscale, inversion,
+dense plot-outward order, measured width, and gesture state. Layout reserves the sum of visible
+strips on each side while keeping every pane and the shared time scale aligned. Axis ticks,
+last-value and crosshair labels, primitives, coordinates, and gestures resolve through the exact
+owning scale. The horizontal grid uses only the innermost visible populated scale, preferring the
+right side when equal orders meet. Hidden and empty named scales retain state without consuming
+layout or receiving labels and input.
+
+Series pane/scale rebinding is one validated engine mutation. An unknown destination leaves pane,
+scale, data, type, style, visibility, streaming state, and handle identity unchanged. Percentage
+and indexed geometry always uses each series' own first visible value, including when several
+comparison series share one scale.
+
 Hosts send input and data to the engine. The engine returns query results and a prepared `ChartFrame`. Browser and GPUI adapters normalize native events into CSS-logical `PointerSample`/`WheelSample` values and feed the same fixed-capacity `GestureResolver`. The resolver owns pointer membership, explicit gesture state, live pinch centroid/distance, survivor rebasing, and cancellation; it retains at most two pointers and performs no move-sample allocation. Hosts still own platform capture, cursor application, event-default policy, and frame/timer scheduling. Zoom, scroll, kinetic motion, snapping, selection, drawing/trading preview semantics, and rollback belong here.
 
 All interaction hit tests use an engine `HitProfile`. Mouse and pen retain precision tolerances; touch expands semantic anchors and actionable trading controls to an effective 44 CSS-pixel target without changing visual geometry. Cancellation from pointer cancellation/capture loss, host focus or visibility loss, resize, backend loss, or disposal closes scale/scroll sessions without inertia and restores drawing/trading previews rather than committing them.
@@ -80,6 +95,10 @@ parsed, and validated before one transactional install; drawing bounds, candidat
 rebuilt once from anchors. Market history, series/indicator definitions, chart options, extensions,
 callbacks, and every runtime cache remain host-owned or derived. Unknown versions and semantic kinds
 fail structurally without mutation.
+
+Named price-scale descriptors and series bindings remain host-owned configuration and are not added
+to chart-state V1. A restoring host recreates pane-local named scales before reinstalling or rebinding
+its series.
 
 The browser split grid is the active-chart router. Its stable workspace cell ID decides which
 independent chart receives a global drawing tool, document shortcut, or view reset; the receiving

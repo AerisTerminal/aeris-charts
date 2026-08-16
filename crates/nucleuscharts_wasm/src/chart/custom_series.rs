@@ -418,12 +418,8 @@ impl ChartInner {
             else {
                 continue;
             };
-            let (visible, pane, overlay, left_scale) = (
-                series.visible,
-                series.pane_index,
-                series.overlay,
-                series.left_scale,
-            );
+            let (visible, pane, target) =
+                (series.visible, series.pane_index, series.price_scale_target);
             // A hidden or pane-less series contributes nothing and its frame values clear (a
             // hidden series paints no last-value chrome either — the reference's visibility gate).
             if !visible || pane >= self.panes.len() {
@@ -444,13 +440,6 @@ impl ChartInner {
             );
             let Some((min, max)) = walk.min.zip(walk.max) else {
                 continue;
-            };
-            let target = if overlay {
-                PriceScaleTarget::Overlay
-            } else if left_scale {
-                PriceScaleTarget::Left
-            } else {
-                PriceScaleTarget::Right
             };
             self.engine
                 .add_autoscale_contribution(PrimitiveAutoscaleContribution {
@@ -515,13 +504,7 @@ impl ChartInner {
             else {
                 continue;
             };
-            let target = if series.overlay {
-                PriceScaleTarget::Overlay
-            } else if series.left_scale {
-                PriceScaleTarget::Left
-            } else {
-                PriceScaleTarget::Right
-            };
+            let target = series.price_scale_target;
             // The custom first value anchors percentage/indexed modes (its geometry's own
             // base value, like the C-b series path).
             let base = series

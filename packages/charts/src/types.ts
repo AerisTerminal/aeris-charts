@@ -476,6 +476,26 @@ export interface price_scale_options {
    * font — multiples of step×10 on uniform ticks, exact powers of ten on log ticks.
    */
   bold_round_labels?: boolean;
+  /** Reserve and render this scale's axis strip while retaining its state when hidden. */
+  visible?: boolean;
+}
+
+export interface price_scale_create_options extends Partial<price_scale_options> {
+  /** Pane-local, case-sensitive id (1-128 UTF-8 bytes; `left`, `right`, and `""` are reserved). */
+  id: string;
+  side: "left" | "right";
+  /** Dense position on the side; 0 is nearest the plot. Omitted appends outward. */
+  order?: number;
+}
+
+export interface price_scale_info {
+  id: string;
+  side: "left" | "right" | null;
+  order: number | null;
+  visible: boolean;
+  built_in: boolean;
+  pane_index: number;
+  series_ids: number[];
 }
 
 /** The visible raw-value range of a price scale. */
@@ -736,10 +756,10 @@ export interface series_options {
    * excluded from the main price axis autoscale. Mirrors the reference's `priceScaleId: ''` + scaleMargins.
    */
   overlay: boolean;
-  /** reference price-scale id: visible left/right pane axis, or empty string for an overlay scale. */
-  price_scale_id: "left" | "right" | "";
+  /** Pane-local price-scale id; `left`/`right` are built-ins and `""` is the overlay scale. */
+  price_scale_id: string;
   /** Camel-case reference alias of `price_scale_id`. */
-  priceScaleId: "left" | "right" | "";
+  priceScaleId: string;
   /** Overlay band as fractions of pane height (default `{ top: 0.8, bottom: 0 }` ⇒ bottom fifth). */
   scale_margins: { top: number; bottom: number };
   /** Stacked pane index (0 = top/price pane). A new pane is created on demand (roadmap Phase B1). */
@@ -1337,6 +1357,10 @@ export interface series_api {
   set_markers(markers: readonly series_marker[], options?: Partial<series_marker_options>): void;
   /** Price-scale handle currently used by this series. */
   price_scale(): price_scale_api;
+  /** Pane-local id of the price scale currently owning this series. */
+  price_scale_id(): string;
+  /** Rebind to an existing price scale in this pane without recreating the series. */
+  move_to_price_scale(id: string): void;
   price_to_coordinate(price: number): number | null;
   coordinate_to_price(coordinate: number): number | null;
   bars_in_logical_range(range: logical_range): bars_info | null;
@@ -1408,7 +1432,7 @@ export interface time_scale_api {
   height(): number;
 }
 
-/** A pane price scale. Left/right are visible axes; the empty id is an independent overlay. */
+/** A pane price scale. The handle becomes stale when its pane or named scale is removed. */
 export interface price_scale_api {
   apply_options(options: deep_partial<price_scale_options>): void;
   options(): price_scale_options;
@@ -1470,11 +1494,10 @@ export interface pane_api {
   /** @experimental Package-side Canvas2D extension; persistence is host-owned. */
   attach_canvas_primitive(primitive: canvas_primitive): canvas_primitive_handle;
   /**
-   * This pane's price scale by id (reference `IPaneApi.priceScale`): the visible `"left"`/`"right"`
-   * axis, or `""` for the overlay scale. Divergence: reference throws on an unknown id; here the id is
-   * one of the three literals, so a scale always resolves.
+   * This pane's price scale by id (reference `IPaneApi.priceScale`): `"left"`/`"right"` for the
+   * built-ins, `""` for overlay, or a host-created pane-local named scale. Unknown IDs throw.
    */
-  price_scale(id: "left" | "right" | ""): price_scale_api;
+  price_scale(id: string): price_scale_api;
 }
 
 export type position_side = "long" | "short";
@@ -1721,7 +1744,11 @@ export interface chart_api {
   apply_options(options: deep_partial<chart_options>): void;
   options(): unknown;
   time_scale(): time_scale_api;
-  price_scale(price_scale_id?: "left" | "right" | "", pane_index?: number): price_scale_api;
+  price_scale(price_scale_id?: string, pane_index?: number): price_scale_api;
+  add_price_scale(options: price_scale_create_options, pane_index?: number): price_scale_api;
+  price_scales(pane_index?: number): price_scale_info[];
+  move_price_scale(id: string, side: "left" | "right", order: number, pane_index?: number): void;
+  remove_price_scale(id: string, pane_index?: number): void;
   /** The stacked panes, top to bottom (roadmap Phase B1). At least one always exists. */
   panes(): pane_api[];
   /**

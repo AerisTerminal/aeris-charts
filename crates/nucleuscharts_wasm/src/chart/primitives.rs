@@ -94,6 +94,7 @@ pub(super) struct PaneScaleSnapshot {
     /// The pane's overlay scale (Phase C-b): series primitives bound to an overlay series
     /// resolve `price_to_y` against it. Unused by the pane-primitive pass.
     overlay: PriceScaleCore,
+    named: Vec<(PriceScaleId, PriceScaleCore)>,
     base_right: Option<f64>,
     base_left: Option<f64>,
 }
@@ -102,10 +103,16 @@ impl ChartInner {
     /// The pane's primary series' base value for percentage/indexed scale modes — the first
     /// visible, non-overlay series bound to the scale (mirrors `format_tick_value`'s primary
     /// rule and the engine's `series_base_value`). `None` when the pane has no such series.
-    fn pane_scale_base_value(&self, pane_index: usize, left: bool, from: i64) -> Option<f64> {
-        let series = self.series.iter().find(|s| {
-            s.visible && !s.overlay && s.pane_index == pane_index && s.left_scale == left
-        })?;
+    fn pane_scale_base_value(
+        &self,
+        pane_index: usize,
+        target: PriceScaleTarget,
+        from: i64,
+    ) -> Option<f64> {
+        let series = self
+            .series
+            .iter()
+            .find(|s| s.visible && s.pane_index == pane_index && s.price_scale_target == target)?;
         let plot = self.engine.data_layer().plot(series.id);
         let row = plot.first_non_whitespace_row(from)?;
         let value = plot.value_at(row, PlotValueIndex::Close);
@@ -132,13 +139,32 @@ impl ChartInner {
             .panes
             .iter()
             .enumerate()
-            .map(|(pi, pane)| PaneScaleSnapshot {
-                right: pane.price_scale.clone(),
-                left: pane.left_scale.clone(),
-                overlay: pane.overlay_scale.clone(),
-                base_right: visible_from
-                    .and_then(|from| self.pane_scale_base_value(pi, false, from)),
-                base_left: visible_from.and_then(|from| self.pane_scale_base_value(pi, true, from)),
+            .map(|(pi, pane)| {
+                let named = self
+                    .engine
+                    .price_scales(pi)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|info| {
+                        let target = self.engine.price_scale_target_for_id(pi, &info.id)?;
+                        let PriceScaleTarget::Named(id) = target else {
+                            return None;
+                        };
+                        Some((id, self.engine.price_scale_for(pi, target)?.clone()))
+                    })
+                    .collect();
+                PaneScaleSnapshot {
+                    right: pane.price_scale.clone(),
+                    left: pane.left_scale.clone(),
+                    overlay: pane.overlay_scale.clone(),
+                    named,
+                    base_right: visible_from.and_then(|from| {
+                        self.pane_scale_base_value(pi, PriceScaleTarget::Right, from)
+                    }),
+                    base_left: visible_from.and_then(|from| {
+                        self.pane_scale_base_value(pi, PriceScaleTarget::Left, from)
+                    }),
+                }
             })
             .collect();
         PrimitiveScaleSnapshot {
@@ -450,13 +476,7 @@ impl ChartInner {
             if !series.visible {
                 continue;
             }
-            let target = if series.overlay {
-                PriceScaleTarget::Overlay
-            } else if series.left_scale {
-                PriceScaleTarget::Left
-            } else {
-                PriceScaleTarget::Right
-            };
+            let target = series.price_scale_target;
             let pane = series.pane_index;
             let Some(pane_snap) = snapshot.panes.get(pane) else {
                 continue;
@@ -707,17 +727,14 @@ impl ChartInner {
         target: PriceScaleTarget,
         base: Option<f64>,
     ) {
-        let Some(pane_state) = self.panes.get(pane) else {
+        let display_target = match target {
+            PriceScaleTarget::Overlay => PriceScaleTarget::Right,
+            target => target,
+        };
+        let Some(scale) = self.engine.price_scale_for(pane, target).cloned() else {
             return;
         };
-        let (side, scale) = match target {
-            PriceScaleTarget::Left => (PriceScaleTarget::Left, pane_state.left_scale.clone()),
-            PriceScaleTarget::Right => (PriceScaleTarget::Right, pane_state.price_scale.clone()),
-            PriceScaleTarget::Overlay => {
-                (PriceScaleTarget::Right, pane_state.overlay_scale.clone())
-            }
-        };
-        self.append_primitive_price_axis_labels(obj, pane, side, Some((scale, base)));
+        self.append_primitive_price_axis_labels(obj, pane, display_target, Some((scale, base)));
         self.append_primitive_time_axis_labels(obj);
     }
 
@@ -731,18 +748,15 @@ impl ChartInner {
         &mut self,
         obj: &js_sys::Object,
         pane: usize,
-        side: PriceScaleTarget,
+        display_target: PriceScaleTarget,
         price_scale: Option<(PriceScaleCore, Option<f64>)>,
     ) {
-        let options = self.opts();
-        let strip_visible = if side == PriceScaleTarget::Left {
-            options.left_price_scale.visible
-        } else {
-            options.right_price_scale.visible
-        };
-        if !strip_visible {
+        let Some((side, axis_x, axis_width)) =
+            self.engine.price_scale_axis_geometry(pane, display_target)
+        else {
             return;
-        }
+        };
+        let options = self.opts();
         let Some(labels) = call_view_array(obj, "price_axis_views") else {
             return;
         };
@@ -808,18 +822,13 @@ impl ChartInner {
             let text_color = reflect_color(&label, "text_color").unwrap_or(default_text);
             // Placement mirrors the engine's price-line labels (frame/axis.rs): right-strip
             // labels left-align past the pane edge, left-strip labels right-align before it.
-            let (x, align, background_x) = if side == PriceScaleTarget::Left {
-                (
-                    self.pane_left - 10.0,
+            let (x, align, background_x) = match side {
+                PriceScaleSide::Left => (
+                    axis_x + axis_width - 10.0,
                     AxisTextAlign::Right,
-                    self.pane_left - width,
-                )
-            } else {
-                (
-                    self.pane_left + self.pane_w + 10.0,
-                    AxisTextAlign::Left,
-                    self.pane_left + self.pane_w,
-                )
+                    axis_x + axis_width - width,
+                ),
+                PriceScaleSide::Right => (axis_x + 10.0, AxisTextAlign::Left, axis_x),
             };
             self.axis_frame.labels.push(AxisLabel {
                 text,
@@ -965,6 +974,11 @@ impl PrimitiveConverters {
             PriceScaleTarget::Right => pane.right.clone(),
             PriceScaleTarget::Left => pane.left.clone(),
             PriceScaleTarget::Overlay => pane.overlay.clone(),
+            PriceScaleTarget::Named(id) => pane
+                .named
+                .iter()
+                .find_map(|(candidate, scale)| (*candidate == id).then(|| scale.clone()))
+                .unwrap_or_else(|| PriceScaleCore::new(Default::default())),
         };
         // `price_to_y(price)`: bitmap y on the owning series' scale; `null` when it has no range.
         let price_to_y = Closure::wrap(Box::new(move |price: f64, _target: JsValue| {

@@ -414,7 +414,6 @@ export class offscreen_chart {
     const delta_x = (adjustment * event.delta_x) / 100;
     const delta_y = -(adjustment * event.delta_y) / 100;
     const pane_left = this.wasm.pane_left();
-    const pane_width = this.wasm.time_scale_width();
     const behavior = this.wheel_behavior === "pan" ? 1 : this.wheel_behavior === "zoom" ? 2 : 0;
     const intent = this.wasm.classify_wheel(
       behavior, delta_x, delta_y, event.delta_mode ?? 0, event.ctrl_key === true,
@@ -422,10 +421,12 @@ export class offscreen_chart {
     const pan_delta = this.wheel_behavior === "auto"
       ? delta_x : Math.abs(delta_x) >= Math.abs(delta_y) ? delta_x : -delta_y;
     if ((intent & 2) !== 0 && delta_y !== 0) {
-      if (event.x < pane_left || event.x > pane_left + pane_width) {
+      const pane = this.wasm.pane_index_at_y(event.y);
+      const target = this.wasm.price_axis_target_at(pane, event.x - pane_left) ?? null;
+      if (target !== null) {
         this.wasm.price_axis_wheel_zoom(
-          this.wasm.pane_index_at_y(event.y),
-          event.x < pane_left ? 1 : 0,
+          pane,
+          target,
           event.y,
           this.wasm.wheel_zoom_scale(delta_y),
         );

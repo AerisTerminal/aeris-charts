@@ -460,47 +460,59 @@ impl ChartEngine {
                 .and_then(Color::parse_css)
                 .unwrap_or(layout_text_color)
         };
-        let right_scale_visible = self.options.get().right_price_scale.visible;
-        let left_scale_visible = self.options.get().left_price_scale.visible;
         let font_size = self.options.get().layout.font_size;
-        let right_text_x = self.pane_left + self.pane_w + 5.0 + 5.0;
-        let left_text_x = (self.pane_left - 5.0 - 5.0).max(0.0);
         for (pi, pane) in self.panes.iter().enumerate() {
-            if right_scale_visible {
+            for target in pane.scale_targets() {
+                let Some((side, strip_x, strip_width)) = self.price_scale_axis_geometry(pi, target)
+                else {
+                    continue;
+                };
+                let Some(scale) = pane.scale(target) else {
+                    continue;
+                };
                 // reference `entireTextOnly`: corner marks shift in by half the font height so no
                 // label text is clipped (price-tick-mark-builder.ts:71).
-                let entire_margin = if pane.price_scale.options().entire_text_only {
-                    pane.price_scale.options().font_size / 2.0
+                let entire_margin = if scale.options().entire_text_only {
+                    scale.options().font_size / 2.0
                 } else {
                     0.0
                 };
-                let text_color = scale_text_color(&pane.price_scale);
-                let ticks_visible = pane.price_scale.options().ticks_visible;
-                let marks = pane.price_scale.build_tick_marks(
-                    self.scale_tick_base(pi, PriceScaleTarget::Right),
-                    entire_margin,
-                );
+                let text_color = scale_text_color(scale);
+                let ticks_visible = scale.options().ticks_visible;
+                let marks = scale.build_tick_marks(self.scale_tick_base(pi, target), entire_margin);
                 let bold_round = Self::bold_round_decisions(
                     &marks.iter().map(|m| m.logical).collect::<Vec<_>>(),
-                    pane.price_scale.options().bold_round_labels,
+                    scale.options().bold_round_labels,
                 );
                 for (mark, bold) in marks.iter().zip(bold_round) {
                     let y = mark.coord;
                     if y >= pane.top - 0.5 && y <= pane.top + pane.height + 0.5 {
                         if ticks_visible {
-                            out.price_ticks.push(PriceAxisTick { y, left: false });
+                            let left = side == PriceScaleSide::Left;
+                            out.price_ticks.push(PriceAxisTick {
+                                y,
+                                x: if left {
+                                    strip_x + strip_width - 5.0
+                                } else {
+                                    strip_x
+                                },
+                                left,
+                            });
                         }
                         out.labels.push(AxisLabel {
-                            text: self.format_tick_value(
-                                pi,
-                                PriceScaleTarget::Right,
-                                &pane.price_scale,
-                                mark.logical,
-                            ),
-                            x: right_text_x,
+                            text: self.format_tick_value(pi, target, scale, mark.logical),
+                            x: if side == PriceScaleSide::Left {
+                                (strip_x + strip_width - 10.0).max(0.0)
+                            } else {
+                                strip_x + 10.0
+                            },
                             y,
                             color: text_color,
-                            align: AxisTextAlign::Left,
+                            align: if side == PriceScaleSide::Left {
+                                AxisTextAlign::Right
+                            } else {
+                                AxisTextAlign::Left
+                            },
                             midpoint: AxisTextMidpoint::Label,
                             font_scale: 1.0,
                             bold,
@@ -512,50 +524,24 @@ impl ChartEngine {
                         });
                     }
                 }
-            }
-            if left_scale_visible {
-                let entire_margin = if pane.left_scale.options().entire_text_only {
-                    pane.left_scale.options().font_size / 2.0
-                } else {
-                    0.0
-                };
-                let text_color = scale_text_color(&pane.left_scale);
-                let ticks_visible = pane.left_scale.options().ticks_visible;
-                let marks = pane.left_scale.build_tick_marks(
-                    self.scale_tick_base(pi, PriceScaleTarget::Left),
-                    entire_margin,
-                );
-                let bold_round = Self::bold_round_decisions(
-                    &marks.iter().map(|m| m.logical).collect::<Vec<_>>(),
-                    pane.left_scale.options().bold_round_labels,
-                );
-                for (mark, bold) in marks.iter().zip(bold_round) {
-                    let y = mark.coord;
-                    if y >= pane.top - 0.5 && y <= pane.top + pane.height + 0.5 {
-                        if ticks_visible {
-                            out.price_ticks.push(PriceAxisTick { y, left: true });
-                        }
-                        out.labels.push(AxisLabel {
-                            text: self.format_tick_value(
-                                pi,
-                                PriceScaleTarget::Left,
-                                &pane.left_scale,
-                                mark.logical,
-                            ),
-                            x: left_text_x,
-                            y,
-                            color: text_color,
-                            align: AxisTextAlign::Right,
-                            midpoint: AxisTextMidpoint::Label,
-                            font_scale: 1.0,
-                            bold,
-                            background: None,
-                            background_corners: AxisLabelCorners::NONE,
-                            measure_extra: 0.0,
-                            attach_group: None,
-                            border: None,
-                        });
-                    }
+                if matches!(target, PriceScaleTarget::Named(_)) {
+                    let border_css = if side == PriceScaleSide::Left {
+                        &self.options.get().left_price_scale.border_color
+                    } else {
+                        &self.options.get().right_price_scale.border_color
+                    };
+                    let border = Color::parse_css(border_css).unwrap_or(GRID);
+                    out.bands.push(AxisBand {
+                        x: if side == PriceScaleSide::Left {
+                            strip_x + strip_width - 1.0
+                        } else {
+                            strip_x
+                        },
+                        y: pane.top,
+                        width: 1.0,
+                        height: pane.height,
+                        color: border,
+                    });
                 }
             }
         }
@@ -938,9 +924,15 @@ impl ChartEngine {
         const PRICE_DEFAULT_TEXT_WIDTH: f64 = 34.0;
 
         let frame = self.build_axis_frame_impl(80.0, &measure, false);
-        let wanted_align = match target {
-            PriceScaleTarget::Left => AxisTextAlign::Right,
-            PriceScaleTarget::Right | PriceScaleTarget::Overlay => AxisTextAlign::Left,
+        let target_side = self
+            .panes
+            .iter()
+            .find_map(|pane| pane.scale_side(target))
+            .unwrap_or(PriceScaleSide::Right);
+        let wanted_align = if target_side == PriceScaleSide::Left {
+            AxisTextAlign::Right
+        } else {
+            AxisTextAlign::Left
         };
         let mut max_text_width = frame
             .labels
@@ -958,17 +950,18 @@ impl ChartEngine {
             && self.options.get().crosshair.horz_line.label_visible
         {
             for (pi, pane) in self.panes.iter().enumerate() {
-                let scale = pane_scale(pane, target);
+                let Some(scale) = pane.scale(target) else {
+                    continue;
+                };
                 if scale.is_empty() {
                     continue;
                 }
                 let Some((from, _)) = self.visible_range_for_frame() else {
                     continue;
                 };
-                let series = self
-                    .series
-                    .iter()
-                    .find(|series| series.pane_index == pi && !series.overlay && series.visible);
+                let series = self.series.iter().find(|series| {
+                    series.pane_index == pi && series.price_scale_target == target && series.visible
+                });
                 let Some(base_value) =
                     series.and_then(|series| self.series_base_value(series.id, from))
                 else {
@@ -1002,13 +995,14 @@ impl ChartEngine {
         // reference `minimumWidth` floors the negotiated strip width (chart-widget.ts
         // `_adjustSizeImpl`: `Math.max(optimalWidth(), minimumWidth)` across the pane's
         // scales on this side).
-        let minimum_width = match target {
-            PriceScaleTarget::Overlay => 0.0,
-            PriceScaleTarget::Right | PriceScaleTarget::Left => self
-                .panes
+        let minimum_width = if target == PriceScaleTarget::Overlay {
+            0.0
+        } else {
+            self.panes
                 .iter()
-                .map(|pane| pane_scale(pane, target).options().minimum_width)
-                .fold(0.0_f64, f64::max),
+                .filter_map(|pane| pane.scale(target))
+                .map(|scale| scale.options().minimum_width)
+                .fold(0.0_f64, f64::max)
         };
         let width = (AXIS_BORDER_SIZE
             + AXIS_TICK_LENGTH
@@ -1018,6 +1012,109 @@ impl ChartEngine {
             + text_width)
             .ceil()
             .max(minimum_width);
+        width + (width as i64 % 2) as f64
+    }
+
+    pub(crate) fn optimal_exact_price_axis_width_for<F>(
+        &self,
+        pane_index: usize,
+        target: PriceScaleTarget,
+        measure: F,
+    ) -> f64
+    where
+        F: Fn(&str) -> f64,
+    {
+        const FIXED_CHROME: f64 = 1.0 + 5.0 + 5.0 + 5.0;
+        const DEFAULT_TEXT_WIDTH: f64 = 34.0;
+        let Some(pane) = self.panes.get(pane_index) else {
+            return 0.0;
+        };
+        let Some(scale) = pane.scale(target) else {
+            return 0.0;
+        };
+        let marks = scale.build_tick_marks(self.scale_tick_base(pane_index, target), 0.0);
+        let mut text_width = marks
+            .iter()
+            .map(|mark| measure(&self.format_tick_value(pane_index, target, scale, mark.logical)))
+            .fold(0.0_f64, f64::max);
+        if let Some((from, to)) = self.visible_range_for_frame() {
+            for series in self.series.iter().filter(|series| {
+                let display_target = if series.price_scale_target == PriceScaleTarget::Overlay {
+                    PriceScaleTarget::Right
+                } else {
+                    series.price_scale_target
+                };
+                series.visible && series.pane_index == pane_index && display_target == target
+            }) {
+                let conversion_scale = pane_scale(pane, series.price_scale_target);
+                let value = if series.kind == SeriesKind::Custom {
+                    series.custom_frame.last_visible.map(|last| last.value)
+                } else {
+                    self.data
+                        .plot(series.id)
+                        .last_non_whitespace_row(to)
+                        .map(|row| {
+                            self.data
+                                .plot(series.id)
+                                .value_at(row, PlotValueIndex::Close)
+                        })
+                };
+                if let (Some(value), Some(base)) = (value, self.series_base_value(series.id, from))
+                {
+                    text_width = text_width.max(measure(&self.format_series_value(
+                        series,
+                        conversion_scale,
+                        conversion_scale.price_to_logical_value(value, base),
+                    )));
+                }
+                for line in &series.price_lines {
+                    if !line.axis_label_visible {
+                        continue;
+                    }
+                    let text = if line.title.is_empty() {
+                        let Some(base) = self.series_base_value(series.id, from) else {
+                            continue;
+                        };
+                        self.format_series_value(
+                            series,
+                            conversion_scale,
+                            conversion_scale.price_to_logical_value(line.price, base),
+                        )
+                    } else {
+                        line.title.clone()
+                    };
+                    text_width = text_width.max(measure(&text));
+                }
+            }
+            if self.crosshair_mode != CrosshairMode::Hidden
+                && self.options.get().crosshair.horz_line.label_visible
+                && !scale.is_empty()
+            {
+                if let Some(series) = self.series.iter().find(|series| {
+                    series.visible
+                        && series.pane_index == pane_index
+                        && series.price_scale_target == target
+                }) {
+                    if let Some(base) = self.series_base_value(series.id, from) {
+                        let top = scale.coordinate_to_price(1.0, base);
+                        let bottom = scale.coordinate_to_price(pane.height - 2.0, base);
+                        for sample in [
+                            top.min(bottom).floor() + 0.111_111_111_111_11,
+                            top.max(bottom).ceil() - 0.111_111_111_111_11,
+                        ] {
+                            text_width = text_width.max(measure(&self.format_series_value(
+                                series,
+                                scale,
+                                scale.price_to_logical_value(sample, base),
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+        let width = (FIXED_CHROME + text_width.max(DEFAULT_TEXT_WIDTH))
+            .ceil()
+            .max(scale.options().minimum_width);
         width + (width as i64 % 2) as f64
     }
 
@@ -1033,6 +1130,16 @@ impl ChartEngine {
                 }
                 let target = series_scale_target(s);
                 let scale = pane_scale(pane, target);
+                let display_target = if target == PriceScaleTarget::Overlay {
+                    PriceScaleTarget::Right
+                } else {
+                    target
+                };
+                let Some((side, strip_x, strip_width)) =
+                    self.price_scale_axis_geometry(pi, display_target)
+                else {
+                    continue;
+                };
                 let Some(base_value) = self.visible_series_base_value(s.id) else {
                     continue;
                 };
@@ -1061,18 +1168,14 @@ impl ChartEngine {
                     };
                     let width = 1.0 + 5.0 + 5.0 + 5.0 + measure(&text);
                     let height = font_size + 2.5 * 2.0;
-                    let (x, align, background_x) = if target == PriceScaleTarget::Left {
+                    let (x, align, background_x) = if side == PriceScaleSide::Left {
                         (
-                            self.pane_left - 10.0,
+                            strip_x + strip_width - 10.0,
                             AxisTextAlign::Right,
-                            self.pane_left - width,
+                            strip_x + strip_width - width,
                         )
                     } else {
-                        (
-                            self.pane_left + self.pane_w + 10.0,
-                            AxisTextAlign::Left,
-                            self.pane_left + self.pane_w,
-                        )
+                        (strip_x + 10.0, AxisTextAlign::Left, strip_x)
                     };
                     // The label background follows the line color; chart text follows the semantic
                     // foreground token unless the line explicitly supplies a text override.
@@ -1271,10 +1374,9 @@ impl ChartEngine {
                 continue;
             }
             let base = self.drawing_scale_base(pi);
-            let series = self
-                .series
-                .iter()
-                .find(|s| s.pane_index == pi && !s.overlay && s.visible && !s.left_scale);
+            let series = self.series.iter().find(|s| {
+                s.pane_index == pi && s.price_scale_target == PriceScaleTarget::Right && s.visible
+            });
             for drawing in &self.drawings {
                 if drawing.pane_index != pi
                     || !matches!(
@@ -1351,8 +1453,7 @@ impl ChartEngine {
         // the 12px price row, keeping the cluster compact without competing with the price.
         let countdown_row_height =
             self.options.get().layout.font_size * COUNTDOWN_FONT_SCALE + 1.5 * 2.0;
-        let mut right: Vec<LastValueLabel> = Vec::new();
-        let mut left: Vec<LastValueLabel> = Vec::new();
+        let mut groups: Vec<(usize, PriceScaleTarget, Vec<LastValueLabel>)> = Vec::new();
         for (pi, pane) in self.panes.iter().enumerate() {
             for series in &self.series {
                 if !series.visible || series.pane_index != pi {
@@ -1432,11 +1533,22 @@ impl ChartEngine {
                 // reference appends overlay (no-scale) series' labels to the pane's default axis
                 // (price-axis-widget.ts:601-607); the engine's default axis is the right one.
                 // The label's `alignLabels` comes from the axis it lands on.
-                let (group, align) = if target == PriceScaleTarget::Left {
-                    (&mut left, pane.left_scale.options().align_labels)
+                let display_target = if target == PriceScaleTarget::Overlay {
+                    PriceScaleTarget::Right
                 } else {
-                    (&mut right, pane.price_scale.options().align_labels)
+                    target
                 };
+                if self.price_scale_axis_geometry(pi, display_target).is_none() {
+                    continue;
+                }
+                let align = pane_scale(pane, display_target).options().align_labels;
+                let group_index = groups
+                    .iter()
+                    .position(|(pane, candidate, _)| *pane == pi && *candidate == display_target)
+                    .unwrap_or_else(|| {
+                        groups.push((pi, display_target, Vec::new()));
+                        groups.len() - 1
+                    });
                 // The top row exists only for the price TEXT: when the price chip is off, the
                 // title chip attaches to the countdown row instead of leaving a phantom blank
                 // row in the strip (and the cluster centers on the value, no shift).
@@ -1453,7 +1565,7 @@ impl ChartEngine {
                 } else {
                     row_height
                 };
-                group.push(LastValueLabel {
+                groups[group_index].2.push(LastValueLabel {
                     price_text: show_price.then_some(text),
                     title,
                     countdown,
@@ -1499,7 +1611,7 @@ impl ChartEngine {
                             scale.price_to_logical_value(quote, base_value),
                         );
                         let side_color = Color::parse_css(css).unwrap_or(fallback).solid();
-                        group.push(LastValueLabel {
+                        groups[group_index].2.push(LastValueLabel {
                             price_text: Some(quote_text),
                             title: Some(side.to_string()),
                             countdown: None,
@@ -1514,14 +1626,14 @@ impl ChartEngine {
                 }
             }
         }
-        // reference aligns labels per price-axis widget; the engine has one strip per side. Scales
-        // with `alignLabels` off keep raw coordinates; the rest resolve overlap as before.
-        resolve_last_value_label_overlap(&mut right, self.pane_h);
-        resolve_last_value_label_overlap(&mut left, self.pane_h);
-        for (group, target) in [
-            (right, PriceScaleTarget::Right),
-            (left, PriceScaleTarget::Left),
-        ] {
+        // Reference aligns labels independently per price-axis widget.
+        for (pane_index, target, mut group) in groups {
+            resolve_last_value_label_overlap(&mut group, self.pane_h);
+            let Some((side, strip_x, strip_width)) =
+                self.price_scale_axis_geometry(pane_index, target)
+            else {
+                continue;
+            };
             // Reference geometry (price-axis-view-renderer.ts `_calculateGeometry`): every boxed
             // label is its own content-sized box — borderSize + paddingInner + paddingOuter +
             // tickLength on the text — no cross-label width sharing.
@@ -1533,18 +1645,14 @@ impl ChartEngine {
                         continue;
                     };
                     let width = 1.0 + 5.0 + 5.0 + 5.0 + measure(&text);
-                    let (x, align, background_x) = if target == PriceScaleTarget::Left {
+                    let (x, align, background_x) = if side == PriceScaleSide::Left {
                         (
-                            self.pane_left - 10.0,
+                            strip_x + strip_width - 10.0,
                             AxisTextAlign::Right,
-                            self.pane_left - width,
+                            strip_x + strip_width - width,
                         )
                     } else {
-                        (
-                            self.pane_left + self.pane_w + 10.0,
-                            AxisTextAlign::Left,
-                            self.pane_left + self.pane_w,
-                        )
+                        (strip_x + 10.0, AxisTextAlign::Left, strip_x)
                     };
                     labels.push(AxisLabel {
                         text,
@@ -1569,7 +1677,7 @@ impl ChartEngine {
                     });
                     continue;
                 }
-                self.append_last_value_cluster(labels, &label, target, measure);
+                self.append_last_value_cluster(labels, &label, pane_index, target, measure);
             }
         }
     }
@@ -1585,12 +1693,17 @@ impl ChartEngine {
         &self,
         labels: &mut Vec<AxisLabel>,
         label: &LastValueLabel,
+        pane_index: usize,
         target: PriceScaleTarget,
         measure: &F,
     ) where
         F: Fn(&str) -> f64,
     {
-        let right_strip = target != PriceScaleTarget::Left;
+        let Some((side, strip_x, strip_width)) = self.price_scale_axis_geometry(pane_index, target)
+        else {
+            return;
+        };
+        let right_strip = side == PriceScaleSide::Right;
         let text_color = LIVE_LABEL_TEXT;
         // The title chip shares the main label color by default (matching the price and
         // countdown chips).
@@ -1614,9 +1727,9 @@ impl ChartEngine {
         // Reference box: borderSize + paddingInner + paddingOuter + tickLength + text.
         let inner_w = 1.0 + TEXT_INSET + inner_text_w + RIGHT_PAD;
         let border_x = if right_strip {
-            self.pane_left + self.pane_w
+            strip_x
         } else {
-            self.pane_left
+            strip_x + strip_width
         };
         let inner_x = if right_strip {
             border_x
@@ -1800,13 +1913,12 @@ impl ChartEngine {
                 // The horizontal line has one shared media-space coordinate. Each visible scale
                 // independently maps that coordinate through its own range/mode/formatter.
                 let snap_y = self.crosshair_snap(pi, x_css, y_css, from, to).1;
-                for (target, visible) in [
-                    (PriceScaleTarget::Left, options.left_price_scale.visible),
-                    (PriceScaleTarget::Right, options.right_price_scale.visible),
-                ] {
-                    if !visible {
+                for target in self.panes[pi].scale_targets() {
+                    let Some((side, strip_x, strip_width)) =
+                        self.price_scale_axis_geometry(pi, target)
+                    else {
                         continue;
-                    }
+                    };
                     let Some(series) = self.scale_formatter_source(pi, target) else {
                         continue;
                     };
@@ -1825,18 +1937,14 @@ impl ChartEngine {
                     );
                     let width = 1.0 + 5.0 + 5.0 + 5.0 + measure(&text);
                     let height = font_size + 2.5 * 2.0;
-                    let (label_x, align, background_x) = if target == PriceScaleTarget::Left {
+                    let (label_x, align, background_x) = if side == PriceScaleSide::Left {
                         (
-                            self.pane_left - 10.0,
+                            strip_x + strip_width - 10.0,
                             AxisTextAlign::Right,
-                            self.pane_left - width,
+                            strip_x + strip_width - width,
                         )
                     } else {
-                        (
-                            self.pane_left + self.pane_w + 10.0,
-                            AxisTextAlign::Left,
-                            self.pane_left + self.pane_w,
-                        )
+                        (strip_x + 10.0, AxisTextAlign::Left, strip_x)
                     };
                     let label_bg =
                         css_color(&ch.horz_line.label_background_color, CROSSHAIR_LABEL_BG);
@@ -1936,19 +2044,25 @@ impl ChartEngine {
             };
             let width = measure(&text) + 20.0;
             let height = 21.0;
-            let left = series_scale_target(series) == PriceScaleTarget::Left;
-            let (x, align, background_x) = if left {
+            let target = series_scale_target(series);
+            let display_target = if target == PriceScaleTarget::Overlay {
+                PriceScaleTarget::Right
+            } else {
+                target
+            };
+            let Some((side, strip_x, strip_width)) =
+                self.price_scale_axis_geometry(pane_index, display_target)
+            else {
+                continue;
+            };
+            let (x, align, background_x) = if side == PriceScaleSide::Left {
                 (
-                    self.pane_left - 10.0,
+                    strip_x + strip_width - 10.0,
                     AxisTextAlign::Right,
-                    self.pane_left - width,
+                    strip_x + strip_width - width,
                 )
             } else {
-                (
-                    self.pane_left + self.pane_w + 10.0,
-                    AxisTextAlign::Left,
-                    self.pane_left + self.pane_w,
-                )
+                (strip_x + 10.0, AxisTextAlign::Left, strip_x)
             };
             labels.push(AxisLabel {
                 text,

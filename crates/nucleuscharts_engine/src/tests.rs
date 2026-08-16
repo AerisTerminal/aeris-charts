@@ -2576,9 +2576,9 @@ fn series_options_json_covers_the_ts_field_set() {
 
     // Scale targeting maps to the reference priceScaleId values; removed series report nothing.
     let overlay = chart.add_series(SeriesKind::Histogram);
-    chart.series_entry_mut(overlay).unwrap().overlay = true;
+    chart.series_entry_mut(overlay).unwrap().price_scale_target = PriceScaleTarget::Overlay;
     let left = chart.add_series(SeriesKind::Line);
-    chart.series_entry_mut(left).unwrap().left_scale = true;
+    chart.series_entry_mut(left).unwrap().price_scale_target = PriceScaleTarget::Left;
     let options: serde_json::Value =
         serde_json::from_str(&chart.series_options_json(overlay).unwrap()).unwrap();
     assert_eq!(options["price_scale_id"], "");
@@ -3930,6 +3930,275 @@ fn pane_identity_exhaustion_is_recoverable_and_does_not_mutate_topology() {
     let before = chart.panes.len();
     assert_eq!(chart.add_pane(true), None);
     assert_eq!(chart.panes.len(), before);
+}
+
+#[test]
+fn named_price_scales_enforce_identity_order_limits_and_removal_contracts() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    install_bars(&mut chart, 5);
+
+    let inner = chart
+        .add_price_scale(0, "inner", PriceScaleSide::Right, Some(0), true)
+        .unwrap();
+    let outer = chart
+        .add_price_scale(0, "Outer", PriceScaleSide::Right, None, true)
+        .unwrap();
+    let left = chart
+        .add_price_scale(0, "left-comparison", PriceScaleSide::Left, Some(0), true)
+        .unwrap();
+    let scales = chart.price_scales(0).unwrap();
+    let info = |id: &str| scales.iter().find(|info| info.id == id).unwrap();
+    assert_eq!(
+        (info("inner").side, info("inner").order),
+        (Some(PriceScaleSide::Right), Some(0))
+    );
+    assert_eq!(
+        (info("right").side, info("right").order),
+        (Some(PriceScaleSide::Right), Some(1))
+    );
+    assert_eq!(
+        (info("Outer").side, info("Outer").order),
+        (Some(PriceScaleSide::Right), Some(2))
+    );
+    assert_eq!(
+        (info("left-comparison").side, info("left-comparison").order),
+        (Some(PriceScaleSide::Left), Some(0))
+    );
+    assert_eq!(
+        (info("left").side, info("left").order),
+        (Some(PriceScaleSide::Left), Some(1))
+    );
+    assert_ne!(inner, outer);
+    assert_ne!(outer, left);
+
+    assert!(chart.move_price_scale(0, outer, PriceScaleSide::Left, 0));
+    assert!(chart.move_price_scale(0, outer, PriceScaleSide::Left, 0));
+    let scales = chart.price_scales(0).unwrap();
+    let left_ids: Vec<_> = scales
+        .iter()
+        .filter(|info| info.side == Some(PriceScaleSide::Left))
+        .map(|info| (info.id.as_str(), info.order.unwrap()))
+        .collect();
+    assert_eq!(
+        left_ids,
+        vec![("Outer", 0), ("left-comparison", 1), ("left", 2)]
+    );
+
+    for invalid in ["", "left", "right", "inner"] {
+        let before = chart.price_scales(0).unwrap().len();
+        let error = chart
+            .add_price_scale(0, invalid, PriceScaleSide::Right, None, true)
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::InvalidOptions);
+        assert_eq!(chart.price_scales(0).unwrap().len(), before);
+    }
+    let overlong = "é".repeat(65);
+    assert_eq!(
+        chart
+            .add_price_scale(0, &overlong, PriceScaleSide::Right, None, true)
+            .unwrap_err()
+            .code(),
+        ErrorCode::InvalidOptions
+    );
+    assert_eq!(
+        chart
+            .add_price_scale(99, "missing-pane", PriceScaleSide::Right, None, true)
+            .unwrap_err()
+            .code(),
+        ErrorCode::InvalidHandle
+    );
+
+    chart.set_series_price_scale(0, inner);
+    assert_eq!(
+        chart.remove_price_scale(0, inner).unwrap_err().code(),
+        ErrorCode::UnsupportedOperation
+    );
+    assert_eq!(
+        chart
+            .remove_price_scale(0, PriceScaleTarget::Right)
+            .unwrap_err()
+            .code(),
+        ErrorCode::UnsupportedOperation
+    );
+    chart.set_series_price_scale(0, PriceScaleTarget::Right);
+    chart.remove_price_scale(0, inner).unwrap();
+    assert!(chart.price_scale_target_for_id(0, "inner").is_none());
+    assert!(chart.price_scale_for(0, inner).is_none());
+    let replacement = chart
+        .add_price_scale(0, "inner", PriceScaleSide::Right, None, false)
+        .unwrap();
+    assert_ne!(
+        replacement, inner,
+        "removed scale identities are never reused"
+    );
+    assert!(!chart.price_scale_visible_for(0, replacement));
+
+    let mut capped = ChartEngine::new(800.0, 500.0, 1.0);
+    for index in 0..MAX_NAMED_PRICE_SCALES_PER_PANE {
+        capped
+            .add_price_scale(
+                0,
+                &format!("scale-{index}"),
+                PriceScaleSide::Right,
+                None,
+                true,
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        capped
+            .add_price_scale(0, "overflow", PriceScaleSide::Right, None, true)
+            .unwrap_err()
+            .code(),
+        ErrorCode::ResourceLimit
+    );
+}
+
+#[test]
+fn empty_named_scales_survive_automatic_pane_cleanup() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    install_bars(&mut chart, 5);
+    let named = chart
+        .add_price_scale(0, "host-owned", PriceScaleSide::Right, None, true)
+        .unwrap();
+    let destination = chart.add_pane(true).unwrap();
+
+    assert!(chart.try_set_series_pane(0, destination, 1.0));
+    assert_eq!(chart.panes.len(), 2);
+    assert_eq!(
+        chart.price_scale_target_for_id(0, "host-owned"),
+        Some(named)
+    );
+    assert!(chart
+        .price_scales(0)
+        .unwrap()
+        .iter()
+        .any(|info| { info.id == "host-owned" && info.series_ids.is_empty() }));
+}
+
+#[test]
+fn named_scale_series_rebinding_and_pane_moves_are_atomic() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    install_bars(&mut chart, 5);
+    let comparison = chart.add_series(SeriesKind::Area);
+    chart
+        .set_series_data(
+            comparison,
+            &[1.0, 2.0, 3.0],
+            &[1_000.0, 1_010.0, 1_020.0],
+            &[1_000.0, 1_010.0, 1_020.0],
+            &[1_000.0, 1_010.0, 1_020.0],
+            &[1_000.0, 1_010.0, 1_020.0],
+        )
+        .unwrap();
+    let source = chart
+        .add_price_scale(0, "comparison", PriceScaleSide::Right, Some(0), true)
+        .unwrap();
+    chart.set_series_price_scale(comparison, source);
+    let before = chart.series_data(comparison);
+
+    let destination_pane = chart.add_pane(true).unwrap();
+    assert!(!chart.try_set_series_pane(comparison, destination_pane, 1.0));
+    assert_eq!(chart.series_price_scale(comparison), Some((0, source)));
+    assert!(!chart.try_set_series_pane_and_scale(comparison, 0, 1.0, "missing"));
+    assert_eq!(chart.series_price_scale(comparison), Some((0, source)));
+    assert_eq!(chart.series_data(comparison), before);
+    assert_eq!(chart.series_kind(comparison), Some(SeriesKind::Area));
+
+    let destination = chart
+        .add_price_scale(
+            destination_pane,
+            "comparison",
+            PriceScaleSide::Left,
+            Some(0),
+            true,
+        )
+        .unwrap();
+    assert!(chart.try_set_series_pane(comparison, destination_pane, 2.0));
+    assert_eq!(
+        chart.series_price_scale(comparison),
+        Some((destination_pane, destination))
+    );
+    assert_eq!(chart.series_data(comparison), before);
+    assert_eq!(chart.series_kind(comparison), Some(SeriesKind::Area));
+
+    assert!(chart.try_set_series_pane_and_scale(comparison, 0, 1.0, "right"));
+    assert_eq!(
+        chart.series_price_scale(comparison),
+        Some((0, PriceScaleTarget::Right))
+    );
+}
+
+#[test]
+fn named_scales_autoscale_independently_and_shared_percentage_series_use_own_bases() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0],
+            &[100.0, 110.0],
+            &[100.0, 110.0],
+            &[100.0, 110.0],
+            &[100.0, 110.0],
+        )
+        .unwrap();
+    let first = chart.add_series(SeriesKind::Line);
+    let second = chart.add_series(SeriesKind::Line);
+    chart
+        .set_series_data(
+            first,
+            &[1.0, 2.0],
+            &[1_000.0, 1_100.0],
+            &[1_000.0, 1_100.0],
+            &[1_000.0, 1_100.0],
+            &[1_000.0, 1_100.0],
+        )
+        .unwrap();
+    chart
+        .set_series_data(
+            second,
+            &[1.0, 2.0],
+            &[2_000.0, 2_200.0],
+            &[2_000.0, 2_200.0],
+            &[2_000.0, 2_200.0],
+            &[2_000.0, 2_200.0],
+        )
+        .unwrap();
+    let comparison = chart
+        .add_price_scale(0, "percentage", PriceScaleSide::Right, Some(0), true)
+        .unwrap();
+    chart.set_series_price_scale(first, comparison);
+    chart.set_series_price_scale(second, comparison);
+    chart.set_price_scale_mode_for(0, comparison, PriceScaleMode::Percentage);
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    chart.build_frame();
+
+    let right_range = chart
+        .price_scale_visible_range_for(0, PriceScaleTarget::Right)
+        .unwrap();
+    let comparison_range = chart.price_scale_visible_range_for(0, comparison).unwrap();
+    assert!(right_range.1 < 200.0);
+    assert!(comparison_range.0 <= 0.0 && comparison_range.1 >= 10.0);
+    let first_y = chart.series_price_to_coordinate(first, 1_100.0).unwrap();
+    let second_y = chart.series_price_to_coordinate(second, 2_200.0).unwrap();
+    assert!((first_y - second_y).abs() < 1e-9);
+
+    chart.set_price_scale_visible_range_for(0, comparison, -5.0, 25.0);
+    let right_before = chart
+        .price_scale_visible_range_for(0, PriceScaleTarget::Right)
+        .unwrap();
+    chart.price_axis_start_scroll(0, comparison, 100.0);
+    chart.price_axis_scroll_to(0, comparison, 120.0);
+    chart.price_axis_end_scroll(0, comparison);
+    assert_ne!(
+        chart.price_scale_visible_range_for(0, comparison),
+        Some((-5.0, 25.0))
+    );
+    assert_eq!(
+        chart.price_scale_visible_range_for(0, PriceScaleTarget::Right),
+        Some(right_before)
+    );
 }
 
 #[test]
