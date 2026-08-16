@@ -720,13 +720,14 @@ impl Probe {
                     &volume,
                 )
                 .expect("native volume fixture is aligned");
+            self.engine
+                .set_series_price_scale(id, PriceScaleTarget::Overlay);
             let s = self
                 .engine
                 .series
                 .iter_mut()
                 .find(|series| series.id == id && !series.removed)
                 .expect("new volume series is live");
-            s.overlay = true;
             s.histogram_updown = true;
             s.price_line_visible = false;
             s.title = "Volume".into();
@@ -1457,9 +1458,8 @@ impl Probe {
             if y > self.engine.pane_h && self.gesture_config.axis_dblclick_reset_time {
                 self.engine.reset_time_scale();
             } else if self.gesture_config.axis_dblclick_reset_price {
-                if let Some(target) = self.engine.price_axis_target_at(pane, pane_x) {
-                    self.engine
-                        .set_price_scale_auto_scale_for(pane, target, true);
+                if self.engine.price_axis_target_at(pane, pane_x).is_some() {
+                    self.engine.reset_price_scales();
                 }
             }
             self.press_moved = true;
@@ -1519,9 +1519,9 @@ impl Probe {
             Some(DragMode::Drawing)
         } else if self.gesture_config.pan {
             self.begin_mouse_pan(pane_x);
-            let price_pan = [PriceScaleTarget::Right, PriceScaleTarget::Left]
-                .into_iter()
-                .find(|target| self.engine.price_scale_auto_scale_for(pane, *target) == Some(false))
+            let price_pan = self
+                .engine
+                .price_pan_target_at(pane, pane_x, y)
                 .map(|target| (pane, target));
             if let Some((pane, target)) = price_pan {
                 self.engine.price_axis_start_scroll(pane, target, y);

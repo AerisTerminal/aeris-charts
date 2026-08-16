@@ -48,6 +48,61 @@ async function auto_scale_state(page) {
   }));
 }
 
+async function install_series_drag_fixture(page) {
+  return page.evaluate(async () => {
+    const chart = window.__chart;
+    const rows = window.__data.slice(0, 5);
+    const right = chart.add_price_scale({
+      id: "drag-right",
+      side: "right",
+      order: 0,
+      minimum_width: 72,
+    });
+    const left = chart.add_price_scale({
+      id: "drag-left",
+      side: "left",
+      order: 0,
+      minimum_width: 72,
+    });
+    const lower = chart.add_series("candlestick", { price_scale_id: "drag-right" });
+    const upper = chart.add_series("candlestick", { price_scale_id: "drag-left" });
+    lower.set_data(rows.map((row, index) => ({
+      time: row.time,
+      open: 100 + index,
+      high: 105 + index,
+      low: 95 + index,
+      close: 102 + index,
+    })));
+    upper.set_data(rows.map((row, index) => ({
+      time: row.time,
+      open: 1_200 + index * 5,
+      high: 1_210 + index * 5,
+      low: 1_190 + index * 5,
+      close: 1_205 + index * 5,
+    })));
+    chart.time_scale().fit_content();
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    right.set_visible_range({ from: 80, to: 180 });
+    left.set_visible_range({ from: 900, to: 1_260 });
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const row = rows.at(-1);
+    const x = chart.time_scale().time_to_coordinate(row.time);
+    return {
+      x: chart.wasm.pane_left() + x,
+      lower_y: lower.price_to_coordinate(106),
+      upper_y: upper.price_to_coordinate(1_225),
+      pane: 0,
+    };
+  });
+}
+
+async function drag_scale_ranges(page) {
+  return page.evaluate(() => ({
+    right: window.__chart.price_scale("drag-right").get_visible_range(),
+    left: window.__chart.price_scale("drag-left").get_visible_range(),
+  }));
+}
+
 for (const backend of ["canvas2d", "webgpu"]) {
   test(`${backend}: named scales own placement, formatting, and comparison normalization`, async ({ page }) => {
     await page.goto(`/?backend=${backend}&forceFallbackAdapter=1`);
@@ -130,7 +185,34 @@ for (const backend of ["canvas2d", "webgpu"]) {
     expect(result.hidden_state).toBe(false);
   });
 
-  test(`${backend}: comparison axis double-click resets only the selected named scale`, async ({ page }) => {
+  test(`${backend}: grabbing either comparison series pans only its own unlocked scale`, async ({ page }) => {
+    await page.goto(`/?backend=${backend}&forceFallbackAdapter=1`);
+    await wait_for_chart(page);
+    const fixture = await install_series_drag_fixture(page);
+    const overlay = page.locator("#chart_container canvas:last-of-type");
+    const box = await overlay.boundingBox();
+    const before = await drag_scale_ranges(page);
+
+    await page.mouse.move(box.x + fixture.x, box.y + fixture.lower_y);
+    await page.mouse.down();
+    await page.mouse.move(box.x + fixture.x, box.y + fixture.lower_y + 32, { steps: 4 });
+    await page.mouse.up();
+    await wait_for_chart(page);
+    const after_lower = await drag_scale_ranges(page);
+    expect(after_lower.right).not.toEqual(before.right);
+    expect(after_lower.left).toEqual(before.left);
+
+    await page.mouse.move(box.x + fixture.x, box.y + fixture.upper_y);
+    await page.mouse.down();
+    await page.mouse.move(box.x + fixture.x, box.y + fixture.upper_y - 28, { steps: 4 });
+    await page.mouse.up();
+    await wait_for_chart(page);
+    const after_upper = await drag_scale_ranges(page);
+    expect(after_upper.right).toEqual(after_lower.right);
+    expect(after_upper.left).not.toEqual(after_lower.left);
+  });
+
+  test(`${backend}: one comparison axis double-click resets every price scale`, async ({ page }) => {
     await page.goto(`/?backend=${backend}&forceFallbackAdapter=1`);
     await wait_for_chart(page);
     const fixture = await install_reset_fixture(page);
@@ -139,10 +221,6 @@ for (const backend of ["canvas2d", "webgpu"]) {
 
     expect(await auto_scale_state(page)).toEqual({ right: false, left: false });
     await page.mouse.dblclick(box.x + fixture.right_x, box.y + fixture.y);
-    await wait_for_chart(page);
-    expect(await auto_scale_state(page)).toEqual({ right: true, left: false });
-
-    await page.mouse.dblclick(box.x + fixture.left_x, box.y + fixture.y);
     await wait_for_chart(page);
     expect(await auto_scale_state(page)).toEqual({ right: true, left: true });
   });
@@ -176,11 +254,12 @@ test("named comparison reset supports touch, configuration gates, and global res
     send("pointerup");
   }, fixture);
   await wait_for_chart(page);
-  expect(await auto_scale_state(page)).toEqual({ right: true, left: false });
+  expect(await auto_scale_state(page)).toEqual({ right: true, left: true });
 
   await page.evaluate(() => {
     const chart = window.__chart;
     chart.price_scale("reset-right").set_visible_range({ from: 995, to: 1_015 });
+    chart.price_scale("reset-left").set_visible_range({ from: 9_995, to: 10_015 });
     chart.apply_options({ handle_scale: { axis_double_click_reset: { price: false } } });
   });
   const overlay = page.locator("#chart_container canvas:last-of-type");
@@ -192,6 +271,38 @@ test("named comparison reset supports touch, configuration gates, and global res
   await page.evaluate(() => window.__chart.reset_view());
   await wait_for_chart(page);
   expect(await auto_scale_state(page)).toEqual({ right: true, left: true });
+});
+
+test("touch dragging a comparison candle pans only that candle's unlocked scale", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  await wait_for_chart(page);
+  const fixture = await install_series_drag_fixture(page);
+  const before = await drag_scale_ranges(page);
+
+  await page.evaluate(({ x, lower_y }) => {
+    const overlay = window.__chart.chart_element().querySelector("canvas:last-of-type");
+    const rect = overlay.getBoundingClientRect();
+    const send = (type, y, buttons) => overlay.dispatchEvent(new PointerEvent(type, {
+      pointerId: 117,
+      pointerType: "touch",
+      isPrimary: true,
+      clientX: rect.left + x,
+      clientY: rect.top + y,
+      button: 0,
+      buttons,
+      bubbles: true,
+      cancelable: true,
+    }));
+    send("pointerdown", lower_y, 1);
+    send("pointermove", lower_y + 18, 1);
+    send("pointermove", lower_y + 36, 1);
+    send("pointerup", lower_y + 36, 0);
+  }, fixture);
+  await wait_for_chart(page);
+
+  const after = await drag_scale_ranges(page);
+  expect(after.right).not.toEqual(before.right);
+  expect(after.left).toEqual(before.left);
 });
 
 test("named scale descriptors support atomic pane moves and host-owned reconstruction", async ({ page }) => {

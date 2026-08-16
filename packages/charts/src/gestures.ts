@@ -273,27 +273,13 @@ export function install_gestures(chart: chart_impl): () => void {
     const enabled = kind === "touch" ? cfg.kinetic_touch : cfg.kinetic_mouse;
     wasm.kinetic_begin_sampling(enabled, x, performance.now());
   };
-  /** Arm the vertical price pan on `pane` (reference `startScrollPrice`): prefers the right
-   *  scale, falls back to the left; skipped under autoscale (the engine's own no-op gate). */
-  const arm_price_pan = (pane: number, start_y: number) => {
+  /** Arm vertical price panning on the exact unlocked scale owned by the selected/hit series. */
+  const arm_price_pan = (pane: number, start_x: number, start_y: number) => {
     disarm_price_pan();
-    const scales = JSON.parse(wasm.price_scales_json(pane)) as {
-      id: string; side: "left" | "right" | null; order: number | null; visible: boolean;
-    }[];
-    scales.sort((a, b) =>
-      (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER)
-      || (a.side === "right" ? -1 : 1)
-    );
-    for (const scale of scales) {
-      if (!scale.visible || scale.side === null) continue;
-      const target = wasm.price_scale_target_by_id(pane, scale.id) ?? null;
-      if (target === null) continue;
-      if (wasm.price_scale_auto_scale(pane, target) === false) {
-        price_pan = { pane, target };
-        wasm.price_axis_start_scroll(pane, target, start_y);
-        break;
-      }
-    }
+    const target = wasm.price_pan_target_at(pane, start_x, start_y) ?? null;
+    if (target === null) return;
+    price_pan = { pane, target };
+    wasm.price_axis_start_scroll(pane, target, start_y);
   };
   /** Close the engine's price-pan session (a no-op arm leaves nothing to close). */
   const disarm_price_pan = () => {
@@ -538,7 +524,7 @@ export function install_gestures(chart: chart_impl): () => void {
     // pane press: pan (time + price in one drag, like reference).
     if (chart.gesture_config().pan) {
       begin_scroll(p.x, "mouse");
-      arm_price_pan(pane_of(p.y), p.y);
+      arm_price_pan(pane_of(p.y), p.x, p.y);
     }
     pointer_targets.set(e.pointerId, InputTargetCode.Pane);
     feed_pointer("down", e, InputTargetCode.Pane);
@@ -734,10 +720,9 @@ export function install_gestures(chart: chart_impl): () => void {
       }
     } else {
       // reference price-axis-widget mouseDoubleClickEvent (handleScale.axisDoubleClickReset.price).
-      const pane = pane_of(y);
       const target = price_axis_target_at({ x, y });
       if (cfg.axis_dblclick_reset_price && target !== null) {
-        wasm.set_price_scale_auto_scale(pane, target, true);
+        wasm.reset_price_scales();
         chart.repaint();
       }
     }
@@ -874,7 +859,7 @@ export function install_gestures(chart: chart_impl): () => void {
         touch_scrolling = true;
         last_pan_x = update.x;
         wasm.scroll_start(update.x);
-        arm_price_pan(pane_of(update.y), update.y);
+        arm_price_pan(pane_of(update.y), update.x, update.y);
         if (e.cancelable && update.prevent_default) e.preventDefault();
       }
       return;
@@ -961,7 +946,7 @@ export function install_gestures(chart: chart_impl): () => void {
         dragging = true;
         touch_scrolling = true;
         wasm.scroll_start(update.previous_x);
-        arm_price_pan(pane_of(update.previous_y), update.previous_y);
+        arm_price_pan(pane_of(update.previous_y), update.previous_x, update.previous_y);
       }
       wasm.scroll_move(update.x);
       last_pan_x = update.x;
@@ -1001,7 +986,7 @@ export function install_gestures(chart: chart_impl): () => void {
       if (!touch_scrolling) {
         touch_scrolling = true;
         begin_scroll(update.previous_x, "touch");
-        arm_price_pan(pane_of(update.previous_y), update.previous_y);
+        arm_price_pan(pane_of(update.previous_y), update.previous_x, update.previous_y);
       }
       wasm.scroll_move(p.x);
       last_pan_x = p.x;
@@ -1028,7 +1013,7 @@ export function install_gestures(chart: chart_impl): () => void {
       touch_moved = true;
       last_pan_x = update.x;
       wasm.scroll_start(update.x);
-      arm_price_pan(pane_of(update.y), update.y);
+      arm_price_pan(pane_of(update.y), update.x, update.y);
       suppress_compatibility_click = true;
       chart.repaint();
       return;

@@ -2712,13 +2712,10 @@ impl ChartEngine {
         self.invalidate_frame_scene();
     }
 
-    /// TradingView-style "reset view" button semantics in one action: the time scale returns
-    /// to its configured defaults (reference `resetTimeScale`) AND every pane's price scales
-    /// re-enable autoscale (reference pane `resetPriceScale`, the price-axis double-click).
-    /// The next frame's autoscale pass recalculates the visible ranges, so a manually
-    /// contracted or over-zoomed price scale fits the data again.
-    pub fn reset_view(&mut self) {
-        self.reset_time_scale();
+    /// Restore autoscale on every price scale in the chart. Comparison scales are one visual
+    /// group from the user's perspective, so a price reset never leaves a neighboring symbol in
+    /// a stale manual range.
+    pub fn reset_price_scales(&mut self) {
         for pane in &mut self.panes {
             pane.price_scale.set_auto_scale(true);
             pane.left_scale.set_auto_scale(true);
@@ -2727,6 +2724,17 @@ impl ChartEngine {
                 entry.scale.set_auto_scale(true);
             }
         }
+        self.invalidate_frame_scene();
+    }
+
+    /// TradingView-style "reset view" button semantics in one action: the time scale returns
+    /// to its configured defaults (reference `resetTimeScale`) AND every pane's price scales
+    /// re-enable autoscale (reference pane `resetPriceScale`, the price-axis double-click).
+    /// The next frame's autoscale pass recalculates the visible ranges, so a manually
+    /// contracted or over-zoomed price scale fits the data again.
+    pub fn reset_view(&mut self) {
+        self.reset_time_scale();
+        self.reset_price_scales();
     }
 
     /// Deep-merge a JSON options patch into the chart options store (reference `applyOptions`

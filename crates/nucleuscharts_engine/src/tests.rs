@@ -702,6 +702,62 @@ fn reset_view_restores_time_defaults_and_reenables_autoscale() {
 }
 
 #[test]
+fn price_reset_restores_every_scale_across_panes_without_resetting_time() {
+    let mut chart = ChartEngine::new(300.0, 240.0, 1.0);
+    chart
+        .set_series_data(
+            0,
+            &[10.0, 20.0, 30.0],
+            &[100.0, 101.0, 102.0],
+            &[101.0, 102.0, 103.0],
+            &[99.0, 100.0, 101.0],
+            &[100.5, 101.5, 102.5],
+        )
+        .unwrap();
+    let named = chart
+        .add_price_scale(0, "comparison-reset", PriceScaleSide::Left, Some(0), false)
+        .unwrap();
+    let pane = chart.add_pane(true).expect("second pane");
+    let pane_named = chart
+        .add_price_scale(pane, "pane-reset", PriceScaleSide::Right, Some(0), false)
+        .unwrap();
+
+    chart.set_bar_spacing(18.0);
+    chart.set_right_offset(3.0);
+    let spacing_before = chart.bar_spacing();
+    let offset_before = chart.right_offset();
+    for (pane, target, from) in [
+        (0, PriceScaleTarget::Right, 100.0),
+        (0, PriceScaleTarget::Left, 90.0),
+        (0, PriceScaleTarget::Overlay, 80.0),
+        (0, named, 70.0),
+        (pane, PriceScaleTarget::Right, 60.0),
+        (pane, PriceScaleTarget::Left, 50.0),
+        (pane, PriceScaleTarget::Overlay, 40.0),
+        (pane, pane_named, 30.0),
+    ] {
+        chart.set_price_scale_visible_range_for(pane, target, from, from + 1.0);
+        assert_eq!(chart.price_scale_auto_scale_for(pane, target), Some(false));
+    }
+
+    chart.reset_price_scales();
+    for (pane, target) in [
+        (0, PriceScaleTarget::Right),
+        (0, PriceScaleTarget::Left),
+        (0, PriceScaleTarget::Overlay),
+        (0, named),
+        (pane, PriceScaleTarget::Right),
+        (pane, PriceScaleTarget::Left),
+        (pane, PriceScaleTarget::Overlay),
+        (pane, pane_named),
+    ] {
+        assert_eq!(chart.price_scale_auto_scale_for(pane, target), Some(true));
+    }
+    assert_eq!(chart.bar_spacing(), spacing_before);
+    assert_eq!(chart.right_offset(), offset_before);
+}
+
+#[test]
 fn left_price_scale_owns_range_axis_labels_and_pane_offset() {
     let mut chart = ChartEngine::new(300.0, 200.0, 1.0);
     chart

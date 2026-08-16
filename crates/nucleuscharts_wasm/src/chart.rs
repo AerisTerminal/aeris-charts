@@ -2796,6 +2796,10 @@ impl NucleusChart {
     pub fn price_axis_end_scroll(&mut self, pane: usize, target: u32) {
         self.inner.borrow_mut().price_axis_end_scroll(pane, target);
     }
+    /// The exact unlocked price scale owned by the selected/hit series under a pane drag.
+    pub fn price_pan_target_at(&self, pane: usize, x_css: f64, y_css: f64) -> Option<u32> {
+        self.inner.borrow().price_pan_target_at(pane, x_css, y_css)
+    }
 
     /// Eased scroll-to-position (the engine owns the cubic ease-out and applies each tick).
     pub fn start_scroll_animation(&mut self, target: f64, duration_ms: f64, now_ms: f64) {
@@ -3068,6 +3072,10 @@ impl NucleusChart {
     /// on every pane's price scales; the next `render()` recalculates the visible ranges.
     pub fn reset_view(&mut self) {
         self.inner.borrow_mut().engine.reset_view();
+    }
+    /// Restore autoscale on every pane-local built-in, named, hidden, and overlay price scale.
+    pub fn reset_price_scales(&mut self) {
+        self.inner.borrow_mut().engine.reset_price_scales();
     }
     /// reference `chart.setCrosshairPosition(price, time, series)`: position the crosshair at a
     /// data point with no DOM event — `time` must resolve exactly to a bar (false

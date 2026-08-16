@@ -698,6 +698,34 @@ impl ChartEngine {
         }
     }
 
+    /// Resolve a pane drag to the unlocked scale owned by the series the user intended to grab.
+    /// A selected series wins when it is itself under the pointer; otherwise the canonical series
+    /// hit arbitration chooses the target. Empty pane space may continue dragging an explicitly
+    /// selected visible series, but never falls back to an arbitrary manual scale.
+    pub fn price_pan_target_at(
+        &self,
+        pane: usize,
+        x_css: f64,
+        y_css: f64,
+    ) -> Option<PriceScaleTarget> {
+        if self.pane_at_y(y_css)? != pane {
+            return None;
+        }
+        let selected = self.selected_series().and_then(|id| {
+            let series = self.series_entry(id)?;
+            (series.visible && series.pane_index == pane).then_some(id)
+        });
+        let series = selected
+            .filter(|id| self.hit_test_one_series(*id, x_css, y_css).is_some())
+            .or_else(|| self.hit_test_series(x_css, y_css))
+            .or(selected)?;
+        let (series_pane, target) = self.series_price_scale(series)?;
+        if series_pane != pane || self.price_scale_auto_scale_for(pane, target)? {
+            return None;
+        }
+        Some(target)
+    }
+
     // --- animated scroll-to-position ---
 
     /// Start an eased scroll to `target_position` (logical bars from the right edge), replacing
@@ -984,6 +1012,118 @@ mod tests {
     }
 
     #[test]
+    fn price_pan_target_follows_the_grabbed_series_scale_without_order_fallback() {
+        let mut chart = chart_with_data(600.0, 300.0);
+        let comparison_series = chart.add_series(SeriesKind::Candlestick);
+        chart
+            .set_series_data(
+                comparison_series,
+                &[1.0, 2.0, 3.0, 4.0, 5.0],
+                &[1_000.0, 1_010.0, 1_020.0, 1_030.0, 1_040.0],
+                &[1_005.0, 1_015.0, 1_025.0, 1_035.0, 1_045.0],
+                &[995.0, 1_005.0, 1_015.0, 1_025.0, 1_035.0],
+                &[1_002.0, 1_012.0, 1_022.0, 1_032.0, 1_042.0],
+            )
+            .unwrap();
+        let comparison = chart
+            .add_price_scale(0, "comparison-pan", PriceScaleSide::Left, Some(0), true)
+            .unwrap();
+        chart.set_series_price_scale(comparison_series, comparison);
+        chart.set_price_scale_visible_range_for(0, PriceScaleTarget::Right, 0.0, 40.0);
+        chart.set_price_scale_visible_range_for(0, comparison, 900.0, 1_100.0);
+
+        let x = chart.time_scale.index_to_coordinate(4);
+        let main_y = chart.series_price_to_coordinate(0, 14.5).unwrap();
+        let comparison_y = chart
+            .series_price_to_coordinate(comparison_series, 1_042.0)
+            .unwrap();
+        assert!((main_y - comparison_y).abs() > 20.0);
+        assert_eq!(
+            chart.price_pan_target_at(0, x, main_y),
+            Some(PriceScaleTarget::Right)
+        );
+        assert_eq!(
+            chart.price_pan_target_at(0, x, comparison_y),
+            Some(comparison)
+        );
+
+        let empty = (0..600)
+            .step_by(20)
+            .flat_map(|x| {
+                (0..300)
+                    .step_by(20)
+                    .map(move |y| (f64::from(x), f64::from(y)))
+            })
+            .find(|(x, y)| chart.hit_test_series(*x, *y).is_none())
+            .expect("pane has empty space");
+        assert_eq!(chart.price_pan_target_at(0, empty.0, empty.1), None);
+
+        chart.set_selected_series(Some(comparison_series));
+        assert_eq!(
+            chart.price_pan_target_at(0, empty.0, empty.1),
+            Some(comparison)
+        );
+
+        chart.set_price_scale_auto_scale_for(0, comparison, true);
+        assert_eq!(chart.price_pan_target_at(0, x, comparison_y), None);
+        assert_eq!(chart.price_pan_target_at(0, empty.0, empty.1), None);
+    }
+
+    #[test]
+    fn selected_overlapping_series_owns_price_pan_and_removal_is_safe() {
+        let mut chart = chart_with_data(600.0, 300.0);
+        let twin = chart.add_series(SeriesKind::Candlestick);
+        chart
+            .set_series_data(
+                twin,
+                &[1.0, 2.0, 3.0, 4.0, 5.0],
+                &[10.0, 11.0, 12.0, 13.0, 14.0],
+                &[11.0, 12.0, 13.0, 14.0, 15.0],
+                &[9.0, 10.0, 11.0, 12.0, 13.0],
+                &[10.5, 11.5, 12.5, 13.5, 14.5],
+            )
+            .unwrap();
+        let twin_scale = chart
+            .add_price_scale(0, "overlap", PriceScaleSide::Right, Some(0), true)
+            .unwrap();
+        chart.set_series_price_scale(twin, twin_scale);
+        chart.set_price_scale_visible_range_for(0, PriceScaleTarget::Right, 0.0, 40.0);
+        chart.set_price_scale_visible_range_for(0, twin_scale, 0.0, 40.0);
+
+        let x = chart.time_scale.index_to_coordinate(4);
+        let y = chart.series_price_to_coordinate(0, 14.5).unwrap();
+        assert_eq!(chart.price_pan_target_at(0, x, y), Some(twin_scale));
+
+        chart.set_selected_series(Some(0));
+        assert_eq!(
+            chart.price_pan_target_at(0, x, y),
+            Some(PriceScaleTarget::Right)
+        );
+        assert!(chart.remove_series(0));
+        assert_eq!(chart.price_pan_target_at(0, x, y), Some(twin_scale));
+        chart.price_axis_start_scroll(0, twin_scale, y);
+        assert!(chart.remove_series(twin));
+        chart.price_axis_scroll_to(0, twin_scale, y + 20.0);
+        chart.price_axis_end_scroll(0, twin_scale);
+        assert_eq!(chart.price_pan_target_at(0, x, y), None);
+    }
+
+    #[test]
+    fn indicator_output_price_pan_uses_the_output_series_scale() {
+        let mut chart = chart_with_data(600.0, 300.0);
+        let sma = chart.add_sma(0, 2).expect("SMA output");
+        let indicator_scale = chart
+            .add_price_scale(0, "indicator-pan", PriceScaleSide::Left, Some(0), true)
+            .unwrap();
+        chart.set_series_price_scale(sma, indicator_scale);
+        chart.set_price_scale_visible_range_for(0, indicator_scale, 0.0, 40.0);
+
+        let x = chart.time_scale.index_to_coordinate(4);
+        let y = chart.series_price_to_coordinate(sma, 14.0).unwrap();
+        assert_eq!(chart.price_pan_target_at(0, x, y), Some(indicator_scale));
+    }
+
+    #[test]
     fn named_axis_hit_testing_and_gestures_touch_only_the_selected_strip() {
         let mut chart = chart_with_data(600.0, 300.0);
         let comparison_series = chart.add_series(SeriesKind::Line);
@@ -1022,17 +1162,14 @@ mod tests {
             Some(PriceScaleTarget::Right)
         );
 
-        // Axis reset is routed through the same exact strip hit. Resetting the named comparison
-        // scale must not unlock the neighboring built-in scale.
-        let reset_target = chart
-            .price_axis_target_at(0, comparison_x + comparison_width / 2.0 - chart.pane_left)
-            .expect("comparison scale reset target");
-        chart.set_price_scale_auto_scale_for(0, reset_target, true);
+        // Any price-axis reset restores the complete comparison group.
+        chart.reset_price_scales();
         assert_eq!(chart.price_scale_auto_scale_for(0, comparison), Some(true));
         assert_eq!(
             chart.price_scale_auto_scale_for(0, PriceScaleTarget::Right),
-            Some(false)
+            Some(true)
         );
+        chart.set_price_scale_visible_range_for(0, PriceScaleTarget::Right, 5.0, 25.0);
         chart.set_price_scale_visible_range_for(0, comparison, 990.0, 1_040.0);
 
         let right_before = chart
