@@ -97,6 +97,7 @@ impl ChartEngine {
         hpr: f64,
         vpr: f64,
         scale: &nucleuscharts_core::scale::price_scale_core::PriceScaleCore,
+        tick_base: i64,
     ) {
         let grid = &self.options.get().grid;
         let vert = css_color(&grid.vert_lines.color, GRID);
@@ -121,7 +122,7 @@ impl ChartEngine {
             }
         }
         if grid.horz_lines.visible {
-            for mark in scale.build_tick_marks(100, 0.0) {
+            for mark in scale.build_tick_marks(tick_base, 0.0) {
                 out.push(Prim::HLine {
                     y: (mark.coord * vpr).round() as i32,
                     x0: -lw,

@@ -779,6 +779,186 @@ fn normal_mode_keeps_the_raw_cursor_price() {
 }
 
 #[test]
+fn crosshair_labels_cover_every_visible_populated_price_scale() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0, 3.0],
+            &[100.0, 105.0, 110.0],
+            &[102.0, 107.0, 112.0],
+            &[98.0, 103.0, 108.0],
+            &[101.0, 106.0, 111.0],
+        )
+        .unwrap();
+    let left = chart.add_series(SeriesKind::Line);
+    chart
+        .set_series_data(
+            left,
+            &[1.0, 2.0, 3.0],
+            &[1_000.0, 1_050.0, 1_100.0],
+            &[1_000.0, 1_050.0, 1_100.0],
+            &[1_000.0, 1_050.0, 1_100.0],
+            &[1_000.0, 1_050.0, 1_100.0],
+        )
+        .unwrap();
+    chart.set_series_price_scale(left, PriceScaleTarget::Left);
+    chart
+        .apply_options(
+            r##"{
+                "leftPriceScale":{"visible":true},
+                "rightPriceScale":{"visible":true},
+                "crosshair":{"horzLine":{"labelBackgroundColor":"#ff00ff"}}
+            }"##,
+        )
+        .unwrap();
+    assert!(
+        chart.series_apply_price_format_json(0, r#"{"type":"price","precision":0,"min_move":1}"#)
+    );
+    assert!(chart
+        .series_apply_price_format_json(left, r#"{"type":"price","precision":2,"min_move":0.01}"#));
+    chart.set_price_scale_mode_for(0, PriceScaleTarget::Left, PriceScaleMode::Logarithmic);
+    chart.set_price_scale_inverted_for(0, PriceScaleTarget::Left, true);
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    chart.build_frame();
+    chart.crosshair = Some((chart.time_scale.index_to_coordinate(1), 220.0));
+
+    let labels = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let magenta = Color::rgb(0xff, 0x00, 0xff);
+    let mut crosshair: Vec<&AxisLabel> = labels
+        .labels
+        .iter()
+        .filter(|label| {
+            matches!(label.background, Some((.., color)) if color == magenta)
+                && label.midpoint == AxisTextMidpoint::Label
+        })
+        .collect();
+    crosshair.sort_by(|a, b| a.x.total_cmp(&b.x));
+
+    assert_eq!(crosshair.len(), 2);
+    assert_eq!(crosshair[0].align, AxisTextAlign::Right);
+    assert_eq!(crosshair[1].align, AxisTextAlign::Left);
+    assert_eq!(crosshair[0].y, crosshair[1].y);
+    assert!(crosshair[0].text.contains('.'));
+    assert!(!crosshair[1].text.contains('.'));
+
+    chart
+        .apply_options(r#"{"leftPriceScale":{"visible":false}}"#)
+        .unwrap();
+    let labels = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    assert_eq!(
+        labels
+            .labels
+            .iter()
+            .filter(|label| matches!(label.background, Some((.., color)) if color == magenta))
+            .count(),
+        1
+    );
+
+    chart
+        .apply_options(r#"{"leftPriceScale":{"visible":true}}"#)
+        .unwrap();
+    chart
+        .set_series_data(left, &[], &[], &[], &[], &[])
+        .unwrap();
+    chart.build_frame();
+    let labels = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    assert_eq!(
+        labels
+            .labels
+            .iter()
+            .filter(|label| matches!(label.background, Some((.., color)) if color == magenta))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn crosshair_labels_share_y_across_crosshair_and_scale_modes() {
+    for crosshair_mode in [
+        CrosshairMode::Normal,
+        CrosshairMode::Magnet,
+        CrosshairMode::MagnetOhlc,
+    ] {
+        for mode in [
+            PriceScaleMode::Normal,
+            PriceScaleMode::Logarithmic,
+            PriceScaleMode::Percentage,
+            PriceScaleMode::IndexedTo100,
+        ] {
+            let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+            chart.crosshair_mode = crosshair_mode;
+            chart
+                .set_series_data(
+                    0,
+                    &[1.0, 2.0, 3.0],
+                    &[100.0, 110.0, 120.0],
+                    &[105.0, 118.0, 125.0],
+                    &[95.0, 104.0, 115.0],
+                    &[102.0, 112.0, 122.0],
+                )
+                .unwrap();
+            let left = chart.add_series(SeriesKind::Line);
+            chart
+                .set_series_data(
+                    left,
+                    &[1.0, 2.0, 3.0],
+                    &[1_000.0, 1_100.0, 1_200.0],
+                    &[1_000.0, 1_100.0, 1_200.0],
+                    &[1_000.0, 1_100.0, 1_200.0],
+                    &[1_000.0, 1_100.0, 1_200.0],
+                )
+                .unwrap();
+            chart.set_series_price_scale(left, PriceScaleTarget::Left);
+            chart
+                .apply_options(
+                    r##"{
+                    "leftPriceScale":{"visible":true},
+                    "rightPriceScale":{"visible":true},
+                    "crosshair":{"horzLine":{"labelBackgroundColor":"#ff00ff"}}
+                }"##,
+                )
+                .unwrap();
+            chart.set_price_scale_mode_for(0, PriceScaleTarget::Right, mode);
+            chart.set_price_scale_mode_for(0, PriceScaleTarget::Left, mode);
+            chart.set_price_scale_inverted_for(0, PriceScaleTarget::Left, true);
+            chart.time_scale.set_width(800.0);
+            chart.fit_content();
+            chart.build_frame();
+            let from = chart.visible_range_for_frame().unwrap().0;
+            let left_base = chart.series_base_value(left, from).unwrap();
+            let snap_y = chart.panes[0]
+                .left_scale
+                .price_to_coordinate(1_100.0, left_base);
+            let x = chart.time_scale.index_to_coordinate(1);
+            chart.crosshair = Some((x, snap_y + 1.0));
+            let (from, to) = chart.visible_range_for_frame().unwrap();
+            let expected_snap_y = chart.crosshair_snap(0, x, snap_y + 1.0, from, to).1;
+
+            let labels = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+            let magenta = Color::rgb(0xff, 0x00, 0xff);
+            let crosshair: Vec<&AxisLabel> = labels
+                .labels
+                .iter()
+                .filter(|label| matches!(label.background, Some((.., color)) if color == magenta))
+                .collect();
+            assert_eq!(
+                crosshair.len(),
+                2,
+                "crosshair {crosshair_mode:?}, scale {mode:?}"
+            );
+            assert!(
+                crosshair
+                    .iter()
+                    .all(|label| (label.y - expected_snap_y).abs() < 1e-9),
+                "crosshair {crosshair_mode:?}, scale {mode:?} did not retain the shared coordinate"
+            );
+        }
+    }
+}
+
+#[test]
 fn do_not_snap_to_hidden_series_indices_moves_to_a_visible_bar() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     // Primary (visible) bars sit at merged indices 0, 1, 3; a hidden series owns index 2.
@@ -1221,6 +1401,114 @@ fn indicator_price_chip_inherits_source_precision_at_creation() {
     assert_eq!(
         chart.series_format_price(sma, 12.34).as_deref(),
         Some("12.3400")
+    );
+}
+
+#[test]
+fn runtime_price_format_rebuilds_scale_ticks_layout_and_autoscale() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0, 3.0, 4.0],
+            &[116_000.25, 116_010.25, 115_995.25, 116_020.25],
+            &[116_012.75, 116_018.75, 116_006.75, 116_030.75],
+            &[115_990.25, 115_998.25, 115_985.25, 116_010.25],
+            &[116_008.25, 116_004.25, 116_001.25, 116_025.25],
+        )
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    chart.build_frame();
+    assert_eq!(chart.scale_tick_base(0, PriceScaleTarget::Right), 100);
+
+    for (precision, min_move, expected_base, decimal) in
+        [(0, 1.0, 1, false), (2, 0.01, 100, true), (0, 1.0, 1, false)]
+    {
+        assert!(chart.series_apply_price_format_json(
+            0,
+            &format!(r#"{{"type":"price","precision":{precision},"min_move":{min_move}}}"#)
+        ));
+        let frame = chart.build_frame();
+        assert_eq!(chart.frame_build_stats().layout_rebuilds, 1);
+        assert_eq!(
+            chart.scale_tick_base(0, PriceScaleTarget::Right),
+            expected_base
+        );
+        let range = chart
+            .price_scale_visible_range_for(0, PriceScaleTarget::Right)
+            .unwrap();
+        assert!(range.0 <= 115_985.25 && range.1 >= 116_030.75);
+        assert!(
+            range.1 - range.0 < 100.0,
+            "unexpected autoscale range {range:?}"
+        );
+        let labels = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+        let tick_labels: Vec<&str> = labels
+            .labels
+            .iter()
+            .filter(|label| label.background.is_none() && label.align == AxisTextAlign::Left)
+            .map(|label| label.text.as_str())
+            .collect();
+        assert!(!tick_labels.is_empty());
+        assert_eq!(tick_labels.iter().any(|label| label.contains('.')), decimal);
+        assert!(frame.panes[0]
+            .main
+            .iter()
+            .any(|primitive| { matches!(primitive, Prim::Rect { .. } | Prim::Polyline { .. }) }));
+    }
+
+    chart.set_price_scale_visible_range_for(0, PriceScaleTarget::Right, 115_900.0, 116_100.0);
+    let manual = chart
+        .price_scale_visible_range_for(0, PriceScaleTarget::Right)
+        .unwrap();
+    assert!(chart
+        .series_apply_price_format_json(0, r#"{"type":"price","precision":2,"min_move":0.01}"#));
+    chart.build_frame();
+    assert_eq!(
+        chart
+            .price_scale_visible_range_for(0, PriceScaleTarget::Right)
+            .unwrap(),
+        manual
+    );
+}
+
+#[test]
+fn scale_formatter_source_tracks_visible_z_order() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let second = chart.add_series(SeriesKind::Line);
+    assert!(chart
+        .series_apply_price_format_json(0, r#"{"type":"price","precision":2,"min_move":0.03}"#));
+    assert!(chart.series_apply_price_format_json(
+        second,
+        r#"{"type":"price","precision":4,"min_move":0.0001}"#
+    ));
+
+    assert_eq!(chart.scale_tick_base(0, PriceScaleTarget::Right), 33);
+    assert_eq!(
+        chart.scale_autoscale_min_move(0, PriceScaleTarget::Right),
+        0.03
+    );
+
+    assert!(chart.set_series_order(vec![second, 0]));
+    assert_eq!(chart.scale_tick_base(0, PriceScaleTarget::Right), 10_000);
+    assert_eq!(
+        chart.scale_autoscale_min_move(0, PriceScaleTarget::Right),
+        0.0001
+    );
+
+    chart.set_series_visible(second, false);
+    assert_eq!(chart.scale_tick_base(0, PriceScaleTarget::Right), 33);
+    assert_eq!(
+        chart.scale_autoscale_min_move(0, PriceScaleTarget::Right),
+        0.03
+    );
+
+    chart.set_price_scale_mode_for(0, PriceScaleTarget::Right, PriceScaleMode::Percentage);
+    assert_eq!(chart.scale_tick_base(0, PriceScaleTarget::Right), 100);
+    assert_eq!(
+        chart.scale_autoscale_min_move(0, PriceScaleTarget::Right),
+        1.0
     );
 }
 

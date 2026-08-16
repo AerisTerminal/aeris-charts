@@ -183,6 +183,12 @@ impl SeriesPriceFormat {
     pub fn is_reference_default(&self) -> bool {
         self.kind == PriceFormatKind::Price && self.precision == 2 && self.min_move == 0.01
     }
+
+    /// Reference series `base()`: the price-scale tick base is the reciprocal of `minMove`.
+    pub(crate) fn base(&self) -> i64 {
+        const MAX_EXACT_BASE: f64 = 1_000_000_000_000_000.0;
+        self.min_move.recip().round().clamp(1.0, MAX_EXACT_BASE) as i64
+    }
 }
 
 /// the reference's shared line-family default color (line/area/baseline `lineColor`, histogram `color`,

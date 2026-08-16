@@ -1200,6 +1200,11 @@ impl ChartEngine {
                     cache.under.prims.push(background);
                 }
                 if let Some((from, to)) = visible {
+                    let (grid_scale, grid_target) = if pane.price_scale.is_empty() {
+                        (&pane.left_scale, PriceScaleTarget::Left)
+                    } else {
+                        (&pane.price_scale, PriceScaleTarget::Right)
+                    };
                     self.build_grid_frame(
                         &mut cache.under.prims,
                         &time_marks,
@@ -1210,11 +1215,8 @@ impl ChartEngine {
                         height_px as i32,
                         hpr,
                         vpr,
-                        if pane.price_scale.is_empty() {
-                            &pane.left_scale
-                        } else {
-                            &pane.price_scale
-                        },
+                        grid_scale,
+                        self.scale_tick_base(pi, grid_target),
                     );
                     self.build_native_session_highlighting_frame(
                         pi,
@@ -1794,6 +1796,15 @@ impl ChartEngine {
 
     fn autoscale_for_frame(&mut self, from: i64, to: i64) {
         let n = self.panes.len().max(1);
+        let scale_min_moves: Vec<[f64; 3]> = (0..n)
+            .map(|pane| {
+                [
+                    self.scale_autoscale_min_move(pane, PriceScaleTarget::Right),
+                    self.scale_autoscale_min_move(pane, PriceScaleTarget::Left),
+                    self.scale_autoscale_min_move(pane, PriceScaleTarget::Overlay),
+                ]
+            })
+            .collect();
         let mut main: Vec<Option<PriceRange>> = vec![None; n];
         let mut left: Vec<Option<PriceRange>> = vec![None; n];
         let mut overlay: Vec<Option<PriceRange>> = vec![None; n];
@@ -2011,19 +2022,21 @@ impl ChartEngine {
             pane.refresh_internal_margins();
             if main_auto {
                 if let Some(range) = main[i].take() {
-                    pane.price_scale.apply_autoscale_range(Some(range), 0.01);
+                    pane.price_scale
+                        .apply_autoscale_range(Some(range), scale_min_moves[i][0]);
                 }
             }
             if left_auto {
                 if let Some(range) = left[i].take() {
-                    pane.left_scale.apply_autoscale_range(Some(range), 0.01);
+                    pane.left_scale
+                        .apply_autoscale_range(Some(range), scale_min_moves[i][1]);
                 }
             }
             if overlay_auto {
                 if let Some(range) = overlay[i].take() {
                     pane.overlay_scale.apply_autoscale_range(
                         Some(range.merge(Some(&PriceRange::new(0.0, 0.0)))),
-                        0.01,
+                        scale_min_moves[i][2],
                     );
                 }
             }

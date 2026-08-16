@@ -200,6 +200,54 @@ impl ChartEngine {
             .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2))
     }
 
+    /// Lowest-z-order visible source attached to a scale, matching the reference formatter owner.
+    pub(crate) fn scale_formatter_source(
+        &self,
+        pane_index: usize,
+        target: PriceScaleTarget,
+    ) -> Option<&crate::SeriesEntry> {
+        self.series_order
+            .iter()
+            .filter_map(|id| self.series_entry(*id))
+            .find(|series| {
+                series.visible
+                    && series.pane_index == pane_index
+                    && series_scale_target(series) == target
+            })
+    }
+
+    pub(crate) fn scale_tick_base(&self, pane_index: usize, target: PriceScaleTarget) -> i64 {
+        let Some(scale) = self.price_scale_for(pane_index, target) else {
+            return 100;
+        };
+        if matches!(
+            scale.mode(),
+            PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100
+        ) {
+            return 100;
+        }
+        self.scale_formatter_source(pane_index, target)
+            .map_or(100, |series| series.price_format.base())
+    }
+
+    pub(crate) fn scale_autoscale_min_move(
+        &self,
+        pane_index: usize,
+        target: PriceScaleTarget,
+    ) -> f64 {
+        let Some(scale) = self.price_scale_for(pane_index, target) else {
+            return 1.0;
+        };
+        if matches!(
+            scale.mode(),
+            PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100
+        ) {
+            return 1.0;
+        }
+        self.scale_formatter_source(pane_index, target)
+            .map_or(1.0, |series| series.price_format.min_move)
+    }
+
     pub(super) fn format_scale_value(&self, scale: &PriceScaleCore, value: f64) -> String {
         if scale.mode() == PriceScaleMode::Percentage {
             // Percentage mode has its own formatter; the host price formatter does not apply here
@@ -287,12 +335,7 @@ impl ChartEngine {
         if scale.mode() == PriceScaleMode::Percentage {
             return PercentageFormatter::default().format(value);
         }
-        let primary = self.series.iter().find(|s| {
-            s.visible
-                && !s.overlay
-                && s.pane_index == pane_index
-                && series_scale_target(s) == target
-        });
+        let primary = self.scale_formatter_source(pane_index, target);
         if let Some(series) = primary {
             if let Some(s) = self.format_with_price_format(&series.price_format, value) {
                 return s;
@@ -433,7 +476,10 @@ impl ChartEngine {
                 };
                 let text_color = scale_text_color(&pane.price_scale);
                 let ticks_visible = pane.price_scale.options().ticks_visible;
-                let marks = pane.price_scale.build_tick_marks(100, entire_margin);
+                let marks = pane.price_scale.build_tick_marks(
+                    self.scale_tick_base(pi, PriceScaleTarget::Right),
+                    entire_margin,
+                );
                 let bold_round = Self::bold_round_decisions(
                     &marks.iter().map(|m| m.logical).collect::<Vec<_>>(),
                     pane.price_scale.options().bold_round_labels,
@@ -475,7 +521,10 @@ impl ChartEngine {
                 };
                 let text_color = scale_text_color(&pane.left_scale);
                 let ticks_visible = pane.left_scale.options().ticks_visible;
-                let marks = pane.left_scale.build_tick_marks(100, entire_margin);
+                let marks = pane.left_scale.build_tick_marks(
+                    self.scale_tick_base(pi, PriceScaleTarget::Left),
+                    entire_margin,
+                );
                 let bold_round = Self::bold_round_decisions(
                     &marks.iter().map(|m| m.logical).collect::<Vec<_>>(),
                     pane.left_scale.options().bold_round_labels,
@@ -1748,32 +1797,32 @@ impl ChartEngine {
                 .iter()
                 .position(|p| y_css >= p.top && y_css <= p.top + p.height)
             {
-                let series = self
-                    .series
-                    .iter()
-                    .find(|series| series.pane_index == pi && !series.overlay && series.visible);
-                let target = series
-                    .map(series_scale_target)
-                    .unwrap_or(PriceScaleTarget::Right);
-                let scale = pane_scale(&self.panes[pi], target);
-                if !scale.is_empty() {
-                    let base_value = series
-                        .and_then(|series| self.series_base_value(series.id, from))
-                        .unwrap_or(0.0);
-                    let (price, snap_y) = self.crosshair_snap(pi, x_css, y_css, from, to);
-                    // The label source (the pane's first visible, non-overlay series) formats
-                    // the crosshair price label with its own priceFormat.
-                    let text = match series {
-                        Some(series) => self.format_series_value(
-                            series,
-                            scale,
-                            scale.price_to_logical_value(price, base_value),
-                        ),
-                        None => self.format_scale_value(
-                            scale,
-                            scale.price_to_logical_value(price, base_value),
-                        ),
+                // The horizontal line has one shared media-space coordinate. Each visible scale
+                // independently maps that coordinate through its own range/mode/formatter.
+                let snap_y = self.crosshair_snap(pi, x_css, y_css, from, to).1;
+                for (target, visible) in [
+                    (PriceScaleTarget::Left, options.left_price_scale.visible),
+                    (PriceScaleTarget::Right, options.right_price_scale.visible),
+                ] {
+                    if !visible {
+                        continue;
+                    }
+                    let Some(series) = self.scale_formatter_source(pi, target) else {
+                        continue;
                     };
+                    let scale = pane_scale(&self.panes[pi], target);
+                    if scale.is_empty() {
+                        continue;
+                    }
+                    let Some(base_value) = self.series_base_value(series.id, from) else {
+                        continue;
+                    };
+                    let price = scale.coordinate_to_price(snap_y, base_value);
+                    let text = self.format_series_value(
+                        series,
+                        scale,
+                        scale.price_to_logical_value(price, base_value),
+                    );
                     let width = 1.0 + 5.0 + 5.0 + 5.0 + measure(&text);
                     let height = font_size + 2.5 * 2.0;
                     let (label_x, align, background_x) = if target == PriceScaleTarget::Left {

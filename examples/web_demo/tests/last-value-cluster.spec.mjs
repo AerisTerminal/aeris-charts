@@ -312,6 +312,146 @@ test("crosshair price and time glyphs stay centered in their label boxes", async
   await context.close();
 });
 
+test("crosshair paints one aligned price label on each visible scale", async ({ browser }) => {
+  const { context, page } = await open_cluster_page(browser, {
+    last_value_visible: false,
+    title_visible: false,
+    countdown_visible: false,
+    price_format: { type: "price", precision: 0, min_move: 1 },
+  });
+  const geometry = await page.evaluate(async () => {
+    const left = window.__chart.add_series("line", {
+      price_scale_id: "left",
+      last_value_visible: false,
+      price_line_visible: false,
+      crosshair_marker_visible: false,
+      price_format: { type: "price", precision: 4, min_move: 0.0001 },
+    });
+    left.set_data(window.__data.slice(-80).map((row, index) => ({
+      time: row.time,
+      value: 1.1 + index * 0.0025,
+    })));
+    window.__chart.apply_options({
+      leftPriceScale: { visible: true },
+      rightPriceScale: { visible: true },
+      crosshair: {
+        horzLine: { labelBackgroundColor: "#ff00ff" },
+        vertLine: { labelBackgroundColor: "#ff00ff" },
+      },
+    });
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const row = window.__data[window.__data.length - 20];
+    window.__chart.set_crosshair_position(row.close, row.time, window.__main);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    return {
+      left_w: window.__chart.price_scale("left").width(),
+      pane_w: window.__chart.time_scale().width(),
+      right_w: window.__chart.price_scale("right").width(),
+      y: window.__main.price_to_coordinate(row.close),
+    };
+  });
+  const shot = await capture(page);
+  const y0 = Math.round(geometry.y) - ROW;
+  const y1 = Math.round(geometry.y) + ROW;
+  const magenta = (color) => near(color, [255, 0, 255]);
+  const left_box = {
+    left: 0,
+    right: geometry.left_w,
+    top: Math.max(0, y0),
+    bottom: Math.min(shot.height, y1),
+  };
+  const right_box = {
+    left: geometry.left_w + geometry.pane_w,
+    right: geometry.left_w + geometry.pane_w + geometry.right_w,
+    top: Math.max(0, y0),
+    bottom: Math.min(shot.height, y1),
+  };
+  expect(geometry.left_w).toBeGreaterThan(0);
+  expect(geometry.right_w).toBeGreaterThan(0);
+  expect(count_where(shot, left_box, magenta), "left-scale crosshair label box").toBeGreaterThan(80);
+  expect(count_where(shot, right_box, magenta), "right-scale crosshair label box").toBeGreaterThan(80);
+
+  const label_rows = (box) => {
+    const rows = [];
+    for (let y = box.top; y < box.bottom; y += 1) {
+      let count = 0;
+      for (let x = box.left; x < box.right; x += 1) {
+        if (magenta(px(shot, x, y))) count += 1;
+      }
+      if (count >= 4) rows.push(y);
+    }
+    return rows;
+  };
+  const left_rows = label_rows(left_box);
+  const right_rows = label_rows(right_box);
+  expect(left_rows.length).toBeGreaterThanOrEqual(ROW - 4);
+  expect(right_rows.length).toBeGreaterThanOrEqual(ROW - 4);
+  expect(Math.min(...left_rows)).toBe(Math.min(...right_rows));
+  expect(Math.max(...left_rows)).toBe(Math.max(...right_rows));
+  await context.close();
+});
+
+test("runtime price precision settles autoscale and candle geometry in one repaint", async ({ browser }) => {
+  const { context, page } = await open_cluster_page(browser, {
+    last_value_visible: false,
+    title_visible: false,
+    countdown_visible: false,
+    price_line_visible: false,
+    up_color: "#00ff00",
+    down_color: "#ff0000",
+    wick_up_color: "#00ff00",
+    wick_down_color: "#ff0000",
+    border_up_color: "#00ff00",
+    border_down_color: "#ff0000",
+    price_format: { type: "price", precision: 2, min_move: 0.01 },
+  });
+  const result = await page.evaluate(async () => {
+    const source = window.__data.slice(-80);
+    const btc = source.map((row, index) => {
+      const open = 116_000 + index * 0.25;
+      const close = open + (index % 2 === 0 ? 3.75 : -2.25);
+      return {
+        time: row.time,
+        open,
+        high: Math.max(open, close) + 4.5,
+        low: Math.min(open, close) - 4.5,
+        close,
+      };
+    });
+    window.__main.set_data(btc);
+    window.__chart.time_scale().fit_content();
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const before = window.__chart.frame_stats().presented_frames;
+    window.__main.apply_options({
+      price_format: { type: "price", precision: 0, min_move: 1 },
+    });
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const range = window.__main.price_scale().get_visible_range();
+    return {
+      frames: window.__chart.frame_stats().presented_frames - before,
+      formatted: window.__main.price_formatter()(116_004.25),
+      range,
+      pane_w: window.__chart.time_scale().width(),
+      pane_h: window.__chart.wasm.pane_height(0),
+      coordinates: btc.flatMap((bar) => [bar.high, bar.low]).map((price) => (
+        window.__main.price_to_coordinate(price)
+      )),
+    };
+  });
+  expect(result.frames, "precision change should settle in the next presented frame").toBe(1);
+  expect(result.formatted).toBe("116,004");
+  expect(result.range.from).toBeLessThanOrEqual(115_993.5);
+  expect(result.range.to).toBeGreaterThanOrEqual(116_027.25);
+  expect(result.range.to - result.range.from).toBeLessThan(100);
+  expect(result.coordinates.every((y) => y !== null && y >= 0 && y <= result.pane_h)).toBe(true);
+
+  const shot = await capture(page);
+  const pane = { left: 0, right: result.pane_w, top: 0, bottom: result.pane_h };
+  expect(count_where(shot, pane, (color) => near(color, [0, 255, 0])), "visible up candles").toBeGreaterThan(20);
+  expect(count_where(shot, pane, (color) => near(color, [255, 0, 0])), "visible down candles").toBeGreaterThan(20);
+  await context.close();
+});
+
 test("cluster parts toggle independently", async ({ browser }) => {
   const { context, page } = await open_cluster_page(browser, {
     title: "NUCLEUS",
