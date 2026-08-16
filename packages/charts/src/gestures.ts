@@ -732,10 +732,12 @@ export function install_gestures(chart: chart_impl): () => void {
         wasm.reset_time_scale();
         chart.repaint();
       }
-    } else if (x < 0 || x > wasm.time_scale_width()) {
+    } else {
       // reference price-axis-widget mouseDoubleClickEvent (handleScale.axisDoubleClickReset.price).
-      if (cfg.axis_dblclick_reset_price) {
-        wasm.set_price_scale_auto_scale(pane_of(y), x < 0 ? 1 : 0, true);
+      const pane = pane_of(y);
+      const target = price_axis_target_at({ x, y });
+      if (cfg.axis_dblclick_reset_price && target !== null) {
+        wasm.set_price_scale_auto_scale(pane, target, true);
         chart.repaint();
       }
     }

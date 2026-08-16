@@ -1456,16 +1456,11 @@ impl Probe {
         if event.click_count >= 2 {
             if y > self.engine.pane_h && self.gesture_config.axis_dblclick_reset_time {
                 self.engine.reset_time_scale();
-            } else if chart_x < self.engine.pane_left
-                && self.gesture_config.axis_dblclick_reset_price
-            {
-                self.engine
-                    .set_price_scale_auto_scale_for(pane, PriceScaleTarget::Left, true);
-            } else if chart_x > self.engine.pane_left + self.engine.pane_w
-                && self.gesture_config.axis_dblclick_reset_price
-            {
-                self.engine
-                    .set_price_scale_auto_scale_for(pane, PriceScaleTarget::Right, true);
+            } else if self.gesture_config.axis_dblclick_reset_price {
+                if let Some(target) = self.engine.price_axis_target_at(pane, pane_x) {
+                    self.engine
+                        .set_price_scale_auto_scale_for(pane, target, true);
+                }
             }
             self.press_moved = true;
             self.dirty = true;

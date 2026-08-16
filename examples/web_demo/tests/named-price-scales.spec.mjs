@@ -7,6 +7,47 @@ async function wait_for_chart(page) {
   }));
 }
 
+async function install_reset_fixture(page) {
+  return page.evaluate(async () => {
+    const chart = window.__chart;
+    const rows = window.__data.slice(0, 4);
+    const points = (base) => rows.map((row, index) => ({ time: row.time, value: base + index * 10 }));
+    const right = chart.add_price_scale({
+      id: "reset-right",
+      side: "right",
+      order: 0,
+      minimum_width: 72,
+    });
+    const left = chart.add_price_scale({
+      id: "reset-left",
+      side: "left",
+      order: 0,
+      minimum_width: 74,
+    });
+    const right_series = chart.add_series("line", { price_scale_id: "reset-right" });
+    const left_series = chart.add_series("line", { price_scale_id: "reset-left" });
+    right_series.set_data(points(1_000));
+    left_series.set_data(points(10_000));
+    chart.time_scale().fit_content();
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    right.set_visible_range({ from: 995, to: 1_015 });
+    left.set_visible_range({ from: 9_995, to: 10_015 });
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    return {
+      right_x: chart.wasm.pane_left() + chart.wasm.time_scale_width() + right.width() / 2,
+      left_x: chart.wasm.pane_left() - left.width() / 2,
+      y: chart.wasm.pane_height(0) / 2,
+    };
+  });
+}
+
+async function auto_scale_state(page) {
+  return page.evaluate(() => ({
+    right: window.__chart.price_scale("reset-right").options().auto_scale,
+    left: window.__chart.price_scale("reset-left").options().auto_scale,
+  }));
+}
+
 for (const backend of ["canvas2d", "webgpu"]) {
   test(`${backend}: named scales own placement, formatting, and comparison normalization`, async ({ page }) => {
     await page.goto(`/?backend=${backend}&forceFallbackAdapter=1`);
@@ -88,7 +129,70 @@ for (const backend of ["canvas2d", "webgpu"]) {
     expect(result.hidden_width).toBe(0);
     expect(result.hidden_state).toBe(false);
   });
+
+  test(`${backend}: comparison axis double-click resets only the selected named scale`, async ({ page }) => {
+    await page.goto(`/?backend=${backend}&forceFallbackAdapter=1`);
+    await wait_for_chart(page);
+    const fixture = await install_reset_fixture(page);
+    const overlay = page.locator("#chart_container canvas:last-of-type");
+    const box = await overlay.boundingBox();
+
+    expect(await auto_scale_state(page)).toEqual({ right: false, left: false });
+    await page.mouse.dblclick(box.x + fixture.right_x, box.y + fixture.y);
+    await wait_for_chart(page);
+    expect(await auto_scale_state(page)).toEqual({ right: true, left: false });
+
+    await page.mouse.dblclick(box.x + fixture.left_x, box.y + fixture.y);
+    await wait_for_chart(page);
+    expect(await auto_scale_state(page)).toEqual({ right: true, left: true });
+  });
 }
+
+test("named comparison reset supports touch, configuration gates, and global reset", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  await wait_for_chart(page);
+  const fixture = await install_reset_fixture(page);
+
+  await page.evaluate(({ right_x, y }) => {
+    const chart = window.__chart;
+    const overlay = chart.chart_element().querySelector("canvas:last-of-type");
+    const rect = overlay.getBoundingClientRect();
+    const clientX = rect.left + right_x;
+    const clientY = rect.top + y;
+    const send = (type) => overlay.dispatchEvent(new PointerEvent(type, {
+      pointerId: 91,
+      pointerType: "touch",
+      isPrimary: true,
+      clientX,
+      clientY,
+      button: 0,
+      buttons: type === "pointerup" ? 0 : 1,
+      bubbles: true,
+      cancelable: true,
+    }));
+    send("pointerdown");
+    send("pointerup");
+    send("pointerdown");
+    send("pointerup");
+  }, fixture);
+  await wait_for_chart(page);
+  expect(await auto_scale_state(page)).toEqual({ right: true, left: false });
+
+  await page.evaluate(() => {
+    const chart = window.__chart;
+    chart.price_scale("reset-right").set_visible_range({ from: 995, to: 1_015 });
+    chart.apply_options({ handle_scale: { axis_double_click_reset: { price: false } } });
+  });
+  const overlay = page.locator("#chart_container canvas:last-of-type");
+  const box = await overlay.boundingBox();
+  await page.mouse.dblclick(box.x + fixture.right_x, box.y + fixture.y);
+  await wait_for_chart(page);
+  expect(await auto_scale_state(page)).toEqual({ right: false, left: false });
+
+  await page.evaluate(() => window.__chart.reset_view());
+  await wait_for_chart(page);
+  expect(await auto_scale_state(page)).toEqual({ right: true, left: true });
+});
 
 test("named scale descriptors support atomic pane moves and host-owned reconstruction", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");

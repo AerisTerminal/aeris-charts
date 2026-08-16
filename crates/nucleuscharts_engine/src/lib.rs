@@ -2722,6 +2722,7 @@ impl ChartEngine {
         for pane in &mut self.panes {
             pane.price_scale.set_auto_scale(true);
             pane.left_scale.set_auto_scale(true);
+            pane.overlay_scale.set_auto_scale(true);
             for entry in &mut pane.named_scales {
                 entry.scale.set_auto_scale(true);
             }

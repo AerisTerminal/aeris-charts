@@ -646,6 +646,9 @@ fn reset_view_restores_time_defaults_and_reenables_autoscale() {
             &[100.5, 101.5, 102.5],
         )
         .unwrap();
+    let comparison = chart
+        .add_price_scale(0, "comparison", PriceScaleSide::Left, Some(0), false)
+        .unwrap();
     chart.time_scale.set_width(300.0);
     chart.layout_panes(172.0);
     chart.fit_content();
@@ -655,7 +658,19 @@ fn reset_view_restores_time_defaults_and_reenables_autoscale() {
     chart.set_bar_spacing(20.0);
     chart.set_right_offset(2.0);
     chart.set_price_scale_visible_range(0, false, 101.0, 101.2);
+    chart.set_price_scale_visible_range_for(0, PriceScaleTarget::Left, 90.0, 91.0);
+    chart.set_price_scale_visible_range_for(0, PriceScaleTarget::Overlay, 80.0, 81.0);
+    chart.set_price_scale_visible_range_for(0, comparison, 70.0, 71.0);
     assert_eq!(chart.price_scale_auto_scale(0, false), Some(false));
+    assert_eq!(
+        chart.price_scale_auto_scale_for(0, PriceScaleTarget::Left),
+        Some(false)
+    );
+    assert_eq!(
+        chart.price_scale_auto_scale_for(0, PriceScaleTarget::Overlay),
+        Some(false)
+    );
+    assert_eq!(chart.price_scale_auto_scale_for(0, comparison), Some(false));
     chart.build_frame();
     assert_eq!(
         chart.price_scale_visible_range(0, false),
@@ -669,6 +684,15 @@ fn reset_view_restores_time_defaults_and_reenables_autoscale() {
     // …and every pane's price scales autoscale again (LWC pane resetPriceScale); the next
     // frame recalculates the range, so the contracted data fits the pane once more.
     assert_eq!(chart.price_scale_auto_scale(0, false), Some(true));
+    assert_eq!(
+        chart.price_scale_auto_scale_for(0, PriceScaleTarget::Left),
+        Some(true)
+    );
+    assert_eq!(
+        chart.price_scale_auto_scale_for(0, PriceScaleTarget::Overlay),
+        Some(true)
+    );
+    assert_eq!(chart.price_scale_auto_scale_for(0, comparison), Some(true));
     chart.build_frame();
     let (min, max) = chart.price_scale_visible_range(0, false).unwrap();
     assert!(

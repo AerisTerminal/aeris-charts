@@ -1022,6 +1022,19 @@ mod tests {
             Some(PriceScaleTarget::Right)
         );
 
+        // Axis reset is routed through the same exact strip hit. Resetting the named comparison
+        // scale must not unlock the neighboring built-in scale.
+        let reset_target = chart
+            .price_axis_target_at(0, comparison_x + comparison_width / 2.0 - chart.pane_left)
+            .expect("comparison scale reset target");
+        chart.set_price_scale_auto_scale_for(0, reset_target, true);
+        assert_eq!(chart.price_scale_auto_scale_for(0, comparison), Some(true));
+        assert_eq!(
+            chart.price_scale_auto_scale_for(0, PriceScaleTarget::Right),
+            Some(false)
+        );
+        chart.set_price_scale_visible_range_for(0, comparison, 990.0, 1_040.0);
+
         let right_before = chart
             .price_scale_visible_range_for(0, PriceScaleTarget::Right)
             .unwrap();
