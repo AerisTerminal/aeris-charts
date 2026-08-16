@@ -230,11 +230,23 @@ impl ChartEngine {
         vpr: f64,
         out: &mut Vec<Prim>,
     ) {
-        const FAMILY: &str =
-            "-apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
         const INLINE_PADDING: f64 = 10.0;
         const BLOCK_PADDING: f64 = 5.0;
         let pane = &self.panes[pane_index];
+        let chart_options = self.options.get();
+        let layout = &chart_options.layout;
+        let family = layout.font_family.as_str();
+        let foreground =
+            Color::parse_css(&layout.text_color).unwrap_or(Color::rgb(0x13, 0x17, 0x22));
+        let muted_foreground =
+            Color::parse_css(&layout.muted_text_color).unwrap_or(Color::rgb(0x78, 0x7b, 0x86));
+        let border = Color::parse_css(&chart_options.right_price_scale.border_color)
+            .unwrap_or(Color::rgb(0x16, 0x19, 0x1f));
+        let background = Color::parse_css(&layout.background.color)
+            .or_else(|| Color::parse_css(&layout.background.top_color))
+            .unwrap_or(Color::rgb(255, 255, 255));
+        let secondary_size = layout.font_size.max(1.0);
+        let primary_size = secondary_size + 2.0;
         for series in self
             .series
             .iter()
@@ -244,7 +256,8 @@ impl ChartEngine {
                 let NativeSeriesPrimitiveKind::DeltaTooltip(state) = &primitive.kind else {
                     continue;
                 };
-                if state.points.is_empty() {
+                let visible_points = state.visible_points();
+                if visible_points.is_empty() {
                     continue;
                 }
                 let plot = self.data.plot(series.id);
@@ -252,7 +265,7 @@ impl ChartEngine {
                     continue;
                 };
                 let mut items = Vec::with_capacity(2);
-                for point in &state.points {
+                for point in visible_points {
                     let Some(row) = plot.search(
                         point.index,
                         nucleuscharts_core::model::plot_list::MismatchDirection::None,
@@ -276,12 +289,6 @@ impl ChartEngine {
                     .as_deref()
                     .and_then(Color::parse_css)
                     .unwrap_or(Color::rgb(0x88, 0x88, 0x88));
-                let background = {
-                    let layout = &self.options.get().layout.background;
-                    Color::parse_css(&layout.color)
-                        .or_else(|| Color::parse_css(&layout.top_color))
-                        .unwrap_or(Color::rgb(255, 255, 255))
-                };
                 let top = pane.top + state.options.top_offset;
                 for (x, _, price, _) in &items {
                     let y = self
@@ -336,7 +343,7 @@ impl ChartEngine {
                         .iter()
                         .enumerate()
                         .map(|(index, text)| {
-                            self.measure_text_run(text, sizes[index], FAMILY, weights[index], false)
+                            self.measure_text_run(text, sizes[index], family, weights[index], false)
                         })
                         .fold(0.0_f64, f64::max)
                         + INLINE_PADDING * 2.0
@@ -344,9 +351,13 @@ impl ChartEngine {
                 let section_height = |count: usize, line_heights: &[f64]| {
                     BLOCK_PADDING * 1.5 + line_heights.iter().take(count).sum::<f64>()
                 };
-                let tooltip_sizes = [14.0, 12.0, 12.0];
+                let tooltip_sizes = [primary_size, secondary_size, secondary_size];
                 let tooltip_weights = [590, 400, 400];
-                let tooltip_heights = [18.0, 16.0, 16.0];
+                let tooltip_heights = [
+                    primary_size + 4.0,
+                    secondary_size + 4.0,
+                    secondary_size + 4.0,
+                ];
                 let mut positions: Vec<(f64, f64)> = items
                     .iter()
                     .zip(&lines)
@@ -407,7 +418,7 @@ impl ChartEngine {
                     .map(|lines| section_height(lines.len(), &tooltip_heights))
                     .fold(0.0_f64, f64::max);
                 let delta_height = if items.len() == 2 {
-                    section_height(2, &[18.0, 16.0])
+                    section_height(2, &[primary_size + 4.0, secondary_size + 4.0])
                 } else {
                     0.0
                 };
@@ -419,24 +430,14 @@ impl ChartEngine {
                     positions[0].1.round()
                 };
                 out.push(Prim::RoundRect {
-                    x: ((main_x + 1.0) * hpr) as f32,
-                    y: ((top + 2.0) * vpr) as f32,
-                    w: (main_width * hpr) as f32,
-                    h: (main_height * vpr) as f32,
-                    radii: [(5.0 * hpr) as f32; 4],
-                    fill: Color::rgba(0, 0, 0, 51),
-                    border_width: 0.0,
-                    border_color: Color::rgba(0, 0, 0, 0),
-                });
-                out.push(Prim::RoundRect {
                     x: (main_x * hpr) as f32,
                     y: (top * vpr) as f32,
                     w: (main_width * hpr) as f32,
                     h: (main_height * vpr) as f32,
-                    radii: [(5.0 * hpr) as f32; 4],
-                    fill: Color::rgb(255, 255, 255),
-                    border_width: 0.0,
-                    border_color: Color::rgb(255, 255, 255),
+                    radii: [(6.0 * hpr.min(vpr)) as f32; 4],
+                    fill: background,
+                    border_width: hpr.min(vpr).max(1.0) as f32,
+                    border_color: border,
                 });
                 if items.len() == 2 && delta_width > 0.0 {
                     out.push(Prim::Rect {
@@ -459,12 +460,12 @@ impl ChartEngine {
                             y: ((y + tooltip_sizes[line_index] * 0.5) * vpr) as f32,
                             text: text.clone(),
                             color: if line_index == 0 {
-                                Color::rgb(0x13, 0x17, 0x22)
+                                foreground
                             } else {
-                                Color::rgb(0x78, 0x7b, 0x86)
+                                muted_foreground
                             },
                             size: (tooltip_sizes[line_index] * vpr) as f32,
-                            family: FAMILY.into(),
+                            family: family.into(),
                             align: TextAlign::Center,
                             weight: tooltip_weights[line_index],
                             italic: false,
@@ -474,22 +475,23 @@ impl ChartEngine {
                 }
                 if items.len() == 2 {
                     let delta_center = positions[1].0 - delta_width * 0.5;
-                    let content_height = section_height(2, &[18.0, 16.0]);
+                    let content_height =
+                        section_height(2, &[primary_size + 4.0, secondary_size + 4.0]);
                     let mut y = top + (main_height - content_height) * 0.5 + BLOCK_PADDING;
                     for (index, text) in [delta_top, delta_bottom].into_iter().enumerate() {
-                        let size = [14.0, 12.0][index];
+                        let size = [primary_size, secondary_size][index];
                         out.push(Prim::Text {
                             x: (delta_center * hpr) as f32,
                             y: ((y + size * 0.5) * vpr) as f32,
                             text,
                             color: delta_text,
                             size: (size * vpr) as f32,
-                            family: FAMILY.into(),
+                            family: family.into(),
                             align: TextAlign::Center,
                             weight: [590, 400][index],
                             italic: false,
                         });
-                        y += [18.0, 16.0][index];
+                        y += [primary_size + 4.0, secondary_size + 4.0][index];
                     }
                 }
             }

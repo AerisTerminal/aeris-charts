@@ -1244,53 +1244,36 @@ impl ChartEngine {
         Some(point)
     }
 
-    /// TradingView magnet (Ctrl held): snap an anchor to the nearest bar — the logical index
-    /// to the bar's center and the price to the closest of the bar's open/high/low/close,
-    /// resolved on the pane's primary series (the first visible, non-overlay series — the same
-    /// primary rule the crosshair/axis use; the snap returns a price, so the series' scale
-    /// binding is irrelevant and left-scale charts snap too). A snapped index with no real bar
-    /// there (whitespace, or off the data) keeps the raw point.
-    fn magnet_snap_point(&self, pane_index: usize, point: DrawingPoint) -> DrawingPoint {
-        let Some(primary) = self
-            .series
-            .iter()
-            .find(|s| s.visible && !s.removed && !s.overlay && s.pane_index == pane_index)
+    /// TradingView magnet (Ctrl held): resolve the live pointer through the same pixel-space
+    /// OHLC candidate path as the crosshair, then encode the winning coordinate on the drawing's
+    /// own price scale. A bar with no visible real candidate keeps the unsnapped point.
+    fn magnet_snap_point_at(
+        &self,
+        pane_index: usize,
+        price_scale: DrawingPriceScale,
+        x: f64,
+        y: f64,
+        point: DrawingPoint,
+    ) -> DrawingPoint {
+        let Some((logical, snapped_y)) = self.ohlc_magnet_snap_coordinate(
+            pane_index,
+            x,
+            y,
+            &[
+                PlotValueIndex::Open,
+                PlotValueIndex::High,
+                PlotValueIndex::Low,
+                PlotValueIndex::Close,
+            ],
+        ) else {
+            return point;
+        };
+        let Some(mut snapped) = self.drawing_from_px_for(pane_index, price_scale, x, snapped_y)
         else {
             return point;
         };
-        let logical = point.logical.round() as i64;
-        let plot = self.data.plot(primary.id);
-        let Some(row) = plot.search(logical, MismatchDirection::None) else {
-            return point;
-        };
-        if plot.is_whitespace_row(row) {
-            return point;
-        }
-        let mut best_price = point.price;
-        let mut best_distance = f64::INFINITY;
-        for column in [
-            PlotValueIndex::Open,
-            PlotValueIndex::High,
-            PlotValueIndex::Low,
-            PlotValueIndex::Close,
-        ] {
-            let value = plot.value_at(row, column);
-            if !value.is_finite() {
-                continue;
-            }
-            let distance = (value - point.price).abs();
-            if distance < best_distance {
-                best_distance = distance;
-                best_price = value;
-            }
-        }
-        if !best_distance.is_finite() {
-            return point;
-        }
-        DrawingPoint {
-            logical: logical as f64,
-            price: best_price,
-        }
+        snapped.logical = logical as f64;
+        snapped
     }
 
     /// TradingView straighten (Shift held): recompute the dragged anchor of a two-anchor tool
@@ -2371,7 +2354,7 @@ impl ChartEngine {
                         cursor_pt = snapped;
                     }
                     if modifiers.magnet {
-                        cursor_pt = self.magnet_snap_point(pane, cursor_pt);
+                        cursor_pt = self.magnet_snap_point_at(pane, price_scale, x, y, cursor_pt);
                     }
                     let Some((mx, my)) = self.drawing_to_px_for(pane, price_scale, cursor_pt)
                     else {
@@ -2464,7 +2447,18 @@ impl ChartEngine {
                     point = snapped;
                 }
                 if modifiers.magnet {
-                    point = self.magnet_snap_point(pane, point);
+                    let snapped = self.magnet_snap_point_at(pane, price_scale, x, y, point);
+                    point = match kind {
+                        DrawingKind::HorizontalLine => DrawingPoint {
+                            price: snapped.price,
+                            ..point
+                        },
+                        DrawingKind::VerticalLine => DrawingPoint {
+                            logical: snapped.logical,
+                            ..point
+                        },
+                        _ => snapped,
+                    };
                 }
                 if modifiers.straighten && points.len() == 2 {
                     // The other anchor is the fixed one (only the dragged anchor moves).
@@ -2508,7 +2502,7 @@ impl ChartEngine {
                     // the anchor drag, so the magnet applies here too (a Ctrl-dragged vertical
                     // line snaps to bar centers, a horizontal one to the nearest OHLC price).
                     if modifiers.magnet && single_anchor {
-                        let snapped = self.magnet_snap_point(pane, point);
+                        let snapped = self.magnet_snap_point_at(pane, price_scale, x, y, point);
                         point = match kind {
                             DrawingKind::HorizontalLine => DrawingPoint {
                                 price: snapped.price,
@@ -2686,7 +2680,7 @@ impl ChartEngine {
             point = snapped;
         }
         if modifiers.magnet {
-            point = self.magnet_snap_point(pane, point);
+            point = self.magnet_snap_point_at(pane, price_scale, x, y, point);
         }
         if modifiers.straighten {
             if let Some(fixed) = fixed {
@@ -2755,7 +2749,7 @@ impl ChartEngine {
             point = snapped;
         }
         if modifiers.magnet {
-            point = self.magnet_snap_point(pane, point);
+            point = self.magnet_snap_point_at(pane, price_scale, x, y, point);
         }
         if modifiers.straighten {
             if let Some(pending) = &self.pending_drawing {

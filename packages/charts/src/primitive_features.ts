@@ -777,6 +777,8 @@ export interface delta_tooltip_options {
 
 export interface delta_tooltip_handle extends detachable_feature {
   active_range(): delta_tooltip_active_range | null;
+  /** Clear the committed comparison without detaching the interaction. */
+  clear(): void;
 }
 
 /** Official one/two-pointer delta tooltip, with all bar lookup and geometry owned by Rust. */
@@ -799,15 +801,12 @@ export function create_delta_tooltip(
     on_active_range_change?.(JSON.parse(json) as delta_tooltip_active_range | null);
   };
   const remove_range_listener = chart.add_delta_tooltip_range_listener(notify_range);
-  chart.apply_options({
-    crosshair: {
-      mode: 1,
-      vertLine: { visible: false, labelVisible: false },
-      horzLine: { visible: false, labelVisible: false },
-    },
-  });
   return {
     active_range,
+    clear() {
+      native.clear();
+      notify_range();
+    },
     detach() {
       remove_range_listener();
       native.detach();

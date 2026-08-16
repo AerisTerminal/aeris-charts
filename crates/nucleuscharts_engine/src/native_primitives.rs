@@ -99,9 +99,30 @@ pub struct DeltaTooltipActiveRange {
 #[derive(Clone, Debug)]
 pub(crate) struct DeltaTooltipState {
     pub options: DeltaTooltipOptions,
-    pub points: Vec<DeltaTooltipPoint>,
+    pub committed_points: Vec<DeltaTooltipPoint>,
+    pub preview_points: Vec<DeltaTooltipPoint>,
     pub mouse_start: Option<DeltaTooltipPoint>,
     pub mouse_drawing: bool,
+}
+
+impl DeltaTooltipState {
+    pub(crate) fn visible_points(&self) -> &[DeltaTooltipPoint] {
+        if self.mouse_drawing && self.preview_points.len() == 2 {
+            &self.preview_points
+        } else if self.committed_points.len() == 2 {
+            &self.committed_points
+        } else {
+            &self.preview_points
+        }
+    }
+
+    fn range_points(&self) -> &[DeltaTooltipPoint] {
+        if self.mouse_drawing && self.preview_points.len() == 2 {
+            &self.preview_points
+        } else {
+            &self.committed_points
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -494,7 +515,8 @@ impl NativeSeriesPrimitive {
                     + state.options.symbol_name.capacity()
             }
             NativeSeriesPrimitiveKind::DeltaTooltip(state) => {
-                state.points.capacity() * core::mem::size_of::<DeltaTooltipPoint>()
+                (state.committed_points.capacity() + state.preview_points.capacity())
+                    * core::mem::size_of::<DeltaTooltipPoint>()
             }
             _ => 0,
         }
@@ -879,7 +901,8 @@ impl ChartEngine {
             series_id,
             NativeSeriesPrimitiveKind::DeltaTooltip(DeltaTooltipState {
                 options,
-                points: Vec::with_capacity(2),
+                committed_points: Vec::with_capacity(2),
+                preview_points: Vec::with_capacity(2),
                 mouse_start: None,
                 mouse_drawing: false,
             }),
@@ -1012,10 +1035,18 @@ impl ChartEngine {
         }) else {
             return false;
         };
-        if state.points == points {
+        let (committed, preview) = if points.len() == 2 {
+            (points, Vec::new())
+        } else {
+            (Vec::new(), points)
+        };
+        if state.committed_points == committed && state.preview_points == preview {
             return true;
         }
-        state.points = points;
+        state.committed_points = committed;
+        state.preview_points = preview;
+        state.mouse_start = None;
+        state.mouse_drawing = false;
         self.invalidate_frame_overlay();
         true
     }
@@ -1035,10 +1066,11 @@ impl ChartEngine {
                 Some((series.id, state))
             })
         })?;
-        if state.points.len() != 2 {
+        let range_points = state.range_points();
+        if range_points.len() != 2 {
             return None;
         }
-        let mut points = state.points.clone();
+        let mut points = range_points.to_vec();
         points.sort_by_key(|point| point.index);
         let plot = self.data.plot(series_id);
         let price = |point: DeltaTooltipPoint| {
@@ -1088,18 +1120,26 @@ impl ChartEngine {
             })
             .collect();
         let mut handled = false;
+        let mut changed = false;
         for series in &mut self.series {
             for primitive in &mut series.native_primitives {
                 let NativeSeriesPrimitiveKind::DeltaTooltip(state) = &mut primitive.kind else {
                     continue;
                 };
                 handled = true;
+                if !state.preview_points.is_empty() {
+                    state.preview_points.clear();
+                    changed = true;
+                }
                 state.mouse_start = starts
                     .iter()
                     .find_map(|(id, point)| (*id == primitive.id).then_some(*point))
                     .flatten();
                 state.mouse_drawing = state.mouse_start.is_some();
             }
+        }
+        if changed {
+            self.invalidate_frame_overlay();
         }
         handled
     }
@@ -1108,7 +1148,7 @@ impl ChartEngine {
     /// yields the captured point plus the live point; ordinary hover yields one point.
     pub fn delta_tooltip_mouse_move(&mut self, x: f64) -> bool {
         if !x.is_finite() {
-            return self.clear_delta_tooltips(true);
+            return self.clear_delta_tooltip_previews(true);
         }
         let targets: Vec<_> = self
             .series
@@ -1148,8 +1188,8 @@ impl ChartEngine {
                     }
                     points.push(current);
                 }
-                if state.points != points {
-                    state.points = points;
+                if state.preview_points != points {
+                    state.preview_points = points;
                     changed = true;
                 }
             }
@@ -1160,20 +1200,34 @@ impl ChartEngine {
         changed
     }
 
-    /// Release a mouse comparison without hiding it; the official primitive keeps the last
-    /// rendered two-point state until the next move or leave.
+    /// Commit a completed mouse comparison. An incomplete replacement gesture leaves the prior
+    /// committed range intact.
     pub fn delta_tooltip_mouse_up(&mut self) -> bool {
-        let mut handled = false;
+        let mut changed = false;
         for series in &mut self.series {
             for primitive in &mut series.native_primitives {
                 let NativeSeriesPrimitiveKind::DeltaTooltip(state) = &mut primitive.kind else {
                     continue;
                 };
-                handled = true;
+                if state.mouse_drawing
+                    && state.preview_points.len() == 2
+                    && state.committed_points != state.preview_points
+                {
+                    state.committed_points.clone_from(&state.preview_points);
+                    changed = true;
+                }
+                if !state.preview_points.is_empty() {
+                    state.preview_points.clear();
+                    changed = true;
+                }
                 state.mouse_drawing = false;
+                state.mouse_start = None;
             }
         }
-        handled
+        if changed {
+            self.invalidate_frame_overlay();
+        }
+        changed
     }
 
     /// Forward a touch-move sample. The first two touches become comparison points; the chart
@@ -1216,8 +1270,19 @@ impl ChartEngine {
                     .find_map(|(id, points)| (*id == primitive.id).then_some(points))
                     .cloned()
                     .unwrap_or_default();
-                if state.points != points {
-                    state.points = points;
+                let state_changed = if points.len() == 2 {
+                    let changed =
+                        state.committed_points != points || !state.preview_points.is_empty();
+                    state.committed_points = points;
+                    state.preview_points.clear();
+                    changed
+                } else if state.preview_points != points {
+                    state.preview_points = points;
+                    true
+                } else {
+                    false
+                };
+                if state_changed {
                     changed = true;
                 }
             }
@@ -1228,9 +1293,35 @@ impl ChartEngine {
         changed
     }
 
-    /// Clear transient delta-tooltip interaction state on chart leave or final touch release.
+    /// Clear transient hover/gesture state on leave while preserving a committed comparison.
     pub fn delta_tooltip_leave(&mut self) -> bool {
-        self.clear_delta_tooltips(true)
+        self.clear_delta_tooltip_previews(true)
+    }
+
+    /// Explicitly clear one committed delta-tooltip selection and any transient gesture state.
+    pub fn clear_delta_tooltip(&mut self, primitive_id: NativePrimitiveId) -> bool {
+        let Some(state) = self.series.iter_mut().find_map(|series| {
+            series.native_primitives.iter_mut().find_map(|primitive| {
+                if primitive.id != primitive_id {
+                    return None;
+                }
+                let NativeSeriesPrimitiveKind::DeltaTooltip(state) = &mut primitive.kind else {
+                    return None;
+                };
+                Some(state)
+            })
+        }) else {
+            return false;
+        };
+        let changed = !state.committed_points.is_empty() || !state.preview_points.is_empty();
+        state.committed_points.clear();
+        state.preview_points.clear();
+        state.mouse_start = None;
+        state.mouse_drawing = false;
+        if changed {
+            self.invalidate_frame_overlay();
+        }
+        true
     }
 
     fn delta_tooltip_point(&self, series_id: SeriesId, x: f64) -> Option<DeltaTooltipPoint> {
@@ -1247,15 +1338,15 @@ impl ChartEngine {
         .map(|_| DeltaTooltipPoint { x, index })
     }
 
-    fn clear_delta_tooltips(&mut self, end_mouse: bool) -> bool {
+    fn clear_delta_tooltip_previews(&mut self, end_mouse: bool) -> bool {
         let mut changed = false;
         for series in &mut self.series {
             for primitive in &mut series.native_primitives {
                 let NativeSeriesPrimitiveKind::DeltaTooltip(state) = &mut primitive.kind else {
                     continue;
                 };
-                if !state.points.is_empty() {
-                    state.points.clear();
+                if !state.preview_points.is_empty() {
+                    state.preview_points.clear();
                     changed = true;
                 }
                 if end_mouse {
@@ -2388,10 +2479,28 @@ mod tests {
             primitive,
             Prim::Circle { radius, .. } if (*radius - 6.0).abs() < f32::EPSILON
         )));
-        assert!(frame.panes[0].main.iter().any(|primitive| matches!(
-            primitive,
-            Prim::RoundRect { fill, .. } if *fill == Color::rgb(255, 255, 255)
-        )));
+        let tooltip_boxes: Vec<_> = frame.panes[0]
+            .main
+            .iter()
+            .filter_map(|primitive| {
+                let Prim::RoundRect {
+                    fill,
+                    border_width,
+                    border_color,
+                    radii,
+                    ..
+                } = primitive
+                else {
+                    return None;
+                };
+                Some((*fill, *border_width, *border_color, *radii))
+            })
+            .collect();
+        assert_eq!(tooltip_boxes.len(), 1, "tooltip must not emit a shadow box");
+        assert_eq!(tooltip_boxes[0].0, Color::rgb(0x07, 0x0a, 0x0f));
+        assert!(tooltip_boxes[0].1 > 0.0);
+        assert_eq!(tooltip_boxes[0].2, Color::rgb(0x16, 0x19, 0x1f));
+        assert!(tooltip_boxes[0].3.iter().all(|radius| *radius == 6.0));
         assert!(frame.panes[0].main.iter().any(|primitive| matches!(
             primitive,
             Prim::Rect { color, .. } if *color == Color::rgba(4, 153, 129, 51)
@@ -2403,14 +2512,16 @@ mod tests {
             )));
         }
 
-        // Mouse-up preserves the last comparison; the next ordinary hover collapses it to one.
+        // Mouse-up commits the comparison; later hover and leave must not clear it.
         assert!(chart.delta_tooltip_mouse_up());
         assert!(chart.delta_tooltip_active_range(primitive).is_some());
-        assert!(chart.delta_tooltip_mouse_move(x2));
-        assert!(chart.delta_tooltip_active_range(primitive).is_none());
+        chart.delta_tooltip_mouse_move(x2);
+        assert!(chart.delta_tooltip_active_range(primitive).is_some());
+        chart.delta_tooltip_leave();
+        assert!(chart.delta_tooltip_active_range(primitive).is_some());
 
         // Touch order is normalized by logical index, matching the official active-range contract.
-        assert!(chart.delta_tooltip_touch_move(&[x7, x2]));
+        chart.delta_tooltip_touch_move(&[x7, x2]);
         assert_eq!(
             chart.delta_tooltip_active_range(primitive),
             Some(DeltaTooltipActiveRange {
@@ -2421,11 +2532,116 @@ mod tests {
         );
         assert!(!chart.delta_tooltip_touch_move(&[x2, x7, x2]));
         assert!(chart.delta_tooltip_active_range(primitive).is_some());
-        assert!(chart.delta_tooltip_leave());
+        chart.delta_tooltip_leave();
+        assert!(chart.delta_tooltip_active_range(primitive).is_some());
+        assert!(chart.build_frame().panes[0].main.iter().any(|primitive| {
+            matches!(primitive, Prim::VLine { color, .. } if *color == options.line_color)
+        }));
+
+        assert!(chart.clear_delta_tooltip(primitive));
         assert!(chart.delta_tooltip_active_range(primitive).is_none());
         assert!(chart.build_frame().panes[0].main.iter().all(|primitive| {
             !matches!(primitive, Prim::VLine { color, .. } if *color == options.line_color)
         }));
+    }
+
+    #[test]
+    fn delta_tooltip_reads_runtime_chart_theme_and_font_options() {
+        let mut chart = chart();
+        let primitive = chart
+            .add_delta_tooltip(0, DeltaTooltipOptions::default())
+            .unwrap();
+        let x2 = chart.time_scale.index_to_coordinate(2);
+        let x7 = chart.time_scale.index_to_coordinate(7);
+        assert!(chart.delta_tooltip_mouse_down(x2));
+        assert!(chart.delta_tooltip_mouse_move(x7));
+        assert!(chart.delta_tooltip_mouse_up());
+        chart
+            .apply_options(
+                r##"{
+                    "layout": {
+                        "background": { "color": "#112233" },
+                        "textColor": "#ddeeff",
+                        "mutedTextColor": "#778899",
+                        "fontSize": 15,
+                        "fontFamily": "Theme Test"
+                    },
+                    "rightPriceScale": { "borderColor": "#445566" }
+                }"##,
+            )
+            .unwrap();
+
+        let frame = chart.build_frame();
+        assert!(frame.panes[0].main.iter().any(|primitive| matches!(
+            primitive,
+            Prim::RoundRect { fill, border_color, radii, .. }
+                if *fill == Color::rgb(0x11, 0x22, 0x33)
+                    && *border_color == Color::rgb(0x44, 0x55, 0x66)
+                    && radii.iter().all(|radius| *radius == 6.0)
+        )));
+        assert!(frame.panes[0].main.iter().any(|primitive| matches!(
+            primitive,
+            Prim::Text { color, family, size, .. }
+                if *color == Color::rgb(0xdd, 0xee, 0xff)
+                    && family == "Theme Test"
+                    && (*size - 17.0).abs() < f32::EPSILON
+        )));
+        assert!(frame.panes[0].main.iter().any(|primitive| matches!(
+            primitive,
+            Prim::Text { color, family, size, .. }
+                if *color == Color::rgb(0x77, 0x88, 0x99)
+                    && family == "Theme Test"
+                    && (*size - 15.0).abs() < f32::EPSILON
+        )));
+        assert!(chart.clear_delta_tooltip(primitive));
+    }
+
+    #[test]
+    fn delta_tooltip_replaces_only_with_complete_mouse_or_touch_ranges() {
+        let mut chart = chart();
+        let primitive = chart
+            .add_delta_tooltip(0, DeltaTooltipOptions::default())
+            .unwrap();
+        let x1 = chart.time_scale.index_to_coordinate(1);
+        let x2 = chart.time_scale.index_to_coordinate(2);
+        let x4 = chart.time_scale.index_to_coordinate(4);
+        let x5 = chart.time_scale.index_to_coordinate(5);
+        let x7 = chart.time_scale.index_to_coordinate(7);
+        let x8 = chart.time_scale.index_to_coordinate(8);
+
+        assert!(chart.delta_tooltip_mouse_down(x2));
+        assert!(chart.delta_tooltip_mouse_move(x7));
+        assert!(chart.delta_tooltip_mouse_up());
+        let first = chart.delta_tooltip_active_range(primitive).unwrap();
+
+        // A click or cancelled replacement does not erase the committed range.
+        assert!(chart.delta_tooltip_mouse_down(x4));
+        chart.delta_tooltip_mouse_up();
+        assert_eq!(chart.delta_tooltip_active_range(primitive), Some(first));
+
+        assert!(chart.delta_tooltip_mouse_down(x1));
+        assert!(chart.delta_tooltip_mouse_move(x5));
+        assert!(chart.delta_tooltip_mouse_up());
+        let replacement = chart.delta_tooltip_active_range(primitive).unwrap();
+        assert_ne!(replacement, first);
+
+        // Two touches commit immediately. Movement by the sole survivor is only a preview.
+        assert!(chart.delta_tooltip_touch_move(&[x7, x8]));
+        let touch_range = chart.delta_tooltip_active_range(primitive).unwrap();
+        assert_ne!(touch_range, replacement);
+        assert!(chart.delta_tooltip_touch_move(&[x4]));
+        assert_eq!(
+            chart.delta_tooltip_active_range(primitive),
+            Some(touch_range)
+        );
+        chart.delta_tooltip_leave();
+        assert_eq!(
+            chart.delta_tooltip_active_range(primitive),
+            Some(touch_range)
+        );
+
+        assert!(chart.remove_native_primitive(primitive));
+        assert_eq!(chart.delta_tooltip_active_range(primitive), None);
     }
 
     #[test]

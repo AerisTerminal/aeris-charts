@@ -1,4 +1,18 @@
 import { test, expect } from "@playwright/test";
+import { PNG } from "pngjs";
+
+function count_near(image, expected, tolerance = 10) {
+  let count = 0;
+  for (let offset = 0; offset < image.data.length; offset += 4) {
+    if (
+      Math.abs(image.data[offset] - expected[0]) <= tolerance
+      && Math.abs(image.data[offset + 1] - expected[1]) <= tolerance
+      && Math.abs(image.data[offset + 2] - expected[2]) <= tolerance
+      && image.data[offset + 3] > 200
+    ) count += 1;
+  }
+  return count;
+}
 
 async function open_chart(page) {
   await page.goto("/?runtimeTest=presentedFrame&backend=canvas2d&forceFallbackAdapter=1");
@@ -597,16 +611,36 @@ test("tooltip matches the official structured chrome over an engine source snaps
   await expect(page.locator(".nucleuscharts-tooltip")).toHaveCount(0);
 });
 
-test("delta tooltip uses standard gestures and Rust-owned one/two-point state", async ({ page }) => {
+test("brushable area retains committed state, preserves crosshair options, and follows live theme", async ({ page }) => {
   await open_chart(page);
   const geometry = await page.evaluate(async () => {
     const api = await import("/dist/nucleuscharts_financial.js");
     const chart = window.__chart;
     chart.apply_options({ handle_scroll: false, handle_scale: false });
-    window.__delta_ranges = [];
-    window.__delta_tooltip = api.create_delta_tooltip(chart, {
-      series: window.__main,
-      on_active_range_change: (range) => window.__delta_ranges.push(range),
+    chart.apply_options({
+      crosshair: {
+        mode: 2,
+        vertLine: { visible: true, labelVisible: false, color: "#aa2244", width: 3 },
+        horzLine: { visible: false, labelVisible: true, color: "#22aa44", width: 2 },
+      },
+    });
+    window.__delta_crosshair = structuredClone(chart.options().crosshair);
+    const brush = chart.add_series("brushable_area", {
+      price_line_visible: false,
+      last_value_visible: false,
+    });
+    brush.set_data(window.__main.data().map((bar) => ({ time: bar.time, value: bar.close })));
+    window.__delta_brush = brush;
+    window.__delta_tooltip = api.enable_brushable_area_interaction(chart, brush);
+    chart.apply_options({
+      layout: {
+        background: { color: "#102030" },
+        textColor: "#f1e2d3",
+        mutedTextColor: "#c3b2a1",
+        fontSize: 15,
+        fontFamily: "Courier New",
+      },
+      rightPriceScale: { borderColor: "#456789" },
     });
     const pane = chart.panes()[0].get_geometry();
     const bounds = chart.chart_element().getBoundingClientRect();
@@ -618,6 +652,8 @@ test("delta tooltip uses standard gestures and Rust-owned one/two-point state", 
     return {
       left: bounds.left + pane.left,
       top: bounds.top + pane.top,
+      width: pane.width,
+      height: pane.height,
       y: bounds.top + pane.top + pane.height * 0.5,
       first,
       second,
@@ -626,6 +662,9 @@ test("delta tooltip uses standard gestures and Rust-owned one/two-point state", 
       x_middle: chart.time_scale().logical_to_coordinate(middle),
     };
   });
+  expect(await page.evaluate(() => window.__chart.options().crosshair)).toEqual(
+    await page.evaluate(() => window.__delta_crosshair),
+  );
   await page.waitForFunction(() => performance.now() > 600);
   const before = await page.screenshot();
   await page.mouse.move(geometry.left + geometry.x_first, geometry.y);
@@ -642,10 +681,18 @@ test("delta tooltip uses standard gestures and Rust-owned one/two-point state", 
   });
   const comparison = await page.screenshot();
   expect(comparison.equals(hover)).toBe(false);
-  expect(await page.evaluate(({ from, to }) => window.__delta_ranges.some((range) => range?.from === from && range?.to === to), {
-    from: geometry.first + 1,
-    to: geometry.second + 1,
-  })).toBe(true);
+  const tooltip_clip = PNG.sync.read(await page.screenshot({
+    clip: {
+      x: geometry.left,
+      y: geometry.top,
+      width: geometry.width,
+      height: Math.min(100, geometry.height),
+    },
+  }));
+  expect(count_near(tooltip_clip, [16, 32, 48], 2), "themed tooltip surface").toBeGreaterThan(100);
+  expect(count_near(tooltip_clip, [241, 226, 211], 12), "themed primary text").toBeGreaterThan(5);
+  expect(count_near(tooltip_clip, [195, 178, 161], 12), "themed muted text").toBeGreaterThan(5);
+  expect(count_near(tooltip_clip, [69, 103, 137], 6), "standard themed border").toBeGreaterThan(10);
   expect(await page.evaluate(() => window.__chart.chart_element().querySelectorAll(".nucleuscharts-delta-tooltip").length)).toBe(0);
 
   await page.mouse.up();
@@ -654,6 +701,27 @@ test("delta tooltip uses standard gestures and Rust-owned one/two-point state", 
     to: geometry.second + 1,
   });
   await page.mouse.move(geometry.left + geometry.x_middle, geometry.y);
-  await expect.poll(() => page.evaluate(() => window.__delta_tooltip.active_range())).toBe(null);
-  await page.evaluate(() => window.__delta_tooltip.detach());
+  await expect.poll(() => page.evaluate(() => window.__delta_tooltip.active_range())).toMatchObject({
+    from: geometry.first + 1,
+    to: geometry.second + 1,
+  });
+  expect(await page.evaluate(() => window.__delta_brush.options().brush_ranges)).toHaveLength(1);
+
+  await page.evaluate(() => window.__delta_tooltip.clear());
+  expect(await page.evaluate(() => window.__delta_tooltip.active_range())).toBe(null);
+  expect(await page.evaluate(() => window.__delta_brush.options().brush_ranges)).toEqual([]);
+
+  await page.mouse.move(geometry.left + geometry.x_first, geometry.y);
+  await page.mouse.down();
+  await page.mouse.move(geometry.left + geometry.x_second, geometry.y, { steps: 4 });
+  await page.mouse.up();
+  expect(await page.evaluate(() => window.__delta_brush.options().brush_ranges)).toHaveLength(1);
+  await page.evaluate(() => {
+    window.__delta_tooltip.detach();
+    window.__delta_tooltip.detach();
+  });
+  expect(await page.evaluate(() => window.__delta_brush.options().brush_ranges)).toEqual([]);
+  expect(await page.evaluate(() => window.__chart.options().crosshair)).toEqual(
+    await page.evaluate(() => window.__delta_crosshair),
+  );
 });

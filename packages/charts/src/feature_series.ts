@@ -16,6 +16,12 @@ export interface brushable_area_interaction_options {
   negative_style?: Partial<feature_brush_style>;
 }
 
+export interface brushable_area_interaction_handle {
+  active_range(): import("./primitive_features.js").delta_tooltip_active_range | null;
+  clear(): void;
+  detach(): void;
+}
+
 /**
  * Compose the official delta-tooltip gesture with a Rust-native `brushable_area` series. Pointer
  * lookup, chronological delta direction, touch state, and tooltip geometry stay in the engine;
@@ -25,7 +31,7 @@ export function enable_brushable_area_interaction(
   chart: chart_api,
   series: series_api,
   options: brushable_area_interaction_options = {},
-): { detach(): void } {
+): brushable_area_interaction_handle {
   if (series.series_type() !== "brushable_area") {
     throw new Error("enable_brushable_area_interaction requires a brushable_area series");
   }
@@ -80,8 +86,17 @@ export function enable_brushable_area_interaction(
       } satisfies Partial<feature_series_options>);
     },
   });
+  let detached = false;
   return {
+    active_range: tooltip.active_range,
+    clear() {
+      if (detached) return;
+      tooltip.clear();
+    },
     detach() {
+      if (detached) return;
+      detached = true;
+      tooltip.clear();
       tooltip.detach();
       chart.apply_options({ handle_scroll: previous_scroll, handle_scale: previous_scale });
     },

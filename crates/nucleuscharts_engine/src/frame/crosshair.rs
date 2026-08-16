@@ -225,6 +225,55 @@ impl ChartEngine {
         (pane_scale(&self.panes[pane_index], target), base_value)
     }
 
+    /// Resolve the OHLC candidate nearest `(x_css, y_css)` in pixel space. Drawings and the
+    /// crosshair share this path so they choose the same bar, visible series, and OHLC field.
+    pub(crate) fn ohlc_magnet_snap_coordinate(
+        &self,
+        pane_index: usize,
+        x_css: f64,
+        y_css: f64,
+        keys: &[PlotValueIndex],
+    ) -> Option<(i64, f64)> {
+        if !(0.0..=self.pane_w).contains(&x_css) || !y_css.is_finite() {
+            return None;
+        }
+        let (from, _) = self.visible_range_for_frame()?;
+        let index = self.snapped_crosshair_index(x_css);
+        let pane = self.panes.get(pane_index)?;
+        let mut candidates = Vec::new();
+        for series in &self.series {
+            if !series.visible
+                || series.removed
+                || series.overlay
+                || series.pane_index != pane_index
+            {
+                continue;
+            }
+            let scale = pane_scale(pane, series_scale_target(series));
+            if scale.is_empty() {
+                continue;
+            }
+            let plot = self.data.plot(series.id);
+            let Some(row) = plot.search(index, MismatchDirection::None) else {
+                continue;
+            };
+            if plot.is_whitespace_row(row) {
+                continue;
+            }
+            let Some(base_value) = self.series_base_value(series.id, from) else {
+                continue;
+            };
+            candidates.extend(keys.iter().filter_map(|&key| {
+                let value = plot.value_at(row, key);
+                value
+                    .is_finite()
+                    .then(|| scale.price_to_coordinate(value, base_value))
+                    .filter(|coordinate| coordinate.is_finite())
+            }));
+        }
+        magnet_snap_coordinate(y_css, &candidates).map(|coordinate| (index, coordinate))
+    }
+
     /// Port of reference `Magnet.align` (model/magnet.ts:30-86): in Magnet modes the horizontal line
     /// snaps to the OHLC candidate — gathered from every visible, non-overlay series on the pane
     /// with a bar exactly at the snapped index — nearest the cursor in *pixel* space (each
@@ -239,7 +288,6 @@ impl ChartEngine {
         from: i64,
         _to: i64,
     ) -> (f64, f64) {
-        let index = self.snapped_crosshair_index(x_css);
         let (default_scale, default_base) = self.pane_default_scale(pane_index, from);
         let price = default_scale.coordinate_to_price(y_css, default_base);
         // The snapped price source: the configured magnet mode, or the Ctrl-held OHLC magnet
@@ -266,34 +314,8 @@ impl ChartEngine {
         let Some(keys) = keys else {
             return (price, y_css);
         };
-        let mut candidates = Vec::new();
-        for s in &self.series {
-            if !s.visible || s.overlay || s.pane_index != pane_index {
-                continue;
-            }
-            let scale = pane_scale(&self.panes[pane_index], series_scale_target(s));
-            if scale.is_empty() {
-                continue;
-            }
-            let plot = self.data.plot(s.id);
-            let Some(row) = plot.search(index, MismatchDirection::None) else {
-                continue;
-            };
-            // A whitespace row at the snapped index is no bar (the reference's plot list omits
-            // whitespace, so its magnet sees no candidate there).
-            if plot.is_whitespace_row(row) {
-                continue;
-            }
-            let Some(base_value) = self.series_base_value(s.id, from) else {
-                continue;
-            };
-            candidates.extend(
-                keys.iter()
-                    .map(|&key| scale.price_to_coordinate(plot.value_at(row, key), base_value)),
-            );
-        }
-        match magnet_snap_coordinate(y_css, &candidates) {
-            Some(nearest) => (
+        match self.ohlc_magnet_snap_coordinate(pane_index, x_css, y_css, keys) {
+            Some((_, nearest)) => (
                 default_scale.coordinate_to_price(nearest, default_base),
                 nearest,
             ),

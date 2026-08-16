@@ -942,6 +942,12 @@ class series_impl implements series_api {
     this.assert_live();
     return this.chart.wasm.native_delta_tooltip_active_range_json(primitive_id);
   }
+  native_clear_delta_tooltip(primitive_id: number): boolean {
+    this.assert_live();
+    const changed = this.chart.wasm.clear_native_delta_tooltip(primitive_id);
+    if (changed) this.chart.repaint();
+    return changed;
+  }
   native_add_user_price_alert(primitive_id: number, price: number): number {
     this.assert_live();
     const id = this.chart.wasm.add_native_user_price_alert(primitive_id, price);
@@ -1102,6 +1108,7 @@ export interface native_user_price_alerts_handle extends native_primitive_handle
 
 export interface native_delta_tooltip_handle extends native_primitive_handle {
   active_range_json(): string;
+  clear(): boolean;
 }
 
 export interface native_tooltip_handle extends native_primitive_handle {
@@ -1257,6 +1264,9 @@ export function attach_native_delta_tooltip(
   return {
     active_range_json() {
       return owner.native_delta_tooltip_active_range_json(id);
+    },
+    clear() {
+      return owner.native_clear_delta_tooltip(id);
     },
     detach: base.detach,
   };
@@ -2450,7 +2460,7 @@ export class chart_impl implements chart_api {
   }
 
   native_delta_tooltip_mouse_up(): void {
-    this.wasm.native_delta_tooltip_mouse_up();
+    if (this.wasm.native_delta_tooltip_mouse_up()) this.notify_delta_tooltip_ranges();
   }
 
   native_delta_tooltip_touch_move(xs: Float64Array): boolean {

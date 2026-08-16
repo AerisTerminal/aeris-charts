@@ -1476,6 +1476,12 @@ impl NucleusChart {
             .borrow()
             .native_delta_tooltip_active_range_json(primitive_id)
     }
+    pub fn clear_native_delta_tooltip(&mut self, primitive_id: u32) -> bool {
+        self.inner
+            .borrow_mut()
+            .engine
+            .clear_delta_tooltip(primitive_id)
+    }
 
     /// Forward normalized host mouse samples to every engine-owned delta tooltip.
     pub fn native_delta_tooltip_mouse_down(&mut self, x: f64) -> bool {

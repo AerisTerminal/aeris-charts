@@ -1269,16 +1269,15 @@ fn ohlc_chart() -> ChartEngine {
 fn magnet_snaps_placement_to_nearest_bar_and_ohlc() {
     let mut chart = ohlc_chart();
     assert!(chart.drawing_create_begin(DrawingKind::TrendLine, None));
-    // Click BETWEEN bars 2 and 3, closest to bar 3's high (12): bar 3 is {o 11, h 12, l 10, c 11};
-    // the raw click is nearer to bar 3's x and to 12 than to any other of its prices... bar 2's
-    // values are {12, 13, 11, 11} — equidistant x here, but the round() goes to 3 (x.5 rounds up).
+    // Click BETWEEN bars 2 and 3. The shared crosshair cell rule keeps the exact boundary on bar 2;
+    // its values are {o 12, h 13, l 11, c 11}, and the cursor is nearest its open at 12.
     let x = (x_at(&chart, 2.0) + x_at(&chart, 3.0)) / 2.0;
     let y = y_at(&chart, 12.0) - 1.0; // just above 12 (closer to 12 than to 11 or 13)
     assert_eq!(chart.drawing_create_click(x, y, MAGNET), -1);
     let pending = chart.pending_drawing().unwrap();
     assert_eq!(pending.drawing.points.len(), 1);
     let point = pending.drawing.points[0];
-    assert_eq!(point.logical, 3.0, "x snaps to the bar center");
+    assert_eq!(point.logical, 2.0, "x uses the crosshair's bar-cell rule");
     assert_eq!(
         point.price, 12.0,
         "price snaps to the nearest of the bar's OHLC"
@@ -1303,6 +1302,79 @@ fn magnet_off_the_data_keeps_the_raw_point() {
     assert!(id > 0);
     let point = chart.drawing(id as DrawingId).unwrap().points[0];
     assert!((point.price - 10.75).abs() < 1e-6);
+}
+
+#[test]
+fn horizontal_line_magnet_uses_the_live_pointer_bar_during_creation_and_editing() {
+    let mut chart = ohlc_chart();
+    let x7 = x_at(&chart, 7.0);
+    let y14 = y_at(&chart, 14.0);
+
+    assert!(chart.drawing_create_begin(DrawingKind::HorizontalLine, None));
+    chart.drawing_create_move(x7, y14 + 0.5, MAGNET);
+    let preview = chart.pending_drawing().unwrap().preview.unwrap();
+    assert_eq!(preview.logical, 7.0);
+    assert_eq!(preview.price, 14.0);
+    let id = chart.drawing_create_click(x7, y14 + 0.5, MAGNET) as DrawingId;
+    assert_ne!(id, 0);
+    assert_eq!(chart.drawing(id).unwrap().points[0].price, 14.0);
+
+    // The line spans the pane, but the pointer X still chooses the candle used by the magnet.
+    let x2 = x_at(&chart, 2.0);
+    let y13 = y_at(&chart, 13.0);
+    chart.set_selected_drawing(Some(id));
+    assert!(chart.drawing_drag_start_at(x2, y14));
+    chart.drawing_drag_to(x2, y13 + 0.5, MAGNET);
+    chart.drawing_drag_end();
+    let point = chart.drawing(id).unwrap().points[0];
+    assert_eq!(
+        point.price, 13.0,
+        "body drag must snap against the bar under the pointer, not the stored anchor X"
+    );
+    assert_eq!(
+        point.logical, 7.0,
+        "the full-width line's stored X is semantic-free"
+    );
+
+    // Dragging the selection handle across bars has the same pointer-X semantics.
+    assert!(chart.drawing_drag_start_at(x7, y13));
+    chart.drawing_drag_to(x_at(&chart, 4.0), y_at(&chart, 9.0) - 0.5, MAGNET);
+    chart.drawing_drag_end();
+    let point = chart.drawing(id).unwrap().points[0];
+    assert_eq!(
+        point.price, 9.0,
+        "anchor drag must resolve the live pointer bar before freezing the unused logical value"
+    );
+    assert_eq!(
+        point.logical, 7.0,
+        "anchor edits must preserve the unused stored X"
+    );
+
+    // Horizontal rays use the same live-pointer resolver, but retain their meaningful start X.
+    assert!(chart.drawing_create_begin(DrawingKind::HorizontalRay, None));
+    chart.drawing_create_move(x2, y13 + 0.5, MAGNET);
+    let preview = chart.pending_drawing().unwrap().preview.unwrap();
+    assert_eq!(
+        preview,
+        DrawingPoint {
+            logical: 2.0,
+            price: 13.0
+        }
+    );
+    let ray = chart.drawing_create_click(x2, y13 + 0.5, MAGNET) as DrawingId;
+    assert_eq!(
+        chart.drawing(ray).unwrap().points[0],
+        DrawingPoint {
+            logical: 2.0,
+            price: 13.0
+        }
+    );
+
+    // Without Ctrl, Horizontal Line placement keeps the raw pointer price.
+    assert!(chart.drawing_create_begin(DrawingKind::HorizontalLine, None));
+    let raw_y = y_at(&chart, 12.4);
+    let raw = chart.drawing_create_click(x2, raw_y, NONE) as DrawingId;
+    assert!((chart.drawing(raw).unwrap().points[0].price - 12.4).abs() < 1e-6);
 }
 
 #[test]
@@ -1467,6 +1539,17 @@ fn ctrl_magnet_snaps_the_crosshair_to_ohlc() {
     assert_eq!(
         crosshair_hline_y(&mut chart),
         Some(y_at(&chart, 12.0).round() as i32)
+    );
+    let crosshair_y = crosshair_hline_y(&mut chart).unwrap();
+    assert!(chart.drawing_create_begin(DrawingKind::HorizontalLine, None));
+    let drawing_id = chart.drawing_create_click(x, y_free, MAGNET) as DrawingId;
+    let (_, drawing_y) = chart
+        .drawing_to_px(0, chart.drawing(drawing_id).unwrap().points[0])
+        .unwrap();
+    assert_eq!(
+        drawing_y.round() as i32,
+        crosshair_y,
+        "crosshair and drawing magnets must resolve the same pixel-space OHLC candidate"
     );
     // Released: raw again (the configured mode is untouched).
     chart.crosshair_ohlc_magnet = false;

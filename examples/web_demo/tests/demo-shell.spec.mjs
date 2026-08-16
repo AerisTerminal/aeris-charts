@@ -189,6 +189,7 @@ test("brushable area writes a logical range whose color follows chronological de
       return feature.options().brush_ranges[0]?.style.line_color ?? null;
     })).toBe(color);
     await page.mouse.up();
+    await page.mouse.move((from.x + to.x) * 0.5, from.y + 12);
     return page.evaluate(() => {
       const feature = window.__chart.series_order().find((item) => item.series_type() === "brushable_area");
       const brush = feature.options().brush_ranges[0];
