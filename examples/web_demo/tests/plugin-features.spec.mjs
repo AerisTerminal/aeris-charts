@@ -14,6 +14,27 @@ function count_near(image, expected, tolerance = 10) {
   return count;
 }
 
+function count_near_point(image, point, viewport, expected, tolerance = 10, radius = 7) {
+  const scale_x = image.width / viewport.width;
+  const scale_y = image.height / viewport.height;
+  const center_x = Math.round(point.x * scale_x);
+  const center_y = Math.round(point.y * scale_y);
+  const pixel_radius = Math.ceil(radius * Math.max(scale_x, scale_y));
+  let count = 0;
+  for (let y = Math.max(0, center_y - pixel_radius); y <= Math.min(image.height - 1, center_y + pixel_radius); y += 1) {
+    for (let x = Math.max(0, center_x - pixel_radius); x <= Math.min(image.width - 1, center_x + pixel_radius); x += 1) {
+      const offset = (y * image.width + x) * 4;
+      if (
+        Math.abs(image.data[offset] - expected[0]) <= tolerance
+        && Math.abs(image.data[offset + 1] - expected[1]) <= tolerance
+        && Math.abs(image.data[offset + 2] - expected[2]) <= tolerance
+        && image.data[offset + 3] > 200
+      ) count += 1;
+    }
+  }
+  return count;
+}
+
 async function open_chart(page) {
   await page.goto("/?runtimeTest=presentedFrame&backend=canvas2d&forceFallbackAdapter=1");
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
@@ -724,4 +745,93 @@ test("brushable area retains committed state, preserves crosshair options, and f
   expect(await page.evaluate(() => window.__chart.options().crosshair)).toEqual(
     await page.evaluate(() => window.__delta_crosshair),
   );
+});
+
+test("brushable area guides reproject through keyboard pan and resize, then double click clears", async ({ page }) => {
+  await open_chart(page);
+  const selection = await page.evaluate(async () => {
+    const api = await import("/dist/nucleuscharts_financial.js");
+    const chart = window.__chart;
+    const brush = chart.add_series("brushable_area", {
+      price_line_visible: false,
+      last_value_visible: false,
+    });
+    brush.set_data(window.__main.data().map((bar) => ({ time: bar.time, value: bar.close })));
+    window.__reproject_brush = brush;
+    window.__reproject_interaction = api.enable_brushable_area_interaction(chart, brush);
+    const pane = chart.panes()[0].get_geometry();
+    const bounds = chart.chart_element().getBoundingClientRect();
+    const range = chart.time_scale().get_visible_logical_range();
+    const span = range.to - range.from;
+    const from = Math.ceil(range.from + span * 0.3);
+    const to = Math.floor(range.from + span * 0.7);
+    return {
+      from,
+      to,
+      start: {
+        x: bounds.left + pane.left + chart.time_scale().logical_to_coordinate(from),
+        y: bounds.top + pane.top + pane.height * 0.5,
+      },
+      end: {
+        x: bounds.left + pane.left + chart.time_scale().logical_to_coordinate(to),
+        y: bounds.top + pane.top + pane.height * 0.5,
+      },
+    };
+  });
+
+  await page.mouse.move(selection.start.x, selection.start.y);
+  await page.mouse.down();
+  await page.mouse.move(selection.end.x, selection.end.y, { steps: 4 });
+  await page.mouse.up();
+  const committed = await page.evaluate(() => window.__reproject_interaction.active_range());
+  expect(committed).toMatchObject({ from: selection.from + 1, to: selection.to + 1 });
+
+  const probes = () => page.evaluate(() => {
+    const chart = window.__chart;
+    const brush = window.__reproject_brush;
+    const active = window.__reproject_interaction.active_range();
+    const pane = chart.panes()[0].get_geometry();
+    const bounds = chart.chart_element().getBoundingClientRect();
+    return [active.from - 1, active.to - 1].map((logical) => {
+      const point = brush.data()[logical];
+      return {
+        x: bounds.left + pane.left + chart.time_scale().logical_to_coordinate(logical),
+        y: bounds.top + pane.top + brush.price_to_coordinate(point.value),
+      };
+    });
+  });
+  const expect_handles = async (points, viewport) => {
+    const image = PNG.sync.read(await page.screenshot());
+    for (const point of points) {
+      expect(count_near_point(image, point, viewport, [136, 136, 136], 12), "guide handle at semantic boundary")
+        .toBeGreaterThan(12);
+    }
+  };
+
+  const initial_probes = await probes();
+  await expect_handles(initial_probes, { width: 1280, height: 720 });
+
+  await page.keyboard.press("Control+ArrowLeft");
+  await page.waitForTimeout(220);
+  expect(await page.evaluate(() => window.__reproject_interaction.active_range())).toEqual(committed);
+  const panned_probes = await probes();
+  expect(panned_probes.map((point) => point.x)).not.toEqual(initial_probes.map((point) => point.x));
+  await expect_handles(panned_probes, { width: 1280, height: 720 });
+
+  await page.setViewportSize({ width: 1500, height: 840 });
+  await page.waitForFunction(() => window.__chart.chart_element().getBoundingClientRect().width > 1400);
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  expect(await page.evaluate(() => window.__reproject_interaction.active_range())).toEqual(committed);
+  const resized_probes = await probes();
+  await expect_handles(resized_probes, { width: 1500, height: 840 });
+
+  const pane_center = await page.evaluate(() => {
+    const chart = window.__chart;
+    const pane = chart.panes()[0].get_geometry();
+    const bounds = chart.chart_element().getBoundingClientRect();
+    return { x: bounds.left + pane.left + pane.width * 0.5, y: bounds.top + pane.top + pane.height * 0.5 };
+  });
+  await page.mouse.dblclick(pane_center.x, pane_center.y);
+  await expect.poll(() => page.evaluate(() => window.__reproject_interaction.active_range())).toBe(null);
+  expect(await page.evaluate(() => window.__reproject_brush.options().brush_ranges)).toEqual([]);
 });

@@ -87,15 +87,19 @@ export function enable_brushable_area_interaction(
     },
   });
   let detached = false;
+  const clear = (): void => {
+    if (detached) return;
+    tooltip.clear();
+  };
+  const on_dbl_click = (): void => clear();
+  chart.subscribe_dbl_click(on_dbl_click);
   return {
     active_range: tooltip.active_range,
-    clear() {
-      if (detached) return;
-      tooltip.clear();
-    },
+    clear,
     detach() {
       if (detached) return;
       detached = true;
+      chart.unsubscribe_dbl_click(on_dbl_click);
       tooltip.clear();
       tooltip.detach();
       chart.apply_options({ handle_scroll: previous_scroll, handle_scale: previous_scale });

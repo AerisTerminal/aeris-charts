@@ -85,7 +85,6 @@ impl Default for DeltaTooltipOptions {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DeltaTooltipPoint {
-    pub x: f64,
     pub index: i64,
 }
 
@@ -1019,7 +1018,7 @@ impl ChartEngine {
                     nucleuscharts_core::model::plot_list::MismatchDirection::None,
                 )
                 .filter(|row| !plot.is_whitespace_row(*row))
-                .map(|_| DeltaTooltipPoint { x: *x, index })
+                .map(|_| DeltaTooltipPoint { index })
             })
             .collect();
         let Some(state) = self.series.iter_mut().find_map(|series| {
@@ -1335,7 +1334,7 @@ impl ChartEngine {
             nucleuscharts_core::model::plot_list::MismatchDirection::None,
         )
         .filter(|row| !plot.is_whitespace_row(*row))
-        .map(|_| DeltaTooltipPoint { x, index })
+        .map(|_| DeltaTooltipPoint { index })
     }
 
     fn clear_delta_tooltip_previews(&mut self, end_mouse: bool) -> bool {
@@ -2543,6 +2542,53 @@ mod tests {
         assert!(chart.build_frame().panes[0].main.iter().all(|primitive| {
             !matches!(primitive, Prim::VLine { color, .. } if *color == options.line_color)
         }));
+    }
+
+    #[test]
+    fn delta_tooltip_guides_reproject_with_the_time_scale() {
+        let mut chart = chart();
+        let options = DeltaTooltipOptions::default();
+        let primitive = chart.add_delta_tooltip(0, options).unwrap();
+        let first_index = 2;
+        let second_index = 7;
+        let spacing = chart.time_scale.bar_spacing();
+        let first_pointer = chart.time_scale.index_to_coordinate(first_index) + spacing * 0.3;
+        let second_pointer = chart.time_scale.index_to_coordinate(second_index) - spacing * 0.3;
+
+        assert!(chart.delta_tooltip_mouse_down(first_pointer));
+        assert!(chart.delta_tooltip_mouse_move(second_pointer));
+        assert!(chart.delta_tooltip_mouse_up());
+
+        let guide_xs = |chart: &mut ChartEngine| {
+            let mut xs = chart.build_frame().panes[0]
+                .main
+                .iter()
+                .filter_map(|primitive| match primitive {
+                    Prim::VLine { x, color, .. } if *color == options.line_color => Some(*x),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            xs.sort_unstable();
+            xs
+        };
+        let expected_xs = |chart: &ChartEngine| {
+            let mut xs = [
+                chart.time_scale.index_to_coordinate(first_index).round() as i32,
+                chart.time_scale.index_to_coordinate(second_index).round() as i32,
+            ];
+            xs.sort_unstable();
+            xs
+        };
+
+        assert_eq!(guide_xs(&mut chart), expected_xs(&chart));
+
+        chart.scroll_to_position(chart.scroll_position() - 2.0);
+        assert_eq!(guide_xs(&mut chart), expected_xs(&chart));
+
+        chart.css_width = 1_200.0;
+        chart.recompute_layout_with_measure(true, |_| 0.0);
+        assert_eq!(guide_xs(&mut chart), expected_xs(&chart));
+        assert!(chart.delta_tooltip_active_range(primitive).is_some());
     }
 
     #[test]

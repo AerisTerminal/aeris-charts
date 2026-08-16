@@ -279,7 +279,12 @@ impl ChartEngine {
                     let Some(time) = times.get(row).copied() else {
                         continue;
                     };
-                    items.push((point.x, point.index, price, time));
+                    items.push((
+                        self.time_scale.index_to_coordinate(point.index),
+                        point.index,
+                        price,
+                        time,
+                    ));
                 }
                 if items.is_empty() {
                     continue;
