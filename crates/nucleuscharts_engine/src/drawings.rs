@@ -749,10 +749,6 @@ pub(crate) fn rdp_simplify(points: &[(f64, f64)], epsilon: f64) -> Vec<(f64, f64
         .collect()
 }
 
-/// reference default `hitTestTolerance` shared with the series hit tests (hit_test.rs).
-const HIT_TOLERANCE: f64 = 3.0;
-/// Anchor-handle hit radius in media px (the drawn handle spans radius 4 + 1.5 border).
-const ANCHOR_HIT_RADIUS: f64 = 6.5;
 /// Padding between a tool's reference box and its text label, in CSS px.
 pub(crate) const TEXT_PAD: f64 = 4.0;
 
@@ -1410,10 +1406,10 @@ impl ChartEngine {
             ),
             _ => (pane.top, pane.top + pane.height),
         };
-        let mut extra_x = drawing.width / 2.0 + HIT_TOLERANCE;
+        let mut extra_x = drawing.width / 2.0 + HitProfile::TOUCH.drawing_stroke_tolerance;
         let mut extra_y = extra_x;
-        extra_x = extra_x.max(ANCHOR_HIT_RADIUS);
-        extra_y = extra_y.max(ANCHOR_HIT_RADIUS);
+        extra_x = extra_x.max(HitProfile::TOUCH.drawing_anchor_radius);
+        extra_y = extra_y.max(HitProfile::TOUCH.drawing_anchor_radius);
         if let Some((width, size)) = text_metrics {
             extra_x = extra_x.max(width + TEXT_PAD * 2.0);
             extra_y = extra_y.max(size * 1.2 + TEXT_PAD * 2.0);
@@ -1438,7 +1434,7 @@ impl ChartEngine {
         base: f64,
         text_metrics: Option<(f64, f64)>,
     ) -> bool {
-        let mut extra_x = drawing.width / 2.0 + ANCHOR_HIT_RADIUS;
+        let mut extra_x = drawing.width / 2.0 + HitProfile::TOUCH.drawing_anchor_radius;
         let mut extra_y = extra_x;
         if let Some((width, size)) = text_metrics {
             extra_x = extra_x.max(width + TEXT_PAD * 2.0);
@@ -2077,16 +2073,31 @@ impl ChartEngine {
     /// bodies hit topmost-first in z-order within the pane under the cursor (hit_test.rs
     /// restricts hits to the hovered pane the same way).
     pub fn hit_test_drawing(&self, x: f64, y: f64) -> Option<DrawingHit> {
-        self.hit_test_drawing_impl(x, y, true)
+        self.hit_test_drawing_with_profile(x, y, HitProfile::PRECISION)
+    }
+
+    pub fn hit_test_drawing_with_profile(
+        &self,
+        x: f64,
+        y: f64,
+        profile: HitProfile,
+    ) -> Option<DrawingHit> {
+        self.hit_test_drawing_impl(x, y, true, profile)
     }
 
     /// Brute-force reference used by deterministic and randomized parity tests.
     #[doc(hidden)]
     pub fn hit_test_drawing_bruteforce(&self, x: f64, y: f64) -> Option<DrawingHit> {
-        self.hit_test_drawing_impl(x, y, false)
+        self.hit_test_drawing_impl(x, y, false, HitProfile::PRECISION)
     }
 
-    fn hit_test_drawing_impl(&self, x: f64, y: f64, indexed: bool) -> Option<DrawingHit> {
+    fn hit_test_drawing_impl(
+        &self,
+        x: f64,
+        y: f64,
+        indexed: bool,
+        profile: HitProfile,
+    ) -> Option<DrawingHit> {
         if !x.is_finite() || !y.is_finite() || x < 0.0 || x > self.pane_w {
             return None;
         }
@@ -2105,7 +2116,7 @@ impl ChartEngine {
                                 drawing.price_scale,
                                 drawing.points[index],
                             ) {
-                                if (x - ax).hypot(y - ay) <= ANCHOR_HIT_RADIUS {
+                                if (x - ax).hypot(y - ay) <= profile.drawing_anchor_radius {
                                     return Some(DrawingHit {
                                         id: selected,
                                         part: DrawingDragPart::Anchor(index),
@@ -2118,7 +2129,7 @@ impl ChartEngine {
                         if drawing.kind == DrawingKind::Rectangle && px.len() == 2 {
                             let anchors = Self::rectangle_anchors(&px);
                             for (index, &(ax, ay)) in anchors.iter().enumerate() {
-                                if (x - ax).hypot(y - ay) <= ANCHOR_HIT_RADIUS {
+                                if (x - ax).hypot(y - ay) <= profile.drawing_anchor_radius {
                                     return Some(DrawingHit {
                                         id: selected,
                                         part: DrawingDragPart::Anchor(index),
@@ -2128,7 +2139,7 @@ impl ChartEngine {
                             }
                         } else {
                             for (index, &(ax, ay)) in px.iter().enumerate() {
-                                if (x - ax).hypot(y - ay) <= ANCHOR_HIT_RADIUS {
+                                if (x - ax).hypot(y - ay) <= profile.drawing_anchor_radius {
                                     return Some(DrawingHit {
                                         id: selected,
                                         part: DrawingDragPart::Anchor(index),
@@ -2149,7 +2160,7 @@ impl ChartEngine {
                 let Some(px) = self.drawing_px(drawing) else {
                     continue;
                 };
-                if self.drawing_body_hit(drawing, &px, x, y) {
+                if self.drawing_body_hit(drawing, &px, x, y, profile) {
                     return Some(DrawingHit {
                         id: drawing.id,
                         part: DrawingDragPart::Body,
@@ -2177,7 +2188,7 @@ impl ChartEngine {
                 let Some(px) = self.drawing_px_cached(drawing, &mut runtime, key) else {
                     continue;
                 };
-                let body_hit = self.drawing_body_hit(drawing, px, x, y);
+                let body_hit = self.drawing_body_hit(drawing, px, x, y, profile);
                 runtime.record_precise_hit();
                 if body_hit {
                     hit = Some(DrawingHit {
@@ -2194,8 +2205,16 @@ impl ChartEngine {
     }
 
     /// The per-kind body test at media px `(x, y)` against the converted anchors `px`.
-    fn drawing_body_hit(&self, drawing: &Drawing, px: &[(f64, f64)], x: f64, y: f64) -> bool {
-        let tolerance = drawing.width / 2.0 + HIT_TOLERANCE;
+    fn drawing_body_hit(
+        &self,
+        drawing: &Drawing,
+        px: &[(f64, f64)],
+        x: f64,
+        y: f64,
+        profile: HitProfile,
+    ) -> bool {
+        let hit_tolerance = profile.drawing_stroke_tolerance;
+        let tolerance = drawing.width / 2.0 + hit_tolerance;
         match drawing.kind {
             DrawingKind::TrendLine => {
                 let (a, b) = (px[0], px[1]);
@@ -2203,7 +2222,7 @@ impl ChartEngine {
             }
             DrawingKind::HorizontalLine => (y - px[0].1).abs() <= tolerance,
             DrawingKind::HorizontalRay => {
-                (y - px[0].1).abs() <= tolerance && x >= px[0].0 - HIT_TOLERANCE
+                (y - px[0].1).abs() <= tolerance && x >= px[0].0 - hit_tolerance
             }
             DrawingKind::VerticalLine => (x - px[0].0).abs() <= tolerance,
             DrawingKind::Rectangle => {
@@ -2237,7 +2256,7 @@ impl ChartEngine {
                     drawing.width,
                     None,
                     self.time_scale.bar_spacing(),
-                    HIT_TOLERANCE,
+                    hit_tolerance,
                 )
                 .is_some()
             }
@@ -2270,8 +2289,17 @@ impl ChartEngine {
     /// re-anchor). A successful grab also selects the drawing (TradingView parity). Returns
     /// false on a miss — the host falls through to its pan/scroll handling.
     pub fn drawing_drag_start_at(&mut self, x: f64, y: f64) -> bool {
+        self.drawing_drag_start_at_with_profile(x, y, HitProfile::PRECISION)
+    }
+
+    pub fn drawing_drag_start_at_with_profile(
+        &mut self,
+        x: f64,
+        y: f64,
+        profile: HitProfile,
+    ) -> bool {
         self.invalidate_frame_overlay();
-        let Some(hit) = self.hit_test_drawing(x, y) else {
+        let Some(hit) = self.hit_test_drawing_with_profile(x, y, profile) else {
             return false;
         };
         let Some(drawing) = self.drawing(hit.id) else {
@@ -2526,8 +2554,63 @@ impl ChartEngine {
         }
     }
 
+    /// Abort an interrupted host drag and restore its exact semantic start snapshot. Capture loss,
+    /// window blur, visibility loss, and pointer cancellation must never commit a partial edit.
+    pub fn drawing_drag_cancel(&mut self) {
+        self.invalidate_frame_overlay();
+        let Some(drag) = self.drawing_drag.take() else {
+            return;
+        };
+        if let Some(drawing) = self
+            .drawings
+            .iter_mut()
+            .find(|drawing| drawing.id == drag.id)
+        {
+            drawing.points = drag.start_points;
+            self.update_drawing_runtime(drag.id);
+            self.invalidate_frame_drawings();
+        }
+    }
+
     pub fn drawing_drag_active(&self) -> bool {
         self.drawing_drag.is_some()
+    }
+
+    /// Keyboard-equivalent movement through the same drag/history path as pointer input.
+    /// `anchor` selects one defining anchor; `None` moves the whole drawing.
+    pub fn nudge_selected_drawing(
+        &mut self,
+        dx_css: f64,
+        dy_css: f64,
+        anchor: Option<usize>,
+    ) -> bool {
+        if !dx_css.is_finite() || !dy_css.is_finite() || (dx_css == 0.0 && dy_css == 0.0) {
+            return false;
+        }
+        let Some(id) = self.selected_drawing else {
+            return false;
+        };
+        let Some(drawing) = self.drawing(id) else {
+            return false;
+        };
+        if anchor.is_some_and(|index| index >= drawing.points.len()) {
+            return false;
+        }
+        let start_points = drawing.points.clone();
+        let Some(start_px) = self.drawing_px(drawing) else {
+            return false;
+        };
+        self.drawing_drag = Some(DrawingDrag {
+            id,
+            part: anchor.map_or(DrawingDragPart::Body, DrawingDragPart::Anchor),
+            start_x: 0.0,
+            start_y: 0.0,
+            start_points,
+            start_px,
+        });
+        self.drawing_drag_to(dx_css, dy_css, DrawingModifiers::default());
+        self.drawing_drag_end();
+        true
     }
 
     // --- interactive creation (click-place anchors, move previews) ---

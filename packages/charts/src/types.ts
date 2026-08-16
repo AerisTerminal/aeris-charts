@@ -6,6 +6,7 @@
 import type { pane_primitive, pane_primitive_handle, series_primitive, series_primitive_handle } from "./primitives.js";
 import type { canvas_primitive, canvas_primitive_handle } from "./canvas_plugins.js";
 import type { custom_series_pane_view } from "./custom_series.js";
+import type { accessibility_handle, accessibility_options } from "./accessibility.js";
 
 // ---------------------------------------------------------------------------------------------
 // Data & option types
@@ -661,6 +662,10 @@ export interface chart_options {
   handle_scale: boolean | handle_scale_options;
   /** Momentum scroll after a pan flick (reference `kineticScroll`). Default touch-only. Package-level. */
   kinetic_scroll: boolean | kinetic_scroll_options;
+  /** Wheel/trackpad policy. `auto` pans continuous pixel deltas and zooms discrete wheels/pinches. */
+  wheel_behavior: "auto" | "pan" | "zoom";
+  /** Chart-owned keyboard and assistive-technology surface. Enabled by default. */
+  accessibility: boolean | accessibility_options;
   /** Touch crosshair tracking-mode behavior (reference `trackingMode`). Package-level. */
   tracking_mode: tracking_mode_options;
   /** Backend override for capability testing; defaults to automatic WebGPU → Canvas2D fallback. */
@@ -1656,6 +1661,8 @@ export interface chart_api {
   frame_stats(): frame_stats;
   /** The chart-local first-party trading domain. Broker state remains host-authoritative. */
   trading(): trading_api;
+  /** The singleton accessibility controller installed for this chart. */
+  accessibility(): accessibility_handle;
   add_series(kind: series_kind, options?: Partial<any_series_options>): series_api;
   /**
    * Add a custom series (plugin platform Phase C-c; reference `IChartApi.addCustomSeries`): a

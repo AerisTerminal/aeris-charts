@@ -11,11 +11,6 @@ async function wait_grid(page) {
   await page.evaluate(() => new Promise((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(resolve));
   }));
-  // The recognizer ignores mouse events for 500 ms after the last touch (reference
-  // Delay.PreventFiresTouchEvents); with no touch on record that window covers page birth, and
-  // CDP-injected events carry no `sourceCapabilities` to bypass it. Out-age the window so the
-  // first hover/drag is always accepted.
-  await page.waitForTimeout(600);
 }
 
 const state = (page) =>
@@ -108,6 +103,7 @@ test("interaction models run engine-side with reference behavior", async ({ page
   await page.mouse.up();
 
   // 5) wheel zoom at pane center: deltaY<0 zooms in.
+  await page.evaluate(() => window.__chart.apply_options({ wheel_behavior: "zoom" }));
   const z0 = (await state(page)).spacing;
   await page.mouse.move(cx, pane_mid_y);
   await page.mouse.wheel(0, -120);
@@ -117,6 +113,7 @@ test("interaction models run engine-side with reference behavior", async ({ page
   expect(z1).toBeGreaterThan(z0);
 
   // 6) wheel scroll (deltaX): offset moves by 80px/spacing bars.
+  await page.evaluate(() => window.__chart.apply_options({ wheel_behavior: "pan" }));
   const w0 = (await state(page)).offset;
   await page.mouse.wheel(120, 0);
   await wait_grid(page);
@@ -130,9 +127,6 @@ test("interaction models run engine-side with reference behavior", async ({ page
   // animation steps below run on a fake clock for determinism (RAF fires on tick).
   await page.evaluate(() => window.__chart.apply_options({ kinetic_scroll: { mouse: true, touch: true } }));
   await page.clock.install();
-  // Fake time starts near zero: escape the recognizer's 500 ms synthetic-touch suppression
-  // window (event timestamps compare against the last touch time) before driving mouse input.
-  await page.clock.runFor(600);
   // Freeze the fake clock so CDP dispatch latency cannot skew the flick's per-segment speed
   // (the engine needs ≥0.2 px/ms to coast); time now advances only on explicit runFor. The
   // freeze target is in the fake Date domain (pauseAt's input), slightly ahead of "now".

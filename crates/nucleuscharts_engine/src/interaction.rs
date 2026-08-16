@@ -13,6 +13,478 @@ use nucleuscharts_core::model::kinetic_animation::KineticAnimation;
 
 use super::*;
 
+/// Maximum simultaneous pointers retained by one chart. Chart gestures use at most two; extra
+/// palm/stylus contacts are rejected instead of allocating or perturbing the active gesture.
+pub const MAX_ACTIVE_POINTERS: usize = 2;
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InputDevice {
+    #[default]
+    Mouse = 0,
+    Touch = 1,
+    Pen = 2,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InputTarget {
+    #[default]
+    Pane = 0,
+    Drawing = 1,
+    Trading = 2,
+    PriceAxis = 3,
+    TimeAxis = 4,
+    Separator = 5,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WheelBehavior {
+    #[default]
+    Auto,
+    Pan,
+    Zoom,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WheelDeltaMode {
+    #[default]
+    Pixel,
+    Line,
+    Page,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WheelIntent {
+    #[default]
+    Ignore = 0,
+    Pan = 1,
+    Zoom = 2,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct WheelSample {
+    pub x: f64,
+    pub y: f64,
+    pub delta_x: f64,
+    pub delta_y: f64,
+    pub delta_mode: WheelDeltaMode,
+    pub modifiers: InputModifiers,
+    pub timestamp_ms: f64,
+}
+
+impl WheelSample {
+    pub fn intent(self, behavior: WheelBehavior) -> WheelIntent {
+        match behavior {
+            WheelBehavior::Pan => WheelIntent::Pan,
+            WheelBehavior::Zoom => WheelIntent::Zoom,
+            WheelBehavior::Auto => {
+                if self.modifiers.control || self.delta_mode != WheelDeltaMode::Pixel {
+                    WheelIntent::Zoom
+                } else {
+                    WheelIntent::Pan
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum InputEvent {
+    PointerDown(PointerSample),
+    PointerMove(PointerSample),
+    PointerUp(PointerSample),
+    LongPress(u32),
+    CancelAll(CancelReason),
+    Wheel(WheelSample),
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PointerSample {
+    pub id: u32,
+    pub device: InputDevice,
+    pub target: InputTarget,
+    pub modifiers: InputModifiers,
+    pub x: f64,
+    pub y: f64,
+    pub timestamp_ms: f64,
+    pub pressure: f64,
+    pub tilt_x: f64,
+    pub tilt_y: f64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CancelReason {
+    #[default]
+    PointerCancelled,
+    LostPointerCapture,
+    WindowBlur,
+    DocumentHidden,
+    Resize,
+    BackendLoss,
+    Disposed,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InputModifiers {
+    pub shift: bool,
+    pub control: bool,
+    pub alt: bool,
+    pub meta: bool,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GestureState {
+    #[default]
+    Idle,
+    Hovering,
+    PendingSinglePointer,
+    Panning,
+    Pinching,
+    Inspecting,
+    DraggingObject,
+    ScalingAxis,
+    ResizingPane,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GestureUpdateKind {
+    #[default]
+    None = 0,
+    Hover = 1,
+    Pressed = 2,
+    DragStarted = 3,
+    DragMoved = 4,
+    PinchStarted = 5,
+    PinchMoved = 6,
+    RebasedSinglePointer = 7,
+    Released = 8,
+    Cancelled = 9,
+    LongPress = 10,
+    Rejected = 11,
+}
+
+/// Allocation-free result returned to a platform adapter for each normalized input sample.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GestureUpdate {
+    pub kind: GestureUpdateKind,
+    pub state: GestureState,
+    pub pointer_id: u32,
+    pub target: InputTarget,
+    pub device: InputDevice,
+    pub x: f64,
+    pub y: f64,
+    pub previous_x: f64,
+    pub previous_y: f64,
+    /// Incremental distance ratio (`current / previous - 1`) for a pinch sample.
+    pub scale_delta: f64,
+    pub active_pointers: u8,
+    pub prevent_default: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ActivePointer {
+    start: PointerSample,
+    current: PointerSample,
+}
+
+/// Shared pointer/gesture recognizer. Hosts retain one instance and execute the returned semantic
+/// updates through `ChartEngine`; DOM/GPUI capture and scheduling stay at their platform boundary.
+pub struct GestureResolver {
+    pointers: [Option<ActivePointer>; MAX_ACTIVE_POINTERS],
+    state: GestureState,
+    primary_id: Option<u32>,
+    pinch_ids: Option<(u32, u32)>,
+    pinch_centroid: (f64, f64),
+    pinch_distance: f64,
+}
+
+impl Default for GestureResolver {
+    fn default() -> Self {
+        Self {
+            pointers: [None; MAX_ACTIVE_POINTERS],
+            state: GestureState::Idle,
+            primary_id: None,
+            pinch_ids: None,
+            pinch_centroid: (0.0, 0.0),
+            pinch_distance: 0.0,
+        }
+    }
+}
+
+impl GestureResolver {
+    pub fn state(&self) -> GestureState {
+        self.state
+    }
+
+    pub fn active_pointer_count(&self) -> usize {
+        self.pointers.iter().flatten().count()
+    }
+
+    pub fn pointer_down(&mut self, sample: PointerSample) -> GestureUpdate {
+        if !sample.x.is_finite()
+            || !sample.y.is_finite()
+            || !sample.timestamp_ms.is_finite()
+            || self.find(sample.id).is_some()
+        {
+            return self.update(GestureUpdateKind::Rejected, sample, sample.x, sample.y, 0.0);
+        }
+        let Some(slot_index) = self.pointers.iter().position(Option::is_none) else {
+            return self.update(GestureUpdateKind::Rejected, sample, sample.x, sample.y, 0.0);
+        };
+        self.pointers[slot_index] = Some(ActivePointer {
+            start: sample,
+            current: sample,
+        });
+
+        let mut touch_ids = self
+            .pointers
+            .iter()
+            .flatten()
+            .filter(|pointer| pointer.current.device == InputDevice::Touch)
+            .map(|pointer| pointer.current.id);
+        let first_touch = touch_ids.next();
+        let second_touch = touch_ids.next();
+        let third_touch = touch_ids.next();
+        if let (Some(first), Some(second), None) = (first_touch, second_touch, third_touch) {
+            let (centroid, distance) = self.pinch_geometry(first, second).unwrap_or_default();
+            self.primary_id = None;
+            self.pinch_ids = Some((first, second));
+            self.pinch_centroid = centroid;
+            self.pinch_distance = distance;
+            self.state = GestureState::Pinching;
+            let mut update = self.update(
+                GestureUpdateKind::PinchStarted,
+                sample,
+                centroid.0,
+                centroid.1,
+                0.0,
+            );
+            update.x = centroid.0;
+            update.y = centroid.1;
+            update.previous_x = centroid.0;
+            update.previous_y = centroid.1;
+            return update;
+        }
+        if self.active_pointer_count() == 1 {
+            self.primary_id = Some(sample.id);
+            self.state = GestureState::PendingSinglePointer;
+            return self.update(GestureUpdateKind::Pressed, sample, sample.x, sample.y, 0.0);
+        }
+        self.pointers[slot_index] = None;
+        self.update(GestureUpdateKind::Rejected, sample, sample.x, sample.y, 0.0)
+    }
+
+    pub fn pointer_move(&mut self, sample: PointerSample) -> GestureUpdate {
+        let Some(index) = self.find(sample.id) else {
+            self.state = GestureState::Hovering;
+            return self.update(GestureUpdateKind::Hover, sample, sample.x, sample.y, 0.0);
+        };
+        let previous = self.pointers[index].expect("located pointer").current;
+        self.pointers[index]
+            .as_mut()
+            .expect("located pointer")
+            .current = sample;
+
+        if let Some((first, second)) = self.pinch_ids {
+            let Some((centroid, distance)) = self.pinch_geometry(first, second) else {
+                return self.update(GestureUpdateKind::None, sample, previous.x, previous.y, 0.0);
+            };
+            let scale_delta = if self.pinch_distance > f64::EPSILON {
+                distance / self.pinch_distance - 1.0
+            } else {
+                0.0
+            };
+            let previous_centroid = self.pinch_centroid;
+            self.pinch_centroid = centroid;
+            self.pinch_distance = distance;
+            self.state = GestureState::Pinching;
+            let mut update = self.update(
+                GestureUpdateKind::PinchMoved,
+                sample,
+                previous_centroid.0,
+                previous_centroid.1,
+                scale_delta,
+            );
+            update.x = centroid.0;
+            update.y = centroid.1;
+            return update;
+        }
+
+        if self.primary_id != Some(sample.id) {
+            return self.update(GestureUpdateKind::None, sample, previous.x, previous.y, 0.0);
+        }
+        if self.state == GestureState::PendingSinglePointer {
+            let start = self.pointers[index].expect("located pointer").start;
+            if (sample.x - start.x).abs() + (sample.y - start.y).abs() < 5.0 {
+                return self.update(GestureUpdateKind::None, sample, previous.x, previous.y, 0.0);
+            }
+            self.state = match sample.target {
+                InputTarget::Pane => GestureState::Panning,
+                InputTarget::Drawing | InputTarget::Trading => GestureState::DraggingObject,
+                InputTarget::PriceAxis | InputTarget::TimeAxis => GestureState::ScalingAxis,
+                InputTarget::Separator => GestureState::ResizingPane,
+            };
+            return self.update(
+                GestureUpdateKind::DragStarted,
+                sample,
+                previous.x,
+                previous.y,
+                0.0,
+            );
+        }
+        self.update(
+            GestureUpdateKind::DragMoved,
+            sample,
+            previous.x,
+            previous.y,
+            0.0,
+        )
+    }
+
+    pub fn pointer_up(&mut self, sample: PointerSample) -> GestureUpdate {
+        let Some(index) = self.find(sample.id) else {
+            return self.update(GestureUpdateKind::Rejected, sample, sample.x, sample.y, 0.0);
+        };
+        self.pointers[index] = None;
+        if self.pinch_ids.is_some() {
+            self.pinch_ids = None;
+            if let Some(remaining) = self.pointers.iter_mut().flatten().next() {
+                remaining.start = remaining.current;
+                let current = remaining.current;
+                self.primary_id = Some(current.id);
+                self.state = GestureState::Panning;
+                return self.update(
+                    GestureUpdateKind::RebasedSinglePointer,
+                    current,
+                    current.x,
+                    current.y,
+                    0.0,
+                );
+            }
+        }
+        self.primary_id = None;
+        self.state = GestureState::Idle;
+        self.update(GestureUpdateKind::Released, sample, sample.x, sample.y, 0.0)
+    }
+
+    pub fn long_press(&mut self, pointer_id: u32) -> GestureUpdate {
+        let Some(pointer) = self.find(pointer_id).and_then(|index| self.pointers[index]) else {
+            return GestureUpdate::default();
+        };
+        if self.state != GestureState::PendingSinglePointer {
+            return GestureUpdate::default();
+        }
+        self.state = GestureState::Inspecting;
+        self.update(
+            GestureUpdateKind::LongPress,
+            pointer.current,
+            pointer.current.x,
+            pointer.current.y,
+            0.0,
+        )
+    }
+
+    pub fn cancel(&mut self) -> GestureUpdate {
+        let pointer = self
+            .pointers
+            .iter()
+            .flatten()
+            .next()
+            .map(|pointer| pointer.current)
+            .unwrap_or_default();
+        self.pointers.fill(None);
+        self.primary_id = None;
+        self.pinch_ids = None;
+        self.state = GestureState::Idle;
+        self.update(
+            GestureUpdateKind::Cancelled,
+            pointer,
+            pointer.x,
+            pointer.y,
+            0.0,
+        )
+    }
+
+    fn find(&self, id: u32) -> Option<usize> {
+        self.pointers
+            .iter()
+            .position(|entry| entry.is_some_and(|pointer| pointer.current.id == id))
+    }
+
+    fn pinch_geometry(&self, first: u32, second: u32) -> Option<((f64, f64), f64)> {
+        let first = self.pointers[self.find(first)?]?.current;
+        let second = self.pointers[self.find(second)?]?.current;
+        Some((
+            ((first.x + second.x) * 0.5, (first.y + second.y) * 0.5),
+            (first.x - second.x).hypot(first.y - second.y),
+        ))
+    }
+
+    fn update(
+        &self,
+        kind: GestureUpdateKind,
+        sample: PointerSample,
+        previous_x: f64,
+        previous_y: f64,
+        scale_delta: f64,
+    ) -> GestureUpdate {
+        GestureUpdate {
+            kind,
+            state: self.state,
+            pointer_id: sample.id,
+            target: sample.target,
+            device: sample.device,
+            x: sample.x,
+            y: sample.y,
+            previous_x,
+            previous_y,
+            scale_delta,
+            active_pointers: self.active_pointer_count() as u8,
+            prevent_default: sample.device == InputDevice::Touch
+                && self.state != GestureState::Hovering
+                && kind != GestureUpdateKind::Rejected,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HitProfile {
+    pub drawing_anchor_radius: f64,
+    pub drawing_stroke_tolerance: f64,
+    pub trading_line_tolerance: f64,
+    pub control_half_size: f64,
+    pub separator_tolerance: f64,
+}
+
+impl HitProfile {
+    pub const PRECISION: Self = Self {
+        drawing_anchor_radius: 6.5,
+        drawing_stroke_tolerance: 3.0,
+        trading_line_tolerance: 6.0,
+        control_half_size: 10.0,
+        separator_tolerance: 4.0,
+    };
+    pub const TOUCH: Self = Self {
+        drawing_anchor_radius: 22.0,
+        drawing_stroke_tolerance: 12.0,
+        trading_line_tolerance: 22.0,
+        control_half_size: 22.0,
+        separator_tolerance: 12.0,
+    };
+
+    pub fn for_device(device: InputDevice) -> Self {
+        if device == InputDevice::Touch {
+            Self::TOUCH
+        } else {
+            Self::PRECISION
+        }
+    }
+}
+
 /// reference `KineticScrollConstants` (pane-widget.ts:38-43) in the px domain: the reference
 /// divides them by the bar spacing to work in rightOffset units; sampling pointer px directly
 /// with the raw constants is the equivalent formulation the Nucleus hosts have always used.
@@ -286,6 +758,110 @@ impl ChartEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pointer(id: u32, x: f64, y: f64) -> PointerSample {
+        PointerSample {
+            id,
+            device: InputDevice::Touch,
+            target: InputTarget::Pane,
+            modifiers: InputModifiers::default(),
+            x,
+            y,
+            timestamp_ms: f64::from(id),
+            pressure: 0.5,
+            tilt_x: 0.0,
+            tilt_y: 0.0,
+        }
+    }
+
+    #[test]
+    fn pinch_moves_about_the_live_centroid_and_rebases_the_survivor() {
+        let mut input = GestureResolver::default();
+        assert_eq!(
+            input.pointer_down(pointer(1, 100.0, 100.0)).kind,
+            GestureUpdateKind::Pressed
+        );
+        let start = input.pointer_down(pointer(2, 200.0, 100.0));
+        assert_eq!(start.kind, GestureUpdateKind::PinchStarted);
+        assert_eq!((start.x, start.y), (150.0, 100.0));
+
+        let moved = input.pointer_move(pointer(2, 230.0, 120.0));
+        assert_eq!(moved.kind, GestureUpdateKind::PinchMoved);
+        assert_eq!((moved.previous_x, moved.previous_y), (150.0, 100.0));
+        assert_eq!((moved.x, moved.y), (165.0, 110.0));
+        assert!(moved.scale_delta > 0.0);
+
+        let rebased = input.pointer_up(pointer(2, 230.0, 120.0));
+        assert_eq!(rebased.kind, GestureUpdateKind::RebasedSinglePointer);
+        assert_eq!(rebased.pointer_id, 1);
+        assert_eq!((rebased.x, rebased.y), (100.0, 100.0));
+        let continued = input.pointer_move(pointer(1, 110.0, 100.0));
+        assert_eq!(continued.kind, GestureUpdateKind::DragMoved);
+        assert_eq!((continued.previous_x, continued.previous_y), (100.0, 100.0));
+    }
+
+    #[test]
+    fn cancellation_and_pointer_capacity_are_bounded() {
+        let mut input = GestureResolver::default();
+        for id in 0..MAX_ACTIVE_POINTERS as u32 {
+            assert_ne!(
+                input.pointer_down(pointer(id, f64::from(id), 0.0)).kind,
+                GestureUpdateKind::Rejected
+            );
+        }
+        assert_eq!(
+            input.pointer_down(pointer(99, 0.0, 0.0)).kind,
+            GestureUpdateKind::Rejected
+        );
+        assert_eq!(input.cancel().kind, GestureUpdateKind::Cancelled);
+        assert_eq!(input.active_pointer_count(), 0);
+        assert_eq!(input.state(), GestureState::Idle);
+    }
+
+    #[test]
+    fn rejected_non_touch_pointer_is_not_retained() {
+        let mut input = GestureResolver::default();
+        let mut first = pointer(1, 10.0, 10.0);
+        first.device = InputDevice::Mouse;
+        let mut second = pointer(2, 20.0, 10.0);
+        second.device = InputDevice::Pen;
+        assert_eq!(input.pointer_down(first).kind, GestureUpdateKind::Pressed);
+        assert_eq!(input.pointer_down(second).kind, GestureUpdateKind::Rejected);
+        assert_eq!(input.active_pointer_count(), 1);
+        assert_eq!(input.pointer_up(first).kind, GestureUpdateKind::Released);
+    }
+
+    #[test]
+    fn touch_and_precision_profiles_keep_visual_geometry_independent() {
+        assert_eq!(
+            HitProfile::for_device(InputDevice::Pen),
+            HitProfile::PRECISION
+        );
+        assert_eq!(
+            HitProfile::for_device(InputDevice::Mouse),
+            HitProfile::PRECISION
+        );
+        assert_eq!(
+            HitProfile::for_device(InputDevice::Touch),
+            HitProfile::TOUCH
+        );
+        assert_eq!(HitProfile::TOUCH.control_half_size * 2.0, 44.0);
+    }
+
+    #[test]
+    fn wheel_auto_preserves_trackpad_pan_and_classifies_pinch_and_discrete_zoom() {
+        let mut sample = WheelSample {
+            delta_y: -0.125,
+            ..WheelSample::default()
+        };
+        assert_eq!(sample.intent(WheelBehavior::Auto), WheelIntent::Pan);
+        sample.modifiers.control = true;
+        assert_eq!(sample.intent(WheelBehavior::Auto), WheelIntent::Zoom);
+        sample.modifiers.control = false;
+        sample.delta_mode = WheelDeltaMode::Line;
+        assert_eq!(sample.intent(WheelBehavior::Auto), WheelIntent::Zoom);
+        assert_eq!(sample.intent(WheelBehavior::Pan), WheelIntent::Pan);
+    }
 
     fn chart_with_data(width: f64, height: f64) -> ChartEngine {
         let mut chart = ChartEngine::new(width, height, 1.0);

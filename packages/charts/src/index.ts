@@ -31,6 +31,8 @@ export * from "./shortcuts.js";
 export * from "./grid.js";
 import { chart_impl } from "./impl.js";
 import { ensure_init } from "./impl.js";
+import { enable_accessibility } from "./accessibility.js";
+import type { accessibility_options } from "./accessibility.js";
 import { default_theme_name, theme_options } from "./theme.js";
 import type { chart_api, chart_options, deep_partial, localization_options, tracking_mode_options } from "./types.js";
 
@@ -72,14 +74,16 @@ export async function create_chart(
   const fallback_pane = document.createElement("canvas");
   const plugin_canvas = document.createElement("canvas");
   const overlay = document.createElement("canvas");
+  // The visible keyboard surface is the chart-owned accessibility layer. Keep the input canvas
+  // out of sequential navigation while preserving the pre-0.9 programmatic-focus shortcut path.
+  overlay.tabIndex = -1;
   for (const c of [gpu_pane, fallback_pane, plugin_canvas, overlay]) {
     c.style.position = "absolute";
     c.style.inset = "0";
     c.style.width = "100%";
     c.style.height = "100%";
     c.style.display = "block";
-    // No `touch-action: none` (reference parity): the recognizer uses non-passive touch listeners and
-    // conditionally preventDefaults, so a drag the chart doesn't own scrolls the page.
+    // The gesture controller derives `touch-action` from chart options before input begins.
   }
   plugin_canvas.style.pointerEvents = "none";
   overlay.style.cursor = "crosshair";
@@ -124,7 +128,7 @@ export async function create_chart(
   // `handle_scroll`, `handle_scale`, `kinetic_scroll`, `tracking_mode`, and
   // `layout.panes.enableResize` are package-level keys and are not forwarded to the engine's
   // options store (gestures live entirely in TS).
-  const { theme, handle_scroll, handle_scale, kinetic_scroll, tracking_mode, localization, ...rest } =
+  const { theme, handle_scroll, handle_scale, kinetic_scroll, wheel_behavior, tracking_mode, localization, accessibility, ...rest } =
     (options ?? {}) as deep_partial<chart_options> & {
       tracking_mode?: tracking_mode_options;
     };
@@ -148,6 +152,7 @@ export async function create_chart(
   ) {
     chart.apply_gesture_options(handle_scroll, handle_scale, kinetic_scroll, tracking_mode);
   }
+  if (wheel_behavior !== undefined) chart.apply_options({ wheel_behavior });
   if (panes_resize !== undefined) {
     chart.apply_panes_resize(panes_resize);
   }
@@ -155,6 +160,14 @@ export async function create_chart(
     // deep_partial recurses into the callback signatures; the fields are already optional, so the
     // concrete localization_options shape is what apply_localization expects.
     chart.apply_localization(localization as localization_options);
+  }
+  if (accessibility !== false) {
+    enable_accessibility(
+      chart,
+      accessibility === undefined || accessibility === true
+        ? {}
+        : accessibility as accessibility_options,
+    );
   }
   chart.render();
   return chart;

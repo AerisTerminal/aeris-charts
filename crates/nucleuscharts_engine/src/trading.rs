@@ -8,7 +8,7 @@ use std::collections::{HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ChartEngine, ChartError, ErrorCode, PriceScaleTarget, PANELESS};
+use crate::{ChartEngine, ChartError, ErrorCode, HitProfile, PriceScaleTarget, PANELESS};
 use nucleuscharts_core::style::{DEFAULT_PRIMARY_RGB, MARKET_DOWN_RGB, MARKET_UP_RGB};
 use nucleuscharts_render::color::Color;
 
@@ -695,11 +695,20 @@ fn validate_unique<'a>(
 
 impl ChartEngine {
     pub fn trading_hit_at(&self, x_css: f64, y_css: f64) -> Option<TradingHit> {
+        self.trading_hit_at_with_profile(x_css, y_css, HitProfile::PRECISION)
+    }
+
+    pub fn trading_hit_at_with_profile(
+        &self,
+        x_css: f64,
+        y_css: f64,
+        profile: HitProfile,
+    ) -> Option<TradingHit> {
         if !x_css.is_finite() || !y_css.is_finite() || x_css < 0.0 || x_css > self.pane_w {
             return None;
         }
         let pane_index = self.pane_at_y(y_css)?;
-        const LINE_TOLERANCE: f64 = 6.0;
+        let line_tolerance = profile.trading_line_tolerance;
 
         if let Some(preview) = self.trading_state.interaction.preview().filter(|preview| {
             preview.pane_index == pane_index
@@ -709,7 +718,7 @@ impl ChartEngine {
                 self.trading_price_coordinate(pane_index, preview.price_scale, preview.price)
             {
                 let distance = (y_css - y).abs();
-                if distance <= LINE_TOLERANCE {
+                if distance <= line_tolerance {
                     if let Some(kind) = self.trading_confirmation_hit(preview, x_css) {
                         let object = match &preview.source {
                             TradingPreviewSource::Order { order_id }
@@ -744,7 +753,7 @@ impl ChartEngine {
                 continue;
             };
             let distance = (y_css - y).abs();
-            if distance > LINE_TOLERANCE {
+            if distance > line_tolerance {
                 continue;
             }
             return Some(TradingHit {
@@ -766,7 +775,7 @@ impl ChartEngine {
                 continue;
             };
             let distance = (y_css - y).abs();
-            if distance > LINE_TOLERANCE {
+            if distance > line_tolerance {
                 continue;
             }
             return Some(TradingHit {
@@ -793,7 +802,7 @@ impl ChartEngine {
                 continue;
             };
             let distance = (x_css - x).hypot(y_css - y);
-            if distance <= 10.0 {
+            if distance <= profile.control_half_size {
                 return Some(TradingHit {
                     object: TradingObjectId::Execution(execution.id.clone()),
                     kind: TradingHitKind::ExecutionMarker,
@@ -974,10 +983,90 @@ impl ChartEngine {
     }
 
     pub fn trading_drag_start_at(&mut self, x_css: f64, y_css: f64) -> bool {
+        self.trading_drag_start_at_with_profile(x_css, y_css, HitProfile::PRECISION)
+    }
+
+    /// Begin keyboard adjustment of a working order without synthesizing screen coordinates.
+    pub fn trading_keyboard_start_order(&mut self, id: &OrderId) -> bool {
         if !self.trading_state.interaction.is_idle_or_hovering() {
             return false;
         }
-        let Some(hit) = self.trading_hit_at(x_css, y_css) else {
+        let Some(order) = self
+            .trading_state
+            .orders
+            .iter()
+            .find(|order| &order.id == id)
+        else {
+            return false;
+        };
+        if !matches!(
+            order.status,
+            OrderStatus::Working | OrderStatus::PartiallyFilled
+        ) {
+            return false;
+        }
+        let preview = TradingPreview {
+            source: TradingPreviewSource::Order {
+                order_id: id.clone(),
+            },
+            phase: TradingPreviewPhase::Dragging,
+            pane_index: order.pane_index,
+            price_scale: order.price_scale,
+            price: order.price,
+            quantity: (order.quantity - order.filled_quantity).max(0.0),
+            side: order.side,
+            role: order.role,
+            base_revision: order.revision,
+            intent_sequence: None,
+        };
+        self.trading_state.interaction = TradingInteractionState::DraggingOrder {
+            authoritative_price: preview.price,
+            preview,
+        };
+        self.invalidate_frame_trading();
+        true
+    }
+
+    /// Move the active keyboard preview by exact instrument ticks.
+    pub fn trading_keyboard_adjust(&mut self, ticks: i32) -> bool {
+        if ticks == 0 {
+            return false;
+        }
+        let tick = self.trading_state.instrument.tick_size.unwrap_or(1.0);
+        let Some(preview) = self.trading_state.interaction.dragging_preview_mut() else {
+            return false;
+        };
+        let price = preview.price + f64::from(ticks) * tick;
+        if !price.is_finite() || price <= 0.0 {
+            return false;
+        }
+        preview.price = price;
+        self.invalidate_frame_trading();
+        true
+    }
+
+    /// Commit the keyboard preview, including the second confirmation step in manual mode.
+    pub fn trading_keyboard_commit(&mut self) -> Option<TradingIntent> {
+        if matches!(
+            self.trading_state.interaction,
+            TradingInteractionState::AwaitingManualConfirmation { .. }
+        ) {
+            self.commit_trading_preview()
+        } else {
+            self.trading_drag_end()
+        }
+    }
+
+    pub fn trading_drag_start_at_with_profile(
+        &mut self,
+        x_css: f64,
+        y_css: f64,
+        profile: HitProfile,
+    ) -> bool {
+        if !self.trading_state.interaction.is_idle_or_hovering() {
+            return false;
+        }
+        let Some(hit) = self.trading_hit_at_with_profile(x_css, y_css, profile) else {
             return false;
         };
         let preview =
@@ -2096,6 +2185,55 @@ mod tests {
             );
             assert!(chart.cancel_trading_drag());
         }
+    }
+
+    #[test]
+    fn touch_profile_expands_order_line_hits_to_a_44px_target() {
+        let mut chart = chart_with_market();
+        chart
+            .set_trading_snapshot(TradingSnapshot {
+                orders: vec![order("order-1", OrderRole::Working, 103.0)],
+                ..TradingSnapshot::default()
+            })
+            .unwrap();
+        chart.build_frame();
+        let y = chart
+            .trading_price_coordinate(0, TradingPriceScale::Right, 103.0)
+            .unwrap();
+        assert!(chart
+            .trading_hit_at_with_profile(20.0, y + 15.0, HitProfile::PRECISION)
+            .is_none());
+        assert_eq!(
+            chart
+                .trading_hit_at_with_profile(20.0, y + 15.0, HitProfile::TOUCH)
+                .expect("44px touch order target")
+                .kind,
+            TradingHitKind::OrderLine
+        );
+    }
+
+    #[test]
+    fn keyboard_order_adjustment_uses_tick_snapping_and_the_pointer_intent_path() {
+        let mut chart = chart_with_market();
+        chart
+            .set_trading_snapshot(TradingSnapshot {
+                instrument: InstrumentMetadata {
+                    tick_size: Some(0.25),
+                    ..InstrumentMetadata::default()
+                },
+                orders: vec![order("keyboard-order", OrderRole::Working, 103.0)],
+                ..TradingSnapshot::default()
+            })
+            .unwrap();
+        let id = id("keyboard-order", OrderId::new);
+        assert!(chart.trading_keyboard_start_order(&id));
+        assert!(chart.trading_keyboard_adjust(10));
+        let intent = chart
+            .trading_drag_end()
+            .expect("instant mode emits an intent");
+        assert_eq!(intent.action, TradingIntentAction::ModifyOrder);
+        assert_eq!(intent.price, Some(105.5));
+        assert_eq!(chart.trading_snapshot().orders[0].price, 103.0);
     }
 
     #[test]

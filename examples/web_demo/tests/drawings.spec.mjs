@@ -34,8 +34,6 @@ async function settle_frames(page) {
 async function goto_fixture(page, backend = "canvas2d") {
   await page.goto(`/?runtimeTest=presentedFrame&backend=${backend}&forceFallbackAdapter=1`);
   await wait_for_chart(page);
-  // Past the touch-suppression window before driving the pointer (see hit-testing.spec.mjs).
-  await page.waitForFunction(() => performance.now() > 600);
 }
 
 /** The chart composite (pane + axes) at device-pixel resolution. */

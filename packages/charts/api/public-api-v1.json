@@ -3,8 +3,8 @@
   "files": [
     {
       "path": "accessibility.d.ts",
-      "bytes": 3225,
-      "sha256": "4638988266c1e8441ba56209bedccd87495326709dd6287caa6bc4df3b7492a2"
+      "bytes": 3375,
+      "sha256": "76a0767713d2d479e0a213d2a3d027d4bf9e198493851ded14f6e83d252ed541"
     },
     {
       "path": "builtin_plugins.d.ts",
@@ -43,8 +43,8 @@
     },
     {
       "path": "offscreen.d.ts",
-      "bytes": 5422,
-      "sha256": "dc39ae829c03ba978245d6b00de2e04e42182407e9f68f761d4918f1b19bc0b8"
+      "bytes": 5694,
+      "sha256": "ed4325b01d5fff2474118e818035ebe75c6c0d364f44ab759d4e7ad10a7d590b"
     },
     {
       "path": "primitive_features.d.ts",
@@ -68,8 +68,8 @@
     },
     {
       "path": "types.d.ts",
-      "bytes": 88063,
-      "sha256": "05c316416c687b85c677e970d21ae77d50651c896d34a31450774c759bb9218e"
+      "bytes": 88557,
+      "sha256": "4dfd3117e01369a623110b3d930b4ac0adebee1ffac1d9bd80e5902e3e92abac"
     }
   ]
 }

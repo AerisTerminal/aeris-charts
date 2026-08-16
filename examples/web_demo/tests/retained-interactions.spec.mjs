@@ -76,6 +76,7 @@ for (const requested_backend of ["auto", "canvas2d"]) {
 
     const spacing_before = await page.evaluate(() => window.__chart.wasm.bar_spacing());
     const before_zoom = await snapshot(page);
+    await page.evaluate(() => window.__chart.apply_options({ wheel_behavior: "zoom" }));
     await page.mouse.move(center.x, center.y);
     await page.mouse.wheel(0, -120);
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));

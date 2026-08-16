@@ -45,7 +45,6 @@ async function overlay_cursor(page) {
 test("RSI toggle stacks a separate pane with its own scale; unchecking prunes it", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   await wait_for_chart(page);
-  await page.waitForFunction(() => performance.now() > 600); // touch-suppression window
   expect(await page.evaluate(() => window.__chart.panes().length)).toBe(1);
 
   await page.check("#rsi_toggle");
@@ -138,7 +137,6 @@ test("pane divider follows the axis border color (theme-aware) until pinned", as
 test("crosshair hides on separator hover and during the resize drag, then resumes", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   await wait_for_chart(page);
-  await page.waitForFunction(() => performance.now() > 600); // touch-suppression window
   await page.check("#rsi_toggle");
   await wait_for_chart(page);
 

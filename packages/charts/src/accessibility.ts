@@ -1,4 +1,4 @@
-/** Active-point-only accessibility controller modelled on TradingView's official pane plugin. */
+/** Chart-owned semantic keyboard and assistive-technology controller. */
 
 import {
   attach_native_accessibility_focus,
@@ -17,6 +17,7 @@ import type {
 const HIDDEN = "position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0";
 const UPDATE_DEBOUNCE_MS = 150;
 const UPDATE_MAX_SERIES = 3;
+const MAX_VISIBLE_QUERY_POINTS = 512;
 const MIN_ZOOM_SPAN = 2;
 const ZOOM_STEP = 0.2;
 const CANVAS_PREVIOUS_ARIA = "data-nucleuscharts-a11y-previous-aria-hidden";
@@ -109,9 +110,14 @@ interface resolved_accessibility_options {
 export interface accessibility_handle {
   detach(): void;
   focus(pane_index?: number): void;
+  focus_target(target: string, pane_index?: number): void;
   refresh(): void;
   apply_options(options: accessibility_options): void;
+  /** Announce a user-triggered chart action through the shared live region. */
+  announce(message: string): void;
 }
+
+const controllers = new WeakMap<chart_api, AccessibilityController>();
 
 const default_messages: accessibility_messages = {
   role_description: "Interactive chart pane",
@@ -141,7 +147,7 @@ function resolve_options(options: accessibility_options): resolved_accessibility
     show_focus_indicator: options.show_focus_indicator ?? true,
     focus_indicator_color: options.focus_indicator_color ?? "#2962FF",
     focus_indicator_size: Math.max(4, Math.min(128, options.focus_indicator_size ?? 14)),
-    announce_data_updates: options.announce_data_updates ?? "active",
+    announce_data_updates: options.announce_data_updates ?? false,
     page_step: Math.max(1, Math.floor(options.page_step ?? 10)),
     data_scope: options.data_scope ?? "visible",
     price_formatter: options.price_formatter,
@@ -194,16 +200,20 @@ class PaneAccessibility {
   private readonly live = document.createElement("div");
   private readonly hint = document.createElement("div");
   private readonly panel = document.createElement("div");
+  private readonly targets = document.createElement("div");
   private readonly writer = new LiveWriter(() => this.live);
   private series: series_api[] = [];
   private points: readonly series_data[] = [];
   private subscriptions = new Map<series_api, () => void>();
-  private focus_handles = new Map<series_api, native_accessibility_focus_handle>();
+  private focus_handle: { series: series_api; handle: native_accessibility_focus_handle } | null = null;
   private dirty = new Set<series_api>();
   private series_index = 0;
   private point_index = -1;
   private focused = false;
   private shortcuts_open = false;
+  private drawing_editing = false;
+  private drawing_anchor = -1;
+  private drawing_nudge_count = 0;
   private high_contrast = false;
   private contrast_queries: MediaQueryList[] = [];
 
@@ -235,6 +245,8 @@ class PaneAccessibility {
     this.panel.className = "nucleuscharts-a11y-shortcuts-panel";
     this.panel.setAttribute("aria-hidden", "true");
     this.layer.appendChild(this.panel);
+    this.targets.className = "nucleuscharts-a11y-targets";
+    this.layer.appendChild(this.targets);
 
     controller.host.appendChild(this.layer);
     this.layer.addEventListener("keydown", this.on_key);
@@ -247,7 +259,13 @@ class PaneAccessibility {
   }
 
   focus(): void {
+    this.refresh_targets();
     this.layer.focus();
+  }
+
+  focus_target(target: string): void {
+    this.refresh_targets();
+    this.targets.querySelector<HTMLElement>(`[data-a11y-target="${CSS.escape(target)}"]`)?.focus();
   }
 
   apply_options(): void {
@@ -258,6 +276,8 @@ class PaneAccessibility {
         ? this.contrast_queries.some((query) => query.matches)
         : options.high_contrast;
     options.on_high_contrast_change?.(this.high_contrast);
+    this.refresh_points();
+    this.sync_focus_handle();
     this.layer.setAttribute("aria-roledescription", options.messages.role_description);
     this.layer.setAttribute("aria-label", this.pane_label());
     const lang = options.lang ?? this.controller.locale();
@@ -268,6 +288,7 @@ class PaneAccessibility {
     this.description.textContent = options.messages.description(this.series.length > 1);
     this.style_outline();
     this.render_shortcuts();
+    this.refresh_targets();
     this.style_shortcuts();
     this.update_focus_ring();
     this.update_geometry();
@@ -288,8 +309,10 @@ class PaneAccessibility {
       if (!current.includes(series)) {
         series.unsubscribe_data_changed(handler);
         this.subscriptions.delete(series);
-        this.focus_handles.get(series)?.detach();
-        this.focus_handles.delete(series);
+        if (this.focus_handle?.series === series) {
+          this.focus_handle.handle.detach();
+          this.focus_handle = null;
+        }
         this.dirty.delete(series);
       }
     }
@@ -298,14 +321,15 @@ class PaneAccessibility {
       const handler = (): void => this.on_data_changed(series);
       series.subscribe_data_changed(handler);
       this.subscriptions.set(series, handler);
-      this.focus_handles.set(series, attach_native_accessibility_focus(series, this.focus_options_json()));
     }
     this.series = current;
     this.series_index = clamp(this.series_index, 0, Math.max(0, this.series.length - 1));
     this.refresh_points();
+    this.sync_focus_handle();
     this.layer.setAttribute("aria-label", this.pane_label());
     this.description.textContent = this.controller.options.messages.description(this.series.length > 1);
     this.render_shortcuts();
+    this.refresh_targets();
     this.update_focus_ring();
   }
 
@@ -322,9 +346,9 @@ class PaneAccessibility {
     this.layer.removeEventListener("focusout", this.on_blur);
     for (const query of this.contrast_queries) query.removeEventListener("change", this.on_contrast_change);
     for (const [series, handler] of this.subscriptions) series.unsubscribe_data_changed(handler);
-    for (const handle of this.focus_handles.values()) handle.detach();
+    this.focus_handle?.handle.detach();
+    this.focus_handle = null;
     this.subscriptions.clear();
-    this.focus_handles.clear();
     this.layer.remove();
   }
 
@@ -349,6 +373,13 @@ class PaneAccessibility {
 
   private readonly on_key = (event: KeyboardEvent): void => {
     if (event.altKey || event.ctrlKey || event.metaKey) return;
+    const target = event.target instanceof HTMLElement ? event.target.dataset.a11yTarget : undefined;
+    if (target !== undefined) {
+      this.handle_semantic_target_key(event, target);
+      return;
+    }
+    const selected_drawing = this.controller.chart.selected_drawing();
+    if (selected_drawing !== null && this.handle_drawing_key(event, selected_drawing)) return;
     if (this.series.length === 0) return;
     switch (event.key) {
       case "ArrowRight": this.move_point(1); break;
@@ -376,6 +407,153 @@ class PaneAccessibility {
     event.preventDefault();
   };
 
+  private handle_semantic_target_key(event: KeyboardEvent, target: string): boolean {
+    if (target === "price-axis") {
+      const scale = this.controller.chart.price_scale("right", this.pane_index);
+      if (event.key === "Home") scale.set_auto_scale(true);
+      else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+        const range = scale.get_visible_range();
+        if (range === null) return false;
+        const center = (range.from + range.to) / 2;
+        const half = (range.to - range.from) * (event.key === "ArrowUp" ? 0.475 : 0.525);
+        scale.set_visible_range({ from: center - half, to: center + half });
+      } else return false;
+    } else if (target === "time-axis") {
+      const scale = this.controller.chart.time_scale();
+      if (event.key === "Home") scale.reset_time_scale();
+      else if (event.key === "ArrowLeft") scale.scroll_to_position(scale.scroll_position() - 1, false);
+      else if (event.key === "ArrowRight") scale.scroll_to_position(scale.scroll_position() + 1, false);
+      else return false;
+    } else if (target === "separator") {
+      if (event.key === "Home") this.pane.set_stretch_factor(1);
+      else if (event.key === "ArrowUp") this.pane.set_height(Math.max(1, this.pane.get_height() - 10));
+      else if (event.key === "ArrowDown") this.pane.set_height(this.pane.get_height() + 10);
+      else return false;
+    } else if (target.startsWith("drawing:")) {
+      const id = Number(target.slice("drawing:".length));
+      const chart = this.controller.chart as chart_api & { select_drawing_for_accessibility(id: number): void };
+      chart.select_drawing_for_accessibility(id);
+      const drawing = this.controller.chart.selected_drawing();
+      if (drawing === null) return false;
+      return this.handle_drawing_key(event, drawing);
+    } else if (target.startsWith("order:")) {
+      const id = target.slice("order:".length);
+      const chart = this.controller.chart as chart_api & {
+        trading_keyboard_start_order(id: string): boolean;
+        trading_keyboard_adjust(ticks: number): boolean;
+        trading_keyboard_commit(): void;
+        trading_keyboard_cancel(): boolean;
+      };
+      if (event.key === "Enter" || event.key === " ") {
+        if (this.targets.querySelector(`[data-a11y-target="order:${CSS.escape(id)}"]`)?.getAttribute("aria-pressed") === "true") {
+          chart.trading_keyboard_commit();
+          const awaiting = this.controller.chart.trading().preview()?.phase === "awaiting_confirmation";
+          this.set_order_editing(id, awaiting);
+          if (awaiting) this.writer.write(`Order ${id} awaiting confirmation. Press Enter to confirm or Escape to discard.`);
+        } else if (chart.trading_keyboard_start_order(id)) {
+          this.set_order_editing(id, true);
+        } else return false;
+      } else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+        const ticks = (event.shiftKey ? 10 : 1) * (event.key === "ArrowUp" ? 1 : -1);
+        if (!chart.trading_keyboard_adjust(ticks)) return false;
+      } else if (event.key === "Escape") {
+        if (!chart.trading_keyboard_cancel()) return false;
+        this.set_order_editing(id, false);
+      } else return false;
+    } else if (target.startsWith("position:")) {
+      if (event.key !== "Enter" && event.key !== " ") return false;
+      this.writer.write(event.target instanceof HTMLElement ? event.target.getAttribute("aria-label") ?? "Position" : "Position");
+    } else {
+      return false;
+    }
+    event.preventDefault();
+    return true;
+  }
+
+  private set_order_editing(id: string, editing: boolean): void {
+    this.targets.querySelector(`[data-a11y-target="order:${CSS.escape(id)}"]`)
+      ?.setAttribute("aria-pressed", String(editing));
+    this.writer.write(`Order ${id} ${editing ? "editing" : "edit committed"}.`);
+  }
+
+  private refresh_targets(): void {
+    const focused = document.activeElement instanceof HTMLElement
+      ? document.activeElement.dataset.a11yTarget : undefined;
+    this.targets.textContent = "";
+    const add = (target: string, label: string, pressed?: boolean) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.a11yTarget = target;
+      button.setAttribute("aria-label", label);
+      if (pressed !== undefined) button.setAttribute("aria-pressed", String(pressed));
+      button.style.cssText = HIDDEN;
+      this.targets.appendChild(button);
+    };
+    for (const drawing of this.controller.chart.drawings()) {
+      if (drawing.pane_index() === this.pane_index) {
+        add(`drawing:${drawing.id}`, `${drawing.kind().replaceAll("_", " ")} drawing`);
+      }
+    }
+    const trading = this.controller.chart.trading().state();
+    for (const order of trading.orders) {
+      if (order.pane_index === this.pane_index) add(`order:${order.id}`, `Order ${order.id} at ${order.price}`, false);
+    }
+    for (const position of trading.positions) {
+      if (position.pane_index === this.pane_index) add(`position:${position.id}`, `Position ${position.id} at ${position.average_price}`);
+    }
+    add("price-axis", `Pane ${this.pane_index + 1} price axis`);
+    if (this.pane_index === this.controller.chart.panes().length - 1) add("time-axis", "Time axis");
+    if (this.pane_index < this.controller.chart.panes().length - 1) add("separator", `Separator after pane ${this.pane_index + 1}`);
+    if (focused !== undefined) {
+      this.targets.querySelector<HTMLElement>(`[data-a11y-target="${CSS.escape(focused)}"]`)?.focus();
+    }
+  }
+
+  private handle_drawing_key(event: KeyboardEvent, drawing: import("./types.js").drawing_api): boolean {
+    const chart = this.controller.chart as chart_api & {
+      nudge_selected_drawing(dx: number, dy: number, anchor: number | null): boolean;
+    };
+    if (event.key === "Enter") {
+      this.drawing_editing = !this.drawing_editing;
+      this.drawing_anchor = -1;
+      this.drawing_nudge_count = 0;
+      this.writer.write(`${drawing.kind().replaceAll("_", " ")} ${this.drawing_editing ? "editing" : "edit committed"}.`);
+    } else if (event.key === "Escape" && this.drawing_editing) {
+      for (let index = 0; index < this.drawing_nudge_count; index++) {
+        this.controller.chart.undo_drawing();
+      }
+      this.drawing_editing = false;
+      this.drawing_anchor = -1;
+      this.drawing_nudge_count = 0;
+      this.writer.write("Drawing edit cancelled.");
+    } else if (event.key === "Delete" || event.key === "Backspace") {
+      const kind = drawing.kind().replaceAll("_", " ");
+      this.drawing_editing = false;
+      this.drawing_nudge_count = 0;
+      drawing.remove();
+      this.writer.write(`${kind} removed.`);
+    } else if (event.key === "Tab" && this.drawing_editing) {
+      const count = drawing.points().length;
+      if (count === 0) return false;
+      this.drawing_anchor = event.shiftKey
+        ? (this.drawing_anchor <= 0 ? count - 1 : this.drawing_anchor - 1)
+        : (this.drawing_anchor + 1) % count;
+      this.writer.write(`Anchor ${this.drawing_anchor + 1} of ${count}.`);
+    } else if (this.drawing_editing && event.key.startsWith("Arrow")) {
+      const step = event.shiftKey ? 10 : 1;
+      const [dx, dy] = event.key === "ArrowLeft" ? [-step, 0]
+        : event.key === "ArrowRight" ? [step, 0]
+          : event.key === "ArrowUp" ? [0, -step] : [0, step];
+      if (!chart.nudge_selected_drawing(dx, dy, this.drawing_anchor < 0 ? null : this.drawing_anchor)) return false;
+      this.drawing_nudge_count += 1;
+      this.writer.write(`Drawing moved ${step} CSS pixel${step === 1 ? "" : "s"}.`);
+    } else {
+      return false;
+    }
+    event.preventDefault();
+    return true;
+  }
+
   private on_data_changed(series: series_api): void {
     if (this.focused && series === this.active_series()) {
       this.refresh_points();
@@ -392,8 +570,31 @@ class PaneAccessibility {
   }
 
   private refresh_points(): void {
-    this.points = this.active_series()?.data() ?? [];
+    const series = this.active_series();
+    this.points = series === undefined ? [] : this.query_points(series);
     this.point_index = Math.min(this.point_index, this.points.length - 1);
+  }
+
+  /** Query only a bounded visible window by default; never copy a streaming series history. */
+  private query_points(series: series_api): readonly series_data[] {
+    if (this.controller.options.data_scope === "all") return series.data();
+    const range = this.controller.chart.time_scale().get_visible_logical_range();
+    if (range === null) return [];
+    const first = Math.ceil(range.from);
+    const last = Math.floor(range.to);
+    if (last < first) return [];
+    const count = last - first + 1;
+    const step = Math.max(1, Math.ceil(count / MAX_VISIBLE_QUERY_POINTS));
+    const points: series_data[] = [];
+    for (let logical = first; logical <= last; logical += step) {
+      const point = series.data_by_index(logical, 0);
+      if (point !== null && points.at(-1)?.time !== point.time) points.push(point);
+    }
+    if ((last - first) % step !== 0) {
+      const point = series.data_by_index(last, 0);
+      if (point !== null && points.at(-1)?.time !== point.time) points.push(point);
+    }
+    return points;
   }
 
   private move_point(delta: number): void {
@@ -410,6 +611,7 @@ class PaneAccessibility {
     const target = previous === undefined ? null : this.logical_index(previous);
     this.series_index = next;
     this.refresh_points();
+    this.sync_focus_handle();
     if (this.points.length > 0 && this.point_index >= 0) {
       this.point_index = target === null ? clamp(this.point_index, 0, this.points.length - 1) : this.nearest_index(target);
       this.scroll_into_view();
@@ -607,7 +809,7 @@ class PaneAccessibility {
   }
 
   private update_summary(series: series_api): string {
-    const data = series.data();
+    const data = this.query_points(series);
     const scoped = this.scoped_points(data);
     let latest: number | undefined;
     for (let index = data.length - 1; index >= 0 && latest === undefined; index--) latest = point_value(data[index]);
@@ -642,10 +844,16 @@ class PaneAccessibility {
     const visible = this.focused && this.controller.options.show_focus_indicator && active !== undefined
       && point !== undefined && point_value(point) !== undefined;
     const options = this.focus_options_json();
-    for (const [series, handle] of this.focus_handles) {
-      const time = visible && series === active ? time_to_utc_seconds(point.time) : null;
-      handle.set(time, options);
-    }
+    this.focus_handle?.handle.set(visible ? time_to_utc_seconds(point.time) : null, options);
+  }
+
+  private sync_focus_handle(): void {
+    const active = this.active_series();
+    if (this.focus_handle?.series === active) return;
+    this.focus_handle?.handle.detach();
+    this.focus_handle = active === undefined
+      ? null
+      : { series: active, handle: attach_native_accessibility_focus(active, this.focus_options_json()) };
   }
 
   private style_outline(): void {
@@ -705,6 +913,7 @@ class AccessibilityController implements accessibility_handle {
   private update_timer: ReturnType<typeof setTimeout> | null = null;
   private description_id = 0;
   private detached = false;
+  private refreshing = false;
   private refresh_queued = false;
   private readonly hidden_canvases = new Map<HTMLCanvasElement, string | null>();
   private readonly initial_canvas_states: (string | null)[];
@@ -768,13 +977,25 @@ class AccessibilityController implements accessibility_handle {
   }
 
   focus(pane_index = 0): void {
+    this.update_geometry();
     this.panes[pane_index]?.focus();
   }
 
+  focus_target(target: string, pane_index = 0): void {
+    this.panes[pane_index]?.focus_target(target);
+  }
+
   refresh(): void {
-    for (const pane of this.panes) pane.detach();
-    this.panes = this.chart.panes().map((pane, index) => new PaneAccessibility(this, pane, index));
-    this.active = this.panes[0] ?? null;
+    if (this.refreshing) return;
+    this.refreshing = true;
+    try {
+      for (const pane of this.panes) pane.detach();
+      this.panes = [];
+      this.panes = this.chart.panes().map((pane, index) => new PaneAccessibility(this, pane, index));
+      this.active = this.panes[0] ?? null;
+    } finally {
+      this.refreshing = false;
+    }
     this.update_geometry();
   }
 
@@ -783,6 +1004,10 @@ class AccessibilityController implements accessibility_handle {
     this.options = resolve_options(this.raw_options);
     this.apply_status_lang();
     for (const pane of this.panes) pane.apply_options();
+  }
+
+  announce(message: string): void {
+    this.status_writer.write(message);
   }
 
   detach(): void {
@@ -830,6 +1055,10 @@ class AccessibilityController implements accessibility_handle {
     this.hidden_canvases.clear();
     this.neutralised.clear();
     this.dirty.clear();
+    controllers.delete(this.chart);
+    (this.chart as chart_api & {
+      set_accessibility_handle?: (handle: accessibility_handle | null) => void;
+    }).set_accessibility_handle?.(null);
   }
 
   private readonly on_view_change = (): void => this.update_geometry();
@@ -839,11 +1068,27 @@ class AccessibilityController implements accessibility_handle {
     this.refresh_queued = true;
     queueMicrotask(() => {
       this.refresh_queued = false;
-      if (!this.detached) this.refresh();
+      if (!this.detached) this.update_geometry();
     });
   };
 
   private update_geometry(): void {
+    if (this.refreshing) return;
+    const current = this.chart.panes();
+    let topology_changed = current.length !== this.panes.length;
+    if (!topology_changed) {
+      for (let index = 0; index < current.length; index++) {
+        try {
+          if (this.panes[index]?.pane.pane_index() !== index) topology_changed = true;
+        } catch {
+          topology_changed = true;
+        }
+      }
+    }
+    if (topology_changed) {
+      this.refresh();
+      return;
+    }
     for (const pane of this.panes) {
       pane.sync_series();
       pane.update_geometry();
@@ -895,13 +1140,23 @@ class AccessibilityController implements accessibility_handle {
 }
 
 /**
- * Attach one official-style active-point-only semantic layer per pane. Financial coordinates and
- * the visible point focus ring remain in the shared Rust engine; this controller owns only DOM,
- * keyboard, localisation, and live-region behavior that cannot exist outside the browser host.
+ * Configure and return the chart-owned accessibility singleton. Financial coordinates, mutation,
+ * history, and the visible focus ring remain in the shared Rust engine; this controller owns only
+ * DOM semantics, keyboard translation, localisation, and browser live-region behavior.
  */
 export function enable_accessibility(
   chart: chart_api,
   options: accessibility_options = {},
 ): accessibility_handle {
-  return new AccessibilityController(chart, options);
+  const existing = controllers.get(chart);
+  if (existing !== undefined) {
+    existing.apply_options(options);
+    return existing;
+  }
+  const controller = new AccessibilityController(chart, options);
+  controllers.set(chart, controller);
+  (chart as chart_api & {
+    set_accessibility_handle?: (handle: accessibility_handle | null) => void;
+  }).set_accessibility_handle?.(controller);
+  return controller;
 }

@@ -11,6 +11,11 @@ import type { pane_primitive, pane_primitive_handle, series_primitive, series_pr
 import type { canvas_primitive, canvas_primitive_handle, canvas_pane_view } from "./canvas_plugins.js";
 import { create_canvas_render_target } from "./canvas_plugins.js";
 import type { custom_series_item, custom_series_pane_view } from "./custom_series.js";
+import {
+  enable_accessibility,
+  type accessibility_handle,
+  type accessibility_options,
+} from "./accessibility.js";
 import { nucleuscharts_error } from "./errors.js";
 import type { nucleuscharts_error_code } from "./errors.js";
 import type {
@@ -2080,6 +2085,7 @@ export interface resolved_gestures {
   axis_scale_time: boolean;
   kinetic_touch: boolean;
   kinetic_mouse: boolean;
+  wheel_behavior: "auto" | "pan" | "zoom";
   panes_resize: boolean;
   tracking_exit_mode: "on_next_tap" | "on_touch_end";
 }
@@ -2260,10 +2266,11 @@ export class chart_impl implements chart_api {
     axis_scale_time: true,
     kinetic_touch: true,
     kinetic_mouse: false,
+    wheel_behavior: "auto",
     panes_resize: true,
     tracking_exit_mode: "on_next_tap",
   };
-  private a11y_live: HTMLElement | null = null;
+  private accessibility_handle: accessibility_handle | null = null;
   private readonly ts = new time_scale_impl(this);
   private readonly trading_handle = new trading_impl(this);
   private observer: ResizeObserver | null = null;
@@ -2285,6 +2292,13 @@ export class chart_impl implements chart_api {
   private last_ts_width: number;
   private last_ts_height: number;
   private auto_size: boolean;
+  private dpr_query: MediaQueryList | null = null;
+  private readonly dpr_change_handler = (): void => {
+    if (this.removed || !this.auto_size) return;
+    const bounds = this.container.getBoundingClientRect();
+    this.resize(bounds.width, bounds.height, window.devicePixelRatio || 1);
+    this.bind_dpr_watcher();
+  };
   /** Crosshair position tracked TS-side (for crosshair-less screenshots); `null` when hidden. */
   private last_crosshair: { x: number; y: number } | null = null;
   /** Last hover hit-test result (Phase C-d), refreshed on crosshair moves; feeds event params. */
@@ -2334,12 +2348,33 @@ export class chart_impl implements chart_api {
     return this.trading_handle;
   }
 
+  accessibility(): accessibility_handle {
+    if (this.accessibility_handle === null) {
+      throw new nucleuscharts_error("unsupported_operation", "accessibility is disabled for this chart");
+    }
+    return this.accessibility_handle;
+  }
+
+  /** Internal package hook used by the singleton accessibility controller. */
+  set_accessibility_handle(handle: accessibility_handle | null): void {
+    this.accessibility_handle = handle;
+  }
+
+  focus_accessibility(pane_index: number, target?: string): void {
+    if (target === undefined) this.accessibility_handle?.focus(pane_index);
+    else this.accessibility_handle?.focus_target(target, pane_index);
+  }
+
   trading_hover_at(x: number, y: number): boolean {
     return this.wasm.trading_hover_at(x, y);
   }
 
   trading_hit_at(x: number, y: number): trading_hit | null {
     return this.trading_handle.hit_at(x, y);
+  }
+
+  trading_hit_at_device(x: number, y: number, device: number): trading_hit | null {
+    return JSON.parse(this.wasm.trading_hit_json_device(x, y, device)) as trading_hit | null;
   }
 
   trading_cursor_at(x: number, y: number): string | null {
@@ -2357,6 +2392,34 @@ export class chart_impl implements chart_api {
 
   trading_drag_start_at(x: number, y: number): boolean {
     return this.wasm.trading_drag_start_at(x, y);
+  }
+
+  trading_drag_start_at_device(x: number, y: number, device: number): boolean {
+    return this.wasm.trading_drag_start_at_device(x, y, device);
+  }
+
+  trading_keyboard_start_order(id: string): boolean {
+    const started = this.wasm.trading_keyboard_start_order(id);
+    if (started) this.repaint();
+    return started;
+  }
+
+  trading_keyboard_adjust(ticks: number): boolean {
+    const changed = this.wasm.trading_keyboard_adjust(ticks);
+    if (changed) this.repaint();
+    return changed;
+  }
+
+  trading_keyboard_commit(): void {
+    this.wasm.trading_keyboard_commit_json();
+    this.trading_handle.dispatch_pending_intents();
+    this.repaint();
+  }
+
+  trading_keyboard_cancel(): boolean {
+    const changed = this.discard_trading_interaction();
+    if (changed) this.repaint();
+    return changed;
   }
 
   trading_drag_to(y: number): boolean {
@@ -2458,10 +2521,14 @@ export class chart_impl implements chart_api {
     this.last_ts_width = this.wasm.time_scale_width();
     this.last_ts_height = this.wasm.time_scale_height();
     this.auto_size = auto_size;
-    this.init_accessibility();
+    this.container.setAttribute("role", "group");
+    if (!this.container.hasAttribute("aria-label")) {
+      this.container.setAttribute("aria-label", "Financial chart");
+    }
     this.detach_gestures = install_gestures(this);
     if (auto_size) {
       this.wasm.enable_auto_resize(container);
+      this.bind_dpr_watcher();
     }
     // Canvas primitives (Phase C-e): the engine's own ResizeObserver (registered first, above)
     // re-renders on container resizes; this one re-runs the package-side canvas pass on the
@@ -3165,10 +3232,10 @@ export class chart_impl implements chart_api {
 
   /** Announce the current visible time range to assistive tech (used after keyboard navigation). */
   announce_view(): void {
-    if (!this.a11y_live) return;
     const r = this.wasm.visible_time_range();
-    this.a11y_live.textContent =
-      r.length === 2 ? `Showing time ${r[0]} to ${r[1]}` : "No data";
+    this.accessibility_handle?.announce(
+      r.length === 2 ? `Showing time ${r[0]} to ${r[1]}` : "No data",
+    );
   }
 
   emit_dbl_click(x: number, y: number): void {
@@ -3238,10 +3305,11 @@ export class chart_impl implements chart_api {
   }
 
   announce_trading_intent(intent: trading_intent): void {
-    if (!this.a11y_live) return;
     const target = intent.order_id ?? intent.position_id ?? "trading object";
     const price = intent.price === undefined ? "" : ` at ${intent.price}`;
-    this.a11y_live.textContent = `Trading request ${intent.action.replaceAll("_", " ")} for ${target}${price}, awaiting confirmation`;
+    this.accessibility_handle?.announce(
+      `Trading request ${intent.action.replaceAll("_", " ")} for ${target}${price}, awaiting confirmation`,
+    );
   }
 
   undo_drawing(): boolean {
@@ -3604,13 +3672,15 @@ export class chart_impl implements chart_api {
     // handle_scroll / handle_scale / kinetic_scroll / tracking_mode (gestures), the pane-resize
     // toggle, and localization (JS callbacks) are package-level; intercept and strip them so only
     // engine-owned, JSON-serializable options reach the wasm store.
-    const { handle_scroll, handle_scale, kinetic_scroll, tracking_mode, localization, ...rest } =
+    const { handle_scroll, handle_scale, kinetic_scroll, wheel_behavior, tracking_mode, localization, accessibility, ...rest } =
       options as deep_partial<chart_options> & {
         handle_scroll?: boolean | handle_scroll_options;
         handle_scale?: boolean | handle_scale_options;
         kinetic_scroll?: boolean | kinetic_scroll_options;
+        wheel_behavior?: "auto" | "pan" | "zoom";
         tracking_mode?: tracking_mode_options;
         localization?: localization_options;
+        accessibility?: boolean | accessibility_options;
       };
     let engine_options: Record<string, unknown> = rest;
     // layout.panes.enableResize (reference) drives the separator drag here, not the engine; strip it
@@ -3627,7 +3697,17 @@ export class chart_impl implements chart_api {
     ) {
       this.apply_gesture_options(handle_scroll, handle_scale, kinetic_scroll, tracking_mode);
     }
+    if (wheel_behavior !== undefined) this.gestures_cfg.wheel_behavior = wheel_behavior;
+    this.sync_touch_action();
     if (localization !== undefined) this.apply_localization(localization);
+    if (accessibility !== undefined) {
+      if (accessibility === false) this.accessibility_handle?.detach();
+      else if (this.accessibility_handle !== null) {
+        this.accessibility_handle.apply_options(accessibility === true ? {} : accessibility);
+      } else {
+        enable_accessibility(this, accessibility === true ? {} : accessibility);
+      }
+    }
     // autoSize stays in `rest` (the engine stores it); the active flag is tracked TS-side.
     if (options.autoSize !== undefined) this.set_auto_size(options.autoSize);
     // Gesture-only patches strip down to an empty object; an empty patch is a no-op for the
@@ -3653,6 +3733,35 @@ export class chart_impl implements chart_api {
       this.wasm.enable_auto_resize(this.container);
     }
     this.auto_size = on;
+    if (on) this.bind_dpr_watcher();
+    else this.unbind_dpr_watcher();
+  }
+
+  nudge_selected_drawing(dx: number, dy: number, anchor: number | null): boolean {
+    const changed = this.wasm.nudge_selected_drawing(dx, dy, anchor ?? -1);
+    if (changed) this.repaint();
+    return changed;
+  }
+
+  select_drawing_for_accessibility(id: number): void {
+    this.wasm.set_selected_drawing(id);
+    this.repaint();
+  }
+
+  /** DPR-only display transitions do not reliably resize CSS bounds on every WebKit host. */
+  private bind_dpr_watcher(): void {
+    this.unbind_dpr_watcher();
+    this.dpr_query = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+    this.dpr_query.addEventListener("change", this.dpr_change_handler, { once: true });
+    window.addEventListener("orientationchange", this.dpr_change_handler);
+    document.addEventListener("fullscreenchange", this.dpr_change_handler);
+  }
+
+  private unbind_dpr_watcher(): void {
+    this.dpr_query?.removeEventListener("change", this.dpr_change_handler);
+    this.dpr_query = null;
+    window.removeEventListener("orientationchange", this.dpr_change_handler);
+    document.removeEventListener("fullscreenchange", this.dpr_change_handler);
   }
 
   auto_size_active(): boolean {
@@ -3684,6 +3793,13 @@ export class chart_impl implements chart_api {
     if (kinetic !== undefined) apply_kinetic(kinetic, this.gestures_cfg);
     if (tracking !== undefined) apply_tracking(tracking, this.gestures_cfg);
     this.sync_interaction_disabled();
+    this.sync_touch_action();
+  }
+
+  private sync_touch_action(): void {
+    const cfg = this.gestures_cfg;
+    this.overlay.style.touchAction = cfg.pan_vert_touch ? "none"
+      : cfg.pan_horz_touch || cfg.pinch_zoom ? "pan-y" : "auto";
   }
 
   /** Resolve the reference `layout.panes.enableResize` toggle (separator drag + hover cursor). */
@@ -3701,38 +3817,15 @@ export class chart_impl implements chart_api {
     this.wasm.set_interaction_disabled(all_off);
   }
 
-  /** Set up the accessible wrapper: focusable role on the overlay + an aria-live status region. */
-  private init_accessibility(): void {
-    this.container.setAttribute("role", "group");
-    if (!this.container.hasAttribute("aria-label")) {
-      this.container.setAttribute("aria-label", "Financial chart");
-    }
-    this.overlay.tabIndex = 0;
-    this.overlay.setAttribute("role", "application");
-    this.overlay.setAttribute(
-      "aria-label",
-      "Chart. Arrow keys pan, plus and minus zoom, Home fits content, Escape clears the crosshair.",
-    );
-    const live = this.container.ownerDocument.createElement("div");
-    live.setAttribute("aria-live", "polite");
-    live.setAttribute("role", "status");
-    // Visually hidden but available to assistive tech.
-    live.style.cssText =
-      "position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0;";
-    this.container.appendChild(live);
-    this.a11y_live = live;
-  }
-
   /** Update the aria-live region with a compact description of the point under the cursor. */
   announce(x: number, y: number): void {
-    if (!this.a11y_live) return;
     const params = this.build_params(x, y);
     if (params.time === null || params.series_data.size === 0) return;
     const parts = [];
     for (const [, point] of params.series_data) {
       parts.push("value" in point ? `${point.value}` : `O ${point.open} H ${point.high} L ${point.low} C ${point.close}`);
     }
-    this.a11y_live.textContent = `Time ${params.time}: ${parts.join("; ")}`;
+    this.accessibility_handle?.announce(`Time ${params.time}: ${parts.join("; ")}`);
   }
 
   /** Whether the user has requested reduced motion (gates kinetic scroll). */
@@ -3952,6 +4045,7 @@ export class chart_impl implements chart_api {
     this.stop_animation();
     this.stop_countdown_timer();
     window.removeEventListener("nucleuscharts-chart-backend-lost", this.backend_loss_handler);
+    this.unbind_dpr_watcher();
     this.detach_gestures?.();
     this.observer?.disconnect();
     this.plugin_resize_observer?.disconnect();
@@ -3973,7 +4067,8 @@ export class chart_impl implements chart_api {
     this.tool_listener = null;
     this.tool_change_subs.clear();
     this.drawing_created_subs.clear();
-    this.a11y_live = null;
+    this.accessibility_handle?.detach();
+    this.accessibility_handle = null;
     wasm.dispose();
     wasm.free();
     this.wasm_instance = null;

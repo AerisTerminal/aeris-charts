@@ -46,8 +46,11 @@ pub use hit_test::{SeriesHit, SeriesHitKind};
 pub use indicators::IndicatorKind;
 pub(crate) use indicators::{IndicatorBinding, IndicatorChange};
 pub use interaction::{
-    pinch_zoom_scale, wheel_zoom_scale, ScrollAnimation, KINETIC_DUMPING, KINETIC_MAX_SPEED,
-    KINETIC_MIN_MOVE, KINETIC_MIN_SPEED, PINCH_ZOOM_INTENSITY, WHEEL_SCROLL_PX_PER_DELTA,
+    pinch_zoom_scale, wheel_zoom_scale, CancelReason, GestureResolver, GestureState, GestureUpdate,
+    GestureUpdateKind, HitProfile, InputDevice, InputEvent, InputModifiers, InputTarget,
+    PointerSample, ScrollAnimation, WheelBehavior, WheelDeltaMode, WheelIntent, WheelSample,
+    KINETIC_DUMPING, KINETIC_MAX_SPEED, KINETIC_MIN_MOVE, KINETIC_MIN_SPEED, MAX_ACTIVE_POINTERS,
+    PINCH_ZOOM_INTENSITY, WHEEL_SCROLL_PX_PER_DELTA,
 };
 pub use native_primitives::{
     AccessibilityFocusOptions, AlertCrossingDirection, AnchoredTextHorizontalAlign,

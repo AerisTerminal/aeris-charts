@@ -125,6 +125,45 @@ fn drawing_drag_is_one_history_entry_and_new_mutation_invalidates_redo() {
 }
 
 #[test]
+fn cancelled_drag_rolls_back_and_keyboard_nudge_uses_history() {
+    let mut chart = settled_chart();
+    let id = add_trend(&mut chart);
+    let before = chart.drawing(id).unwrap().points.clone();
+    let x = (x_at(&chart, before[0].logical) + x_at(&chart, before[1].logical)) / 2.0;
+    let y = (y_at(&chart, before[0].price) + y_at(&chart, before[1].price)) / 2.0;
+
+    assert!(chart.drawing_drag_start_at(x, y));
+    chart.drawing_drag_to(x + 40.0, y + 20.0, DrawingModifiers::default());
+    assert_ne!(chart.drawing(id).unwrap().points, before);
+    chart.drawing_drag_cancel();
+    assert_eq!(chart.drawing(id).unwrap().points, before);
+
+    chart.set_selected_drawing(Some(id));
+    assert!(chart.nudge_selected_drawing(1.0, 0.0, None));
+    assert_ne!(chart.drawing(id).unwrap().points, before);
+    assert!(chart.undo_drawing());
+    assert_eq!(chart.drawing(id).unwrap().points, before);
+}
+
+#[test]
+fn touch_profile_expands_anchor_hits_without_changing_precision_hits() {
+    let mut chart = settled_chart();
+    let id = add_trend(&mut chart);
+    chart.set_selected_drawing(Some(id));
+    let point = chart.drawing(id).unwrap().points[0];
+    let x = x_at(&chart, point.logical) + 15.0;
+    let y = y_at(&chart, point.price) + 15.0;
+    assert!(chart
+        .hit_test_drawing_with_profile(x, y, HitProfile::PRECISION)
+        .is_none());
+    let touch = chart
+        .hit_test_drawing_with_profile(x, y, HitProfile::TOUCH)
+        .expect("44px touch anchor target");
+    assert_eq!(touch.id, id);
+    assert_eq!(touch.part, DrawingDragPart::Anchor(0));
+}
+
+#[test]
 fn drawing_history_is_bounded_to_one_hundred_operations() {
     let mut chart = settled_chart();
     for offset in 0..101 {

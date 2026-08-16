@@ -25,15 +25,17 @@ use std::{
 use gpui::{
     canvas, div, prelude::*, px, relative, rgb, size, AnyElement, App, Bounds, Context,
     CursorStyle, Entity, FocusHandle, Focusable, KeyDownEvent, ModifiersChangedEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Render, ScrollWheelEvent, Subscription, Window,
-    WindowBounds, WindowOptions,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PinchEvent, Render, ScrollDelta,
+    ScrollWheelEvent, Subscription, Window, WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
 use nucleuscharts_core::model::data_layer::SeriesId;
 use nucleuscharts_engine::{
     crosshair_mode_from_u8, marker_pos, marker_shape, ChartEngine, ChartFrame, DrawingKind,
-    DrawingModifiers, DrawingPoint, Marker, PriceScaleTarget, PrimitiveAutoscaleContribution,
-    SeriesKind, SplitDirection, Workspace, WorkspaceLayout,
+    DrawingModifiers, DrawingPoint, GestureResolver, InputDevice, InputModifiers, InputTarget,
+    Marker, PointerSample, PriceScaleTarget, PrimitiveAutoscaleContribution, SeriesKind,
+    SplitDirection, WheelBehavior, WheelDeltaMode, WheelIntent, WheelSample, Workspace,
+    WorkspaceLayout,
 };
 use nucleuscharts_render::color::Color;
 use nucleuscharts_render::draw_list::{IRect, LineStyle, Prim, TextAlign};
@@ -270,6 +272,7 @@ struct GestureConfig {
     pan: bool,
     wheel_scroll: bool,
     wheel_zoom: bool,
+    wheel_behavior: WheelBehavior,
     axis_dblclick_reset_time: bool,
     axis_dblclick_reset_price: bool,
     axis_scale_price: bool,
@@ -284,6 +287,7 @@ impl Default for GestureConfig {
             pan: true,
             wheel_scroll: true,
             wheel_zoom: true,
+            wheel_behavior: WheelBehavior::Auto,
             axis_dblclick_reset_time: true,
             axis_dblclick_reset_price: true,
             axis_scale_price: true,
@@ -410,6 +414,8 @@ struct Probe {
     fitted: bool,
     viewport_offset: (f32, f32),
     gesture_config: GestureConfig,
+    input: GestureResolver,
+    input_target: InputTarget,
     cursor_style: CursorStyle,
     press_start: Option<(f64, f64)>,
     press_moved: bool,
@@ -488,6 +494,8 @@ impl Probe {
             fitted: false,
             viewport_offset: (0.0, 0.0),
             gesture_config: GestureConfig::default(),
+            input: GestureResolver::default(),
+            input_target: InputTarget::Pane,
             cursor_style: CursorStyle::Crosshair,
             press_start: None,
             press_moved: false,
@@ -1290,6 +1298,48 @@ impl Probe {
         }
     }
 
+    fn mouse_sample(
+        &self,
+        pane_x: f64,
+        y: f64,
+        target: InputTarget,
+        modifiers: gpui::Modifiers,
+    ) -> PointerSample {
+        PointerSample {
+            id: 1,
+            device: InputDevice::Mouse,
+            target,
+            modifiers: InputModifiers {
+                shift: modifiers.shift,
+                control: modifiers.control,
+                alt: modifiers.alt,
+                meta: modifiers.platform,
+            },
+            x: pane_x,
+            y,
+            timestamp_ms: self.now_ms(),
+            pressure: 0.5,
+            tilt_x: 0.0,
+            tilt_y: 0.0,
+        }
+    }
+
+    fn input_target_at(&self, chart_x: f64, pane_x: f64, y: f64) -> InputTarget {
+        if self.gesture_config.panes_resize && self.separator_at(y).is_some() {
+            InputTarget::Separator
+        } else if y > self.engine.pane_h {
+            InputTarget::TimeAxis
+        } else if chart_x < self.engine.pane_left
+            || chart_x > self.engine.pane_left + self.engine.pane_w
+        {
+            InputTarget::PriceAxis
+        } else if self.armed_tool.is_some() || self.engine.hit_test_drawing(pane_x, y).is_some() {
+            InputTarget::Drawing
+        } else {
+            InputTarget::Pane
+        }
+    }
+
     fn update_crosshair(&mut self, pane_x: f64, y: f64) {
         if pane_x >= 0.0 && pane_x <= self.engine.pane_w && y >= 0.0 && y <= self.engine.pane_h {
             self.engine.crosshair = Some((pane_x, y));
@@ -1325,6 +1375,7 @@ impl Probe {
     }
 
     fn clear_pointer_state(&mut self) {
+        self.input.cancel();
         match self.drag.take() {
             Some(DragMode::Pan { price_pan }) => {
                 if let Some((pane, target)) = price_pan {
@@ -1383,6 +1434,9 @@ impl Probe {
         self.engine.time_scale_end_scroll();
         self.engine.cancel_scroll_animation();
         let (chart_x, pane_x, y) = self.local_position(event.position);
+        self.input_target = self.input_target_at(chart_x, pane_x, y);
+        let sample = self.mouse_sample(pane_x, y, self.input_target, event.modifiers);
+        self.input.pointer_down(sample);
         self.update_crosshair_modifier(event.modifiers.control, event.modifiers.platform);
         let pane = self.engine.pane_index_at_y(y);
         self.update_cursor(chart_x, y);
@@ -1498,6 +1552,8 @@ impl Probe {
         cx: &mut Context<Self>,
     ) {
         let (chart_x, pane_x, y) = self.local_position(event.position);
+        let sample = self.mouse_sample(pane_x, y, self.input_target, event.modifiers);
+        self.input.pointer_move(sample);
         self.update_crosshair_modifier(event.modifiers.control, event.modifiers.platform);
         if event.dragging() {
             self.mark_press_moved(pane_x, y);
@@ -1566,6 +1622,8 @@ impl Probe {
 
     fn on_mouse_up(&mut self, event: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let (chart_x, pane_x, y) = self.local_position(event.position);
+        let sample = self.mouse_sample(pane_x, y, self.input_target, event.modifiers);
+        self.input.pointer_up(sample);
         self.update_crosshair_modifier(event.modifiers.control, event.modifiers.platform);
         self.mark_press_moved(pane_x, y);
         let moved = self.press_moved;
@@ -1649,7 +1707,27 @@ impl Probe {
         let dy: f32 = delta.y.into();
         let normalized_x = f64::from(dx) / 100.0;
         let normalized_y = f64::from(dy) / 100.0;
-        if normalized_y != 0.0 && self.gesture_config.wheel_zoom {
+        let delta_mode = if matches!(event.delta, ScrollDelta::Pixels(_)) {
+            WheelDeltaMode::Pixel
+        } else {
+            WheelDeltaMode::Line
+        };
+        let intent = WheelSample {
+            x: pane_x,
+            y,
+            delta_x: normalized_x,
+            delta_y: normalized_y,
+            delta_mode,
+            modifiers: InputModifiers {
+                shift: event.modifiers.shift,
+                control: event.modifiers.control,
+                alt: event.modifiers.alt,
+                meta: event.modifiers.platform,
+            },
+            timestamp_ms: self.now_ms(),
+        }
+        .intent(self.gesture_config.wheel_behavior);
+        if intent == WheelIntent::Zoom && normalized_y != 0.0 && self.gesture_config.wheel_zoom {
             let zoom = nucleuscharts_engine::wheel_zoom_scale(normalized_y);
             let pane = self.engine.pane_index_at_y(y);
             if chart_x < self.engine.pane_left {
@@ -1662,16 +1740,45 @@ impl Probe {
                 self.engine.time_scale_zoom(pane_x, zoom);
             }
         }
-        if normalized_x != 0.0 && self.gesture_config.wheel_scroll {
+        let pan_delta = if normalized_x.abs() >= normalized_y.abs() {
+            normalized_x
+        } else {
+            normalized_y
+        };
+        if intent == WheelIntent::Pan && pan_delta != 0.0 && self.gesture_config.wheel_scroll {
             self.engine.time_scale_start_scroll(0.0);
-            self.engine.time_scale_scroll_to(
-                nucleuscharts_engine::WHEEL_SCROLL_PX_PER_DELTA * normalized_x,
-            );
+            self.engine
+                .time_scale_scroll_to(nucleuscharts_engine::WHEEL_SCROLL_PX_PER_DELTA * pan_delta);
             self.engine.time_scale_end_scroll();
         }
         self.update_pointer_feedback(chart_x, pane_x, y);
         cx.stop_propagation();
         cx.notify();
+    }
+
+    fn on_pinch(&mut self, event: &PinchEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let (chart_x, pane_x, y) = self.local_position(event.position);
+        let intent = WheelSample {
+            x: pane_x,
+            y,
+            delta_y: f64::from(event.delta),
+            modifiers: InputModifiers {
+                control: true,
+                ..InputModifiers::default()
+            },
+            timestamp_ms: self.now_ms(),
+            ..WheelSample::default()
+        }
+        .intent(self.gesture_config.wheel_behavior);
+        if intent == WheelIntent::Zoom && self.gesture_config.wheel_zoom {
+            self.engine.time_scale_zoom(
+                pane_x,
+                nucleuscharts_engine::pinch_zoom_scale(f64::from(event.delta)),
+            );
+            self.update_pointer_feedback(chart_x, pane_x, y);
+            cx.stop_propagation();
+            cx.notify();
+        }
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
@@ -1909,6 +2016,7 @@ impl Render for Probe {
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_scroll_wheel(cx.listener(Self::on_scroll_wheel))
+            .on_pinch(cx.listener(Self::on_pinch))
             .on_modifiers_changed(cx.listener(Self::on_modifiers_changed))
             .on_key_down(cx.listener(Self::on_key_down))
             .child(

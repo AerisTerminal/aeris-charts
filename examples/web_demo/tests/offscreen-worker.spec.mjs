@@ -102,16 +102,20 @@ test("OffscreenCanvas worker renders, resizes, and accepts relayed pointer/wheel
 
   // A second pointer may be active, but canceling the pointer that owns the drag must end the
   // scroll session; the non-owner cannot inherit it.
-  await send(page, { type: "pointer", event: { type: "down", x: 260, y: 150, pointer_id: 8 } });
-  await send(page, { type: "pointer", event: { type: "down", x: 280, y: 150, pointer_id: 9 } });
+  await send(page, { type: "pointer", event: { type: "down", x: 260, y: 150, pointer_id: 8, pointer_type: "touch" } });
+  await send(page, { type: "pointer", event: { type: "down", x: 320, y: 150, pointer_id: 9, pointer_type: "touch" } });
+  const pinched = await send(page, {
+    type: "pointer", event: { type: "move", x: 380, y: 165, pointer_id: 9, pointer_type: "touch", buttons: 1 },
+  });
+  expect(pinched.range).not.toEqual(dragged.range);
   const canceled = await send(page, {
-    type: "pointer", event: { type: "cancel", x: 260, y: 150, pointer_id: 8 },
+    type: "pointer", event: { type: "cancel", x: 260, y: 150, pointer_id: 8, pointer_type: "touch" },
   });
   const non_owner_move = await send(page, {
-    type: "pointer", event: { type: "move", x: 500, y: 150, pointer_id: 9, buttons: 1 },
+    type: "pointer", event: { type: "move", x: 500, y: 150, pointer_id: 9, pointer_type: "touch", buttons: 1 },
   });
   expect(non_owner_move.range).toEqual(canceled.range);
-  await send(page, { type: "pointer", event: { type: "up", x: 500, y: 150, pointer_id: 9 } });
+  await send(page, { type: "pointer", event: { type: "up", x: 500, y: 150, pointer_id: 9, pointer_type: "touch" } });
 
   const keyed = await send(page, { type: "key", event: { key: "ArrowRight" } });
   expect(keyed.range).not.toEqual(dragged.range);

@@ -15,11 +15,6 @@ async function wait_for_chart(page) {
   await page.evaluate(() => new Promise((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(resolve));
   }));
-  // The recognizer ignores mouse events for 500 ms after the last touch (reference
-  // Delay.PreventFiresTouchEvents); with no touch on record that window covers page birth, and
-  // CDP-injected events carry no `sourceCapabilities` to bypass it. Out-age the window so the
-  // first hover is always accepted.
-  await page.waitForTimeout(600);
 }
 
 async function settle_frames(page) {

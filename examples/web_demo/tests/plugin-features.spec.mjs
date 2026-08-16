@@ -176,7 +176,10 @@ test("primitive feature helpers compose existing engine and host boundaries", as
     const user_alerts = api.create_user_price_alerts(chart, series);
     user_alerts.add(start.close);
 
-    const a11y = api.enable_accessibility(chart, { chart_title: "Test financial chart" });
+    const a11y = api.enable_accessibility(chart, {
+      chart_title: "Test financial chart",
+      announce_data_updates: "active",
+    });
     a11y.focus();
     document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
     chart.set_crosshair_position(start.close, start.time, series);
@@ -381,6 +384,7 @@ test("accessibility provides per-pane semantics, official keyboard help, summari
       chart_title: "Accessible price history",
       data_scope: "all",
       show_shortcuts: true,
+      announce_data_updates: "active",
     });
     accessibility.focus(0);
     const layer = document.activeElement;
@@ -440,7 +444,8 @@ test("accessibility provides per-pane semantics, official keyboard help, summari
   expect(result.after_zoom.to - result.after_zoom.from).toBeLessThan(result.before_zoom.to - result.before_zoom.from);
   expect(result.summary).toContain("data points");
   expect(result.update).toContain("Chart data updated");
-  expect(result.after_canvas).toEqual(result.before_canvas);
+  expect(result.before_canvas.every((value) => value === "true")).toBe(true);
+  expect(result.after_canvas.every((value) => value === null)).toBe(true);
 });
 
 test("accessibility creates an independently named focus target for every live pane", async ({ page }) => {

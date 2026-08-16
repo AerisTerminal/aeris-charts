@@ -12,6 +12,10 @@ entry point and `./design.css` are the only npm export paths. The supported root
   subscriptions, screenshots, and lifecycle operations declared by those handles;
 - first-party broker-neutral trading state, instant/manual confirmation, previews, hit testing,
   semantic style, and typed intent subscriptions exposed by `chart.trading()`;
+- default chart accessibility, its additive `chart.accessibility()` singleton handle, compatibility
+  `enable_accessibility()`, accessibility options, and keyboard data/drawing operation;
+- the additive `wheel_behavior` chart option (`auto`, `pan`, or `zoom`); existing gesture option
+  names remain compatible;
 - `nucleuscharts_error` and its machine-readable error codes;
 - chart-state persistence V1 through `chart.export_state()` and `chart.import_state()`.
 

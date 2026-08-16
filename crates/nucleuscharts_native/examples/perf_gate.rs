@@ -4,6 +4,7 @@
 //!
 //!   Target A — 60fps @ 10 series x 50k bars:  `build_frame` under 16.67 ms/frame
 //!   Target B — 1M-bar load under 300 ms:      `set_series_data` of 1,000,000 bars
+//!   Target C — canonical pointer sample:      fixed-capacity resolver under 0.01 ms/sample
 //!
 //! Report-only by default (prints numbers + PASS/FAIL). Set `NUCLEUSCHARTS_PERF_STRICT=1` to exit non-zero
 //! on any failure so CI can treat it as a hard gate; thresholds are machine-dependent, so the
@@ -13,7 +14,9 @@
 
 use std::time::Instant;
 
-use nucleuscharts_engine::{ChartEngine, ChartFrame, SeriesKind};
+use nucleuscharts_engine::{
+    ChartEngine, ChartFrame, GestureResolver, InputDevice, InputTarget, PointerSample, SeriesKind,
+};
 
 /// Parallel `(times, open, high, low, close)` columns.
 type OhlcColumns = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
@@ -54,6 +57,8 @@ fn main() {
     const FRAMES: usize = 60;
     const LOAD_BARS: usize = 1_000_000;
     const LOAD_BUDGET_MS: f64 = 300.0;
+    const INPUT_SAMPLES: usize = 1_000_000;
+    const INPUT_SAMPLE_BUDGET_MS: f64 = 0.01;
 
     println!("nucleuscharts perf gate (release build recommended)\n");
 
@@ -94,7 +99,37 @@ fn main() {
     println!("Target B — {LOAD_BARS} bar load:");
     let b_pass = report("set_series_data", load_ms, LOAD_BUDGET_MS);
 
-    let all_pass = a_pass && b_pass;
+    // ---- Target C: allocation-free canonical pointer resolver -------------------------------
+    // GestureResolver contains only a two-slot inline pointer array and scalar state: the move
+    // loop has no heap owner or capacity growth path. Measure the release-mode sample latency.
+    let mut input = GestureResolver::default();
+    let mut sample = PointerSample {
+        id: 1,
+        device: InputDevice::Touch,
+        target: InputTarget::Pane,
+        modifiers: Default::default(),
+        x: 100.0,
+        y: 100.0,
+        timestamp_ms: 0.0,
+        pressure: 0.5,
+        tilt_x: 0.0,
+        tilt_y: 0.0,
+    };
+    input.pointer_down(sample);
+    let start = Instant::now();
+    for index in 0..INPUT_SAMPLES {
+        sample.x = 100.0 + (index & 63) as f64;
+        sample.timestamp_ms = index as f64;
+        std::hint::black_box(input.pointer_move(sample));
+    }
+    let per_sample_ms = start.elapsed().as_secs_f64() * 1000.0 / INPUT_SAMPLES as f64;
+    println!(
+        "Target C — {INPUT_SAMPLES} canonical pointer samples ({}-byte fixed resolver):",
+        std::mem::size_of::<GestureResolver>()
+    );
+    let c_pass = report("pointer_move", per_sample_ms, INPUT_SAMPLE_BUDGET_MS);
+
+    let all_pass = a_pass && b_pass && c_pass;
     println!(
         "\n{}",
         if all_pass {

@@ -19,7 +19,7 @@ npm install @nucleuscharts/financial
 ```
 
 Version tags publish automatically when the tag matches `packages/charts/package.json` exactly
-(for example, package version `0.8.14` is released from tag `v0.8.14`).
+(for example, package version `0.9.0` is released from tag `v0.9.0`).
 
 Create a chart with the asynchronous, snake-case API:
 
@@ -76,9 +76,17 @@ while heatmap-around-line and shaded-background examples are composed beneath a 
 
 Features that Nucleus already owns—drawings, bands, price lines, overlay scales, partial-last-price
 lines, session shading, highlighted bar slots, and time-anchored volume profiles—are thin helpers
-over those engine APIs. Accessibility keyboard/ARIA state and tooltip elements remain browser DOM
-chrome, while their exact data lookup, guides, focus geometry, and rendering primitives remain in
-the engine. Every returned feature handle with `detach()` releases its engine and host state.
+over those engine APIs. Accessibility is enabled by default; `chart.accessibility()` returns its
+singleton controller and `enable_accessibility(chart, options)` configures the same instance for
+compatibility. Keyboard/ARIA nodes and announcements remain browser DOM chrome, while bounded data
+queries, focus geometry, drawing edits, and rendering primitives use the shared engine. Streaming
+market updates are silent unless `announce_data_updates` is enabled. Every returned feature handle
+with `detach()` releases its engine and host state.
+
+Browser input uses Pointer Events for mouse, touch, and pen. The engine owns the bounded gesture
+state, live-centroid pinch behavior, cancellation, and device-aware hit tolerances. Wheel policy is
+configurable with `wheel_behavior: "auto" | "pan" | "zoom"`; auto preserves high-resolution
+trackpad deltas as pan while treating discrete wheels and browser pinch signals as zoom.
 
 ## Trading and order management
 

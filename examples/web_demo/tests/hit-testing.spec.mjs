@@ -25,10 +25,6 @@ async function settle_frames(page) {
 async function goto_fixture(page) {
   await page.goto("/?runtimeTest=presentedFrame&backend=canvas2d&forceFallbackAdapter=1");
   await wait_for_chart(page);
-  // the reference's touch-suppression window (Delay.PreventFiresTouchEvents): mouse moves within the
-  // first 500ms of page life are treated as synthetic post-touch events and ignored — wait
-  // past it before driving the pointer (same guard exists in the reference's mouse-event-handler).
-  await page.waitForFunction(() => performance.now() > 600);
 }
 
 /** Subscribe a page-side collector to crosshair moves, capturing the Phase C-d hover fields. */

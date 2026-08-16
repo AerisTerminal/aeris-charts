@@ -48,6 +48,7 @@ const UNSUPPORTED_WORKER_OPTIONS = [
   "handle_scale",
   "kinetic_scroll",
   "tracking_mode",
+  "accessibility",
 ] as const;
 
 type offscreen_layout_options = Omit<deep_partial<chart_options["layout"]>, "panes"> & {
@@ -63,6 +64,7 @@ export type offscreen_chart_options = Omit<
 
 function split_offscreen_options(options: offscreen_chart_options): {
   theme: "light" | "dark" | undefined;
+  wheel_behavior: "auto" | "pan" | "zoom" | undefined;
   engine: Record<string, unknown>;
 } {
   const raw = options as Record<string, unknown>;
@@ -76,8 +78,8 @@ function split_offscreen_options(options: offscreen_chart_options): {
       "worker charts do not support option layout.panes.enableResize",
     );
   }
-  const { theme, ...engine } = options;
-  return { theme, engine: engine as Record<string, unknown> };
+  const { theme, wheel_behavior, ...engine } = options;
+  return { theme, wheel_behavior, engine: engine as Record<string, unknown> };
 }
 
 export interface offscreen_chart_init {
@@ -104,6 +106,11 @@ export interface offscreen_pointer_event {
   ctrl_key?: boolean;
   meta_key?: boolean;
   shift_key?: boolean;
+  pointer_type?: "mouse" | "touch" | "pen";
+  timestamp_ms?: number;
+  pressure?: number;
+  tilt_x?: number;
+  tilt_y?: number;
 }
 
 export interface offscreen_wheel_event {
@@ -114,6 +121,7 @@ export interface offscreen_wheel_event {
   delta_y: number;
   /** 0 = pixels, 1 = lines, 2 = pages (the WheelEvent values). */
   delta_mode?: 0 | 1 | 2;
+  ctrl_key?: boolean;
 }
 
 export interface offscreen_key_event {
@@ -130,10 +138,11 @@ export interface offscreen_key_event {
  */
 export class offscreen_chart {
   private readonly stats_scratch = new Float64Array(NucleusChart.frame_stats_len());
-  private readonly active_pointers = new Set<number>();
+  private readonly input_scratch = new Float64Array(NucleusChart.input_update_len());
   private readonly backend_change_handlers = new Set<(backend: "webgpu" | "canvas2d") => void>();
   private primary_adopted = false;
   private drag_pointer_id: number | null = null;
+  private pinch_active = false;
   private removed = false;
   private width: number;
   private height: number;
@@ -148,6 +157,7 @@ export class offscreen_chart {
     width: number,
     height: number,
     dpr: number,
+    private wheel_behavior: "auto" | "pan" | "zoom",
   ) {
     this.width = width;
     this.height = height;
@@ -257,7 +267,8 @@ export class offscreen_chart {
 
   apply_options(options: offscreen_chart_options): void {
     this.assert_live();
-    const { theme, engine } = split_offscreen_options(options);
+    const { theme, wheel_behavior, engine } = split_offscreen_options(options);
+    if (wheel_behavior !== undefined) this.wheel_behavior = wheel_behavior;
     if (theme !== undefined) this.wasm.apply_options(JSON.stringify(theme_options(theme)));
     if (Object.keys(engine).length > 0) this.wasm.apply_options(JSON.stringify(engine));
     this.render();
@@ -313,29 +324,81 @@ export class offscreen_chart {
     const pane_height = this.height - this.wasm.time_scale_height();
     const in_pane = x >= 0 && x <= pane_width && y >= 0 && y <= pane_height;
     const primary = (event.button ?? 0) === 0;
+    const device = event.pointer_type === "touch" ? 1 : event.pointer_type === "pen" ? 2 : 0;
+    const target = in_pane ? 0 : y > pane_height ? 4 : 3;
+    const feed = (phase: "down" | "move" | "up") => {
+      const method = phase === "down" ? this.wasm.input_pointer_down.bind(this.wasm)
+        : phase === "move" ? this.wasm.input_pointer_move.bind(this.wasm)
+          : this.wasm.input_pointer_up.bind(this.wasm);
+      const modifiers = (event.shift_key ? 1 : 0) | (event.ctrl_key ? 2 : 0)
+        | (event.meta_key ? 8 : 0);
+      method(
+        id, device, target, modifiers, x, y, event.timestamp_ms ?? performance.now(),
+        event.pressure ?? (primary ? 0.5 : 0), event.tilt_x ?? 0, event.tilt_y ?? 0,
+        this.input_scratch,
+      );
+      return {
+        kind: this.input_scratch[0]!,
+        pointer_id: this.input_scratch[2]!,
+        x: this.input_scratch[5]!,
+        y: this.input_scratch[6]!,
+        previous_x: this.input_scratch[7]!,
+        scale_delta: this.input_scratch[9]!,
+      };
+    };
 
     switch (event.type) {
       case "down":
         if (!primary) return;
-        this.active_pointers.add(id);
-        if (in_pane && this.drag_pointer_id === null) {
-          this.wasm.scroll_start(x);
-          this.drag_pointer_id = id;
-          this.wasm.set_crosshair(x, y);
+        {
+          const update = feed("down");
+          if (update.kind === 11) return;
+          if (update.kind === 5) {
+            if (this.drag_pointer_id !== null) this.wasm.scroll_end();
+            this.drag_pointer_id = null;
+            this.pinch_active = true;
+            this.wasm.scroll_start(update.x);
+          } else if (in_pane && this.drag_pointer_id === null) {
+            this.wasm.scroll_start(x);
+            this.drag_pointer_id = id;
+            this.wasm.set_crosshair(x, y);
+          }
         }
         break;
       case "move":
-        if (this.drag_pointer_id === id) this.wasm.scroll_move(x);
+        {
+          const update = feed("move");
+          if (update.kind === 6) {
+            this.wasm.scroll_move(update.x);
+            if (update.scale_delta !== 0) {
+              this.wasm.zoom(update.x, this.wasm.pinch_zoom_scale(update.scale_delta));
+            }
+          } else if (this.drag_pointer_id === id) {
+            this.wasm.scroll_move(x);
+          }
+        }
         if (in_pane || this.drag_pointer_id === id) this.wasm.set_crosshair(x, y);
         else this.wasm.clear_crosshair();
         break;
-      case "up":
-      case "cancel":
-        this.active_pointers.delete(id);
-        if (this.drag_pointer_id === id) {
+      case "up": {
+        const update = feed("up");
+        if (update.kind === 7) {
+          this.wasm.scroll_end();
+          this.wasm.scroll_start(update.x);
+          this.drag_pointer_id = update.pointer_id;
+          this.pinch_active = false;
+        } else if (this.drag_pointer_id === id || this.pinch_active) {
           this.wasm.scroll_end();
           this.drag_pointer_id = null;
+          this.pinch_active = false;
         }
+        break;
+      }
+      case "cancel":
+        this.wasm.input_cancel_all(this.input_scratch);
+        if (this.drag_pointer_id !== null || this.pinch_active) this.wasm.scroll_end();
+        this.drag_pointer_id = null;
+        this.pinch_active = false;
         break;
       case "leave":
         if (this.drag_pointer_id !== id) this.wasm.clear_crosshair();
@@ -352,7 +415,11 @@ export class offscreen_chart {
     const delta_y = -(adjustment * event.delta_y) / 100;
     const pane_left = this.wasm.pane_left();
     const pane_width = this.wasm.time_scale_width();
-    if (delta_y !== 0) {
+    const behavior = this.wheel_behavior === "pan" ? 1 : this.wheel_behavior === "zoom" ? 2 : 0;
+    const mode = this.wasm.classify_wheel(behavior, event.delta_mode ?? 0, event.ctrl_key === true) === 2
+      ? "zoom" : "pan";
+    const pan_delta = Math.abs(delta_x) >= Math.abs(delta_y) ? delta_x : -delta_y;
+    if (mode === "zoom" && delta_y !== 0) {
       if (event.x < pane_left || event.x > pane_left + pane_width) {
         this.wasm.price_axis_wheel_zoom(
           this.wasm.pane_index_at_y(event.y),
@@ -364,9 +431,9 @@ export class offscreen_chart {
         this.wasm.zoom(event.x - pane_left, this.wasm.wheel_zoom_scale(delta_y));
       }
     }
-    if (delta_x !== 0) {
+    if (mode === "pan" && pan_delta !== 0) {
       this.wasm.scroll_start(0);
-      this.wasm.scroll_move(this.wasm.wheel_scroll_delta(delta_x));
+      this.wasm.scroll_move(this.wasm.wheel_scroll_delta(pan_delta));
       this.wasm.scroll_end();
     }
     this.render();
@@ -449,8 +516,9 @@ export class offscreen_chart {
     if (this.removed) return;
     globalThis.removeEventListener("nucleuscharts-chart-backend-lost", this.backend_loss_handler);
     if (this.drag_pointer_id !== null) this.wasm.scroll_end();
+    this.wasm.input_cancel_all(this.input_scratch);
     this.drag_pointer_id = null;
-    this.active_pointers.clear();
+    this.pinch_active = false;
     this.backend_change_handlers.clear();
     this.removed = true;
     this.wasm.dispose();
@@ -478,7 +546,7 @@ export async function create_offscreen_chart(
   const height = Math.max(init.height, 1);
   const dpr = Math.max(init.dpr, Number.EPSILON);
   const options = init.options ?? {};
-  const { theme, engine: engine_options } = split_offscreen_options(options);
+  const { theme, wheel_behavior, engine: engine_options } = split_offscreen_options(options);
   const wasm = await wasm_create_offscreen_chart(
     gpu_canvas,
     fallback_canvas,
@@ -494,7 +562,9 @@ export async function create_offscreen_chart(
     wasm.apply_options(JSON.stringify(engine_options));
   }
   wasm.set_series_type(KIND_TO_U8[init.series_kind ?? "candlestick"]);
-  const chart = new offscreen_chart(wasm, gpu_canvas, fallback_canvas, width, height, dpr);
+  const chart = new offscreen_chart(
+    wasm, gpu_canvas, fallback_canvas, width, height, dpr, wheel_behavior ?? "auto",
+  );
   chart.render();
   return chart;
 }

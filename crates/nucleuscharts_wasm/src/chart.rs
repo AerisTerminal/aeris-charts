@@ -51,7 +51,8 @@ use nucleuscharts_core::scale::price_scale_core::PriceScaleMode;
 use nucleuscharts_engine::{
     crosshair_mode_from_u8, line_style_from_u8, marker_pos, marker_shape, AxisFrame, AxisLabel,
     AxisLabelCorners, AxisTextAlign, AxisTextMidpoint, ChartEngine, DrawingKind, DrawingModifiers,
-    DrawingPoint, ExecutionId, FeatureSeriesKind, InstrumentMetadata, Marker, OrderId, PaneId,
+    DrawingPoint, ExecutionId, FeatureSeriesKind, GestureResolver, GestureUpdate, InputDevice,
+    InputModifiers, InputTarget, InstrumentMetadata, Marker, OrderId, PaneId, PointerSample,
     PositionId, PriceFormatterFn, PriceScaleTarget, PrimitiveAutoscaleContribution, SeriesKind,
     TickMarkFormatterFn, TimeFormatterFn, TradingConfirmationMode, TradingExecution,
     TradingPosition, TradingSnapshot, TradingStyleOptions, WorkingOrder,
@@ -127,6 +128,80 @@ fn trading_result_json(result: Result<(), nucleuscharts_engine::ChartError>) -> 
         })
         .to_string(),
     }
+}
+
+const INPUT_UPDATE_LEN: usize = 12;
+
+fn input_device_from_u8(value: u8) -> InputDevice {
+    match value {
+        1 => InputDevice::Touch,
+        2 => InputDevice::Pen,
+        _ => InputDevice::Mouse,
+    }
+}
+
+fn input_target_from_u8(value: u8) -> InputTarget {
+    match value {
+        1 => InputTarget::Drawing,
+        2 => InputTarget::Trading,
+        3 => InputTarget::PriceAxis,
+        4 => InputTarget::TimeAxis,
+        5 => InputTarget::Separator,
+        _ => InputTarget::Pane,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pointer_sample(
+    id: u32,
+    device: u8,
+    target: u8,
+    modifiers: u8,
+    x: f64,
+    y: f64,
+    timestamp_ms: f64,
+    pressure: f64,
+    tilt_x: f64,
+    tilt_y: f64,
+) -> PointerSample {
+    PointerSample {
+        id,
+        device: input_device_from_u8(device),
+        target: input_target_from_u8(target),
+        modifiers: InputModifiers {
+            shift: modifiers & 1 != 0,
+            control: modifiers & 2 != 0,
+            alt: modifiers & 4 != 0,
+            meta: modifiers & 8 != 0,
+        },
+        x,
+        y,
+        timestamp_ms,
+        pressure,
+        tilt_x,
+        tilt_y,
+    }
+}
+
+fn write_input_update(out: &mut [f64], update: GestureUpdate) -> bool {
+    if out.len() < INPUT_UPDATE_LEN {
+        return false;
+    }
+    out[..INPUT_UPDATE_LEN].copy_from_slice(&[
+        update.kind as u8 as f64,
+        update.state as u8 as f64,
+        f64::from(update.pointer_id),
+        update.target as u8 as f64,
+        update.device as u8 as f64,
+        update.x,
+        update.y,
+        update.previous_x,
+        update.previous_y,
+        update.scale_delta,
+        f64::from(update.active_pointers),
+        if update.prevent_default { 1.0 } else { 0.0 },
+    ]);
+    true
 }
 
 fn broadcast_gpu_loss() {
@@ -291,6 +366,7 @@ struct ChartInner {
     bitmap_w: u32,
     bitmap_h: u32,
     engine: ChartEngine,
+    input: GestureResolver,
     frame: nucleuscharts_engine::ChartFrame,
     axis_frame: AxisFrame,
     /// Backend-neutral top-layer primitives: watermark, axis chrome, ticks, and all axis/crosshair
@@ -572,6 +648,7 @@ pub async fn create_chart(
         bitmap_w,
         bitmap_h,
         engine: ChartEngine::new(css_width, css_height, dpr),
+        input: GestureResolver::default(),
         frame: nucleuscharts_engine::ChartFrame::default(),
         axis_frame: AxisFrame::default(),
         axis_prims: Vec::new(),
@@ -706,6 +783,7 @@ pub async fn create_offscreen_chart(
         bitmap_w,
         bitmap_h,
         engine: ChartEngine::new(css_width, css_height, dpr),
+        input: GestureResolver::default(),
         frame: nucleuscharts_engine::ChartFrame::default(),
         axis_frame: AxisFrame::default(),
         axis_prims: Vec::new(),
@@ -887,7 +965,16 @@ impl NucleusChart {
     }
 
     pub fn trading_hit_json(&self, x_css: f64, y_css: f64) -> String {
-        let hit = self.inner.borrow().engine.trading_hit_at(x_css, y_css);
+        self.trading_hit_json_device(x_css, y_css, InputDevice::Mouse as u8)
+    }
+
+    pub fn trading_hit_json_device(&self, x_css: f64, y_css: f64, device: u8) -> String {
+        let profile = nucleuscharts_engine::HitProfile::for_device(input_device_from_u8(device));
+        let hit = self
+            .inner
+            .borrow()
+            .engine
+            .trading_hit_at_with_profile(x_css, y_css, profile);
         match hit {
             None => "null".to_string(),
             Some(hit) => {
@@ -962,6 +1049,31 @@ impl NucleusChart {
             .borrow_mut()
             .engine
             .trading_drag_start_at(x_css, y_css)
+    }
+    pub fn trading_drag_start_at_device(&mut self, x_css: f64, y_css: f64, device: u8) -> bool {
+        let profile = nucleuscharts_engine::HitProfile::for_device(input_device_from_u8(device));
+        self.inner
+            .borrow_mut()
+            .engine
+            .trading_drag_start_at_with_profile(x_css, y_css, profile)
+    }
+    pub fn trading_keyboard_start_order(&mut self, id: &str) -> bool {
+        OrderId::new(id).is_ok_and(|id| {
+            self.inner
+                .borrow_mut()
+                .engine
+                .trading_keyboard_start_order(&id)
+        })
+    }
+    pub fn trading_keyboard_adjust(&mut self, ticks: i32) -> bool {
+        self.inner
+            .borrow_mut()
+            .engine
+            .trading_keyboard_adjust(ticks)
+    }
+    pub fn trading_keyboard_commit_json(&mut self) -> String {
+        serde_json::to_string(&self.inner.borrow_mut().engine.trading_keyboard_commit())
+            .unwrap_or_else(|_| "null".to_string())
     }
 
     pub fn trading_drag_to(&mut self, y_css: f64) -> bool {
@@ -2391,6 +2503,130 @@ impl NucleusChart {
     // --- engine-owned interaction models (the TS recognizer forwards samples; all formulas
     // live in the engine — see nucleuscharts_engine::interaction) ---
 
+    pub fn input_update_len() -> usize {
+        INPUT_UPDATE_LEN
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn input_pointer_down(
+        &mut self,
+        id: u32,
+        device: u8,
+        target: u8,
+        modifiers: u8,
+        x: f64,
+        y: f64,
+        timestamp_ms: f64,
+        pressure: f64,
+        tilt_x: f64,
+        tilt_y: f64,
+        out: &mut [f64],
+    ) -> bool {
+        let sample = pointer_sample(
+            id,
+            device,
+            target,
+            modifiers,
+            x,
+            y,
+            timestamp_ms,
+            pressure,
+            tilt_x,
+            tilt_y,
+        );
+        write_input_update(out, self.inner.borrow_mut().input.pointer_down(sample))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn input_pointer_move(
+        &mut self,
+        id: u32,
+        device: u8,
+        target: u8,
+        modifiers: u8,
+        x: f64,
+        y: f64,
+        timestamp_ms: f64,
+        pressure: f64,
+        tilt_x: f64,
+        tilt_y: f64,
+        out: &mut [f64],
+    ) -> bool {
+        let sample = pointer_sample(
+            id,
+            device,
+            target,
+            modifiers,
+            x,
+            y,
+            timestamp_ms,
+            pressure,
+            tilt_x,
+            tilt_y,
+        );
+        write_input_update(out, self.inner.borrow_mut().input.pointer_move(sample))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn input_pointer_up(
+        &mut self,
+        id: u32,
+        device: u8,
+        target: u8,
+        modifiers: u8,
+        x: f64,
+        y: f64,
+        timestamp_ms: f64,
+        pressure: f64,
+        tilt_x: f64,
+        tilt_y: f64,
+        out: &mut [f64],
+    ) -> bool {
+        let sample = pointer_sample(
+            id,
+            device,
+            target,
+            modifiers,
+            x,
+            y,
+            timestamp_ms,
+            pressure,
+            tilt_x,
+            tilt_y,
+        );
+        write_input_update(out, self.inner.borrow_mut().input.pointer_up(sample))
+    }
+
+    pub fn input_long_press(&mut self, id: u32, out: &mut [f64]) -> bool {
+        write_input_update(out, self.inner.borrow_mut().input.long_press(id))
+    }
+
+    pub fn input_cancel_all(&mut self, out: &mut [f64]) -> bool {
+        write_input_update(out, self.inner.borrow_mut().input.cancel())
+    }
+
+    pub fn classify_wheel(&self, behavior: u8, delta_mode: u8, control: bool) -> u8 {
+        let behavior = match behavior {
+            1 => nucleuscharts_engine::WheelBehavior::Pan,
+            2 => nucleuscharts_engine::WheelBehavior::Zoom,
+            _ => nucleuscharts_engine::WheelBehavior::Auto,
+        };
+        let delta_mode = match delta_mode {
+            1 => nucleuscharts_engine::WheelDeltaMode::Line,
+            2 => nucleuscharts_engine::WheelDeltaMode::Page,
+            _ => nucleuscharts_engine::WheelDeltaMode::Pixel,
+        };
+        nucleuscharts_engine::WheelSample {
+            delta_mode,
+            modifiers: nucleuscharts_engine::InputModifiers {
+                control,
+                ..nucleuscharts_engine::InputModifiers::default()
+            },
+            ..nucleuscharts_engine::WheelSample::default()
+        }
+        .intent(behavior) as u8
+    }
+
     /// reference wheel zoom increment: `sign(deltaY) * min(1, |deltaY|)`.
     pub fn wheel_zoom_scale(&self, delta_y: f64) -> f64 {
         self.inner.borrow().wheel_zoom_scale(delta_y)
@@ -2650,6 +2886,13 @@ impl NucleusChart {
     pub fn drawing_drag_start_at(&mut self, x_css: f64, y_css: f64) -> bool {
         self.inner.borrow_mut().drawing_drag_start_at(x_css, y_css)
     }
+    pub fn drawing_drag_start_at_device(&mut self, x_css: f64, y_css: f64, device: u8) -> bool {
+        let profile = nucleuscharts_engine::HitProfile::for_device(input_device_from_u8(device));
+        self.inner
+            .borrow_mut()
+            .engine
+            .drawing_drag_start_at_with_profile(x_css, y_css, profile)
+    }
     pub fn drawing_drag_to(&mut self, x_css: f64, y_css: f64, magnet: bool, straighten: bool) {
         self.inner
             .borrow_mut()
@@ -2658,8 +2901,18 @@ impl NucleusChart {
     pub fn drawing_drag_end(&mut self) {
         self.inner.borrow_mut().drawing_drag_end();
     }
+    pub fn drawing_drag_cancel(&mut self) {
+        self.inner.borrow_mut().engine.drawing_drag_cancel();
+    }
     pub fn drawing_drag_active(&self) -> bool {
         self.inner.borrow().drawing_drag_active()
+    }
+    pub fn nudge_selected_drawing(&mut self, dx_css: f64, dy_css: f64, anchor: i32) -> bool {
+        self.inner.borrow_mut().engine.nudge_selected_drawing(
+            dx_css,
+            dy_css,
+            usize::try_from(anchor).ok(),
+        )
     }
     /// Undo one committed drawing mutation in this chart's bounded semantic history.
     pub fn undo_drawing(&mut self) -> bool {
