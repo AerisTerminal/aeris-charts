@@ -273,13 +273,12 @@ export function install_gestures(chart: chart_impl): () => void {
     const enabled = kind === "touch" ? cfg.kinetic_touch : cfg.kinetic_mouse;
     wasm.kinetic_begin_sampling(enabled, x, performance.now());
   };
-  /** Arm vertical price panning on the exact unlocked scale owned by the selected/hit series. */
+  /** Resolve, unlock, and arm the exact scale owned by the selected/hit series. */
   const arm_price_pan = (pane: number, start_x: number, start_y: number) => {
     disarm_price_pan();
-    const target = wasm.price_pan_target_at(pane, start_x, start_y) ?? null;
+    const target = wasm.begin_price_pan_at(pane, start_x, start_y) ?? null;
     if (target === null) return;
     price_pan = { pane, target };
-    wasm.price_axis_start_scroll(pane, target, start_y);
   };
   /** Close the engine's price-pan session (a no-op arm leaves nothing to close). */
   const disarm_price_pan = () => {

@@ -698,16 +698,11 @@ impl ChartEngine {
         }
     }
 
-    /// Resolve a pane drag to the unlocked scale owned by the series the user intended to grab.
+    /// Resolve a pane drag to the scale owned by the series the user intended to grab.
     /// A selected series wins when it is itself under the pointer; otherwise the canonical series
     /// hit arbitration chooses the target. Empty pane space may continue dragging an explicitly
-    /// selected visible series, but never falls back to an arbitrary manual scale.
-    pub fn price_pan_target_at(
-        &self,
-        pane: usize,
-        x_css: f64,
-        y_css: f64,
-    ) -> Option<PriceScaleTarget> {
+    /// selected visible series, but never falls back to an arbitrary scale.
+    fn price_pan_target_at(&self, pane: usize, x_css: f64, y_css: f64) -> Option<PriceScaleTarget> {
         if self.pane_at_y(y_css)? != pane {
             return None;
         }
@@ -720,9 +715,27 @@ impl ChartEngine {
             .or_else(|| self.hit_test_series(x_css, y_css))
             .or(selected)?;
         let (series_pane, target) = self.series_price_scale(series)?;
-        if series_pane != pane || self.price_scale_auto_scale_for(pane, target)? {
+        if series_pane != pane {
             return None;
         }
+        Some(target)
+    }
+
+    /// Resolve and begin one pane price-pan session. Starting a drag explicitly unlocks only the
+    /// intended series' scale, preserving its current autoscaled range as the manual snapshot.
+    pub fn begin_price_pan_at(
+        &mut self,
+        pane: usize,
+        x_css: f64,
+        y_css: f64,
+    ) -> Option<PriceScaleTarget> {
+        let target = self.price_pan_target_at(pane, x_css, y_css)?;
+        let scale = self.price_scale_for_mut(pane, target)?;
+        scale.start_scroll(y_css);
+        if scale.is_auto_scale() {
+            return None;
+        }
+        self.invalidate_frame_all();
         Some(target)
     }
 
@@ -1002,13 +1015,40 @@ mod tests {
     }
 
     #[test]
-    fn price_pan_noops_under_autoscale() {
+    fn price_pan_unlocks_the_autoscaled_target_before_moving_it() {
         let mut chart = chart_with_data(400.0, 300.0);
         let (from, to) = chart.price_scale_visible_range(0, false).unwrap();
         chart.price_axis_start_scroll(0, PriceScaleTarget::Right, 100.0);
+        assert_eq!(chart.price_scale_auto_scale(0, false), Some(false));
         chart.price_axis_scroll_to(0, PriceScaleTarget::Right, 120.0);
         let (new_from, new_to) = chart.price_scale_visible_range(0, false).unwrap();
-        assert_eq!((new_from, new_to), (from, to));
+        assert_ne!((new_from, new_to), (from, to));
+        assert!((new_to - new_from - (to - from)).abs() < 1e-9);
+        chart.price_axis_end_scroll(0, PriceScaleTarget::Right);
+    }
+
+    #[test]
+    fn every_builtin_series_hit_unlocks_its_own_autoscaled_scale() {
+        for kind in [
+            SeriesKind::Candlestick,
+            SeriesKind::Bar,
+            SeriesKind::Line,
+            SeriesKind::Area,
+            SeriesKind::Histogram,
+        ] {
+            let mut chart = chart_with_data(400.0, 300.0);
+            chart.convert_series_kind(0, kind);
+            chart.autoscale_visible();
+            let x = chart.time_scale.index_to_coordinate(4);
+            let y = chart.series_price_to_coordinate(0, 14.5).unwrap();
+            assert_eq!(
+                chart.begin_price_pan_at(0, x, y),
+                Some(PriceScaleTarget::Right),
+                "{kind:?}"
+            );
+            assert_eq!(chart.price_scale_auto_scale(0, false), Some(false));
+            chart.price_axis_end_scroll(0, PriceScaleTarget::Right);
+        }
     }
 
     #[test]
@@ -1064,9 +1104,22 @@ mod tests {
             Some(comparison)
         );
 
+        chart.set_price_scale_auto_scale_for(0, PriceScaleTarget::Right, true);
         chart.set_price_scale_auto_scale_for(0, comparison, true);
-        assert_eq!(chart.price_pan_target_at(0, x, comparison_y), None);
-        assert_eq!(chart.price_pan_target_at(0, empty.0, empty.1), None);
+        assert_eq!(
+            chart.price_pan_target_at(0, x, comparison_y),
+            Some(comparison)
+        );
+        assert_eq!(
+            chart.begin_price_pan_at(0, x, comparison_y),
+            Some(comparison)
+        );
+        assert_eq!(chart.price_scale_auto_scale_for(0, comparison), Some(false));
+        assert_eq!(
+            chart.price_scale_auto_scale_for(0, PriceScaleTarget::Right),
+            Some(true)
+        );
+        chart.price_axis_end_scroll(0, comparison);
     }
 
     #[test]
@@ -1116,11 +1169,15 @@ mod tests {
             .add_price_scale(0, "indicator-pan", PriceScaleSide::Left, Some(0), true)
             .unwrap();
         chart.set_series_price_scale(sma, indicator_scale);
-        chart.set_price_scale_visible_range_for(0, indicator_scale, 0.0, 40.0);
+        chart.autoscale_visible();
 
         let x = chart.time_scale.index_to_coordinate(4);
         let y = chart.series_price_to_coordinate(sma, 14.0).unwrap();
-        assert_eq!(chart.price_pan_target_at(0, x, y), Some(indicator_scale));
+        assert_eq!(chart.begin_price_pan_at(0, x, y), Some(indicator_scale));
+        assert_eq!(
+            chart.price_scale_auto_scale_for(0, indicator_scale),
+            Some(false)
+        );
     }
 
     #[test]

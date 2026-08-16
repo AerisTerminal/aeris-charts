@@ -739,6 +739,7 @@ fn price_reset_restores_every_scale_across_panes_without_resetting_time() {
         chart.set_price_scale_visible_range_for(pane, target, from, from + 1.0);
         assert_eq!(chart.price_scale_auto_scale_for(pane, target), Some(false));
     }
+    chart.price_axis_start_scroll(0, PriceScaleTarget::Right, 100.0);
 
     chart.reset_price_scales();
     for (pane, target) in [
@@ -755,6 +756,19 @@ fn price_reset_restores_every_scale_across_panes_without_resetting_time() {
     }
     assert_eq!(chart.bar_spacing(), spacing_before);
     assert_eq!(chart.right_offset(), offset_before);
+
+    // Reset must discard the in-flight manual snapshot. Turning manual mode back on without
+    // starting a new drag cannot resume the stale session.
+    chart.build_frame();
+    let reset_range = chart
+        .price_scale_visible_range_for(0, PriceScaleTarget::Right)
+        .unwrap();
+    chart.set_price_scale_auto_scale_for(0, PriceScaleTarget::Right, false);
+    chart.price_axis_scroll_to(0, PriceScaleTarget::Right, 140.0);
+    assert_eq!(
+        chart.price_scale_visible_range_for(0, PriceScaleTarget::Right),
+        Some(reset_range)
+    );
 }
 
 #[test]

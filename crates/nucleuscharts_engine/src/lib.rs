@@ -2724,7 +2724,9 @@ impl ChartEngine {
                 entry.scale.set_auto_scale(true);
             }
         }
-        self.invalidate_frame_scene();
+        // Autoscale changes affect ranges, marker margins, coordinates, axes, and retained
+        // geometry. Rebuild the complete frame contract on the next repaint.
+        self.invalidate_frame_all();
     }
 
     /// TradingView-style "reset view" button semantics in one action: the time scale returns

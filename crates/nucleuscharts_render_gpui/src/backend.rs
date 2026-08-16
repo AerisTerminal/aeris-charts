@@ -308,18 +308,10 @@ impl ShapedTextCache {
 
 /// Bounded cache converting the shared straight-alpha RGBA8 payload into GPUI's retained image
 /// resource once per immutable image/opacity pair.
+#[derive(Default)]
 pub(crate) struct RasterImageCache {
     entries: HashMap<(u64, u32), (Arc<RenderImage>, u64)>,
     tick: u64,
-}
-
-impl Default for RasterImageCache {
-    fn default() -> Self {
-        Self {
-            entries: HashMap::new(),
-            tick: 0,
-        }
-    }
 }
 
 impl RasterImageCache {

@@ -1457,10 +1457,10 @@ impl Probe {
         if event.click_count >= 2 {
             if y > self.engine.pane_h && self.gesture_config.axis_dblclick_reset_time {
                 self.engine.reset_time_scale();
-            } else if self.gesture_config.axis_dblclick_reset_price {
-                if self.engine.price_axis_target_at(pane, pane_x).is_some() {
-                    self.engine.reset_price_scales();
-                }
+            } else if self.gesture_config.axis_dblclick_reset_price
+                && self.engine.price_axis_target_at(pane, pane_x).is_some()
+            {
+                self.engine.reset_price_scales();
             }
             self.press_moved = true;
             self.dirty = true;
@@ -1521,11 +1521,8 @@ impl Probe {
             self.begin_mouse_pan(pane_x);
             let price_pan = self
                 .engine
-                .price_pan_target_at(pane, pane_x, y)
+                .begin_price_pan_at(pane, pane_x, y)
                 .map(|target| (pane, target));
-            if let Some((pane, target)) = price_pan {
-                self.engine.price_axis_start_scroll(pane, target, y);
-            }
             Some(DragMode::Pan { price_pan })
         } else {
             None
@@ -1738,9 +1735,9 @@ impl Probe {
                 self.engine.time_scale_zoom(pane_x, zoom);
             }
         }
-        let pan_delta = if self.gesture_config.wheel_behavior == WheelBehavior::Auto {
-            normalized_x
-        } else if normalized_x.abs() >= normalized_y.abs() {
+        let pan_delta = if self.gesture_config.wheel_behavior == WheelBehavior::Auto
+            || normalized_x.abs() >= normalized_y.abs()
+        {
             normalized_x
         } else {
             normalized_y

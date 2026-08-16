@@ -11,6 +11,42 @@ async function wait_grid(page) {
   }));
 }
 
+test("header comparison controls add and clear independently scaled symbols", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+
+  await page.selectOption("#comparison_symbol", "MOON");
+  await page.click("#comparison_add");
+  await page.selectOption("#comparison_symbol", "ORBIT");
+  await page.click("#comparison_add");
+
+  const added = await page.evaluate(() => ({
+    count: window.__chart.__demo_comparisons.size,
+    scales: window.__chart.price_scales().filter((scale) => scale.id.startsWith("demo-comparison-")),
+    moon_type: window.__chart.__demo_comparisons.get("MOON").series.series_type(),
+    orbit_type: window.__chart.__demo_comparisons.get("ORBIT").series.series_type(),
+  }));
+  expect(added.count).toBe(2);
+  expect(added.scales.map((scale) => [scale.id, scale.side, scale.series_ids.length])).toEqual([
+    ["demo-comparison-moon", "left", 1],
+    ["demo-comparison-orbit", "right", 1],
+  ]);
+  expect(added.moon_type).toBe("candlestick");
+  expect(added.orbit_type).toBe("candlestick");
+  await expect(page.locator("#comparison_clear")).toContainText("2");
+
+  await page.click("#comparison_clear");
+  expect(await page.evaluate(() => window.__chart.__demo_comparisons.size)).toBe(0);
+  expect(await page.evaluate(() => window.__chart.price_scales()
+    .filter((scale) => scale.id.startsWith("demo-comparison-"))
+    .every((scale) => !scale.visible && scale.series_ids.length === 0))).toBe(true);
+  await expect(page.locator("#comparison_clear")).toBeDisabled();
+
+  await page.selectOption("#comparison_symbol", "MOON");
+  await page.click("#comparison_add");
+  expect(await page.evaluate(() => window.__chart.__demo_comparisons.size)).toBe(1);
+});
+
 test("demo chrome and controls follow the chart theme", async ({ page }) => {
   await page.goto("/");
   await wait_grid(page);

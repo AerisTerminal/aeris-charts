@@ -2796,9 +2796,11 @@ impl NucleusChart {
     pub fn price_axis_end_scroll(&mut self, pane: usize, target: u32) {
         self.inner.borrow_mut().price_axis_end_scroll(pane, target);
     }
-    /// The exact unlocked price scale owned by the selected/hit series under a pane drag.
-    pub fn price_pan_target_at(&self, pane: usize, x_css: f64, y_css: f64) -> Option<u32> {
-        self.inner.borrow().price_pan_target_at(pane, x_css, y_css)
+    /// Resolve the intended series scale, unlock it when autoscaled, and begin its drag session.
+    pub fn begin_price_pan_at(&mut self, pane: usize, x_css: f64, y_css: f64) -> Option<u32> {
+        self.inner
+            .borrow_mut()
+            .begin_price_pan_at(pane, x_css, y_css)
     }
 
     /// Eased scroll-to-position (the engine owns the cubic ease-out and applies each tick).

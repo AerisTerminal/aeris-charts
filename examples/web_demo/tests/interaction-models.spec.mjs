@@ -21,6 +21,7 @@ const state = (page) =>
     width: window.__chart.wasm.time_scale_width(),
     axis_h: window.__chart.wasm.time_scale_height(),
     min_spacing: window.__chart.time_scale().options().min_bar_spacing,
+    auto_scale: window.__chart.price_scale("right").options().auto_scale,
   }));
 
 async function chart_box(page) {
@@ -76,23 +77,38 @@ test("interaction models run engine-side with reference behavior", async ({ page
   expect(mid1).toBeCloseTo(mid0, 6); // center-pinned
   await page.mouse.up();
 
-  // 3) vertical price pan (manual scale): drag the pane vertically -> range shifts, span constant.
-  await page.evaluate(() => window.__chart.wasm.set_price_scale_auto_scale(0, 0, false));
+  // 3) vertical price pan: grabbing the autoscaled candle unlocks its scale, then shifts the
+  // range with a constant span.
+  const grab = await page.evaluate(async () => {
+    window.__chart.price_scale("right").set_auto_scale(true);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const range = window.__chart.time_scale().get_visible_logical_range();
+    const logical = Math.floor(range.to);
+    const bar = window.__main.data_by_index(logical, -1);
+    return {
+      x: window.__chart.time_scale().logical_to_coordinate(logical),
+      y: window.__main.price_to_coordinate((bar.high + bar.low) / 2),
+    };
+  });
   const pre_pan = await state(page);
-  const cx = box.x + pane_left + s0.width / 2;
-  await page.mouse.move(cx, pane_mid_y);
+  expect(pre_pan.auto_scale).toBe(true);
+  const grab_x = box.x + pane_left + grab.x;
+  const candle_y = box.y + grab.y;
+  await page.mouse.move(grab_x, candle_y);
   await page.mouse.down();
-  await page.mouse.move(cx, pane_mid_y + 40, { steps: 6 });
+  await page.mouse.move(grab_x, candle_y + 40, { steps: 6 });
   const post_pan = await state(page);
   console.log("price pan +40px:", JSON.stringify(pre_pan.range), "->", JSON.stringify(post_pan.range));
   const span_pre = pre_pan.range[1] - pre_pan.range[0];
   const span_post = post_pan.range[1] - post_pan.range[0];
   expect(span_post).toBeCloseTo(span_pre, 6);
   expect(post_pan.range[0]).toBeGreaterThan(pre_pan.range[0]); // dragged down -> range up
+  expect(post_pan.auto_scale).toBe(false);
   await page.mouse.up();
   await page.evaluate(() => window.__chart.wasm.set_price_scale_auto_scale(0, 0, true));
 
   // 4) horizontal pan (time scroll): drag left -> view moves to older data (offset grows).
+  const cx = box.x + pane_left + s0.width / 2;
   const o0 = (await state(page)).offset;
   await page.mouse.move(cx, pane_mid_y);
   await page.mouse.down();

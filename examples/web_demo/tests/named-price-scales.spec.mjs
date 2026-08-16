@@ -57,12 +57,14 @@ async function install_series_drag_fixture(page) {
       side: "right",
       order: 0,
       minimum_width: 72,
+      scale_margins: { top: 0.55, bottom: 0.05 },
     });
     const left = chart.add_price_scale({
       id: "drag-left",
       side: "left",
       order: 0,
       minimum_width: 72,
+      scale_margins: { top: 0.05, bottom: 0.55 },
     });
     const lower = chart.add_series("candlestick", { price_scale_id: "drag-right" });
     const upper = chart.add_series("candlestick", { price_scale_id: "drag-left" });
@@ -82,9 +84,6 @@ async function install_series_drag_fixture(page) {
     })));
     chart.time_scale().fit_content();
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    right.set_visible_range({ from: 80, to: 180 });
-    left.set_visible_range({ from: 900, to: 1_260 });
-    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     const row = rows.at(-1);
     const x = chart.time_scale().time_to_coordinate(row.time);
     return {
@@ -100,6 +99,8 @@ async function drag_scale_ranges(page) {
   return page.evaluate(() => ({
     right: window.__chart.price_scale("drag-right").get_visible_range(),
     left: window.__chart.price_scale("drag-left").get_visible_range(),
+    right_auto: window.__chart.price_scale("drag-right").options().auto_scale,
+    left_auto: window.__chart.price_scale("drag-left").options().auto_scale,
   }));
 }
 
@@ -185,13 +186,14 @@ for (const backend of ["canvas2d", "webgpu"]) {
     expect(result.hidden_state).toBe(false);
   });
 
-  test(`${backend}: grabbing either comparison series pans only its own unlocked scale`, async ({ page }) => {
+  test(`${backend}: grabbing either comparison series unlocks and pans only its own scale`, async ({ page }) => {
     await page.goto(`/?backend=${backend}&forceFallbackAdapter=1`);
     await wait_for_chart(page);
     const fixture = await install_series_drag_fixture(page);
     const overlay = page.locator("#chart_container canvas:last-of-type");
     const box = await overlay.boundingBox();
     const before = await drag_scale_ranges(page);
+    expect(before).toMatchObject({ right_auto: true, left_auto: true });
 
     await page.mouse.move(box.x + fixture.x, box.y + fixture.lower_y);
     await page.mouse.down();
@@ -201,6 +203,7 @@ for (const backend of ["canvas2d", "webgpu"]) {
     const after_lower = await drag_scale_ranges(page);
     expect(after_lower.right).not.toEqual(before.right);
     expect(after_lower.left).toEqual(before.left);
+    expect(after_lower).toMatchObject({ right_auto: false, left_auto: true });
 
     await page.mouse.move(box.x + fixture.x, box.y + fixture.upper_y);
     await page.mouse.down();
@@ -210,6 +213,7 @@ for (const backend of ["canvas2d", "webgpu"]) {
     const after_upper = await drag_scale_ranges(page);
     expect(after_upper.right).toEqual(after_lower.right);
     expect(after_upper.left).not.toEqual(after_lower.left);
+    expect(after_upper).toMatchObject({ right_auto: false, left_auto: false });
   });
 
   test(`${backend}: one comparison axis double-click resets every price scale`, async ({ page }) => {
@@ -273,11 +277,12 @@ test("named comparison reset supports touch, configuration gates, and global res
   expect(await auto_scale_state(page)).toEqual({ right: true, left: true });
 });
 
-test("touch dragging a comparison candle pans only that candle's unlocked scale", async ({ page }) => {
+test("touch dragging a comparison candle unlocks and pans only that candle's scale", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   await wait_for_chart(page);
   const fixture = await install_series_drag_fixture(page);
   const before = await drag_scale_ranges(page);
+  expect(before).toMatchObject({ right_auto: true, left_auto: true });
 
   await page.evaluate(({ x, lower_y }) => {
     const overlay = window.__chart.chart_element().querySelector("canvas:last-of-type");
@@ -303,6 +308,7 @@ test("touch dragging a comparison candle pans only that candle's unlocked scale"
   const after = await drag_scale_ranges(page);
   expect(after.right).not.toEqual(before.right);
   expect(after.left).toEqual(before.left);
+  expect(after).toMatchObject({ right_auto: false, left_auto: true });
 });
 
 test("named scale descriptors support atomic pane moves and host-owned reconstruction", async ({ page }) => {

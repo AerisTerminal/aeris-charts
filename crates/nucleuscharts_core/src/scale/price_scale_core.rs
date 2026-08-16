@@ -245,6 +245,13 @@ impl PriceScaleCore {
     }
 
     pub fn set_auto_scale(&mut self, v: bool) {
+        if v {
+            // Re-enabling (or reaffirming) autoscale cancels any stale manual gesture snapshot.
+            // A later pointer session must start from the newly autoscaled range.
+            self.scale_start_point = None;
+            self.scroll_start_point = None;
+            self.price_range_snapshot = None;
+        }
         if self.options.auto_scale != v {
             self.options.auto_scale = v;
             self.changed();
@@ -620,14 +627,17 @@ impl PriceScaleCore {
     // --- axis-drag scroll ---
 
     pub fn start_scroll(&mut self, x: f64) {
-        if self.is_auto_scale() {
-            return;
-        }
         if self.scroll_start_point.is_some() || self.price_range_snapshot.is_some() {
             return;
         }
         if self.is_empty() {
             return;
+        }
+        if self.is_auto_scale() {
+            // A direct pane drag is an explicit request to unlock this scale. The engine has
+            // already produced the current autoscaled range before pointer interaction begins.
+            self.options.auto_scale = false;
+            self.changed();
         }
         self.scroll_start_point = Some(x);
         self.price_range_snapshot = self.price_range;
@@ -999,13 +1009,21 @@ mod tests {
     }
 
     #[test]
-    fn scroll_requires_manual_scale_mode() {
+    fn scroll_unlocks_autoscale_and_reset_cancels_the_session() {
         let mut s = scale_with_range(100.0, 0.0, 10.0);
         assert!(s.is_auto_scale());
         s.start_scroll(10.0);
+        assert!(!s.is_auto_scale());
         s.scroll_to(20.0);
-        // autoscale on -> no-op
-        assert_eq!(s.price_range().unwrap(), &PriceRange::new(0.0, 10.0));
+        assert_ne!(s.price_range().unwrap(), &PriceRange::new(0.0, 10.0));
+
+        s.set_auto_scale(true);
+        assert!(s.scroll_start_point.is_none());
+        assert!(s.price_range_snapshot.is_none());
+
+        let reset_range = *s.price_range().unwrap();
+        s.scroll_to(30.0);
+        assert_eq!(s.price_range().unwrap(), &reset_range);
     }
 
     #[test]
