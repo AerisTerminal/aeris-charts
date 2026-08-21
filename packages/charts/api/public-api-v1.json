@@ -63,8 +63,8 @@
     },
     {
       "path": "theme.d.ts",
-      "bytes": 1272,
-      "sha256": "7d73c34c301923943b0db285f87b3475d491d68a9aad4f63b4dd0d27931216e7"
+      "bytes": 1430,
+      "sha256": "a9439cfee5185241527d81e011a3e9a82bc52731ed761c3bac4e313e18d38b05"
     },
     {
       "path": "types.d.ts",

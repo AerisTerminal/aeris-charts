@@ -546,17 +546,20 @@ mod tests {
     #[test]
     fn defaults_match_nucleus_style() {
         let o = ChartOptions::default();
-        assert_eq!(o.layout.background.color, "#070a0f");
-        assert_eq!(o.layout.text_color, "#fafafa");
-        assert_eq!(o.layout.muted_text_color, "#9da3aa");
+        assert_eq!(o.layout.background.color, DEFAULT_SURFACE_CSS);
+        assert_eq!(o.layout.text_color, DEFAULT_FOREGROUND_CSS);
+        assert_eq!(o.layout.muted_text_color, DEFAULT_MUTED_FOREGROUND_CSS);
         assert_eq!(o.layout.font_size, 12.0);
-        assert_eq!(o.grid.vert_lines.color, "#16191f");
+        assert_eq!(o.grid.vert_lines.color, DEFAULT_BORDER_CSS);
         assert_eq!(o.grid.horz_lines.style, line_style::SOLID);
         assert_eq!(o.crosshair.mode, crosshair_mode::NORMAL);
         assert!(!o.crosshair.do_not_snap_to_hidden_series_indices);
         assert_eq!(o.crosshair.vert_line.style, line_style::DOTTED);
-        assert_eq!(o.crosshair.vert_line.color, "#16191f");
-        assert_eq!(o.crosshair.horz_line.label_background_color, "#0c1115");
+        assert_eq!(o.crosshair.vert_line.color, DEFAULT_CROSSHAIR_LINE_CSS);
+        assert_eq!(
+            o.crosshair.horz_line.label_background_color,
+            DEFAULT_CROSSHAIR_LABEL_CSS
+        );
         assert!(o.hovered_series_on_top);
         assert!(!o.auto_size);
         // Axis border cosmetics use the canonical border everywhere.
@@ -564,10 +567,10 @@ mod tests {
         assert!(!o.left_price_scale.visible);
         assert!(o.right_price_scale.border_visible);
         assert!(o.left_price_scale.border_visible);
-        assert_eq!(o.right_price_scale.border_color, "#16191f");
-        assert_eq!(o.left_price_scale.border_color, "#16191f");
+        assert_eq!(o.right_price_scale.border_color, DEFAULT_BORDER_CSS);
+        assert_eq!(o.left_price_scale.border_color, DEFAULT_BORDER_CSS);
         assert!(o.time_scale.border_visible);
-        assert_eq!(o.time_scale.border_color, "#16191f");
+        assert_eq!(o.time_scale.border_color, DEFAULT_BORDER_CSS);
         // Watermark defaults: hidden, transparent, 48px centered (reference v4).
         assert!(!o.watermark.visible);
         assert_eq!(o.watermark.color, "rgba(0, 0, 0, 0)");
@@ -642,9 +645,9 @@ mod tests {
         // untouched siblings survive: strip visibility and the other border options
         assert!(o.right_price_scale.visible);
         assert!(o.right_price_scale.border_visible);
-        assert_eq!(o.left_price_scale.border_color, "#16191f");
+        assert_eq!(o.left_price_scale.border_color, DEFAULT_BORDER_CSS);
         assert!(!o.time_scale.border_visible);
-        assert_eq!(o.time_scale.border_color, "#16191f");
+        assert_eq!(o.time_scale.border_color, DEFAULT_BORDER_CSS);
     }
 
     #[test]
@@ -658,7 +661,7 @@ mod tests {
         assert_eq!(o.grid.vert_lines.style, line_style::SOLID);
         assert!(!o.grid.vert_lines.visible);
         // ...and the neighbouring family is untouched.
-        assert_eq!(o.grid.horz_lines.color, "#16191f");
+        assert_eq!(o.grid.horz_lines.color, DEFAULT_BORDER_CSS);
     }
 
     #[test]
@@ -671,7 +674,7 @@ mod tests {
         assert_eq!(o.grid.vert_lines.color, "#111111");
         assert_eq!(o.crosshair.mode, crosshair_mode::NORMAL);
         // and unrelated defaults remain
-        assert_eq!(o.layout.background.color, "#070a0f");
+        assert_eq!(o.layout.background.color, DEFAULT_SURFACE_CSS);
     }
 
     #[test]

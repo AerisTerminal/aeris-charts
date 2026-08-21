@@ -4,7 +4,7 @@
  * Packs the package exactly as npm would for publish, installs the tarball into a scratch dir,
  * and asserts the installed artifact is complete and importable:
  *   1. `npm pack` produces a tarball containing JavaScript, types, WebAssembly, the portable
- *      design system and font, and LICENSE.
+ *      design system, and LICENSE.
  *   2. `npm install <tarball>` into an empty consumer dir.
  *   3. The installed module imports in Node (side-effect-free) and exposes `create_chart`.
  *   4. `dist/nucleuscharts_wasm_bg.wasm` is present inside the installed package (non-trivial size).
@@ -43,7 +43,6 @@ try {
     "package/dist/index.d.ts",
     "package/dist/nucleuscharts_wasm_bg.wasm",
     "package/dist/nucleuscharts.css",
-    "package/dist/inter_400.ttf",
     "package/LICENSE",
   ]) {
     assert.ok(files.includes(required), `tarball is missing ${required}`);

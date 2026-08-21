@@ -260,7 +260,7 @@ mod tests {
             text: text.into(),
             color: Color::rgb(0x10, 0x20, 0x30),
             size: 12.0,
-            family: "Inter, sans-serif".into(),
+            family: "sans-serif".into(),
             align,
             weight: 400,
             italic: false,
@@ -308,7 +308,7 @@ mod tests {
         r.italic = true;
         r.size = 11.5;
         let key = TextKey::for_run(&r);
-        assert_eq!(key.font, "italic 700 11.5px Inter, sans-serif");
+        assert_eq!(key.font, "italic 700 11.5px sans-serif");
     }
 
     #[test]

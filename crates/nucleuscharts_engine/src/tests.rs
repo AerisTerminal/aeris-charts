@@ -2426,7 +2426,14 @@ fn price_line_extras_drive_line_and_axis_label_rendering() {
     assert!(has_line(&mut chart));
     let label = find_label(&mut chart).expect("price-line label");
     assert!(matches!(label.background, Some((.., c)) if c == line_color));
-    assert_eq!(label.color, Color::rgb(0xfa, 0xfa, 0xfa));
+    assert_eq!(
+        label.color,
+        Color::rgb(
+            nucleuscharts_core::style::DARK_FOREGROUND_RGB.0,
+            nucleuscharts_core::style::DARK_FOREGROUND_RGB.1,
+            nucleuscharts_core::style::DARK_FOREGROUND_RGB.2,
+        )
+    );
 
     // `lineVisible: false` skips only the HLine; the axis label stays.
     assert!(chart.price_line_apply_options(id, r#"{"line_visible":false}"#));
@@ -4706,17 +4713,41 @@ fn theme_switch_uses_nucleus_tokens_without_replacing_market_data() {
 
     chart.set_theme(ChartTheme::Light);
     let light = chart.options.get();
-    assert_eq!(light.layout.background.color, "#ffffff");
-    assert_eq!(light.layout.text_color, "#333333");
-    assert_eq!(light.layout.muted_text_color, "#737373");
-    assert_eq!(light.right_price_scale.border_color, "#f3f3f3");
+    assert_eq!(
+        light.layout.background.color,
+        nucleuscharts_core::style::LIGHT_SURFACE_CSS
+    );
+    assert_eq!(
+        light.layout.text_color,
+        nucleuscharts_core::style::LIGHT_FOREGROUND_CSS
+    );
+    assert_eq!(
+        light.layout.muted_text_color,
+        nucleuscharts_core::style::LIGHT_MUTED_FOREGROUND_CSS
+    );
+    assert_eq!(
+        light.right_price_scale.border_color,
+        nucleuscharts_core::style::LIGHT_BORDER_CSS
+    );
     assert_eq!(row_count(&chart, 0), 20);
 
     chart.set_theme(ChartTheme::Dark);
     let dark = chart.options.get();
-    assert_eq!(dark.layout.background.color, "#070a0f");
-    assert_eq!(dark.layout.text_color, "#fafafa");
-    assert_eq!(dark.layout.muted_text_color, "#9da3aa");
-    assert_eq!(dark.right_price_scale.border_color, "#16191f");
+    assert_eq!(
+        dark.layout.background.color,
+        nucleuscharts_core::style::DARK_SURFACE_CSS
+    );
+    assert_eq!(
+        dark.layout.text_color,
+        nucleuscharts_core::style::DARK_FOREGROUND_CSS
+    );
+    assert_eq!(
+        dark.layout.muted_text_color,
+        nucleuscharts_core::style::DARK_MUTED_FOREGROUND_CSS
+    );
+    assert_eq!(
+        dark.right_price_scale.border_color,
+        nucleuscharts_core::style::DARK_BORDER_CSS
+    );
     assert_eq!(row_count(&chart, 0), 20);
 }

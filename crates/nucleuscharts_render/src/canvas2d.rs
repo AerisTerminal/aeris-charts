@@ -779,16 +779,16 @@ mod tests {
     #[test]
     fn font_spec_uses_numeric_weight_and_plain_size() {
         assert_eq!(
-            text_font_spec(12.0, "Inter, sans-serif", 400, false),
-            "400 12px Inter, sans-serif"
+            text_font_spec(12.0, "sans-serif", 400, false),
+            "400 12px sans-serif"
         );
         assert_eq!(
-            text_font_spec(11.5, "Inter", 700, false),
-            "700 11.5px Inter"
+            text_font_spec(11.5, "sans-serif", 700, false),
+            "700 11.5px sans-serif"
         );
         assert_eq!(
-            text_font_spec(11.5, "Inter", 600, true),
-            "italic 600 11.5px Inter"
+            text_font_spec(11.5, "sans-serif", 600, true),
+            "italic 600 11.5px sans-serif"
         );
     }
 }

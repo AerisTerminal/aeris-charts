@@ -2496,13 +2496,32 @@ mod tests {
             })
             .collect();
         assert_eq!(tooltip_boxes.len(), 1, "tooltip must not emit a shadow box");
-        assert_eq!(tooltip_boxes[0].0, Color::rgb(0x07, 0x0a, 0x0f));
+        assert_eq!(
+            tooltip_boxes[0].0,
+            Color::rgb(
+                nucleuscharts_core::style::DEFAULT_SURFACE_RGB.0,
+                nucleuscharts_core::style::DEFAULT_SURFACE_RGB.1,
+                nucleuscharts_core::style::DEFAULT_SURFACE_RGB.2,
+            )
+        );
         assert!(tooltip_boxes[0].1 > 0.0);
-        assert_eq!(tooltip_boxes[0].2, Color::rgb(0x16, 0x19, 0x1f));
+        assert_eq!(
+            tooltip_boxes[0].2,
+            Color::rgb(
+                nucleuscharts_core::style::DEFAULT_BORDER_RGB.0,
+                nucleuscharts_core::style::DEFAULT_BORDER_RGB.1,
+                nucleuscharts_core::style::DEFAULT_BORDER_RGB.2,
+            )
+        );
         assert!(tooltip_boxes[0].3.iter().all(|radius| *radius == 6.0));
         assert!(frame.panes[0].main.iter().any(|primitive| matches!(
             primitive,
-            Prim::Rect { color, .. } if *color == Color::rgba(4, 153, 129, 51)
+            Prim::Rect { color, .. } if *color == Color::rgba(
+                nucleuscharts_core::style::MARKET_UP_RGB.0,
+                nucleuscharts_core::style::MARKET_UP_RGB.1,
+                nucleuscharts_core::style::MARKET_UP_RGB.2,
+                51,
+            )
         )));
         for expected in ["102.00", "107.00", "+5.00", "+4.90%"] {
             assert!(frame.panes[0].main.iter().any(|primitive| matches!(

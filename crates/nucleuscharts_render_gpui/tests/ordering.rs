@@ -147,7 +147,7 @@ fn mixed_prims() -> (Vec<Prim>, Vec<[f32; 2]>) {
             text: "label".into(),
             color: C3,
             size: 11.0,
-            family: "Inter".into(),
+            family: "sans-serif".into(),
             align: TextAlign::Left,
             weight: 400,
             italic: false,

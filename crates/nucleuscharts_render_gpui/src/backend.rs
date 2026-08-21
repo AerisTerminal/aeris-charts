@@ -976,15 +976,15 @@ mod tests {
 
     #[test]
     fn font_family_list_splits_into_family_plus_fallbacks() {
-        let f = to_font(&run("Inter, \"Helvetica Neue\", sans-serif"));
-        assert_eq!(f.family.as_ref(), "Inter");
+        let f = to_font(&run("sans-serif, \"Helvetica Neue\", monospace"));
+        assert_eq!(f.family.as_ref(), "sans-serif");
         assert!(f.fallbacks.is_some());
     }
 
     #[test]
     fn a_single_family_has_no_fallbacks() {
-        let f = to_font(&run("Inter"));
-        assert_eq!(f.family.as_ref(), "Inter");
+        let f = to_font(&run("sans-serif"));
+        assert_eq!(f.family.as_ref(), "sans-serif");
         assert!(f.fallbacks.is_none());
     }
 
@@ -996,7 +996,7 @@ mod tests {
 
     #[test]
     fn weight_and_style_map_onto_gpui() {
-        let mut r = run("Inter");
+        let mut r = run("sans-serif");
         r.weight = 700;
         r.italic = true;
         let f = to_font(&r);
@@ -1136,7 +1136,7 @@ mod tests {
 
     #[test]
     fn shaped_text_cache_avoids_reinvoking_the_shaper_on_a_hit() {
-        let key = ShapedTextKey::for_run(&run("Inter"), px(12.0));
+        let key = ShapedTextKey::for_run(&run("sans-serif"), px(12.0));
         let mut cache = ShapedTextCache::with_capacity(4);
         let first = cache.get_or_shape(key.clone(), || cached_line(9.0));
         let hit = cache.get_or_shape(key, || panic!("a cache hit must not shape again"));
@@ -1147,11 +1147,11 @@ mod tests {
     #[test]
     fn shaped_text_cache_is_bounded_and_evicts_the_lru_entry() {
         let mut cache = ShapedTextCache::with_capacity(2);
-        let mut a = run("Inter");
+        let mut a = run("sans-serif");
         a.text = "a".into();
-        let mut b = run("Inter");
+        let mut b = run("sans-serif");
         b.text = "b".into();
-        let mut c = run("Inter");
+        let mut c = run("sans-serif");
         c.text = "c".into();
         let (ka, kb, kc) = (
             ShapedTextKey::for_run(&a, px(12.0)),
@@ -1174,7 +1174,7 @@ mod tests {
 
     #[test]
     fn shaped_text_key_reuses_layout_across_position_and_alignment_changes() {
-        let a = run("Inter");
+        let a = run("sans-serif");
         let mut b = a.clone();
         b.x = 41.25;
         b.y = 99.75;

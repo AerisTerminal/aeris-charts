@@ -25,6 +25,10 @@ export interface chart_theme {
   ring: string;
   crosshair_line: string;
   crosshair_label: string;
+  /** Candle, volume, and other up-market geometry. */
+  bullish: string;
+  /** Candle, volume, and other down-market geometry. */
+  bearish: string;
 }
 
 export const light_theme: chart_theme = {
@@ -41,6 +45,8 @@ export const light_theme: chart_theme = {
   ring: style_tokens.light.ring,
   crosshair_line: style_tokens.light.crosshair_line,
   crosshair_label: style_tokens.light.crosshair_label,
+  bullish: style_tokens.market.up,
+  bearish: style_tokens.market.down,
 };
 
 export const dark_theme: chart_theme = {
@@ -57,6 +63,8 @@ export const dark_theme: chart_theme = {
   ring: style_tokens.dark.ring,
   crosshair_line: style_tokens.dark.crosshair_line,
   crosshair_label: style_tokens.dark.crosshair_label,
+  bullish: style_tokens.market.up,
+  bearish: style_tokens.market.down,
 };
 
 export type theme_name = "light" | "dark";

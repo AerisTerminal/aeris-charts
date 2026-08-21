@@ -8,6 +8,18 @@ use super::*;
 use nucleuscharts_core::model::data_layer::DataLayer;
 use nucleuscharts_core::model::plot_list::{PlotList, PlotValues};
 
+const LIVE_TEXT: Color = Color::rgb(
+    nucleuscharts_core::style::DARK_FOREGROUND_RGB.0,
+    nucleuscharts_core::style::DARK_FOREGROUND_RGB.1,
+    nucleuscharts_core::style::DARK_FOREGROUND_RGB.2,
+);
+const LIVE_COUNTDOWN: Color = Color::rgba(
+    nucleuscharts_core::style::DARK_FOREGROUND_RGB.0,
+    nucleuscharts_core::style::DARK_FOREGROUND_RGB.1,
+    nucleuscharts_core::style::DARK_FOREGROUND_RGB.2,
+    0xb3,
+);
+
 #[test]
 fn marker_geometry_tracks_reference_spacing_buckets() {
     assert_eq!(marker_envelope_size(0.5), 10.0);
@@ -1370,7 +1382,7 @@ fn bid_ask_lines_and_chips_render_only_when_enabled_with_values() {
     };
     let bid_chip = side_chip("Bid");
     let ask_chip = side_chip("Ask");
-    let foreground = Color::rgb(0xfa, 0xfa, 0xfa);
+    let foreground = LIVE_TEXT;
     assert_eq!(bid_chip.color, foreground);
     assert_eq!(ask_chip.color, foreground);
     assert!(
@@ -1547,8 +1559,8 @@ fn indicator_price_chip_matches_the_main_chip_width_and_stands_one_row_tall() {
         .iter()
         .find(|l| l.text == "SMA 2")
         .expect("sma name chip");
-    assert_eq!(sma_price.color, Color::rgb(0xfa, 0xfa, 0xfa));
-    assert_eq!(sma_name.color, Color::rgb(0xfa, 0xfa, 0xfa));
+    assert_eq!(sma_price.color, LIVE_TEXT);
+    assert_eq!(sma_name.color, LIVE_TEXT);
     assert_eq!(
         bg(sma_name).3,
         bg(sma_price).3,
@@ -1769,14 +1781,14 @@ fn horizontal_line_drawings_label_the_axis_in_the_line_color() {
     let label = label_at(&mut chart);
     let (_, _, _, _, bg) = label.background.expect("boxed");
     assert_eq!(bg, PRIMARY, "default drawing color");
-    assert_eq!(label.color, Color::rgb(0xfa, 0xfa, 0xfa));
+    assert_eq!(label.color, LIVE_TEXT);
 
     // The label is part of the line: recoloring the drawing recolors the label.
     assert!(chart.drawing_apply_options(id, r##"{"color":"#ff0000"}"##));
     let label = label_at(&mut chart);
     let (_, _, _, _, bg) = label.background.expect("boxed");
     assert_eq!(bg, Color::rgb(0xff, 0x00, 0x00));
-    assert_eq!(label.color, Color::rgb(0xfa, 0xfa, 0xfa));
+    assert_eq!(label.color, LIVE_TEXT);
 }
 
 #[test]
@@ -2923,9 +2935,9 @@ fn last_value_cluster_rows_toggle_independently() {
     assert_eq!(countdown.font_scale, 11.0 / 12.0);
     // Live labels always use the dark foreground token, even under light-theme layout text.
     // The countdown is the same foreground with reduced opacity.
-    assert_eq!(chip.color, Color::rgb(0xfa, 0xfa, 0xfa));
-    assert_eq!(price.color, Color::rgb(0xfa, 0xfa, 0xfa));
-    assert_eq!(countdown.color, Color::rgba(0xfa, 0xfa, 0xfa, 0xb3));
+    assert_eq!(chip.color, LIVE_TEXT);
+    assert_eq!(price.color, LIVE_TEXT);
+    assert_eq!(countdown.color, LIVE_COUNTDOWN);
 
     // Price off, title + countdown on: only the outside title chip and the inside countdown
     // chip render — no empty price box, and the title chip ATTACHES to the countdown row

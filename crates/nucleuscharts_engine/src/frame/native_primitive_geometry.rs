@@ -240,8 +240,12 @@ impl ChartEngine {
             Color::parse_css(&layout.text_color).unwrap_or(Color::rgb(0x13, 0x17, 0x22));
         let muted_foreground =
             Color::parse_css(&layout.muted_text_color).unwrap_or(Color::rgb(0x78, 0x7b, 0x86));
-        let border = Color::parse_css(&chart_options.right_price_scale.border_color)
-            .unwrap_or(Color::rgb(0x16, 0x19, 0x1f));
+        let border =
+            Color::parse_css(&chart_options.right_price_scale.border_color).unwrap_or(Color::rgb(
+                nucleuscharts_core::style::DEFAULT_BORDER_RGB.0,
+                nucleuscharts_core::style::DEFAULT_BORDER_RGB.1,
+                nucleuscharts_core::style::DEFAULT_BORDER_RGB.2,
+            ));
         let background = Color::parse_css(&layout.background.color)
             .or_else(|| Color::parse_css(&layout.background.top_color))
             .unwrap_or(Color::rgb(255, 255, 255));
@@ -386,15 +390,11 @@ impl ChartEngine {
                     delta_top = format!("{}{change:.2}", if positive { "+" } else { "" });
                     delta_bottom = format!("{}{percent:.2}%", if positive { "+" } else { "" });
                     delta_bg = if positive {
-                        Color::rgba(4, 153, 129, 51)
+                        Color::rgba(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2, 51)
                     } else {
-                        Color::rgba(239, 83, 80, 51)
+                        Color::rgba(MARKET_DOWN_RGB.0, MARKET_DOWN_RGB.1, MARKET_DOWN_RGB.2, 51)
                     };
-                    delta_text = if positive {
-                        Color::rgb(4, 153, 129)
-                    } else {
-                        Color::rgb(239, 83, 80)
-                    };
+                    delta_text = if positive { UP } else { DOWN };
                     let min_delta = section_width(
                         &[delta_top.clone(), delta_bottom.clone()],
                         &[14.0, 12.0],

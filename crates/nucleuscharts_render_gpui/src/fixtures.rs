@@ -290,7 +290,7 @@ pub fn gradients(dpr: f32) -> Fixture {
 }
 
 /// **Text.** Axis-style labels in each alignment and weight. A residual here is attributable to
-/// glyph rasterization: GPUI uses DirectWrite, `nucleuscharts_native` uses a bundled Inter face through
+/// glyph rasterization: GPUI uses DirectWrite, `nucleuscharts_native` uses a bundled OFL sans through
 /// `ab_glyph`, and the browser uses its own engine. These are different rasterizers by construction.
 pub fn text(dpr: f32) -> Fixture {
     let (w, h) = dims(dpr);
@@ -317,7 +317,7 @@ pub fn text(dpr: f32) -> Fixture {
             text: s.to_string(),
             color: INK,
             size: 12.0 * dpr,
-            family: "Inter, sans-serif".into(),
+            family: "sans-serif".into(),
             align,
             weight,
             italic: false,

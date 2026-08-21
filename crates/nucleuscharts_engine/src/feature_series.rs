@@ -10,6 +10,7 @@ use nucleuscharts_core::model::data_validation::{
     ValidationError, ValidationReport, MAX_SAFE_VALUE, MIN_SAFE_VALUE,
 };
 use nucleuscharts_core::model::plot_list::MismatchDirection;
+use nucleuscharts_core::style::{MARKET_DOWN_RGB, MARKET_UP_RGB};
 use nucleuscharts_render::color::Color;
 use std::mem::size_of;
 
@@ -349,6 +350,22 @@ fn rgba(r: u8, g: u8, b: u8, a: u8) -> Color {
     Color::rgba(r, g, b, a)
 }
 
+fn market_rgb(rgb: (u8, u8, u8)) -> Color {
+    Color::rgb(rgb.0, rgb.1, rgb.2)
+}
+
+fn market_rgba(rgb: (u8, u8, u8), alpha: u8) -> Color {
+    Color::rgba(rgb.0, rgb.1, rgb.2, alpha)
+}
+
+fn blend_white((r, g, b): (u8, u8, u8), white: u8) -> Color {
+    let mix = |channel: u8| {
+        let keep = 255 - white;
+        ((u16::from(channel) * u16::from(keep) + 255 * u16::from(white)) / 255) as u8
+    };
+    Color::rgb(mix(r), mix(g), mix(b))
+}
+
 impl Default for FeatureSeriesOptions {
     fn default() -> Self {
         let palette = vec![
@@ -379,20 +396,20 @@ impl Default for FeatureSeriesOptions {
             max_height: 130.0,
             cell_border_width: 1.0,
             cell_border_color: rgba(0, 0, 0, 0),
-            high_line_color: rgb(0x04, 0x99, 0x81),
-            low_line_color: rgb(0xf2, 0x36, 0x45),
+            high_line_color: market_rgb(MARKET_UP_RGB),
+            low_line_color: market_rgb(MARKET_DOWN_RGB),
             close_line_color: rgb(0x87, 0x89, 0x93),
-            area_top_color: rgba(4, 153, 129, 51),
-            area_bottom_color: rgba(242, 54, 69, 51),
+            area_top_color: market_rgba(MARKET_UP_RGB, 51),
+            area_bottom_color: market_rgba(MARKET_DOWN_RGB, 51),
             high_line_width: 2.0,
             low_line_width: 2.0,
             close_line_width: 2.0,
             width_percent: 50.0,
             radius: None,
-            up_color: rgb(0x26, 0xa6, 0x9a),
-            down_color: rgb(0xef, 0x53, 0x50),
-            wick_up_color: rgb(0x26, 0xa6, 0x9a),
-            wick_down_color: rgb(0xef, 0x53, 0x50),
+            up_color: market_rgb(MARKET_UP_RGB),
+            down_color: market_rgb(MARKET_DOWN_RGB),
+            wick_up_color: market_rgb(MARKET_UP_RGB),
+            wick_down_color: market_rgb(MARKET_DOWN_RGB),
             wick_visible: true,
             low_color: rgb(50, 50, 255),
             high_color: rgb(255, 50, 50),
@@ -412,10 +429,10 @@ impl FeatureSeriesOptions {
         let mut options = Self::default();
         if kind == FeatureSeriesKind::DualRangeHistogram {
             options.colors = vec![
-                rgb(0xac, 0xe5, 0xdc),
-                rgb(0x42, 0xbd, 0xa8),
-                rgb(0xfc, 0xca, 0xcd),
-                rgb(0xf7, 0x7c, 0x80),
+                blend_white(MARKET_UP_RGB, 160),
+                market_rgb(MARKET_UP_RGB),
+                blend_white(MARKET_DOWN_RGB, 160),
+                market_rgb(MARKET_DOWN_RGB),
             ];
         }
         options

@@ -21,11 +21,12 @@ use tiny_skia::{
     Stroke, StrokeDash, Transform,
 };
 
-/// Bundled Inter face (SIL OFL, <https://github.com/google/fonts>) parsed once. The font is
-/// committed in-tree so golden renders are machine-independent — no system font lookup.
+/// Generic OFL sans used only by this CPU rasterizer so golden PNGs do not depend on
+/// installed system fonts. Chart layout defaults remain the host system UI stack; this
+/// face is not published with the browser package.
 static FONT: LazyLock<FontArc> = LazyLock::new(|| {
-    FontArc::try_from_slice(include_bytes!("../assets/Inter.ttf"))
-        .expect("bundled Inter.ttf must be a valid font")
+    FontArc::try_from_slice(include_bytes!("../assets/sans.ttf"))
+        .expect("bundled sans.ttf must be a valid font")
 });
 
 /// Current fill style. Rebuilt into a `tiny_skia` shader on each paint so we sidestep the
@@ -651,7 +652,7 @@ mod tests {
             text: "Ag 123".into(),
             color: ink,
             size: 24.0,
-            family: "Inter".into(),
+            family: "sans-serif".into(),
             align,
             weight: 400,
             italic: false,

@@ -7,7 +7,7 @@ import { PNG } from "pngjs";
 
 const LABEL = [247, 82, 95]; // #f7525f — the deterministic final DOWN bar's label color
 const CHIP = LABEL; // the title chip shares the main label color by default
-const BORDER = [22, 25, 31]; // #16191f - the demo's dark-theme axis border
+const BORDER = [38, 38, 38]; // #262626 - dark axis border composited over the surface
 const ROW = 17; // 12px font + 2*2.5 padding
 
 const test_port = Number.parseInt(process.env.NUCLEUSCHARTS_TEST_PORT ?? "4174", 10);

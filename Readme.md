@@ -129,8 +129,9 @@ import "@nucleuscharts/financial/design.css";
 ```
 
 Light is the CSS default. Set `data-theme="dark"` (or class `dark`) on a root element for dark
-mode, and apply `theme_options("dark")` to the chart. The package ships Inter for host UI; chart
-font choice remains explicit so asynchronous web-font loading cannot shift financial labels.
+mode, and apply `theme_options("dark")` to the chart. Host chrome and chart labels default to the
+system UI font stack. Chart font remains an explicit layout option so a host webfont cannot shift
+financial labels until the host sets it.
 Chart defaults use the same semantic roles directly: foreground for axes and value text, border
 for crosshair lines, and muted for crosshair-label surfaces.
 

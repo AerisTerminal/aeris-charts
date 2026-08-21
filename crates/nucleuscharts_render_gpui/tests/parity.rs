@@ -584,7 +584,7 @@ fn text_runs_reach_both_backends_with_the_same_font_and_anchor() {
         text: "42.50".into(),
         color: Color::rgb(0x13, 0x17, 0x22),
         size: 12.0,
-        family: "Inter, sans-serif".into(),
+        family: "sans-serif".into(),
         align: TextAlign::Right,
         weight: 400,
         italic: false,

@@ -9,11 +9,16 @@ mod tests {
     #[test]
     fn canonical_dark_and_market_tokens_are_exact() {
         assert_eq!(DEFAULT_THEME_NAME, "dark");
-        assert_eq!(DARK_SURFACE_CSS, "#070a0f");
-        assert_eq!(DARK_FOREGROUND_CSS, "#fafafa");
-        assert_eq!(DARK_MUTED_CSS, "#0c1115");
-        assert_eq!(DARK_MUTED_FOREGROUND_CSS, "#9da3aa");
-        assert_eq!(DARK_BORDER_CSS, "#16191f");
+        assert_eq!(LIGHT_SURFACE_CSS, "#fcfcfc");
+        assert_eq!(LIGHT_FOREGROUND_CSS, "#141414");
+        assert_eq!(LIGHT_MUTED_CSS, "#f3f3f3");
+        assert_eq!(LIGHT_MUTED_FOREGROUND_CSS, "#505050");
+        assert_eq!(LIGHT_BORDER_CSS, "#e9e9e9");
+        assert_eq!(DARK_SURFACE_CSS, "#141414");
+        assert_eq!(DARK_FOREGROUND_CSS, "#f0f0f0");
+        assert_eq!(DARK_MUTED_CSS, "#181818");
+        assert_eq!(DARK_MUTED_FOREGROUND_CSS, "#b7b7b7");
+        assert_eq!(DARK_BORDER_CSS, "#262626");
         assert_eq!(DARK_CROSSHAIR_CSS, DARK_BORDER_CSS);
         assert_eq!(DARK_CROSSHAIR_LABEL_CSS, DARK_MUTED_CSS);
         assert_eq!(LIGHT_CROSSHAIR_CSS, LIGHT_FOREGROUND_CSS);
