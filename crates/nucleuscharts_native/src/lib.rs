@@ -1,15 +1,15 @@
 //! Native rasterizer target for the [`nucleuscharts_render::canvas2d`] executor (roadmap Phase D1/D2).
 //!
-//! Implements [`Canvas2d`] on top of [`tiny_skia`] — a pure-Rust CPU rasterizer, no system deps —
+//! Implements [`Canvas2d`] on top of [`tiny_skia`] — a pure-Rust CPU rasterizer —
 //! so the same `Prim` draw-list IR the WebGPU backend renders can also be rasterized to a
-//! [`tiny_skia::Pixmap`] and saved as a PNG. This is the deterministic render path the roadmap
-//! calls for: golden-image tests (compare against the reference charting library's PNGs) and
-//! server-side chart rendering, all off-GPU.
+//! [`tiny_skia::Pixmap`] and saved as a PNG. Geometry is independent of installed fonts.
+//! Text uses the host system UI sans-serif face. Scene goldens that contain no text stay
+//! machine-independent; glyph outlines follow whatever sans the OS provides.
 
 pub mod engine_scene;
 pub mod scene;
 
-use ab_glyph::{Font, FontArc, PxScale, ScaleFont};
+use ab_glyph::{Font, FontArc, FontVec, PxScale, ScaleFont};
 use nucleuscharts_engine::ChartEngine;
 use nucleuscharts_render::canvas2d::{execute, Canvas2d, Viewport};
 use nucleuscharts_render::color::Color;
@@ -21,13 +21,27 @@ use tiny_skia::{
     Stroke, StrokeDash, Transform,
 };
 
-/// Generic OFL sans used only by this CPU rasterizer so golden PNGs do not depend on
-/// installed system fonts. Chart layout defaults remain the host system UI stack; this
-/// face is not published with the browser package.
-static FONT: LazyLock<FontArc> = LazyLock::new(|| {
-    FontArc::try_from_slice(include_bytes!("../assets/sans.ttf"))
-        .expect("bundled sans.ttf must be a valid font")
-});
+/// Host system UI sans-serif. Chart layout defaults already name this stack; native
+/// rasterization must use the same source instead of embedding a product face.
+static FONT: LazyLock<FontArc> = LazyLock::new(system_ui_sans);
+
+fn system_ui_sans() -> FontArc {
+    let mut db = fontdb::Database::new();
+    db.load_system_fonts();
+    let id = db
+        .query(&fontdb::Query {
+            families: &[fontdb::Family::SansSerif],
+            ..fontdb::Query::default()
+        })
+        .or_else(|| db.faces().next().map(|face| face.id))
+        .expect("native rasterizer needs a system UI sans-serif font");
+    db.with_face_data(id, |data, index| {
+        FontVec::try_from_vec_and_index(data.to_vec(), index)
+            .map(FontArc::from)
+            .expect("system UI sans-serif font must be a valid TTF or OTF")
+    })
+    .expect("system UI sans-serif font file must be readable")
+}
 
 /// Current fill style. Rebuilt into a `tiny_skia` shader on each paint so we sidestep the
 /// `Shader<'a>` lifetime — solid colors and vertical gradients both own their data.
@@ -290,9 +304,9 @@ impl Canvas2d for TinySkiaCanvas {
         );
     }
 
-    /// Rasterize a text run with the bundled face. The `font` spec carries the size
-    /// (`"{weight} {size}px {family}"`); the single bundled face stands in for every
-    /// family/weight/italic, matching the Canvas2D semantics everywhere metrics allow:
+    /// Rasterize a text run with the host system UI sans. The `font` spec carries the size
+    /// (`"{weight} {size}px {family}"`); native CPU output uses one system face for every
+    /// family/weight/italic, matching Canvas2D metrics wherever the OS face allows:
     /// x is the `align`ed edge, y the vertical center (`textBaseline: "middle"`, approximated
     /// by the ascent/descent midpoint). Coordinates are used as-is (already bitmap space).
     fn fill_text(

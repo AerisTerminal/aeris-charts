@@ -131,7 +131,7 @@ The browser boundary translates data and platform events. It must not become a s
 
 ### `nucleuscharts_native`
 
-The headless native executor and verification support. It uses tiny-skia for deterministic raster output, golden comparisons, examples, and release performance gates. It is evidence infrastructure, not a competing product model.
+The headless native executor and verification support. It uses tiny-skia for deterministic raster output, golden comparisons, examples, and release performance gates. Text follows the host system UI sans-serif face. It is evidence infrastructure, not a competing product model.
 
 ## TypeScript package
 
@@ -141,7 +141,7 @@ Browser accessibility is chart-owned, enabled by default, and represented by one
 
 Auto-size keeps `ResizeObserver`'s exact device-pixel path. A resolution media-query watcher plus orientation/fullscreen fallbacks re-run sizing when DPR changes without a CSS-bounds change; resize reprojects semantic state and does not create new object identities.
 
-The package also ships `design.css` as the portable host design system. Host chrome uses the system UI font stack and may use `color-mix` and `oklch`. The published package does not include a webfont. Native CPU golden rasterization embeds a generic OFL sans solely so PNG output is machine-independent. Chart-facing roles — surface, axis text, axis border, and market up/down — have deterministic opaque sRGB equivalents in `packages/charts/src/style_tokens.json`, composited over the theme surface. `nucleuscharts_core` compiles that file into the default options used by every engine and backend. Those colors therefore resolve before frame construction rather than through demo or renderer overrides. The demo consumes the published CSS asset and selects the same named theme as the chart. A `v*` tag matching the package version publishes the verified artifact to GitHub Packages.
+The package also ships `design.css` as the portable host design system. Host chrome uses the system UI font stack and may use `color-mix` and `oklch`. The published package does not include a webfont. Native CPU text uses the host system UI sans-serif face; scene goldens that contain no text stay machine-independent. Chart-facing roles — surface, axis text, axis border, and market up/down — have deterministic opaque sRGB equivalents in `packages/charts/src/style_tokens.json`, composited over the theme surface. `nucleuscharts_core` compiles that file into the default options used by every engine and backend. Those colors therefore resolve before frame construction rather than through demo or renderer overrides. The demo consumes the published CSS asset and selects the same named theme as the chart. A `v*` tag matching the package version publishes the verified artifact to GitHub Packages.
 
 The package uses `snake_case` publicly. Data crosses into WebAssembly in typed columns or bounded shared-ring layouts rather than per-point object calls on hot paths. Typed update batches transfer their sanitized owned columns to the engine's batch entry point; the browser wrapper never loops through the single-row engine API. `examples/web_demo` is an integration and parity test host, not part of the library architecture.
 

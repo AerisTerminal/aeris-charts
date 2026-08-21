@@ -3094,6 +3094,7 @@ name = "nucleuscharts_native"
 version = "0.1.0"
 dependencies = [
  "ab_glyph",
+ "fontdb",
  "nucleuscharts_core",
  "nucleuscharts_engine",
  "nucleuscharts_render",

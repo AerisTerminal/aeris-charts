@@ -290,8 +290,8 @@ pub fn gradients(dpr: f32) -> Fixture {
 }
 
 /// **Text.** Axis-style labels in each alignment and weight. A residual here is attributable to
-/// glyph rasterization: GPUI uses DirectWrite, `nucleuscharts_native` uses a bundled OFL sans through
-/// `ab_glyph`, and the browser uses its own engine. These are different rasterizers by construction.
+/// glyph rasterization: GPUI uses DirectWrite, `nucleuscharts_native` uses the host system UI sans
+/// through `ab_glyph`, and the browser uses its own engine. These are different rasterizers by construction.
 pub fn text(dpr: f32) -> Fixture {
     let (w, h) = dims(dpr);
     let mut prims = vec![Prim::Rect {
