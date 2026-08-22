@@ -695,8 +695,8 @@ pub(crate) struct PendingDrawing {
 
 /// Freehand brush capture in progress (TradingView's brush drag, engine-owned): the points
 /// collected so far plus the options template for the committed drawing. Input is decimated by
-/// distance on the way in (media px) and RDP-simplified at commit — the stored path is already
-/// the smooth one.
+/// distance on the way in (media px) and committed as-is — the stored path is exactly the curve
+/// the live stroke painted.
 pub(crate) struct BrushCapture {
     pub(crate) pane_index: usize,
     pub(crate) points: Vec<DrawingPoint>,
@@ -708,46 +708,6 @@ pub(crate) struct BrushCapture {
 /// Minimum spacing between captured brush points in media px (input decimation — anything
 /// closer is pointer noise, not intent).
 pub(crate) const BRUSH_MIN_POINT_DISTANCE: f64 = 1.5;
-/// Ramer–Douglas–Peucker tolerance in media px applied at brush commit: drops collinear/noise
-/// points so the stored path is the smooth centerline of the stroke.
-pub(crate) const BRUSH_SIMPLIFY_TOLERANCE: f64 = 1.0;
-
-/// Ramer–Douglas–Peucker polyline simplification in media-px space (iterative — no recursion
-/// depth limit on long strokes). Both endpoints are always kept.
-pub(crate) fn rdp_simplify(points: &[(f64, f64)], epsilon: f64) -> Vec<(f64, f64)> {
-    if points.len() <= 2 {
-        return points.to_vec();
-    }
-    let mut keep = vec![false; points.len()];
-    keep[0] = true;
-    keep[points.len() - 1] = true;
-    let mut stack = vec![(0usize, points.len() - 1)];
-    while let Some((first, last)) = stack.pop() {
-        if last <= first + 1 {
-            continue;
-        }
-        let (a, b) = (points[first], points[last]);
-        let mut max_distance = 0.0_f64;
-        let mut max_index = first;
-        for (index, &point) in points.iter().enumerate().take(last).skip(first + 1) {
-            let distance = distance_to_segment(point.0, point.1, a.0, a.1, b.0, b.1);
-            if distance > max_distance {
-                max_distance = distance;
-                max_index = index;
-            }
-        }
-        if max_distance > epsilon {
-            keep[max_index] = true;
-            stack.push((first, max_index));
-            stack.push((max_index, last));
-        }
-    }
-    points
-        .iter()
-        .zip(keep.iter())
-        .filter_map(|(&point, &keep)| keep.then_some(point))
-        .collect()
-}
 
 /// Padding between a tool's reference box and its text label, in CSS px.
 pub(crate) const TEXT_PAD: f64 = 4.0;
@@ -2856,10 +2816,10 @@ impl ChartEngine {
         }
     }
 
-    /// Commit the stroke (pointer-up): the captured path is RDP-simplified in media-px space
-    /// ([`BRUSH_SIMPLIFY_TOLERANCE`] — the stored path is the smooth centerline of the stroke,
-    /// rendered as a curved polyline) and committed as a selected drawing. Returns the id, or
-    /// 0 discarding a degenerate stroke (fewer than two surviving points / no capture active).
+    /// Commit the stroke (pointer-up): the decimated capture is committed as-is — the stored
+    /// path is exactly the curve the live stroke painted (input decimation already bounded it),
+    /// rendered as a curved polyline. Returns the id, or 0 discarding a degenerate stroke
+    /// (fewer than two points / no capture active).
     pub fn brush_create_end(&mut self) -> DrawingId {
         self.invalidate_frame_drawings();
         let Some(capture) = self.brush_capture.take() else {
@@ -2868,33 +2828,13 @@ impl ChartEngine {
         if capture.points.len() < 2 {
             return 0;
         }
-        // Simplify in pixel space, then convert the surviving corners back to anchors.
-        let px: Option<Vec<(f64, f64)>> = capture
-            .points
-            .iter()
-            .map(|&point| self.drawing_to_px(capture.pane_index, point))
-            .collect();
-        let Some(px) = px else {
-            return 0;
-        };
-        let simplified = rdp_simplify(&px, BRUSH_SIMPLIFY_TOLERANCE);
-        let points: Option<Vec<DrawingPoint>> = simplified
-            .iter()
-            .map(|&(x, y)| self.drawing_from_px(capture.pane_index, x, y))
-            .collect();
-        let Some(points) = points else {
-            return 0;
-        };
-        if points.len() < 2 {
-            return 0;
-        }
         let Some(id) = self.take_drawing_id() else {
             return 0;
         };
         let mut drawing = capture.options;
         drawing.id = id;
         drawing.pane_index = capture.pane_index;
-        drawing.points = points;
+        drawing.points = capture.points;
         self.drawings.push(drawing);
         self.insert_drawing_runtime(id);
         self.selected_drawing = Some(id);

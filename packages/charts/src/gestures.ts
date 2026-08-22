@@ -69,7 +69,7 @@ export function install_gestures(chart: chart_impl): () => void {
   // engine's local preview; confirmed broker state is never mutated by this gesture path.
   let trading_dragging = false;
   let trading_press = false;
-  // Freehand brush capture in progress (the engine decimates/simplifies the stroke).
+  // Freehand brush capture in progress (the engine decimates the stroke by distance).
   let brush_drawing = false;
   // A text-tool press that already committed (mousedown placement) — the trailing click is
   // swallowed so it cannot re-open the typing-mode editor.
@@ -662,7 +662,7 @@ export function install_gestures(chart: chart_impl): () => void {
       return;
     }
     if (brush_drawing) {
-      // Commit the stroke (engine simplifies it into a smooth curved drawing, left selected).
+      // Commit the stroke (stored as a smooth curved drawing, left selected).
       brush_drawing = false;
       chart.brush_create_end();
       chart.repaint();

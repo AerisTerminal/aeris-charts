@@ -1729,28 +1729,7 @@ fn brush_renders_as_one_smooth_curved_polyline() {
 }
 
 #[test]
-fn rdp_simplify_drops_collinear_noise_and_keeps_corners() {
-    // A straight run with jitter inside tolerance collapses to its endpoints.
-    let mut path: Vec<(f64, f64)> = (0..=20).map(|i| (i as f64 * 10.0, 0.0)).collect();
-    path[10] = (100.0, 0.4); // sub-tolerance jitter
-    let simplified = rdp_simplify(&path, 1.0);
-    assert_eq!(simplified, vec![(0.0, 0.0), (200.0, 0.0)]);
-    // A real corner above tolerance survives (with its immediate neighbours — the classic RDP
-    // result), and both ends are always kept.
-    path[10] = (100.0, 5.0);
-    let simplified = rdp_simplify(&path, 1.0);
-    assert!(simplified.contains(&(100.0, 5.0)), "the corner survives");
-    assert_eq!(simplified.first(), Some(&(0.0, 0.0)));
-    assert_eq!(simplified.last(), Some(&(200.0, 0.0)));
-    // Two points or fewer pass through unchanged.
-    assert_eq!(
-        rdp_simplify(&[(1.0, 2.0), (3.0, 4.0)], 1.0),
-        vec![(1.0, 2.0), (3.0, 4.0)]
-    );
-}
-
-#[test]
-fn brush_capture_decimates_input_and_simplifies_on_commit() {
+fn brush_capture_decimates_input_and_commits_the_live_path() {
     let mut chart = settled_chart();
     assert!(!chart.brush_create_active());
     let start = (x_at(&chart, 2.0), y_at(&chart, 10.0));
@@ -1759,13 +1738,26 @@ fn brush_capture_decimates_input_and_simplifies_on_commit() {
     // Sub-threshold jitter is decimated (bar spacing is ~80 px here, so 0.5px is noise).
     chart.brush_create_add(start.0 + 0.5, start.1 + 0.5);
     assert_eq!(chart.brush_capture().unwrap().points.len(), 1);
-    // A straight drag across four bars with one real corner: commit keeps the ends + corner.
+    // A straight drag across four bars with one real corner.
     let spacing = x_at(&chart, 3.0) - x_at(&chart, 2.0);
     for step in 1..=8 {
         chart.brush_create_add(start.0 + step as f64 * spacing * 0.5, start.1);
     }
     chart.brush_create_add(start.0 + 4.5 * spacing, start.1 - 3.0 * spacing);
     chart.brush_create_add(start.0 + 5.0 * spacing, start.1 - 6.0 * spacing);
+    // The capture is what the live stroke painted — the commit must not re-shape it.
+    let captured: Vec<(f64, f64)> = chart
+        .brush_capture()
+        .unwrap()
+        .points
+        .iter()
+        .map(|&point| {
+            (
+                chart.logical_to_coordinate(point.logical).unwrap(),
+                chart.series_price_to_coordinate(0, point.price).unwrap(),
+            )
+        })
+        .collect();
     let id = chart.brush_create_end();
     assert!(id > 0);
     assert!(!chart.brush_create_active());
@@ -1773,14 +1765,19 @@ fn brush_capture_decimates_input_and_simplifies_on_commit() {
     assert_eq!(drawing.kind, DrawingKind::Brush);
     assert_eq!(drawing.color, "#123456");
     let points = &drawing.points;
-    // The collinear middle samples simplify away; the corner and both ends survive.
+    // Every decimated sample survives: the committed path is the live stroke's curve.
     assert!(
-        points.len() <= 4,
-        "simplified to the stroke's corners: {points:?}"
+        points.len() >= captured.len(),
+        "no commit-time thinning: {points:?}"
     );
     assert!(points.len() >= 2);
     assert!((points[0].logical - 2.0).abs() < 1e-6);
     assert!((points[0].price - 10.0).abs() < 1e-6);
+    for (anchor, &(x, y)) in points.iter().zip(captured.iter()) {
+        let px_x = chart.logical_to_coordinate(anchor.logical).unwrap();
+        let px_y = chart.series_price_to_coordinate(0, anchor.price).unwrap();
+        assert!((px_x - x).abs() < 1e-6 && (px_y - y).abs() < 1e-6);
+    }
     // The stroke is left selected (TradingView parity).
     assert_eq!(chart.selected_drawing(), Some(id));
 }

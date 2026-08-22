@@ -2172,13 +2172,13 @@ fn crosshair_line_style_and_width_flow_from_options() {
     chart.fit_content();
     chart.crosshair = Some((200.0, 120.0));
 
-    // Default: Nucleus's dotted crosshair at the crisp 1px width.
+    // Default: Nucleus's dashed crosshair at the crisp 1px width.
     let mut frame = ChartFrame::default();
     chart.build_frame_into(&mut frame);
     assert!(frame.panes[0].main.iter().any(|p| matches!(
         p,
         Prim::VLine {
-            style: LineStyle::Dotted,
+            style: LineStyle::Dashed,
             width: 1,
             ..
         }
@@ -2186,7 +2186,7 @@ fn crosshair_line_style_and_width_flow_from_options() {
     assert!(frame.panes[0].main.iter().any(|p| matches!(
         p,
         Prim::HLine {
-            style: LineStyle::Dotted,
+            style: LineStyle::Dashed,
             width: 1,
             ..
         }

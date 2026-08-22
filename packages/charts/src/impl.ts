@@ -3497,7 +3497,7 @@ export class chart_impl implements chart_api {
 
   /**
    * Begin a freehand brush stroke (pointer-down with the brush tool armed): the engine captures
-   * and decimates the path, simplifies it on commit, and renders it as a smooth curve.
+   * and decimates the path, and renders it as a smooth curve.
    * Returns whether the stroke started (a pane was hit).
    */
   brush_create_start(x: number, y: number): boolean {
@@ -3512,8 +3512,8 @@ export class chart_impl implements chart_api {
   }
 
   /**
-   * Commit the brush stroke (pointer-up): the engine RDP-simplifies the path into a smooth
-   * curved drawing, left selected. Disarms the tool on a commit (one-shot, TradingView
+   * Commit the brush stroke (pointer-up): the captured path is stored as-is and rendered as a
+   * smooth curved drawing, left selected. Disarms the tool on a commit (one-shot, TradingView
    * default); a click without a drag discards the stroke.
    */
   brush_create_end(): void {

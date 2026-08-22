@@ -1266,8 +1266,8 @@ pub struct ChartEngine {
     /// Interactive drawing creation in progress (drawings.rs): committed anchors plus a
     /// preview point following the mouse.
     pending_drawing: Option<PendingDrawing>,
-    /// Freehand brush capture in progress (drawings.rs): the decimated point list, simplified
-    /// at commit.
+    /// Freehand brush capture in progress (drawings.rs): the decimated point list, committed
+    /// as-is on pointer-up.
     brush_capture: Option<BrushCapture>,
     /// The text drawing the host's typing-mode editor currently owns (drawings.rs): its
     /// placeholder/label is suppressed in the frame so the editor's preview is the only

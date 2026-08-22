@@ -351,9 +351,9 @@ impl ChartEngine {
             // The text tool's geometry IS its label (emitted by `build_drawing_text`).
             DrawingKind::Text => {}
             DrawingKind::Brush => {
-                // TradingView's brush stroke: ONE smooth curved polyline through the
-                // simplified path (the same `LineType::Curved` interpolation the series line
-                // family uses), so the stroke is ultra smooth and identical on both backends.
+                // TradingView's brush stroke: ONE smooth curved polyline through the captured
+                // path (the same `LineType::Curved` interpolation the series line family uses),
+                // so the stroke is ultra smooth and identical on both backends.
                 let first_point = points.len() as u32;
                 for &(x, y) in px {
                     points.push([x as f32, y as f32]);

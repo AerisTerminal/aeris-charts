@@ -610,7 +610,7 @@ test("drawing tools render pixel-identical on WebGPU and Canvas2D (AA coverage s
       chart.add_drawing("text", [{ logical: Math.floor((l0 + l1) / 2), price: lo - 2 }], {
         text: "styled 800 italic", text_weight: 800, text_italic: true, text_color: "#e91e63",
       });
-      // A smooth brush stroke (curved polyline through a simplified path).
+      // A smooth brush stroke (curved polyline through the captured path).
       chart.add_drawing("brush", [
         { logical: l0 + 4, price: lo - 0.5 },
         { logical: Math.floor((l0 + l1) / 2), price: hi + 0.8 },
@@ -974,11 +974,11 @@ test("Ctrl magnets the crosshair to the hovered bar's OHLC", async ({ page }) =>
   expect(Math.abs(released_row - probe.y * PR), "released: raw again").toBeLessThan(2 * PR);
 });
 
-test("brush: freehand drag draws a simplified smooth stroke with end anchors", async ({ page }) => {
+test("brush: freehand drag draws a smooth stroke that survives commit unchanged", async ({ page }) => {
   await goto_fixture(page);
   const s = await anchor_spots(page);
   await page.evaluate(() => window.__chart.set_drawing_tool("brush", { color: "#000000", width: 2 }));
-  // Drag an arc across the pane in small steps (the engine decimates + simplifies it).
+  // Drag an arc across the pane in small steps (the engine decimates the raw moves by distance).
   const from = await spot(page, s.l0, s.p_lo);
   const bend = await spot(page, Math.floor((s.l0 + s.l1) / 2), s.p_hi);
   const to = await spot(page, s.l1, s.p_lo);
@@ -994,13 +994,14 @@ test("brush: freehand drag draws a simplified smooth stroke with end anchors", a
   }
   await page.mouse.up();
   await settle_frames(page);
-  // Committed, selected, simplified: far fewer stored points than raw move steps.
+  // Committed, selected: every decimated capture point is kept — the committed curve is
+  // exactly what the live drag painted (no commit-time thinning or reshaping).
   const list = await drawings(page);
   expect(list).toHaveLength(1);
   expect(list[0].kind).toBe("brush");
   const point_count = list[0].points.length;
   expect(point_count).toBeGreaterThanOrEqual(2);
-  expect(point_count).toBeLessThan(steps);
+  expect(point_count).toBeLessThanOrEqual(steps + 1);
   expect(await page.evaluate(() => window.__chart.selected_drawing()?.id ?? null)).toBe(list[0].id);
   expect(await page.evaluate(() => window.__chart.active_drawing_tool())).toBeNull();
 

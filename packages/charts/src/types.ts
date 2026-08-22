@@ -522,7 +522,7 @@ export interface crosshair_line_options {
   color?: string;
   /** Stroke width in CSS px. */
   width?: number;
-  /** Line style (`line_style` value; default Dotted). */
+  /** Line style (`line_style` value; default Dashed). */
   style?: number;
   visible?: boolean;
   /** Display the crosshair label on the relevant scale (reference `labelVisible`, default `true`). */

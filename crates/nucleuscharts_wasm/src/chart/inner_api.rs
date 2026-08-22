@@ -2103,8 +2103,8 @@ impl ChartInner {
     pub fn brush_create_add(&mut self, x_css: f64, y_css: f64) {
         self.engine.brush_create_add(x_css, y_css);
     }
-    /// Commit the stroke (pointer-up): RDP-simplified and stored as a selected drawing. 0 =
-    /// degenerate stroke discarded.
+    /// Commit the stroke (pointer-up): the captured path is stored as-is as a selected
+    /// drawing. 0 = degenerate stroke discarded.
     pub fn brush_create_end(&mut self) -> u32 {
         self.engine.brush_create_end()
     }

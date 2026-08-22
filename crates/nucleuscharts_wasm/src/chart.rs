@@ -3046,7 +3046,7 @@ impl NucleusChart {
         self.inner.borrow().drawing_create_active()
     }
 
-    // --- freehand brush (press-drag-release capture; engine owns decimation/simplification) ---
+    // --- freehand brush (press-drag-release capture; engine owns input decimation) ---
 
     /// Begin a brush stroke (pointer-down with the brush tool armed; "" options = defaults).
     /// False off the panes/data.
@@ -3059,8 +3059,9 @@ impl NucleusChart {
     pub fn brush_create_add(&mut self, x_css: f64, y_css: f64) {
         self.inner.borrow_mut().brush_create_add(x_css, y_css);
     }
-    /// Commit the stroke (pointer-up): RDP-simplified into a smooth curved path and stored as
-    /// the selected drawing. 0 = degenerate stroke discarded (a click without a drag).
+    /// Commit the stroke (pointer-up): the captured path is stored as-is (input decimation
+    /// already bounded it) and rendered as a smooth curved polyline, left selected. 0 =
+    /// degenerate stroke discarded (a click without a drag).
     pub fn brush_create_end(&mut self) -> u32 {
         self.inner.borrow_mut().brush_create_end()
     }
