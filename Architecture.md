@@ -117,7 +117,7 @@ Backend-neutral drawing primitives, colors, geometry, bar-width rules, and the o
 
 ### `nucleuscharts_render_gpui`
 
-The native GPUI executor. It converts the prepared primitive stream into GPUI scene operations and owns GPUI-specific text, image caches, geometry conversion, backend metrics, and fixtures. It must not fork chart behavior or recalculate engine geometry.
+The native GPUI executor. It converts the prepared primitive stream into GPUI scene operations and owns GPUI-specific text, image caches, geometry conversion, backend metrics, and fixtures. It must not fork chart behavior or recalculate engine geometry. The repository's interactive Linux probe enables GPUI's Wayland platform explicitly; Windows continues through GPUI's native platform selection.
 
 An interactive GPUI host requests another animation frame only for active engine animation or an explicit finite measurement run. Idle charts stop scheduling frames. The executor retains its lowered `ScenePlan`; a host presentation that does not change the canonical engine frame can repaint that plan without lowering every primitive again.
 
