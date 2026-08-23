@@ -292,6 +292,85 @@ pub struct DataLayer {
     /// Changes only when the merged timestamp sequence changes. Value-only current-bar updates
     /// leave it untouched, so time-derived consumers can distinguish them without rescanning.
     time_points_generation: u64,
+    /// Old union for the current owner transaction, captured only when a rebuild actually changes
+    /// logical indices and consumed when the owner synchronizes the final time scale.
+    merged_time_rebase_source: Option<Vec<i64>>,
+    capture_merged_time_rebase: bool,
+}
+
+/// Piecewise-linear old-to-new logical-index mapping through timestamps present in both unions.
+/// Exact common timestamps remain exact, while anchors outside the common extent extrapolate with
+/// slope one. The data layer creates this only for a transaction that rebuilt the merged union.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MergedTimeMapping {
+    common_indices: Vec<(usize, usize)>,
+}
+
+impl MergedTimeMapping {
+    fn between(old: &[i64], new: &[i64]) -> Self {
+        let mut common_indices = Vec::new();
+        let (mut old_index, mut new_index) = (0, 0);
+        while old_index < old.len() && new_index < new.len() {
+            match old[old_index].cmp(&new[new_index]) {
+                std::cmp::Ordering::Less => old_index += 1,
+                std::cmp::Ordering::Greater => new_index += 1,
+                std::cmp::Ordering::Equal => {
+                    let current = (old_index, new_index);
+                    if common_indices.len() >= 2 {
+                        let a: (usize, usize) = common_indices[common_indices.len() - 2];
+                        let b: (usize, usize) = common_indices[common_indices.len() - 1];
+                        let ab_old = (b.0 - a.0) as u128;
+                        let ab_new = (b.1 - a.1) as u128;
+                        let bc_old = (current.0 - b.0) as u128;
+                        let bc_new = (current.1 - b.1) as u128;
+                        if ab_old * bc_new == ab_new * bc_old {
+                            *common_indices.last_mut().expect("two breakpoints exist") = current;
+                        } else {
+                            common_indices.push(current);
+                        }
+                    } else {
+                        common_indices.push(current);
+                    }
+                    old_index += 1;
+                    new_index += 1;
+                }
+            }
+        }
+        if common_indices.is_empty()
+            || common_indices
+                .iter()
+                .all(|&(old_index, new_index)| old_index == new_index)
+        {
+            common_indices.clear();
+        }
+        Self { common_indices }
+    }
+
+    pub fn map_logical(&self, logical: f64) -> f64 {
+        if !logical.is_finite() || self.common_indices.is_empty() {
+            return logical;
+        }
+        let upper = self
+            .common_indices
+            .partition_point(|&(old_index, _)| (old_index as f64) < logical);
+        if let Some(&(old_index, new_index)) = self.common_indices.get(upper) {
+            if old_index as f64 == logical {
+                return new_index as f64;
+            }
+        }
+        if upper == 0 {
+            let (old_index, new_index) = self.common_indices[0];
+            return new_index as f64 + logical - old_index as f64;
+        }
+        if upper == self.common_indices.len() {
+            let (old_index, new_index) = self.common_indices[upper - 1];
+            return new_index as f64 + logical - old_index as f64;
+        }
+        let (old_left, new_left) = self.common_indices[upper - 1];
+        let (old_right, new_right) = self.common_indices[upper];
+        let fraction = (logical - old_left as f64) / (old_right - old_left) as f64;
+        new_left as f64 + fraction * (new_right - new_left) as f64
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -339,6 +418,19 @@ impl DataLayer {
         Self::default()
     }
 
+    /// Start an owner-level market-data transaction. This is allocation-free until a merged-union
+    /// rebuild changes the sequence; tail appends and value-only replacements therefore stay free.
+    pub fn begin_merged_time_transaction(&mut self) {
+        self.capture_merged_time_rebase = true;
+    }
+
+    /// Finish the owner transaction against its final merged union.
+    pub fn take_merged_time_mapping(&mut self) -> Option<MergedTimeMapping> {
+        self.capture_merged_time_rebase = false;
+        let old = self.merged_time_rebase_source.take()?;
+        Some(MergedTimeMapping::between(&old, &self.merged_times))
+    }
+
     pub fn add_series(&mut self) -> SeriesId {
         let id = self.next_series_id;
         self.next_series_id = self
@@ -370,7 +462,11 @@ impl DataLayer {
             merged_time_bytes: self.merged_times.len() * std::mem::size_of::<i64>(),
             owned_time_bytes: self.auxiliary_times.len() * std::mem::size_of::<i64>(),
             scratch_capacity_bytes: self.merged_times_scratch.capacity()
-                * std::mem::size_of::<i64>(),
+                * std::mem::size_of::<i64>()
+                + self
+                    .merged_time_rebase_source
+                    .as_ref()
+                    .map_or(0, |times| times.capacity() * std::mem::size_of::<i64>()),
             ..DataLayerMemoryUsage::default()
         };
         for &slot in self.live_slots.values() {
@@ -1277,6 +1373,9 @@ impl DataLayer {
         all.sort_unstable();
         all.dedup();
         if *all != self.merged_times {
+            if self.capture_merged_time_rebase && self.merged_time_rebase_source.is_none() {
+                self.merged_time_rebase_source = Some(self.merged_times.clone());
+            }
             std::mem::swap(&mut self.merged_times, all);
             self.time_points_generation = self.time_points_generation.wrapping_add(1);
         }
@@ -1648,6 +1747,86 @@ mod tests {
 
         dl.update(id, 259_200, [5.0; 4]);
         assert_eq!(dl.time_points_generation(), appended);
+    }
+
+    #[test]
+    fn merged_time_mapping_interpolates_common_timestamps_and_extrapolates_with_unit_slope() {
+        let mut dl = DataLayer::new();
+        let id = dl.add_series();
+        set(&mut dl, id, &[10, 20, 30], &[1.0; 3]);
+
+        dl.begin_merged_time_transaction();
+        assert!(dl.update(id, 15, [2.0; 4]));
+        let mapping = dl.take_merged_time_mapping().unwrap();
+
+        assert_eq!(mapping.map_logical(0.0), 0.0);
+        assert_eq!(mapping.map_logical(0.5), 1.0);
+        assert_eq!(mapping.map_logical(1.0), 2.0);
+        assert_eq!(mapping.map_logical(2.0), 3.0);
+        assert_eq!(mapping.map_logical(-1.25), -1.25);
+        assert_eq!(mapping.map_logical(3.5), 4.5);
+    }
+
+    #[test]
+    fn merged_time_mapping_is_identity_without_common_timestamps() {
+        let mut dl = DataLayer::new();
+        let id = dl.add_series();
+        set(&mut dl, id, &[10, 20, 30], &[1.0; 3]);
+
+        dl.begin_merged_time_transaction();
+        set(&mut dl, id, &[40, 50, 60], &[2.0; 3]);
+        let mapping = dl.take_merged_time_mapping().unwrap();
+        assert_eq!(mapping.map_logical(-1.5), -1.5);
+        assert_eq!(mapping.map_logical(1.25), 1.25);
+        assert_eq!(mapping.map_logical(4.0), 4.0);
+    }
+
+    #[test]
+    fn merged_time_mapping_uses_the_transaction_final_union() {
+        let mut dl = DataLayer::new();
+        let primary = dl.add_series();
+        let divergent = dl.add_series();
+        set(&mut dl, primary, &[10, 20, 30, 40], &[1.0; 4]);
+        set(&mut dl, divergent, &[20], &[2.0]);
+
+        dl.begin_merged_time_transaction();
+        set(&mut dl, primary, &[15, 30, 40], &[3.0; 3]);
+        set(&mut dl, divergent, &[20, 35], &[4.0; 2]);
+        let mapping = dl.take_merged_time_mapping().unwrap();
+
+        assert_eq!(dl.merged_times(), &[15, 20, 30, 35, 40]);
+        assert_eq!(mapping.map_logical(1.0), 1.0); // shared timestamp 20
+        assert_eq!(mapping.map_logical(2.0), 2.0); // shared timestamp 30
+        assert_eq!(mapping.map_logical(3.0), 4.0); // shared timestamp 40
+        assert_eq!(mapping.map_logical(2.5), 3.0);
+    }
+
+    #[test]
+    fn merged_time_mapping_retains_only_slope_change_breakpoints() {
+        let old: Vec<i64> = (0..10_000).map(|index| i64::from(index) * 2).collect();
+        let mut new = old.clone();
+        new.insert(5_000, 9_999);
+
+        let mapping = MergedTimeMapping::between(&old, &new);
+
+        assert_eq!(mapping.common_indices.len(), 4);
+        assert_eq!(mapping.map_logical(4_999.5), 5_000.0);
+        assert_eq!(mapping.map_logical(9_999.0), 10_000.0);
+    }
+
+    #[test]
+    fn replacements_and_tail_appends_do_not_create_a_mapping() {
+        let mut dl = DataLayer::new();
+        let id = dl.add_series();
+        set(&mut dl, id, &[10, 20, 30], &[1.0; 3]);
+
+        dl.begin_merged_time_transaction();
+        assert!(dl.update(id, 30, [2.0; 4]));
+        assert!(dl.take_merged_time_mapping().is_none());
+
+        dl.begin_merged_time_transaction();
+        assert!(dl.update(id, 40, [3.0; 4]));
+        assert!(dl.take_merged_time_mapping().is_none());
     }
 
     #[test]

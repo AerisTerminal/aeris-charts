@@ -122,7 +122,7 @@ impl ChartInner {
             .as_ref()
             .is_some_and(|gfx| gfx.device_lost.load(Ordering::Acquire))
         {
-            self.activate_canvas2d("WebGPU device was lost");
+            self.activate_canvas2d("device_lost", "WebGPU device was lost");
         }
 
         let bg = resolved_surface_color(&self.opts().layout.background.color);
@@ -450,7 +450,7 @@ impl ChartInner {
                 return Ok(());
             }
             PaneRenderOutcome::Fallback(reason) => {
-                self.activate_canvas2d(&reason);
+                self.activate_canvas2d("surface_acquisition_failed", &reason);
                 self.render_canvas2d()?;
             }
             PaneRenderOutcome::Canvas2d => self.render_canvas2d()?,
@@ -925,12 +925,12 @@ impl ChartInner {
     }
 
     /// Permanently switch this chart instance to its already-initialized Canvas2D pane.
-    fn activate_canvas2d(&mut self, reason: &str) {
+    fn activate_canvas2d(&mut self, stable_reason: &'static str, detail: &str) {
         if self.gfx.take().is_some() {
             set_backend_visibility(self.gpu_pane.as_ref(), self.fallback_pane.as_ref(), false);
-            web_sys::console::warn_1(
-                &format!("nucleuscharts: {reason}; continuing with Canvas2D").into(),
-            );
+            self.backend_status
+                .runtime_fallback(stable_reason, detail.to_string());
+            warn_backend_fallback(&self.backend_status);
         }
     }
 

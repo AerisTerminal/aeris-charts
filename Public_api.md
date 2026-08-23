@@ -21,6 +21,9 @@ entry point and `./design.css` are the only npm export paths. The supported root
   names remain compatible;
 - `nucleuscharts_error` and its machine-readable error codes;
 - chart-state persistence V1 through `chart.export_state()` and `chart.import_state()`.
+- read-only backend diagnostics through `chart.backend_status()`, including the requested and active
+  backend, stable fallback stage/reason, secure-context and `navigator.gpu` exposure, and optional
+  unstable platform detail. `chart.backend()` retains its existing active-backend return value.
 
 Generated `wasm-bindgen` classes, methods reachable only through implementation objects, telemetry,
 benchmark counters, demo globals, fixtures, and test hooks are internal even when JavaScript can

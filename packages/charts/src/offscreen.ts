@@ -10,6 +10,7 @@ import { default_theme_name, theme_options } from "./theme.js";
 import { FEATURE_KIND_TO_U8, KIND_TO_U8, is_feature_series_kind } from "./types.js";
 import type {
   any_series_options,
+  backend_status,
   chart_options,
   deep_partial,
   frame_stats,
@@ -178,6 +179,12 @@ export class offscreen_chart {
   backend(): "webgpu" | "canvas2d" {
     this.assert_live();
     return this.wasm.backend_kind() as "webgpu" | "canvas2d";
+  }
+
+  /** Structured backend selection/fallback diagnostics for this worker chart. */
+  backend_status(): Readonly<backend_status> {
+    this.assert_live();
+    return Object.freeze(JSON.parse(this.wasm.backend_status_json()) as backend_status);
   }
 
   /** Subscribe to runtime WebGPU → Canvas2D fallback. The owner should reveal the HTML canvas

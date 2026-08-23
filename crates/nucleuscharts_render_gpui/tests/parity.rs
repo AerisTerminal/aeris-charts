@@ -26,8 +26,8 @@ use nucleuscharts_render::canvas2d::{execute as canvas_execute, Canvas2d, Viewpo
 use nucleuscharts_render::color::Color;
 use nucleuscharts_render::draw_list::{Gradient, IRect, LineStyle, LineType, Prim, TextAlign};
 use nucleuscharts_render_gpui::{
-    ExecutorOptions, GpuiChartRenderer, GpuiFrameMetrics, Paint, PreparedNucleusFrame, SceneOp,
-    ScenePlan,
+    fixtures, ExecutorOptions, GpuiChartRenderer, GpuiFrameMetrics, Paint, PreparedNucleusFrame,
+    SceneOp, ScenePlan,
 };
 
 /// A Canvas2D target that records only what the crisp-rect subset does: the current fill style and
@@ -531,6 +531,43 @@ fn tessellated_prims_take_the_path_route_on_both_backends() {
                 assert_eq!(vertex_count % 3, 0, "{name}: partial triangle in the mesh");
             }
         }
+    }
+}
+
+#[test]
+fn curved_brush_fixture_lowers_sparse_dense_and_scaled_widths_without_drops() {
+    for dpr in [1.0f32, 1.25, 1.5, 2.0, 2.5] {
+        let fixture = fixtures::curved_brushes(dpr);
+        let stroke_count = fixture
+            .prims
+            .iter()
+            .filter(|prim| {
+                matches!(
+                    prim,
+                    Prim::Polyline {
+                        line_type: LineType::Curved,
+                        ..
+                    }
+                )
+            })
+            .count();
+        let (plan, metrics) = gpui_plan(&fixture.prims, &fixture.points);
+        let meshes: Vec<_> = plan
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                SceneOp::Mesh { vertex_count, .. } => Some(*vertex_count),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(stroke_count, 4, "DPR {dpr}: fixture lost curved strokes");
+        assert_eq!(metrics.dropped_prims, 0, "DPR {dpr}: a stroke was dropped");
+        assert_eq!(meshes.len(), stroke_count, "DPR {dpr}: wrong mesh count");
+        assert!(
+            meshes.iter().all(|count| *count >= 3 && *count % 3 == 0),
+            "DPR {dpr}: every curved brush must produce complete triangles"
+        );
     }
 }
 

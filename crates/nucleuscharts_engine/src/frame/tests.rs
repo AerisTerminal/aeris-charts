@@ -3902,6 +3902,46 @@ fn retained_frame_matches_clean_rebuild_across_mutation_sequence() {
 }
 
 #[test]
+fn retained_frame_matches_clean_rebuild_after_drawing_time_rebase() {
+    use crate::drawings::{DrawingKind, DrawingPoint};
+
+    let mut chart = retained_two_series_chart();
+    let drawing = chart
+        .add_drawing(
+            DrawingKind::TrendLine,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 0.5,
+                    price: 12.0,
+                },
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 16.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    chart.build_frame();
+
+    chart
+        .set_series_data(
+            0,
+            &[0.0, 1.0, 2.0, 3.0],
+            &[9.0, 10.0, 20.0, 15.0],
+            &[10.0, 11.0, 21.0, 16.0],
+            &[8.0, 9.0, 19.0, 14.0],
+            &[9.5, 10.5, 20.5, 15.5],
+        )
+        .unwrap();
+
+    assert_eq!(chart.drawing(drawing).unwrap().points[0].logical, 1.5);
+    assert_eq!(chart.drawing(drawing).unwrap().points[1].logical, 3.0);
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+}
+
+#[test]
 fn dense_retained_frame_matches_clean_rebuild_after_update_pan_and_zoom() {
     let count = 20_000usize;
     let times = (0..count).map(|row| row as f64).collect::<Vec<_>>();

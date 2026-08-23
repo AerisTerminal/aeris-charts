@@ -1669,10 +1669,41 @@ export interface trading_api {
   unsubscribe_intents(handler: trading_intent_handler): void;
 }
 
+/** Immutable diagnostic snapshot for backend selection and fallback. */
+export interface backend_status {
+  readonly requested_backend: "auto" | "canvas2d";
+  readonly active_backend: "webgpu" | "canvas2d";
+  readonly stage:
+    | "backend_selection"
+    | "adapter_acquisition"
+    | "device_acquisition"
+    | "surface_configuration"
+    | "initialization"
+    | "ready"
+    | "runtime";
+  readonly reason:
+    | "canvas2d_requested"
+    | "adapter_unavailable"
+    | "device_unavailable"
+    | "surface_unavailable"
+    | "webgpu_initialization_failed"
+    | "webgpu_ready"
+    | "device_lost"
+    | "surface_acquisition_failed";
+  /** Browser secure-context state at chart construction, or `null` when the host cannot expose it. */
+  readonly secure_context: boolean | null;
+  /** Whether `navigator.gpu` was exposed at construction, without making another adapter request. */
+  readonly navigator_gpu: boolean | null;
+  /** Unstable platform detail for debugging. Branch on `stage` and `reason`, not this text. */
+  readonly detail?: string;
+}
+
 /** The chart. Create with {@link create_chart}. */
 export interface chart_api {
   /** Active pane backend: `webgpu` when available, otherwise the shared `canvas2d` fallback. */
   backend(): "webgpu" | "canvas2d";
+  /** Structured backend selection/fallback diagnostics for this chart. */
+  backend_status(): Readonly<backend_status>;
   /**
    * Render telemetry for the last frame — the surface for holding a frame-time budget and
    * detecting regressions. Cheap enough to poll every frame: the returned object is freshly

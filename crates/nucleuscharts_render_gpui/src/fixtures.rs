@@ -242,6 +242,75 @@ pub fn tessellated(dpr: f32) -> Fixture {
     }
 }
 
+/// **Curved brush strokes.** Sparse and dense point streams at thin through heavy brush widths.
+/// Every stroke keeps `LineType::Curved`, so GPUI and the reference rasterizer consume the shared
+/// curved-line expansion rather than a backend-specific smoothing path.
+pub fn curved_brushes(dpr: f32) -> Fixture {
+    let (w, h) = dims(dpr);
+    let mut prims = vec![Prim::Rect {
+        rect: IRect {
+            x: 0,
+            y: 0,
+            w: w as i32,
+            h: h as i32,
+        },
+        color: BG,
+    }];
+    let mut points = Vec::new();
+
+    for (y_offset, width, color) in [(0.0, 1.0, LINE), (72.0, 6.0, DOWN)] {
+        let first_point = points.len() as u32;
+        for [x, y] in [
+            [20.0, 42.0],
+            [92.0, 18.0],
+            [176.0, 62.0],
+            [270.0, 24.0],
+            [360.0, 66.0],
+            [460.0, 36.0],
+        ] {
+            points.push([x * dpr, (y + y_offset) * dpr]);
+        }
+        prims.push(Prim::Polyline {
+            first_point,
+            point_count: 6,
+            width: width * dpr,
+            style: LineStyle::Solid,
+            line_type: LineType::Curved,
+            color,
+        });
+    }
+
+    for (y_offset, width, color) in [(198.0, 2.0, UP), (260.0, 4.0, INK)] {
+        let first_point = points.len() as u32;
+        let point_count = 96;
+        for i in 0..point_count {
+            let t = i as f32 / (point_count - 1) as f32;
+            points.push([
+                (20.0 + t * 440.0) * dpr,
+                (y_offset + (t * 19.0).sin() * 20.0 + (t * 7.0).cos() * 8.0) * dpr,
+            ]);
+        }
+        prims.push(Prim::Polyline {
+            first_point,
+            point_count,
+            width: width * dpr,
+            style: LineStyle::Solid,
+            line_type: LineType::Curved,
+            color,
+        });
+    }
+
+    Fixture {
+        name: "curved_brushes",
+        attribution: "shared curved-line expansion across brush density and width",
+        prims,
+        points,
+        width: w,
+        height: h,
+        background: BG,
+    }
+}
+
 /// **Gradients.** A `Background` vertical ramp and an `AreaFill`. A residual here is attributable to
 /// gradient interpolation (GPUI interpolates in its own colour space; Canvas2D and tiny-skia
 /// interpolate premultiplied sRGB).
@@ -471,6 +540,7 @@ pub fn all(dpr: f32) -> Vec<Fixture> {
         translucent_rects(dpr),
         opaque_aa(dpr),
         tessellated(dpr),
+        curved_brushes(dpr),
         gradients(dpr),
         text(dpr),
     ]
@@ -499,6 +569,39 @@ mod tests {
             for (x, y) in a.iter().zip(&b) {
                 assert_eq!(x.prims, y.prims, "{} is not reproducible", x.name);
                 assert_eq!(x.points, y.points);
+            }
+        }
+    }
+
+    #[test]
+    fn curved_brush_fixture_covers_density_width_and_dpr_matrix() {
+        for dpr in [1.0f32, 1.25, 1.5, 2.0, 2.5] {
+            let fixture = curved_brushes(dpr);
+            let strokes: Vec<_> = fixture
+                .prims
+                .iter()
+                .filter_map(|prim| match prim {
+                    Prim::Polyline {
+                        point_count,
+                        width,
+                        line_type,
+                        ..
+                    } => Some((*point_count, *width, *line_type)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(strokes.len(), 4);
+            assert!(strokes.iter().all(|stroke| stroke.2 == LineType::Curved));
+            assert_eq!(
+                strokes.iter().map(|stroke| stroke.0).collect::<Vec<_>>(),
+                [6, 6, 96, 96]
+            );
+            for (actual, logical) in strokes
+                .iter()
+                .map(|stroke| stroke.1)
+                .zip([1.0f32, 6.0, 2.0, 4.0])
+            {
+                assert!((actual - logical * dpr).abs() <= f32::EPSILON);
             }
         }
     }

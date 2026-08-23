@@ -1012,6 +1012,10 @@ impl ChartEngine {
         if autoscale_dirty {
             self.autoscale_visible();
         }
+        if self.drawing_baselines_need_frame_refresh {
+            self.refresh_drawing_pixel_baselines();
+            self.drawing_baselines_need_frame_refresh = false;
+        }
         let scene_dirty = self.retained_frame.scene_generation != self.frame_invalidation.scene;
         let drawings_dirty =
             self.retained_frame.drawings_generation != self.frame_invalidation.drawings;

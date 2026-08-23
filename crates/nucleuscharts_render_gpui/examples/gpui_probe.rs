@@ -204,6 +204,19 @@ fn synthetic_bars(count: usize) -> Bars {
     }
 }
 
+fn next_bar_timestamp(times: &[f64]) -> f64 {
+    let Some(&latest) = times.last() else {
+        return 1_600_000_000.0;
+    };
+    let cadence = times
+        .windows(2)
+        .rev()
+        .map(|pair| pair[1] - pair[0])
+        .find(|cadence| cadence.is_finite() && *cadence > 0.0)
+        .unwrap_or(60.0);
+    latest + cadence
+}
+
 /// Match the Web demo's root-cell fixture: 1,000 deterministic hourly bars by default.
 fn interactive_root_bars(count: usize) -> Bars {
     let end_time = 1_600_000_000.0 + count.saturating_sub(1) as f64 * 3_600.0;
@@ -1143,7 +1156,7 @@ impl Probe {
         let o = self.source_bars.close.last().copied().unwrap_or(c);
         let high = o.max(c) + 2.0;
         let low = o.min(c) - 2.0;
-        let time = 1_600_000_000.0 + t * 60.0;
+        let time = next_bar_timestamp(&self.source_bars.times);
         self.engine.update_series_bar(0, time, [o, high, low, c]);
         if let Some(id) = self.volume_id {
             let volume = (high - low) * 25_000.0 + i as f64 * 31.0;
@@ -3505,6 +3518,27 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_append_uses_the_latest_source_cadence() {
+        let mut probe = Probe::new_interactive(3);
+        let previous = *probe.source_bars.times.last().unwrap();
+        probe.append_bar();
+        assert_eq!(probe.source_bars.times.len(), 4);
+        assert_eq!(*probe.source_bars.times.last().unwrap(), previous + 3_600.0);
+
+        let mut hourly = vec![1_600_000_000.0, 1_600_003_600.0, 1_600_007_200.0];
+        let first_append = next_bar_timestamp(&hourly);
+        assert_eq!(first_append, 1_600_010_800.0);
+        hourly.push(first_append);
+        assert_eq!(next_bar_timestamp(&hourly), 1_600_014_400.0);
+
+        assert_eq!(
+            next_bar_timestamp(&[1_600_000_000.0, 1_600_000_060.0]),
+            1_600_000_120.0,
+            "the finite probe's minute cadence remains unchanged"
+        );
+    }
 
     #[test]
     fn resize_replaces_negotiated_pane_dimensions_at_fractional_dpr() {

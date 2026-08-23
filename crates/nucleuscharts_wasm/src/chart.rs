@@ -41,7 +41,10 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::CanvasRenderingContext2d;
 
-use crate::backend_policy::{surface_error_action, SurfaceErrorAction};
+use crate::backend_policy::{
+    surface_error_action, BackendStartupFailure, BackendStatus, BackendWarningDeduplicator,
+    SurfaceErrorAction,
+};
 use crate::telemetry::{FrameTelemetry, FRAME_STATS_LEN};
 use nucleuscharts_core::model::data_layer::SeriesId;
 use nucleuscharts_core::model::data_validation::sanitize_ohlc;
@@ -78,6 +81,40 @@ extern "C" {
 }
 
 static GPU_LOSS_GENERATION: AtomicU32 = AtomicU32::new(0);
+
+thread_local! {
+    static BACKEND_WARNINGS: RefCell<BackendWarningDeduplicator> = RefCell::default();
+}
+
+fn browser_gpu_capabilities() -> (Option<bool>, Option<bool>) {
+    let global = js_sys::global();
+    let secure_context = js_sys::Reflect::get(&global, &"isSecureContext".into())
+        .ok()
+        .and_then(|value| value.as_bool());
+    let navigator_gpu = js_sys::Reflect::get(&global, &"navigator".into())
+        .ok()
+        .filter(|navigator| !navigator.is_null() && !navigator.is_undefined())
+        .and_then(|navigator| js_sys::Reflect::get(&navigator, &"gpu".into()).ok())
+        .map(|gpu| !gpu.is_null() && !gpu.is_undefined());
+    (secure_context, navigator_gpu)
+}
+
+fn warn_backend_fallback(status: &BackendStatus) {
+    if !BACKEND_WARNINGS.with(|warnings| warnings.borrow_mut().should_warn(status)) {
+        return;
+    }
+    let detail = status
+        .detail
+        .as_deref()
+        .map_or(String::new(), |detail| format!("; detail={detail}"));
+    web_sys::console::warn_1(
+        &format!(
+            "nucleuscharts: WebGPU fallback stage={} reason={} secure_context={:?} navigator_gpu={:?}; using Canvas2D{detail}",
+            status.stage, status.reason, status.secure_context, status.navigator_gpu
+        )
+        .into(),
+    );
+}
 
 fn validation_diagnostics_json(
     report: &nucleuscharts_core::model::data_validation::ValidationReport,
@@ -368,6 +405,7 @@ struct ChartInner {
     fallback_pane: Option<web_sys::HtmlCanvasElement>,
     pane_ctx: CanvasRenderingContext2d,
     axis_ctx: CanvasRenderingContext2d,
+    backend_status: BackendStatus,
     bitmap_w: u32,
     bitmap_h: u32,
     engine: ChartEngine,
@@ -610,6 +648,7 @@ pub async fn create_chart(
 
     let bitmap_w = (css_width * dpr).round().max(1.0) as u32;
     let bitmap_h = (css_height * dpr).round().max(1.0) as u32;
+    let (secure_context, navigator_gpu) = browser_gpu_capabilities();
     // A canvas cannot change context type after WebGPU has claimed it. Keep a dedicated 2D pane
     // warm from construction so a device loss can switch backends without replacing DOM nodes or
     // rebuilding chart state.
@@ -617,8 +656,11 @@ pub async fn create_chart(
         .get_context("2d")?
         .ok_or_else(|| JsValue::from_str("no 2d pane context"))?
         .dyn_into::<CanvasRenderingContext2d>()?;
-    let gfx = if force_canvas2d {
-        None
+    let (gfx, backend_status) = if force_canvas2d {
+        (
+            None,
+            BackendStatus::canvas2d_requested(secure_context, navigator_gpu),
+        )
     } else {
         match try_create_gfx(
             wgpu::SurfaceTarget::Canvas(gpu_pane_canvas),
@@ -630,15 +672,14 @@ pub async fn create_chart(
         )
         .await
         {
-            Ok(gfx) => Some(gfx),
+            Ok(gfx) => (
+                Some(gfx),
+                BackendStatus::webgpu_ready(secure_context, navigator_gpu),
+            ),
             Err(error) => {
-                web_sys::console::warn_1(
-                    &format!(
-                        "nucleuscharts: WebGPU unavailable; using Canvas2D fallback ({error:?})"
-                    )
-                    .into(),
-                );
-                None
+                let status = BackendStatus::startup_fallback(error, secure_context, navigator_gpu);
+                warn_backend_fallback(&status);
+                (None, status)
             }
         }
     };
@@ -650,6 +691,7 @@ pub async fn create_chart(
         fallback_pane: Some(fallback_pane_el.clone()),
         pane_ctx,
         axis_ctx,
+        backend_status,
         bitmap_w,
         bitmap_h,
         engine: ChartEngine::new(css_width, css_height, dpr),
@@ -736,6 +778,7 @@ pub async fn create_offscreen_chart(
     let dpr = dpr.max(f64::EPSILON);
     let bitmap_w = (css_width * dpr).round().max(1.0) as u32;
     let bitmap_h = (css_height * dpr).round().max(1.0) as u32;
+    let (secure_context, navigator_gpu) = browser_gpu_capabilities();
     for canvas in [&gpu_pane_canvas, &fallback_pane_canvas] {
         canvas.set_width(bitmap_w);
         canvas.set_height(bitmap_h);
@@ -753,8 +796,11 @@ pub async fn create_offscreen_chart(
         .ok_or_else(|| JsValue::from_str("no offscreen 2d measurement context"))?
         .unchecked_into::<CanvasRenderingContext2d>();
 
-    let gfx = if force_canvas2d {
-        None
+    let (gfx, backend_status) = if force_canvas2d {
+        (
+            None,
+            BackendStatus::canvas2d_requested(secure_context, navigator_gpu),
+        )
     } else {
         match try_create_gfx(
             wgpu::SurfaceTarget::OffscreenCanvas(gpu_pane_canvas),
@@ -766,15 +812,14 @@ pub async fn create_offscreen_chart(
         )
         .await
         {
-            Ok(gfx) => Some(gfx),
+            Ok(gfx) => (
+                Some(gfx),
+                BackendStatus::webgpu_ready(secure_context, navigator_gpu),
+            ),
             Err(error) => {
-                web_sys::console::warn_1(
-                    &format!(
-                        "nucleuscharts: worker WebGPU unavailable; using OffscreenCanvas 2D ({error:?})"
-                    )
-                    .into(),
-                );
-                None
+                let status = BackendStatus::startup_fallback(error, secure_context, navigator_gpu);
+                warn_backend_fallback(&status);
+                (None, status)
             }
         }
     };
@@ -785,6 +830,7 @@ pub async fn create_offscreen_chart(
         fallback_pane: None,
         pane_ctx,
         axis_ctx,
+        backend_status,
         bitmap_w,
         bitmap_h,
         engine: ChartEngine::new(css_width, css_height, dpr),
@@ -3283,6 +3329,11 @@ impl NucleusChart {
         self.inner.borrow().backend_kind()
     }
 
+    pub fn backend_status_json(&self) -> String {
+        serde_json::to_string(&self.inner.borrow().backend_status)
+            .expect("backend status is always serializable")
+    }
+
     /// Number of `f64` slots [`Self::frame_stats_into`] writes. The façade allocates one scratch
     /// array of this length per chart and reuses it, so reading stats never allocates.
     pub fn frame_stats_len() -> usize {
@@ -3330,7 +3381,7 @@ impl ChartInner {
 }
 
 /// Outcome of a shared-GPU init attempt, delivered to every waiting `create_chart` call.
-type SharedGpuResult = Result<Rc<SharedGpu>, String>;
+type SharedGpuResult = Result<Rc<SharedGpu>, BackendStartupFailure>;
 type SharedGpuWaiters = Rc<RefCell<Vec<futures_channel::oneshot::Sender<SharedGpuResult>>>>;
 
 /// Slot for the page-wide shared GPU context. `Pending` serializes concurrent `create_chart`
@@ -3352,7 +3403,7 @@ enum SharedGpuAction {
     Create(SharedGpuWaiters),
 }
 
-async fn shared_gpu(force_fallback_adapter: bool) -> Result<Rc<SharedGpu>, JsValue> {
+async fn shared_gpu(force_fallback_adapter: bool) -> Result<Rc<SharedGpu>, BackendStartupFailure> {
     let action = SHARED_GPU.with(|slot| {
         let mut slot = slot.borrow_mut();
         if let SharedGpuSlot::Ready(shared) = &*slot {
@@ -3379,10 +3430,9 @@ async fn shared_gpu(force_fallback_adapter: bool) -> Result<Rc<SharedGpu>, JsVal
     });
     match action {
         SharedGpuAction::Ready(shared) => Ok(shared),
-        SharedGpuAction::Wait(rx) => rx
-            .await
-            .map_err(|_| JsValue::from_str("shared GPU init dropped"))?
-            .map_err(|e| JsValue::from_str(&format!("shared GPU init failed: {e}"))),
+        SharedGpuAction::Wait(rx) => rx.await.map_err(|_| {
+            BackendStartupFailure::initialization("shared GPU init dropped".to_string())
+        })?,
         SharedGpuAction::Create(waiters) => {
             let result = create_shared_gpu(force_fallback_adapter).await;
             SHARED_GPU.with(|slot| {
@@ -3395,21 +3445,40 @@ async fn shared_gpu(force_fallback_adapter: bool) -> Result<Rc<SharedGpu>, JsVal
             for tx in waiters.borrow_mut().drain(..) {
                 let _ = tx.send(result.clone());
             }
-            result.map_err(|e| JsValue::from_str(&e))
+            result
         }
     }
 }
 
-async fn create_shared_gpu(force_fallback_adapter: bool) -> Result<Rc<SharedGpu>, String> {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-    let adapter = instance
+async fn create_shared_gpu(
+    force_fallback_adapter: bool,
+) -> Result<Rc<SharedGpu>, BackendStartupFailure> {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::BROWSER_WEBGPU,
+        ..Default::default()
+    });
+    let adapter = match instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter,
         })
         .await
-        .map_err(|e| format!("request_adapter failed: {e}"))?;
+    {
+        Ok(adapter) => adapter,
+        Err(high_performance_error) => instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::default(),
+                compatible_surface: None,
+                force_fallback_adapter,
+            })
+            .await
+            .map_err(|default_error| {
+                BackendStartupFailure::adapter(format!(
+                    "request_adapter failed after high-performance and default attempts: {default_error}; high-performance attempt: {high_performance_error}"
+                ))
+            })?,
+    };
     // `timestamp-query` powers `frame_stats().gpu_ms`. It is strictly optional: request it only
     // when the adapter advertises it, so a device lacking the feature (or a browser that has not
     // shipped it) still creates a chart — `gpu_ms` then reports `null` (frame_stats docs).
@@ -3420,7 +3489,7 @@ async fn create_shared_gpu(force_fallback_adapter: bool) -> Result<Rc<SharedGpu>
             ..Default::default()
         })
         .await
-        .map_err(|e| format!("request_device failed: {e}"))?;
+        .map_err(|e| BackendStartupFailure::device(format!("request_device failed: {e}")))?;
     let device_lost = Arc::new(AtomicBool::new(false));
     let lost_flag = Arc::clone(&device_lost);
     device.set_device_lost_callback(move |reason, _message| {
@@ -3454,22 +3523,24 @@ async fn try_create_gfx(
     dpr: f64,
     simulate_adapter_failure: bool,
     force_fallback_adapter: bool,
-) -> Result<Gfx, JsValue> {
+) -> Result<Gfx, BackendStartupFailure> {
     if simulate_adapter_failure {
-        return Err(JsValue::from_str(
-            "request_adapter failed: deterministic runtime-matrix injection",
+        return Err(BackendStartupFailure::adapter(
+            "webgpu found no adapters".to_string(),
         ));
     }
     let shared = shared_gpu(force_fallback_adapter).await?;
     let surface = shared
         .instance
         .create_surface(surface_target)
-        .map_err(|e| JsValue::from_str(&format!("create_surface failed: {e}")))?;
+        .map_err(|e| BackendStartupFailure::surface(format!("create_surface failed: {e}")))?;
     let bitmap_w = (css_width * dpr).round().max(1.0) as u32;
     let bitmap_h = (css_height * dpr).round().max(1.0) as u32;
     let config = surface
         .get_default_config(&shared.adapter, bitmap_w, bitmap_h)
-        .ok_or_else(|| JsValue::from_str("surface not supported by adapter"))?;
+        .ok_or_else(|| {
+            BackendStartupFailure::surface("surface not supported by adapter".to_string())
+        })?;
     surface.configure(&shared.device, &config);
     let renderers = shared.renderers_for(config.format);
     let msaa = MsaaTarget::new(&shared.device, config.format, bitmap_w, bitmap_h);

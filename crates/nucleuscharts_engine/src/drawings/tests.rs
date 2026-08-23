@@ -93,6 +93,323 @@ fn drawing_history_reverses_create_delete_points_and_style() {
 }
 
 #[test]
+fn historical_insert_rebases_fractional_anchors_and_history_without_a_history_command() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times = [10.0, 20.0, 30.0];
+    let values = [10.0, 11.0, 12.0];
+    chart
+        .set_series_data(0, &times, &values, &values, &values, &values)
+        .unwrap();
+    let id = chart
+        .add_drawing(
+            DrawingKind::TrendLine,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 0.5,
+                    price: 10.0,
+                },
+                DrawingPoint {
+                    logical: 1.0,
+                    price: 11.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+
+    assert!(chart.undo_drawing());
+    assert!(chart.drawing(id).is_none());
+    assert!(chart.update_series_bar(0, 15.0, [10.5; 4]));
+    assert!(chart.redo_drawing());
+    assert_eq!(chart.drawing(id).unwrap().points[0].logical, 1.0);
+    assert_eq!(chart.drawing(id).unwrap().points[1].logical, 2.0);
+}
+
+#[test]
+fn divergent_series_keep_exact_shared_timestamp_anchors() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let divergent = chart.add_series(SeriesKind::Line);
+    let primary_times = [10.0, 20.0, 30.0, 40.0];
+    let primary_values = [10.0, 11.0, 12.0, 13.0];
+    chart
+        .set_series_data(
+            0,
+            &primary_times,
+            &primary_values,
+            &primary_values,
+            &primary_values,
+            &primary_values,
+        )
+        .unwrap();
+    chart
+        .set_series_data(divergent, &[20.0], &[20.0], &[20.0], &[20.0], &[20.0])
+        .unwrap();
+    let id = chart
+        .add_drawing(
+            DrawingKind::TrendLine,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 1.0,
+                    price: 11.0,
+                },
+                DrawingPoint {
+                    logical: 3.0,
+                    price: 13.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+
+    let replacement_times = [15.0, 30.0, 35.0, 40.0];
+    let replacement_values = [10.5, 12.0, 12.5, 13.0];
+    chart
+        .set_series_data(
+            0,
+            &replacement_times,
+            &replacement_values,
+            &replacement_values,
+            &replacement_values,
+            &replacement_values,
+        )
+        .unwrap();
+
+    assert_eq!(chart.data.merged_times(), &[15, 20, 30, 35, 40]);
+    assert_eq!(chart.drawing(id).unwrap().points[0].logical, 1.0);
+    assert_eq!(chart.drawing(id).unwrap().points[1].logical, 4.0);
+}
+
+#[test]
+fn current_replacement_and_tail_append_do_not_move_drawings() {
+    let mut chart = settled_chart();
+    let id = add_trend(&mut chart);
+    let points = chart.drawing(id).unwrap().points.clone();
+
+    assert!(chart.update_series_bar(0, 9.0 * 3_600.0, [10.25; 4]));
+    assert_eq!(chart.drawing(id).unwrap().points, points);
+    assert!(chart.update_series_bar(0, 10.0 * 3_600.0, [10.5; 4]));
+    assert_eq!(chart.drawing(id).unwrap().points, points);
+}
+
+#[test]
+fn cap_trim_rebases_4096_point_drawing_by_the_exact_129_removed_rows() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times = (0..4_096).map(|index| index as f64).collect::<Vec<_>>();
+    let values = vec![10.0; times.len()];
+    chart
+        .set_series_data(0, &times, &values, &values, &values, &values)
+        .unwrap();
+    assert!(chart.set_series_max_points(0, Some(4_096)));
+    let id = chart
+        .add_drawing(
+            DrawingKind::TrendLine,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 128.5,
+                    price: 10.0,
+                },
+                DrawingPoint {
+                    logical: 4_095.0,
+                    price: 10.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+
+    assert!(chart.update_series_bar(0, 4_096.0, [10.0; 4]));
+
+    assert_eq!(chart.data.merged_times().len(), 3_968);
+    assert_eq!(chart.data.merged_times().first(), Some(&129));
+    assert_eq!(chart.drawing(id).unwrap().points[0].logical, -0.5);
+    assert_eq!(chart.drawing(id).unwrap().points[1].logical, 3_966.0);
+}
+
+#[test]
+fn active_drawing_state_and_pixel_baselines_rebase_with_the_union() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times = [10.0, 20.0, 30.0];
+    let values = [10.0, 11.0, 12.0];
+    chart
+        .set_series_data(0, &times, &values, &values, &values, &values)
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    chart.build_frame();
+    let id = chart
+        .add_drawing(
+            DrawingKind::TrendLine,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 0.5,
+                    price: 10.0,
+                },
+                DrawingPoint {
+                    logical: 1.5,
+                    price: 11.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    let drawing = chart.drawing(id).unwrap().clone();
+    chart.drawing_drag = Some(DrawingDrag {
+        id,
+        part: DrawingDragPart::Body,
+        start_x: 100.0,
+        start_y: 100.0,
+        current_x: 100.0,
+        current_y: 100.0,
+        history_points: drawing.points.clone(),
+        start_points: drawing.points.clone(),
+        start_px: vec![(f64::NAN, f64::NAN); 2],
+    });
+    chart.pending_drawing = Some(PendingDrawing {
+        drawing: Drawing::new(
+            0,
+            DrawingKind::TrendLine,
+            0,
+            vec![DrawingPoint {
+                logical: 0.5,
+                price: 10.0,
+            }],
+        ),
+        preview: Some(DrawingPoint {
+            logical: 1.0,
+            price: 11.0,
+        }),
+    });
+    chart.brush_capture = Some(BrushCapture {
+        pane_index: 0,
+        points: vec![
+            DrawingPoint {
+                logical: 0.25,
+                price: 10.0,
+            },
+            DrawingPoint {
+                logical: 1.25,
+                price: 11.0,
+            },
+        ],
+        last_px: (f64::NAN, f64::NAN),
+        options: Drawing::new(
+            0,
+            DrawingKind::Brush,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 0.75,
+                    price: 10.0,
+                },
+                DrawingPoint {
+                    logical: 1.75,
+                    price: 11.0,
+                },
+            ],
+        ),
+    });
+
+    assert!(chart.update_series_bar(0, 15.0, [10.5; 4]));
+
+    assert_eq!(chart.drawing(id).unwrap().points[0].logical, 1.0);
+    assert_eq!(
+        chart.drawing_drag.as_ref().unwrap().start_points[1].logical,
+        2.5
+    );
+    assert_eq!(
+        chart.pending_drawing.as_ref().unwrap().drawing.points[0].logical,
+        1.0
+    );
+    assert_eq!(
+        chart
+            .pending_drawing
+            .as_ref()
+            .unwrap()
+            .preview
+            .unwrap()
+            .logical,
+        2.0
+    );
+    let capture = chart.brush_capture.as_ref().unwrap();
+    assert_eq!(capture.points[0].logical, 0.5);
+    assert_eq!(capture.points[1].logical, 2.25);
+    assert_eq!(capture.options.points[0].logical, 1.5);
+    assert!(capture.last_px.0.is_finite() && capture.last_px.1.is_finite());
+    assert!(chart
+        .drawing_drag
+        .as_ref()
+        .unwrap()
+        .start_px
+        .iter()
+        .all(|(x, y)| x.is_finite() && y.is_finite()));
+}
+
+#[test]
+fn active_drag_rebases_at_the_latest_pointer_without_a_followup_jump() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times = [10.0, 20.0, 30.0];
+    let values = [10.0, 11.0, 12.0];
+    chart
+        .set_series_data(0, &times, &values, &values, &values, &values)
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    chart.build_frame();
+    let id = chart
+        .add_drawing(
+            DrawingKind::TrendLine,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 0.5,
+                    price: 10.25,
+                },
+                DrawingPoint {
+                    logical: 1.5,
+                    price: 11.25,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    chart.set_selected_drawing(Some(id));
+    let start = chart.drawing_point_to_coordinate(id, 0).unwrap();
+    assert!(chart.drawing_drag_start_at(start.0, start.1));
+    let pointer = (start.0 + 40.0, start.1 + 20.0);
+    chart.drawing_drag_to(pointer.0, pointer.1, DrawingModifiers::default());
+
+    assert!(chart.update_series_bar(0, 15.0, [100.0; 4]));
+    chart.build_frame();
+    let rebased = chart.drawing(id).unwrap().points.clone();
+    chart.drawing_drag_to(pointer.0, pointer.1, DrawingModifiers::default());
+    let unchanged = &chart.drawing(id).unwrap().points;
+    assert_eq!(unchanged.len(), rebased.len());
+    for (actual, expected) in unchanged.iter().zip(&rebased) {
+        assert!((actual.logical - expected.logical).abs() < 1e-12);
+        assert!((actual.price - expected.price).abs() < 1e-12);
+    }
+
+    chart.drawing_drag_cancel();
+    assert_eq!(
+        chart.drawing(id).unwrap().points,
+        [
+            DrawingPoint {
+                logical: 1.0,
+                price: 10.25,
+            },
+            DrawingPoint {
+                logical: 2.5,
+                price: 11.25,
+            },
+        ]
+    );
+}
+
+#[test]
 fn drawing_drag_is_one_history_entry_and_new_mutation_invalidates_redo() {
     let mut chart = settled_chart();
     let id = add_trend(&mut chart);

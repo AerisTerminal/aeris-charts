@@ -82,7 +82,7 @@ pub use workspace::{SplitDirection, Workspace, WorkspaceError, WorkspaceLayout};
 use nucleuscharts_core::format::price_formatter::PriceFormatter;
 use nucleuscharts_core::format::time_formatter::{MonthNames, DEFAULT_DATE_FORMAT};
 use nucleuscharts_core::model::data_layer::{
-    DataLayer, DataLayerMemoryUsage, PointColorChannel, SeriesId, SeriesIdError,
+    DataLayer, DataLayerMemoryUsage, MergedTimeMapping, PointColorChannel, SeriesId, SeriesIdError,
 };
 use nucleuscharts_core::model::data_validation::{
     sanitize_ohlc, sanitize_ohlc_styled, sanitize_point, ValidationError, ValidationReport,
@@ -1260,6 +1260,9 @@ pub struct ChartEngine {
     /// Active anchor/body drag session on a drawing (drawings.rs; the interaction.rs session
     /// pattern — the engine owns the start snapshot and the math).
     drawing_drag: Option<DrawingDrag>,
+    /// A merged-time rebase refreshed live interaction pixels immediately; refresh once more after
+    /// the next frame's layout and autoscale settle their final coordinate transforms.
+    drawing_baselines_need_frame_refresh: bool,
     /// Bounded chart-local semantic history for committed drawing mutations. Runtime-only:
     /// persistence stores the current drawings, never this stack.
     drawing_history: DrawingHistory,
@@ -1300,6 +1303,7 @@ impl ChartEngine {
     pub fn new(css_width: f64, css_height: f64, dpr: f64) -> Self {
         let mut data = DataLayer::new();
         let main = data.add_series();
+        data.begin_merged_time_transaction();
         Self {
             time_scale: TimeScaleCore::new(TimeScaleOptions::default()),
             panes: vec![Pane::with_chart_ids(PaneId(NonZeroU32::MIN), 1)],
@@ -1353,6 +1357,7 @@ impl ChartEngine {
             next_drawing_id: 1,
             selected_drawing: None,
             drawing_drag: None,
+            drawing_baselines_need_frame_refresh: false,
             drawing_history: DrawingHistory::default(),
             pending_drawing: None,
             brush_capture: None,
@@ -3073,10 +3078,14 @@ impl ChartEngine {
     }
 
     fn sync_time_points(&mut self) {
+        let merged_time_mapping = self.data.take_merged_time_mapping();
         let sequence_changed =
             self.data.time_points_generation() != self.synced_time_points_generation;
         if sequence_changed {
             self.invalidate_frame_scene();
+        }
+        if let Some(mapping) = merged_time_mapping.as_ref() {
+            self.rebase_drawing_logicals(mapping);
         }
         // Port of reference `ChartModel.updateTimeScale` (chart-model.ts:953-984): decide the
         // right-offset compensation BEFORE the new points/base index land on the scale.
@@ -3153,6 +3162,11 @@ impl ChartEngine {
         self.synced_first_time = times.first().copied();
         self.time_scale.set_points_len(times.len());
         self.time_scale.set_base_index(self.data.base_index());
+        if merged_time_mapping.is_some() {
+            self.refresh_drawing_pixel_baselines();
+            self.drawing_baselines_need_frame_refresh = true;
+        }
         self.prune_selection_anchor_snapshot();
+        self.data.begin_merged_time_transaction();
     }
 }

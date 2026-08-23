@@ -19,7 +19,7 @@ import {
 import { nucleuscharts_error } from "./errors.js";
 import type { nucleuscharts_error_code } from "./errors.js";
 import type {
-  any_series_options, bars_info, chart_api, chart_options, chart_state_v1, data_changed_handler, dbl_click_handler,
+  any_series_options, backend_status, bars_info, chart_api, chart_options, chart_state_v1, data_changed_handler, dbl_click_handler,
   deep_partial, drawing_api, drawing_created_handler, drawing_info, drawing_kind, drawing_options,
   drawing_point, drawing_tool_change_handler,
   feature_series_kind, frame_stats,
@@ -3884,6 +3884,10 @@ export class chart_impl implements chart_api {
 
   backend(): "webgpu" | "canvas2d" {
     return this.wasm.backend_kind() as "webgpu" | "canvas2d";
+  }
+
+  backend_status(): Readonly<backend_status> {
+    return Object.freeze(JSON.parse(this.wasm.backend_status_json()) as backend_status);
   }
 
   /**

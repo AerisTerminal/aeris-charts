@@ -596,6 +596,20 @@ impl Drawing {
             self.text.as_str()
         }
     }
+
+    fn rebase_logical(&mut self, mapping: &MergedTimeMapping) -> bool {
+        rebase_points(&mut self.points, mapping)
+    }
+}
+
+fn rebase_points(points: &mut [DrawingPoint], mapping: &MergedTimeMapping) -> bool {
+    let mut changed = false;
+    for point in points {
+        let logical = mapping.map_logical(point.logical);
+        changed |= logical != point.logical;
+        point.logical = logical;
+    }
+    changed
 }
 
 /// The part of a drawing a hit/drag landed on: the whole shape (a move drag) or one defining
@@ -642,10 +656,15 @@ pub(crate) struct DrawingDrag {
     /// Press point in pane-relative media px (x from the pane's left, y from the chart's top).
     pub(crate) start_x: f64,
     pub(crate) start_y: f64,
-    /// Anchor definitions at drag start.
+    /// Latest pointer position, used to rebase the interaction without changing the active drag.
+    pub(crate) current_x: f64,
+    pub(crate) current_y: f64,
+    /// Anchor definitions at the current interaction baseline.
     pub(crate) start_points: Vec<DrawingPoint>,
     /// Anchors converted to media px at drag start (the body-drag translation base).
     pub(crate) start_px: Vec<(f64, f64)>,
+    /// Original semantic snapshot retained for cancellation and the one committed history entry.
+    pub(crate) history_points: Vec<DrawingPoint>,
 }
 
 const DRAWING_HISTORY_LIMIT: usize = 100;
@@ -669,6 +688,25 @@ enum DrawingCommand {
     },
 }
 
+impl DrawingCommand {
+    fn rebase_logical(&mut self, mapping: &MergedTimeMapping) {
+        match self {
+            Self::Create { drawing, .. } | Self::Delete { drawing, .. } => {
+                drawing.rebase_logical(mapping);
+            }
+            Self::Update { before, after } => {
+                before.rebase_logical(mapping);
+                after.rebase_logical(mapping);
+            }
+            Self::Clear { drawings } => {
+                for drawing in drawings {
+                    drawing.rebase_logical(mapping);
+                }
+            }
+        }
+    }
+}
+
 /// Runtime-only, chart-local drawing history. Commands carry only the semantic drawing state
 /// needed to reverse one committed action; previews, hit indexes, selection, and render caches
 /// never enter the stack.
@@ -682,6 +720,12 @@ impl DrawingHistory {
     pub(crate) fn clear(&mut self) {
         self.undo.clear();
         self.redo.clear();
+    }
+
+    fn rebase_logical(&mut self, mapping: &MergedTimeMapping) {
+        for command in self.undo.iter_mut().chain(&mut self.redo) {
+            command.rebase_logical(mapping);
+        }
     }
 }
 
@@ -957,6 +1001,68 @@ pub(crate) struct TextBox {
 }
 
 impl ChartEngine {
+    pub(crate) fn rebase_drawing_logicals(&mut self, mapping: &MergedTimeMapping) {
+        let mut committed_changed = false;
+        for drawing in &mut self.drawings {
+            committed_changed |= drawing.rebase_logical(mapping);
+        }
+        let mut transient_changed = false;
+        if let Some(pending) = self.pending_drawing.as_mut() {
+            transient_changed |= pending.drawing.rebase_logical(mapping);
+            if let Some(preview) = pending.preview.as_mut() {
+                transient_changed |= rebase_points(std::slice::from_mut(preview), mapping);
+            }
+        }
+        if let Some(capture) = self.brush_capture.as_mut() {
+            transient_changed |= rebase_points(&mut capture.points, mapping);
+            transient_changed |= capture.options.rebase_logical(mapping);
+        }
+        if let Some(drag) = self.drawing_drag.as_mut() {
+            transient_changed |= rebase_points(&mut drag.start_points, mapping);
+            transient_changed |= rebase_points(&mut drag.history_points, mapping);
+        }
+        self.drawing_history.rebase_logical(mapping);
+
+        if committed_changed {
+            self.drawing_runtime
+                .borrow_mut()
+                .rebuild_all(&self.drawings, self.panes.len());
+        }
+        if committed_changed || transient_changed {
+            self.invalidate_frame_drawings();
+        }
+    }
+
+    pub(crate) fn refresh_drawing_pixel_baselines(&mut self) {
+        let drag_baseline = self.drawing_drag.as_ref().and_then(|drag| {
+            let drawing = self.drawing(drag.id)?;
+            let points = drawing.points.clone();
+            let px = points
+                .iter()
+                .map(|&point| {
+                    self.drawing_to_px_for(drawing.pane_index, drawing.price_scale, point)
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some((points, px, drag.current_x, drag.current_y))
+        });
+        if let (Some(drag), Some((start_points, start_px, pointer_x, pointer_y))) =
+            (self.drawing_drag.as_mut(), drag_baseline)
+        {
+            drag.start_x = pointer_x;
+            drag.start_y = pointer_y;
+            drag.start_points = start_points;
+            drag.start_px = start_px;
+        }
+
+        let brush_px = self
+            .brush_capture
+            .as_ref()
+            .and_then(|capture| self.drawing_to_px(capture.pane_index, *capture.points.last()?));
+        if let (Some(capture), Some(last_px)) = (self.brush_capture.as_mut(), brush_px) {
+            capture.last_px = last_px;
+        }
+    }
+
     fn record_drawing_command(&mut self, command: DrawingCommand) {
         if self.drawing_history.undo.len() == DRAWING_HISTORY_LIMIT {
             self.drawing_history.undo.remove(0);
@@ -2258,6 +2364,9 @@ impl ChartEngine {
             part: hit.part,
             start_x: x,
             start_y: y,
+            current_x: x,
+            current_y: y,
+            history_points: start_points.clone(),
             start_points,
             start_px,
         });
@@ -2274,9 +2383,11 @@ impl ChartEngine {
     /// responds live (TradingView parity).
     pub fn drawing_drag_to(&mut self, x: f64, y: f64, modifiers: DrawingModifiers) {
         self.invalidate_frame_drawings();
-        let Some(drag) = &self.drawing_drag else {
+        let Some(drag) = self.drawing_drag.as_mut() else {
             return;
         };
+        drag.current_x = x;
+        drag.current_y = y;
         let (dx, dy) = (x - drag.start_x, y - drag.start_y);
         let (id, part) = (drag.id, drag.part);
         let (start_points, start_px) = (drag.start_points.clone(), drag.start_px.clone());
@@ -2497,7 +2608,7 @@ impl ChartEngine {
             self.update_drawing_runtime(id);
             if let Some(after) = self.drawing(id).cloned() {
                 let mut before = after.clone();
-                before.points = drag.start_points;
+                before.points = drag.history_points;
                 if before != after {
                     self.record_drawing_command(DrawingCommand::Update {
                         before,
@@ -2520,7 +2631,7 @@ impl ChartEngine {
             .iter_mut()
             .find(|drawing| drawing.id == drag.id)
         {
-            drawing.points = drag.start_points;
+            drawing.points = drag.history_points;
             self.update_drawing_runtime(drag.id);
             self.invalidate_frame_drawings();
         }
@@ -2559,6 +2670,9 @@ impl ChartEngine {
             part: anchor.map_or(DrawingDragPart::Body, DrawingDragPart::Anchor),
             start_x: 0.0,
             start_y: 0.0,
+            current_x: 0.0,
+            current_y: 0.0,
+            history_points: start_points.clone(),
             start_points,
             start_px,
         });
