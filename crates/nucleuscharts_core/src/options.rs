@@ -253,7 +253,7 @@ pub struct GridOptions {
 pub struct CrosshairLineOptions {
     pub color: String,
     pub width: f64,
-    /// [`line_style`] value (default Dotted).
+    /// [`line_style`] value (Nucleus default Dashed).
     pub style: u8,
     pub visible: bool,
     #[serde(rename = "labelVisible")]
