@@ -2047,8 +2047,12 @@ impl ChartEngine {
             .iter_mut()
             .find(|series| series.id == id && !series.removed)
         {
+            if series.visible == visible {
+                return;
+            }
             series.visible = visible;
             self.invalidate_frame_scene();
+            self.invalidate_frame_layout_and_axis();
         }
     }
 

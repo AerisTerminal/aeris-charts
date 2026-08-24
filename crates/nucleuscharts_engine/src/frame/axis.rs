@@ -277,7 +277,7 @@ impl ChartEngine {
         background.contrast_text_over(surface)
     }
 
-    /// Lowest-z-order visible source attached to a scale, matching the reference formatter owner.
+    /// Lowest-z-order source attached to a scale, matching the reference formatter owner.
     pub(crate) fn scale_formatter_source(
         &self,
         pane_index: usize,
@@ -286,11 +286,7 @@ impl ChartEngine {
         self.series_order
             .iter()
             .filter_map(|id| self.series_entry(*id))
-            .find(|series| {
-                series.visible
-                    && series.pane_index == pane_index
-                    && series_scale_target(series) == target
-            })
+            .find(|series| series.pane_index == pane_index && series_scale_target(series) == target)
     }
 
     pub(crate) fn scale_tick_base(&self, pane_index: usize, target: PriceScaleTarget) -> i64 {
@@ -398,7 +394,7 @@ impl ChartEngine {
     }
 
     /// Axis TICK label formatting: the format of the scale's primary source — the first
-    /// visible, non-overlay series bound to that scale (reference uses the scale's main source for
+    /// non-overlay series bound to that scale (reference uses the scale's main source for
     /// ticks: price-scale.ts `updateFormatter` picks the lowest-zorder data source). A primary
     /// source with the factory-default price format defers to the chart-level/built-in
     /// formatter, exactly like before per-series formats existed.

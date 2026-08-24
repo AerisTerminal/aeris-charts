@@ -1715,7 +1715,7 @@ fn runtime_price_format_rebuilds_scale_ticks_layout_and_autoscale() {
 }
 
 #[test]
-fn scale_formatter_source_tracks_visible_z_order() {
+fn scale_formatter_source_tracks_attached_z_order() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     let second = chart.add_series(SeriesKind::Line);
     assert!(chart
@@ -1739,10 +1739,10 @@ fn scale_formatter_source_tracks_visible_z_order() {
     );
 
     chart.set_series_visible(second, false);
-    assert_eq!(chart.scale_tick_base(0, PriceScaleTarget::Right), 33);
+    assert_eq!(chart.scale_tick_base(0, PriceScaleTarget::Right), 10_000);
     assert_eq!(
         chart.scale_autoscale_min_move(0, PriceScaleTarget::Right),
-        0.03
+        0.0001
     );
 
     chart.set_price_scale_mode_for(0, PriceScaleTarget::Right, PriceScaleMode::Percentage);
@@ -1751,6 +1751,94 @@ fn scale_formatter_source_tracks_visible_z_order() {
         chart.scale_autoscale_min_move(0, PriceScaleTarget::Right),
         1.0
     );
+}
+
+#[test]
+fn hiding_sole_indicator_preserves_scale_format_and_layout() {
+    let measure = |text: &str| text.len() as f64 * 7.0;
+    let mut chart = ChartEngine::new(900.0, 500.0, 1.0);
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0, 3.0, 4.0],
+            &[65_470.0, 65_480.0, 65_490.0, 65_500.0],
+            &[65_480.0, 65_490.0, 65_500.0, 65_510.0],
+            &[65_460.0, 65_470.0, 65_480.0, 65_490.0],
+            &[65_475.0, 65_485.0, 65_495.0, 65_505.0],
+        )
+        .unwrap();
+    assert!(
+        chart.series_apply_price_format_json(0, r#"{"type":"price","precision":0,"min_move":1}"#)
+    );
+    let sma = chart.add_sma(0, 2).expect("valid sma");
+    let indicator_scale = chart
+        .add_price_scale(0, "indicator", PriceScaleSide::Right, None, true)
+        .unwrap();
+    chart.set_series_price_scale(0, PriceScaleTarget::Overlay);
+    chart.set_series_price_scale(sma, indicator_scale);
+    chart.fit_content();
+    chart.recompute_layout_with_measure(true, measure);
+    chart.build_frame();
+    let initial_axis = chart.build_axis_frame(80.0, measure);
+    let initial_ticks: Vec<_> = initial_axis
+        .labels
+        .iter()
+        .filter(|label| label.background.is_none() && label.align == AxisTextAlign::Left)
+        .map(|label| label.text.clone())
+        .collect();
+    let initial_range = chart
+        .price_scale_visible_range_for(0, indicator_scale)
+        .unwrap();
+    let initial_width = chart.price_scale_axis_width(0, indicator_scale).unwrap();
+    assert_eq!(chart.scale_tick_base(0, indicator_scale), 1);
+    assert_eq!(chart.scale_autoscale_min_move(0, indicator_scale), 1.0);
+    assert!(!initial_ticks.is_empty());
+    assert!(initial_ticks.iter().all(|label| !label.contains('.')));
+
+    chart.set_series_visible(sma, false);
+    assert!(chart.frame_requires_layout());
+    chart.recompute_layout_with_measure(false, measure);
+    chart.build_frame();
+    let hidden_axis = chart.build_axis_frame(80.0, measure);
+    let hidden_ticks: Vec<_> = hidden_axis
+        .labels
+        .iter()
+        .filter(|label| label.background.is_none() && label.align == AxisTextAlign::Left)
+        .map(|label| label.text.clone())
+        .collect();
+    assert_eq!(chart.scale_tick_base(0, indicator_scale), 1);
+    assert_eq!(chart.scale_autoscale_min_move(0, indicator_scale), 1.0);
+    assert_eq!(hidden_ticks, initial_ticks);
+    assert_eq!(
+        chart.price_scale_visible_range_for(0, indicator_scale),
+        Some(initial_range)
+    );
+    assert_eq!(
+        chart.price_scale_axis_width(0, indicator_scale),
+        Some(initial_width)
+    );
+
+    chart.set_series_visible(sma, true);
+    assert!(chart.frame_requires_layout());
+    chart.recompute_layout_with_measure(false, measure);
+    chart.build_frame();
+    let shown_axis = chart.build_axis_frame(80.0, measure);
+    let shown_ticks: Vec<_> = shown_axis
+        .labels
+        .iter()
+        .filter(|label| label.background.is_none() && label.align == AxisTextAlign::Left)
+        .map(|label| label.text.clone())
+        .collect();
+    assert_eq!(shown_ticks, initial_ticks);
+    assert_eq!(
+        chart.price_scale_visible_range_for(0, indicator_scale),
+        Some(initial_range)
+    );
+    assert_eq!(
+        chart.price_scale_axis_width(0, indicator_scale),
+        Some(initial_width)
+    );
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
 }
 
 #[test]
@@ -3966,6 +4054,18 @@ fn direct_host_series_mutation_advances_canonical_revision_without_hashing_state
     assert_ne!(before, restyled);
     assert!(chart.frame_build_stats().series_rebuilds > 0);
     assert_retained_frame_matches_clean_rebuild(&mut chart);
+}
+
+#[test]
+fn direct_host_series_visibility_mutation_requests_layout() {
+    let mut chart = retained_two_series_chart();
+    chart.recompute_layout_with_measure(true, |text| text.len() as f64 * 7.0);
+    chart.build_frame();
+    assert!(!chart.frame_requires_layout());
+
+    chart.series[0].visible = false;
+
+    assert!(chart.frame_requires_layout());
 }
 
 #[test]

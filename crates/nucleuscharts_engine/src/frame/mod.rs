@@ -884,6 +884,7 @@ impl ChartEngine {
     pub fn frame_requires_layout(&self) -> bool {
         self.retained_frame.layout_generation != self.frame_invalidation.layout
             || self.retained_frame.autoscale_generation != self.frame_invalidation.autoscale
+            || self.retained_frame.last_series_revision != self.series.revision()
     }
 
     pub(crate) fn frame_layout_prepared(&mut self) {

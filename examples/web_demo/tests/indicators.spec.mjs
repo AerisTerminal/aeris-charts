@@ -198,6 +198,53 @@ test("indicator values inherit source precision at creation", async ({ page }) =
   expect(values).toEqual({ inherited: "65,475", overridden: "65,475.4600" });
 });
 
+for (const backend of ["canvas2d", "webgpu"]) {
+  test(`${backend}: hiding the sole SMA preserves scale precision and spacing`, async ({ page }) => {
+    await page.goto(`/?backend=${backend}&forceFallbackAdapter=1`);
+    await wait_grid(page);
+    const result = await page.evaluate(async () => {
+      const chart = window.__chart;
+      window.__main.apply_options({
+        price_format: { type: "price", precision: 0, min_move: 1 },
+      });
+      const scale = chart.add_price_scale({ id: "sma-only", side: "right", order: 0 });
+      const sma = chart.add_sma(window.__main, 20);
+      sma.apply_options({
+        price_scale_id: "sma-only",
+        last_value_visible: false,
+        price_line_visible: false,
+        title_visible: false,
+      });
+      chart.time_scale().fit_content();
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const range = chart.time_scale().get_visible_logical_range();
+      const logical = Math.floor((range.from + range.to) / 2);
+      const point = sma.data_by_index(logical);
+      const snapshot = () => ({
+        pane_width: chart.time_scale().width(),
+        scale_width: scale.width(),
+        range: scale.get_visible_range(),
+        coordinate: sma.price_to_coordinate(point.value),
+      });
+      const initial = snapshot();
+
+      sma.apply_options({ visible: false });
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const hidden = snapshot();
+
+      sma.apply_options({ visible: true });
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const shown = snapshot();
+      return { actual_backend: chart.backend(), initial, hidden, shown };
+    });
+
+    expect(result.actual_backend).toBe(backend);
+    expect(result.initial.scale_width).toBeGreaterThan(0);
+    expect(result.hidden).toEqual(result.initial);
+    expect(result.shown).toEqual(result.initial);
+  });
+}
+
 test("stochastic, atr, vwap, and wma register with lineage and placement", async ({ page }) => {
   await page.goto("/");
   await wait_grid(page);
