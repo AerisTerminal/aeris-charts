@@ -20,20 +20,20 @@
   color-scheme: light;
   --font-sans: -apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif;
 
-  --surface: #fcfcfc;
-  --surface-secondary: #f3f3f3;
+  --surface: #ffffff;
+  --surface-secondary: #fafafa;
 
-  --border: color-mix(in srgb, #141414 8%, transparent);
+  --border: color-mix(in srgb, #141414 6%, transparent);
   --border-secondary: var(--border);
-  --input-fill: var(--surface);
-  --input-border: var(--border);
+  --input-fill: var(--surface-secondary);
+  --input-border: var(--border-secondary);
 
   --text-primary: #141414;
   --text-secondary: color-mix(in srgb, #141414 74%, transparent);
   --text-muted: color-mix(in srgb, #141414 36%, transparent);
 
-  --hover-bg: color-mix(in srgb, #141414 4%, transparent);
-  --active-bg: color-mix(in srgb, #141414 6%, transparent);
+  --hover-bg: color-mix(in srgb, #141414 3.5%, transparent);
+  --active-bg: color-mix(in srgb, #141414 5%, transparent);
 
   --icon: color-mix(in srgb, #141414 50%, transparent);
   --icon-active: #141414;

@@ -84,6 +84,9 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
     surface: getComputedStyle(document.documentElement).getPropertyValue("--surface").trim(),
     header: getComputedStyle(document.getElementById("bar")).backgroundColor,
     chart: window.__chart.options().layout.background.color,
+    axis_text: window.__chart.options().layout.textColor,
+    axis_border: window.__chart.options().rightPriceScale.borderColor,
+    grid: window.__chart.options().grid.vertLines.color,
     border_control: document.getElementById("axis_border_color").value,
     crosshair_control: document.getElementById("cross_color").value,
     crosshair_label_control: document.getElementById("cross_label_bg").value,
@@ -95,6 +98,9 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
     surface: "#141414",
     header: "rgb(20, 20, 20)",
     chart: "#141414",
+    axis_text: "#f0f0f0",
+    axis_border: "#262626",
+    grid: "#262626",
     border_control: "#262626",
     crosshair_control: "#262626",
     crosshair_label_control: "#181818",
@@ -105,10 +111,13 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
   expect(await theme_state()).toEqual({
     root: "light",
     control: "light",
-    surface: "#fcfcfc",
-    header: "rgb(252, 252, 252)",
-    chart: "#fcfcfc",
-    border_control: "#e9e9e9",
+    surface: "#ffffff",
+    header: "rgb(255, 255, 255)",
+    chart: "#ffffff",
+    axis_text: "#141414",
+    axis_border: "#f1f1f1",
+    grid: "#f1f1f1",
+    border_control: "#f1f1f1",
     crosshair_control: "#141414",
     crosshair_label_control: "#141414",
   });
@@ -153,9 +162,9 @@ test("portable design tokens and disabled controls match the brand contract", as
     surface: "#141414",
     "surface-secondary": "#181818",
     border: "color-mix(in srgb, #f0f0f0 8%, transparent)",
-    "border-secondary": "var(--border)",
-    "input-fill": "var(--surface-secondary)",
-    "input-border": "var(--border-secondary)",
+    "border-secondary": "color-mix(in srgb, #f0f0f0 8%, transparent)",
+    "input-fill": "#181818",
+    "input-border": "color-mix(in srgb, #f0f0f0 8%, transparent)",
     "text-primary": "#f0f0f0",
     "text-secondary": "color-mix(in srgb, #f0f0f0 74%, transparent)",
     "text-muted": "color-mix(in srgb, #f0f0f0 36%, transparent)",
@@ -178,17 +187,17 @@ test("portable design tokens and disabled controls match the brand contract", as
   await page.selectOption("#theme_select", "light");
   expect(await tokens()).toEqual({
     "font-sans": '-apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif',
-    surface: "#fcfcfc",
-    "surface-secondary": "#f3f3f3",
-    border: "color-mix(in srgb, #141414 8%, transparent)",
-    "border-secondary": "var(--border)",
-    "input-fill": "var(--surface)",
-    "input-border": "var(--border)",
+    surface: "#ffffff",
+    "surface-secondary": "#fafafa",
+    border: "color-mix(in srgb, #141414 6%, transparent)",
+    "border-secondary": "color-mix(in srgb, #141414 6%, transparent)",
+    "input-fill": "#fafafa",
+    "input-border": "color-mix(in srgb, #141414 6%, transparent)",
     "text-primary": "#141414",
     "text-secondary": "color-mix(in srgb, #141414 74%, transparent)",
     "text-muted": "color-mix(in srgb, #141414 36%, transparent)",
-    "hover-bg": "color-mix(in srgb, #141414 4%, transparent)",
-    "active-bg": "color-mix(in srgb, #141414 6%, transparent)",
+    "hover-bg": "color-mix(in srgb, #141414 3.5%, transparent)",
+    "active-bg": "color-mix(in srgb, #141414 5%, transparent)",
     icon: "color-mix(in srgb, #141414 50%, transparent)",
     "icon-active": "#141414",
     primary: "#3e63dd",
@@ -469,7 +478,7 @@ test("split dividers follow the axis border token (theme and explicit changes)",
   await page.selectOption("#theme_select", "light");
   await wait_grid(page);
   const light_border = await border_hex();
-  expect(light_border.toLowerCase()).toBe("#e9e9e9");
+  expect(light_border.toLowerCase()).toBe("#f1f1f1");
   expect(await divider_rgb()).toBe(to_rgb(light_border));
 
   // An explicit axis border change re-resolves the divider too.

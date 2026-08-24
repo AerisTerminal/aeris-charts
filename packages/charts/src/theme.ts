@@ -1,8 +1,9 @@
 /**
  * Nucleus's public theme mapping.
  *
- * `style_tokens.json` is the only palette source. The Rust engine compiles the same file into
- * its defaults, so WebGPU, Canvas2D, GPUI, and the TypeScript package cannot drift.
+ * `style_tokens.json` is the opaque chart-palette projection of the complete host palette in
+ * `nucleuscharts.css`. The Rust engine compiles the projection into its defaults, so WebGPU,
+ * Canvas2D, GPUI, and the TypeScript package cannot drift while host-only CSS stays out of Rust.
  */
 
 import type { chart_options, deep_partial } from "./types.js";
