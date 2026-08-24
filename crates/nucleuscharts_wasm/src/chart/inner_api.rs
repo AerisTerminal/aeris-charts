@@ -1935,6 +1935,24 @@ impl ChartInner {
         }
         output
     }
+
+    /// Encode the engine-owned chart value snapshot. `NaN` selects latest mode; finite integer
+    /// values select exact logical mode. No history or snapshot semantics are assembled here.
+    pub fn value_snapshot_json(&self, logical_index: f64) -> String {
+        let logical_index = if logical_index.is_nan() {
+            None
+        } else if logical_index.is_finite()
+            && logical_index.fract() == 0.0
+            && logical_index >= i64::MIN as f64
+            && logical_index <= i64::MAX as f64
+        {
+            Some(logical_index as i64)
+        } else {
+            return "[]".to_string();
+        };
+        serde_json::to_string(&self.engine.value_snapshot(logical_index))
+            .unwrap_or_else(|_| "[]".to_string())
+    }
     pub fn series_bars_in_logical_range(&self, id: u32, from: f64, to: f64) -> Vec<f64> {
         self.engine
             .series_bars_in_logical_range(id as SeriesId, from, to)
@@ -2173,39 +2191,6 @@ impl ChartInner {
 
     pub fn time_to_index(&self, time: f64, find_nearest: bool) -> Option<i64> {
         self.engine.time_to_index(time, find_nearest)
-    }
-
-    /// Per-series values at the bar under an X coordinate, flattened as groups of five:
-    /// `[series_id, open, high, low, close, ...]`. Only series that actually have a point at that
-    /// bar are included (single-value series report the value in all four slots; a whitespace
-    /// row is no bar and is skipped). Empty when the cursor is off the data. Series are ordered
-    /// topmost-first, matching the reference's hit-test order (pane-hit-test.ts reverses the z-order).
-    /// Backs the façade's `seriesData` map for crosshair/click events.
-    pub fn hover_data(&self, x_css: f64) -> Vec<f64> {
-        use nucleuscharts_core::model::plot_list::MismatchDirection;
-        let n = self.engine.data_layer().merged_times().len() as i64;
-        if n == 0 {
-            return Vec::new();
-        }
-        let index = self.time_scale.coordinate_to_index(x_css);
-        if index < 0 || index >= n {
-            return Vec::new();
-        }
-        let mut out = Vec::new();
-        for &id in self.engine.series_order().iter().rev() {
-            let plot = self.engine.data_layer().plot(id);
-            if let Some(row) = plot.search(index, MismatchDirection::None) {
-                if plot.is_whitespace_row(row) {
-                    continue;
-                }
-                out.push(id as f64);
-                out.push(plot.value_at(row, PlotValueIndex::Open));
-                out.push(plot.value_at(row, PlotValueIndex::High));
-                out.push(plot.value_at(row, PlotValueIndex::Low));
-                out.push(plot.value_at(row, PlotValueIndex::Close));
-            }
-        }
-        out
     }
 
     /// Visible window in logical (bar) units as `[from, to]`, or empty when there is no data.

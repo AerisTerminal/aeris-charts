@@ -761,11 +761,9 @@ impl ChartInner {
             return;
         };
         let font_size = options.layout.font_size;
-        let default_text = Color::parse_css(&options.layout.text_color).unwrap_or(Color::rgb(
-            DEFAULT_AXIS_TEXT_RGB.0,
-            DEFAULT_AXIS_TEXT_RGB.1,
-            DEFAULT_AXIS_TEXT_RGB.2,
-        ));
+        let fallback = nucleuscharts_core::style::DEFAULT_SURFACE_RGB;
+        let surface = Color::parse_css(&options.layout.background.color)
+            .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2));
         let font_family = options.layout.font_family;
         let dpr = self.dpr;
         let measure =
@@ -815,11 +813,12 @@ impl ChartInner {
             let height = font_size + 2.5 * 2.0;
             // Colors mirror the price-line label resolution: the descriptor's
             // `background_color`/`color` picks the box and `text_color` the glyphs; an omitted
-            // text color follows the chart's semantic foreground.
+            // text color automatically contrasts with the effective background.
             let background = reflect_color(&label, "background_color")
                 .or_else(|| reflect_color(&label, "color"))
                 .unwrap_or(PRIMITIVE_LABEL_BG);
-            let text_color = reflect_color(&label, "text_color").unwrap_or(default_text);
+            let text_color = reflect_color(&label, "text_color")
+                .unwrap_or_else(|| background.contrast_text_over(surface));
             // Placement mirrors the engine's price-line labels (frame/axis.rs): right-strip
             // labels left-align past the pane edge, left-strip labels right-align before it.
             let (x, align, background_x) = match side {
@@ -860,11 +859,9 @@ impl ChartInner {
         };
         let options = self.opts();
         let font_size = options.layout.font_size;
-        let default_text = Color::parse_css(&options.layout.text_color).unwrap_or(Color::rgb(
-            DEFAULT_AXIS_TEXT_RGB.0,
-            DEFAULT_AXIS_TEXT_RGB.1,
-            DEFAULT_AXIS_TEXT_RGB.2,
-        ));
+        let fallback = nucleuscharts_core::style::DEFAULT_SURFACE_RGB;
+        let surface = Color::parse_css(&options.layout.background.color)
+            .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2));
         let font_family = options.layout.font_family;
         let dpr = self.dpr;
         let measure =
@@ -896,7 +893,8 @@ impl ChartInner {
             let background = reflect_color(&label, "background_color")
                 .or_else(|| reflect_color(&label, "color"))
                 .unwrap_or(PRIMITIVE_LABEL_BG);
-            let text_color = reflect_color(&label, "text_color").unwrap_or(default_text);
+            let text_color = reflect_color(&label, "text_color")
+                .unwrap_or_else(|| background.contrast_text_over(surface));
             self.axis_frame.labels.push(AxisLabel {
                 text,
                 x: box_x + width / 2.0,

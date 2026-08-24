@@ -8,17 +8,8 @@ use super::*;
 use nucleuscharts_core::model::data_layer::DataLayer;
 use nucleuscharts_core::model::plot_list::{PlotList, PlotValues};
 
-const LIVE_TEXT: Color = Color::rgb(
-    nucleuscharts_core::style::DARK_FOREGROUND_RGB.0,
-    nucleuscharts_core::style::DARK_FOREGROUND_RGB.1,
-    nucleuscharts_core::style::DARK_FOREGROUND_RGB.2,
-);
-const LIVE_COUNTDOWN: Color = Color::rgba(
-    nucleuscharts_core::style::DARK_FOREGROUND_RGB.0,
-    nucleuscharts_core::style::DARK_FOREGROUND_RGB.1,
-    nucleuscharts_core::style::DARK_FOREGROUND_RGB.2,
-    0xb3,
-);
+const LIVE_TEXT: Color = Color::rgb(0xff, 0xff, 0xff);
+const LIVE_COUNTDOWN: Color = Color::rgba(0xff, 0xff, 0xff, 0xb3);
 
 #[test]
 fn marker_geometry_tracks_reference_spacing_buckets() {
@@ -1395,10 +1386,23 @@ fn bid_ask_lines_and_chips_render_only_when_enabled_with_values() {
     );
     assert!(labels.iter().any(|l| l.text == "11.00"));
     assert!(labels.iter().any(|l| l.text == "12.00"));
+    // Light quote colors use black text throughout the shared title+price cluster.
+    assert!(chart.series_apply_options_json(0, r##"{"ask_color": "#f0e68c"}"##));
+    let labels = boxed_labels(&mut chart);
+    let light = Color::rgb(0xf0, 0xe6, 0x8c);
+    let ask_labels: Vec<_> = labels
+        .iter()
+        .filter(|label| label.text == "Ask" || label.text == "12.00")
+        .collect();
+    assert_eq!(ask_labels.len(), 2);
+    assert!(ask_labels.iter().all(|label| {
+        label.color == Color::rgb(0, 0, 0)
+            && matches!(label.background, Some((.., color)) if color == light)
+    }));
     // One side cleared via the options JSON: only the ask line + chips remain.
     assert!(chart.series_apply_options_json(0, r##"{"bid": null}"##));
     assert!(!hlines(&mut chart).iter().any(|&(_, c)| c == blue));
-    assert!(hlines(&mut chart).iter().any(|&(_, c)| c == red));
+    assert!(hlines(&mut chart).iter().any(|&(_, c)| c == light));
     // Custom colors reach the frame verbatim-parsed; disabling hides everything.
     assert!(chart.series_apply_options_json(0, r##"{"ask_color": "#112233"}"##));
     assert!(hlines(&mut chart)
@@ -1440,6 +1444,52 @@ fn price_line_color_css_string_parses_at_render_time() {
         p,
         Prim::HLine { color, .. } if *color == LINE
     )));
+}
+
+#[test]
+fn explicit_price_line_color_unifies_the_live_line_and_complete_cluster() {
+    let mut chart = countdown_chart();
+    chart.now_override = Some(250.0);
+    chart.series[0].title = "NDQ".to_string();
+    chart.series[0].countdown_visible = true;
+    chart.series[0].price_line_color = Some("#f0e68c".to_string());
+    let live = Color::rgb(0xf0, 0xe6, 0x8c);
+
+    let frame = chart.build_frame();
+    assert!(frame.panes[0].main.iter().any(|primitive| matches!(
+        primitive,
+        Prim::HLine { color, style: LineStyle::Dotted, .. } if *color == live
+    )));
+
+    let labels = boxed_labels(&mut chart);
+    assert_eq!(labels.len(), 3);
+    assert!(labels
+        .iter()
+        .all(|label| matches!(label.background, Some((.., color)) if color == live)));
+    assert_eq!(
+        labels
+            .iter()
+            .find(|label| label.text == "NDQ")
+            .unwrap()
+            .color,
+        Color::rgb(0, 0, 0)
+    );
+    assert_eq!(
+        labels
+            .iter()
+            .find(|label| label.text == "12.50")
+            .unwrap()
+            .color,
+        Color::rgb(0, 0, 0)
+    );
+    assert_eq!(
+        labels
+            .iter()
+            .find(|label| label.text == "00:50")
+            .unwrap()
+            .color,
+        Color::rgba(0, 0, 0, 0xb3)
+    );
 }
 
 #[test]
@@ -1789,6 +1839,14 @@ fn horizontal_line_drawings_label_the_axis_in_the_line_color() {
     let (_, _, _, _, bg) = label.background.expect("boxed");
     assert_eq!(bg, Color::rgb(0xff, 0x00, 0x00));
     assert_eq!(label.color, LIVE_TEXT);
+
+    // Omitted text color contrasts with a light line; an explicit override remains authoritative.
+    assert!(chart.drawing_apply_options(id, r##"{"color":"#f0e68c"}"##));
+    let label = label_at(&mut chart);
+    assert_eq!(label.color, Color::rgb(0, 0, 0));
+    assert!(chart.drawing_apply_options(id, r##"{"label_text_color":"#123456"}"##));
+    let label = label_at(&mut chart);
+    assert_eq!(label.color, Color::rgb(0x12, 0x34, 0x56));
 }
 
 #[test]
@@ -2543,6 +2601,22 @@ fn custom_series_last_value_line_and_label_follow_the_frame_values() {
     assert!(axis.labels.iter().any(
         |l| matches!(l.background, Some((.., c)) if c == visible.color) && l.text == "104.00"
     ));
+
+    // A valid explicit live color overrides both custom frame colors without changing the
+    // line's LastVisible source or the label's visible-value text.
+    let live = Color::rgb(0xf0, 0xe6, 0x8c);
+    chart.series_entry_mut(custom).unwrap().price_line_color = Some(live.to_hex());
+    let frame = chart.build_frame();
+    assert!(frame.panes[0].main.iter().any(|p| matches!(
+        p,
+        Prim::HLine { color, style: LineStyle::Dotted, .. } if *color == live
+    )));
+    let axis = chart.build_axis_frame(80.0, |t| t.len() as f64 * 7.0);
+    assert!(axis.labels.iter().any(|label| {
+        label.text == "104.00"
+            && label.color == Color::rgb(0, 0, 0)
+            && matches!(label.background, Some((.., color)) if color == live)
+    }));
 }
 
 #[test]
@@ -2574,6 +2648,19 @@ fn custom_series_last_value_data_and_base_value_come_from_the_frame_values() {
     let visible: serde_json::Value =
         serde_json::from_str(&chart.series_last_value_data(custom, false).unwrap()).unwrap();
     assert_eq!(visible["value"].as_f64().unwrap(), 102.5);
+    let latest_snapshot = chart
+        .value_snapshot(None)
+        .into_iter()
+        .find(|snapshot| snapshot.series_id == custom)
+        .unwrap();
+    assert_eq!(latest_snapshot.value, Some(103.5));
+    let exact_snapshot = chart
+        .value_snapshot(Some(2))
+        .into_iter()
+        .find(|snapshot| snapshot.series_id == custom)
+        .unwrap();
+    assert_eq!(exact_snapshot.value, None);
+    assert_eq!(exact_snapshot.previous_value, None);
     // The custom first value anchors coordinate conversion (series_base_value's custom branch).
     assert_eq!(chart.series_base_value(custom, 0), Some(100.0));
     // A non-custom kind rejects frame values, and a custom series without them reports nothing.
@@ -2933,8 +3020,7 @@ fn last_value_cluster_rows_toggle_independently() {
     assert_eq!(cd_h, 11.0 + 1.5 * 2.0);
     assert_eq!(price.font_scale, 1.0);
     assert_eq!(countdown.font_scale, 11.0 / 12.0);
-    // Live labels always use the dark foreground token, even under light-theme layout text.
-    // The countdown is the same foreground with reduced opacity.
+    // This dark live background selects white; countdown uses the same RGB at reduced opacity.
     assert_eq!(chip.color, LIVE_TEXT);
     assert_eq!(price.color, LIVE_TEXT);
     assert_eq!(countdown.color, LIVE_COUNTDOWN);
@@ -3031,21 +3117,24 @@ fn boxed_axis_labels_select_the_axis_facing_corners() {
     chart.set_series_price_scale(0, PriceScaleTarget::Right);
 
     // The crosshair price label follows its strip; the time label rounds the bottom corners.
+    // Both choose black text against a configured light background.
+    chart
+        .apply_options(
+            r##"{"crosshair":{"horzLine":{"labelBackgroundColor":"#f0e68c"},"vertLine":{"labelBackgroundColor":"#f0e68c"}}}"##,
+        )
+        .unwrap();
     chart.crosshair = Some((400.0, 250.0));
     let labels = boxed_labels(&mut chart);
+    let light_crosshair = Color::rgb(0xf0, 0xe6, 0x8c);
     let price = labels
         .iter()
         .find(|label| {
-            matches!(label.background, Some((.., color)) if color == CROSSHAIR_LABEL_BG)
+            matches!(label.background, Some((.., color)) if color == light_crosshair)
                 && label.midpoint == AxisTextMidpoint::Label
         })
         .expect("crosshair price label");
     assert_eq!(price.background_corners, AxisLabelCorners::RIGHT);
-    let boxed_text = nucleuscharts_core::style::DARK_FOREGROUND_RGB;
-    assert_eq!(
-        price.color,
-        Color::rgb(boxed_text.0, boxed_text.1, boxed_text.2)
-    );
+    assert_eq!(price.color, Color::rgb(0, 0, 0));
     let (price_x, ..) = price.background.expect("boxed crosshair price label");
     assert_eq!(price_x, chart.pane_left + chart.pane_w);
     let time = labels
@@ -3053,10 +3142,7 @@ fn boxed_axis_labels_select_the_axis_facing_corners() {
         .find(|l| l.midpoint == AxisTextMidpoint::StableTime)
         .expect("crosshair time label");
     assert_eq!(time.background_corners, AxisLabelCorners::BOTTOM);
-    assert_eq!(
-        time.color,
-        Color::rgb(boxed_text.0, boxed_text.1, boxed_text.2)
-    );
+    assert_eq!(time.color, Color::rgb(0, 0, 0));
     let (_, time_y, _, time_h, _) = time.background.expect("boxed time label");
     assert_eq!(time_y, chart.pane_h);
     assert_eq!(time_h, 1.0 + 5.0 + 3.0 + 12.0 + 3.0);

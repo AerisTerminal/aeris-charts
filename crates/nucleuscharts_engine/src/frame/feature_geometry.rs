@@ -111,16 +111,6 @@ fn mix_background_color(low: Color, high: Color, amount: f64) -> Color {
     )
 }
 
-fn official_heatmap_color(amount: f64) -> Color {
-    let amount = amount.clamp(0.0, 100.0);
-    Color::rgba(
-        0,
-        (100.0 + amount * 1.55).round().clamp(0.0, 255.0) as u8,
-        amount.round().clamp(0.0, 255.0) as u8,
-        ((0.2 + amount * 0.8).clamp(0.0, 1.0) * 255.0).round() as u8,
-    )
-}
-
 fn push_polyline(
     out: &mut Vec<Prim>,
     points: &mut Vec<[f32; 2]>,
@@ -574,9 +564,7 @@ impl ChartEngine {
                 let h = (height - 1 - (border_y * 2.0).round() as i32).max(1);
                 out.push(Prim::Rect {
                     rect: IRect { x, y, w, h },
-                    color: cell
-                        .color
-                        .unwrap_or_else(|| official_heatmap_color(cell.amount)),
+                    color: cell.rendered_color(),
                 });
                 if draw_border
                     && options.cell_border_width > 0.0

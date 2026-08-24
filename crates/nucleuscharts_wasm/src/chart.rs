@@ -48,7 +48,7 @@ use crate::backend_policy::{
 use crate::telemetry::{FrameTelemetry, FRAME_STATS_LEN};
 use nucleuscharts_core::model::data_layer::SeriesId;
 use nucleuscharts_core::model::data_validation::sanitize_ohlc;
-use nucleuscharts_core::model::plot_list::{MismatchDirection, PlotValueIndex};
+use nucleuscharts_core::model::plot_list::MismatchDirection;
 use nucleuscharts_core::options::{ChartOptions, WatermarkOptions};
 use nucleuscharts_core::scale::price_scale_core::PriceScaleMode;
 use nucleuscharts_engine::{
@@ -3246,6 +3246,11 @@ impl NucleusChart {
     pub fn series_data(&self, id: u32) -> Vec<f64> {
         self.inner.borrow().series_data(id)
     }
+    /// Every live series' latest value, or exact value at a merged logical index, as one JSON
+    /// transfer. `NaN` selects independently-resolved latest mode.
+    pub fn value_snapshot_json(&self, logical_index: f64) -> String {
+        self.inner.borrow().value_snapshot_json(logical_index)
+    }
     pub fn series_bars_in_logical_range(&self, id: u32, from: f64, to: f64) -> Vec<f64> {
         self.inner
             .borrow()
@@ -3287,11 +3292,6 @@ impl NucleusChart {
     /// Logical index for a UTC-seconds timestamp. `find_nearest` follows reference lower-bound rules.
     pub fn time_to_index(&self, time: f64, find_nearest: bool) -> Option<i64> {
         self.inner.borrow().time_to_index(time, find_nearest)
-    }
-    /// Per-series OHLC at the bar under X (CSS px) as a flat `[id, o, h, l, c, ...]` Float64Array
-    /// (see the inner method); empty off-chart. Backs crosshair/click `seriesData`.
-    pub fn hover_data(&self, x_css: f64) -> Vec<f64> {
-        self.inner.borrow().hover_data(x_css)
     }
     /// Visible window in logical (bar) units as a `[from, to]` Float64Array (empty if no data).
     pub fn visible_logical_range(&self) -> Vec<f64> {

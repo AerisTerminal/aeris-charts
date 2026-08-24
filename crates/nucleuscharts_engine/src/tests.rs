@@ -886,6 +886,76 @@ fn series_data_and_logical_range_queries_match_reference_gap_semantics() {
 }
 
 #[test]
+fn value_snapshot_unifies_latest_exact_predecessor_format_and_placement() {
+    let nan = f64::NAN;
+    let mut chart = ChartEngine::new(300.0, 200.0, 1.0);
+    chart
+        .set_series_data(
+            0,
+            &[10.0, 20.0, 30.0],
+            &[10.0, 20.0, nan],
+            &[13.0, 23.0, nan],
+            &[9.0, 19.0, nan],
+            &[11.0, 21.0, nan],
+        )
+        .unwrap();
+    assert!(chart.series_apply_price_format_json(0, r#"{"type":"price","precision":1}"#));
+    let comparison = chart.add_series(SeriesKind::Line);
+    chart
+        .set_series_data(
+            comparison,
+            &[10.0, 30.0],
+            &[100.0, 300.0],
+            &[100.0, 300.0],
+            &[100.0, 300.0],
+            &[100.0, 300.0],
+        )
+        .unwrap();
+    chart.convert_series_kind(comparison, SeriesKind::Area);
+    chart.set_series_pane(comparison, 1, 0.5);
+    chart.set_series_price_scale(comparison, PriceScaleTarget::Left);
+
+    let latest = chart.value_snapshot(None);
+    assert_eq!(latest.len(), 2);
+    assert_eq!(
+        (latest[0].logical_index, latest[0].time, latest[0].close),
+        (Some(1), Some(20), Some(21.0))
+    );
+    assert_eq!(latest[0].previous_value, Some(11.0));
+    assert_eq!(latest[0].formatted_close.as_deref(), Some("21.0"));
+    assert_eq!(latest[0].formatted_previous_value.as_deref(), Some("11.0"));
+    assert_eq!(
+        (latest[1].logical_index, latest[1].time, latest[1].value),
+        (Some(2), Some(30), Some(300.0))
+    );
+    assert_eq!(latest[1].previous_value, Some(100.0));
+    assert_eq!(latest[1].kind, SeriesKind::Area);
+    assert_eq!(latest[1].pane_index, 1);
+    assert_eq!(latest[1].price_scale_id, "left");
+
+    let exact_gap = chart.value_snapshot(Some(1));
+    assert_eq!(exact_gap[0].close, Some(21.0));
+    assert_eq!(exact_gap[0].previous_value, Some(11.0));
+    assert_eq!(exact_gap[1].logical_index, Some(1));
+    assert_eq!(exact_gap[1].time, Some(20));
+    assert_eq!(exact_gap[1].value, None, "a gap never borrows a value");
+    assert_eq!(exact_gap[1].previous_value, None);
+
+    let exact_whitespace = chart.value_snapshot(Some(2));
+    assert_eq!(exact_whitespace[0].time, Some(30));
+    assert_eq!(exact_whitespace[0].close, None);
+    assert_eq!(exact_whitespace[0].previous_value, None);
+    assert_eq!(exact_whitespace[1].value, Some(300.0));
+    assert_eq!(exact_whitespace[1].previous_value, Some(100.0));
+
+    assert!(chart.update_series_bar(comparison, 40.0, [400.0; 4]));
+    let fresh = chart.value_snapshot(None);
+    assert_eq!(fresh[1].time, Some(40));
+    assert_eq!(fresh[1].value, Some(400.0));
+    assert_eq!(fresh[1].previous_value, Some(300.0));
+}
+
+#[test]
 fn crosshair_geometry_is_host_independent() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     chart.series[0].kind = SeriesKind::Line;
@@ -1951,11 +2021,23 @@ fn indicator_info_reports_lineage_and_output_slots() {
     assert_eq!(info.deviation, None);
     assert_eq!(info.source, 0);
     assert_eq!(info.output_index, 0);
+    assert_eq!(info.binding_id, sma);
+    assert_eq!(info.parameters.period, Some(2));
+    assert_eq!(info.output_name, "SMA");
+    assert_eq!(info.output_count, 1);
+    assert_eq!(info.volume_source, None);
 
     let ids = chart.add_bollinger(0, 3, 2.5);
     let upper = chart.indicator_info(ids[0]).unwrap();
     assert_eq!(upper.kind, "bollinger");
     assert_eq!(upper.deviation, Some(2.5));
+    assert_eq!(upper.parameters.deviation, Some(2.5));
+    assert_eq!(upper.output_name, "Upper");
+    assert_eq!(chart.indicator_info(ids[1]).unwrap().output_name, "Basis");
+    assert_eq!(chart.indicator_info(ids[2]).unwrap().output_name, "Lower");
+    assert!(ids
+        .iter()
+        .all(|&id| chart.indicator_info(id).unwrap().binding_id == ids[0]));
     assert_eq!(
         (0..3)
             .map(|i| chart.indicator_info(ids[i]).unwrap().output_index)
@@ -1966,6 +2048,83 @@ fn indicator_info_reports_lineage_and_output_slots() {
     // The source series itself and unknown ids are not indicator outputs.
     assert_eq!(chart.indicator_info(0), None);
     assert_eq!(chart.indicator_info(999), None);
+}
+
+#[test]
+fn indicator_snapshot_values_and_complete_multi_output_metadata_stay_ordered() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let values = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            &values,
+            &values,
+            &values,
+            &values,
+        )
+        .unwrap();
+    let macd = chart.add_macd(0, 2, 3, 2);
+    let names = macd
+        .iter()
+        .map(|&id| chart.indicator_info(id).unwrap().output_name)
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["MACD", "Signal", "Histogram"]);
+    for (index, &id) in macd.iter().enumerate() {
+        let info = chart.indicator_info(id).unwrap();
+        assert_eq!(info.binding_id, macd[0]);
+        assert_eq!(info.output_index, index);
+        assert_eq!(info.output_count, 3);
+        assert_eq!(info.parameters.fast, Some(2));
+        assert_eq!(info.parameters.slow, Some(3));
+        assert_eq!(info.parameters.signal, Some(2));
+    }
+    let snapshot = chart.value_snapshot(None);
+    for &id in &macd {
+        let output = snapshot.iter().find(|value| value.series_id == id).unwrap();
+        assert!(output.value.is_some());
+        assert!(output.formatted_value.is_some());
+    }
+    let previous_macd = snapshot
+        .iter()
+        .find(|value| value.series_id == macd[0])
+        .and_then(|value| value.value)
+        .unwrap();
+    assert!(chart.update_series_bar(0, 6.0, [12.0; 4]));
+    let updated_macd = chart
+        .value_snapshot(None)
+        .into_iter()
+        .find(|value| value.series_id == macd[0])
+        .and_then(|value| value.value)
+        .unwrap();
+    assert_ne!(updated_macd, previous_macd);
+
+    let volume = chart.add_series(SeriesKind::Histogram);
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            &values,
+            &values,
+            &values,
+            &values,
+        )
+        .unwrap();
+    chart
+        .set_series_data(
+            volume,
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            &values,
+            &values,
+            &values,
+            &values,
+        )
+        .unwrap();
+    let vwap = chart.add_vwap(0, Some(volume)).unwrap();
+    assert_eq!(
+        chart.indicator_info(vwap).unwrap().volume_source,
+        Some(volume)
+    );
 }
 
 #[test]
@@ -2242,8 +2401,7 @@ fn crosshair_label_visibility_and_background_flow_from_options() {
     let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
     let label_background = nucleuscharts_core::style::DEFAULT_CROSSHAIR_LABEL_RGB;
     let label_background = Color::rgb(label_background.0, label_background.1, label_background.2);
-    let foreground = nucleuscharts_core::style::DEFAULT_FOREGROUND_RGB;
-    let foreground = Color::rgb(foreground.0, foreground.1, foreground.2);
+    let foreground = label_background.contrast_text();
     let time_label = axis
         .labels
         .iter()
@@ -2422,18 +2580,11 @@ fn price_line_extras_drive_line_and_axis_label_rendering() {
             .find(|l| l.text == "target")
     };
 
-    // Defaults: line drawn, boxed label in the line color with semantic foreground text.
+    // Defaults: line drawn, boxed label in the line color with contrasting text.
     assert!(has_line(&mut chart));
     let label = find_label(&mut chart).expect("price-line label");
     assert!(matches!(label.background, Some((.., c)) if c == line_color));
-    assert_eq!(
-        label.color,
-        Color::rgb(
-            nucleuscharts_core::style::DARK_FOREGROUND_RGB.0,
-            nucleuscharts_core::style::DARK_FOREGROUND_RGB.1,
-            nucleuscharts_core::style::DARK_FOREGROUND_RGB.2,
-        )
-    );
+    assert_eq!(label.color, line_color.contrast_text());
 
     // `lineVisible: false` skips only the HLine; the axis label stays.
     assert!(chart.price_line_apply_options(id, r#"{"line_visible":false}"#));
@@ -2447,7 +2598,35 @@ fn price_line_extras_drive_line_and_axis_label_rendering() {
     assert!(has_line(&mut chart));
     assert!(find_label(&mut chart).is_none());
 
-    // Custom label colors paint the box and the text independently of the line color.
+    // A custom light background without a text override automatically selects black.
+    assert!(chart.price_line_apply_options(
+        id,
+        r##"{"axis_label_visible":true,"axis_label_color":"#f0e68c"}"##
+    ));
+    let label = find_label(&mut chart).expect("price-line label");
+    assert!(matches!(label.background, Some((.., c)) if c == Color::rgb(0xf0, 0xe6, 0x8c)));
+    assert_eq!(label.color, Color::rgb(0, 0, 0));
+
+    // Translucent label colors contrast against the actual theme surface.
+    assert!(
+        chart.price_line_apply_options(id, r##"{"axis_label_color":"rgba(255,255,255,0.25)"}"##)
+    );
+    chart
+        .apply_options(r##"{"layout":{"background":{"type":"solid","color":"#000000"}}}"##)
+        .unwrap();
+    assert_eq!(
+        find_label(&mut chart).expect("price-line label").color,
+        Color::rgb(255, 255, 255)
+    );
+    chart
+        .apply_options(r##"{"layout":{"background":{"type":"solid","color":"#ffffff"}}}"##)
+        .unwrap();
+    assert_eq!(
+        find_label(&mut chart).expect("price-line label").color,
+        Color::rgb(0, 0, 0)
+    );
+
+    // An explicit text color remains independent of the background and line color.
     assert!(chart.price_line_apply_options(
         id,
         r##"{"axis_label_visible":true,"axis_label_color":"#010203","axis_label_text_color":"#aabbcc"}"##

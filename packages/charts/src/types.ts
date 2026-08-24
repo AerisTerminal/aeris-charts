@@ -112,6 +112,7 @@ export interface hlc_area_data { time: time; high: number; low: number; close: n
 export interface pretty_histogram_data { time: time; value: number; color?: string }
 export interface rounded_candle_data { time: time; open: number; high: number; low: number; close: number }
 export interface background_shade_data { time: time; value: number }
+/** Every non-whitespace row in one stacked-area series must carry the same number of layers. */
 export interface stacked_area_data { time: time; values: readonly number[] }
 export interface stacked_bars_data { time: time; values: readonly number[] }
 export interface whisker_box_data {
@@ -318,6 +319,36 @@ export interface last_value_data {
   time: number;
 }
 
+/**
+ * One live series in {@link chart_api.value_snapshot}. Numeric and formatted fields are null when
+ * the series is missing or whitespace at an exact logical index. `value` is the current scalar
+ * value; OHLC series instead populate `open`/`high`/`low`/`close`. Experimental custom series have
+ * null exact-index values; latest mode can expose only the last value recorded by a visible frame.
+ */
+export interface chart_value_snapshot {
+  series: series_api;
+  series_id: number;
+  kind: series_kind;
+  pane_index: number;
+  price_scale_id: string;
+  logical_index: number | null;
+  /** UTC-second timestamp selected independently per series in latest mode. */
+  time: number | null;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number | null;
+  value: number | null;
+  /** Previous same-series non-whitespace close/scalar value. */
+  previous_value: number | null;
+  formatted_open: string | null;
+  formatted_high: string | null;
+  formatted_low: string | null;
+  formatted_close: string | null;
+  formatted_value: string | null;
+  formatted_previous_value: string | null;
+}
+
 /** Parameters delivered to crosshair-move and click subscribers (mirrors reference `MouseEventParams`). */
 export interface mouse_event_params {
   /** UTC seconds of the bar under the cursor, or `null` off the data. */
@@ -330,6 +361,8 @@ export interface mouse_event_params {
   pane_index: number | null;
   /** Per-series value at the hovered bar, keyed by the series handle. */
   series_data: Map<series_api, ohlc_data | single_value_data>;
+  /** Rich engine snapshot at the crosshair index; on crosshair leave this is the latest snapshot. */
+  value_snapshot: chart_value_snapshot[];
   /**
    * The series under the cursor (reference `MouseEventParams.hoveredSeries`), from the engine's
    * per-kind hit tests (candle/bar high-low range, histogram column, line stroke) — or a
@@ -367,15 +400,32 @@ export interface pane_geometry {
  * 1 = middle, 2 = lower; SMA/EMA: always 0.
  */
 export interface indicator_info {
+  /** Stable identity shared by all outputs in one indicator binding. */
+  binding_id: number;
   kind: "sma" | "ema" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "wma";
+  /** Complete structured parameters. Fields not used by this kind are `null`. */
+  parameters: {
+    period: number | null;
+    deviation: number | null;
+    fast: number | null;
+    slow: number | null;
+    signal: number | null;
+    k_period: number | null;
+    d_period: number | null;
+  };
   period: number;
   /** Second parameter when the kind has one: Bollinger deviation, MACD signal period,
    *  Stochastic %D period; otherwise `null`. */
   deviation: number | null;
   source: series_api;
+  /** VWAP's bound volume series, otherwise `null`. */
+  volume_source: series_api | null;
+  /** Stable display name for this output, preserving binding output order. */
+  output_name: string;
   /** Bollinger: 0 = upper, 1 = middle, 2 = lower. MACD: 0 = line, 1 = signal, 2 = histogram.
    *  Stochastic: 0 = %K, 1 = %D. Everything else: 0. */
   output_index: number;
+  output_count: number;
 }
 
 /** Series lifecycle event (platform chrome: legend chips, indicator counts). */
@@ -632,7 +682,7 @@ export interface chart_options {
   layout: {
     background: { type: string; color: string };
     textColor: string;
-    /** Secondary unboxed chart text. Live labels use the dark foreground for contrast. */
+    /** Secondary unboxed chart text. Boxed live labels derive black/white text from their fill. */
     mutedTextColor: string;
     fontSize: number;
     fontFamily: string;
@@ -798,7 +848,10 @@ export interface series_options {
   price_line_source?: 0 | 1;
   /** Price line width in CSS px (reference `priceLineWidth`, default 1). */
   price_line_width?: number;
-  /** Price line color (reference `priceLineColor`); default `""` follows the series color. */
+  /**
+   * Built-in live-line and complete last-value-cluster color (reference `priceLineColor`);
+   * default `""` follows the resolved series/bar/point color.
+   */
   price_line_color?: string;
   /** Price line style, a `LINE_STYLE_TO_U8` value (reference `priceLineStyle`, default 1 Dotted). */
   price_line_style?: number;
@@ -1102,7 +1155,7 @@ export interface drawing_options {
   axis_bands_visible: boolean;
   /** Rectangle endpoint-label background (`""` = drawing color). */
   label_color: string;
-  /** Rectangle endpoint-label text (`""` = chart foreground). */
+  /** Rectangle endpoint-label text (`""` = automatic black/white contrast against `label_color`). */
   label_text_color: string;
   /** Snap rectangle x anchors to canonical data times. */
   snap_time_to_data: boolean;
@@ -1717,6 +1770,12 @@ export interface chart_api {
   trading(): trading_api;
   /** The singleton accessibility controller installed for this chart. */
   accessibility(): accessibility_handle;
+  /**
+   * Return every live series as one engine-owned snapshot and one WASM transfer. With no argument,
+   * each series resolves its own latest non-whitespace row. With an index, lookup is exact: gaps
+   * and whitespace remain present with null data and never borrow a neighboring value.
+   */
+  value_snapshot(logical_index?: number): chart_value_snapshot[];
   add_series(kind: series_kind, options?: Partial<any_series_options>): series_api;
   /**
    * Add a custom series (plugin platform Phase C-c; reference `IChartApi.addCustomSeries`): a

@@ -87,11 +87,29 @@ const fn rgb_u32(rgb: (u8, u8, u8), alpha: u8) -> u32 {
 /// indicator chrome (legend chips, counts, settings) without the engine owning any UI.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct IndicatorInfo {
+    /// Stable identity shared by every output of this binding. The first output's opaque series
+    /// identity is safe because output identities are monotonic and the binding owns all outputs.
+    pub binding_id: SeriesId,
     pub kind: &'static str,
+    pub parameters: IndicatorParameters,
     pub period: usize,
     pub deviation: Option<f64>,
     pub source: SeriesId,
+    pub volume_source: Option<SeriesId>,
+    pub output_name: &'static str,
     pub output_index: usize,
+    pub output_count: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct IndicatorParameters {
+    pub period: Option<usize>,
+    pub deviation: Option<f64>,
+    pub fast: Option<usize>,
+    pub slow: Option<usize>,
+    pub signal: Option<usize>,
+    pub k_period: Option<usize>,
+    pub d_period: Option<usize>,
 }
 
 impl ChartEngine {
@@ -120,30 +138,97 @@ impl ChartEngine {
                 .iter()
                 .position(|&output| output == id)
                 .map(|output_index| {
-                    let (kind, period, deviation) = match binding.kind {
-                        IndicatorKind::Sma { period } => ("sma", period, None),
-                        IndicatorKind::Ema { period } => ("ema", period, None),
-                        IndicatorKind::Bollinger { period, deviation } => {
-                            ("bollinger", period, Some(deviation))
-                        }
-                        IndicatorKind::Rsi { period } => ("rsi", period, None),
+                    let (kind, period, deviation, parameters) = match binding.kind {
+                        IndicatorKind::Sma { period } => (
+                            "sma",
+                            period,
+                            None,
+                            IndicatorParameters {
+                                period: Some(period),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
+                        IndicatorKind::Ema { period } => (
+                            "ema",
+                            period,
+                            None,
+                            IndicatorParameters {
+                                period: Some(period),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
+                        IndicatorKind::Bollinger { period, deviation } => (
+                            "bollinger",
+                            period,
+                            Some(deviation),
+                            IndicatorParameters {
+                                period: Some(period),
+                                deviation: Some(deviation),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
+                        IndicatorKind::Rsi { period } => (
+                            "rsi",
+                            period,
+                            None,
+                            IndicatorParameters {
+                                period: Some(period),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
                         // MACD/Stochastic pack their second period into `deviation`.
-                        IndicatorKind::Macd { slow, signal, .. } => {
-                            ("macd", slow, Some(signal as f64))
-                        }
-                        IndicatorKind::Stochastic { k_period, d_period } => {
-                            ("stochastic", k_period, Some(d_period as f64))
-                        }
-                        IndicatorKind::Atr { period } => ("atr", period, None),
-                        IndicatorKind::Vwap => ("vwap", 0, None),
-                        IndicatorKind::Wma { period } => ("wma", period, None),
+                        IndicatorKind::Macd { fast, slow, signal } => (
+                            "macd",
+                            slow,
+                            Some(signal as f64),
+                            IndicatorParameters {
+                                fast: Some(fast),
+                                slow: Some(slow),
+                                signal: Some(signal),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
+                        IndicatorKind::Stochastic { k_period, d_period } => (
+                            "stochastic",
+                            k_period,
+                            Some(d_period as f64),
+                            IndicatorParameters {
+                                k_period: Some(k_period),
+                                d_period: Some(d_period),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
+                        IndicatorKind::Atr { period } => (
+                            "atr",
+                            period,
+                            None,
+                            IndicatorParameters {
+                                period: Some(period),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
+                        IndicatorKind::Vwap => ("vwap", 0, None, IndicatorParameters::default()),
+                        IndicatorKind::Wma { period } => (
+                            "wma",
+                            period,
+                            None,
+                            IndicatorParameters {
+                                period: Some(period),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
                     };
                     IndicatorInfo {
+                        binding_id: binding.outputs[0],
                         kind,
+                        parameters,
                         period,
                         deviation,
                         source: binding.source,
+                        volume_source: binding.volume_source,
+                        output_name: indicator_output_name(&binding.kind, output_index),
                         output_index,
+                        output_count: binding.outputs.len(),
                     }
                 })
         })
@@ -636,5 +721,19 @@ fn indicator_title(kind: &IndicatorKind) -> String {
         IndicatorKind::Atr { period } => format!("ATR {period}"),
         IndicatorKind::Vwap => "VWAP".to_string(),
         IndicatorKind::Wma { period } => format!("WMA {period}"),
+    }
+}
+
+fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static str {
+    match kind {
+        IndicatorKind::Sma { .. } => "SMA",
+        IndicatorKind::Ema { .. } => "EMA",
+        IndicatorKind::Bollinger { .. } => ["Upper", "Basis", "Lower"][output_index],
+        IndicatorKind::Rsi { .. } => "RSI",
+        IndicatorKind::Macd { .. } => ["MACD", "Signal", "Histogram"][output_index],
+        IndicatorKind::Stochastic { .. } => ["%K", "%D"][output_index],
+        IndicatorKind::Atr { .. } => "ATR",
+        IndicatorKind::Vwap => "VWAP",
+        IndicatorKind::Wma { .. } => "WMA",
     }
 }

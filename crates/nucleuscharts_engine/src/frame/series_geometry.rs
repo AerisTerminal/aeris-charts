@@ -1003,11 +1003,7 @@ impl ChartEngine {
                 let Some(base_value) = self.series_base_value(series.id, from) else {
                     continue;
                 };
-                let color = series
-                    .price_line_color
-                    .as_deref()
-                    .and_then(Color::parse_css)
-                    .unwrap_or(last.color);
+                let color = self.effective_series_live_color(series, last.color);
                 out.push(Prim::HLine {
                     y: (scale.price_to_coordinate(last.value, base_value) * vpr).round() as i32,
                     x0: 0,
@@ -1047,11 +1043,8 @@ impl ChartEngine {
             };
             // reference `priceLineColor` default '' (series.ts priceLineColor): follow the bar color.
             // The pinned CSS string parses here; an unparseable string falls back to ''.
-            let color = series
-                .price_line_color
-                .as_deref()
-                .and_then(Color::parse_css)
-                .unwrap_or_else(|| self.series_bar_color(series, row, baseline));
+            let color = self
+                .effective_series_live_color(series, self.series_bar_color(series, row, baseline));
             out.push(Prim::HLine {
                 y: (scale.price_to_coordinate(close, base_value) * vpr).round() as i32,
                 x0: 0,

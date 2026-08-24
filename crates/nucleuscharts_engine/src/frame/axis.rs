@@ -2,17 +2,6 @@
 
 use super::*;
 
-const LIVE_LABEL_TEXT: Color = Color::rgb(
-    nucleuscharts_core::style::DARK_FOREGROUND_RGB.0,
-    nucleuscharts_core::style::DARK_FOREGROUND_RGB.1,
-    nucleuscharts_core::style::DARK_FOREGROUND_RGB.2,
-);
-const LIVE_LABEL_COUNTDOWN_TEXT: Color = Color::rgba(
-    nucleuscharts_core::style::DARK_FOREGROUND_RGB.0,
-    nucleuscharts_core::style::DARK_FOREGROUND_RGB.1,
-    nucleuscharts_core::style::DARK_FOREGROUND_RGB.2,
-    0xb3,
-);
 const COUNTDOWN_FONT_SCALE: f64 = 11.0 / 12.0;
 
 /// A last-value label candidate before axis overlap resolution (reference IPriceAxisView state:
@@ -198,6 +187,13 @@ impl ChartEngine {
         let fallback = nucleuscharts_core::style::DEFAULT_FOREGROUND_RGB;
         Color::parse_css(&self.options.get().layout.text_color)
             .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2))
+    }
+
+    fn axis_label_text_color(&self, background: Color) -> Color {
+        let fallback = nucleuscharts_core::style::DEFAULT_SURFACE_RGB;
+        let surface = Color::parse_css(&self.options.get().layout.background.color)
+            .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2));
+        background.contrast_text_over(surface)
     }
 
     /// Lowest-z-order visible source attached to a scale, matching the reference formatter owner.
@@ -731,7 +727,7 @@ impl ChartEngine {
             .label_text_color
             .as_deref()
             .and_then(Color::parse_css)
-            .unwrap_or_else(|| self.primary_text_color());
+            .unwrap_or_else(|| self.axis_label_text_color(label_background));
         let font_size = self.options.get().layout.font_size;
         for left_side in [true, false] {
             let visible = if left_side {
@@ -878,7 +874,9 @@ impl ChartEngine {
                     text: options.label_text.clone(),
                     x: box_x + width / 2.0,
                     y: self.pane_h + BORDER + TICK + PADDING + font_size / 2.0,
-                    color: options.label_text_color,
+                    color: options.label_text_color.unwrap_or_else(|| {
+                        self.axis_label_text_color(options.label_background_color)
+                    }),
                     align: AxisTextAlign::Center,
                     midpoint: AxisTextMidpoint::None,
                     font_scale: 1.0,
@@ -1177,8 +1175,8 @@ impl ChartEngine {
                     } else {
                         (strip_x + 10.0, AxisTextAlign::Left, strip_x)
                     };
-                    // The label background follows the line color; chart text follows the semantic
-                    // foreground token unless the line explicitly supplies a text override.
+                    // The label background follows the line color; omitted text automatically
+                    // contrasts with that effective background.
                     let background = line
                         .axis_label_color
                         .as_deref()
@@ -1188,7 +1186,7 @@ impl ChartEngine {
                         .axis_label_text_color
                         .as_deref()
                         .and_then(Color::parse_css)
-                        .unwrap_or_else(|| self.primary_text_color());
+                        .unwrap_or_else(|| self.axis_label_text_color(background));
                     labels.push(AxisLabel {
                         text,
                         x,
@@ -1359,7 +1357,8 @@ impl ChartEngine {
 
     /// TradingView's horizontal-line/ray axis label: the drawing's price boxed on the price
     /// axis in the LINE's own color (the label is part of the drawing — recoloring the line
-    /// recolors the label on the next frame), with semantic foreground text. Formatted
+    /// recolors the label on the next frame), with automatic contrasting text unless explicitly
+    /// configured. Formatted
     /// with the pane's primary series' price format, like the price-line labels.
     pub(super) fn append_drawing_line_labels<F>(&self, labels: &mut Vec<AxisLabel>, measure: &F)
     where
@@ -1399,15 +1398,20 @@ impl ChartEngine {
                     None => self.format_scale_value(scale, logical),
                 };
                 // The label IS the line: background in the drawing's color (parsed per frame,
-                // so option changes track), semantic foreground text.
+                // so option changes track), with an explicit text override when configured.
                 let background = Color::parse_css(&drawing.color).unwrap_or(PRIMARY).solid();
+                let text_color = drawing
+                    .label_text_color
+                    .as_deref()
+                    .and_then(Color::parse_css)
+                    .unwrap_or_else(|| self.axis_label_text_color(background));
                 let width = 1.0 + 5.0 + 5.0 + 5.0 + measure(&text);
                 let height = font_size + 2.5 * 2.0;
                 labels.push(AxisLabel {
                     text,
                     x: self.pane_left + self.pane_w + 10.0,
                     y,
-                    color: self.primary_text_color(),
+                    color: text_color,
                     align: AxisTextAlign::Left,
                     midpoint: AxisTextMidpoint::Label,
                     font_scale: 1.0,
@@ -1430,7 +1434,7 @@ impl ChartEngine {
 
     /// reference SeriesPriceAxisView: every visible series with `lastValueVisible` (default true)
     /// gets a last-value label on its price scale — the background is the series' bar color,
-    /// semantic foreground text, and the last visible bar's close in the scale's format.
+    /// contrasting black/white text, and the last visible bar's close in the scale's format.
     /// Labels sharing an axis side are pushed apart with the reference's overlap resolution
     /// (price-axis-widget.ts `_fixLabelOverlap`).
     ///
@@ -1498,7 +1502,11 @@ impl ChartEngine {
                         scale,
                         scale.price_to_logical_value(last.value, base_value),
                     );
-                    (y, last.color, text)
+                    (
+                        y,
+                        self.effective_series_live_color(series, last.color),
+                        text,
+                    )
                 } else {
                     // whitespace rows are skipped (the reference's plot list omits them).
                     let Some(row) = plot.last_non_whitespace_row(to) else {
@@ -1520,7 +1528,10 @@ impl ChartEngine {
                     } else {
                         None
                     };
-                    let color = self.series_bar_color(series, row, baseline);
+                    let color = self.effective_series_live_color(
+                        series,
+                        self.series_bar_color(series, row, baseline),
+                    );
                     // The series' OWN priceFormat drives its last-value label (reference
                     // series-price-axis-view.ts text, via the scale's series formatter).
                     let text = self.format_series_value(
@@ -1658,7 +1669,7 @@ impl ChartEngine {
                         text,
                         x,
                         y: label.y,
-                        color: LIVE_LABEL_TEXT,
+                        color: self.axis_label_text_color(label.color),
                         align,
                         midpoint: AxisTextMidpoint::Label,
                         font_scale: 1.0,
@@ -1704,7 +1715,9 @@ impl ChartEngine {
             return;
         };
         let right_strip = side == PriceScaleSide::Right;
-        let text_color = LIVE_LABEL_TEXT;
+        let text_color = self.axis_label_text_color(label.color);
+        let countdown_text_color =
+            Color::rgba(text_color.r(), text_color.g(), text_color.b(), 0xb3);
         // The title chip shares the main label color by default (matching the price and
         // countdown chips).
         let chip_color = label.color;
@@ -1848,7 +1861,7 @@ impl ChartEngine {
                 text: countdown.clone(),
                 x: text_x,
                 y: countdown_y + countdown_height / 2.0,
-                color: LIVE_LABEL_COUNTDOWN_TEXT,
+                color: countdown_text_color,
                 align: text_align,
                 midpoint: AxisTextMidpoint::Label,
                 font_scale: COUNTDOWN_FONT_SCALE,
@@ -1900,7 +1913,7 @@ impl ChartEngine {
         }
         // Price-axis label tracks the horizontal line (reference `horzLine`); time-axis label tracks the
         // vertical line (reference `vertLine`). Each carries its own `labelVisible`/`labelBackgroundColor`,
-        // and the text color is the semantic foreground token.
+        // and text automatically contrasts with each configured background.
         let options = self.options.get();
         let font_size = options.layout.font_size;
         let ch = &options.crosshair;
@@ -1952,7 +1965,7 @@ impl ChartEngine {
                         text,
                         x: label_x,
                         y: snap_y,
-                        color: LIVE_LABEL_TEXT,
+                        color: self.axis_label_text_color(label_bg),
                         align,
                         midpoint: AxisTextMidpoint::Label,
                         font_scale: 1.0,
@@ -1993,7 +2006,7 @@ impl ChartEngine {
                     text,
                     x: box_x + width / 2.0,
                     y: self.pane_h + BORDER + TICK + PADDING + font_size / 2.0,
-                    color: LIVE_LABEL_TEXT,
+                    color: self.axis_label_text_color(label_bg),
                     align: AxisTextAlign::Center,
                     midpoint: AxisTextMidpoint::StableTime,
                     font_scale: 1.0,
@@ -2068,7 +2081,7 @@ impl ChartEngine {
                 text,
                 x,
                 y,
-                color: Color::rgb(255, 255, 255),
+                color: self.axis_label_text_color(state.options.color),
                 align,
                 midpoint: AxisTextMidpoint::Label,
                 font_scale: 1.0,

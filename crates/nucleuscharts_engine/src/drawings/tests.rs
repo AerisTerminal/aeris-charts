@@ -1297,7 +1297,10 @@ fn official_rectangle_preview_commit_and_axis_views_are_engine_owned() {
         preview_axis
             .labels
             .iter()
-            .filter(|label| label.background.is_some() && label.color == Color::rgb(255, 255, 255))
+            .filter(|label| {
+                label.color == Color::rgb(255, 255, 255)
+                    && matches!(label.background, Some((.., color)) if color == Color::rgb(200, 50, 100))
+            })
             .count(),
         4
     );

@@ -4,6 +4,120 @@
 use super::*;
 
 impl ChartEngine {
+    /// A unified value snapshot for every live series. `None` selects each engine-owned series' own
+    /// latest non-whitespace row; `Some(index)` performs an exact merged-logical lookup and never
+    /// borrows a neighboring value. Custom-series values are host-produced, so only their last
+    /// recorded frame value is available in latest mode. The query retains only its result and does
+    /// not copy series history.
+    pub fn value_snapshot(&self, logical_index: Option<i64>) -> Vec<SeriesValueSnapshot> {
+        self.series_order
+            .iter()
+            .filter_map(|&id| self.series_value_snapshot(id, logical_index))
+            .collect()
+    }
+
+    fn series_value_snapshot(
+        &self,
+        id: SeriesId,
+        requested_index: Option<i64>,
+    ) -> Option<SeriesValueSnapshot> {
+        let series = self.series_entry(id)?;
+        let feature_kind = self.feature_series_kind(id);
+        let price_scale_id = self
+            .price_scale_id_for_target(series.pane_index, series.price_scale_target)
+            .unwrap_or("")
+            .to_string();
+        let mut snapshot = SeriesValueSnapshot {
+            series_id: id,
+            kind: series.kind,
+            feature_kind,
+            pane_index: series.pane_index,
+            price_scale_id,
+            logical_index: requested_index,
+            time: requested_index
+                .and_then(|index| usize::try_from(index).ok())
+                .and_then(|index| self.data.merged_times().get(index).copied()),
+            open: None,
+            high: None,
+            low: None,
+            close: None,
+            value: None,
+            previous_value: None,
+            formatted_open: None,
+            formatted_high: None,
+            formatted_low: None,
+            formatted_close: None,
+            formatted_value: None,
+            formatted_previous_value: None,
+        };
+
+        if series.kind == SeriesKind::Custom {
+            if requested_index.is_none() {
+                let latest = series
+                    .custom_frame
+                    .last
+                    .filter(|last| last.value.is_finite());
+                if let Some(latest) = latest {
+                    snapshot.logical_index = self
+                        .data
+                        .merged_times()
+                        .binary_search(&latest.time)
+                        .ok()
+                        .and_then(|index| i64::try_from(index).ok());
+                    snapshot.time = Some(latest.time);
+                    snapshot.value = Some(latest.value);
+                    snapshot.formatted_value =
+                        Some(self.format_series_resolved(series, latest.value));
+                }
+            }
+            return Some(snapshot);
+        }
+
+        let plot = self.data.plot(id);
+        let row = match requested_index {
+            Some(index) => plot
+                .search(index, MismatchDirection::None)
+                .filter(|&row| !plot.is_whitespace_row(row)),
+            None => plot.last_non_whitespace_row(TimePointIndex::MAX),
+        };
+        let Some(row) = row else {
+            return Some(snapshot);
+        };
+        let index = plot.index_at(row)?;
+        let time = *self.data.merged_times().get(index as usize)?;
+        snapshot.logical_index = Some(index);
+        snapshot.time = Some(time);
+
+        let format = |value: f64| {
+            value
+                .is_finite()
+                .then(|| self.format_series_resolved(series, value))
+        };
+        let close = plot.value_at(row, PlotValueIndex::Close);
+        if matches!(series.kind, SeriesKind::Candlestick | SeriesKind::Bar) {
+            let open = plot.value_at(row, PlotValueIndex::Open);
+            let high = plot.value_at(row, PlotValueIndex::High);
+            let low = plot.value_at(row, PlotValueIndex::Low);
+            snapshot.open = open.is_finite().then_some(open);
+            snapshot.high = high.is_finite().then_some(high);
+            snapshot.low = low.is_finite().then_some(low);
+            snapshot.close = close.is_finite().then_some(close);
+            snapshot.formatted_open = format(open);
+            snapshot.formatted_high = format(high);
+            snapshot.formatted_low = format(low);
+            snapshot.formatted_close = format(close);
+        } else {
+            snapshot.value = close.is_finite().then_some(close);
+            snapshot.formatted_value = format(close);
+        }
+        if let Some(previous_row) = plot.last_non_whitespace_row_before(row) {
+            let previous = plot.value_at(previous_row, PlotValueIndex::Close);
+            snapshot.previous_value = previous.is_finite().then_some(previous);
+            snapshot.formatted_previous_value = format(previous);
+        }
+        Some(snapshot)
+    }
+
     pub fn series_price_to_coordinate(&self, id: SeriesId, price: f64) -> Option<f64> {
         if !price.is_finite() {
             return None;

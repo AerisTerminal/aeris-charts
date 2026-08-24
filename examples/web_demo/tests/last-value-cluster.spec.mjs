@@ -270,6 +270,32 @@ test("last-value cluster paints chip, price, and countdown rows; the chip matche
   await context.close();
 });
 
+test("explicit light price-line color unifies the live cluster and selects dark text", async ({ browser }) => {
+  const LIVE = [240, 230, 140];
+  const { context, page } = await open_cluster_page(browser, {
+    title: "NUCLEUS",
+    title_visible: true,
+    countdown_visible: true,
+    price_line_color: "#f0e68c",
+    price_line_visible: true,
+  });
+  const anchor = await cluster_anchor(page);
+  const shot = await capture(page);
+  let top = -1;
+  let bottom = -1;
+  for (let y = 0; y < shot.height; y += 1) {
+    if (near(px(shot, anchor.pane_w + 2, y), LIVE)) {
+      if (top === -1) top = y;
+      bottom = y;
+    }
+  }
+  const cluster = { left: anchor.pane_w + 1, right: shot.width, top, bottom: bottom + 1 };
+  expect(top, "light cluster should be located").toBeGreaterThanOrEqual(0);
+  expect(count_where(shot, cluster, (color) => near(color, LIVE)), "unified light cluster fill").toBeGreaterThan(150);
+  expect(count_where(shot, cluster, (color) => color.every((channel) => channel < 32)), "black cluster glyph ink").toBeGreaterThan(5);
+  await context.close();
+});
+
 test("crosshair price and time glyphs stay centered in their label boxes", async ({ browser }) => {
   const { context, page } = await open_cluster_page(browser, {
     last_value_visible: false,

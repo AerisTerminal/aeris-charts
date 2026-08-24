@@ -1321,11 +1321,10 @@ impl ChartEngine {
                     let baseline = (series.kind == SeriesKind::Baseline)
                         .then(|| self.resolved_baseline_price(series.id, from, to))
                         .flatten();
-                    let color = series
-                        .price_line_color
-                        .as_deref()
-                        .and_then(Color::parse_css)
-                        .unwrap_or_else(|| self.series_bar_color(series, row, baseline));
+                    let color = self.effective_series_live_color(
+                        series,
+                        self.series_bar_color(series, row, baseline),
+                    );
                     let dash = (4.0 * vpr).round().max(1.0) as i32;
                     let gap = (2.0 * vpr).round().max(1.0) as i32;
                     let mut x = start;

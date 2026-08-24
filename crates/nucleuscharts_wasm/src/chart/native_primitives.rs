@@ -20,6 +20,13 @@ fn json_color(value: &serde_json::Value, key: &str, fallback: Color) -> Color {
         .unwrap_or(fallback)
 }
 
+fn json_optional_color(value: &serde_json::Value, key: &str) -> Option<Color> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .and_then(Color::parse_css)
+}
+
 fn parse_session_highlights(json: &str) -> Option<Vec<SessionHighlightingData>> {
     serde_json::from_str::<serde_json::Value>(json)
         .ok()?
@@ -201,7 +208,7 @@ impl ChartInner {
                 "label_background_color",
                 defaults.label_background_color,
             ),
-            label_text_color: json_color(&value, "label_text_color", defaults.label_text_color),
+            label_text_color: json_optional_color(&value, "label_text_color"),
             show_label: value
                 .get("show_label")
                 .and_then(serde_json::Value::as_bool)

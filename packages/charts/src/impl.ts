@@ -19,7 +19,7 @@ import {
 import { nucleuscharts_error } from "./errors.js";
 import type { nucleuscharts_error_code } from "./errors.js";
 import type {
-  any_series_options, backend_status, bars_info, chart_api, chart_options, chart_state_v1, data_changed_handler, dbl_click_handler,
+  any_series_options, backend_status, bars_info, chart_api, chart_options, chart_state_v1, chart_value_snapshot, data_changed_handler, dbl_click_handler,
   deep_partial, drawing_api, drawing_created_handler, drawing_info, drawing_kind, drawing_options,
   drawing_point, drawing_tool_change_handler,
   feature_series_kind, frame_stats,
@@ -802,15 +802,20 @@ class series_impl implements series_api {
   }
   indicator_info(): indicator_info | null {
     const raw = JSON.parse(this.chart.wasm.series_indicator_info_json(this.id)) as
-      | { kind: indicator_info["kind"]; period: number; deviation: number | null; source: number; output_index: number }
+      | Omit<indicator_info, "source" | "volume_source"> & { source: number; volume_source: number | null }
       | null;
     if (raw === null) return null;
     return {
+      binding_id: raw.binding_id,
       kind: raw.kind,
+      parameters: raw.parameters,
       period: raw.period,
       deviation: raw.deviation,
       source: this.chart.series_handle(raw.source),
+      volume_source: raw.volume_source === null ? null : this.chart.series_handle(raw.volume_source),
+      output_name: raw.output_name,
       output_index: raw.output_index,
+      output_count: raw.output_count,
     };
   }
   subscribe_data_changed(handler: data_changed_handler): void {
@@ -2404,6 +2409,20 @@ export class chart_impl implements chart_api {
     return this.accessibility_handle;
   }
 
+  value_snapshot(logical_index?: number): chart_value_snapshot[] {
+    const raw = JSON.parse(this.wasm.value_snapshot_json(logical_index ?? Number.NaN)) as Array<
+      Omit<chart_value_snapshot, "series" | "kind"> & {
+        kind: series_kind | "feature";
+        feature_kind: feature_series_kind | null;
+      }
+    >;
+    return raw.map(({ feature_kind, ...entry }) => ({
+      ...entry,
+      series: this.series_handle(entry.series_id),
+      kind: entry.kind === "feature" ? feature_kind! : entry.kind,
+    }));
+  }
+
   /** Internal package hook used by the singleton accessibility controller. */
   set_accessibility_handle(handle: accessibility_handle | null): void {
     this.accessibility_handle = handle;
@@ -3179,23 +3198,28 @@ export class chart_impl implements chart_api {
   private build_params(x: number, y: number): mouse_event_params {
     const time = undef_to_null(this.wasm.coordinate_to_time(x));
     const logical = undef_to_null(this.wasm.coordinate_to_logical(x));
-    const flat = this.wasm.hover_data(x); // groups of [id, o, h, l, c]
+    const value_snapshot = logical === null ? [] : this.value_snapshot(logical);
     const series_data = new Map<series_api, ohlc_data | single_value_data>();
-    const t = time ?? 0;
-    for (let i = 0; i + 4 < flat.length; i += 5) {
-      const s = this.series_by_id.get(flat[i]!);
-      if (!s) continue;
-      const [o, h, l, c] = [flat[i + 1]!, flat[i + 2]!, flat[i + 3]!, flat[i + 4]!];
-      series_data.set(
-        s,
-        s.kind === "candlestick" || s.kind === "bar"
-          ? { time: t, open: o, high: h, low: l, close: c }
-          : { time: t, value: c },
-      );
+    // Preserve the compatibility map's historical topmost-first insertion order while the rich
+    // snapshot itself stays in canonical bottom-to-top series order.
+    for (let index = value_snapshot.length - 1; index >= 0; index -= 1) {
+      const entry = value_snapshot[index]!;
+      if (entry.time === null) continue;
+      if (entry.open !== null && entry.high !== null && entry.low !== null && entry.close !== null) {
+        series_data.set(entry.series, {
+          time: entry.time,
+          open: entry.open,
+          high: entry.high,
+          low: entry.low,
+          close: entry.close,
+        });
+      } else if (entry.value !== null) {
+        series_data.set(entry.series, { time: entry.time, value: entry.value });
+      }
     }
     const hovered_series = this.hover?.series_id != null ? this.series_handle(this.hover.series_id) : null;
     return {
-      time, logical, point: { x, y }, pane_index: this.pane_index_at(x, y), series_data,
+      time, logical, point: { x, y }, pane_index: this.pane_index_at(x, y), series_data, value_snapshot,
       hovered_series, hovered_object_id: this.hover?.object_id ?? null,
     };
   }
@@ -3240,6 +3264,7 @@ export class chart_impl implements chart_api {
     if (this.crosshair_subs.size === 0) return;
     const params: mouse_event_params = {
       time: null, logical: null, point: null, pane_index: null, series_data: new Map(),
+      value_snapshot: this.value_snapshot(),
       hovered_series: null, hovered_object_id: null,
     };
     for (const h of this.crosshair_subs) h(params);

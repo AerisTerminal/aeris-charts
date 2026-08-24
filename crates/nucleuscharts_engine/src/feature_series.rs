@@ -14,7 +14,8 @@ use nucleuscharts_core::style::{MARKET_DOWN_RGB, MARKET_UP_RGB};
 use nucleuscharts_render::color::Color;
 use std::mem::size_of;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FeatureSeriesKind {
     BrushableArea,
     DualRangeHistogram,
@@ -71,6 +72,20 @@ pub struct HeatmapCell {
     pub amount: f64,
     /// Host-resolved `cellShader` output. `None` uses the official default shader.
     pub color: Option<Color>,
+}
+
+impl HeatmapCell {
+    pub(crate) fn rendered_color(&self) -> Color {
+        self.color.unwrap_or_else(|| {
+            let amount = self.amount.clamp(0.0, 100.0);
+            Color::rgba(
+                0,
+                (100.0 + amount * 1.55).round().clamp(0.0, 255.0) as u8,
+                amount.round().clamp(0.0, 255.0) as u8,
+                ((0.2 + amount * 0.8).clamp(0.0, 1.0) * 255.0).round() as u8,
+            )
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -577,6 +592,8 @@ pub(crate) struct FeatureSeriesState {
     pub kind: FeatureSeriesKind,
     pub options: FeatureSeriesOptions,
     pub rows: Vec<FeatureRow>,
+    stacked_area_layers: Option<usize>,
+    stacked_area_value_rows: usize,
 }
 
 impl FeatureSeriesState {
@@ -587,6 +604,8 @@ impl FeatureSeriesState {
             kind,
             options,
             rows: Vec::new(),
+            stacked_area_layers: None,
+            stacked_area_value_rows: 0,
         }
     }
 
@@ -615,6 +634,72 @@ impl FeatureSeriesState {
 }
 
 impl ChartEngine {
+    pub(crate) fn feature_bar_color(&self, id: SeriesId, row: usize) -> Option<Color> {
+        let series = self.series_entry(id)?;
+        let feature = series.feature.as_ref()?;
+        let value = feature.rows.get(row)?.value.as_ref()?;
+        let options = &feature.options;
+        Some(match value {
+            FeatureValue::BrushableArea { .. } => {
+                let logical = self.data.plot(id).index_at(row)? as f64;
+                options
+                    .brush_ranges
+                    .iter()
+                    .find(|range| {
+                        let start = range.from.min(range.to);
+                        let end = range.from.max(range.to);
+                        logical >= start && logical < end
+                    })
+                    .map_or(options.line_color, |range| range.style.line_color)
+            }
+            FeatureValue::DualRangeHistogram { .. } => options.colors[0],
+            FeatureValue::GroupedBars { values } => {
+                options.colors[values.len().saturating_sub(1) % options.colors.len()]
+            }
+            FeatureValue::Heatmap { cells } => {
+                let projection = value.projection()[3];
+                cells
+                    .iter()
+                    .rev()
+                    .find(|cell| {
+                        let low = cell.low.min(cell.high);
+                        let high = cell.low.max(cell.high);
+                        projection >= low && projection <= high
+                    })
+                    .or_else(|| cells.last())?
+                    .rendered_color()
+            }
+            FeatureValue::HlcArea { .. } => options.close_line_color,
+            FeatureValue::PrettyHistogram { color, .. } => color.unwrap_or(options.color),
+            FeatureValue::RoundedCandles { close, .. } => {
+                let previous_close = self
+                    .data
+                    .plot(id)
+                    .last_non_whitespace_row_before(row)
+                    .and_then(|row| feature.rows.get(row))
+                    .and_then(|row| match row.value.as_ref()? {
+                        FeatureValue::RoundedCandles { close, .. } => Some(*close),
+                        _ => None,
+                    });
+                if previous_close.is_none_or(|previous| *close >= previous) {
+                    options.up_color
+                } else {
+                    options.down_color
+                }
+            }
+            FeatureValue::BackgroundShade { .. } => options.color,
+            FeatureValue::StackedArea { values } => {
+                options.stacked_area_colors
+                    [values.len().saturating_sub(1) % options.stacked_area_colors.len()]
+                .line
+            }
+            FeatureValue::StackedBars { values } => {
+                options.colors[values.len().saturating_sub(1) % options.colors.len()]
+            }
+            FeatureValue::WhiskerBox { .. } => options.whisker_color,
+        })
+    }
+
     pub fn add_feature_series(
         &mut self,
         kind: FeatureSeriesKind,
@@ -631,6 +716,7 @@ impl ChartEngine {
         kind: FeatureSeriesKind,
         options: FeatureSeriesOptionsPatch,
     ) -> bool {
+        let had_data = !self.data.plot(id).is_empty();
         let Some(series) = self
             .series
             .iter_mut()
@@ -642,6 +728,17 @@ impl ChartEngine {
         series.feature = Some(FeatureSeriesState::new(kind, options));
         series.custom_frame = Default::default();
         self.data.set_rows_count_as_data(id, true);
+        if had_data {
+            let cleared = self.install_series_data(
+                id,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            );
+            debug_assert!(cleared, "validated series must accept an empty replacement");
+        }
         self.invalidate_frame_series(id);
         true
     }
@@ -759,7 +856,22 @@ impl ChartEngine {
                 _ => ValidationError::UnknownSeries(id),
             })?;
         let input_was_empty = input.is_empty();
-        let (mut rows, report) = sanitize_feature_rows(kind, input);
+        let (mut rows, mut report) = sanitize_feature_rows(kind, input);
+        if kind == FeatureSeriesKind::StackedArea {
+            let expected_layers = rows.iter().find_map(|row| match row.value.as_ref()? {
+                FeatureValue::StackedArea { values } => Some(values.len()),
+                _ => None,
+            });
+            if let Some(expected_layers) = expected_layers {
+                let before = rows.len();
+                rows.retain(|row| match row.value.as_ref() {
+                    Some(FeatureValue::StackedArea { values }) => values.len() == expected_layers,
+                    _ => true,
+                });
+                report.dropped_invalid += before - rows.len();
+                report.accepted = rows.len();
+            }
+        }
         // An explicitly empty set clears the series. A non-empty payload with no valid rows is a
         // rejected transaction and must not erase previously accepted chart data.
         if !input_was_empty && rows.is_empty() && report.dropped_invalid > 0 {
@@ -795,6 +907,14 @@ impl ChartEngine {
             .series_entry_mut(id)
             .and_then(|series| series.feature.as_mut())
         {
+            feature.stacked_area_layers = rows.iter().find_map(|row| match row.value.as_ref()? {
+                FeatureValue::StackedArea { values } => Some(values.len()),
+                _ => None,
+            });
+            feature.stacked_area_value_rows = rows
+                .iter()
+                .filter(|row| matches!(row.value, Some(FeatureValue::StackedArea { .. })))
+                .count();
             feature.rows = rows;
         }
         self.invalidate_frame_series(id);
@@ -817,9 +937,47 @@ impl ChartEngine {
                 Err(SeriesIdError::Stale(id)) => ValidationError::StaleSeries(id),
                 _ => ValidationError::UnknownSeries(id),
             })?;
-        let (mut rows, report) = sanitize_feature_rows(kind, vec![point]);
+        let (mut rows, mut report) = sanitize_feature_rows(kind, vec![point]);
         let Some(row) = rows.pop() else {
             return Ok(report);
+        };
+        let stacked_update = if kind == FeatureSeriesKind::StackedArea {
+            let feature = self
+                .series_entry(id)
+                .and_then(|series| series.feature.as_ref())
+                .expect("validated feature series");
+            let replacing_value = feature
+                .rows
+                .binary_search_by_key(&row.time, |existing| existing.time)
+                .ok()
+                .is_some_and(|position| {
+                    matches!(
+                        feature.rows[position].value,
+                        Some(FeatureValue::StackedArea { .. })
+                    )
+                });
+            let incoming_layers = match row.value.as_ref() {
+                Some(FeatureValue::StackedArea { values }) => Some(values.len()),
+                _ => None,
+            };
+            let other_value_rows = feature
+                .stacked_area_value_rows
+                .saturating_sub(usize::from(replacing_value));
+            if other_value_rows > 0
+                && incoming_layers.is_some_and(|layers| {
+                    feature
+                        .stacked_area_layers
+                        .is_some_and(|expected| layers != expected)
+                })
+            {
+                report.accepted = 0;
+                report.dropped_invalid += 1;
+                return Ok(report);
+            }
+            let value_rows = other_value_rows + usize::from(incoming_layers.is_some());
+            Some((incoming_layers.or(feature.stacked_area_layers), value_rows))
+        } else {
+            None
         };
         let projection = row
             .value
@@ -846,6 +1004,10 @@ impl ChartEngine {
             {
                 Ok(position) => feature.rows[position] = row,
                 Err(position) => feature.rows.insert(position, row),
+            }
+            if let Some((layers, value_rows)) = stacked_update {
+                feature.stacked_area_layers = if value_rows > 0 { layers } else { None };
+                feature.stacked_area_value_rows = value_rows;
             }
         }
         let trimmed = self.enforce_series_cap(id);
@@ -906,6 +1068,16 @@ impl ChartEngine {
             .series_entry_mut(id)
             .and_then(|series| series.feature.as_mut())
         {
+            let removed_values = feature.rows[len.min(feature.rows.len())..]
+                .iter()
+                .filter(|row| matches!(row.value, Some(FeatureValue::StackedArea { .. })))
+                .count();
+            feature.stacked_area_value_rows = feature
+                .stacked_area_value_rows
+                .saturating_sub(removed_values);
+            if feature.stacked_area_value_rows == 0 {
+                feature.stacked_area_layers = None;
+            }
             feature.rows.truncate(len);
         }
     }
@@ -916,6 +1088,16 @@ impl ChartEngine {
             .and_then(|series| series.feature.as_mut())
         {
             let drop = feature.rows.len().saturating_sub(keep);
+            let removed_values = feature.rows[..drop]
+                .iter()
+                .filter(|row| matches!(row.value, Some(FeatureValue::StackedArea { .. })))
+                .count();
+            feature.stacked_area_value_rows = feature
+                .stacked_area_value_rows
+                .saturating_sub(removed_values);
+            if feature.stacked_area_value_rows == 0 {
+                feature.stacked_area_layers = None;
+            }
             feature.rows.drain(..drop);
         }
     }
@@ -1059,6 +1241,321 @@ mod tests {
         let (times, values) = chart.data.series_data(0).unwrap();
         assert_eq!(times, [1, 2]);
         assert_eq!(values[3], [9.0, 13.0]);
+    }
+
+    #[test]
+    fn feature_live_colors_and_snapshots_follow_the_rendered_projection() {
+        let close_color = Color::rgb(1, 2, 3);
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        chart.configure_feature_series(
+            0,
+            FeatureSeriesKind::HlcArea,
+            FeatureSeriesOptionsPatch {
+                close_line_color: Some(close_color),
+                ..FeatureSeriesOptionsPatch::default()
+            },
+        );
+        chart
+            .set_feature_series_data(
+                0,
+                vec![
+                    FeatureDataPoint {
+                        time: 1.0,
+                        value: Some(FeatureValue::HlcArea {
+                            high: 12.0,
+                            low: 8.0,
+                            close: 10.0,
+                        }),
+                    },
+                    FeatureDataPoint {
+                        time: 2.0,
+                        value: Some(FeatureValue::HlcArea {
+                            high: 13.0,
+                            low: 9.0,
+                            close: 11.0,
+                        }),
+                    },
+                ],
+            )
+            .unwrap();
+
+        assert_eq!(chart.feature_bar_color(0, 1), Some(close_color));
+        let snapshot = chart.value_snapshot(None).remove(0);
+        assert_eq!(snapshot.value, Some(11.0));
+        assert_eq!(
+            (snapshot.open, snapshot.high, snapshot.low, snapshot.close),
+            (None, None, None, None)
+        );
+        chart.set_price_scale_visible_range_for(0, crate::PriceScaleTarget::Right, 0.0, 20.0);
+        chart.time_scale.set_width(800.0);
+        chart.fit_content();
+        let frame = chart.build_frame();
+        assert!(
+            frame.panes[0].main.iter().any(|primitive| matches!(
+                primitive,
+                nucleuscharts_render::draw_list::Prim::HLine { color, .. }
+                    if *color == close_color
+            )),
+            "primitives: {:?}",
+            frame.panes[0].main
+        );
+        let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+        assert!(axis
+            .labels
+            .iter()
+            .any(|label| matches!(label.background, Some((.., color)) if color == close_color)));
+
+        let up = Color::rgb(4, 5, 6);
+        let down = Color::rgb(7, 8, 9);
+        chart.configure_feature_series(
+            0,
+            FeatureSeriesKind::RoundedCandles,
+            FeatureSeriesOptionsPatch {
+                up_color: Some(up),
+                down_color: Some(down),
+                ..FeatureSeriesOptionsPatch::default()
+            },
+        );
+        chart
+            .set_feature_series_data(
+                0,
+                vec![
+                    FeatureDataPoint {
+                        time: 1.0,
+                        value: Some(FeatureValue::RoundedCandles {
+                            open: 9.0,
+                            high: 11.0,
+                            low: 8.0,
+                            close: 10.0,
+                        }),
+                    },
+                    FeatureDataPoint {
+                        time: 2.0,
+                        value: None,
+                    },
+                    FeatureDataPoint {
+                        time: 3.0,
+                        value: Some(FeatureValue::RoundedCandles {
+                            open: 10.0,
+                            high: 10.0,
+                            low: 8.0,
+                            close: 9.0,
+                        }),
+                    },
+                ],
+            )
+            .unwrap();
+        assert_eq!(chart.feature_bar_color(0, 0), Some(up));
+        assert_eq!(chart.feature_bar_color(0, 2), Some(down));
+        chart.fit_content();
+        let frame = chart.build_frame();
+        assert!(frame.panes[0].main.iter().any(|primitive| matches!(
+            primitive,
+            nucleuscharts_render::draw_list::Prim::HLine { color, .. } if *color == down
+        )));
+        let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+        assert!(axis
+            .labels
+            .iter()
+            .any(|label| matches!(label.background, Some((.., color)) if color == down)));
+    }
+
+    #[test]
+    fn heatmap_live_color_uses_the_rendered_cell_shader() {
+        let shader_color = Color::rgb(20, 220, 120);
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        chart.configure_feature_series(
+            0,
+            FeatureSeriesKind::Heatmap,
+            FeatureSeriesOptionsPatch::default(),
+        );
+        chart
+            .set_feature_series_data(
+                0,
+                [1.0, 2.0]
+                    .into_iter()
+                    .map(|time| FeatureDataPoint {
+                        time,
+                        value: Some(FeatureValue::Heatmap {
+                            cells: vec![HeatmapCell {
+                                low: 8.0,
+                                high: 12.0,
+                                amount: 50.0,
+                                color: Some(shader_color),
+                            }],
+                        }),
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        assert_eq!(chart.feature_bar_color(0, 1), Some(shader_color));
+
+        chart.set_price_scale_visible_range_for(0, crate::PriceScaleTarget::Right, 0.0, 20.0);
+        chart.time_scale.set_width(800.0);
+        chart.fit_content();
+        let frame = chart.build_frame();
+        assert!(frame.panes[0].main.iter().any(|primitive| matches!(
+            primitive,
+            nucleuscharts_render::draw_list::Prim::HLine { color, .. }
+                if *color == shader_color
+        )));
+        let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+        assert!(axis
+            .labels
+            .iter()
+            .any(|label| matches!(label.background, Some((.., color)) if color == shader_color)));
+    }
+
+    #[test]
+    fn stacked_area_rejects_rows_that_cannot_share_rendered_layers() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        chart.configure_feature_series(
+            0,
+            FeatureSeriesKind::StackedArea,
+            FeatureSeriesOptionsPatch::default(),
+        );
+        let report = chart
+            .set_feature_series_data(
+                0,
+                vec![
+                    FeatureDataPoint {
+                        time: 1.0,
+                        value: Some(FeatureValue::StackedArea {
+                            values: vec![1.0, 2.0, 3.0],
+                        }),
+                    },
+                    FeatureDataPoint {
+                        time: 2.0,
+                        value: Some(FeatureValue::StackedArea {
+                            values: vec![4.0, 5.0],
+                        }),
+                    },
+                    FeatureDataPoint {
+                        time: 3.0,
+                        value: None,
+                    },
+                ],
+            )
+            .unwrap();
+        assert_eq!(report.accepted, 2);
+        assert_eq!(report.dropped_invalid, 1);
+        assert_eq!(chart.feature_series_data(0).unwrap().len(), 2);
+        assert_eq!(chart.value_snapshot(None)[0].value, Some(6.0));
+
+        let report = chart
+            .update_feature_series_data(
+                0,
+                FeatureDataPoint {
+                    time: 4.0,
+                    value: Some(FeatureValue::StackedArea {
+                        values: vec![6.0, 7.0],
+                    }),
+                },
+            )
+            .unwrap();
+        assert_eq!(report.accepted, 0);
+        assert_eq!(report.dropped_invalid, 1);
+        assert_eq!(chart.feature_series_data(0).unwrap().len(), 2);
+
+        assert_eq!(chart.series_pop(0, 1), Some(1));
+        let report = chart
+            .update_feature_series_data(
+                0,
+                FeatureDataPoint {
+                    time: 1.0,
+                    value: Some(FeatureValue::StackedArea {
+                        values: vec![8.0, 9.0],
+                    }),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            report.accepted, 1,
+            "the sole valued row can define a new schema"
+        );
+        assert_eq!(chart.series_pop(0, 1), Some(0));
+
+        let report = chart
+            .update_feature_series_data(
+                0,
+                FeatureDataPoint {
+                    time: 5.0,
+                    value: Some(FeatureValue::StackedArea {
+                        values: vec![1.0, 2.0, 3.0, 4.0],
+                    }),
+                },
+            )
+            .unwrap();
+        assert_eq!(report.accepted, 1, "pop resets an empty series' schema");
+        chart.set_series_max_points(0, Some(1));
+        chart
+            .update_feature_series_data(
+                0,
+                FeatureDataPoint {
+                    time: 6.0,
+                    value: None,
+                },
+            )
+            .unwrap();
+        let report = chart
+            .update_feature_series_data(
+                0,
+                FeatureDataPoint {
+                    time: 7.0,
+                    value: Some(FeatureValue::StackedArea {
+                        values: vec![10.0, 11.0],
+                    }),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            report.accepted, 1,
+            "retention resets an empty series' schema"
+        );
+    }
+
+    #[test]
+    fn feature_reconfiguration_clears_payload_and_canonical_projection_together() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        chart.configure_feature_series(
+            0,
+            FeatureSeriesKind::StackedArea,
+            FeatureSeriesOptionsPatch::default(),
+        );
+        chart
+            .set_feature_series_data(
+                0,
+                vec![FeatureDataPoint {
+                    time: 1.0,
+                    value: Some(FeatureValue::StackedArea {
+                        values: vec![1.0, 2.0, 3.0],
+                    }),
+                }],
+            )
+            .unwrap();
+
+        assert!(chart.configure_feature_series(
+            0,
+            FeatureSeriesKind::StackedArea,
+            FeatureSeriesOptionsPatch::default(),
+        ));
+        assert!(chart.feature_series_data(0).unwrap().is_empty());
+        assert!(chart.data.plot(0).is_empty());
+        assert_eq!(chart.value_snapshot(None)[0].value, None);
+
+        let report = chart
+            .update_feature_series_data(
+                0,
+                FeatureDataPoint {
+                    time: 2.0,
+                    value: Some(FeatureValue::StackedArea {
+                        values: vec![4.0, 5.0],
+                    }),
+                },
+            )
+            .unwrap();
+        assert_eq!(report.accepted, 1);
+        assert_eq!(chart.value_snapshot(None)[0].value, Some(9.0));
     }
 
     #[test]

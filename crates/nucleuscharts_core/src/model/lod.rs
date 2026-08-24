@@ -287,6 +287,42 @@ impl LodPyramid {
 }
 
 impl LodPyramidView<'_> {
+    /// Last non-whitespace source row strictly before `end`. The prefix is decomposed into at
+    /// most `LOD_FANOUT - 1` raw rows or summary nodes per hierarchy level, so trailing
+    /// whitespace cannot turn a latest/predecessor query into a history-length scan.
+    pub fn last_row_before(self, end: usize) -> Option<usize> {
+        let len = self.values.column(PlotValueIndex::Close).len();
+        let mut position = end.min(len);
+        while position > 0 {
+            let mut selected = None;
+            let mut group = LOD_FANOUT;
+            for level in 0..self.pyramid.levels.len() {
+                if group > position || !position.is_multiple_of(group) {
+                    break;
+                }
+                selected = Some((level, group));
+                let Some(next) = group.checked_mul(LOD_FANOUT) else {
+                    break;
+                };
+                group = next;
+            }
+            if let Some((level, group)) = selected {
+                let node = position / group - 1;
+                let row = self.pyramid.levels[level][node].last;
+                if row != NO_ROW {
+                    return Some(row as usize);
+                }
+                position -= group;
+            } else {
+                position -= 1;
+                if !self.values.is_whitespace_row(position) {
+                    return Some(position);
+                }
+            }
+        }
+        None
+    }
+
     /// Deepest summary level whose group fits within the average physical-pixel density. Level
     /// zero means the canonical raw path; level one aggregates `LOD_FANOUT` rows.
     pub fn selected_level(self, rows_per_pixel: f64) -> usize {
@@ -367,6 +403,23 @@ mod tests {
         assert_eq!(rows.iter().collect::<Vec<_>>(), vec![3, 17, 201, 276]);
         assert!(stats.summary_nodes > 0);
         assert!(stats.raw_rows < 2 * LOD_FANOUT);
+    }
+
+    #[test]
+    fn predecessor_lookup_skips_pathological_whitespace_with_the_pyramid() {
+        let mut data = vec![f64::NAN; LOD_FANOUT.pow(5) + 7];
+        data[3] = 12.0;
+        data[LOD_FANOUT.pow(3) + 2] = 34.0;
+        let mut pyramid = LodPyramid::default();
+        pyramid.rebuild(values(&data));
+        let view = pyramid.view(values(&data));
+
+        assert_eq!(
+            view.last_row_before(data.len()),
+            Some(LOD_FANOUT.pow(3) + 2)
+        );
+        assert_eq!(view.last_row_before(LOD_FANOUT.pow(3) + 2), Some(3));
+        assert_eq!(view.last_row_before(3), None);
     }
 
     #[test]

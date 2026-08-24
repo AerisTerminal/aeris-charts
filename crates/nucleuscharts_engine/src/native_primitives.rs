@@ -288,7 +288,7 @@ pub struct VerticalLineOptions {
     pub label_text: String,
     pub width: f64,
     pub label_background_color: Color,
-    pub label_text_color: Color,
+    pub label_text_color: Option<Color>,
     pub show_label: bool,
 }
 
@@ -413,7 +413,7 @@ impl Default for VerticalLineOptions {
             label_text: String::new(),
             width: 3.0,
             label_background_color: Color::rgb(0, 128, 0),
-            label_text_color: Color::rgb(255, 255, 255),
+            label_text_color: None,
             show_label: false,
         }
     }
@@ -2980,7 +2980,7 @@ mod tests {
                     label_text: "Event".into(),
                     width: 3.0,
                     label_background_color: label_background,
-                    label_text_color: label_text,
+                    label_text_color: Some(label_text),
                     show_label: true,
                 },
             )
@@ -3043,6 +3043,7 @@ mod tests {
         let mut chart = chart();
         let options = UserPriceAlertsOptions {
             symbol_name: "AAPL".into(),
+            color: Color::rgb(0xf0, 0xe6, 0x8c),
             ..UserPriceAlertsOptions::default()
         };
         let primitive = chart.add_user_price_alerts(0, options.clone()).unwrap();
@@ -3080,9 +3081,10 @@ mod tests {
         )));
         let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
         assert!(axis.labels.iter().any(|label| {
-            label
-                .background
-                .is_some_and(|(_, _, _, height, color)| height == 21.0 && color == options.color)
+            label.color == Color::rgb(0, 0, 0)
+                && label.background.is_some_and(|(_, _, _, height, color)| {
+                    height == 21.0 && color == options.color
+                })
         }));
 
         let alert = chart.user_price_alerts(primitive).unwrap()[0];

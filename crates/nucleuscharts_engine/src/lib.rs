@@ -290,7 +290,8 @@ impl TryFrom<u32> for PaneId {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SeriesKind {
     Candlestick,
     Bar,
@@ -410,6 +411,32 @@ pub struct SeriesDataPoint {
     pub high: f64,
     pub low: f64,
     pub close: f64,
+}
+
+/// One live series in a chart-wide value query. Latest mode resolves `logical_index` and `time`
+/// independently for each series; exact mode retains an entry with null values for gaps and
+/// whitespace. All formatting is resolved by the engine through the series' current formatter.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct SeriesValueSnapshot {
+    pub series_id: SeriesId,
+    pub kind: SeriesKind,
+    pub feature_kind: Option<FeatureSeriesKind>,
+    pub pane_index: usize,
+    pub price_scale_id: String,
+    pub logical_index: Option<i64>,
+    pub time: Option<i64>,
+    pub open: Option<f64>,
+    pub high: Option<f64>,
+    pub low: Option<f64>,
+    pub close: Option<f64>,
+    pub value: Option<f64>,
+    pub previous_value: Option<f64>,
+    pub formatted_open: Option<String>,
+    pub formatted_high: Option<String>,
+    pub formatted_low: Option<String>,
+    pub formatted_close: Option<String>,
+    pub formatted_value: Option<String>,
+    pub formatted_previous_value: Option<String>,
 }
 
 const SELECTION_ANCHOR_SPACING_CSS: f64 = 96.0;
@@ -535,8 +562,8 @@ pub struct PriceLine {
     pub axis_label_visible: bool,
     /// reference `axisLabelColor` (default `''`): label background; `None` follows the line color.
     pub axis_label_color: Option<String>,
-    /// reference `axisLabelTextColor` (default `''`): label text; `None` uses semantic foreground
-    /// against the label background (as the crosshair labels do).
+    /// reference `axisLabelTextColor` (default `''`): label text; `None` automatically selects
+    /// black or white for contrast against the effective label background.
     pub axis_label_text_color: Option<String>,
 }
 
@@ -596,9 +623,10 @@ pub struct SeriesEntry {
     pub price_line_source: u8,
     /// reference `priceLineWidth` in CSS px (default 1).
     pub price_line_width: f64,
-    /// reference `priceLineColor` (default `''`): `None` follows the last bar's color. The CSS
-    /// string is stored verbatim (reference `series.options()` returns the applied string); it is
-    /// parsed only at render time, falling back to the follow behavior when unparseable.
+    /// reference `priceLineColor` (default `''`): a valid color controls both the built-in live
+    /// line and complete last-value cluster; `None` follows the relevant bar/custom value color.
+    /// The CSS string is stored verbatim (reference `series.options()` returns the applied string);
+    /// it is parsed only at render time, falling back to the follow behavior when unparseable.
     pub price_line_color: Option<String>,
     /// reference `priceLineStyle` (default 1 = Dotted; the reference LineStyle numbering).
     pub price_line_style: u8,

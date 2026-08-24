@@ -748,10 +748,26 @@ impl ChartEngine {
             // reference custom-series colorer (series-bar-colorer.ts Custom arm): the series `color`
             // option (the data-item color wins in reference; the host folds those into the custom
             // frame values, so this arm is only the exhaustiveness fallback).
-            SeriesKind::Custom | SeriesKind::Feature => {
-                verbatim_color(&series.line_color, crate::DEFAULT_LINE_COLOR)
-            }
+            SeriesKind::Feature => self
+                .feature_bar_color(series.id, row)
+                .unwrap_or_else(|| verbatim_color(&series.line_color, crate::DEFAULT_LINE_COLOR)),
+            SeriesKind::Custom => verbatim_color(&series.line_color, crate::DEFAULT_LINE_COLOR),
         }
+    }
+
+    /// One effective color for a series' built-in live line and complete last-value cluster.
+    /// A valid explicit `price_line_color` wins; otherwise callers supply the resolved color for
+    /// the relevant row or custom-series frame value, preserving `price_line_source` semantics.
+    pub(crate) fn effective_series_live_color(
+        &self,
+        series: &crate::SeriesEntry,
+        resolved: Color,
+    ) -> Color {
+        series
+            .price_line_color
+            .as_deref()
+            .and_then(Color::parse_css)
+            .unwrap_or(resolved)
     }
 }
 

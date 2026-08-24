@@ -86,7 +86,7 @@ impl<'a> PlotValues<'a> {
         self.column(plot)[row]
     }
 
-    fn is_whitespace_row(self, row: usize) -> bool {
+    pub(crate) fn is_whitespace_row(self, row: usize) -> bool {
         match self {
             Self::Single(values) => values[row].is_nan(),
             Self::Ohlc(values) => values.iter().all(|column| column[row].is_nan()),
@@ -174,16 +174,18 @@ impl<'a> PlotListView<'a> {
     }
 
     pub fn last_non_whitespace_row(self, index: TimePointIndex) -> Option<usize> {
-        let mut row = self.search(index, MismatchDirection::NearestLeft)?;
-        loop {
-            if !self.is_whitespace_row(row) {
-                return Some(row);
-            }
-            if row == 0 {
-                return None;
-            }
-            row -= 1;
+        let row = self.search(index, MismatchDirection::NearestLeft)?;
+        self.last_non_whitespace_row_before(row + 1)
+    }
+
+    /// Last non-whitespace source row strictly before `end_row`.
+    pub fn last_non_whitespace_row_before(self, end_row: usize) -> Option<usize> {
+        if let Some(lod) = self.lod() {
+            return lod.last_row_before(end_row);
         }
+        (0..end_row.min(self.size()))
+            .rev()
+            .find(|&row| !self.is_whitespace_row(row))
     }
 
     pub fn first_non_whitespace_row(self, index: TimePointIndex) -> Option<usize> {

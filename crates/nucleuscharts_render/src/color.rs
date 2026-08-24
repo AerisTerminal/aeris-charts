@@ -99,6 +99,25 @@ impl Color {
         }
     }
 
+    /// Contrast text after compositing this color over an opaque surface. Opaque label colors
+    /// take the existing fast path; translucent labels follow the color users actually see.
+    pub fn contrast_text_over(&self, surface: Color) -> Color {
+        if self.a() == u8::MAX {
+            return self.contrast_text();
+        }
+        let alpha = self.a() as u32;
+        let inverse = u8::MAX as u32 - alpha;
+        let blend = |foreground: u8, background: u8| {
+            ((foreground as u32 * alpha + background as u32 * inverse + 127) / 255) as u8
+        };
+        Color::rgb(
+            blend(self.r(), surface.r()),
+            blend(self.g(), surface.g()),
+            blend(self.b(), surface.b()),
+        )
+        .contrast_text()
+    }
+
     /// Same hue at full opacity: RGB preserved, alpha forced to 0xFF. Used for the last-value
     /// cluster's chip backgrounds (title/price/countdown), which follow the series color but
     /// must never turn translucent when that color carries alpha (TradingView-style).
@@ -208,6 +227,19 @@ mod tests {
             Color::rgb(0, 0, 0)
         );
         assert_eq!(Color::rgb(0x08, 0x99, 0x81).to_hex(), "#089981");
+    }
+
+    #[test]
+    fn translucent_contrast_uses_the_composited_surface() {
+        let translucent_white = Color::rgba(255, 255, 255, 64);
+        assert_eq!(
+            translucent_white.contrast_text_over(Color::rgb(0, 0, 0)),
+            Color::rgb(255, 255, 255)
+        );
+        assert_eq!(
+            translucent_white.contrast_text_over(Color::rgb(255, 255, 255)),
+            Color::rgb(0, 0, 0)
+        );
     }
 
     #[test]

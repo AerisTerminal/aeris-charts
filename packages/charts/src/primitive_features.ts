@@ -148,6 +148,7 @@ export interface rectangle_drawing_tool_options extends Partial<drawing_options>
   fill_color?: string;
   preview_fill_color?: string;
   label_color?: string;
+  /** Omit to select black or white from the effective label background. */
   label_text_color?: string;
   show_labels?: boolean;
 }
@@ -164,7 +165,6 @@ const RECTANGLE_DEFAULTS = {
   fill_color: "rgba(200, 50, 100, 0.75)",
   preview_fill_color: "rgba(200, 50, 100, 0.25)",
   label_color: "rgba(200, 50, 100, 1)",
-  label_text_color: "#ffffff",
   show_labels: true,
 } as const;
 
@@ -180,7 +180,7 @@ function normalize_rectangle_options(
     show_labels: options.show_labels ?? RECTANGLE_DEFAULTS.show_labels,
     axis_bands_visible: options.axis_bands_visible ?? true,
     label_color: options.label_color ?? options.color ?? RECTANGLE_DEFAULTS.label_color,
-    label_text_color: options.label_text_color ?? RECTANGLE_DEFAULTS.label_text_color,
+    label_text_color: options.label_text_color,
     snap_time_to_data: options.snap_time_to_data ?? true,
   };
 }
@@ -359,6 +359,7 @@ export interface vertical_line_options {
   label_text?: string;
   width?: number;
   label_background_color?: string;
+  /** Omit to select black or white from the effective label background. */
   label_text_color?: string;
   show_label?: boolean;
 }

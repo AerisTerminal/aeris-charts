@@ -13,6 +13,13 @@ entry point and `./design.css` are the only npm export paths. The supported root
   `chart.price_scale()`/`pane.price_scale()`, and series scale identity/rebinding;
 - built-in series, indicators, drawing kinds, options, themes, data ingestion, interactions,
   subscriptions, screenshots, and lifecycle operations declared by those handles;
+- chart-wide engine value queries through `chart.value_snapshot(logical_index?)`, including every
+  live series' handle/ID, current kind, pane/scale placement, engine-owned exact or independently
+  latest values, predecessor value, and formatted fields; `mouse_event_params.value_snapshot`
+  carries the same records and restores latest values on crosshair leave while legacy `series_data`
+  remains valued-only;
+- additive complete indicator lineage metadata: stable binding ID, structured parameters, source and
+  optional VWAP volume source, and stable output name/index/count, while legacy fields remain;
 - first-party broker-neutral trading state, instant/manual confirmation, previews, hit testing,
   semantic style, and typed intent subscriptions exposed by `chart.trading()`;
 - default chart accessibility, its additive `chart.accessibility()` singleton handle, compatibility
@@ -28,6 +35,22 @@ entry point and `./design.css` are the only npm export paths. The supported root
 Generated `wasm-bindgen` classes, methods reachable only through implementation objects, telemetry,
 benchmark counters, demo globals, fixtures, and test hooks are internal even when JavaScript can
 inspect them at runtime. `drawings_json()` is an internal inspection shape, not persistence.
+
+`value_snapshot()` performs no history export. With no argument it resolves each engine-owned
+series' own latest non-whitespace logical index/time. With an integer argument it performs exact
+merged-logical lookup; every live series remains in the array, and a missing or whitespace value has
+null data rather than borrowing a neighbor. OHLC series populate `open`, `high`, `low`, and `close`;
+scalar series populate `value`; `previous_value` is the prior same-series non-whitespace close/value.
+Matching formatted fields use that series' current formatter. Host applications remain responsible
+for symbol/exchange metadata, volume-series association outside a VWAP binding, bar/day changes,
+session calendars, visibility settings, and legend DOM.
+
+Engine-owned advanced feature series expose their documented scalar price projection through
+`value`, preserving the legacy scalar `series_data` shape. Experimental custom-series values are
+computed by arbitrary host callbacks during rendering rather than stored as canonical engine data.
+Their snapshot record is therefore null for exact-index queries and until a frame records a value;
+latest mode exposes only the most recently recorded visible-frame value and may remain stale while
+the series is not rendered.
 
 The declaration manifest at `packages/charts/api/public-api-v1.json` records every supported
 declaration file. CI runs `npm run check:api`; after deliberate review, update it with
