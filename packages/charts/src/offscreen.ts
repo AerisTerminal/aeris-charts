@@ -14,6 +14,7 @@ import type {
   chart_options,
   deep_partial,
   frame_stats,
+  ingestion_diagnostics,
   ohlc_columns,
   series_kind,
   series_data,
@@ -144,6 +145,7 @@ export class offscreen_chart {
   private primary_adopted = false;
   private drag_pointer_id: number | null = null;
   private pinch_active = false;
+  private last_ingestion: ingestion_diagnostics | null = null;
   private removed = false;
   private width: number;
   private height: number;
@@ -185,6 +187,17 @@ export class offscreen_chart {
   backend_status(): Readonly<backend_status> {
     this.assert_live();
     return Object.freeze(JSON.parse(this.wasm.backend_status_json()) as backend_status);
+  }
+
+  /** Diagnostics for the most recent worker-side data ingestion. */
+  last_ingestion_diagnostics(): ingestion_diagnostics | null {
+    this.assert_live();
+    return this.last_ingestion;
+  }
+
+  private record_ingestion(json: string | undefined): boolean {
+    this.last_ingestion = json === undefined ? null : JSON.parse(json) as ingestion_diagnostics;
+    return this.last_ingestion?.status !== "rejected";
   }
 
   /** Subscribe to runtime WebGPU → Canvas2D fallback. The owner should reveal the HTML canvas
@@ -234,9 +247,9 @@ export class offscreen_chart {
         "set_data_typed() does not apply to structured advanced-series payloads",
       );
     }
-    this.wasm.set_series_data_typed(
+    if (!this.record_ingestion(this.wasm.set_series_data_typed(
       series_id, columns.times, columns.open, columns.high, columns.low, columns.close,
-    );
+    ))) return;
     this.render();
   }
 
@@ -248,9 +261,9 @@ export class offscreen_chart {
         "update_typed() does not apply to structured advanced-series payloads",
       );
     }
-    this.wasm.update_series_bars_typed(
+    if (!this.record_ingestion(this.wasm.update_series_bars_typed(
       series_id, columns.times, columns.open, columns.high, columns.low, columns.close,
-    );
+    ))) return;
     this.render();
   }
 
@@ -258,17 +271,17 @@ export class offscreen_chart {
   set_feature_data(data: readonly series_data[], series_id = 0): void {
     this.assert_live();
     const converted = data.map((item) => ({ ...item, time: time_to_utc_seconds(item.time) }));
-    this.wasm.set_feature_series_data(series_id, converted);
+    if (!this.record_ingestion(this.wasm.set_feature_series_data(series_id, converted))) return;
     this.render();
   }
 
   /** Append or replace one structured advanced-series row in a worker chart. */
   update_feature(item: series_data, series_id = 0): void {
     this.assert_live();
-    this.wasm.update_feature_series_item(
+    if (!this.record_ingestion(this.wasm.update_feature_series_item(
       series_id,
       { ...item, time: time_to_utc_seconds(item.time) },
-    );
+    ))) return;
     this.render();
   }
 

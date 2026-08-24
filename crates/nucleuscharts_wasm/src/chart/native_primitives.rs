@@ -1,6 +1,7 @@
 //! Browser-boundary parsing for first-class engine-owned financial primitives.
 
 use super::*;
+use nucleuscharts_core::model::data_validation::validate_timestamp;
 use nucleuscharts_engine::{
     AccessibilityFocusOptions, AlertCrossingDirection, AnchoredTextHorizontalAlign,
     AnchoredTextOptions, AnchoredTextVerticalAlign, BandsIndicatorOptions, DeltaTooltipOptions,
@@ -33,19 +34,13 @@ fn parse_session_highlights(json: &str) -> Option<Vec<SessionHighlightingData>> 
         .as_array()?
         .iter()
         .map(|item| {
-            let time = item.get("time")?.as_f64()?;
-            if !time.is_finite() || time.fract() != 0.0 {
-                return None;
-            }
+            let time = validate_timestamp(item.get("time")?.as_f64()?).ok()?;
             let color = item
                 .get("color")
                 .and_then(serde_json::Value::as_str)
                 .and_then(Color::parse_css)
                 .unwrap_or(Color::rgba(0, 0, 0, 0));
-            Some(SessionHighlightingData {
-                time: time as i64,
-                color,
-            })
+            Some(SessionHighlightingData { time, color })
         })
         .collect()
 }
@@ -95,10 +90,7 @@ fn parse_overlay_price_scale_options(json: &str) -> Option<OverlayPriceScaleOpti
 
 fn parse_volume_profile(json: &str) -> Option<VolumeProfileData> {
     let value: serde_json::Value = serde_json::from_str(json).ok()?;
-    let time = value.get("time")?.as_f64()?;
-    if !time.is_finite() || time.fract() != 0.0 {
-        return None;
-    }
+    let time = validate_timestamp(value.get("time")?.as_f64()?).ok()?;
     let width = value.get("width")?.as_f64()?;
     let profile = value
         .get("profile")?
@@ -112,7 +104,7 @@ fn parse_volume_profile(json: &str) -> Option<VolumeProfileData> {
         })
         .collect::<Option<Vec<_>>>()?;
     Some(VolumeProfileData {
-        time: time as i64,
+        time,
         profile,
         width,
     })
@@ -184,9 +176,9 @@ impl ChartInner {
         time: f64,
         options_json: &str,
     ) -> u32 {
-        if !time.is_finite() || time.fract() != 0.0 {
+        let Ok(time) = validate_timestamp(time) else {
             return 0;
-        }
+        };
         let value: serde_json::Value = match serde_json::from_str(options_json) {
             Ok(value) => value,
             Err(_) => return 0,
@@ -215,7 +207,7 @@ impl ChartInner {
                 .unwrap_or(defaults.show_label),
         };
         self.engine
-            .add_vertical_line(series_id, time as i64, options)
+            .add_vertical_line(series_id, time, options)
             .unwrap_or(0)
     }
 
@@ -365,13 +357,12 @@ impl ChartInner {
         second_price: f64,
         options_json: &str,
     ) -> u32 {
-        if !first_time.is_finite()
-            || first_time.fract() != 0.0
-            || !second_time.is_finite()
-            || second_time.fract() != 0.0
-        {
+        let (Ok(first_time), Ok(second_time)) = (
+            validate_timestamp(first_time),
+            validate_timestamp(second_time),
+        ) else {
             return 0;
-        }
+        };
         let value: serde_json::Value = match serde_json::from_str(options_json) {
             Ok(value) => value,
             Err(_) => return 0,
@@ -380,9 +371,9 @@ impl ChartInner {
         self.engine
             .add_trend_line(
                 series_id,
-                first_time as i64,
+                first_time,
                 first_price,
-                second_time as i64,
+                second_time,
                 second_price,
                 TrendLineOptions {
                     line_color: json_color(&value, "line_color", defaults.line_color),
@@ -587,9 +578,9 @@ impl ChartInner {
         title: &str,
         crossing_direction: &str,
     ) -> u32 {
-        if !start.is_finite() || start.fract() != 0.0 || !end.is_finite() || end.fract() != 0.0 {
+        let (Ok(start), Ok(end)) = (validate_timestamp(start), validate_timestamp(end)) else {
             return 0;
-        }
+        };
         let direction = match crossing_direction {
             "up" => AlertCrossingDirection::Up,
             "down" => AlertCrossingDirection::Down,
@@ -599,8 +590,8 @@ impl ChartInner {
             .add_expiring_price_alert(
                 primitive_id,
                 price,
-                start as i64,
-                end as i64,
+                start,
+                end,
                 title.to_string(),
                 direction,
             )
@@ -623,11 +614,11 @@ impl ChartInner {
         value: f64,
         now_ms: f64,
     ) -> f64 {
-        if !time.is_finite() || time.fract() != 0.0 {
+        let Ok(time) = validate_timestamp(time) else {
             return -1.0;
-        }
+        };
         self.engine
-            .refresh_expiring_price_alerts(primitive_id, time as i64, value, now_ms)
+            .refresh_expiring_price_alerts(primitive_id, time, value, now_ms)
             .unwrap_or(-1.0)
     }
 

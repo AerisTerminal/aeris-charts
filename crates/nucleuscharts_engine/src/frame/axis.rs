@@ -41,7 +41,7 @@ pub(crate) fn median_bar_interval(times: &[i64]) -> Option<f64> {
     let tail = &times[times.len().saturating_sub(11)..];
     let mut deltas: Vec<i64> = tail
         .windows(2)
-        .map(|w| w[1] - w[0])
+        .filter_map(|w| w[1].checked_sub(w[0]))
         .filter(|&d| d > 0)
         .collect();
     if deltas.is_empty() {
@@ -70,8 +70,89 @@ pub(crate) fn format_countdown_remaining(remaining: f64) -> String {
             secs % 60
         )
     } else {
-        format!("{}d {}h", secs / 86400, secs % 86400 / 3600)
+        let days = secs / 86400;
+        if days > 9999 {
+            "9999d+".to_string()
+        } else {
+            format!("{}d {}h", days, secs % 86400 / 3600)
+        }
     }
+}
+
+fn countdown_layout_key(remaining: f64) -> usize {
+    let secs = remaining.max(0.0).floor() as u64;
+    if secs < 3600 {
+        1
+    } else if secs < 86400 {
+        2
+    } else {
+        let days = secs / 86400;
+        if days > 9999 {
+            3
+        } else {
+            let day_digits = if days == 0 {
+                1
+            } else {
+                days.ilog10() as usize + 1
+            };
+            let hours = secs % 86400 / 3600;
+            let hour_digits = if hours < 10 { 1 } else { 2 };
+            100 + day_digits * 10 + hour_digits
+        }
+    }
+}
+
+fn countdown_text_width<F>(text: &str, measure: &F) -> f64
+where
+    F: Fn(&str) -> f64,
+{
+    let mut width = measure(text);
+    for digit in '0'..='9' {
+        let candidate: String = text
+            .chars()
+            .map(|character| {
+                if character.is_ascii_digit() {
+                    digit
+                } else {
+                    character
+                }
+            })
+            .collect();
+        width = width.max(measure(&candidate));
+    }
+    width
+}
+
+fn fit_axis_text<F>(text: &str, max_width: f64, measure: &F) -> Option<String>
+where
+    F: Fn(&str) -> f64,
+{
+    if max_width <= 0.0 {
+        return None;
+    }
+    if measure(text) <= max_width {
+        return Some(text.to_string());
+    }
+    const ELLIPSIS: &str = "...";
+    if measure(ELLIPSIS) > max_width {
+        return None;
+    }
+
+    let boundaries: Vec<usize> = text.char_indices().map(|(index, _)| index).collect();
+    let mut low = 0;
+    let mut high = boundaries.len();
+    while low < high {
+        let middle = (low + high).div_ceil(2);
+        let end = boundaries.get(middle).copied().unwrap_or(text.len());
+        let candidate = format!("{}{}", &text[..end], ELLIPSIS);
+        if measure(&candidate) <= max_width {
+            low = middle;
+        } else {
+            high = middle - 1;
+        }
+    }
+    let end = boundaries.get(low).copied().unwrap_or(text.len());
+    Some(format!("{}{}", &text[..end], ELLIPSIS))
 }
 
 /// Minimal port of reference price-axis-widget.ts `_fixLabelOverlap` + `recalculateOverlapping`
@@ -340,17 +421,6 @@ impl ChartEngine {
         self.format_scale_value(scale, value)
     }
 
-    /// Time-axis tick label, honoring a host `tickMarkFormatter` when installed. Month
-    /// labels use the locale month-name table (reference `localization.locale`).
-    pub(super) fn format_time_tick(&self, ts: i64, kind: TickMarkType) -> String {
-        if let Some(f) = &self.tick_mark_formatter_fn {
-            if let Some(s) = f(ts, kind as u8) {
-                return s;
-            }
-        }
-        format_tick_label_with(ts, kind, &self.month_names)
-    }
-
     /// Crosshair time label, honoring a host `timeFormatter` when installed. Otherwise the
     /// engine's `localization.dateFormat` pattern with the locale month-name table (reference
     /// chart-options-defaults.ts:34-37).
@@ -565,8 +635,21 @@ impl ChartEngine {
                 }
                 let kind =
                     weight_to_tick_mark_type(weight, self.time_visible, self.seconds_visible);
+                let custom_text = self
+                    .tick_mark_formatter_fn
+                    .as_ref()
+                    .and_then(|formatter| formatter(ts, kind as u8));
+                let built_in = custom_text.is_none();
+                let text = custom_text
+                    .unwrap_or_else(|| format_tick_label_with(ts, kind, &self.month_names));
+                if kind == TickMarkType::Year
+                    && built_in
+                    && text.chars().count() > self.tick_mark_max_character_length as usize
+                {
+                    continue;
+                }
                 out.labels.push(AxisLabel {
-                    text: self.format_time_tick(ts, kind),
+                    text,
                     x,
                     y: self.pane_h + 1.0 + 5.0 + 3.0 + font_size / 2.0,
                     color: layout_text_color,
@@ -935,11 +1018,15 @@ impl ChartEngine {
         let mut max_text_width = frame
             .labels
             .iter()
-            // Reference optimalWidth measures ticks and ordinary back labels. The smaller
-            // Nucleus countdown extension is the exception: it shares the already-negotiated
-            // price chip width instead of leaving permanent blank space on the whole scale.
-            .filter(|label| label.align == wanted_align && label.font_scale == 1.0)
-            .map(|label| measure(&label.text) + label.measure_extra)
+            .filter(|label| label.align == wanted_align)
+            .map(|label| {
+                let text_width = if label.font_scale == COUNTDOWN_FONT_SCALE {
+                    countdown_text_width(&label.text, &measure)
+                } else {
+                    measure(&label.text)
+                };
+                text_width * label.font_scale + label.measure_extra
+            })
             .fold(0.0_f64, f64::max);
         // reference optimalWidth reserves room for the crosshair label via a STATIC worst-case
         // sample (never the live label): the top/bottom prices snapped outward with a
@@ -1064,6 +1151,12 @@ impl ChartEngine {
                         conversion_scale,
                         conversion_scale.price_to_logical_value(value, base),
                     )));
+                }
+                if series.countdown_visible {
+                    if let Some(countdown) = self.series_countdown_text(series.id) {
+                        text_width = text_width
+                            .max(countdown_text_width(&countdown, &measure) * COUNTDOWN_FONT_SCALE);
+                    }
                 }
                 for line in &series.price_lines {
                     if !line.axis_label_visible {
@@ -1721,7 +1814,11 @@ impl ChartEngine {
         // The title chip shares the main label color by default (matching the price and
         // countdown chips).
         let chip_color = label.color;
-        let title_w = label.title.as_deref().map(measure);
+        let fitted_title = label
+            .title
+            .as_deref()
+            .and_then(|title| fit_axis_text(title, (self.pane_w - 10.0).max(0.0), measure));
+        let title_w = fitted_title.as_deref().map(measure);
         let chip_w = title_w.map(|w| w + 10.0).unwrap_or(0.0);
         let price_w = label.price_text.as_deref().map(measure).unwrap_or(0.0);
         let countdown_w = label
@@ -1780,7 +1877,7 @@ impl ChartEngine {
             AxisLabelCorners::LEFT
         };
         // Title chip: outside the strip, a small standalone rounded box next to the border.
-        if let (Some(title), Some(_)) = (&label.title, title_w) {
+        if let (Some(title), Some(_)) = (&fitted_title, title_w) {
             let chip_x = if right_strip {
                 border_x - chip_w
             } else {
@@ -1883,8 +1980,7 @@ impl ChartEngine {
     /// at zero and formatted by magnitude. The interval is the median of the last up-to-10
     /// inter-bar deltas of the series' own bar times (fallback: the last delta). `None` (the row
     /// hides) with fewer than two bars or no installed host clock (`now_override`).
-    pub(crate) fn series_countdown_text(&self, id: SeriesId) -> Option<String> {
-        let now = self.now_override?;
+    fn series_countdown_remaining_at(&self, id: SeriesId, now: f64) -> Option<f64> {
         let plot = self.data.plot(id);
         // Only the tail (up to 11 bars → 10 deltas) feeds the inference.
         let times = self.data.merged_times();
@@ -1894,7 +1990,20 @@ impl ChartEngine {
             .collect();
         let interval = median_bar_interval(&tail_times)?;
         let last_time = *tail_times.last()?;
-        let remaining = (last_time as f64 + interval - now).max(0.0);
+        Some((last_time as f64 + interval - now).max(0.0))
+    }
+
+    pub(crate) fn series_countdown_layout_key_at(
+        &self,
+        id: SeriesId,
+        now: Option<f64>,
+    ) -> Option<usize> {
+        let remaining = self.series_countdown_remaining_at(id, now?)?;
+        Some(countdown_layout_key(remaining))
+    }
+
+    pub(crate) fn series_countdown_text(&self, id: SeriesId) -> Option<String> {
+        let remaining = self.series_countdown_remaining_at(id, self.now_override?)?;
         Some(format_countdown_remaining(remaining))
     }
 

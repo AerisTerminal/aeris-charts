@@ -1004,10 +1004,13 @@ impl PrimitiveConverters {
         // `time_to_x(time)`: bitmap x for an exact UTC-seconds bar time, else `null` (reference
         // `timeToCoordinate` does not snap to the nearest bar).
         let time_to_x = Closure::wrap(Box::new(move |time: f64| {
-            if !time.is_finite() || times.is_empty() {
+            let Ok(time) = nucleuscharts_core::model::data_validation::validate_timestamp(time)
+            else {
+                return JsValue::NULL;
+            };
+            if times.is_empty() {
                 return JsValue::NULL;
             }
-            let time = time as i64;
             let index = times.partition_point(|&point| point < time);
             if index >= times.len() || times[index] != time {
                 return JsValue::NULL;

@@ -154,6 +154,33 @@ fn rejected_diagnostics_json(reason: impl core::fmt::Display) -> String {
     .to_string()
 }
 
+fn rejected_validation_diagnostics_json(
+    error: nucleuscharts_core::model::data_validation::ValidationError,
+) -> String {
+    use nucleuscharts_core::model::data_validation::{TimestampErrorCategory, ValidationError};
+
+    let (dropped_invalid, dropped_non_finite, dropped_out_of_range) = match &error {
+        ValidationError::InvalidTimestamp { error, .. } => (
+            1,
+            usize::from(error.category == TimestampErrorCategory::NonFinite),
+            usize::from(error.category == TimestampErrorCategory::OutOfRange),
+        ),
+        _ => (0, 0, 0),
+    };
+    serde_json::json!({
+        "status": "rejected",
+        "accepted": 0,
+        "dropped_invalid": dropped_invalid,
+        "dropped_non_finite": dropped_non_finite,
+        "dropped_out_of_range": dropped_out_of_range,
+        "deduplicated": 0,
+        "reordered": false,
+        "semantic_anomalies": 0,
+        "reason": error.to_string(),
+    })
+    .to_string()
+}
+
 fn trading_result_json(result: Result<(), nucleuscharts_engine::ChartError>) -> String {
     match result {
         Ok(()) => r#"{"ok":true}"#.to_string(),
@@ -1405,8 +1432,10 @@ impl NucleusChart {
     ) -> bool {
         let time = if time.is_nan() {
             None
-        } else if time.is_finite() && time.fract() == 0.0 {
-            Some(time as i64)
+        } else if let Ok(time) =
+            nucleuscharts_core::model::data_validation::validate_timestamp(time)
+        {
+            Some(time)
         } else {
             return false;
         };
@@ -2330,14 +2359,14 @@ impl NucleusChart {
     /// Replace a custom series' items (reference `ISeriesApi.setData`): a JS array of `{time, ...}`
     /// objects (times in UTC seconds). The raw items are stored host-side verbatim; their
     /// times enter the engine as whitespace-style rows. Call `render()` after.
-    pub fn set_custom_series_data(&mut self, id: u32, items: js_sys::Array) {
-        self.inner.borrow_mut().set_custom_series_data(id, items);
+    pub fn set_custom_series_data(&mut self, id: u32, items: js_sys::Array) -> Option<String> {
+        self.inner.borrow_mut().set_custom_series_data(id, items)
     }
 
     /// Streaming update of a custom series (reference `ISeriesApi.update`): append a new time or
     /// replace the item at an existing one. Call `render()` after.
-    pub fn update_custom_series_item(&mut self, id: u32, item: JsValue) {
-        self.inner.borrow_mut().update_custom_series_item(id, item);
+    pub fn update_custom_series_item(&mut self, id: u32, item: JsValue) -> Option<String> {
+        self.inner.borrow_mut().update_custom_series_item(id, item)
     }
 
     /// The custom series' raw items aligned with the engine rows (post-sanitize order),

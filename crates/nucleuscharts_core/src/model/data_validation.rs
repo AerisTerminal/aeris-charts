@@ -13,15 +13,17 @@
 //!
 //! Repair policy, in order:
 //! 1. **Length mismatch** between the time and value columns is unrecoverable → [`Err`].
-//! 2. **Non-finite / out-of-safe-range** rows (NaN, ±Inf, |v| beyond [`MAX_SAFE_VALUE`], or a
-//!    non-finite time) are dropped and counted — **except** a row whose four values are all
+//! 2. **Invalid timestamps** reject the complete batch. Times must be finite, integral UTC
+//!    seconds in the inclusive years 0000..9999 range.
+//! 3. **Non-finite / out-of-safe-range values** (NaN, ±Inf, or |v| beyond [`MAX_SAFE_VALUE`])
+//!    are dropped and counted — **except** a row whose four values are all
 //!    NaN, which is kept as an explicit **whitespace** row (the reference's `{time}`-only item,
 //!    data-consumer.ts `isWhitespaceData`): a real bar never has all four NaN, and for
 //!    single-value series a NaN value is whitespace. Whitespace rows occupy their time point
 //!    but draw nothing; genuinely malformed rows (a partial NaN set, ±Inf, out-of-range) are
 //!    still dropped.
-//! 3. **Unordered** rows are stably sorted by time (`reordered` flagged).
-//! 4. **Duplicate** timestamps collapse **last-wins** (the last occurrence in the *source*
+//! 4. **Unordered** rows are stably sorted by time (`reordered` flagged).
+//! 5. **Duplicate** timestamps collapse **last-wins** (the last occurrence in the *source*
 //!    input for that timestamp survives — matching a streaming `update()` overwriting a bar).
 
 /// the reference's safe magnitude bound (`data-validators.ts`): `Number.MAX_SAFE_INTEGER / 100`.
@@ -29,13 +31,118 @@ pub const MAX_SAFE_VALUE: f64 = 9_007_199_254_740_991.0 / 100.0;
 /// Symmetric lower bound.
 pub const MIN_SAFE_VALUE: f64 = -MAX_SAFE_VALUE;
 
+/// Earliest supported whole UTC second: 0000-01-01T00:00:00Z.
+pub const MIN_TIMESTAMP: i64 = -62_167_219_200;
+/// Latest supported whole UTC second: 9999-12-31T23:59:59Z.
+pub const MAX_TIMESTAMP: i64 = 253_402_300_799;
+
+/// Compact reason an input cannot be used as a canonical timestamp.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimestampErrorCategory {
+    NonFinite,
+    Fractional,
+    OutOfRange,
+}
+
+/// A likely unit used by a timestamp that is outside the supported seconds range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimestampUnit {
+    Milliseconds,
+    Microseconds,
+    Nanoseconds,
+}
+
+impl TimestampUnit {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Milliseconds => "milliseconds",
+            Self::Microseconds => "microseconds",
+            Self::Nanoseconds => "nanoseconds",
+        }
+    }
+}
+
+/// Structured timestamp failure with an optional wrong-unit hint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimestampError {
+    pub category: TimestampErrorCategory,
+    pub likely_unit: Option<TimestampUnit>,
+}
+
+impl core::fmt::Display for TimestampError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "expected a finite whole number of UTC seconds in the inclusive range {MIN_TIMESTAMP}..{MAX_TIMESTAMP}"
+        )?;
+        match self.category {
+            TimestampErrorCategory::NonFinite => write!(f, "; received a non-finite value"),
+            TimestampErrorCategory::Fractional => write!(f, "; received fractional seconds"),
+            TimestampErrorCategory::OutOfRange => {
+                write!(f, "; received a value outside the supported range")?;
+                if let Some(unit) = self.likely_unit {
+                    write!(
+                        f,
+                        "; the value appears to be {}, convert it to UTC seconds before ingestion (timestamps are not auto-converted)",
+                        unit.name()
+                    )?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Validate one numeric timestamp without truncating or converting it.
+pub fn validate_timestamp(time: f64) -> Result<i64, TimestampError> {
+    if !time.is_finite() {
+        return Err(TimestampError {
+            category: TimestampErrorCategory::NonFinite,
+            likely_unit: None,
+        });
+    }
+    if time.fract() != 0.0 {
+        return Err(TimestampError {
+            category: TimestampErrorCategory::Fractional,
+            likely_unit: None,
+        });
+    }
+    if !(MIN_TIMESTAMP as f64..=MAX_TIMESTAMP as f64).contains(&time) {
+        let likely_unit = [
+            (1_000.0, 1_000_000_000_000.0, TimestampUnit::Milliseconds),
+            (
+                1_000_000.0,
+                1_000_000_000_000_000.0,
+                TimestampUnit::Microseconds,
+            ),
+            (
+                1_000_000_000.0,
+                1_000_000_000_000_000_000.0,
+                TimestampUnit::Nanoseconds,
+            ),
+        ]
+        .into_iter()
+        .find_map(|(scale, minimum_magnitude, unit)| {
+            let seconds = time / scale;
+            (time.abs() >= minimum_magnitude
+                && (MIN_TIMESTAMP as f64..=MAX_TIMESTAMP as f64).contains(&seconds))
+            .then_some(unit)
+        });
+        return Err(TimestampError {
+            category: TimestampErrorCategory::OutOfRange,
+            likely_unit,
+        });
+    }
+    Ok(time as i64)
+}
+
 /// What the sanitizer had to change to make the data ingestible.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ValidationReport {
-    /// Rows dropped for a non-finite / out-of-range time or value.
+    /// Rows dropped for a non-finite or out-of-range value. Invalid times reject the transaction.
     pub dropped_invalid: usize,
-    /// Invalid rows dropped specifically because a time or value was NaN/infinite (excluding an
-    /// all-NaN whitespace row).
+    /// Invalid rows dropped specifically because a value was NaN/infinite (excluding an all-NaN
+    /// whitespace row).
     pub dropped_non_finite: usize,
     /// Invalid rows dropped because a finite value exceeded the supported safe range.
     pub dropped_out_of_range: usize,
@@ -67,6 +174,8 @@ pub enum ValidationError {
     UnknownSeries(u32),
     /// The caller supplied an identity whose series has already been removed.
     StaleSeries(u32),
+    /// A timestamp failed the shared whole-UTC-seconds contract.
+    InvalidTimestamp { index: usize, error: TimestampError },
     /// The time column and the value columns have differing lengths.
     LengthMismatch {
         times: usize,
@@ -88,6 +197,9 @@ impl core::fmt::Display for ValidationError {
         match self {
             ValidationError::UnknownSeries(id) => write!(f, "unknown series id {id}"),
             ValidationError::StaleSeries(id) => write!(f, "stale series id {id}"),
+            ValidationError::InvalidTimestamp { index, error } => {
+                write!(f, "invalid timestamp at row {index}: {error}")
+            }
             ValidationError::LengthMismatch { times, open, high, low, close } => write!(
                 f,
                 "time/OHLC arrays must have equal length (times={times}, open={open}, high={high}, low={low}, close={close})"
@@ -130,9 +242,9 @@ pub fn is_semantic_ohlc_anomaly([open, high, low, close]: [f64; 4]) -> bool {
 
 /// Sanitize parallel time/OHLC columns into ascending, unique, finite rows.
 ///
-/// `times` are wall-clock seconds as `f64` at the JS boundary; each is truncated toward zero to an
-/// `i64` time key (a non-finite time drops the row). Single-value series pass the same value in all
-/// four columns, so this covers line/area/histogram too.
+/// `times` are whole UTC seconds as `f64` at the JS boundary. Any invalid timestamp rejects the
+/// complete batch. Single-value series pass the same value in all four columns, so this covers
+/// line/area/histogram too.
 pub fn sanitize_ohlc(
     times: &[f64],
     open: &[f64],
@@ -223,17 +335,25 @@ fn sanitize_rows<P: Clone>(
         });
     }
 
+    let valid_times = times
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, time)| {
+            validate_timestamp(time)
+                .map_err(|error| ValidationError::InvalidTimestamp { index, error })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
     let mut report = ValidationReport::default();
 
-    // 1. Keep only finite, in-range rows; remember source order for stable sort + last-wins.
+    // 1. Keep only finite, in-range value rows; remember source order for stable sort + last-wins.
     //    All-NaN rows survive as explicit whitespace (reference `{time}`-only items).
     let mut rows: Vec<(i64, [f64; 4], usize, P)> = Vec::with_capacity(n);
     for i in 0..n {
-        let t = times[i];
         let v = [open[i], high[i], low[i], close[i]];
         let whitespace = is_whitespace_values(v);
-        let non_finite =
-            !t.is_finite() || (!whitespace && v.iter().any(|value| !value.is_finite()));
+        let non_finite = !whitespace && v.iter().any(|value| !value.is_finite());
         let out_of_range = !whitespace
             && !non_finite
             && v.iter()
@@ -244,7 +364,7 @@ fn sanitize_rows<P: Clone>(
             report.dropped_out_of_range += usize::from(out_of_range);
             continue;
         }
-        rows.push((t as i64, v, i, payload_of(i)));
+        rows.push((valid_times[i], v, i, payload_of(i)));
     }
 
     // 2. Detect out-of-order before sorting (so `reordered` reflects the caller's input).
@@ -296,8 +416,8 @@ fn sanitize_rows<P: Clone>(
 }
 
 /// Owned-input variant used by typed-array hosts. Clean integer-timestamp feeds take ownership of
-/// their columns without the intermediate row matrix; malformed or fractional feeds fall back to
-/// the fully repairing sanitizer. This keeps the common ingestion path to one JS→WASM copy.
+/// their columns without the intermediate row matrix; other feeds fall back to the full validator
+/// and value-repair sanitizer. This keeps the common ingestion path to one JS→WASM copy.
 pub fn sanitize_ohlc_owned(
     times: Vec<f64>,
     open: Vec<f64>,
@@ -320,8 +440,7 @@ pub fn sanitize_ohlc_owned(
     for i in 0..n {
         let time = times[i];
         let values = [open[i], high[i], low[i], close[i]];
-        clean &= time.is_finite()
-            && time.fract() == 0.0
+        clean &= validate_timestamp(time).is_ok()
             && (i == 0 || times[i - 1] < time)
             && (is_whitespace_values(values) || values.iter().copied().all(safe));
         if !is_whitespace_values(values)
@@ -354,10 +473,11 @@ pub fn sanitize_ohlc_owned(
 /// An all-NaN value set is a valid whitespace update (reference `series.update` with a `{time}`-only
 /// item replaces the bar with whitespace); a partial NaN set or ±Inf is a bad tick.
 pub fn sanitize_point(time: f64, values: [f64; 4]) -> Option<(i64, [f64; 4])> {
-    if !time.is_finite() || !(is_whitespace_values(values) || values.iter().copied().all(safe)) {
+    let time = validate_timestamp(time).ok()?;
+    if !(is_whitespace_values(values) || values.iter().copied().all(safe)) {
         return None;
     }
-    Some((time as i64, values))
+    Some((time, values))
 }
 
 #[cfg(test)]
@@ -476,10 +596,18 @@ mod tests {
     }
 
     #[test]
-    fn drops_row_with_non_finite_time() {
-        let s = ohlc(&[1.0, f64::NAN, 3.0], &[10.0, 20.0, 30.0]).unwrap();
-        assert_eq!(s.times, [1, 3]);
-        assert_eq!(s.report.dropped_invalid, 1);
+    fn invalid_timestamp_rejects_the_complete_batch() {
+        let err = ohlc(&[1.0, f64::NAN, 3.0], &[10.0, 20.0, 30.0]).unwrap_err();
+        assert!(matches!(
+            err,
+            ValidationError::InvalidTimestamp {
+                index: 1,
+                error: TimestampError {
+                    category: TimestampErrorCategory::NonFinite,
+                    ..
+                }
+            }
+        ));
     }
 
     #[test]
@@ -573,19 +701,99 @@ mod tests {
     }
 
     #[test]
-    fn truncates_fractional_seconds_to_i64() {
-        let s = ohlc(&[1.9, 2.4], &[10.0, 20.0]).unwrap();
-        assert_eq!(s.times, [1, 2]);
+    fn timestamp_validator_accepts_exact_boundaries_and_preserves_valid_input() {
+        assert_eq!(validate_timestamp(MIN_TIMESTAMP as f64), Ok(MIN_TIMESTAMP));
+        assert_eq!(validate_timestamp(MAX_TIMESTAMP as f64), Ok(MAX_TIMESTAMP));
+        assert_eq!(validate_timestamp(1_725_000_000.0), Ok(1_725_000_000));
+    }
+
+    #[test]
+    fn timestamp_validator_rejects_non_finite_fractional_and_out_of_range_values() {
+        assert_eq!(
+            validate_timestamp(f64::INFINITY).unwrap_err().category,
+            TimestampErrorCategory::NonFinite
+        );
+        assert_eq!(
+            validate_timestamp(1.5).unwrap_err().category,
+            TimestampErrorCategory::Fractional
+        );
+        assert_eq!(
+            validate_timestamp(MIN_TIMESTAMP as f64 - 1.0)
+                .unwrap_err()
+                .category,
+            TimestampErrorCategory::OutOfRange
+        );
+        assert_eq!(
+            validate_timestamp(MAX_TIMESTAMP as f64 + 1.0)
+                .unwrap_err()
+                .category,
+            TimestampErrorCategory::OutOfRange
+        );
+    }
+
+    #[test]
+    fn timestamp_validator_reports_likely_wrong_units_without_converting() {
+        let seconds = 1_725_000_000.0;
+        for (value, unit) in [
+            (seconds * 1_000.0, TimestampUnit::Milliseconds),
+            (seconds * 1_000_000.0, TimestampUnit::Microseconds),
+            (seconds * 1_000_000_000.0, TimestampUnit::Nanoseconds),
+        ] {
+            let error = validate_timestamp(value).unwrap_err();
+            assert_eq!(error.category, TimestampErrorCategory::OutOfRange);
+            assert_eq!(error.likely_unit, Some(unit));
+            assert!(error.to_string().contains(unit.name()));
+        }
+
+        assert_eq!(
+            validate_timestamp(MAX_TIMESTAMP as f64 + 1.0)
+                .unwrap_err()
+                .likely_unit,
+            None
+        );
+    }
+
+    #[test]
+    fn borrowed_owned_and_styled_batches_share_atomic_timestamp_validation() {
+        let times = [MIN_TIMESTAMP as f64, MAX_TIMESTAMP as f64 + 1.0];
+        let values = [10.0, 20.0];
+        let assert_second_row = |error| {
+            assert!(matches!(
+                error,
+                ValidationError::InvalidTimestamp { index: 1, .. }
+            ));
+        };
+
+        assert_second_row(ohlc(&times, &values).unwrap_err());
+        assert_second_row(
+            sanitize_ohlc_owned(
+                times.to_vec(),
+                values.to_vec(),
+                values.to_vec(),
+                values.to_vec(),
+                values.to_vec(),
+            )
+            .unwrap_err(),
+        );
+        assert_second_row(
+            sanitize_ohlc_styled(
+                &times,
+                &values,
+                &values,
+                &values,
+                &values,
+                [Some(vec![1, 2]), None, None],
+            )
+            .unwrap_err(),
+        );
     }
 
     #[test]
     fn sanitize_point_rejects_bad_ticks() {
         assert!(sanitize_point(f64::NAN, [1.0, 1.0, 1.0, 1.0]).is_none());
         assert!(sanitize_point(1.0, [1.0, f64::INFINITY, 1.0, 1.0]).is_none());
-        assert_eq!(
-            sanitize_point(1.5, [1.0, 2.0, 0.5, 1.5]),
-            Some((1, [1.0, 2.0, 0.5, 1.5]))
-        );
+        assert!(sanitize_point(1.5, [1.0, 2.0, 0.5, 1.5]).is_none());
+        assert!(sanitize_point(MAX_TIMESTAMP as f64 + 1.0, [1.0; 4]).is_none());
     }
 
     #[test]

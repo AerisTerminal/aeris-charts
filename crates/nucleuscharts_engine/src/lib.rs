@@ -85,7 +85,8 @@ use nucleuscharts_core::model::data_layer::{
     DataLayer, DataLayerMemoryUsage, MergedTimeMapping, PointColorChannel, SeriesId, SeriesIdError,
 };
 use nucleuscharts_core::model::data_validation::{
-    sanitize_ohlc, sanitize_ohlc_styled, sanitize_point, ValidationError, ValidationReport,
+    sanitize_ohlc, sanitize_ohlc_styled, sanitize_point, validate_timestamp, ValidationError,
+    ValidationReport,
 };
 use nucleuscharts_core::model::magnet::CrosshairMode;
 use nucleuscharts_core::model::plot_list::{MismatchDirection, PlotValueIndex};
@@ -1486,9 +1487,27 @@ impl ChartEngine {
     pub fn set_now_seconds(&mut self, now: f64) {
         if now.is_finite() {
             let changed_second = self.now_override.map(f64::floor) != Some(now.floor());
-            self.now_override = Some(now);
             if changed_second {
-                self.invalidate_frame_axis();
+                let previous_now = self.now_override;
+                let mut countdown_active = false;
+                let layout_changed = self
+                    .series
+                    .iter()
+                    .filter(|series| series.visible && series.countdown_visible)
+                    .any(|series| {
+                        let previous = self.series_countdown_layout_key_at(series.id, previous_now);
+                        let next = self.series_countdown_layout_key_at(series.id, Some(now));
+                        countdown_active |= next.is_some();
+                        previous != next
+                    });
+                self.now_override = Some(now);
+                if layout_changed {
+                    self.invalidate_frame_layout_and_axis();
+                } else if countdown_active {
+                    self.invalidate_frame_axis();
+                }
+            } else {
+                self.now_override = Some(now);
             }
         }
     }
@@ -2125,7 +2144,6 @@ impl ChartEngine {
 
     /// Apply one streaming OHLC update after validating its time and values.
     pub fn update_series_bar(&mut self, id: SeriesId, time: f64, values: [f64; 4]) -> bool {
-        self.invalidate_frame_series(id);
         self.update_series_bar_styled(id, time, values, [None; 3])
     }
 
@@ -2223,13 +2241,13 @@ impl ChartEngine {
         values: [f64; 4],
         colors: [Option<u32>; 3],
     ) -> bool {
-        self.invalidate_frame_series(id);
         if self.validate_series_id(id).is_err() {
             return false;
         }
         let Some((time, values)) = sanitize_point(time, values) else {
             return false;
         };
+        self.invalidate_frame_series(id);
         let from = self
             .data
             .series_data(id)
@@ -2304,12 +2322,12 @@ impl ChartEngine {
         close: &[f64],
         colors: [Option<Vec<u32>>; 3],
     ) -> Result<ValidationReport, ValidationError> {
-        self.invalidate_frame_series(id);
         self.validate_series_id(id).map_err(|error| match error {
             SeriesIdError::Unknown(id) => ValidationError::UnknownSeries(id),
             SeriesIdError::Stale(id) => ValidationError::StaleSeries(id),
         })?;
         let s = sanitize_ohlc_styled(times, open, high, low, close, colors)?;
+        self.invalidate_frame_series(id);
         let report = s.data.report.clone();
         self.install_series_columns(
             id,
@@ -2344,7 +2362,6 @@ impl ChartEngine {
         low: &[f64],
         close: &[f64],
     ) -> Result<ValidationReport, ValidationError> {
-        self.invalidate_frame_series(id);
         // A removed slot must stay empty; ignore the data (the TS series handle rejects the call
         // before it reaches here, so this is defense-in-depth) and report a clean no-op.
         self.validate_series_id(id).map_err(|error| match error {
@@ -2352,6 +2369,7 @@ impl ChartEngine {
             SeriesIdError::Stale(id) => ValidationError::StaleSeries(id),
         })?;
         let sanitized = sanitize_ohlc(times, open, high, low, close)?;
+        self.invalidate_frame_series(id);
         let report = sanitized.report.clone();
         self.install_series_columns(
             id,
@@ -2678,10 +2696,9 @@ impl ChartEngine {
         if !self.series.iter().any(|s| s.id == series_id) {
             return false;
         }
-        // Bars live at integer-second times (ingestion truncates), so a fractional time can
-        // never resolve to a bar — reject it rather than truncating onto one (reference compares
-        // exact time keys and reports no match).
-        if !time.is_finite() || time.fract() != 0.0 {
+        // Bars live at validated integer-second times, so a fractional or out-of-range time can
+        // never resolve to a bar.
+        if validate_timestamp(time).is_err() {
             return false;
         }
         let Some(index) = self.time_to_index(time, false) else {
@@ -2998,14 +3015,11 @@ impl ChartEngine {
     /// or after the timestamp and clamp timestamps beyond the last point to that final point,
     /// matching the reference's lower-bound behavior.
     pub fn time_to_index(&self, time: f64, find_nearest: bool) -> Option<TimePointIndex> {
-        if !time.is_finite() {
-            return None;
-        }
+        let time = validate_timestamp(time).ok()?;
         let times = self.data.merged_times();
         if times.is_empty() {
             return None;
         }
-        let time = time as i64;
         let index = times.partition_point(|&point| point < time);
         if index < times.len() && times[index] == time {
             return Some(index as TimePointIndex);

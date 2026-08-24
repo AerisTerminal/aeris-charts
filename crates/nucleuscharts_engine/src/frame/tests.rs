@@ -2894,6 +2894,7 @@ fn countdown_format_covers_all_three_ranges() {
     // >= 1d: "Xd Xh".
     assert_eq!(fmt(86400.0), "1d 0h");
     assert_eq!(fmt(2.0 * 86400.0 + 5.0 * 3600.0 + 120.0), "2d 5h");
+    assert_eq!(fmt(10_000.0 * 86400.0), "9999d+");
 }
 
 /// One line series on 60s bars ending at t=240, close 12.5; the host clock pins the countdown.
@@ -3276,7 +3277,7 @@ fn boxed_labels_begin_beyond_the_axis_border_at_every_dpr() {
 }
 
 #[test]
-fn axis_width_negotiation_excludes_the_secondary_countdown_row() {
+fn axis_width_negotiation_includes_the_secondary_countdown_row() {
     let measure = |t: &str| t.len() as f64 * 7.0;
     let mut chart = countdown_chart();
     let plain = chart.optimal_price_axis_width_for(PriceScaleTarget::Right, measure);
@@ -3285,18 +3286,112 @@ fn axis_width_negotiation_excludes_the_secondary_countdown_row() {
     // (exact reference structural: 1 border + 5 tick + 5 inner + 5 outer + 5 offset).
     assert_eq!(plain, 56.0);
 
-    // The smaller countdown extension shares the primary price chip width instead of leaving
-    // permanent blank axis space. Full-size price and indicator labels still negotiate normally.
+    // The eight-character countdown is wider than the primary price and must widen the strip.
     chart.series[0].countdown_visible = true;
     chart.now_override = Some(300.0 - 86399.0);
     let with_countdown = chart.optimal_price_axis_width_for(PriceScaleTarget::Right, measure);
-    assert_eq!(with_countdown, plain);
+    assert_eq!(with_countdown, 74.0);
 
     // The title chip lives OUTSIDE the strip (pane side), so it never widens the axis.
     chart.now_override = Some(250.0); // "00:50" — same 5 chars as the price
     chart.series[0].title = "NDQ".to_string();
     let with_cluster = chart.optimal_price_axis_width_for(PriceScaleTarget::Right, measure);
     assert_eq!(with_cluster, 56.0, "outside chip must not widen the strip");
+}
+
+#[test]
+fn exact_axis_width_negotiation_includes_the_countdown_row() {
+    let measure = |text: &str| text.len() as f64 * 7.0;
+    let mut chart = countdown_chart();
+    chart.series[0].countdown_visible = true;
+    chart.now_override = Some(300.0 - 86399.0);
+
+    assert_eq!(
+        chart.optimal_exact_price_axis_width_for(0, PriceScaleTarget::Right, measure),
+        68.0
+    );
+}
+
+#[test]
+fn countdown_clock_requests_layout_without_invalidating_coordinates() {
+    let mut chart = countdown_chart();
+    chart.series[0].countdown_visible = true;
+    chart.recompute_layout_with_measure(true, |text| text.len() as f64 * 7.0);
+    chart.build_frame();
+    assert!(!chart.frame_requires_layout());
+    let coordinate_revision = chart.frame_coordinate_revision();
+
+    chart.set_now_seconds(300.0 - 86399.0);
+
+    assert!(chart.frame_requires_layout());
+    assert_eq!(chart.frame_coordinate_revision(), coordinate_revision);
+
+    chart.recompute_layout_with_measure(false, |text| text.len() as f64 * 7.0);
+    chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    chart.set_now_seconds(300.0 - 86398.0);
+    assert!(!chart.frame_requires_layout());
+    assert!(chart.frame_requires_axis());
+}
+
+#[test]
+fn countdown_clock_does_not_invalidate_a_series_without_an_interval() {
+    let mut chart = countdown_chart();
+    chart
+        .set_series_data(0, &[240.0], &[12.0], &[12.0], &[12.0], &[12.0])
+        .unwrap();
+    chart.series[0].countdown_visible = true;
+    chart.recompute_layout_with_measure(true, |text| text.len() as f64 * 7.0);
+    chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+
+    chart.set_now_seconds(250.0);
+
+    assert!(!chart.frame_requires_layout());
+    assert!(!chart.frame_requires_axis());
+}
+
+#[test]
+fn long_title_chip_is_fitted_inside_the_pane() {
+    let mut chart = countdown_chart();
+    chart.series[0].title = "A".repeat(500);
+    chart.recompute_layout_with_measure(true, |text| text.len() as f64 * 7.0);
+    let labels = boxed_labels(&mut chart);
+    let title = labels
+        .iter()
+        .find(|label| label.text.ends_with("..."))
+        .expect("fitted title chip");
+    let (x, _, width, _, _) = title.background.expect("title background");
+    assert!(x >= chart.pane_left);
+    assert!(x + width <= chart.pane_left + chart.pane_w);
+}
+
+#[test]
+fn built_in_year_labels_honor_the_character_limit_without_truncation() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times = [0.0, 31_536_000.0, 63_072_000.0];
+    let values = [10.0; 3];
+    chart
+        .set_series_data(0, &times, &values, &values, &values, &values)
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+
+    let labels = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    assert!(labels.labels.iter().any(|label| label.text == "1970"));
+
+    chart.set_tick_mark_max_character_length(2);
+    let labels = chart.build_axis_frame(20.0, |text| text.len() as f64 * 7.0);
+    assert!(!labels.labels.iter().any(|label| label.text == "1970"));
+
+    chart.set_tick_mark_formatter(Some(Box::new(|_, _| None)));
+    let labels = chart.build_axis_frame(20.0, |text| text.len() as f64 * 7.0);
+    assert!(!labels.labels.iter().any(|label| label.text == "1970"));
+
+    chart.set_tick_mark_formatter(Some(Box::new(|_, _| Some("custom-year".to_string()))));
+    let labels = chart.build_axis_frame(20.0, |text| text.len() as f64 * 7.0);
+    assert!(labels
+        .labels
+        .iter()
+        .any(|label| label.text == "custom-year"));
 }
 
 #[test]
@@ -3786,12 +3881,15 @@ fn stable_axis_frame_is_not_rebuilt_until_an_axis_input_changes() {
 }
 
 #[test]
-fn countdown_tick_invalidates_axis_without_rebuilding_pane_layers() {
+fn countdown_tick_renegotiates_layout_without_rebuilding_unchanged_pane_layers() {
     let mut chart = retained_two_series_chart();
+    chart.recompute_layout_with_measure(true, |text| text.len() as f64 * 7.0);
     chart.build_frame();
     chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
     chart.set_now_seconds(1_700_000_000.0);
     assert!(chart.frame_requires_axis());
+    assert!(chart.frame_requires_layout());
+    chart.recompute_layout_with_measure(false, |text| text.len() as f64 * 7.0);
     chart.build_frame();
     assert_eq!(chart.frame_build_stats(), FrameBuildStats::default());
 }

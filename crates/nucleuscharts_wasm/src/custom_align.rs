@@ -6,28 +6,30 @@
 //! `sanitize_rows`, data_layer.rs `update_styled`) must hold identically across both views so
 //! the row ↔ item mapping never drifts; this module is that mapping's single source of truth.
 
-use nucleuscharts_core::model::data_validation::ValidationReport;
+use nucleuscharts_core::model::data_validation::{
+    validate_timestamp, ValidationError, ValidationReport,
+};
 
 /// Sanitize `(time, item)` pairs into ascending, unique rows, carrying each item through its
 /// row's fate — the item-level mirror of `sanitize_rows` (data_validation.rs):
-/// 1. rows with a non-finite time drop (with their items);
+/// 1. any invalid time rejects the complete batch;
 /// 2. unordered input stably sorts by time (`reordered` flagged);
 /// 3. duplicate timestamps collapse last-wins (the last occurrence in the *source* input
 ///    survives, matching a streaming `update` overwriting a bar).
 ///
-/// Times truncate toward zero to `i64` seconds, exactly like the OHLC sanitizer. Items carry
-/// no engine values, so there is nothing else to validate: whitespace-vs-data is plugin-defined
-/// (the pane view's `is_whitespace`) and never gates ingestion.
-pub fn sanitize_items<T>(times: &[f64], items: Vec<T>) -> (Vec<i64>, Vec<T>, ValidationReport) {
+/// Items carry no engine values, so there is nothing else to validate: whitespace-vs-data is
+/// plugin-defined (the pane view's `is_whitespace`) and never gates ingestion.
+pub fn sanitize_items<T>(
+    times: &[f64],
+    items: Vec<T>,
+) -> Result<(Vec<i64>, Vec<T>, ValidationReport), ValidationError> {
     debug_assert_eq!(times.len(), items.len());
     let mut report = ValidationReport::default();
     let mut rows: Vec<(i64, usize, T)> = Vec::with_capacity(times.len());
     for (index, (&time, item)) in times.iter().zip(items).enumerate() {
-        if !time.is_finite() {
-            report.dropped_invalid += 1;
-            continue;
-        }
-        rows.push((time as i64, index, item));
+        let time = validate_timestamp(time)
+            .map_err(|error| ValidationError::InvalidTimestamp { index, error })?;
+        rows.push((time, index, item));
     }
     report.reordered = rows.windows(2).any(|w| w[0].0 > w[1].0);
     if report.reordered {
@@ -48,7 +50,7 @@ pub fn sanitize_items<T>(times: &[f64], items: Vec<T>) -> (Vec<i64>, Vec<T>, Val
         }
     }
     report.accepted = out_times.len();
-    (out_times, out_items, report)
+    Ok((out_times, out_items, report))
 }
 
 /// Streaming update mirroring the data layer's raw-row `update_styled`: append a new time or
@@ -81,7 +83,7 @@ mod tests {
 
     fn sanitize(times: &[f64]) -> (Vec<i64>, Vec<String>, ValidationReport) {
         let items: Vec<String> = (0..times.len()).map(|i| format!("item{i}")).collect();
-        sanitize_items(times, items)
+        sanitize_items(times, items).unwrap()
     }
 
     #[test]
@@ -94,12 +96,13 @@ mod tests {
     }
 
     #[test]
-    fn rows_with_non_finite_times_drop_with_their_items() {
-        let (times, items, report) = sanitize(&[1.0, f64::NAN, f64::INFINITY, 2.0]);
-        assert_eq!(times, [1, 2]);
-        assert_eq!(items, ["item0", "item3"]);
-        assert_eq!(report.dropped_invalid, 2);
-        assert!(!report.is_clean());
+    fn invalid_time_rejects_the_complete_custom_batch() {
+        let items = vec!["first", "invalid"];
+        let error = sanitize_items(&[1.0, f64::NAN], items).unwrap_err();
+        assert!(matches!(
+            error,
+            ValidationError::InvalidTimestamp { index: 1, .. }
+        ));
     }
 
     #[test]
@@ -132,9 +135,12 @@ mod tests {
     }
 
     #[test]
-    fn fractional_times_truncate_toward_zero() {
-        let (times, _, _) = sanitize(&[1.9, 2.4]);
-        assert_eq!(times, [1, 2]);
+    fn fractional_times_are_rejected() {
+        let error = sanitize_items(&[1.9], vec!["item"]).unwrap_err();
+        assert!(matches!(
+            error,
+            ValidationError::InvalidTimestamp { index: 0, .. }
+        ));
     }
 
     #[test]

@@ -856,7 +856,7 @@ impl ChartEngine {
                 _ => ValidationError::UnknownSeries(id),
             })?;
         let input_was_empty = input.is_empty();
-        let (mut rows, mut report) = sanitize_feature_rows(kind, input);
+        let (mut rows, mut report) = sanitize_feature_rows(kind, input)?;
         if kind == FeatureSeriesKind::StackedArea {
             let expected_layers = rows.iter().find_map(|row| match row.value.as_ref()? {
                 FeatureValue::StackedArea { values } => Some(values.len()),
@@ -937,7 +937,7 @@ impl ChartEngine {
                 Err(SeriesIdError::Stale(id)) => ValidationError::StaleSeries(id),
                 _ => ValidationError::UnknownSeries(id),
             })?;
-        let (mut rows, mut report) = sanitize_feature_rows(kind, vec![point]);
+        let (mut rows, mut report) = sanitize_feature_rows(kind, vec![point])?;
         let Some(row) = rows.pop() else {
             return Ok(report);
         };
@@ -1106,15 +1106,18 @@ impl ChartEngine {
 fn sanitize_feature_rows(
     kind: FeatureSeriesKind,
     input: Vec<FeatureDataPoint>,
-) -> (Vec<FeatureRow>, ValidationReport) {
+) -> Result<(Vec<FeatureRow>, ValidationReport), ValidationError> {
+    let times = input
+        .iter()
+        .enumerate()
+        .map(|(index, point)| {
+            nucleuscharts_core::model::data_validation::validate_timestamp(point.time)
+                .map_err(|error| ValidationError::InvalidTimestamp { index, error })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let mut report = ValidationReport::default();
     let mut rows = Vec::with_capacity(input.len());
     for (source, point) in input.into_iter().enumerate() {
-        if !point.time.is_finite() {
-            report.dropped_invalid += 1;
-            report.dropped_non_finite += 1;
-            continue;
-        }
         if let Some(value) = &point.value {
             if value.kind() != kind || !value.finite_and_safe() {
                 report.dropped_invalid += 1;
@@ -1125,7 +1128,7 @@ fn sanitize_feature_rows(
                 report.semantic_anomalies += 1;
             }
         }
-        rows.push((point.time as i64, source, point.value));
+        rows.push((times[source], source, point.value));
     }
     report.reordered = rows.windows(2).any(|pair| pair[0].0 > pair[1].0);
     rows.sort_by_key(|(time, _, _)| *time);
@@ -1138,7 +1141,7 @@ fn sanitize_feature_rows(
         sanitized.push(FeatureRow { time, value });
     }
     report.accepted = sanitized.len();
-    (sanitized, report)
+    Ok((sanitized, report))
 }
 
 #[cfg(test)]
@@ -2117,5 +2120,59 @@ mod tests {
             })
             .expect("rounded candle body");
         assert!(body.1.iter().all(|radius| *radius <= body.0 / 2.0));
+    }
+
+    #[test]
+    fn invalid_feature_timestamps_reject_atomically() {
+        use nucleuscharts_core::model::data_validation::{
+            TimestampErrorCategory, MAX_TIMESTAMP, MIN_TIMESTAMP,
+        };
+
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        chart.configure_feature_series(
+            0,
+            FeatureSeriesKind::BrushableArea,
+            FeatureSeriesOptionsPatch::default(),
+        );
+        let point = |time| FeatureDataPoint {
+            time,
+            value: Some(FeatureValue::BrushableArea { value: time }),
+        };
+        chart
+            .set_feature_series_data(
+                0,
+                vec![point(MIN_TIMESTAMP as f64), point(MAX_TIMESTAMP as f64)],
+            )
+            .unwrap();
+        let before = chart.feature_series_data(0).unwrap();
+
+        for invalid in [
+            f64::NAN,
+            1.5,
+            MAX_TIMESTAMP as f64 + 1.0,
+            1_725_000_000_000.0,
+        ] {
+            let error = chart
+                .set_feature_series_data(0, vec![point(10.0), point(invalid)])
+                .unwrap_err();
+            assert!(matches!(
+                error,
+                ValidationError::InvalidTimestamp { index: 1, .. }
+            ));
+            assert_eq!(chart.feature_series_data(0).unwrap(), before);
+        }
+
+        let error = chart.update_feature_series_data(0, point(2.5)).unwrap_err();
+        assert!(matches!(
+            error,
+            ValidationError::InvalidTimestamp {
+                error: nucleuscharts_core::model::data_validation::TimestampError {
+                    category: TimestampErrorCategory::Fractional,
+                    ..
+                },
+                ..
+            }
+        ));
+        assert_eq!(chart.feature_series_data(0).unwrap(), before);
     }
 }

@@ -27,6 +27,13 @@ Each canonical built-in series also owns an eager fanout-16 row-summary pyramid.
 
 Each canonical series also carries a data generation. An ascending typed batch is sanitized once at the host boundary, merged into its source in one data-layer operation, then synchronizes merged time points, tick weights, dependent indicators, and frame generations once. Tail batches append weights incrementally; historical batches merge in `O(n + k)` and reindex once rather than once per input row. A data-layer transaction that actually rebuilds the timestamp union temporarily captures its prior union and emits one old-to-final logical mapping through common timestamps when the engine synchronizes. Current-bar replacements and pure tail appends capture and map nothing, and no second merged timeline survives the synchronization boundary.
 
+One core validator defines canonical numeric time: a finite, integral count of whole UTC seconds in
+the inclusive range `-62167219200..253402300799` (years 0000..9999). Hosts do not auto-convert
+numeric timestamps. Out-of-range errors include a likely milliseconds, microseconds, or nanoseconds
+hint when dividing by that unit would enter the supported range. Direct set/update batches validate
+all timestamps before repair or mutation and reject atomically; single updates likewise preserve
+state. Shared-ring drains may reject individual rows because producer drains cannot be rolled back.
+
 ## Crate boundaries
 
 ### `nucleuscharts_core`
@@ -54,9 +61,11 @@ each visible side scale retains its own options, range, formatter source, autosc
 dense plot-outward order, measured width, and gesture state. Layout reserves the sum of visible
 strips on each side while keeping every pane and the shared time scale aligned. Axis ticks,
 last-value and crosshair labels, primitives, coordinates, and gestures resolve through the exact
-owning scale. The horizontal grid uses only the innermost visible populated scale, preferring the
-right side when equal orders meet. Hidden and empty named scales retain state without consuming
-layout or receiving labels and input.
+owning scale. Width negotiation measures every axis-side row in a live-value cluster, including the
+scaled countdown row; the pane-side title chip is fitted to the available pane instead of inflating
+the strip. The horizontal grid uses only the innermost visible populated scale, preferring the right
+side when equal orders meet. Hidden and empty named scales retain state without consuming layout or
+receiving labels and input.
 
 Series pane/scale rebinding is one validated engine mutation. An unknown destination leaves pane,
 scale, data, type, style, visibility, streaming state, and handle identity unchanged. Percentage
@@ -246,7 +255,7 @@ Benchmark comparisons enforce only explicitly configured budgets. An empty polic
 
 Chart math must be deterministic for the same state, viewport, and device scale. Validate malformed data at the input boundary. Preserve whitespace rows, time ordering, logical ranges, primitive order, and explicit warm-up gaps.
 
-OHLC ingestion preserves structurally valid numeric input rather than silently rewriting financial values. Impossible relationships are accepted for compatibility but counted in structured diagnostics alongside accepted, dropped, deduplicated, reordered, non-finite, and out-of-range rows. Clean ingestion returns no diagnostic object on the browser hot path. Predictable boundary failures carry stable error categories rather than relying on console text.
+OHLC ingestion preserves structurally valid numeric input rather than silently rewriting financial values. Impossible relationships are accepted for compatibility but counted in structured diagnostics alongside accepted, dropped, deduplicated, reordered, non-finite, and out-of-range rows. Invalid timestamps reject a direct transaction before value-row repair; accepted batches retain the existing value repair semantics. Clean ingestion returns no diagnostic object on the browser hot path. Predictable boundary failures carry stable error categories rather than relying on console text.
 
 The generic `Workspace` engine type owns only split-tree topology, stable cell identities, ratios,
 and bounded validation of a restored layout. Subscription caps, billing-tier vetoes, cumulative

@@ -206,16 +206,19 @@ impl ChartInner {
 
     /// Replace a custom series' items (reference `ISeriesApi.setData`). Each item must carry a
     /// `time` (UTC seconds); the raw items are kept verbatim (for `render`/`data()`) and only
-    /// their times cross into the engine, as whitespace-style rows. Sanitization mirrors the
-    /// built-in boundary: non-finite times drop, out-of-order input stably sorts, duplicate
-    /// times collapse last-wins (custom_align.rs).
-    pub(super) fn set_custom_series_data(&mut self, id: u32, items: js_sys::Array) {
+    /// their times cross into the engine, as whitespace-style rows. Invalid timestamps reject the
+    /// complete batch; otherwise out-of-order input stably sorts and duplicates collapse last-wins.
+    pub(super) fn set_custom_series_data(
+        &mut self,
+        id: u32,
+        items: js_sys::Array,
+    ) -> Option<String> {
         let Some(position) = self.custom_series.iter().position(|e| e.series == id) else {
             web_sys::console::warn_1(
                 &format!("nucleuscharts: set_custom_series_data for unknown custom series {id}")
                     .into(),
             );
-            return;
+            return Some(rejected_diagnostics_json("unknown custom series id"));
         };
         let raw: Vec<JsValue> = items.iter().collect();
         let times: Vec<f64> = raw
@@ -227,7 +230,15 @@ impl ChartInner {
                     .unwrap_or(f64::NAN)
             })
             .collect();
-        let (times, aligned, report) = crate::custom_align::sanitize_items(&times, raw);
+        let (times, aligned, report) = match crate::custom_align::sanitize_items(&times, raw) {
+            Ok(sanitized) => sanitized,
+            Err(error) => {
+                web_sys::console::warn_1(
+                    &format!("nucleuscharts: set_custom_series_data rejected — {error}").into(),
+                );
+                return Some(rejected_validation_diagnostics_json(error));
+            }
+        };
         if !report.is_clean() {
             web_sys::console::warn_1(
                 &format!(
@@ -252,33 +263,43 @@ impl ChartInner {
             vec![f64::NAN; count],
             vec![f64::NAN; count],
         );
+        validation_diagnostics_json(&report)
     }
 
     /// Streaming update of a custom series (reference `ISeriesApi.update`): append a new time or
     /// replace the item at an existing one (a mid-history change splices, like the data
-    /// layer's rebuild case). A non-finite time drops the tick with a warning.
-    pub(super) fn update_custom_series_item(&mut self, id: u32, item: JsValue) {
+    /// layer's rebuild case). An invalid time rejects the update with no mutation.
+    pub(super) fn update_custom_series_item(&mut self, id: u32, item: JsValue) -> Option<String> {
         let Some(position) = self.custom_series.iter().position(|e| e.series == id) else {
             web_sys::console::warn_1(
                 &format!("nucleuscharts: update_custom_series_item for unknown custom series {id}")
                     .into(),
             );
-            return;
+            return Some(rejected_diagnostics_json("unknown custom series id"));
         };
         let time = js_sys::Reflect::get(&item, &"time".into())
             .ok()
             .and_then(|t| t.as_f64())
-            .filter(|t| t.is_finite());
-        let Some(time) = time else {
-            web_sys::console::warn_1(
-                &"nucleuscharts: update_custom_series_item dropped a non-finite time".into(),
-            );
-            return;
+            .unwrap_or(f64::NAN);
+        let time = match nucleuscharts_core::model::data_validation::validate_timestamp(time) {
+            Ok(time) => time,
+            Err(error) => {
+                web_sys::console::warn_1(
+                    &format!("nucleuscharts: update_custom_series_item rejected — {error}").into(),
+                );
+                return Some(rejected_validation_diagnostics_json(
+                    nucleuscharts_core::model::data_validation::ValidationError::InvalidTimestamp {
+                        index: 0,
+                        error,
+                    },
+                ));
+            }
         };
         let entry = &mut self.custom_series[position];
-        crate::custom_align::upsert_item(&mut entry.times, &mut entry.items, time as i64, item);
+        crate::custom_align::upsert_item(&mut entry.times, &mut entry.items, time, item);
         self.engine
-            .update_series_bar(id as SeriesId, time, [f64::NAN; 4]);
+            .update_series_bar(id as SeriesId, time as f64, [f64::NAN; 4]);
+        None
     }
 
     /// The custom series' raw items aligned with the engine rows (post-sanitize order),

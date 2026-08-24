@@ -168,6 +168,16 @@ function count_where(png, box, predicate) {
   return n;
 }
 
+function rightmost_where(png, box, predicate) {
+  let right = -1;
+  for (let y = box.top; y < box.bottom; y += 1) {
+    for (let x = box.left; x < box.right; x += 1) {
+      if (predicate(px(png, x, y))) right = Math.max(right, x);
+    }
+  }
+  return right;
+}
+
 const count_color = (png, box, color) => count_where(png, box, (c) => near(c, color));
 const is_white = (c) => c[0] > 240 && c[1] > 240 && c[2] > 240;
 
@@ -475,6 +485,50 @@ test("runtime price precision settles autoscale and candle geometry in one repai
   const pane = { left: 0, right: result.pane_w, top: 0, bottom: result.pane_h };
   expect(count_where(shot, pane, (color) => near(color, [0, 255, 0])), "visible up candles").toBeGreaterThan(20);
   expect(count_where(shot, pane, (color) => near(color, [255, 0, 0])), "visible down candles").toBeGreaterThan(20);
+  await context.close();
+});
+
+test("precision-zero daily countdown reserves the complete live-label width", async ({ browser }) => {
+  const { context, page } = await open_cluster_page(browser, {
+    title: "HYPE",
+    title_visible: true,
+    countdown_visible: false,
+    price_format: { type: "price", precision: 0, min_move: 1 },
+  });
+  const result = await page.evaluate(async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const bars = [2, 1, 0].map((days, index) => ({
+      time: now - days * 86_400,
+      open: 101 + index,
+      high: 102 + index,
+      low: 99 + index,
+      close: 100 + index,
+    }));
+    window.__cluster_close = bars[bars.length - 1].close;
+    window.__main.set_data(bars);
+    window.__chart.time_scale().fit_content();
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const without = window.__chart.time_scale().width();
+    window.__main.apply_options({ countdown_visible: true });
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    return {
+      without,
+      with_countdown: window.__chart.time_scale().width(),
+      pane_w: window.__chart.time_scale().width(),
+    };
+  });
+
+  expect(result.with_countdown).toBeLessThan(result.without);
+  const shot = await capture(page);
+  const box = find_cluster(shot, result.pane_w);
+  expect(box.top).toBeGreaterThanOrEqual(0);
+  expect(shot.width - result.pane_w).toBeGreaterThanOrEqual(64);
+  const countdown_row = { ...box, top: box.bottom - 14 };
+  const is_countdown_ink = (color) => near(color, [247, 200, 199], 24);
+  expect(count_where(shot, countdown_row, is_countdown_ink)).toBeGreaterThan(8);
+  expect(rightmost_where(shot, countdown_row, is_countdown_ink)).toBeLessThan(shot.width - 5);
+  const price_row = { ...box, bottom: box.top + ROW };
+  expect(rightmost_where(shot, price_row, is_white)).toBeLessThan(shot.width - 5);
   await context.close();
 });
 

@@ -175,3 +175,11 @@ test("OffscreenCanvas keeps the Canvas2D fallback path renderable", async ({ pag
   expect(moved.stats.presented_frames).toBeGreaterThan(ready.stats.presented_frames);
   expect(moved.stats.canvas2d_ops).toBeGreaterThan(0);
 });
+
+test("OffscreenCanvas exposes atomic timestamp rejection diagnostics", async ({ page }) => {
+  await create_worker_chart(page, "canvas2d");
+  const result = await send(page, { type: "invalid_timestamp" });
+  expect(result.type).toBe("timestamp_diagnostics");
+  expect(result.diagnostics).toMatchObject({ status: "rejected", accepted: 0 });
+  expect(result.diagnostics.reason).toContain("milliseconds");
+});

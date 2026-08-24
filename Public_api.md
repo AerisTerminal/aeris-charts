@@ -87,6 +87,12 @@ scale IDs are case-sensitive, pane-local UTF-8 strings of 1-128 bytes, with at m
 Clean batch/current-bar ingestion retains its allocation-free/null diagnostic path. Repaired,
 dropped, reordered, deduplicated, rejected, or semantically anomalous input is available through
 `series.last_ingestion_diagnostics()`; OHLC anomalies are reported without rewriting values.
+Numeric times must be finite whole UTC seconds in the inclusive range
+`-62167219200..253402300799` (years 0000..9999) and are never auto-converted. Rejection reasons
+suggest milliseconds, microseconds, or nanoseconds when scaling would produce an in-range value.
+Any invalid timestamp rejects a direct set/update batch atomically, and an invalid single update
+leaves the current series unchanged. Shared-ring drains reject malformed rows individually.
+Worker charts expose the most recent result through `offscreen_chart.last_ingestion_diagnostics()`.
 
 ## Persistence V1
 

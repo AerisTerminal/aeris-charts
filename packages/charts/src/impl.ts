@@ -198,17 +198,59 @@ const FRAME_STATS_SLOT = {
 } as const;
 
 /**
- * Convert a `time` input to the engine's UTC-seconds form. Business days and `"YYYY-MM-DD"` strings
- * are taken at UTC midnight (matching the reference's `Date.UTC(...)/1000`). A malformed value yields `NaN`,
- * which the engine's sanitizer drops as an invalid row.
+ * Convert a `time` input to the engine's UTC-seconds form. Business days and strict `"YYYY-MM-DD"`
+ * strings are taken at UTC midnight. A malformed or normalized date yields `NaN`, which causes the
+ * ingestion transaction to be rejected.
  */
 export function time_to_utc_seconds(t: time): number {
   if (typeof t === "number") return t;
+  let year: number;
+  let month: number;
+  let day: number;
   if (typeof t === "string") {
-    const [y, m, d] = t.split("-").map(Number);
-    return Date.UTC(y ?? NaN, (m ?? 1) - 1, d ?? 1) / 1000;
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t);
+    if (match === null) return NaN;
+    year = Number(match[1]);
+    month = Number(match[2]);
+    day = Number(match[3]);
+  } else {
+    if (t === null || typeof t !== "object") return NaN;
+    ({ year, month, day } = t);
   }
-  return Date.UTC(t.year, t.month - 1, t.day) / 1000;
+  if (![year, month, day].every(Number.isInteger)
+    || year < 0 || year > 9999 || month < 1 || month > 12 || day < 1 || day > 31) return NaN;
+
+  // Date.UTC remaps years 0..99 to 1900..1999. setUTCFullYear applies the astronomical year
+  // directly, then the round-trip check rejects rollover such as 2024-02-31.
+  const date = new Date(0);
+  date.setUTCHours(0, 0, 0, 0);
+  date.setUTCFullYear(year, month - 1, day);
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return NaN;
+  return date.getTime() / 1_000;
+}
+
+const MIN_TIMESTAMP_SECONDS = -62_167_219_200;
+const MAX_TIMESTAMP_SECONDS = 253_402_300_799;
+
+function timestamp_rejection_reason(time: number): string | null {
+  const expected = `expected a finite whole number of UTC seconds in the inclusive range ${MIN_TIMESTAMP_SECONDS}..${MAX_TIMESTAMP_SECONDS}`;
+  if (!Number.isFinite(time)) return `invalid timestamp: ${expected}; received a non-finite value`;
+  if (!Number.isInteger(time)) return `invalid timestamp: ${expected}; received fractional seconds`;
+  if (time >= MIN_TIMESTAMP_SECONDS && time <= MAX_TIMESTAMP_SECONDS) return null;
+  const likely = [
+    [1_000, 1_000_000_000_000, "milliseconds"],
+    [1_000_000, 1_000_000_000_000_000, "microseconds"],
+    [1_000_000_000, 1_000_000_000_000_000_000, "nanoseconds"],
+  ] as const;
+  const unit = likely.find(([scale, minimum_magnitude]) => {
+    const seconds = time / scale;
+    return Math.abs(time) >= minimum_magnitude
+      && seconds >= MIN_TIMESTAMP_SECONDS && seconds <= MAX_TIMESTAMP_SECONDS;
+  })?.[2];
+  const hint = unit === undefined
+    ? ""
+    : `; the value appears to be ${unit}, convert it to UTC seconds before ingestion (timestamps are not auto-converted)`;
+  return `invalid timestamp: ${expected}; received a value outside the supported range${hint}`;
 }
 
 function pack(data: readonly series_data[]): {
@@ -368,7 +410,10 @@ class series_impl implements series_api {
   set_data(data: readonly series_data[]): void {
     this.assert_live();
     const p = pack(data);
-    this.record_ingestion(this.chart.wasm.set_series_data_typed(this.id, p.times, p.open, p.high, p.low, p.close));
+    const accepted = this.record_ingestion(
+      this.chart.wasm.set_series_data_typed(this.id, p.times, p.open, p.high, p.low, p.close),
+    );
+    if (!accepted) return;
     // set_series_data resets point colors, so per-point channels must be applied after it.
     if (p.body_colors !== undefined || p.wick_colors !== undefined || p.border_colors !== undefined) {
       this.chart.wasm.set_series_point_colors(this.id, p.body_colors, p.wick_colors, p.border_colors);
@@ -389,9 +434,10 @@ class series_impl implements series_api {
    */
   set_data_typed(columns: ohlc_columns): void {
     this.assert_live();
-    this.record_ingestion(this.chart.wasm.set_series_data_typed(
+    const accepted = this.record_ingestion(this.chart.wasm.set_series_data_typed(
       this.id, columns.times, columns.open, columns.high, columns.low, columns.close,
     ));
+    if (!accepted) return;
     this.chart.sync_countdown_timer();
     this.chart.repaint();
     for (const handler of this.data_changed_subs) handler("full");
@@ -405,9 +451,10 @@ class series_impl implements series_api {
    */
   update_typed(columns: ohlc_columns): void {
     this.assert_live();
-    this.record_ingestion(this.chart.wasm.update_series_bars_typed(
+    const accepted = this.record_ingestion(this.chart.wasm.update_series_bars_typed(
       this.id, columns.times, columns.open, columns.high, columns.low, columns.close,
     ));
+    if (!accepted) return;
     // Same post-update bookkeeping as `update`: data arriving on a countdown-enabled series can
     // start the timer, and repaints coalesce onto the next frame rather than painting per batch.
     if (this.chart.countdown_series_present) this.chart.sync_countdown_timer();
@@ -460,7 +507,7 @@ class series_impl implements series_api {
     const border = "border_color" in point ? point_color_to_u32(point.border_color) : undefined;
     // Series-scoped streaming: append a new time point or replace the last on this series.
     const time = time_to_utc_seconds(point.time);
-    this.record_single_ingestion(time, [o, h, l, c]);
+    if (!this.record_single_ingestion(time, [o, h, l, c])) return;
     this.chart.wasm.update_series_bar_styled(
       this.id, time, o, h, l, c, body, wick, border,
     );
@@ -475,13 +522,16 @@ class series_impl implements series_api {
     return this.last_ingestion;
   }
 
-  protected record_ingestion(json: string | undefined): void {
+  protected record_ingestion(json: string | undefined): boolean {
     this.last_ingestion = json === undefined ? null : JSON.parse(json) as ingestion_diagnostics;
+    return this.last_ingestion?.status !== "rejected";
   }
 
-  private record_single_ingestion(time: number, values: [number, number, number, number]): void {
+  private record_single_ingestion(time: number, values: [number, number, number, number]): boolean {
     const whitespace = values.every(Number.isNaN);
-    const non_finite = !Number.isFinite(time) || (!whitespace && values.some((value) => !Number.isFinite(value)));
+    const timestamp_reason = timestamp_rejection_reason(time);
+    const value_non_finite = !whitespace && values.some((value) => !Number.isFinite(value));
+    const non_finite = timestamp_reason !== null || value_non_finite;
     const limit = Number.MAX_SAFE_INTEGER / 100;
     const out_of_range = !non_finite
       && !whitespace
@@ -491,18 +541,21 @@ class series_impl implements series_api {
       && (high < low || high < open || high < close || low > open || low > close);
     if (!non_finite && !out_of_range && !semantic) {
       this.last_ingestion = null;
-      return;
+      return true;
     }
     this.last_ingestion = {
       status: non_finite || out_of_range ? "rejected" : "accepted_with_diagnostics",
       accepted: semantic ? 1 : 0,
       dropped_invalid: non_finite || out_of_range ? 1 : 0,
-      dropped_non_finite: non_finite ? 1 : 0,
-      dropped_out_of_range: out_of_range ? 1 : 0,
+      dropped_non_finite: value_non_finite || !Number.isFinite(time) ? 1 : 0,
+      dropped_out_of_range: out_of_range
+        || (timestamp_reason !== null && Number.isInteger(time)) ? 1 : 0,
       deduplicated: 0,
       reordered: false,
       semantic_anomalies: semantic ? 1 : 0,
+      ...(timestamp_reason === null ? {} : { reason: timestamp_reason }),
     };
+    return semantic;
   }
 
   pop(count = 1): void {
@@ -1511,7 +1564,7 @@ class custom_series_impl extends series_impl {
   set_data(data: readonly custom_series_item[]): void {
     this.assert_live();
     const converted = data.map((item) => ({ ...item, time: time_to_utc_seconds(item.time) }));
-    this.chart.wasm.set_custom_series_data(this.id, converted);
+    if (!this.record_ingestion(this.chart.wasm.set_custom_series_data(this.id, converted))) return;
     this.chart.repaint();
     for (const handler of this.data_changed_subs) handler("full");
   }
@@ -1519,7 +1572,10 @@ class custom_series_impl extends series_impl {
   /** Append a new item or replace the one at an existing time (reference `update`). */
   update(item: custom_series_item): void {
     this.assert_live();
-    this.chart.wasm.update_custom_series_item(this.id, { ...item, time: time_to_utc_seconds(item.time) });
+    if (!this.record_ingestion(this.chart.wasm.update_custom_series_item(
+      this.id,
+      { ...item, time: time_to_utc_seconds(item.time) },
+    ))) return;
     // Custom series compute their price values through the JS pane view during render,
     // so this path must stay synchronous: last_value_data and friends read that
     // render-computed state immediately after an update.
@@ -1592,7 +1648,7 @@ class feature_series_impl extends series_impl {
       ...item,
       time: time_to_utc_seconds(item.time),
     } as series_data));
-    this.record_ingestion(this.chart.wasm.set_feature_series_data(this.id, converted));
+    if (!this.record_ingestion(this.chart.wasm.set_feature_series_data(this.id, converted))) return;
     this.chart.sync_countdown_timer();
     this.chart.repaint();
     for (const handler of this.data_changed_subs) handler("full");
@@ -1600,10 +1656,10 @@ class feature_series_impl extends series_impl {
 
   update(item: series_data): void {
     this.assert_live();
-    this.record_ingestion(this.chart.wasm.update_feature_series_item(
+    if (!this.record_ingestion(this.chart.wasm.update_feature_series_item(
       this.id,
       this.engine_item({ ...item, time: time_to_utc_seconds(item.time) } as series_data),
-    ));
+    ))) return;
     if (this.chart.countdown_series_present) this.chart.sync_countdown_timer();
     this.chart.schedule_repaint();
     for (const handler of this.data_changed_subs) handler("update");

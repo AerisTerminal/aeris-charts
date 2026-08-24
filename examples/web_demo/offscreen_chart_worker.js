@@ -75,6 +75,19 @@ self.onmessage = async (event) => {
       // hook and lets subscribe_backend_change publish the post-render backend.
       chart.wasm.simulate_device_loss_for_test();
       return;
+    } else if (message.type === "invalid_timestamp") {
+      chart.update_typed({
+        times: new Float64Array([1_725_000_000_000]),
+        open: new Float64Array([100]),
+        high: new Float64Array([101]),
+        low: new Float64Array([99]),
+        close: new Float64Array([100]),
+      });
+      postMessage({
+        type: "timestamp_diagnostics",
+        diagnostics: chart.last_ingestion_diagnostics(),
+      });
+      return;
     } else if (message.type === "remove") {
       if (timer !== null) clearInterval(timer);
       timer = null;

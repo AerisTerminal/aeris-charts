@@ -114,6 +114,48 @@ test("ingestion exposes structured repair and impossible-OHLC diagnostics", asyn
   });
 });
 
+test("timestamp rejection is atomic and calendar dates are strict", async ({ page }) => {
+  await page.goto("/?backend=canvas2d");
+  await wait_for_chart(page);
+  const result = await page.evaluate(() => {
+    const series = window.__chart.add_series("line", { visible: false });
+    series.set_data([{ time: 1_725_000_000, value: 10 }]);
+    const before = series.data();
+
+    series.update_typed({
+      times: new Float64Array([1_725_000_060, 1_725_000_000_000]),
+      open: new Float64Array([11, 12]),
+      high: new Float64Array([11, 12]),
+      low: new Float64Array([11, 12]),
+      close: new Float64Array([11, 12]),
+    });
+    const milliseconds = series.last_ingestion_diagnostics();
+    const after_batch = series.data();
+
+    series.update({ time: 1_725_000_000.5, value: 99 });
+    const fractional = series.last_ingestion_diagnostics();
+    const after_single = series.data();
+
+    series.set_data([{ time: "2024-02-31", value: 20 }]);
+    const malformed_date = series.last_ingestion_diagnostics();
+    const after_date = series.data();
+
+    series.set_data([{ time: { year: 50, month: 1, day: 2 }, value: 30 }]);
+    const year_50 = series.data()[0]?.time;
+    return { before, after_batch, after_single, after_date, milliseconds, fractional, malformed_date, year_50 };
+  });
+
+  expect(result.after_batch).toEqual(result.before);
+  expect(result.after_single).toEqual(result.before);
+  expect(result.after_date).toEqual(result.before);
+  expect(result.milliseconds).toMatchObject({ status: "rejected", accepted: 0 });
+  expect(result.milliseconds.reason).toContain("milliseconds");
+  expect(result.fractional).toMatchObject({ status: "rejected", dropped_invalid: 1 });
+  expect(result.fractional.reason).toContain("fractional seconds");
+  expect(result.malformed_date.reason).toContain("non-finite");
+  expect(result.year_50).toBe(-60589209600);
+});
+
 test("pane and price-scale handles follow the same pane through reorder", async ({ page }) => {
   await page.goto("/?backend=canvas2d");
   await wait_for_chart(page);

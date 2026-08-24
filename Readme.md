@@ -40,6 +40,12 @@ candles.set_data([
 chart.time_scale().fit_content();
 ```
 
+Numeric times are finite whole UTC seconds in the exact inclusive range
+`-62167219200..253402300799` (years 0000..9999). Nucleus never auto-converts numeric timestamps;
+rejections include a likely milliseconds, microseconds, or nanoseconds hint when applicable.
+Direct set/update batches reject atomically on any invalid timestamp, and invalid single updates
+leave existing data unchanged. Inspect `series.last_ingestion_diagnostics()` for the reason.
+
 ## Advanced chart features
 
 The advanced financial series are first-class Rust-engine series. Their data, autoscale projection,

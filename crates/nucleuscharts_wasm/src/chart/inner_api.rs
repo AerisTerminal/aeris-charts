@@ -210,7 +210,7 @@ impl ChartInner {
                 web_sys::console::warn_1(
                     &format!("nucleuscharts: set_series_data rejected — {e}").into(),
                 );
-                return Some(rejected_diagnostics_json(e));
+                return Some(rejected_validation_diagnostics_json(e));
             }
         };
         if !s.report.is_clean() {
@@ -261,7 +261,7 @@ impl ChartInner {
                 web_sys::console::warn_1(
                     &format!("nucleuscharts: update_typed rejected — {e}").into(),
                 );
-                return Some(rejected_diagnostics_json(e));
+                return Some(rejected_validation_diagnostics_json(e));
             }
         };
         if !s.report.is_clean() {
@@ -382,13 +382,18 @@ impl ChartInner {
             web_sys::console::warn_1(&"nucleuscharts: update_bar for unknown series id".into());
             return;
         }
-        // Drop a bad tick rather than corrupting the series (roadmap Phase A3).
+        if let Err(error) = nucleuscharts_core::model::data_validation::validate_timestamp(time) {
+            web_sys::console::warn_1(
+                &format!("nucleuscharts: update_bar rejected — invalid timestamp: {error}").into(),
+            );
+            return;
+        }
         if !self
             .engine
             .update_series_bar(series_id as SeriesId, time, [open, high, low, close])
         {
             web_sys::console::warn_1(
-                &"nucleuscharts: update_bar dropped a non-finite point".into(),
+                &"nucleuscharts: update_bar rejected invalid or out-of-range values".into(),
             );
         }
     }
@@ -435,6 +440,15 @@ impl ChartInner {
             );
             return;
         }
+        if let Err(error) = nucleuscharts_core::model::data_validation::validate_timestamp(time) {
+            web_sys::console::warn_1(
+                &format!(
+                    "nucleuscharts: update_series_bar_styled rejected — invalid timestamp: {error}"
+                )
+                .into(),
+            );
+            return;
+        }
         if !self.engine.update_series_bar_styled(
             series_id as SeriesId,
             time,
@@ -442,7 +456,8 @@ impl ChartInner {
             [body, wick, border],
         ) {
             web_sys::console::warn_1(
-                &"nucleuscharts: update_series_bar_styled dropped a non-finite point".into(),
+                &"nucleuscharts: update_series_bar_styled rejected invalid or out-of-range values"
+                    .into(),
             );
         }
     }
@@ -669,11 +684,12 @@ impl ChartInner {
         };
         let mut markers = Vec::with_capacity(inputs.len());
         for marker in inputs {
-            if !marker.time.is_finite()
-                || marker.time.fract() != 0.0
-                || !marker.size.is_finite()
-                || marker.price.is_some_and(|price| !price.is_finite())
-            {
+            let Ok(time) =
+                nucleuscharts_core::model::data_validation::validate_timestamp(marker.time)
+            else {
+                return false;
+            };
+            if !marker.size.is_finite() || marker.price.is_some_and(|price| !price.is_finite()) {
                 return false;
             }
             let position = match marker.position.as_str() {
@@ -710,7 +726,7 @@ impl ChartInner {
                 color
             };
             markers.push(Marker {
-                time: marker.time as i64,
+                time,
                 position,
                 shape,
                 color,

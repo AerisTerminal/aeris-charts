@@ -149,27 +149,31 @@ test("custom series data()/update() round-trip items through sort, dedupe, and s
     const t1 = 1767225600; // the fixture's last bar time (merged index 999)
     const t2 = t1 + 3600;
     const t3 = t2 + 3600;
-    // Unsorted, duplicated (last wins), and one non-finite-time row (dropped with a warning).
+    // Unsorted and duplicated (last wins).
     series.set_data([
       { time: t2, value: 2, tag: "first-t2" },
       { time: t1, value: 1 },
       { time: t2, value: 3, tag: "last-t2" },
-      { time: NaN, value: 9 },
     ]);
     const after_set = series.data().map((item) => ({ ...item }));
+    series.set_data([{ time: t3, value: 9 }, { time: NaN, value: 10 }]);
+    const rejected = series.last_ingestion_diagnostics();
+    const after_rejected_set = series.data().map((item) => ({ ...item }));
     series.update({ time: t3, value: 4 });
     series.update({ time: t1, value: 7 });
     const after_update = series.data().map((item) => ({ ...item }));
     const t2_index = window.__chart.time_scale().time_to_index(t2);
     const by_index = { ...series.data_by_index(t2_index, 0) };
     const last = series.last_value_data(true);
-    return { after_set, after_update, by_index, last, series_type: series.series_type(), t1, t2, t3 };
+    return { after_set, after_rejected_set, rejected, after_update, by_index, last, series_type: series.series_type(), t1, t2, t3 };
   });
   expect(result.series_type).toBe("custom");
   expect(result.after_set).toEqual([
     { time: result.t1, value: 1 },
     { time: result.t2, value: 3, tag: "last-t2" },
   ]);
+  expect(result.after_rejected_set).toEqual(result.after_set);
+  expect(result.rejected).toMatchObject({ status: "rejected", accepted: 0, dropped_invalid: 1 });
   expect(result.after_update).toEqual([
     { time: result.t1, value: 7 },
     { time: result.t2, value: 3, tag: "last-t2" },

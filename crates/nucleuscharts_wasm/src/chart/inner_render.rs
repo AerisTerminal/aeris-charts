@@ -48,18 +48,19 @@ impl ChartInner {
             self.engine.invalidate_axis_frame();
         }
 
-        // ---- layout (price axis width negotiated against the price labels) ----
-        if self.engine.frame_requires_layout() {
-            self.recompute_layout(false);
-        }
-
         // Feed the engine clock for the candle-close countdown labels: the host-pinned value
         // when `set_now_seconds` installed one (the package's 1s countdown timer), else the
-        // browser's system time — the engine itself is headless and owns no clock.
+        // browser's system time — the engine itself is headless and owns no clock. This must
+        // happen before layout so the first rendered countdown participates in width negotiation.
         let now = self
             .now_override
             .unwrap_or_else(|| js_sys::Date::now() / 1000.0);
         self.engine.set_now_seconds(now);
+
+        // ---- layout (price axis width negotiated against the price labels) ----
+        if self.engine.frame_requires_layout() {
+            self.recompute_layout(false);
+        }
 
         // Settle layout, autoscale, and retained pane layers before building axis labels so the
         // axis consumes the same finalized scale ranges as the canonical pane frame.

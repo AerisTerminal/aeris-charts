@@ -49,12 +49,15 @@ export interface business_day {
 
 /**
  * A point in time (reference `Time`). Accepted forms at the input boundary:
- * - `number` — UTC timestamp in seconds since the epoch;
+ * - `number` — a finite whole UTC timestamp in seconds since the epoch;
  * - `business_day` — `{ year, month, day }`, taken at UTC midnight;
  * - `string` — `"YYYY-MM-DD"`, taken at UTC midnight.
  *
- * The engine stores UTC seconds; business-day/string inputs are converted at the boundary. Values
- * the engine returns (e.g. `data()`, crosshair params) are always the numeric UTC-seconds form.
+ * Numeric timestamps are never auto-converted and must be in the inclusive range
+ * `-62167219200..253402300799` (years 0000..9999). Out-of-range values that look like milliseconds,
+ * microseconds, or nanoseconds are rejected with a conversion hint. Business-day/string inputs are
+ * strictly validated and converted at the boundary. Values the engine returns (e.g. `data()`,
+ * crosshair params) are always the numeric UTC-seconds form.
  */
 export type time = number | business_day | string;
 
@@ -139,9 +142,10 @@ export type series_data = ohlc_data | single_value_data | feature_series_data | 
 
 /**
  * Columnar input for {@link series_api.set_data_typed} and {@link series_api.update_typed}: one
- * `Float64Array` per channel, all of equal length. `times` are UTC seconds (the engine's time
- * unit — convert with the same rules `set_data` applies: UTC-midnight for business days /
- * "YYYY-MM-DD" strings). Single-value series repeat their value in all four price channels.
+ * `Float64Array` per channel, all of equal length. `times` are finite whole UTC seconds in the
+ * inclusive range `-62167219200..253402300799`; they are never auto-converted. Convert business
+ * days / "YYYY-MM-DD" strings to UTC midnight before using this typed API. Single-value series
+ * repeat their value in all four price channels.
  * Whitespace slots are all-NaN rows.
  *
  * The engine treats these arrays as read-only inputs — it neither mutates nor retains them — so
@@ -158,7 +162,9 @@ export interface ohlc_columns {
 
 /** Structured result for an ingestion that was repaired, rejected, or semantically suspicious.
  * `null` from {@link series_api.last_ingestion_diagnostics} means every supplied row was accepted
- * without repair or anomaly. Financial anomalies are accepted unchanged; hosts choose policy. */
+ * without repair or anomaly. A rejected set/update preserves the series' current state. Timestamp
+ * reasons identify the whole-seconds/range failure and likely millisecond/microsecond/nanosecond
+ * units when applicable. Financial anomalies are accepted unchanged; hosts choose policy. */
 export interface ingestion_diagnostics {
   status: "accepted_with_diagnostics" | "rejected";
   accepted: number;

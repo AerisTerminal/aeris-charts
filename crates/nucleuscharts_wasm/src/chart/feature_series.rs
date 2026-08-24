@@ -345,7 +345,7 @@ impl ChartInner {
             .collect();
         match self.engine.set_feature_series_data(id, input) {
             Ok(report) => validation_diagnostics_json(&report),
-            Err(error) => Some(rejected_diagnostics_json(error)),
+            Err(error) => Some(rejected_validation_diagnostics_json(error)),
         }
     }
 
@@ -361,7 +361,7 @@ impl ChartInner {
         };
         match self.engine.update_feature_series_data(id, point) {
             Ok(report) => validation_diagnostics_json(&report),
-            Err(error) => Some(rejected_diagnostics_json(error)),
+            Err(error) => Some(rejected_validation_diagnostics_json(error)),
         }
     }
 

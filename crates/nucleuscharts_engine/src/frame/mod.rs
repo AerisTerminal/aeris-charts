@@ -339,6 +339,12 @@ impl FrameInvalidation {
     fn axis(&mut self) {
         self.axis = self.tick();
     }
+
+    fn layout_and_axis(&mut self) {
+        let generation = self.tick();
+        self.layout = generation;
+        self.axis = generation;
+    }
 }
 
 #[derive(Clone, Default)]
@@ -849,6 +855,10 @@ impl ChartEngine {
 
     pub(crate) fn invalidate_frame_axis(&mut self) {
         self.frame_invalidation.axis();
+    }
+
+    pub(crate) fn invalidate_frame_layout_and_axis(&mut self) {
+        self.frame_invalidation.layout_and_axis();
     }
 
     pub fn frame_build_stats(&self) -> FrameBuildStats {
