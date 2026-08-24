@@ -75,6 +75,40 @@ function background_shade_data(bars) {
   });
 }
 
+/** Deterministic PRNG so stacked demos stay stable across reloads. */
+function demo_rand(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 4294967296;
+  };
+}
+
+/**
+ * Realistic stacked composition: mean-reverting category shares + mild activity
+ * scaling from bar range. Avoids the sine “mountain range” look.
+ */
+function stacked_series_data(bars, layer_count = 4) {
+  const rand = demo_rand(0x51ac4ed);
+  const means = [48, 31, 19, 12].slice(0, layer_count);
+  const levels = means.slice();
+  let activity = 1;
+  return bars.map((bar) => {
+    const close = Math.max(1e-6, bar.close ?? 1);
+    const range = Math.max(0, (bar.high ?? close) - (bar.low ?? close)) / close;
+    // Overall “volume” drifts slowly; wider bars → slightly busier stacks.
+    activity = activity * 0.93 + (0.88 + Math.min(0.55, range * 14) + (rand() - 0.5) * 0.06) * 0.07;
+    activity = Math.max(0.62, Math.min(1.45, activity));
+    const values = levels.map((level, index) => {
+      const noise = (rand() - 0.5) * (1.1 + index * 0.2);
+      levels[index] = level * 0.91 + means[index] * 0.09 + noise;
+      levels[index] = Math.max(means[index] * 0.4, Math.min(means[index] * 1.55, levels[index]));
+      return Math.round(Math.max(2, levels[index] * activity) * 10) / 10;
+    });
+    return { time: bar.time, values };
+  });
+}
+
 function series_features(bars) {
   const sampled = bars.filter((_, index) => index % 5 === 0);
   const closes = sampled.map((bar) => bar.close);
@@ -202,13 +236,17 @@ function series_features(bars) {
     },
     {
       id: "stacked-area", label: "Stacked area", detail: "Cumulative layers", icon: "chart",
+      preserve_time_spacing: true,
       series_kind: "stacked_area", options: {},
-      data: () => sampled.map((bar, index) => ({ time: bar.time, values: [12 + index % 18, 8 + index % 10, 5 + index % 7] })),
+      data: () => stacked_series_data(bars, 4),
+      compose: (chart) => use_official_feature_spacing(chart),
     },
     {
       id: "stacked-bars", label: "Stacked bars", detail: "Cumulative columns", icon: "chart",
+      preserve_time_spacing: true,
       series_kind: "stacked_bars", options: {},
-      data: () => sampled.map((bar, index) => ({ time: bar.time, values: [12 + index % 18, 8 + index % 10, 5 + index % 7] })),
+      data: () => stacked_series_data(bars, 4),
+      compose: (chart) => use_official_feature_spacing(chart),
     },
     {
       id: "whisker-box", label: "Whisker box", detail: "Quartiles + outliers", icon: "chart",
