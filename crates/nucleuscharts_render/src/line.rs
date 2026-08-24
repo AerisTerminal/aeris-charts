@@ -137,17 +137,16 @@ impl StrokeMesh {
     }
 
     fn push_round_join(&mut self, center: [f32; 2], radius: f32, color: [f32; 4]) {
-        // fan approximation of the joint cap; 8 segments is plenty at typical line widths
-        const SEGMENTS: usize = 8;
+        let segments = join_segments(radius);
         let v = |p: [f32; 2]| LineVertex {
             x: p[0],
             y: p[1],
             color,
         };
         let c = v(center);
-        for i in 0..SEGMENTS {
-            let a0 = (i as f32) / SEGMENTS as f32 * std::f32::consts::TAU;
-            let a1 = ((i + 1) as f32) / SEGMENTS as f32 * std::f32::consts::TAU;
+        for i in 0..segments {
+            let a0 = (i as f32) / segments as f32 * std::f32::consts::TAU;
+            let a1 = ((i + 1) as f32) / segments as f32 * std::f32::consts::TAU;
             let p0 = [center[0] + radius * a0.cos(), center[1] + radius * a0.sin()];
             let p1 = [center[0] + radius * a1.cos(), center[1] + radius * a1.sin()];
             self.push_tri(c, v(p0), v(p1));
@@ -155,8 +154,29 @@ impl StrokeMesh {
     }
 }
 
+/// Fan segments for a round join of `radius`: enough to keep the chord error under a quarter
+/// device pixel (`r * (1 - cos(pi / n)) < 0.25`), bounded so thin series lines stay cheap and
+/// heavy brush strokes stay visibly round instead of octagonal.
+pub fn join_segments(radius: f32) -> usize {
+    ((std::f32::consts::PI * (radius * 2.0).sqrt()).ceil() as usize).clamp(8, 32)
+}
+
 /// Number of straight segments used to tessellate a curved interval.
 const CURVE_SEGMENTS: usize = 16;
+
+/// Target device-px length of one curved segment. Intervals already shorter than this render as
+/// their chord: at a few device pixels the curve and its chord cover the same pixels, and
+/// densifying them would multiply tessellation work (a freehand brush samples every ~1.5 px)
+/// without changing the output.
+const CURVE_SEGMENT_PX: f64 = 4.0;
+
+/// Segments for one curved interval of device-px length `len_px`, capped at [`CURVE_SEGMENTS`]
+/// and never denser than one segment (the chord).
+fn curve_segments_for(len_px: f64) -> usize {
+    (len_px / CURVE_SEGMENT_PX)
+        .ceil()
+        .clamp(1.0, CURVE_SEGMENTS as f64) as usize
+}
 
 /// Catmull-Rom interpolation of one scalar channel at parameter `t` (0..1).
 fn catmull_rom(p0: f64, p1: f64, p2: f64, p3: f64, t: f64) -> f64 {
@@ -168,14 +188,23 @@ fn catmull_rom(p0: f64, p1: f64, p2: f64, p3: f64, t: f64) -> f64 {
         + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)
 }
 
-/// Expand a polyline according to its [`LineType`]: `Simple` is unchanged; `WithSteps` inserts a
-/// horizontal-then-vertical corner at each interval (the value holds until the next point, as in
-/// the reference charting library); `Curved` tessellates a Catmull-Rom spline through the points.
-pub fn expand_line(points: &[LinePoint], line_type: LineType) -> Vec<LinePoint> {
+/// Expand a polyline according to its [`LineType`] into `out` (cleared first, allocation reused):
+/// `Simple` is unchanged; `WithSteps` inserts a horizontal-then-vertical corner at each interval
+/// (the value holds until the next point, as in the reference charting library); `Curved`
+/// tessellates a Catmull-Rom spline through the points with a per-interval segment count adapted
+/// to the interval's device-px length (`hpr`/`vpr` convert media to device px).
+pub fn expand_line_into(
+    points: &[LinePoint],
+    line_type: LineType,
+    hpr: f64,
+    vpr: f64,
+    out: &mut Vec<LinePoint>,
+) {
+    out.clear();
     match line_type {
-        LineType::Simple => points.to_vec(),
+        LineType::Simple => out.extend_from_slice(points),
         LineType::WithSteps => {
-            let mut out = Vec::with_capacity(points.len() * 2);
+            out.reserve(points.len() * 2);
             for (i, p) in points.iter().enumerate() {
                 if i > 0 {
                     // step corner: horizontal to this x at the previous y, then drop to this point
@@ -186,31 +215,43 @@ pub fn expand_line(points: &[LinePoint], line_type: LineType) -> Vec<LinePoint> 
                 }
                 out.push(*p);
             }
-            out
         }
         LineType::Curved => {
             if points.len() < 3 {
-                return points.to_vec();
+                out.extend_from_slice(points);
+                return;
             }
             let n = points.len();
-            let mut out = Vec::with_capacity((n - 1) * CURVE_SEGMENTS + 1);
             out.push(points[0]);
             for i in 0..n - 1 {
                 let p0 = points[i.saturating_sub(1)];
                 let p1 = points[i];
                 let p2 = points[i + 1];
                 let p3 = points[(i + 2).min(n - 1)];
-                for s in 1..=CURVE_SEGMENTS {
-                    let t = s as f64 / CURVE_SEGMENTS as f64;
+                let len_px = ((p2.x - p1.x) * hpr).hypot((p2.y - p1.y) * vpr);
+                let segments = curve_segments_for(len_px);
+                for s in 1..=segments {
+                    let t = s as f64 / segments as f64;
                     out.push(LinePoint {
                         x: catmull_rom(p0.x, p1.x, p2.x, p3.x, t),
                         y: catmull_rom(p0.y, p1.y, p2.y, p3.y, t),
                     });
                 }
             }
-            out
         }
     }
+}
+
+/// Expand a polyline according to its [`LineType`]: `Simple` is unchanged; `WithSteps` inserts a
+/// horizontal-then-vertical corner at each interval (the value holds until the next point, as in
+/// the reference charting library); `Curved` tessellates a Catmull-Rom spline through the points.
+///
+/// Allocating convenience wrapper over [`expand_line_into`] for callers whose points are already
+/// in device px.
+pub fn expand_line(points: &[LinePoint], line_type: LineType) -> Vec<LinePoint> {
+    let mut out = Vec::new();
+    expand_line_into(points, line_type, 1.0, 1.0, &mut out);
+    out
 }
 
 /// Builds a stroke mesh over `points` (single color). `visible_range` is `[from, to)` row
@@ -221,7 +262,14 @@ pub fn build_line_stroke(
     params: &LineParams,
     out: &mut StrokeMesh,
 ) {
-    let expanded = expand_line(points, params.line_type);
+    let mut expanded = Vec::new();
+    expand_line_into(
+        points,
+        params.line_type,
+        params.horizontal_pixel_ratio,
+        params.vertical_pixel_ratio,
+        &mut expanded,
+    );
     let points = &expanded[..];
     if points.len() < 2 {
         // single point: reference draws a short horizontal segment of barWidth; skip until we
@@ -236,6 +284,7 @@ pub fn build_line_stroke(
 
     let bp = |p: &LinePoint| [(p.x * hpr) as f32, (p.y * vpr) as f32];
 
+    let mut prev_dir: Option<[f32; 2]> = None;
     for i in 0..points.len() - 1 {
         let a = bp(&points[i]);
         let b = bp(&points[i + 1]);
@@ -246,16 +295,25 @@ pub fn build_line_stroke(
         if len < 1e-6 {
             continue;
         }
+        let dir = [dx / len, dy / len];
         // normal
-        let nx = -dy / len * half;
-        let ny = dx / len * half;
+        let nx = -dir[1] * half;
+        let ny = dir[0] * half;
 
         self_push_segment(out, a, b, nx, ny, rgba);
 
-        // round join at the shared interior vertex
-        if i > 0 {
-            out.push_round_join(a, half, rgba);
+        // Round join at the shared interior vertex, but only where the turn opens a visible
+        // wedge: nearly-collinear segments (dense brush samples) leave a sub-pixel gap no
+        // backend can resolve, and a fan there is pure tessellation overhead.
+        if let Some(prev) = prev_dir {
+            let cos = (prev[0] * dir[0] + prev[1] * dir[1]).clamp(-1.0, 1.0);
+            let sin = (prev[0] * dir[1] - prev[1] * dir[0]).abs();
+            let gap = (half + 0.5) * sin / (1.0 + cos).max(1e-6);
+            if gap >= 0.25 {
+                out.push_round_join(a, half, rgba);
+            }
         }
+        prev_dir = Some(dir);
     }
 }
 
@@ -297,7 +355,14 @@ pub fn build_area_fill(
     params: &LineParams,
     out: &mut AreaMesh,
 ) {
-    let expanded = expand_line(points, params.line_type);
+    let mut expanded = Vec::new();
+    expand_line_into(
+        points,
+        params.line_type,
+        params.horizontal_pixel_ratio,
+        params.vertical_pixel_ratio,
+        &mut expanded,
+    );
     let points = &expanded[..];
     if points.len() < 2 {
         return;
@@ -369,7 +434,14 @@ pub fn build_baseline(
     stroke: &mut StrokeMesh,
     fill: &mut AreaMesh,
 ) {
-    let expanded = expand_line(points, params.line_type);
+    let mut expanded = Vec::new();
+    expand_line_into(
+        points,
+        params.line_type,
+        params.horizontal_pixel_ratio,
+        params.vertical_pixel_ratio,
+        &mut expanded,
+    );
     let pts = &expanded[..];
     if pts.len() < 2 {
         return;
@@ -509,15 +581,65 @@ mod tests {
             LinePoint { x: 20.0, y: 0.0 },
         ];
         let out = expand_line(&pts, LineType::Curved);
-        // (n-1)*SEG + 1 vertices
-        assert_eq!(out.len(), (3 - 1) * CURVE_SEGMENTS + 1);
+        // adaptive: each 14.1px interval gets ceil(14.1 / 4) = 4 segments
+        assert_eq!(out.len(), 2 * 4 + 1);
         // curve interpolates through the source knots
         assert_eq!((out[0].x, out[0].y), (0.0, 0.0));
-        assert_eq!((out[CURVE_SEGMENTS].x, out[CURVE_SEGMENTS].y), (10.0, 10.0));
-        assert_eq!(
-            (out[2 * CURVE_SEGMENTS].x, out[2 * CURVE_SEGMENTS].y),
-            (20.0, 0.0)
-        );
+        assert_eq!((out[4].x, out[4].y), (10.0, 10.0));
+        assert_eq!((out[8].x, out[8].y), (20.0, 0.0));
+    }
+
+    #[test]
+    fn expand_curved_keeps_short_intervals_as_chords() {
+        // Brush-density samples: 1.5px intervals are already below the visible faceting
+        // threshold, so each renders as its chord instead of 16 curve segments.
+        let pts: Vec<LinePoint> = (0..20)
+            .map(|i| LinePoint {
+                x: i as f64 * 1.5,
+                y: (i as f64 * 0.7).sin(),
+            })
+            .collect();
+        let out = expand_line(&pts, LineType::Curved);
+        assert_eq!(out.len(), pts.len(), "one segment per short interval");
+    }
+
+    #[test]
+    fn expand_curved_caps_long_intervals_at_sixteen_segments() {
+        let pts = [
+            LinePoint { x: 0.0, y: 0.0 },
+            LinePoint { x: 500.0, y: 100.0 },
+            LinePoint { x: 1000.0, y: 0.0 },
+        ];
+        let out = expand_line(&pts, LineType::Curved);
+        assert_eq!(out.len(), 2 * CURVE_SEGMENTS + 1);
+    }
+
+    #[test]
+    fn expand_curved_scales_segment_count_by_pixel_ratio() {
+        let pts = [
+            LinePoint { x: 0.0, y: 0.0 },
+            LinePoint { x: 10.0, y: 10.0 },
+            LinePoint { x: 20.0, y: 0.0 },
+        ];
+        let mut out = Vec::new();
+        expand_line_into(&pts, LineType::Curved, 2.0, 2.0, &mut out);
+        // 14.1 media px = 28.3 device px per interval -> ceil(28.3 / 4) = 8 segments
+        assert_eq!(out.len(), 2 * 8 + 1);
+    }
+
+    #[test]
+    fn nearly_collinear_strokes_skip_round_joins() {
+        // A dense, almost straight brush stroke: no turn opens a visible wedge, so the mesh is
+        // exactly two triangles per segment with no join fans.
+        let pts: Vec<LinePoint> = (0..50)
+            .map(|i| LinePoint {
+                x: i as f64 * 1.5,
+                y: 10.0 + (i as f64 * 0.02).sin() * 0.05,
+            })
+            .collect();
+        let mut mesh = StrokeMesh::default();
+        build_line_stroke(&pts, BLUE, &params(1.0, 6.0), &mut mesh);
+        assert_eq!(mesh.vertices.len(), 49 * 6, "segments only, no joins");
     }
 
     #[test]

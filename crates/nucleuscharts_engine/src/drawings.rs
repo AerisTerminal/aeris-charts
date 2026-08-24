@@ -2911,23 +2911,26 @@ impl ChartEngine {
     }
 
     /// Capture the next stroke point from a pointer move, decimated by distance
-    /// ([`BRUSH_MIN_POINT_DISTANCE`] in media px — closer samples are pointer noise).
-    pub fn brush_create_add(&mut self, x: f64, y: f64) {
-        self.invalidate_frame_drawings();
+    /// ([`BRUSH_MIN_POINT_DISTANCE`] in media px — closer samples are pointer noise). Returns
+    /// whether a point was captured; rejected samples leave the frame untouched, so hosts can
+    /// skip the repaint instead of rebuilding the drawings layer per raw pointer event.
+    pub fn brush_create_add(&mut self, x: f64, y: f64) -> bool {
         let Some(capture) = &self.brush_capture else {
-            return;
+            return false;
         };
         if (x - capture.last_px.0).hypot(y - capture.last_px.1) < BRUSH_MIN_POINT_DISTANCE {
-            return;
+            return false;
         }
         let pane = capture.pane_index;
         let Some(point) = self.drawing_from_px(pane, x, y) else {
-            return;
+            return false;
         };
         if let Some(capture) = self.brush_capture.as_mut() {
             capture.points.push(point);
             capture.last_px = (x, y);
         }
+        self.invalidate_frame_drawings();
+        true
     }
 
     /// Commit the stroke (pointer-up): the decimated capture is committed as-is — the stored

@@ -372,6 +372,13 @@ fn push_quad(plan: &mut ScenePlan, metrics: &mut GpuiFrameMetrics, rect: DeviceR
     metrics.ops += 1;
 }
 
+/// The largest mesh handed to one GPUI `Path`. GPUI's wgpu renderer copies every path vertex
+/// (position, `st`, a fat `Background`, bounds) into a fixed 2 MiB instance buffer and, on
+/// overflow, grows the buffer and re-encodes the whole frame — so one unbounded stroke can stall
+/// the window in a grow-and-redraw loop. Chunking keeps each path upload bounded; the mesh is a
+/// triangle soup, so splitting it changes neither coverage nor paint order.
+const MAX_MESH_VERTICES: u32 = 12_288;
+
 fn push_mesh(
     plan: &mut ScenePlan,
     metrics: &mut GpuiFrameMetrics,
@@ -381,14 +388,21 @@ fn push_mesh(
     if vertex_count < 3 {
         return;
     }
-    plan.ops.push(SceneOp::Mesh {
-        first_vertex,
-        vertex_count,
-        fill,
-    });
-    metrics.paths += 1;
+    let mut offset = first_vertex;
+    let mut remaining = vertex_count;
+    while remaining > 0 {
+        let chunk = remaining.min(MAX_MESH_VERTICES);
+        plan.ops.push(SceneOp::Mesh {
+            first_vertex: offset,
+            vertex_count: chunk,
+            fill,
+        });
+        metrics.paths += 1;
+        metrics.ops += 1;
+        offset += chunk;
+        remaining -= chunk;
+    }
     metrics.triangles += vertex_count / 3;
-    metrics.ops += 1;
 }
 
 /// Push a clip rect, returning `false` when it is degenerate (nothing was pushed).
@@ -603,6 +617,39 @@ mod tests {
             panic!("expected a mesh, got {:?}", plan.ops[0]);
         };
         assert_eq!(*fill, Paint::Solid(C));
+    }
+
+    #[test]
+    fn an_oversized_mesh_is_chunked_into_bounded_paths() {
+        // 1100 collinear points: 1099 segments of 12 vertices plus caps, past MAX_MESH_VERTICES.
+        let points: Vec<[f32; 2]> = (0..1100).map(|i| [i as f32, 0.0]).collect();
+        let (plan, metrics) = run(
+            &[Prim::Polyline {
+                first_point: 0,
+                point_count: points.len() as u32,
+                width: 2.0,
+                style: LineStyle::Solid,
+                line_type: LineType::Simple,
+                color: C,
+            }],
+            &points,
+        );
+        assert_eq!(metrics.paths, 2, "the mesh splits into bounded chunks");
+        let total: u32 = plan
+            .ops
+            .iter()
+            .map(|op| match op {
+                SceneOp::Mesh { vertex_count, .. } => *vertex_count,
+                _ => 0,
+            })
+            .sum();
+        assert_eq!(total, metrics.triangles * 3, "chunking drops no triangles");
+        assert!(
+            plan.ops.iter().all(
+                |op| matches!(op, SceneOp::Mesh { vertex_count, .. } if *vertex_count <= 12_288)
+            ),
+            "every chunk fits one bounded GPUI path upload"
+        );
     }
 
     #[test]

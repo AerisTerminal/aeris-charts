@@ -3,19 +3,22 @@
 //! Every helper here reuses Nucleus's own pixel math rather than recomputing it:
 //! - the integer-rect subset copies the exact expansion the wgpu quad executor and the Canvas2D
 //!   executor already agree on (`fillRectInnerBorder`, half-width line centering, dash phase);
-//! - the anti-aliased subset calls `nucleuscharts_render::line`'s tessellators
-//!   (`build_line_stroke`/`build_area_fill`/`build_disc`), so GPUI draws the same triangles the
-//!   WebGPU backend does.
+//! - the anti-aliased subset reuses `nucleuscharts_render::line`'s shared curve expansion and area
+//!   tessellation, and extrudes strokes/discs/rings itself with a per-vertex Loop-Blinn coverage
+//!   encoding ([`edge_st`]): GPUI's path pass cannot rely on MSAA (its sample count can fall back
+//!   to 1x on Linux), so the same geometry the WebGPU backend's 4x MSAA target smooths carries its
+//!   own 1 px coverage fade here. The fade is an *exterior* band — solid interior out to the
+//!   nominal edge, then a 1 px strip whose `st` ramp is exact by construction (see [`edge_st`]).
 //!
 //! Uses Nucleus's coordinate, bar-width, and snapping calculations.
 
 use nucleuscharts_render::color::Color;
 use nucleuscharts_render::draw_list::{IRect, LineStyle, LineType};
 use nucleuscharts_render::line::{
-    build_area_fill, build_disc, build_line_stroke, AreaMesh, LineParams, LinePoint, StrokeMesh,
+    build_area_fill, expand_line_into, join_segments, AreaMesh, LineParams, LinePoint,
 };
 
-use crate::scene::{DeviceRect, MeshVertex, Paint};
+use crate::scene::{DeviceRect, MeshVertex, Paint, SOLID_ST};
 
 /// The identity `LineParams` the tessellators must run with: the shared point pool already carries
 /// the DPR (see `nucleuscharts_render_wgpu::tri_executor`), so re-scaling here would double-apply it.
@@ -114,13 +117,13 @@ pub(crate) fn line_span_start(center: i32, width: i32) -> i32 {
     center - width / 2
 }
 
-/// Append `verts` as a triangle list, returning `(first_vertex, vertex_count)`.
+/// Append `verts` as a solid-interior triangle list, returning `(first_vertex, vertex_count)`.
 pub(crate) fn push_vertices(
     pool: &mut Vec<MeshVertex>,
     verts: impl IntoIterator<Item = [f32; 2]>,
 ) -> (u32, u32) {
     let first = pool.len() as u32;
-    pool.extend(verts.into_iter().map(|[x, y]| MeshVertex { x, y }));
+    pool.extend(verts.into_iter().map(|[x, y]| MeshVertex::solid(x, y)));
     let count = pool.len() as u32 - first;
     // A partial triangle would make GPUI's `push_triangle` loop drop a vertex silently.
     let count = count - count % 3;
@@ -128,10 +131,64 @@ pub(crate) fn push_vertices(
     (first, count)
 }
 
+/// Append one coverage-encoded triangle.
+fn push_tri_st(
+    pool: &mut Vec<MeshVertex>,
+    a: [f32; 2],
+    st_a: [f32; 2],
+    b: [f32; 2],
+    st_b: [f32; 2],
+    c: [f32; 2],
+    st_c: [f32; 2],
+) {
+    pool.extend([
+        MeshVertex {
+            x: a[0],
+            y: a[1],
+            st: st_a,
+        },
+        MeshVertex {
+            x: b[0],
+            y: b[1],
+            st: st_b,
+        },
+        MeshVertex {
+            x: c[0],
+            y: c[1],
+            st: st_c,
+        },
+    ]);
+}
+
+/// Coverage fade width in device px: the band outside every nominal edge whose alpha ramps
+/// linearly to zero, matching the 1 px ramp GPUI's path shader applies (`alpha = saturate(0.5 -
+/// distance)`).
+const FADE_PX: f32 = 1.0;
+
+/// `st` for a vertex at signed device-px distance `d` (positive outside) from the nearest
+/// exterior edge. GPUI's path shader computes coverage from `f = s² - t` and its screen-space
+/// gradient; choosing `s = d`, `t = d² - d` makes `f == d` at the vertex.
+///
+/// The encoding is only *exact* across a triangle when `t` interpolates linearly to the same
+/// value `s²` would have — i.e. when the triangle spans `d ∈ [0, 1]`, where `t ≡ 0` at both ends
+/// so `f = s²` is the exact quadratic and the shader's distance estimate `f / |∇f|` is `d / 2`,
+/// a perfect linear ramp over the band. A triangle spanning a wider `d` range interpolates `t`
+/// along the secant of the quadratic, collapsing the ramp toward a hard edge displaced outward —
+/// so wide geometry must be solid ([`crate::scene::SOLID_ST`]) out to the nominal edge and only
+/// the exterior 1 px band may carry this encoding.
+const fn edge_st(d: f32) -> [f32; 2] {
+    [d, d * d - d]
+}
+
+/// `st` at a nominal exterior edge: exact zero of the shader's coverage field.
+const FADE_IN_ST: [f32; 2] = edge_st(0.0);
+/// `st` one device px outside a nominal exterior edge: coverage reaches zero exactly here.
+const FADE_OUT_ST: [f32; 2] = edge_st(FADE_PX);
+
 /// Reusable tessellation buffers, owned by the renderer and cleared (never freed) per prim.
 ///
-/// Nucleus's tessellators write into caller-provided `Vec`s. Allocating those fresh per prim made
-/// scene construction allocation-bound: a single dense polyline grows a large `StrokeMesh` from
+/// Tessellation writes into caller-provided `Vec`s. Allocating those fresh per prim made scene
+/// construction allocation-bound: a single dense polyline grows a large expansion buffer from
 /// empty every frame, and doubling reallocations copy its contents. Retaining these buffers avoids
 /// that repeated allocation while keeping the produced geometry unchanged.
 ///
@@ -141,8 +198,8 @@ pub(crate) fn push_vertices(
 pub struct Scratch {
     /// The point window sliced out of the frame's shared pool.
     points: Vec<LinePoint>,
-    /// Stroke tessellation output.
-    stroke: StrokeMesh,
+    /// Curve expansion of the window, reused across prims.
+    expanded: Vec<LinePoint>,
     /// Area tessellation output.
     area: AreaMesh,
     /// `[f32; 2]` staging for polygons, discs, rings and band fills.
@@ -155,8 +212,7 @@ impl Scratch {
     /// Approximate retained bytes, so a host can assert the scratch stays bounded across a replay.
     pub fn capacity_bytes(&self) -> usize {
         self.points.capacity() * std::mem::size_of::<LinePoint>()
-            + self.stroke.vertices.capacity()
-                * std::mem::size_of::<nucleuscharts_render::line::LineVertex>()
+            + self.expanded.capacity() * std::mem::size_of::<LinePoint>()
             + self.area.vertices.capacity()
                 * std::mem::size_of::<nucleuscharts_render::line::LineVertex>()
             + self.verts.capacity() * std::mem::size_of::<[f32; 2]>()
@@ -175,8 +231,9 @@ fn slice_into(out: &mut Vec<LinePoint>, points: &[[f32; 2]], first: u32, count: 
     }));
 }
 
-/// Tessellate a solid polyline stroke into `pool`. Returns a zero-length range for a run with
-/// fewer than two points, which the caller reports as a dropped prim.
+/// Tessellate a solid polyline stroke into `pool` with a 1 px coverage fringe on every exterior
+/// edge. Returns a zero-length range for a run with fewer than two points, which the caller
+/// reports as a dropped prim.
 pub(crate) fn polyline_mesh(
     scratch: &mut Scratch,
     pool: &mut Vec<MeshVertex>,
@@ -188,23 +245,139 @@ pub(crate) fn polyline_mesh(
 ) -> (u32, u32) {
     let Scratch {
         points: window,
-        stroke,
+        expanded,
         ..
     } = scratch;
     slice_into(window, points, first, count);
     if window.len() < 2 {
         return (pool.len() as u32, 0);
     }
-    stroke.vertices.clear();
-    // The color is carried by the op's `Paint`; a placeholder keeps the shared tessellator's
-    // signature intact without allocating a second vertex format.
-    build_line_stroke(
-        window,
-        Color::rgb(0, 0, 0),
-        &identity_params(width as f64, line_type),
-        stroke,
+    // The pool already carries the DPR, so expansion adapts to device px directly.
+    expand_line_into(window, line_type, 1.0, 1.0, expanded);
+    stroke_aa_into(pool, expanded, width)
+}
+
+/// Extrude a polyline stroke into anti-aliased triangles: every segment becomes a solid
+/// half-width core out to the nominal edge plus an exterior 1 px fade band whose coverage ramp is
+/// exact (see [`edge_st`]), interior vertices get a round join where the turn opens a visible
+/// wedge (same threshold as the shared tessellator), and both ends get a fading butt-cap strip.
+fn stroke_aa_into(pool: &mut Vec<MeshVertex>, pts: &[LinePoint], width: f32) -> (u32, u32) {
+    let first = pool.len() as u32;
+    let half = (width / 2.0).max(0.0);
+    if pts.len() < 2 || half <= 0.0 {
+        return (first, 0);
+    }
+    let mut prev_dir: Option<[f32; 2]> = None;
+    let mut prev_b = [0.0f32; 2];
+    for i in 0..pts.len() - 1 {
+        let a = [pts[i].x as f32, pts[i].y as f32];
+        let b = [pts[i + 1].x as f32, pts[i + 1].y as f32];
+        let dx = b[0] - a[0];
+        let dy = b[1] - a[1];
+        let len = (dx * dx + dy * dy).sqrt();
+        if len < 1e-6 {
+            continue;
+        }
+        let dir = [dx / len, dy / len];
+        let n = [-dir[1], dir[0]];
+        // Butt-cap fade at the stroke's start, past the first endpoint.
+        if prev_dir.is_none() {
+            cap_strip(pool, a, [-dir[0], -dir[1]], n, half);
+        }
+        // Solid core spanning the full width.
+        let la = [a[0] + n[0] * half, a[1] + n[1] * half];
+        let lb = [b[0] + n[0] * half, b[1] + n[1] * half];
+        let ra = [a[0] - n[0] * half, a[1] - n[1] * half];
+        let rb = [b[0] - n[0] * half, b[1] - n[1] * half];
+        push_tri_st(pool, la, SOLID_ST, lb, SOLID_ST, rb, SOLID_ST);
+        push_tri_st(pool, la, SOLID_ST, rb, SOLID_ST, ra, SOLID_ST);
+        // Exterior 1 px fade band on each side.
+        for side in [1.0f32, -1.0] {
+            let in_a = [a[0] + n[0] * half * side, a[1] + n[1] * half * side];
+            let in_b = [b[0] + n[0] * half * side, b[1] + n[1] * half * side];
+            let out_a = [
+                a[0] + n[0] * (half + FADE_PX) * side,
+                a[1] + n[1] * (half + FADE_PX) * side,
+            ];
+            let out_b = [
+                b[0] + n[0] * (half + FADE_PX) * side,
+                b[1] + n[1] * (half + FADE_PX) * side,
+            ];
+            push_tri_st(
+                pool,
+                out_a,
+                FADE_OUT_ST,
+                out_b,
+                FADE_OUT_ST,
+                in_b,
+                FADE_IN_ST,
+            );
+            push_tri_st(pool, out_a, FADE_OUT_ST, in_b, FADE_IN_ST, in_a, FADE_IN_ST);
+        }
+        // Round join at the shared interior vertex where the turn is visible.
+        if let Some(prev) = prev_dir {
+            let cos = (prev[0] * dir[0] + prev[1] * dir[1]).clamp(-1.0, 1.0);
+            let sin = (prev[0] * dir[1] - prev[1] * dir[0]).abs();
+            let gap = (half + FADE_PX) * sin / (1.0 + cos).max(1e-6);
+            if gap >= 0.25 {
+                join_fan_aa(pool, a, half);
+            }
+        }
+        prev_dir = Some(dir);
+        prev_b = b;
+    }
+    // Butt-cap fade past the stroke's end.
+    if let Some(dir) = prev_dir {
+        cap_strip(pool, prev_b, dir, [-dir[1], dir[0]], half);
+    }
+    (first, pool.len() as u32 - first)
+}
+
+/// The 1 px fade band across a butt cap: from the cap plane (the solid core's exact edge) to one
+/// pixel past it. The band reaches `half + FADE_PX` along the cap so it meets the side fades at
+/// the corners.
+fn cap_strip(pool: &mut Vec<MeshVertex>, at: [f32; 2], out: [f32; 2], n: [f32; 2], half: f32) {
+    let r = half + FADE_PX;
+    let in_l = [at[0] + n[0] * r, at[1] + n[1] * r];
+    let in_r = [at[0] - n[0] * r, at[1] - n[1] * r];
+    let out_l = [
+        at[0] + out[0] * FADE_PX + n[0] * r,
+        at[1] + out[1] * FADE_PX + n[1] * r,
+    ];
+    let out_r = [
+        at[0] + out[0] * FADE_PX - n[0] * r,
+        at[1] + out[1] * FADE_PX - n[1] * r,
+    ];
+    push_tri_st(pool, in_l, FADE_IN_ST, in_r, FADE_IN_ST, out_r, FADE_OUT_ST);
+    push_tri_st(
+        pool,
+        in_l,
+        FADE_IN_ST,
+        out_r,
+        FADE_OUT_ST,
+        out_l,
+        FADE_OUT_ST,
     );
-    push_vertices(pool, stroke.vertices.iter().map(|v| [v.x, v.y]))
+}
+
+/// A coverage-exact round join: a solid fan out to the nominal radius, then a 1 px fade ring past
+/// it so the shader ramps coverage linearly across the outer pixel instead of hard-clipping.
+fn join_fan_aa(pool: &mut Vec<MeshVertex>, center: [f32; 2], radius: f32) {
+    let segments = join_segments(radius);
+    let rim = radius + FADE_PX;
+    for i in 0..segments {
+        let a0 = i as f32 / segments as f32 * std::f32::consts::TAU;
+        let a1 = (i + 1) as f32 / segments as f32 * std::f32::consts::TAU;
+        let (c0, s0) = (a0.cos(), a0.sin());
+        let (c1, s1) = (a1.cos(), a1.sin());
+        let p0 = [center[0] + radius * c0, center[1] + radius * s0];
+        let p1 = [center[0] + radius * c1, center[1] + radius * s1];
+        push_tri_st(pool, center, SOLID_ST, p0, SOLID_ST, p1, SOLID_ST);
+        let o0 = [center[0] + rim * c0, center[1] + rim * s0];
+        let o1 = [center[0] + rim * c1, center[1] + rim * s1];
+        push_tri_st(pool, p0, FADE_IN_ST, o0, FADE_OUT_ST, o1, FADE_OUT_ST);
+        push_tri_st(pool, p0, FADE_IN_ST, o1, FADE_OUT_ST, p1, FADE_IN_ST);
+    }
 }
 
 /// Tessellate a dashed polyline into one mesh per solid dash run, recording the ranges in
@@ -225,19 +398,12 @@ pub(crate) fn dashed_polyline_meshes(
     if scratch.points.len() < 2 {
         return;
     }
-    // `expand_line` and `dash_split` both return owned Vecs. Dashed polylines are the rare route
-    // (the engine pre-splits the series it owns into solid runs), so they keep the simple form.
-    let expanded = nucleuscharts_render::line::expand_line(&scratch.points, line_type);
+    expand_line_into(&scratch.points, line_type, 1.0, 1.0, &mut scratch.expanded);
+    // `dash_split` returns owned Vecs. Dashed polylines are the rare route (the engine pre-splits
+    // the series it owns into solid runs), so they keep the simple form.
     let pattern: Vec<f64> = pattern.iter().map(|&len| len as f64).collect();
-    for run in nucleuscharts_render::line::dash_split(&expanded, &pattern) {
-        scratch.stroke.vertices.clear();
-        build_line_stroke(
-            &run,
-            Color::rgb(0, 0, 0),
-            &identity_params(width as f64, LineType::Simple),
-            &mut scratch.stroke,
-        );
-        let range = push_vertices(pool, scratch.stroke.vertices.iter().map(|v| [v.x, v.y]));
+    for run in nucleuscharts_render::line::dash_split(&scratch.expanded, &pattern) {
+        let range = stroke_aa_into(pool, &run, width);
         if range.1 >= 3 {
             scratch.ranges.push(range);
         }
@@ -339,17 +505,63 @@ pub(crate) fn lerp_color(a: Color, b: Color, t: f32) -> Color {
     )
 }
 
-/// Tessellate a filled disc into `pool` (24 segments, matching `build_disc`).
+/// Tessellate a filled disc into `pool` (24 segments, matching `build_disc`): solid out to the
+/// nominal radius, then the exact 1 px coverage fade outside it.
 pub(crate) fn disc_mesh(pool: &mut Vec<MeshVertex>, cx: f32, cy: f32, radius: f32) -> (u32, u32) {
-    let mut verts = Vec::new();
-    build_disc([cx, cy], radius, Color::rgb(0, 0, 0), &mut verts);
-    push_vertices(pool, verts.iter().map(|v| [v.x, v.y]))
+    const SEGMENTS: usize = 24;
+    let first = pool.len() as u32;
+    let rim = radius + FADE_PX;
+    for i in 0..SEGMENTS {
+        let a0 = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+        let a1 = (i + 1) as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+        let (c0, s0) = (a0.cos(), a0.sin());
+        let (c1, s1) = (a1.cos(), a1.sin());
+        let p0 = [cx + radius * c0, cy + radius * s0];
+        let p1 = [cx + radius * c1, cy + radius * s1];
+        push_tri_st(pool, [cx, cy], SOLID_ST, p0, SOLID_ST, p1, SOLID_ST);
+        let o0 = [cx + rim * c0, cy + rim * s0];
+        let o1 = [cx + rim * c1, cy + rim * s1];
+        push_tri_st(pool, p0, FADE_IN_ST, o0, FADE_OUT_ST, o1, FADE_OUT_ST);
+        push_tri_st(pool, p0, FADE_IN_ST, o1, FADE_OUT_ST, p1, FADE_IN_ST);
+    }
+    (first, pool.len() as u32 - first)
+}
+
+/// One annulus between radii `r0` (inner row, `st0`) and `r1` (outer row, `st1`). Equal `st` on
+/// both rows gives a constant `s` gradient of zero, so the shader's solid branch fills the band
+/// at full coverage.
+fn annulus_st(
+    pool: &mut Vec<MeshVertex>,
+    cx: f32,
+    cy: f32,
+    r0: f32,
+    st0: [f32; 2],
+    r1: f32,
+    st1: [f32; 2],
+) {
+    const SEGMENTS: usize = 24;
+    if r1 - r0 <= 0.0 {
+        return;
+    }
+    for i in 0..SEGMENTS {
+        let a0 = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+        let a1 = (i + 1) as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+        let (c0, s0) = (a0.cos(), a0.sin());
+        let (c1, s1) = (a1.cos(), a1.sin());
+        let o0 = [cx + r1 * c0, cy + r1 * s0];
+        let o1 = [cx + r1 * c1, cy + r1 * s1];
+        let i0 = [cx + r0 * c0, cy + r0 * s0];
+        let i1 = [cx + r0 * c1, cy + r0 * s1];
+        push_tri_st(pool, o0, st1, o1, st1, i1, st0);
+        push_tri_st(pool, o0, st1, i1, st0, i0, st0);
+    }
 }
 
 /// A ring (annulus) between `radius` and `radius - stroke_width`, for `Circle`'s stroke.
 ///
 /// The Canvas2D executor strokes the disc's arc, which covers `[r - w/2, r + w/2]`; the same
-/// coverage as an annulus with those radii. 24 segments keeps it aligned with [`disc_mesh`].
+/// coverage as an annulus with those radii, solid between the nominal edges plus the exact 1 px
+/// coverage fade outside each. 24 segments keeps it aligned with [`disc_mesh`].
 pub(crate) fn ring_mesh(
     pool: &mut Vec<MeshVertex>,
     cx: f32,
@@ -357,22 +569,31 @@ pub(crate) fn ring_mesh(
     radius: f32,
     stroke_width: f32,
 ) -> (u32, u32) {
-    const SEGMENTS: usize = 24;
+    let first = pool.len() as u32;
     let outer = radius + stroke_width / 2.0;
     let inner = (radius - stroke_width / 2.0).max(0.0);
-    let mut verts = Vec::with_capacity(SEGMENTS * 6);
-    for i in 0..SEGMENTS {
-        let a0 = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
-        let a1 = (i + 1) as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
-        let (c0, s0) = (a0.cos(), a0.sin());
-        let (c1, s1) = (a1.cos(), a1.sin());
-        let o0 = [cx + outer * c0, cy + outer * s0];
-        let o1 = [cx + outer * c1, cy + outer * s1];
-        let i0 = [cx + inner * c0, cy + inner * s0];
-        let i1 = [cx + inner * c1, cy + inner * s1];
-        verts.extend([o0, o1, i1, o0, i1, i0]);
+    if outer <= 0.0 {
+        return (first, 0);
     }
-    push_vertices(pool, verts)
+    annulus_st(
+        pool,
+        cx,
+        cy,
+        outer,
+        FADE_IN_ST,
+        outer + FADE_PX,
+        FADE_OUT_ST,
+    );
+    annulus_st(pool, cx, cy, inner, SOLID_ST, outer, SOLID_ST);
+    if inner > 0.0 {
+        // Fade into the hole: coverage distance is measured from the inner edge, positive inward.
+        // A sub-pixel hole collapses the inner row toward the centre with a proportionally
+        // smaller distance, which keeps the ramp linear.
+        let hole_r = (inner - FADE_PX).max(0.0);
+        let hole_st = edge_st((inner - hole_r) / FADE_PX);
+        annulus_st(pool, cx, cy, hole_r, hole_st, inner, FADE_IN_ST);
+    }
+    (first, pool.len() as u32 - first)
 }
 
 /// The outline of a rounded rectangle as a closed polygon, matching the wgpu executor's
@@ -454,6 +675,89 @@ pub(crate) fn band_fill_mesh(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scene::SOLID_ST;
+
+    /// Point-in-mesh test over the triangle coverage (ignoring `st`), for coverage-gap checks.
+    fn covered(pool: &[MeshVertex], first: u32, count: u32, qx: f32, qy: f32) -> bool {
+        pool[first as usize..(first + count) as usize]
+            .chunks_exact(3)
+            .any(|tri| {
+                let (a, b, c) = (&tri[0], &tri[1], &tri[2]);
+                let d1 = (qx - b.x) * (a.y - b.y) - (a.x - b.x) * (qy - b.y);
+                let d2 = (qx - c.x) * (b.y - c.y) - (b.x - c.x) * (qy - c.y);
+                let d3 = (qx - a.x) * (c.y - a.y) - (c.x - a.x) * (qy - a.y);
+                let neg = d1 < 0.0 || d2 < 0.0 || d3 < 0.0;
+                let pos = d1 > 0.0 || d2 > 0.0 || d3 > 0.0;
+                !(neg && pos)
+            })
+    }
+
+    /// The mesh must cover the full nominal stroke (no gaps or notches, e.g. at joins) and stay
+    /// within the fade band (no overreach). Regresses the brush's staircase texture.
+    #[test]
+    fn curved_stroke_mesh_covers_the_nominal_band_without_gaps() {
+        let knots = [
+            [20.0f32, 42.0],
+            [92.0, 18.0],
+            [176.0, 62.0],
+            [270.0, 24.0],
+            [360.0, 66.0],
+            [460.0, 36.0],
+        ];
+        let mut pool = Vec::new();
+        let (first, count) = polyline_mesh(
+            &mut Scratch::default(),
+            &mut pool,
+            &knots,
+            0,
+            knots.len() as u32,
+            6.0,
+            LineType::Curved,
+        );
+        // Walk the expanded centerline and probe perpendicular to it.
+        let window: Vec<LinePoint> = knots
+            .iter()
+            .map(|p| LinePoint {
+                x: p[0] as f64,
+                y: p[1] as f64,
+            })
+            .collect();
+        let mut expanded = Vec::new();
+        expand_line_into(&window, LineType::Curved, 1.0, 1.0, &mut expanded);
+        let half = 3.0f32;
+        for pair in expanded.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            let (dx, dy) = ((b.x - a.x) as f32, (b.y - a.y) as f32);
+            let len = (dx * dx + dy * dy).sqrt();
+            if len < 1e-6 {
+                continue;
+            }
+            let (nx, ny) = (-dy / len, dx / len);
+            for t in [0.25f32, 0.5, 0.75] {
+                let (px, py) = (a.x as f32 + dx * t, a.y as f32 + dy * t);
+                for side in [1.0f32, -1.0] {
+                    // Just inside the nominal edge: always covered.
+                    let (ix, iy) = (
+                        px + nx * (half - 0.25) * side,
+                        py + ny * (half - 0.25) * side,
+                    );
+                    assert!(
+                        covered(&pool, first, count, ix, iy),
+                        "gap inside the nominal band at ({ix}, {iy})"
+                    );
+                    // Past the fade band: never covered.
+                    let (ox, oy) = (
+                        px + nx * (half + FADE_PX + 0.25) * side,
+                        py + ny * (half + FADE_PX + 0.25) * side,
+                    );
+                    assert!(
+                        !covered(&pool, first, count, ox, oy),
+                        "overreach past the fade band at ({ox}, {oy})"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn degenerate_integer_rects_are_dropped() {
@@ -678,21 +982,60 @@ mod tests {
     }
 
     #[test]
-    fn ring_mesh_covers_the_stroke_band_only() {
+    fn ring_mesh_covers_the_stroke_band_with_a_coverage_fringe() {
         let mut pool = Vec::new();
         let (first, count) = ring_mesh(&mut pool, 0.0, 0.0, 10.0, 2.0);
-        assert_eq!(count, 24 * 6);
-        // A Canvas2D `arc` + `stroke` of width 2 at radius 10 covers [9, 11]; nothing inside.
+        // Outer fade + solid middle + inner fade, 24 segments of 2 triangles each.
+        assert_eq!(count, 3 * 24 * 6);
+        // A Canvas2D `arc` + `stroke` of width 2 at radius 10 covers [9, 11]; the fade reaches
+        // one pixel past it on both sides, and nothing approaches the disc's interior.
         for v in &pool[first as usize..(first + count) as usize] {
             let r = (v.x * v.x + v.y * v.y).sqrt();
-            assert!((8.9..=11.1).contains(&r), "radius {r} outside the band");
+            assert!((7.9..=12.1).contains(&r), "radius {r} outside the band");
+            assert!(r > 1.0, "the ring must not cover the disc's interior");
         }
+        // The extreme rows sit one pixel past the nominal edges, where coverage reaches zero.
         assert!(
             pool[first as usize..(first + count) as usize]
                 .iter()
-                .all(|v| (v.x * v.x + v.y * v.y).sqrt() > 1.0),
-            "the ring must not cover the disc's interior"
+                .any(|v| v.st == FADE_OUT_ST),
+            "the fringe rows carry the Loop-Blinn edge encoding"
         );
+    }
+
+    #[test]
+    fn stroke_mesh_fades_its_exterior_edges() {
+        let mut pool = Vec::new();
+        // One horizontal 4 px segment at y = 10: nominal band [8, 12], fade one pixel outside it.
+        let pts = [[0.0f32, 10.0], [20.0, 10.0]];
+        let (first, count) = polyline_mesh(
+            &mut Scratch::default(),
+            &mut pool,
+            &pts,
+            0,
+            2,
+            4.0,
+            LineType::Simple,
+        );
+        let verts = &pool[first as usize..(first + count) as usize];
+        assert!(
+            verts.iter().any(|v| v.st != SOLID_ST),
+            "edge vertices carry the coverage encoding, not the solid convention"
+        );
+        let y0 = verts.iter().map(|v| v.y).fold(f32::INFINITY, f32::min);
+        let y1 = verts.iter().map(|v| v.y).fold(f32::NEG_INFINITY, f32::max);
+        assert_eq!((y0, y1), (7.0, 13.0), "bounds grow by the 1 px fade band");
+        // The outermost rows sit at signed distance +1 (fully faded); the nominal edge rows carry
+        // the exact zero of the coverage field; the core is solid.
+        assert!(verts
+            .iter()
+            .any(|v| (v.y - 13.0).abs() < 1e-4 && v.st == FADE_OUT_ST));
+        assert!(verts
+            .iter()
+            .any(|v| (v.y - 12.0).abs() < 1e-4 && v.st == FADE_IN_ST));
+        assert!(verts
+            .iter()
+            .any(|v| (v.y - 8.0).abs() < 1e-4 && v.st == SOLID_ST));
     }
 
     #[test]

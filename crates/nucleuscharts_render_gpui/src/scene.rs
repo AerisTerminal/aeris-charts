@@ -151,10 +151,34 @@ pub enum SceneOp {
 
 /// A mesh vertex in device px. Colors live on the owning [`SceneOp::Mesh`]'s [`Paint`], because a
 /// GPUI `Path` carries a single `Background` rather than per-vertex colors.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+///
+/// `st` feeds the coverage term of GPUI's path shader (`f = s² - t`, `alpha = saturate(0.5 -
+/// f / |∇f|)`). [`SOLID_ST`] marks a fully covered interior vertex (constant `s` → the shader's
+/// zero-gradient solid branch). Edge vertices produced by `geometry`'s anti-aliased tessellators
+/// instead carry a Loop-Blinn signed-distance encoding (`s = d`, `t = d² - d`), which the shader
+/// turns into a 1 px edge fade — the coverage WebGPU gets from its 4x MSAA target, which GPUI's
+/// path pass does not guarantee (its sample count can fall back to 1x on Linux).
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MeshVertex {
     pub x: f32,
     pub y: f32,
+    pub st: [f32; 2],
+}
+
+/// The `st` of a fully covered interior vertex (GPUI's "solid interior" convention).
+pub const SOLID_ST: [f32; 2] = [0.0, 1.0];
+
+impl MeshVertex {
+    /// A fully covered interior vertex.
+    pub const fn solid(x: f32, y: f32) -> Self {
+        Self { x, y, st: SOLID_ST }
+    }
+}
+
+impl Default for MeshVertex {
+    fn default() -> Self {
+        Self::solid(0.0, 0.0)
+    }
 }
 
 /// One lowered frame: the ordered ops plus the shared vertex pool their meshes index.
@@ -222,9 +246,9 @@ mod tests {
     fn mesh_bounds_covers_every_vertex() {
         let mut plan = ScenePlan::default();
         plan.vertices.extend([
-            MeshVertex { x: 3.0, y: 4.0 },
-            MeshVertex { x: -1.0, y: 9.0 },
-            MeshVertex { x: 5.0, y: 2.0 },
+            MeshVertex::solid(3.0, 4.0),
+            MeshVertex::solid(-1.0, 9.0),
+            MeshVertex::solid(5.0, 2.0),
         ]);
         assert_eq!(
             plan.mesh_bounds(0, 3),
@@ -243,7 +267,7 @@ mod tests {
     #[test]
     fn clear_keeps_capacity() {
         let mut plan = ScenePlan::default();
-        plan.vertices.extend([MeshVertex { x: 1.0, y: 2.0 }; 8]);
+        plan.vertices.extend([MeshVertex::solid(1.0, 2.0); 8]);
         plan.ops.push(SceneOp::PopClip);
         let cap = plan.vertices.capacity();
         plan.clear();

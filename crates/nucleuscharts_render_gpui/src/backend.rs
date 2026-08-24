@@ -715,10 +715,12 @@ fn matching_pop(plan: &ScenePlan, start: usize, end: usize) -> usize {
 
 /// Build a GPUI `Path` from a triangle-list mesh.
 ///
-/// `st = (0, 1)` on all three vertices is GPUI's "solid interior" convention (the same one
-/// `Path::line_to` uses): the path shader's curve term degenerates to full coverage, so the
-/// triangle rasterizes hard-edged — matching the WebGPU backend's triangles rather than adding an
-/// antialiasing pass Nucleus's other backends do not have.
+/// Each vertex carries its own `st`: solid interior vertices use `(0, 1)` (GPUI's "solid
+/// interior" convention — the path shader's zero-gradient branch gives full coverage), while
+/// edge vertices produced by [`crate::geometry`]'s anti-aliased tessellators carry a Loop-Blinn
+/// signed-distance encoding the shader turns into a 1 px coverage fade. That reproduces the edge
+/// smoothing the WebGPU backend gets from its 4x MSAA target, which GPUI's path pass cannot rely
+/// on (its sample count is picked from the surface and can fall back to 1x on Linux).
 fn build_path(
     plan: &ScenePlan,
     first_vertex: u32,
@@ -729,7 +731,7 @@ fn build_path(
     if verts.len() < 3 {
         return None;
     }
-    let solid = point(0.0, 1.0);
+    let st = |v: &crate::scene::MeshVertex| point(v.st[0], v.st[1]);
     let first = transform.point(verts[0].x, verts[0].y);
     let mut path = Path::new(first);
     for tri in verts.chunks_exact(3) {
@@ -739,7 +741,7 @@ fn build_path(
                 transform.point(tri[1].x, tri[1].y),
                 transform.point(tri[2].x, tri[2].y),
             ),
-            (solid, solid, solid),
+            (st(&tri[0]), st(&tri[1]), st(&tri[2])),
         );
     }
     Some(path)
@@ -1104,10 +1106,8 @@ mod tests {
     fn build_path_emits_one_triangle_per_three_vertices() {
         let mut plan = ScenePlan::default();
         for i in 0..6 {
-            plan.vertices.push(crate::scene::MeshVertex {
-                x: i as f32,
-                y: i as f32,
-            });
+            plan.vertices
+                .push(crate::scene::MeshVertex::solid(i as f32, i as f32));
         }
         let t = Transform::new(NucleusViewport::new(0.0, 0.0, 100.0, 100.0), 1.0);
         let path = build_path(&plan, 0, 6, t).expect("two triangles");
@@ -1119,9 +1119,9 @@ mod tests {
     fn build_path_rejects_a_partial_triangle() {
         let mut plan = ScenePlan::default();
         plan.vertices
-            .push(crate::scene::MeshVertex { x: 0.0, y: 0.0 });
+            .push(crate::scene::MeshVertex::solid(0.0, 0.0));
         plan.vertices
-            .push(crate::scene::MeshVertex { x: 1.0, y: 0.0 });
+            .push(crate::scene::MeshVertex::solid(1.0, 0.0));
         let t = Transform::new(NucleusViewport::new(0.0, 0.0, 100.0, 100.0), 1.0);
         assert!(build_path(&plan, 0, 2, t).is_none());
     }

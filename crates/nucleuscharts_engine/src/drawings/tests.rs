@@ -2103,6 +2103,24 @@ fn brush_capture_decimates_input_and_commits_the_live_path() {
 }
 
 #[test]
+fn rejected_brush_samples_do_not_rebuild_the_drawings_layer() {
+    let mut chart = settled_chart();
+    let start = (x_at(&chart, 2.0), y_at(&chart, 10.0));
+    assert!(chart.brush_create_start(None, start.0, start.1));
+    // Absorb the stroke-start invalidation before measuring.
+    chart.build_frame();
+    // Sub-threshold jitter: rejected, and the drawings layer must stay clean so hosts repainting
+    // per pointer event don't rebuild the scene for nothing.
+    assert!(!chart.brush_create_add(start.0 + 0.5, start.1 + 0.5));
+    chart.build_frame();
+    assert_eq!(chart.frame_build_stats().drawing_rebuilds, 0);
+    // A real sample is captured and dirties the layer.
+    assert!(chart.brush_create_add(start.0 + 30.0, start.1));
+    chart.build_frame();
+    assert_eq!(chart.frame_build_stats().drawing_rebuilds, 1);
+}
+
+#[test]
 fn live_options_update_brush_without_losing_captured_points() {
     let mut chart = settled_chart();
     let start = (x_at(&chart, 2.0), y_at(&chart, 10.0));

@@ -1593,8 +1593,11 @@ impl Probe {
                 );
             }
             Some(DragMode::BrushCreation) if event.dragging() => {
-                self.engine.brush_create_add(pane_x, y);
-                self.dirty = true;
+                // Only a captured point dirties the frame; rejected sub-threshold samples leave
+                // the scene untouched so fast drags don't rebuild per raw pointer event.
+                if self.engine.brush_create_add(pane_x, y) {
+                    self.dirty = true;
+                }
             }
             _ => {
                 if self
@@ -3330,12 +3333,22 @@ impl Render for InteractiveDemo {
             },
             |chart| {
                 let probe = chart.read(cx);
+                // Live frame cost, so an open demo answers "how much FPS" without a finite probe.
+                let frame_ms = probe.last.total_nanos() as f64 / 1.0e6;
+                let fps = if frame_ms > 0.0 {
+                    1.0e3 / frame_ms
+                } else {
+                    0.0
+                };
                 (
                     shell_rgb(
                         &probe.engine.options.get().time_scale.border_color,
                         shell_rgb(theme_border(self.theme), 0xe5e5e5),
                     ),
-                    format!("{}  ·  {}", probe.legend, probe.click_status),
+                    format!(
+                        "{}  ·  {}  ·  {frame_ms:.1} ms ({fps:.0} fps)",
+                        probe.legend, probe.click_status
+                    ),
                 )
             },
         );
