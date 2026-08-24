@@ -293,8 +293,8 @@
       </label>
       <label title="Stroke width in CSS px — templates new drawings and applies live to the selected one">w <input type="range" id="drawing_width" min="1" max="8" step="1" value="2"><span id="drawing_width_val">2</span></label>
       <label title="Text label carried by newly created drawings (any tool)">label <input type="text" id="drawing_text" size="8"></label>
-      <label title="Label text color — templates new drawings and applies live to the selected one">text <input type="color" id="drawing_text_color" value="#0a0a0a"></label>
-      <label title="Label font size in CSS px — templates new drawings and applies live to the selected one">size <input type="number" id="drawing_text_size" min="8" max="72" step="1" value="12"></label>
+      <label title="Label text color — templates new drawings and applies live to the selected one">text <input type="color" id="drawing_text_color" value="#f0f0f0"></label>
+      <label title="Label font size in CSS px — templates new drawings and applies live to the selected one">size <input type="number" id="drawing_text_size" min="8" max="72" step="1" value="18"></label>
       <label title="Label font weight — templates new drawings and applies live to the selected one">weight
         <select id="drawing_weight">
           <option value="300">300</option>
@@ -1024,7 +1024,7 @@ function sync_drawing_inputs_from_selection() {
   document.getElementById("drawing_width_val").textContent = String(o.width);
   set("drawing_text", o.text);
   set("drawing_text_color", css_to_hex(o.text_color));
-  set("drawing_text_size", String(o.text_size ?? 12));
+  set("drawing_text_size", String(o.text_size ?? 18));
   set("drawing_weight", String(o.text_weight ?? 400));
   document.getElementById("drawing_italic").checked = o.text_italic;
 }
@@ -1478,6 +1478,10 @@ document.getElementById("theme_select").addEventListener("change", (e) => {
   else chart.apply_options({ layout: { panes: { separatorColor: document.getElementById("pane_separator_color").value } } });
   if (!theme_color_touched.axis_text) document.getElementById("axis_text_color").value = palette.foreground;
   chart.apply_options({ layout: { textColor: palette.foreground, mutedTextColor: palette.muted_foreground } });
+  // Drawing label color follows the theme unless the user has a selection that already pinned one.
+  if (active_chart().selected_drawing() === null) {
+    document.getElementById("drawing_text_color").value = css_to_hex(palette.foreground) || palette.foreground;
+  }
   if (!theme_color_touched.grid) document.getElementById("grid_color").value = palette.border;
   apply_grid_style();
   if (!theme_color_touched.crosshair_line) document.getElementById("cross_color").value = palette.crosshair_line;
@@ -1493,6 +1497,7 @@ if (parity_fixture === null) {
   apply_axis_border();
   document.getElementById("pane_separator_color").value = palette.border;
   document.getElementById("axis_text_color").value = palette.foreground;
+  document.getElementById("drawing_text_color").value = css_to_hex(palette.foreground) || palette.foreground;
   document.getElementById("grid_color").value = palette.border;
   apply_grid_style();
   document.getElementById("cross_color").value = palette.crosshair_line;

@@ -1100,7 +1100,7 @@ impl Probe {
         let mut drawing_widths = HashMap::new();
         for drawing in self.engine.drawings() {
             let text = drawing.display_text();
-            let size = drawing.text_size.unwrap_or(layout.font_size);
+            let size = drawing.resolved_text_size(layout.font_size);
             let weight = if drawing.kind == DrawingKind::Text && drawing.text.is_empty() {
                 700
             } else {

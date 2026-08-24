@@ -14,7 +14,7 @@ use nucleuscharts_render::draw_list::{IRect, LineStyle, LineType, Prim, TextAlig
 
 use super::PRIMARY;
 use crate::drawings::{
-    Drawing, DrawingKind, DrawingTextHAlign, TEXT_PAD, TEXT_PLACEHOLDER_MIN_SIZE,
+    Drawing, DrawingId, DrawingKind, DrawingTextHAlign, TEXT_CHROME_PAD, TEXT_PAD,
 };
 use crate::ChartEngine;
 
@@ -25,6 +25,9 @@ use crate::ChartEngine;
 const ANCHOR_RADIUS: f64 = 4.0;
 const ANCHOR_BORDER_WIDTH: f64 = 1.5;
 const ANCHOR_BORDER: Color = PRIMARY;
+/// The hover ring's dimmed variant of the focus border (TradingView shows the same border at
+/// roughly half strength until the drawing is actually selected).
+const HOVER_BORDER: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0x73);
 
 impl ChartEngine {
     #[cfg(test)]
@@ -182,11 +185,39 @@ impl ChartEngine {
         }
     }
 
-    /// Selection handles are retained with the overlay, so selection-only changes do not
-    /// invalidate or reconstruct unrelated drawing geometry.
+    /// The selected/hovered drawing's converted bitmap-px anchor points, or `None` when the
+    /// id is stale, on another pane, or off-screen.
+    fn overlay_drawing_px(
+        &self,
+        pane_index: usize,
+        id: DrawingId,
+        hpr: f64,
+        vpr: f64,
+    ) -> Option<Vec<(f64, f64)>> {
+        let drawing = self.drawing(id)?;
+        if drawing.pane_index != pane_index {
+            return None;
+        }
+        let key = self.drawing_coordinate_key(drawing)?;
+        let mut runtime = self.drawing_runtime.borrow_mut();
+        let px = self.drawing_px_cached(drawing, &mut runtime, key)?;
+        Some(
+            px.iter()
+                .map(|&(x, y)| (x * hpr, y * vpr))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    /// Selection chrome is retained with the overlay, so selection-only changes do not
+    /// invalidate or reconstruct unrelated drawing geometry. The text tool gets no anchor
+    /// handles (TradingView: text has no drag points) — its selection affordance is the focus
+    /// border alone. That border STAYS painted while the host typing-mode editor is open
+    /// (the wrap is borderless; only the caret overlays), so entering/leaving edit cannot
+    /// shift the outline.
     pub(super) fn build_selected_drawing_handles_frame(
         &self,
         pane_index: usize,
+        pane_w_px: i32,
         hpr: f64,
         vpr: f64,
         out: &mut Vec<Prim>,
@@ -197,20 +228,16 @@ impl ChartEngine {
         let Some(drawing) = self.drawing(id) else {
             return;
         };
-        if drawing.pane_index != pane_index {
+        if drawing.kind == DrawingKind::Text {
+            let Some(px) = self.overlay_drawing_px(pane_index, id, hpr, vpr) else {
+                return;
+            };
+            self.push_text_chrome(drawing, &px, pane_w_px, vpr, ANCHOR_BORDER, out);
             return;
         }
-        let Some(key) = self.drawing_coordinate_key(drawing) else {
+        let Some(px) = self.overlay_drawing_px(pane_index, id, hpr, vpr) else {
             return;
         };
-        let mut runtime = self.drawing_runtime.borrow_mut();
-        let Some(px) = self.drawing_px_cached(drawing, &mut runtime, key) else {
-            return;
-        };
-        let px = px
-            .iter()
-            .map(|&(x, y)| (x * hpr, y * vpr))
-            .collect::<Vec<_>>();
         if drawing.kind == DrawingKind::Rectangle && px.len() == 2 {
             build_rectangle_handles(&px, vpr, self.anchor_fill(), out);
         } else if drawing.kind == DrawingKind::Brush && px.len() > 2 {
@@ -218,6 +245,32 @@ impl ChartEngine {
         } else {
             build_anchor_handles(&px, vpr, self.anchor_fill(), out);
         }
+    }
+
+    /// The hovered text drawing's focus border at hover opacity (TradingView's hover ring):
+    /// the same chrome box as selection, dimmed. Suppressed while the drawing is selected
+    /// (the full-strength border already paints, including during typing mode).
+    pub(super) fn build_hovered_text_frame(
+        &self,
+        pane_index: usize,
+        pane_w_px: i32,
+        hpr: f64,
+        vpr: f64,
+        out: &mut Vec<Prim>,
+    ) {
+        let Some(id) = self.hovered_text else {
+            return;
+        };
+        if self.selected_drawing == Some(id) {
+            return;
+        }
+        let Some(drawing) = self.drawing(id) else {
+            return;
+        };
+        let Some(px) = self.overlay_drawing_px(pane_index, id, hpr, vpr) else {
+            return;
+        };
+        self.push_text_chrome(drawing, &px, pane_w_px, vpr, HOVER_BORDER, out);
     }
 
     /// One drawing's geometry prims at bitmap-px anchors `px`.
@@ -370,44 +423,18 @@ impl ChartEngine {
         }
     }
 
-    /// One drawing's text label (every tool can carry one): the placement resolves the 3×3
-    /// alignment against the tool's reference box (drawings.rs `text_box`/`text_placement`),
-    /// then emits a `Prim::Text` — x is the aligned edge, y the vertical center (the IR's
-    /// middle-baseline convention), so the run rasterizes identically on both backends. An
-    /// empty text tool renders the muted "+ Add Text" prompt (drawings.rs `TEXT_PLACEHOLDER`),
-    /// and a text tool with a `box_color`/`box_border_color` gets its container (crisp
-    /// integer-snapped `Rect`/`RectFrame` prims behind the run — TradingView's text-box
-    /// background/border).
-    fn build_drawing_text(
+    /// The text run's resolved glyph size (bitmap px, placeholder floor included), aligned
+    /// anchor point, and horizontal alignment — shared by the label prim, the container box,
+    /// and the focus/hover chrome so every consumer draws the same geometry.
+    fn text_run_geometry(
         &self,
         drawing: &Drawing,
         px: &[(f64, f64)],
         pane_w_px: i32,
         vpr: f64,
-        out: &mut Vec<Prim>,
-    ) {
-        let is_text_tool = drawing.kind == DrawingKind::Text;
-        if drawing.text.is_empty() && !is_text_tool {
-            return;
-        }
-        // While the host's typing-mode editor owns a text drawing, its label/placeholder is
-        // suppressed — the editor's preview is the only visual for it (TradingView's editing
-        // state).
-        if is_text_tool && self.editing_drawing == Some(drawing.id) {
-            return;
-        }
-        let placeholder = is_text_tool && drawing.text.is_empty();
+    ) -> (f64, f64, f64, DrawingTextHAlign) {
         let layout = &self.options.get().layout;
-        let size = if placeholder {
-            // The preview reads bold + bigger (≥ 12 CSS px, TradingView's prompt).
-            drawing
-                .text_size
-                .unwrap_or(layout.font_size)
-                .max(TEXT_PLACEHOLDER_MIN_SIZE)
-                * vpr
-        } else {
-            drawing.text_size.unwrap_or(layout.font_size) * vpr
-        };
+        let size = drawing.resolved_text_size(layout.font_size) * vpr;
         let pane = &self.panes[drawing.pane_index];
         let reference = ChartEngine::text_box(
             drawing.kind,
@@ -417,23 +444,78 @@ impl ChartEngine {
             pane.height * vpr,
         );
         let (x, y, align) = ChartEngine::text_placement(drawing, &reference, size, TEXT_PAD * vpr);
-        let token = if placeholder {
-            &layout.muted_text_color
-        } else {
-            &layout.text_color
+        (size, x, y, align)
+    }
+
+    /// The text tool's interaction chrome (hover ring, focus border): a crisp integer-snapped
+    /// hollow frame on the SAME box the host's editing wrap draws — the label run (advance ×
+    /// 1.2·size, the hit test's line-height convention) padded by the editing chrome's
+    /// 2 px border + 4 px padding (drawings.rs `TEXT_CHROME_PAD`). Selection, hover, and
+    /// typing mode land on one outline, so entering/leaving the editor moves nothing.
+    fn push_text_chrome(
+        &self,
+        drawing: &Drawing,
+        px: &[(f64, f64)],
+        pane_w_px: i32,
+        vpr: f64,
+        color: Color,
+        out: &mut Vec<Prim>,
+    ) {
+        let (size, x, y, align) = self.text_run_geometry(drawing, px, pane_w_px, vpr);
+        let width = self.measure_drawing_text(drawing, size);
+        let height = size * 1.2;
+        let pad = TEXT_CHROME_PAD * vpr;
+        let left = match align {
+            DrawingTextHAlign::Left => x,
+            DrawingTextHAlign::Center => x - width / 2.0,
+            DrawingTextHAlign::Right => x - width,
         };
+        let rect = IRect {
+            x: (left - pad).round() as i32,
+            y: (y - height / 2.0 - pad).round() as i32,
+            w: (width + 2.0 * pad).round().max(1.0) as i32,
+            h: (height + 2.0 * pad).round().max(1.0) as i32,
+        };
+        out.push(Prim::RectFrame {
+            rect,
+            border: (2.0 * vpr).round().max(1.0) as i32,
+            color,
+        });
+    }
+
+    /// One drawing's text label (every tool can carry one): the placement resolves the 3×3
+    /// alignment against the tool's reference box (drawings.rs `text_box`/`text_placement`),
+    /// then emits a `Prim::Text` — x is the aligned edge, y the vertical center (the IR's
+    /// middle-baseline convention), so the run rasterizes identically on both backends. Empty
+    /// text (including an empty text tool) paints nothing — the host typing-mode editor is the
+    /// only empty-state UI, and leaving it without typed text removes the drawing. A text tool
+    /// with a `box_color`/`box_border_color` gets its container (crisp integer-snapped
+    /// `Rect`/`RectFrame` prims behind the run — TradingView's text-box background/border).
+    fn build_drawing_text(
+        &self,
+        drawing: &Drawing,
+        px: &[(f64, f64)],
+        pane_w_px: i32,
+        vpr: f64,
+        out: &mut Vec<Prim>,
+    ) {
+        // Empty text paints nothing. While the host typing-mode editor is open the LABEL and
+        // the focus border still paint — the editor wrap is borderless with transparent glyphs,
+        // so entering edit cannot lift the text or shift the outline (TradingView's
+        // overlay-caret model).
+        if drawing.text.is_empty() {
+            return;
+        }
+        let is_text_tool = drawing.kind == DrawingKind::Text;
+        let (size, x, y, align) = self.text_run_geometry(drawing, px, pane_w_px, vpr);
+        let layout = &self.options.get().layout;
         let color = drawing
             .text_color
             .as_deref()
-            .filter(|_| !placeholder)
             .and_then(Color::parse_css)
-            .or_else(|| Color::parse_css(token))
+            .or_else(|| Color::parse_css(&layout.text_color))
             .unwrap_or_else(|| {
-                let fallback = if placeholder {
-                    nucleuscharts_core::style::DEFAULT_MUTED_FOREGROUND_RGB
-                } else {
-                    nucleuscharts_core::style::DEFAULT_FOREGROUND_RGB
-                };
+                let fallback = nucleuscharts_core::style::DEFAULT_FOREGROUND_RGB;
                 Color::rgb(fallback.0, fallback.1, fallback.2)
             });
 
@@ -486,13 +568,7 @@ impl ChartEngine {
                 DrawingTextHAlign::Center => TextAlign::Center,
                 DrawingTextHAlign::Right => TextAlign::Right,
             },
-            // The preview reads bold (TradingView's prompt); the committed label uses the
-            // drawing's own weight (normal 400 when unset).
-            weight: if placeholder {
-                700
-            } else {
-                drawing.text_weight.unwrap_or(400)
-            },
+            weight: drawing.text_weight.unwrap_or(400),
             italic: drawing.text_italic,
         });
     }

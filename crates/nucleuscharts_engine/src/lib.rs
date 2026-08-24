@@ -1305,6 +1305,10 @@ pub struct ChartEngine {
     /// placeholder/label is suppressed in the frame so the editor's preview is the only
     /// visual for it.
     editing_drawing: Option<DrawingId>,
+    /// The text drawing under the host's pointer (drawings.rs): the overlay frame paints its
+    /// focus border at hover opacity (TradingView's hover ring). Only the text tool has hover
+    /// chrome — other kinds show nothing until selected.
+    hovered_text: Option<DrawingId>,
     /// Optional host text-measure callback for drawing-label hit boxes (drawings.rs
     /// [`TextMeasureFn`]); without one the engine estimates widths by character count.
     text_measure_fn: Option<TextMeasureFn>,
@@ -1391,6 +1395,7 @@ impl ChartEngine {
             pending_drawing: None,
             brush_capture: None,
             editing_drawing: None,
+            hovered_text: None,
             text_measure_fn: None,
             kinetic: None,
             scroll_animation: None,

@@ -2185,7 +2185,7 @@ fn text_prims(chart: &mut ChartEngine) -> TextPrims {
 }
 
 #[test]
-fn empty_text_tool_renders_the_muted_placeholder_and_hits_it() {
+fn empty_text_tool_paints_nothing_but_remains_hittable() {
     let mut chart = settled_chart();
     let id = chart
         .add_drawing(
@@ -2199,35 +2199,14 @@ fn empty_text_tool_renders_the_muted_placeholder_and_hits_it() {
         )
         .unwrap();
     let (texts, _) = text_prims(&mut chart);
-    let (_, color) = texts
-        .iter()
-        .find(|(t, _)| t == TEXT_PLACEHOLDER)
-        .expect("placeholder rendered");
-    let muted = nucleuscharts_core::style::DEFAULT_MUTED_FOREGROUND_RGB;
-    assert_eq!(*color, Color::rgb(muted.0, muted.1, muted.2));
-    // The preview reads bold and ≥ 12 CSS px (dpr 1 here, so bitmap size == CSS size).
-    let frame = chart.build_frame();
-    let (size, weight) = frame.panes[0]
-        .main
-        .iter()
-        .find_map(|prim| match prim {
-            Prim::Text {
-                text, size, weight, ..
-            } if text == TEXT_PLACEHOLDER => Some((*size, *weight)),
-            _ => None,
-        })
-        .expect("placeholder rendered");
-    assert_eq!(weight, 700, "placeholder is bold");
-    assert!(size >= 12.0, "placeholder is at least 12px: {size}");
-    // And it is a click target (the placeholder opens the editor) — the measured box covers it.
+    assert!(texts.is_empty(), "empty text tools paint no canvas ghost");
+    // The caret-sized chrome box is still a click target (host opens the editor).
     let hit = chart
         .hit_test_drawing(x_at(&chart, 5.0), y_at(&chart, 11.0))
-        .expect("placeholder is clickable");
+        .expect("empty text is clickable");
     assert_eq!(hit.id, id);
-    // Setting text replaces the placeholder with the real run at full strength.
     assert!(chart.drawing_apply_options(id, r##"{"text":"hello"}"##));
     let (texts, _) = text_prims(&mut chart);
-    assert!(texts.iter().all(|(t, _)| t != TEXT_PLACEHOLDER));
     let (_, color) = texts
         .iter()
         .find(|(t, _)| t == "hello")
@@ -2292,7 +2271,7 @@ fn text_styling_options_round_trip_and_render() {
 }
 
 #[test]
-fn editing_drawing_suppresses_the_placeholder() {
+fn editing_drawing_keeps_the_label_for_overlay_caret() {
     let mut chart = settled_chart();
     let id = chart
         .add_drawing(
@@ -2302,20 +2281,20 @@ fn editing_drawing_suppresses_the_placeholder() {
                 logical: 5.0,
                 price: 11.0,
             }],
-            None,
+            Some(r##"{"text":"live"}"##),
         )
         .unwrap();
     let (texts, _) = text_prims(&mut chart);
-    assert!(texts.iter().any(|(t, _)| t == TEXT_PLACEHOLDER));
-    // The host's typing-mode editor owns the visual: the placeholder/label is suppressed.
+    assert!(texts.iter().any(|(t, _)| t == "live"));
+    // Typing mode: the host wrap owns the border, but the canvas label stays so the
+    // transparent editor cannot lift/recolor the glyphs.
     chart.set_editing_drawing(Some(id));
     assert_eq!(chart.editing_drawing(), Some(id));
     let (texts, _) = text_prims(&mut chart);
-    assert!(texts.iter().all(|(t, _)| t != TEXT_PLACEHOLDER));
-    // Clearing the flag restores it.
+    assert!(texts.iter().any(|(t, _)| t == "live"));
     chart.set_editing_drawing(None);
     let (texts, _) = text_prims(&mut chart);
-    assert!(texts.iter().any(|(t, _)| t == TEXT_PLACEHOLDER));
+    assert!(texts.iter().any(|(t, _)| t == "live"));
 }
 
 #[test]

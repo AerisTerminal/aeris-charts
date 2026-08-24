@@ -256,12 +256,14 @@ impl ChartInner {
             };
         let Some(pane) = self.engine.pane_at_y(y_css) else {
             self.engine.set_hovered_series(None);
+            self.engine.set_hovered_text(None);
             return result(None, None, None);
         };
         if let Some((series_id, primitive_id, _)) =
             self.engine.hit_test_user_price_alerts(x_css, y_css)
         {
             self.engine.set_hovered_series(Some(series_id));
+            self.engine.set_hovered_text(None);
             return result(
                 Some(series_id),
                 Some(format!("user-price-alerts:{primitive_id}")),
@@ -317,6 +319,7 @@ impl ChartInner {
         if let Some(hit) = &best_primitive {
             if hit.z_rank() == 2 {
                 self.engine.set_hovered_series(hit.series);
+                self.engine.set_hovered_text(None);
                 return result(hit.series, hit.external_id.clone(), hit.cursor.clone());
             }
         }
@@ -324,15 +327,18 @@ impl ChartInner {
         // the series and the normal/bottom primitives, so their hit wins over everything
         // except a `top`-layer primitive (handled above). A drawing hit reports no series and
         // releases the hovered-series z-bump, and carries the part cursor (`move` on a body,
-        // `pointer` on a selected drawing's anchor handle).
+        // `pointer` on a selected drawing's anchor handle). A TEXT drawing additionally gets
+        // the hover ring (the engine kind-filters; other kinds have no hover chrome).
         if let Some(drawing) = self.engine.hit_test_drawing(x_css, y_css) {
             self.engine.set_hovered_series(None);
+            self.engine.set_hovered_text(Some(drawing.id));
             return result(
                 None,
                 Some(format!("drawing:{}", drawing.id)),
                 Some(drawing.cursor.to_string()),
             );
         }
+        self.engine.set_hovered_text(None);
         // Walk the sources topmost-first, accumulating the best series hit (the reference's
         // `isBetterHit` arbitration); reaching the best primitive hit's owning series
         // returns whatever accumulated above it, else the primitive hit.

@@ -605,7 +605,6 @@ test("drawing tools render pixel-identical on WebGPU and Canvas2D (AA coverage s
         text: "boxed", box_color: "rgba(41, 98, 255, 0.85)", box_border_color: "#e91e63",
         box_border_width: 2, text_color: "#ffffff",
       });
-      chart.add_drawing("text", [{ logical: l0 + 16, price: lo + (hi - lo) / 4 }], {});
       // A styled label (heavy weight + italic) — its own atlas/font-spec path.
       chart.add_drawing("text", [{ logical: Math.floor((l0 + l1) / 2), price: lo - 2 }], {
         text: "styled 800 italic", text_weight: 800, text_italic: true, text_color: "#e91e63",
@@ -1087,10 +1086,13 @@ test("changing style mid-edit never wipes the typed text; font size control appl
   expect(sized.text_size).toBe(24);
   expect(sized.text).toBe("keep me");
 
-  // Selecting the drawing syncs its style into the toolbar inputs.
-  const at = { x: p.x + offset.left, y: p.y + offset.top };
-  await page.mouse.click(at.x, at.y);
-  await page.keyboard.press("Escape"); // close the typing-mode editor the click opened
+  // The drawing is still selected after the style edits — the toolbar mirrors it on pointerup.
+  await page.mouse.click(p.x + offset.left + 200, p.y + offset.top); // empty pane: deselect
+  await settle_frames(page);
+  await page.mouse.click(p.x + offset.left, p.y + offset.top); // first click: select only
+  await settle_frames(page);
+  expect(await page.evaluate(() => window.__chart.selected_drawing())).not.toBeNull();
+  await expect(page.locator("#chart_container #nucleuscharts-text-editor")).toHaveCount(0);
   const synced = await page.evaluate(() => ({
     weight: document.getElementById("drawing_weight").value,
     size: document.getElementById("drawing_text_size").value,
@@ -1149,7 +1151,7 @@ test("tool customization templates new drawings and applies live to the selected
   expect(updated.width).toBe(3);
 });
 
-test("text tool: press places and opens typing mode; typing replaces the preview", async ({ page }) => {
+test("text tool: press places and opens typing mode; typing commits; leaving empty removes", async ({ page }) => {
   await goto_fixture(page);
   // No crosshair pixels near the probes.
   await page.evaluate(() => window.__chart.apply_options({ crosshair: { mode: 2 } }));
@@ -1158,64 +1160,115 @@ test("text tool: press places and opens typing mode; typing replaces the preview
   const clean = await capture(page);
   await page.evaluate(() => window.__chart.set_drawing_tool("text"));
   await page.mouse.click(p.x, p.y);
-  // Typing mode: the editing chrome is a square, thick blue-bordered box with a focused input
-  // and the bold muted "Add text" preview (and nothing else — the engine's own placeholder is
-  // suppressed while editing).
+  // Typing mode: borderless caret overlay; the engine's focus border is the only outline.
   const wrap = page.locator("#chart_container #nucleuscharts-text-editor");
   await expect(wrap).toBeVisible();
   const editor = wrap.locator("#nucleuscharts-text-input");
   await expect(editor).toBeFocused();
-  const preview = wrap.locator("#nucleuscharts-text-preview");
-  await expect(preview).toHaveText("Add text");
-  expect(await wrap.evaluate((el) => getComputedStyle(el).borderRadius)).toBe("0px");
-  expect(await wrap.evaluate((el) => getComputedStyle(el).border)).toContain("2px");
-  const border_color = await wrap.evaluate((el) => getComputedStyle(el).borderColor);
-  expect(border_color).toBe("rgb(62, 99, 221)");
-  // One visual only: the canvas's muted-text pixels at the anchor stay at the clean baseline —
-  // the engine's own placeholder prim is suppressed while editing (the selected drawing's
-  // blue anchor handle stays, correctly).
+  await expect(page.locator("#nucleuscharts-text-preview")).toHaveCount(0);
+  expect(await wrap.evaluate((el) => getComputedStyle(el).borderStyle)).toBe("none");
+  // Focus border stays on the canvas (primary blue ring) — not a DOM handoff.
+  const blue_ring = (png) => count_color(crop_around(png, p.x * PR, p.y * PR, 130, 40), BLUE, 40);
+  expect(blue_ring(await capture(page)), "engine focus border while editing").toBeGreaterThan(10);
+  // Engine keeps painting the label under the transparent editor (no lift). Empty still paints nothing.
   const dark_clean = count_dark(crop_around(clean, p.x * PR, p.y * PR, 130, 26));
   const dark_editing = count_dark(crop_around(await capture(page), p.x * PR, p.y * PR, 130, 26));
-  expect(dark_editing, "engine placeholder suppressed while editing").toBeLessThanOrEqual(dark_clean);
+  expect(dark_editing, "empty edit paints no ghost ink").toBeLessThanOrEqual(dark_clean + 40);
 
-  // Typing hides the "Add text" preview immediately; the box hugs the typed text.
   await editor.fill("engine label");
-  await expect(preview).toBeHidden();
   await page.keyboard.press("Enter");
   await settle_frames(page);
-  // Committed: the chrome is gone, the drawing carries the text.
   await expect(page.locator("#chart_container #nucleuscharts-text-editor")).toHaveCount(0);
   const list = await drawings(page);
   expect(list).toHaveLength(1);
   expect((await page.evaluate(() => window.__chart.drawings()[0].options())).text).toBe("engine label");
+
+  // Leaving empty (Escape on a fresh placement) removes the drawing — no "Add text" left behind.
+  await page.evaluate(() => window.__chart.set_drawing_tool("text"));
+  await page.mouse.click(p.x + 80, p.y);
+  await expect(page.locator("#chart_container #nucleuscharts-text-input")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await settle_frames(page);
+  expect(await drawings(page)).toHaveLength(1);
 });
 
-test("text tool: Escape cancels the edit; clicking the label reopens typing mode", async ({ page }) => {
+test("text tool: first click selects (focus border), a second click opens typing mode; Escape cancels", async ({ page }) => {
   await goto_fixture(page);
+  // No crosshair pixels near the probes.
+  await page.evaluate(() => window.__chart.apply_options({ crosshair: { mode: 2 } }));
   const s = await anchor_spots(page);
   await page.evaluate(({ l0, p_mid }) => {
     window.__chart.add_drawing("text", [{ logical: l0, price: p_mid }], { text: "source" });
   }, s);
   await settle_frames(page);
-  // Click the label: typing mode opens, prefilled.
   const p = await spot(page, s.l0, s.p_mid);
-  await page.mouse.click(p.x, p.y);
   const editor = page.locator("#chart_container #nucleuscharts-text-input");
+
+  // TradingView's two-step model: the first click only SELECTS — no editor, the drawing
+  // becomes selected, and the engine's focus border (primary blue ring) paints around the
+  // label. No anchor discs exist for text (covered engine-side in frame/tests.rs).
+  const before_select = await capture(page);
+  await page.mouse.click(p.x, p.y);
+  await settle_frames(page);
+  await expect(editor).toHaveCount(0);
+  expect(await page.evaluate(() => window.__chart.selected_drawing())).not.toBeNull();
+  const blue_ring = (png) => count_color(crop_around(png, p.x * PR, p.y * PR, 130, 40), BLUE, 40);
+  expect(blue_ring(await capture(page)), "focus border paints on select").toBeGreaterThan(blue_ring(before_select) + 10);
+
+  // The second click on the selected label opens typing mode, prefilled.
+  await page.mouse.click(p.x, p.y);
   await expect(editor).toBeVisible();
-  await expect(editor).toHaveText("source");
-  // The preview is hidden for a non-empty edit.
-  await expect(page.locator("#nucleuscharts-text-preview")).toBeHidden();
+  // Overlay caret: editor glyphs are transparent; the canvas label is the ink.
+  const ink = await editor.evaluate((el) => ({
+    color: getComputedStyle(el).color,
+    fill: getComputedStyle(el).webkitTextFillColor,
+    caret: getComputedStyle(el).caretColor,
+  }));
+  expect(ink.color === "rgba(0, 0, 0, 0)" || ink.fill === "rgba(0, 0, 0, 0)").toBe(true);
   // Escape discards the edit.
   await editor.fill("discarded");
   await page.keyboard.press("Escape");
   await settle_frames(page);
   await expect(page.locator("#chart_container #nucleuscharts-text-editor")).toHaveCount(0);
   expect((await page.evaluate(() => window.__chart.drawings()[0].options())).text).toBe("source");
+  // Still selected after the cancelled edit: ONE click re-enters typing mode.
+  await page.mouse.click(p.x, p.y);
+  await expect(editor).toBeVisible();
+  await page.keyboard.press("Escape");
 });
 
-test("empty text shows the muted placeholder, and clicking it opens typing mode", async ({ page }) => {
+test("hovering a text drawing shows the focus border at reduced opacity; leaving clears it", async ({ page }) => {
   await goto_fixture(page);
-  // No crosshair pixels near the probes.
+  await page.evaluate(() => window.__chart.apply_options({ crosshair: { mode: 2 } }));
+  const s = await anchor_spots(page);
+  await page.evaluate(({ l0, p_mid }) => {
+    window.__chart.add_drawing("text", [{ logical: l0, price: p_mid }], { text: "hoverable" });
+  }, s);
+  await settle_frames(page);
+  const p = await spot(page, s.l0, s.p_mid);
+  // The hover ring blends the primary blue at ~45% over the light fixture background: a
+  // distinctly blue-but-not-full-strength tint the plain chart never contains.
+  const bluish = (png) => {
+    const crop = crop_around(png, p.x * PR, p.y * PR, 140, 44);
+    let n = 0;
+    for (let o = 0; o < crop.data.length; o += 4) {
+      const r = crop.data[o], g = crop.data[o + 1], b = crop.data[o + 2];
+      if (b > r + 30 && b > g + 20) n += 1;
+    }
+    return n;
+  };
+  const resting = bluish(await capture(page));
+  await page.mouse.move(p.x, p.y);
+  await settle_frames(page);
+  expect(bluish(await capture(page)), "hover ring paints").toBeGreaterThan(resting + 10);
+  // Moving off the label removes the ring.
+  await page.mouse.move(p.x, p.y + 120);
+  await settle_frames(page);
+  expect(bluish(await capture(page)), "hover ring clears").toBeLessThanOrEqual(resting + 4);
+});
+
+test("empty text paints nothing on the chart; leaving edit without typing removes it", async ({ page }) => {
+  await goto_fixture(page);
   await page.evaluate(() => window.__chart.apply_options({ crosshair: { mode: 2 } }));
   const s = await anchor_spots(page);
   const clean = await capture(page);
@@ -1223,28 +1276,21 @@ test("empty text shows the muted placeholder, and clicking it opens typing mode"
     window.__chart.add_drawing("text", [{ logical: l0, price: p_mid }]);
   }, s);
   await settle_frames(page);
-  // The "Add text" placeholder paints at the anchor (muted) and is a click target.
   const p = await spot(page, s.l0, s.p_mid);
-  const with_placeholder = await capture(page);
+  // No "Add text" ghost on the canvas for an empty drawing.
   expect(
-    pixel_diff(crop_around(clean, p.x * PR, p.y * PR, 130, 26), crop_around(with_placeholder, p.x * PR, p.y * PR, 130, 26)),
-    "placeholder paints",
-  ).toBeGreaterThan(30);
+    pixel_diff(crop_around(clean, p.x * PR, p.y * PR, 130, 26), crop_around(await capture(page), p.x * PR, p.y * PR, 130, 26)),
+    "empty text paints nothing",
+  ).toBe(0);
+  // Empty text: first click opens typing mode (no ink to focus). Leaving without typing removes it.
   await page.mouse.click(p.x, p.y);
   const editor = page.locator("#chart_container #nucleuscharts-text-input");
   await expect(editor).toBeVisible();
   await expect(editor).toHaveText("");
-  // While editing, the engine's placeholder is suppressed: the region's muted-text pixels drop
-  // back to the clean baseline (the selected drawing's blue anchor handle stays, correctly).
-  const dark_clean = count_dark(crop_around(clean, p.x * PR, p.y * PR, 130, 26));
-  const dark_placeholder = count_dark(crop_around(with_placeholder, p.x * PR, p.y * PR, 130, 26));
-  expect(dark_placeholder, "placeholder text paints").toBeGreaterThan(dark_clean + 20);
-  const dark_editing = count_dark(crop_around(await capture(page), p.x * PR, p.y * PR, 130, 26));
-  expect(dark_editing, "engine placeholder suppressed while editing").toBeLessThanOrEqual(dark_clean);
-  await editor.fill("from placeholder");
-  await page.keyboard.press("Enter");
+  await expect(page.locator("#nucleuscharts-text-preview")).toHaveCount(0);
+  await page.keyboard.press("Escape");
   await settle_frames(page);
-  expect((await page.evaluate(() => window.__chart.drawings()[0].options())).text).toBe("from placeholder");
+  expect(await drawings(page)).toHaveLength(0);
 });
 
 test("text drawing moves freely in both directions with a body drag", async ({ page }) => {
@@ -1280,6 +1326,8 @@ test("the editor tracks its anchor through wheel zoom and scroll (no displacemen
   }, s);
   await settle_frames(page);
   const p = await spot(page, s.l0, s.p_mid);
+  // Two-step: first click selects, second opens typing mode.
+  await page.mouse.click(p.x, p.y);
   await page.mouse.click(p.x, p.y);
   const editor = page.locator("#chart_container #nucleuscharts-text-input");
   await expect(editor).toBeVisible();
@@ -1325,6 +1373,8 @@ test("typing mode keeps the text pixel-anchored (no shift, same size) as it grow
   }, s);
   await settle_frames(page);
   const p = await spot(page, s.l0, s.p_mid);
+  // Two-step: first click selects, second opens typing mode.
+  await page.mouse.click(p.x, p.y);
   await page.mouse.click(p.x, p.y);
   const editor = page.locator("#chart_container #nucleuscharts-text-input");
   await expect(editor).toBeVisible();
@@ -1342,7 +1392,9 @@ test("typing mode keeps the text pixel-anchored (no shift, same size) as it grow
       font_weight: cs.fontWeight,
     };
   });
-  const expected_size = await page.evaluate(() => Math.max(window.__chart.options().layout.fontSize, 12));
+  // Exactly the engine's committed size: text_size, else the text tool's own 18px default
+  // (TEXT_TOOL_DEFAULT_SIZE, drawings.rs) — NOT layout.fontSize, and no editor-side floor.
+  const expected_size = 18;
   let m = await metrics();
   expect(Math.abs(m.center.x - p.x), "text x on the anchor").toBeLessThanOrEqual(1.5);
   expect(Math.abs(m.center.y - p.y), "text y on the anchor").toBeLessThanOrEqual(1.5);
@@ -1356,6 +1408,80 @@ test("typing mode keeps the text pixel-anchored (no shift, same size) as it grow
   expect(Math.abs(m.center.x - p.x), "grown text x still on the anchor").toBeLessThanOrEqual(1.5);
   expect(Math.abs(m.center.y - p.y), "grown text y still on the anchor").toBeLessThanOrEqual(1.5);
   await page.keyboard.press("Escape");
+});
+
+test("typing mode matches the committed render: exact size and baseline (no jump on edit/commit)", async ({ page }) => {
+  await goto_fixture(page);
+  await page.evaluate(() => window.__chart.apply_options({ crosshair: { mode: 2 } }));
+  const s = await anchor_spots(page);
+  // A sub-12px size: the editor must NOT floor it — the engine rasterizes committed text at
+  // the exact size (only the empty-text placeholder is floored at 12, drawings.rs). Flat-bottom
+  // glyphs (no descenders/overshoot) so the committed ink's bottom edge IS the baseline.
+  await page.evaluate(({ l0, p_mid }) => {
+    window.__chart.add_drawing("text", [{ logical: l0, price: p_mid }], { text: "HAHA", text_size: 10, text_color: "#7b1fa2" });
+  }, s);
+  await settle_frames(page);
+  const p = await spot(page, s.l0, s.p_mid);
+  // The committed canvas run's baseline from real pixels: the last purple ink row (+1)
+  // (the fixture page renders the chart at the viewport origin, so capture px are comparable
+  // to viewport CSS px × the device ratio).
+  const png = await capture(page);
+  let run_baseline = -1;
+  for (let y = 0; y < png.height; y += 1) {
+    for (let x = 0; x < png.width; x += 1) {
+      const o = (y * png.width + x) * 4;
+      if (
+        Math.abs(png.data[o] - PURPLE[0]) <= 40 &&
+        Math.abs(png.data[o + 1] - PURPLE[1]) <= 40 &&
+        Math.abs(png.data[o + 2] - PURPLE[2]) <= 40 &&
+        y + 1 > run_baseline
+      ) run_baseline = y + 1;
+    }
+  }
+  expect(run_baseline, "committed label paints").toBeGreaterThan(0);
+  // Two-step: first click selects, second opens typing mode.
+  await page.mouse.click(p.x, p.y);
+  await page.mouse.click(p.x, p.y);
+  const editor = page.locator("#chart_container #nucleuscharts-text-input");
+  await expect(editor).toBeVisible();
+  const probe = await page.evaluate(() => {
+    const editor = document.querySelector("#nucleuscharts-text-input");
+    // The editor's own baseline, via the same zero-size inline-probe the package uses.
+    const span = document.createElement("span");
+    span.style.display = "inline-block";
+    span.style.width = "0";
+    span.style.height = "0";
+    editor.appendChild(span);
+    const baseline = span.getBoundingClientRect().top;
+    span.remove();
+    return { font_size: getComputedStyle(editor).fontSize, baseline };
+  });
+  expect(probe.font_size, "editor size == committed size (no 12px floor)").toBe("10px");
+  expect(
+    Math.abs(probe.baseline * PR - run_baseline),
+    "editor baseline on the committed run's ink baseline",
+  ).toBeLessThanOrEqual(1.6);
+  await page.keyboard.press("Escape");
+});
+
+test("empty typing mode is a blank caret box (no Add text ghost)", async ({ page }) => {
+  await goto_fixture(page);
+  await page.evaluate(() => window.__chart.apply_options({ crosshair: { mode: 2 } }));
+  const s = await anchor_spots(page);
+  await page.evaluate(({ l0, p_mid }) => {
+    window.__chart.add_drawing("text", [{ logical: l0, price: p_mid }]);
+  }, s);
+  await settle_frames(page);
+  const p = await spot(page, s.l0, s.p_mid);
+  await page.mouse.click(p.x, p.y);
+  const editor = page.locator("#chart_container #nucleuscharts-text-input");
+  await expect(editor).toBeVisible();
+  await expect(editor).toHaveText("");
+  await expect(page.locator("#nucleuscharts-text-preview")).toHaveCount(0);
+  const font_size = await editor.evaluate((el) => getComputedStyle(el).fontSize);
+  expect(font_size).toBe("18px");
+  await page.keyboard.press("Escape");
+  expect(await drawings(page)).toHaveLength(0);
 });
 
 test("text styling: weight, italic, and color flow through options and pixels", async ({ page }) => {  await goto_fixture(page);

@@ -518,8 +518,9 @@ pub struct Drawing {
     /// Snap rectangle time anchors to canonical data times, matching the official plugin's
     /// `MouseEventParams.time` placement instead of retaining a fractional x coordinate.
     pub snap_time_to_data: bool,
-    /// The tool's text label (`""` = none). The text tool renders the [`TEXT_PLACEHOLDER`]
-    /// prompt instead and clicks open the host's editor.
+    /// The tool's text label (`""` = none). Empty text tools paint nothing on the chart; the
+    /// host typing-mode editor is the empty-state UI, and leaving it without typed text removes
+    /// the drawing.
     pub text: String,
     /// Label color CSS string; `None` follows the chart's `layout.textColor`.
     pub text_color: Option<String>,
@@ -539,12 +540,16 @@ pub struct Drawing {
     pub box_border_width: f64,
 }
 
-/// The prompt the text tool renders while it carries no text (TradingView's "Add text"),
-/// painted bold (≥ 12 px) and muted, and clickable (it opens the host's editor).
-pub const TEXT_PLACEHOLDER: &str = "Add text";
+/// Default glyph size for the TEXT TOOL's label in CSS px when `text_size` is unset
+/// (TradingView's default text-tool size). Other tools' labels keep following the chart's
+/// `layout.font_size`.
+pub const TEXT_TOOL_DEFAULT_SIZE: f64 = 18.0;
 
-/// Minimum glyph size for the placeholder prompt in CSS px (the preview reads bold + bigger).
-pub(crate) const TEXT_PLACEHOLDER_MIN_SIZE: f64 = 12.0;
+/// The text tool's interaction-chrome padding in CSS px: the editing border (2 px) plus its
+/// padding (4 px), mirrored by the host's `#nucleuscharts-text-editor` wrap (impl.ts). The
+/// hit area and the hover/focus borders all use this box so selection, hovering, and typing
+/// mode land on exactly the same outline.
+pub(crate) const TEXT_CHROME_PAD: f64 = TEXT_PAD + 2.0;
 
 impl Drawing {
     pub(crate) fn new(
@@ -587,14 +592,22 @@ impl Drawing {
         }
     }
 
-    /// The label a drawing actually renders: its `text`, or the muted [`TEXT_PLACEHOLDER`]
-    /// prompt for an empty text tool.
+    /// The label a drawing actually renders. Empty text tools render nothing — the host's
+    /// typing-mode editor is the only empty-state UI, and leaving that editor without typed
+    /// text removes the drawing (TradingView: no lingering "Add text" ghost on the chart).
     pub fn display_text(&self) -> &str {
-        if self.kind == DrawingKind::Text && self.text.is_empty() {
-            TEXT_PLACEHOLDER
-        } else {
-            self.text.as_str()
-        }
+        self.text.as_str()
+    }
+
+    /// The glyph size the label actually renders at in CSS px: `text_size` when set, else
+    /// [`TEXT_TOOL_DEFAULT_SIZE`] for the text tool and the chart's `layout.font_size` for
+    /// every other tool's label. Rendering, hit-testing, and host editing chrome must all
+    /// resolve through this so they never disagree.
+    pub fn resolved_text_size(&self, layout_font_size: f64) -> f64 {
+        self.text_size.unwrap_or(match self.kind {
+            DrawingKind::Text => TEXT_TOOL_DEFAULT_SIZE,
+            _ => layout_font_size,
+        })
     }
 
     fn rebase_logical(&mut self, mapping: &MergedTimeMapping) -> bool {
@@ -1094,6 +1107,9 @@ impl ChartEngine {
         if self.editing_drawing == Some(id) {
             self.editing_drawing = None;
         }
+        if self.hovered_text == Some(id) {
+            self.hovered_text = None;
+        }
         Some((drawing, index))
     }
 
@@ -1567,15 +1583,7 @@ impl ChartEngine {
             return None;
         }
         if entry.text_key != key {
-            let placeholder = drawing.kind == DrawingKind::Text && drawing.text.is_empty();
-            let size = if placeholder {
-                drawing
-                    .text_size
-                    .unwrap_or(font_size)
-                    .max(TEXT_PLACEHOLDER_MIN_SIZE)
-            } else {
-                drawing.text_size.unwrap_or(font_size)
-            };
+            let size = drawing.resolved_text_size(font_size);
             entry.text_width = self.measure_drawing_text_with_family(drawing, size, font_family);
             entry.text_size = size;
             entry.text_key = key;
@@ -1821,22 +1829,20 @@ impl ChartEngine {
         (x, y, h)
     }
 
-    /// Measure (or estimate) a label's width in the same px units as `size`. Measures the
-    /// DISPLAY text (`drawing.display_text()` — the "Add text" placeholder included, at the
-    /// placeholder's bold weight when it applies).
+    /// Measure (or estimate) a label's width in the same px units as `size`. Empty text tools
+    /// use one em so the focus/hover chrome and hit target stay a caret-sized box (the host
+    /// never leaves an empty text drawing on the chart after editing).
     pub(crate) fn measure_drawing_text(&self, drawing: &Drawing, size: f64) -> f64 {
         let layout = &self.options.get().layout;
         self.measure_drawing_text_with_family(drawing, size, &layout.font_family)
     }
 
     fn measure_drawing_text_with_family(&self, drawing: &Drawing, size: f64, family: &str) -> f64 {
+        if drawing.kind == DrawingKind::Text && drawing.text.is_empty() {
+            return size;
+        }
         let text = drawing.display_text();
-        let placeholder = drawing.kind == DrawingKind::Text && drawing.text.is_empty();
-        let weight = if placeholder {
-            700
-        } else {
-            drawing.text_weight.unwrap_or(400)
-        };
+        let weight = drawing.text_weight.unwrap_or(400);
         self.measure_text_run(text, size, family, weight, drawing.text_italic)
     }
 
@@ -2082,11 +2088,12 @@ impl ChartEngine {
         self.selected_drawing
     }
 
-    /// Mark the text drawing the host's typing-mode editor currently owns (TradingView's
-    /// editing state): the frame suppresses its placeholder/label so the editor's preview is
-    /// the only visual for it. Cleared when the editor closes. An unknown id never sticks.
+    /// Mark the text drawing the host's typing-mode editor currently owns. The frame keeps
+    /// painting the label and the focus border underneath the host's borderless caret overlay
+    /// (TradingView's overlay-caret model); this flag is the host/query seam for that session.
+    /// Cleared when the editor closes. An unknown id never sticks.
     pub fn set_editing_drawing(&mut self, id: Option<DrawingId>) {
-        self.invalidate_frame_drawings();
+        self.invalidate_frame_overlay();
         self.editing_drawing = id.filter(|&eid| {
             self.drawings
                 .iter()
@@ -2096,6 +2103,26 @@ impl ChartEngine {
 
     pub fn editing_drawing(&self) -> Option<DrawingId> {
         self.editing_drawing
+    }
+
+    /// Mark the TEXT drawing under the host's pointer (`None` when hovering anything else):
+    /// the overlay frame paints its focus border at hover opacity (TradingView's hover ring).
+    /// Only text drawings stick — the other kinds have no hover affordance, so hovering them
+    /// must not invalidate the overlay. Repaint-worthy changes only.
+    pub fn set_hovered_text(&mut self, id: Option<DrawingId>) {
+        let valid = id.filter(|&hid| {
+            self.drawings
+                .iter()
+                .any(|d| d.id == hid && d.kind == DrawingKind::Text)
+        });
+        if valid != self.hovered_text {
+            self.invalidate_frame_overlay();
+            self.hovered_text = valid;
+        }
+    }
+
+    pub fn hovered_text(&self) -> Option<DrawingId> {
+        self.hovered_text
     }
 
     /// Select the drawing under pane-relative media px `(x, y)` (the host click pipeline):
@@ -2310,10 +2337,12 @@ impl ChartEngine {
                 .is_some()
             }
             DrawingKind::Text => {
-                // The click target is the rendered run (the label, or the "+ Add Text"
-                // placeholder while empty) plus the container padding.
+                // The click/hover target is the interaction-chrome box (the label run while
+                // non-empty, else a one-em caret box — empty text paints nothing on the chart)
+                // plus the editing chrome's border+padding, so the painted hover/focus border
+                // is itself hittable.
                 let layout = &self.options.get().layout;
-                let size = drawing.text_size.unwrap_or(layout.font_size);
+                let size = drawing.resolved_text_size(layout.font_size);
                 let reference =
                     Self::text_box(drawing.kind, px, self.pane_w, 0.0, self.pane_h.max(1.0));
                 let (tx, ty, align) = Self::text_placement(drawing, &reference, size, TEXT_PAD);
@@ -2324,10 +2353,10 @@ impl ChartEngine {
                     DrawingTextHAlign::Center => tx - width / 2.0,
                     DrawingTextHAlign::Right => tx - width,
                 };
-                x >= left - TEXT_PAD
-                    && x <= left + width + TEXT_PAD
-                    && y >= ty - height / 2.0 - TEXT_PAD
-                    && y <= ty + height / 2.0 + TEXT_PAD
+                x >= left - TEXT_CHROME_PAD
+                    && x <= left + width + TEXT_CHROME_PAD
+                    && y >= ty - height / 2.0 - TEXT_CHROME_PAD
+                    && y <= ty + height / 2.0 + TEXT_CHROME_PAD
             }
         }
     }

@@ -3649,6 +3649,113 @@ fn selection_anchors_paint_theme_derived_discs_on_the_selected_series() {
 }
 
 #[test]
+fn text_tool_selection_paints_a_focus_border_without_anchor_handles() {
+    use crate::drawings::{DrawingKind, DrawingPoint, TEXT_TOOL_DEFAULT_SIZE};
+    use nucleuscharts_render::draw_list::IRect;
+
+    // The text chrome is the only RectFrame in the primary token's blue (candle bodies and
+    // rectangle tools carry their own colors).
+    let is_chrome = |color: Color| color.0 & 0xFFFF_FF00 == PRIMARY.0 & 0xFFFF_FF00;
+    let border_frames = |chart: &mut ChartEngine| -> Vec<(IRect, i32, Color)> {
+        chart
+            .build_frame()
+            .panes[0]
+            .main
+            .iter()
+            .filter_map(|prim| match prim {
+                Prim::RectFrame {
+                    rect,
+                    border,
+                    color,
+                } if is_chrome(*color) => Some((*rect, *border, *color)),
+                _ => None,
+            })
+            .collect()
+    };
+
+    let mut chart = anchor_chart();
+    let text = chart
+        .add_drawing(
+            DrawingKind::Text,
+            0,
+            vec![DrawingPoint {
+                logical: 2.0,
+                price: 11.0,
+            }],
+            Some(r#"{"text":"levels"}"#),
+        )
+        .unwrap();
+    // A trend line guards the anchor path: it must keep its handle discs.
+    let line = chart
+        .add_drawing(
+            DrawingKind::TrendLine,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 0.0,
+                    price: 10.0,
+                },
+                DrawingPoint {
+                    logical: 4.0,
+                    price: 12.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+
+    // Unselected, unhovered: no chrome at all.
+    let initial = border_frames(&mut chart);
+    assert!(initial.is_empty(), "unexpected chrome: {initial:?}");
+
+    // Hover: the focus border at hover opacity (dimmed alpha), and only for text — hovering
+    // a trend line sticks nothing.
+    chart.set_hovered_text(Some(line));
+    assert!(border_frames(&mut chart).is_empty());
+    assert_eq!(chart.hovered_text(), None);
+    chart.set_hovered_text(Some(text));
+    assert_eq!(chart.hovered_text(), Some(text));
+    let hover = border_frames(&mut chart);
+    assert_eq!(hover.len(), 1);
+    assert_eq!(hover[0].2 .0 & 0xFF, 0x73, "hover ring at reduced opacity");
+    // The chrome box: 1.2×size line height + the 6 css px chrome pad, 2 px frame (dpr 1).
+    let expected_h = (TEXT_TOOL_DEFAULT_SIZE * 1.2 + 12.0).round() as i32;
+    assert_eq!(hover[0].0.h, expected_h);
+    assert_eq!(hover[0].1, 2);
+
+    // Selection upgrades the same box to full strength — and paints NO anchor discs
+    // (TradingView: text has no drag-point handles).
+    chart.set_selected_drawing(Some(text));
+    let selected = border_frames(&mut chart);
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].2, PRIMARY, "selected border at full strength");
+    assert_eq!(selected[0].0, hover[0].0, "selection keeps the hover ring's box");
+    assert!(frame_discs(&mut chart).is_empty());
+
+    // The hover ring never double-paints over the selection border.
+    let still_one = border_frames(&mut chart);
+    assert_eq!(still_one.len(), 1);
+
+    // While the typing-mode editor owns the drawing, the engine still paints the focus
+    // border (the host wrap is borderless) — the wrap's border is not a second outline.
+    chart.set_editing_drawing(Some(text));
+    let editing = border_frames(&mut chart);
+    assert_eq!(editing.len(), 1, "focus border stays while editing");
+    assert_eq!(editing[0].0, selected[0].0, "edit does not move the focus border");
+    chart.set_editing_drawing(None);
+
+    // The trend line keeps its anchor handles on selection (border discs + fill discs).
+    chart.set_selected_drawing(Some(line));
+    chart.set_hovered_text(None);
+    let discs = frame_discs(&mut chart);
+    assert_eq!(discs.len(), 4, "two anchors × (border disc + fill disc)");
+
+    // Deselect/deshover clears everything.
+    chart.set_selected_drawing(None);
+    assert!(border_frames(&mut chart).is_empty());
+}
+
+#[test]
 fn selection_anchors_decimate_to_a_sparse_hint_at_tight_spacing() {
     // 200 bars across an 800 css px pane (4 px/bar): TradingView-style anchors are a selection
     // HINT, not one disc per bar — one per 96 css px, first and last always kept.

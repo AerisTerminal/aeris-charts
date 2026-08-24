@@ -512,6 +512,9 @@ export function install_gestures(chart: chart_impl): () => void {
       chart.repaint();
       return;
     }
+    // Snapshot the selection before the drag grab selects the hit — `emit_click`'s
+    // two-step text editing needs the pre-press selection.
+    chart.note_drawing_press();
     if (wasm.drawing_drag_start_at(p.x, p.y)) {
       pointer_targets.set(e.pointerId, InputTargetCode.Drawing);
       feed_pointer("down", e, InputTargetCode.Drawing);
@@ -888,11 +891,15 @@ export function install_gestures(chart: chart_impl): () => void {
         if (chart.active_drawing_tool() === "brush" && chart.brush_create_start(p.x, p.y)) {
           brush_drawing = true;
         }
-      } else if (wasm.drawing_drag_start_at_device(p.x, p.y, InputDeviceCode.Touch)) {
-        target = InputTargetCode.Drawing;
-        drawing_dragging = true;
       } else {
-        chart.deactivate_trading_group();
+        // Same pre-grab selection snapshot as the mouse path (two-step text editing).
+        chart.note_drawing_press();
+        if (wasm.drawing_drag_start_at_device(p.x, p.y, InputDeviceCode.Touch)) {
+          target = InputTargetCode.Drawing;
+          drawing_dragging = true;
+        } else {
+          chart.deactivate_trading_group();
+        }
       }
     }
     pointer_targets.set(e.pointerId, target);
