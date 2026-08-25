@@ -1763,6 +1763,21 @@ impl ChartInner {
         self.engine.pane_index_at_y(y_css)
     }
 
+    pub fn chart_context_at(&self, x_css: f64, y_css: f64) -> Vec<f64> {
+        let Some(context) = self.engine.chart_context_at(x_css, y_css) else {
+            return Vec::new();
+        };
+        vec![
+            context.x,
+            context.y,
+            context.pane_index as f64,
+            context.time.unwrap_or(f64::NAN),
+            context.logical.unwrap_or(f64::NAN),
+            context.price,
+            context.series.map_or(f64::NAN, f64::from),
+        ]
+    }
+
     pub fn price_axis_target_at(&self, pane: usize, x_css: f64) -> Option<u32> {
         self.engine
             .price_axis_target_at(pane, x_css)

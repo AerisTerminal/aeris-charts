@@ -207,7 +207,7 @@ impl ChartEngine {
     /// The pane's default price scale (reference `Pane.defaultPriceScale`): the scale of the first
     /// visible, non-overlay series on the pane, else the pane's right scale. Returns the scale
     /// and its base (first) value for coordinate conversion.
-    pub(super) fn pane_default_scale(
+    pub(crate) fn pane_default_scale(
         &self,
         pane_index: usize,
         from: i64,

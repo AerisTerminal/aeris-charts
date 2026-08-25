@@ -27,21 +27,21 @@ test("demo shell is responsive, icon-led, and has no horizontal control ribbon",
 test("feature lab exposes every first-class helper and manages series lifecycle", async ({ page }) => {
   await open_demo(page);
   // The 28 official plugins expose 29 scenarios; the native trading engine adds one more.
-  await expect(page.locator("#feature_grid .feature-card")).toHaveCount(30);
+  await expect(page.locator("#feature_grid .feature-card")).toHaveCount(28);
   await expect(page.locator('[data-feature-id="heatmap-standalone"]')).toBeVisible();
   await expect(page.locator('[data-feature-id="heatmap-line"]')).toBeVisible();
 
-  await page.locator('[data-feature-id="rounded-candles"]').click();
-  await expect(page.locator('[data-feature-id="rounded-candles"]')).toHaveAttribute("aria-pressed", "true");
-  expect(await page.evaluate(() => window.__feature_lab.active_ids())).toEqual(["rounded-candles"]);
-  expect(await page.evaluate(() => window.__chart.series_order().filter((item) => item.series_type() === "rounded_candles").length)).toBe(1);
+  await page.locator('[data-feature-id="hlc-area"]').click();
+  await expect(page.locator('[data-feature-id="hlc-area"]')).toHaveAttribute("aria-pressed", "true");
+  expect(await page.evaluate(() => window.__feature_lab.active_ids())).toEqual(["hlc-area"]);
+  expect(await page.evaluate(() => window.__chart.series_order().filter((item) => item.series_type() === "hlc_area").length)).toBe(1);
   expect(await page.evaluate(() => window.__main.options().visible)).toBe(false);
 
   await page.locator('[data-feature-id="volume-profile"]').click();
-  expect(await page.evaluate(() => window.__feature_lab.active_ids().sort())).toEqual(["rounded-candles", "volume-profile"]);
+  expect(await page.evaluate(() => window.__feature_lab.active_ids().sort())).toEqual(["hlc-area", "volume-profile"]);
   await page.locator("#feature_clear").click();
   expect(await page.evaluate(() => window.__feature_lab.active_ids())).toEqual([]);
-  expect(await page.evaluate(() => window.__chart.series_order().filter((item) => item.series_type() === "rounded_candles").length)).toBe(0);
+  expect(await page.evaluate(() => window.__chart.series_order().filter((item) => item.series_type() === "hlc_area").length)).toBe(0);
   expect(await page.evaluate(() => window.__main.options().visible)).toBe(true);
 });
 
@@ -71,24 +71,8 @@ test("reported plugin scenarios use full data and official line compositions", a
   })));
 
   const initial_lines = (await inspect()).filter((item) => item.type === "line").length;
-  await page.evaluate(() => window.__feature_lab.activate("dual-range-histogram"));
-  let series = await inspect();
-  expect(series.find((item) => item.type === "dual_range_histogram")?.points).toBe(await page.evaluate(() => window.__data.length));
-  expect(series.filter((item) => item.type === "baseline")).toHaveLength(1);
-  expect(series.at(-1)?.type).toBe("baseline");
-  expect(await page.evaluate(() => window.__chart.options().hoveredSeriesOnTop)).toBe(false);
-  expect(await page.evaluate(() => {
-    const range = window.__chart.time_scale().get_visible_logical_range();
-    return range.to - range.from;
-  })).toBeLessThan(await page.evaluate(() => window.__data.length / 2));
-  const dual_margins = await page.evaluate(() => window.__chart.series_order()
-    .find((item) => item.series_type() === "dual_range_histogram").price_scale().options().scale_margins);
-  expect(dual_margins.top).toBeGreaterThan(0);
-  expect(dual_margins.bottom).toBe(dual_margins.top);
-
   await page.evaluate(() => window.__feature_lab.activate("heatmap-standalone"));
-  expect(await page.evaluate(() => window.__chart.options().hoveredSeriesOnTop)).toBe(true);
-  series = await inspect();
+  let series = await inspect();
   expect(series.find((item) => item.type === "heatmap")).toMatchObject({
     points: await page.evaluate(() => window.__data.length),
     first_cells: 10,

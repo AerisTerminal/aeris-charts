@@ -18,12 +18,10 @@ use std::mem::size_of;
 #[serde(rename_all = "snake_case")]
 pub enum FeatureSeriesKind {
     BrushableArea,
-    DualRangeHistogram,
     GroupedBars,
     Heatmap,
     HlcArea,
     PrettyHistogram,
-    RoundedCandles,
     BackgroundShade,
     StackedArea,
     StackedBars,
@@ -34,12 +32,10 @@ impl FeatureSeriesKind {
     pub fn from_u8(kind: u8) -> Option<Self> {
         Some(match kind {
             0 => Self::BrushableArea,
-            1 => Self::DualRangeHistogram,
             2 => Self::GroupedBars,
             3 => Self::Heatmap,
             4 => Self::HlcArea,
             5 => Self::PrettyHistogram,
-            6 => Self::RoundedCandles,
             7 => Self::BackgroundShade,
             8 => Self::StackedArea,
             9 => Self::StackedBars,
@@ -51,12 +47,10 @@ impl FeatureSeriesKind {
     pub fn to_u8(self) -> u8 {
         match self {
             Self::BrushableArea => 0,
-            Self::DualRangeHistogram => 1,
             Self::GroupedBars => 2,
             Self::Heatmap => 3,
             Self::HlcArea => 4,
             Self::PrettyHistogram => 5,
-            Self::RoundedCandles => 6,
             Self::BackgroundShade => 7,
             Self::StackedArea => 8,
             Self::StackedBars => 9,
@@ -115,9 +109,6 @@ pub enum FeatureValue {
     BrushableArea {
         value: f64,
     },
-    DualRangeHistogram {
-        values: Vec<f64>,
-    },
     GroupedBars {
         values: Vec<f64>,
     },
@@ -132,12 +123,6 @@ pub enum FeatureValue {
     PrettyHistogram {
         value: f64,
         color: Option<Color>,
-    },
-    RoundedCandles {
-        open: f64,
-        high: f64,
-        low: f64,
-        close: f64,
     },
     BackgroundShade {
         value: f64,
@@ -158,12 +143,10 @@ impl FeatureValue {
     fn kind(&self) -> FeatureSeriesKind {
         match self {
             Self::BrushableArea { .. } => FeatureSeriesKind::BrushableArea,
-            Self::DualRangeHistogram { .. } => FeatureSeriesKind::DualRangeHistogram,
             Self::GroupedBars { .. } => FeatureSeriesKind::GroupedBars,
             Self::Heatmap { .. } => FeatureSeriesKind::Heatmap,
             Self::HlcArea { .. } => FeatureSeriesKind::HlcArea,
             Self::PrettyHistogram { .. } => FeatureSeriesKind::PrettyHistogram,
-            Self::RoundedCandles { .. } => FeatureSeriesKind::RoundedCandles,
             Self::BackgroundShade { .. } => FeatureSeriesKind::BackgroundShade,
             Self::StackedArea { .. } => FeatureSeriesKind::StackedArea,
             Self::StackedBars { .. } => FeatureSeriesKind::StackedBars,
@@ -178,8 +161,7 @@ impl FeatureValue {
             Self::BrushableArea { value }
             | Self::PrettyHistogram { value, .. }
             | Self::BackgroundShade { value } => safe(*value),
-            Self::DualRangeHistogram { values }
-            | Self::GroupedBars { values }
+            Self::GroupedBars { values }
             | Self::StackedArea { values }
             | Self::StackedBars { values } => {
                 !values.is_empty() && values.iter().copied().all(safe)
@@ -191,12 +173,6 @@ impl FeatureValue {
                         .all(|cell| safe(cell.low) && safe(cell.high) && safe(cell.amount))
             }
             Self::HlcArea { high, low, close } => safe(*high) && safe(*low) && safe(*close),
-            Self::RoundedCandles {
-                open,
-                high,
-                low,
-                close,
-            } => safe(*open) && safe(*high) && safe(*low) && safe(*close),
             Self::WhiskerBox {
                 quartiles,
                 outliers,
@@ -207,12 +183,6 @@ impl FeatureValue {
     fn semantic_anomaly(&self) -> bool {
         match self {
             Self::HlcArea { high, low, close } => high < low || close < low || close > high,
-            Self::RoundedCandles {
-                open,
-                high,
-                low,
-                close,
-            } => high < low || high < open || high < close || low > open || low > close,
             Self::Heatmap { cells } => cells.iter().any(|cell| cell.high < cell.low),
             Self::WhiskerBox { quartiles, .. } => {
                 quartiles.windows(2).any(|pair| pair[0] > pair[1])
@@ -226,7 +196,6 @@ impl FeatureValue {
     pub(crate) fn projection(&self) -> [f64; 4] {
         match self {
             Self::BrushableArea { value } | Self::PrettyHistogram { value, .. } => [*value; 4],
-            Self::DualRangeHistogram { .. } => [0.0; 4],
             Self::GroupedBars { values } => {
                 range_projection(values, *values.last().unwrap_or(&0.0))
             }
@@ -243,12 +212,6 @@ impl FeatureValue {
                 [mid, high, low, mid]
             }
             Self::HlcArea { high, low, close } => [*close, *high, *low, *close],
-            Self::RoundedCandles {
-                open,
-                high,
-                low,
-                close,
-            } => [*open, *high, *low, *close],
             // The reference intentionally returns NaN so this visual never owns a price scale.
             Self::BackgroundShade { .. } => [f64::NAN; 4],
             Self::StackedArea { values } | Self::StackedBars { values } => {
@@ -286,8 +249,6 @@ pub struct FeatureSeriesOptionsPatch {
     pub line_width: Option<f64>,
     pub base_price: Option<f64>,
     pub brush_ranges: Option<Vec<BrushRange>>,
-    pub border_radius: Option<Vec<f64>>,
-    pub max_height: Option<f64>,
     pub cell_border_width: Option<f64>,
     pub cell_border_color: Option<Color>,
     pub high_line_color: Option<Color>,
@@ -300,11 +261,6 @@ pub struct FeatureSeriesOptionsPatch {
     pub close_line_width: Option<f64>,
     pub width_percent: Option<f64>,
     pub radius: Option<f64>,
-    pub up_color: Option<Color>,
-    pub down_color: Option<Color>,
-    pub wick_up_color: Option<Color>,
-    pub wick_down_color: Option<Color>,
-    pub wick_visible: Option<bool>,
     pub low_color: Option<Color>,
     pub high_color: Option<Color>,
     pub low_value: Option<f64>,
@@ -327,8 +283,6 @@ pub(crate) struct FeatureSeriesOptions {
     pub line_width: f64,
     pub base_price: f64,
     pub brush_ranges: Vec<BrushRange>,
-    pub border_radius: Vec<f64>,
-    pub max_height: f64,
     pub cell_border_width: f64,
     pub cell_border_color: Color,
     pub high_line_color: Color,
@@ -341,11 +295,6 @@ pub(crate) struct FeatureSeriesOptions {
     pub close_line_width: f64,
     pub width_percent: f64,
     pub radius: Option<f64>,
-    pub up_color: Color,
-    pub down_color: Color,
-    pub wick_up_color: Color,
-    pub wick_down_color: Color,
-    pub wick_visible: bool,
     pub low_color: Color,
     pub high_color: Color,
     pub low_value: f64,
@@ -371,14 +320,6 @@ fn market_rgb(rgb: (u8, u8, u8)) -> Color {
 
 fn market_rgba(rgb: (u8, u8, u8), alpha: u8) -> Color {
     Color::rgba(rgb.0, rgb.1, rgb.2, alpha)
-}
-
-fn blend_white((r, g, b): (u8, u8, u8), white: u8) -> Color {
-    let mix = |channel: u8| {
-        let keep = 255 - white;
-        ((u16::from(channel) * u16::from(keep) + 255 * u16::from(white)) / 255) as u8
-    };
-    Color::rgb(mix(r), mix(g), mix(b))
 }
 
 impl Default for FeatureSeriesOptions {
@@ -407,8 +348,6 @@ impl Default for FeatureSeriesOptions {
             line_width: 2.0,
             base_price: 0.0,
             brush_ranges: Vec::new(),
-            border_radius: vec![2.0, 0.0, 2.0, 0.0],
-            max_height: 130.0,
             cell_border_width: 1.0,
             cell_border_color: rgba(0, 0, 0, 0),
             high_line_color: market_rgb(MARKET_UP_RGB),
@@ -421,11 +360,6 @@ impl Default for FeatureSeriesOptions {
             close_line_width: 2.0,
             width_percent: 50.0,
             radius: None,
-            up_color: market_rgb(MARKET_UP_RGB),
-            down_color: market_rgb(MARKET_DOWN_RGB),
-            wick_up_color: market_rgb(MARKET_UP_RGB),
-            wick_down_color: market_rgb(MARKET_DOWN_RGB),
-            wick_visible: true,
             low_color: rgb(50, 50, 255),
             high_color: rgb(255, 50, 50),
             low_value: 0.0,
@@ -440,19 +374,6 @@ impl Default for FeatureSeriesOptions {
 }
 
 impl FeatureSeriesOptions {
-    fn for_kind(kind: FeatureSeriesKind) -> Self {
-        let mut options = Self::default();
-        if kind == FeatureSeriesKind::DualRangeHistogram {
-            options.colors = vec![
-                blend_white(MARKET_UP_RGB, 160),
-                market_rgb(MARKET_UP_RGB),
-                blend_white(MARKET_DOWN_RGB, 160),
-                market_rgb(MARKET_DOWN_RGB),
-            ];
-        }
-        options
-    }
-
     fn apply(&mut self, patch: FeatureSeriesOptionsPatch) {
         macro_rules! set {
             ($field:ident) => {
@@ -500,24 +421,6 @@ impl FeatureSeriesOptions {
                 .collect();
         }
         if patch
-            .border_radius
-            .as_ref()
-            .is_some_and(|radii| !radii.is_empty())
-        {
-            self.border_radius = patch
-                .border_radius
-                .unwrap_or_default()
-                .into_iter()
-                .map(|radius| radius.max(0.0))
-                .collect();
-        }
-        if patch
-            .max_height
-            .is_some_and(|value| value.is_finite() && value > 0.0)
-        {
-            self.max_height = patch.max_height.unwrap_or(self.max_height);
-        }
-        if patch
             .cell_border_width
             .is_some_and(|value| value.is_finite() && value >= 0.0)
         {
@@ -558,11 +461,6 @@ impl FeatureSeriesOptions {
                 self.radius = Some(radius);
             }
         }
-        set!(up_color);
-        set!(down_color);
-        set!(wick_up_color);
-        set!(wick_down_color);
-        set!(wick_visible);
         set!(low_color);
         set!(high_color);
         if patch.low_value.is_some_and(f64::is_finite) {
@@ -598,7 +496,7 @@ pub(crate) struct FeatureSeriesState {
 
 impl FeatureSeriesState {
     fn new(kind: FeatureSeriesKind, patch: FeatureSeriesOptionsPatch) -> Self {
-        let mut options = FeatureSeriesOptions::for_kind(kind);
+        let mut options = FeatureSeriesOptions::default();
         options.apply(patch);
         Self {
             kind,
@@ -615,8 +513,7 @@ impl FeatureSeriesState {
             .iter()
             .filter_map(|row| row.value.as_ref())
             .map(|value| match value {
-                FeatureValue::DualRangeHistogram { values }
-                | FeatureValue::GroupedBars { values }
+                FeatureValue::GroupedBars { values }
                 | FeatureValue::StackedArea { values }
                 | FeatureValue::StackedBars { values } => values.capacity() * size_of::<f64>(),
                 FeatureValue::Heatmap { cells } => cells.capacity() * size_of::<HeatmapCell>(),
@@ -629,7 +526,6 @@ impl FeatureSeriesState {
             + self.options.colors.capacity() * size_of::<Color>()
             + self.options.stacked_area_colors.capacity() * size_of::<StackedAreaColor>()
             + self.options.brush_ranges.capacity() * size_of::<BrushRange>()
-            + self.options.border_radius.capacity() * size_of::<f64>()
     }
 }
 
@@ -652,7 +548,6 @@ impl ChartEngine {
                     })
                     .map_or(options.line_color, |range| range.style.line_color)
             }
-            FeatureValue::DualRangeHistogram { .. } => options.colors[0],
             FeatureValue::GroupedBars { values } => {
                 options.colors[values.len().saturating_sub(1) % options.colors.len()]
             }
@@ -671,22 +566,6 @@ impl ChartEngine {
             }
             FeatureValue::HlcArea { .. } => options.close_line_color,
             FeatureValue::PrettyHistogram { color, .. } => color.unwrap_or(options.color),
-            FeatureValue::RoundedCandles { close, .. } => {
-                let previous_close = self
-                    .data
-                    .plot(id)
-                    .last_non_whitespace_row_before(row)
-                    .and_then(|row| feature.rows.get(row))
-                    .and_then(|row| match row.value.as_ref()? {
-                        FeatureValue::RoundedCandles { close, .. } => Some(*close),
-                        _ => None,
-                    });
-                if previous_close.is_none_or(|previous| *close >= previous) {
-                    options.up_color
-                } else {
-                    options.down_color
-                }
-            }
             FeatureValue::BackgroundShade { .. } => options.color,
             FeatureValue::StackedArea { values } => {
                 options.stacked_area_colors
@@ -792,8 +671,6 @@ impl ChartEngine {
                     "line_width": range.style.line_width,
                 }
             })).collect::<Vec<_>>(),
-            "border_radius": options.border_radius,
-            "max_height": options.max_height,
             "cell_border_width": options.cell_border_width,
             "cell_border_color": options.cell_border_color.to_css(),
             "high_line_color": options.high_line_color.to_css(),
@@ -805,11 +682,6 @@ impl ChartEngine {
             "low_line_width": options.low_line_width,
             "close_line_width": options.close_line_width,
             "width_percent": options.width_percent,
-            "up_color": options.up_color.to_css(),
-            "down_color": options.down_color.to_css(),
-            "wick_up_color": options.wick_up_color.to_css(),
-            "wick_down_color": options.wick_down_color.to_css(),
-            "wick_visible": options.wick_visible,
             "low_color": options.low_color.to_css(),
             "high_color": options.high_color.to_css(),
             "low_value": options.low_value,
@@ -1148,13 +1020,31 @@ fn sanitize_feature_rows(
 mod tests {
     use super::*;
 
+    #[test]
+    fn feature_kind_codes_preserve_surviving_public_ids() {
+        let expected = [
+            (0, FeatureSeriesKind::BrushableArea),
+            (2, FeatureSeriesKind::GroupedBars),
+            (3, FeatureSeriesKind::Heatmap),
+            (4, FeatureSeriesKind::HlcArea),
+            (5, FeatureSeriesKind::PrettyHistogram),
+            (7, FeatureSeriesKind::BackgroundShade),
+            (8, FeatureSeriesKind::StackedArea),
+            (9, FeatureSeriesKind::StackedBars),
+            (10, FeatureSeriesKind::WhiskerBox),
+        ];
+        for (code, kind) in expected {
+            assert_eq!(FeatureSeriesKind::from_u8(code), Some(kind));
+            assert_eq!(kind.to_u8(), code);
+        }
+        assert_eq!(FeatureSeriesKind::from_u8(1), None);
+        assert_eq!(FeatureSeriesKind::from_u8(6), None);
+    }
+
     fn sample_value(kind: FeatureSeriesKind, index: usize) -> FeatureValue {
         let value = 10.0 + index as f64;
         match kind {
             FeatureSeriesKind::BrushableArea => FeatureValue::BrushableArea { value },
-            FeatureSeriesKind::DualRangeHistogram => FeatureValue::DualRangeHistogram {
-                values: vec![value, value / 2.0, -value, -value / 2.0],
-            },
             FeatureSeriesKind::GroupedBars => FeatureValue::GroupedBars {
                 values: vec![value, value + 2.0, value - 2.0],
             },
@@ -1174,12 +1064,6 @@ mod tests {
             FeatureSeriesKind::PrettyHistogram => {
                 FeatureValue::PrettyHistogram { value, color: None }
             }
-            FeatureSeriesKind::RoundedCandles => FeatureValue::RoundedCandles {
-                open: value - 1.0,
-                high: value + 2.0,
-                low: value - 2.0,
-                close: value + 1.0,
-            },
             FeatureSeriesKind::BackgroundShade => FeatureValue::BackgroundShade { value },
             FeatureSeriesKind::StackedArea => FeatureValue::StackedArea {
                 values: vec![value, value / 2.0, value / 4.0],
@@ -1307,60 +1191,6 @@ mod tests {
             .labels
             .iter()
             .any(|label| matches!(label.background, Some((.., color)) if color == close_color)));
-
-        let up = Color::rgb(4, 5, 6);
-        let down = Color::rgb(7, 8, 9);
-        chart.configure_feature_series(
-            0,
-            FeatureSeriesKind::RoundedCandles,
-            FeatureSeriesOptionsPatch {
-                up_color: Some(up),
-                down_color: Some(down),
-                ..FeatureSeriesOptionsPatch::default()
-            },
-        );
-        chart
-            .set_feature_series_data(
-                0,
-                vec![
-                    FeatureDataPoint {
-                        time: 1.0,
-                        value: Some(FeatureValue::RoundedCandles {
-                            open: 9.0,
-                            high: 11.0,
-                            low: 8.0,
-                            close: 10.0,
-                        }),
-                    },
-                    FeatureDataPoint {
-                        time: 2.0,
-                        value: None,
-                    },
-                    FeatureDataPoint {
-                        time: 3.0,
-                        value: Some(FeatureValue::RoundedCandles {
-                            open: 10.0,
-                            high: 10.0,
-                            low: 8.0,
-                            close: 9.0,
-                        }),
-                    },
-                ],
-            )
-            .unwrap();
-        assert_eq!(chart.feature_bar_color(0, 0), Some(up));
-        assert_eq!(chart.feature_bar_color(0, 2), Some(down));
-        chart.fit_content();
-        let frame = chart.build_frame();
-        assert!(frame.panes[0].main.iter().any(|primitive| matches!(
-            primitive,
-            nucleuscharts_render::draw_list::Prim::HLine { color, .. } if *color == down
-        )));
-        let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
-        assert!(axis
-            .labels
-            .iter()
-            .any(|label| matches!(label.background, Some((.., color)) if color == down)));
     }
 
     #[test]
@@ -1617,12 +1447,10 @@ mod tests {
     fn every_feature_kind_builds_shared_frame_geometry() {
         let kinds = [
             FeatureSeriesKind::BrushableArea,
-            FeatureSeriesKind::DualRangeHistogram,
             FeatureSeriesKind::GroupedBars,
             FeatureSeriesKind::Heatmap,
             FeatureSeriesKind::HlcArea,
             FeatureSeriesKind::PrettyHistogram,
-            FeatureSeriesKind::RoundedCandles,
             FeatureSeriesKind::BackgroundShade,
             FeatureSeriesKind::StackedArea,
             FeatureSeriesKind::StackedBars,
@@ -1716,50 +1544,7 @@ mod tests {
     }
 
     #[test]
-    fn dual_range_columns_and_background_shade_match_official_bar_geometry() {
-        let mut dual = ChartEngine::new(800.0, 500.0, 1.0);
-        dual.configure_feature_series(
-            0,
-            FeatureSeriesKind::DualRangeHistogram,
-            FeatureSeriesOptionsPatch::default(),
-        );
-        dual.set_feature_series_data(
-            0,
-            (0..6)
-                .map(|time| FeatureDataPoint {
-                    time: time as f64,
-                    value: Some(FeatureValue::DualRangeHistogram {
-                        values: vec![20.0, 10.0, -20.0, -10.0],
-                    }),
-                })
-                .collect(),
-        )
-        .unwrap();
-        dual.time_scale.set_width(800.0);
-        dual.fit_content();
-        let frame = dual.build_frame();
-        let segment = dual
-            .frame_series_segments(0)
-            .iter()
-            .find(|segment| segment.series_id == Some(0))
-            .copied()
-            .unwrap();
-        let columns = frame.panes[0].main[segment.start..segment.end]
-            .iter()
-            .filter_map(|primitive| match primitive {
-                nucleuscharts_render::draw_list::Prim::RoundRect { x, w, .. } => {
-                    Some((*x as i32, *w as i32))
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(columns.len(), 24);
-        assert!(columns.chunks_exact(4).all(|group| {
-            group
-                .iter()
-                .all(|column| *column == group[0] && column.1 > 1)
-        }));
-
+    fn background_shade_matches_official_bar_geometry() {
         let mut background = ChartEngine::new(800.0, 500.0, 2.0);
         background.configure_feature_series(
             0,
@@ -2072,54 +1857,6 @@ mod tests {
             columns, 4,
             "strict bars 2..=4 plus the official right overscan"
         );
-    }
-
-    #[test]
-    fn rounded_candles_preserve_official_wicks_and_canvas_radius_normalization() {
-        let wick = Color::rgb(9, 8, 7);
-        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
-        chart.configure_feature_series(
-            0,
-            FeatureSeriesKind::RoundedCandles,
-            FeatureSeriesOptionsPatch {
-                radius: Some(100.0),
-                wick_visible: Some(false),
-                wick_up_color: Some(wick),
-                ..FeatureSeriesOptionsPatch::default()
-            },
-        );
-        chart
-            .set_feature_series_data(
-                0,
-                vec![FeatureDataPoint {
-                    time: 1.0,
-                    value: Some(FeatureValue::RoundedCandles {
-                        open: 10.0,
-                        high: 12.0,
-                        low: 8.0,
-                        close: 10.0,
-                    }),
-                }],
-            )
-            .unwrap();
-        chart.time_scale.set_width(800.0);
-        chart.fit_content();
-        let frame = chart.build_frame();
-        assert!(frame.panes[0].main.iter().any(|primitive| {
-            matches!(primitive, nucleuscharts_render::draw_list::Prim::Rect { color, .. }
-                if *color == wick)
-        }));
-        let body = frame.panes[0]
-            .main
-            .iter()
-            .find_map(|primitive| match primitive {
-                nucleuscharts_render::draw_list::Prim::RoundRect { h, radii, .. } => {
-                    Some((*h, *radii))
-                }
-                _ => None,
-            })
-            .expect("rounded candle body");
-        assert!(body.1.iter().all(|radius| *radius <= body.0 / 2.0));
     }
 
     #[test]

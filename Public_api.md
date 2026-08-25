@@ -13,6 +13,9 @@ entry point and `./design.css` are the only npm export paths. The supported root
   `chart.price_scale()`/`pane.price_scale()`, and series scale identity/rebinding;
 - built-in series, indicators, drawing kinds, options, themes, data ingestion, interactions,
   subscriptions, screenshots, and lifecycle operations declared by those handles;
+- engine-resolved secondary-click context through `chart.subscribe_chart_context()`, including
+  pane, time, logical index, coordinates, hit series, and the exact price on its scale; hosts own
+  menus, clipboard operations, and order actions;
 - chart-wide engine value queries through `chart.value_snapshot(logical_index?)`, including every
   live series' handle/ID, current kind, pane/scale placement, engine-owned exact or independently
   latest values, predecessor value, and formatted fields; `mouse_event_params.value_snapshot`

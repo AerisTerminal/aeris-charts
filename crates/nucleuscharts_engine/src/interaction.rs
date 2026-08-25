@@ -134,6 +134,19 @@ pub struct InputModifiers {
     pub meta: bool,
 }
 
+/// Deterministic chart-space context for one intentional secondary click. Hosts own the menu or
+/// action UI; the engine owns pane, time, logical-index, hit-series, and price-scale resolution.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ChartContext {
+    pub x: f64,
+    pub y: f64,
+    pub pane_index: usize,
+    pub time: Option<f64>,
+    pub logical: Option<f64>,
+    pub price: f64,
+    pub series: Option<SeriesId>,
+}
+
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum GestureState {
@@ -793,6 +806,36 @@ impl ChartEngine {
         }
         index
     }
+
+    /// Resolve a secondary-click payload without mutating hover, selection, drawing, or trading
+    /// state. A hit series supplies its exact pane scale; empty pane space uses the same canonical
+    /// default scale as the crosshair.
+    pub fn chart_context_at(&self, x: f64, y: f64) -> Option<ChartContext> {
+        if !x.is_finite() || !y.is_finite() || !(0.0..=self.pane_w).contains(&x) {
+            return None;
+        }
+        let pane_index = self.pane_at_y(y)?;
+        let series = self.hit_test_series(x, y);
+        let price = if let Some(series) = series {
+            self.series_coordinate_to_price(series, y)?
+        } else {
+            let (from, _) = self.visible_range_for_frame()?;
+            let (scale, base) = self.pane_default_scale(pane_index, from);
+            if scale.is_empty() {
+                return None;
+            }
+            scale.coordinate_to_price(y, base)
+        };
+        price.is_finite().then(|| ChartContext {
+            x,
+            y,
+            pane_index,
+            time: self.coordinate_to_time(x),
+            logical: self.coordinate_to_logical(x),
+            price,
+            series,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -1110,6 +1153,41 @@ mod tests {
             Some(true)
         );
         chart.price_axis_end_scroll(0, comparison);
+    }
+
+    #[test]
+    fn chart_context_uses_the_hit_series_scale_without_mutating_selection() {
+        let mut chart = chart_with_data(600.0, 300.0);
+        let comparison_series = chart.add_series(SeriesKind::Line);
+        chart
+            .set_series_data(
+                comparison_series,
+                &[1.0, 2.0, 3.0, 4.0, 5.0],
+                &[1_000.0, 1_010.0, 1_020.0, 1_030.0, 1_040.0],
+                &[1_000.0, 1_010.0, 1_020.0, 1_030.0, 1_040.0],
+                &[1_000.0, 1_010.0, 1_020.0, 1_030.0, 1_040.0],
+                &[1_000.0, 1_010.0, 1_020.0, 1_030.0, 1_040.0],
+            )
+            .unwrap();
+        let comparison = chart
+            .add_price_scale(0, "context", PriceScaleSide::Left, Some(0), true)
+            .unwrap();
+        chart.set_series_price_scale(comparison_series, comparison);
+        chart.set_price_scale_visible_range_for(0, PriceScaleTarget::Right, 0.0, 40.0);
+        chart.set_price_scale_visible_range_for(0, comparison, 900.0, 1_100.0);
+
+        let x = chart.time_scale.index_to_coordinate(4);
+        let y = chart
+            .series_price_to_coordinate(comparison_series, 1_040.0)
+            .unwrap();
+        let context = chart.chart_context_at(x, y).expect("chart context");
+
+        assert_eq!(context.pane_index, 0);
+        assert_eq!(context.logical, Some(4.0));
+        assert_eq!(context.time, Some(5.0));
+        assert_eq!(context.series, Some(comparison_series));
+        assert!((context.price - 1_040.0).abs() < 1e-9);
+        assert_eq!(chart.selected_series(), None);
     }
 
     #[test]

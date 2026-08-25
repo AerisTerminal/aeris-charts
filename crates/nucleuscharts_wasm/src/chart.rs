@@ -2895,6 +2895,11 @@ impl NucleusChart {
     pub fn pane_index_at_y(&self, y_css: f64) -> usize {
         self.inner.borrow().pane_index_at_y(y_css)
     }
+    /// Engine-owned secondary-click context as
+    /// `[x, y, pane, time|NaN, logical|NaN, price, series_id|NaN]`.
+    pub fn chart_context_at(&self, x_css: f64, y_css: f64) -> Vec<f64> {
+        self.inner.borrow().chart_context_at(x_css, y_css)
+    }
     pub fn price_axis_target_at(&self, pane: usize, x_css: f64) -> Option<u32> {
         self.inner.borrow().price_axis_target_at(pane, x_css)
     }

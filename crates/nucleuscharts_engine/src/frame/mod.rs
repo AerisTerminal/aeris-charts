@@ -1556,7 +1556,13 @@ impl ChartEngine {
                 cache.overlay.prims.clear();
                 cache.overlay.points.clear();
                 self.build_native_accessibility_focus_frame(pi, hpr, vpr, &mut cache.overlay.prims);
-                self.build_hovered_text_frame(pi, pane_w_px as i32, hpr, vpr, &mut cache.overlay.prims);
+                self.build_hovered_text_frame(
+                    pi,
+                    pane_w_px as i32,
+                    hpr,
+                    vpr,
+                    &mut cache.overlay.prims,
+                );
                 self.build_selected_drawing_handles_frame(
                     pi,
                     pane_w_px as i32,

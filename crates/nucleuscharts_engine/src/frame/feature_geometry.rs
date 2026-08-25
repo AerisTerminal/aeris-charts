@@ -1,10 +1,9 @@
 use super::*;
 use crate::feature_series::{FeatureSeriesKind, FeatureSeriesOptions, FeatureValue};
-use nucleuscharts_render::bar_width::{apply_crosshair_parity, optimal_candlestick_width};
+use nucleuscharts_render::bar_width::optimal_candlestick_width;
 
 #[derive(Clone, Copy)]
 struct VisibleFeatureBar<'a> {
-    row: usize,
     logical: i64,
     x_media: f64,
     value: &'a FeatureValue,
@@ -169,7 +168,6 @@ impl ChartEngine {
                 let value = feature.rows.get(row)?.value.as_ref()?;
                 let logical = plot.index_at(row)?;
                 Some(VisibleFeatureBar {
-                    row,
                     logical,
                     x_media: self.time_scale.index_to_coordinate(logical),
                     value,
@@ -188,15 +186,6 @@ impl ChartEngine {
                 pane_top + pane_height,
                 out,
                 points,
-                scale,
-                rs.base_value,
-            ),
-            FeatureSeriesKind::DualRangeHistogram => self.build_dual_range_feature(
-                &bars,
-                &feature.options,
-                hpr,
-                vpr,
-                out,
                 scale,
                 rs.base_value,
             ),
@@ -230,16 +219,6 @@ impl ChartEngine {
             ),
             FeatureSeriesKind::PrettyHistogram => self.build_pretty_histogram_feature(
                 &bars,
-                &feature.options,
-                hpr,
-                vpr,
-                out,
-                scale,
-                rs.base_value,
-            ),
-            FeatureSeriesKind::RoundedCandles => self.build_rounded_candles_feature(
-                &bars,
-                &feature.rows,
                 &feature.options,
                 hpr,
                 vpr,
@@ -415,73 +394,6 @@ impl ChartEngine {
                 (style.line_width * vpr) as f32,
                 style.line_color,
             );
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn build_dual_range_feature(
-        &self,
-        bars: &[VisibleFeatureBar<'_>],
-        options: &FeatureSeriesOptions,
-        hpr: f64,
-        vpr: f64,
-        out: &mut Vec<Prim>,
-        scale: &nucleuscharts_core::scale::price_scale_core::PriceScaleCore,
-        base: f64,
-    ) {
-        let maximum = bars
-            .iter()
-            .filter_map(|bar| match bar.value {
-                FeatureValue::DualRangeHistogram { values } => Some(values.as_slice()),
-                _ => None,
-            })
-            .flatten()
-            .map(|value| value.abs())
-            .fold(0.0, f64::max);
-        if maximum == 0.0 {
-            return;
-        }
-        let positions = column_positions(
-            &bars.iter().map(|bar| bar.x_media).collect::<Vec<_>>(),
-            self.time_scale.bar_spacing(),
-            hpr,
-        );
-        let zero = scale.price_to_coordinate(0.0, base);
-        let border_width = if self.time_scale.bar_spacing() * hpr < 4.0 {
-            0.0
-        } else {
-            (0.5 * hpr).max(1.0)
-        } as f32;
-        for (bar, column) in bars.iter().zip(positions) {
-            let FeatureValue::DualRangeHistogram { values } = bar.value else {
-                continue;
-            };
-            let width = hpr
-                .max((column.right - column.left) as f64)
-                .min(self.time_scale.bar_spacing() * hpr) as f32;
-            for (index, value) in values.iter().enumerate() {
-                let y =
-                    zero - value.signum() * (value.abs() / maximum) * (options.max_height / 2.0);
-                let (top, height) = positions_box(zero, y, vpr);
-                let requested = options.border_radius[index % options.border_radius.len()] * vpr;
-                let radius = requested.min(width as f64 / 2.0).min(height as f64).floor() as f32;
-                let radii = if *value >= 0.0 {
-                    [radius, radius, 0.0, 0.0]
-                } else {
-                    [0.0, 0.0, radius, radius]
-                };
-                let color = options.colors[index % options.colors.len()];
-                out.push(Prim::RoundRect {
-                    x: column.left as f32,
-                    y: top as f32,
-                    w: width,
-                    h: height as f32,
-                    radii,
-                    fill: color,
-                    border_width,
-                    border_color: Color::rgba(0, 0, 0, 0),
-                });
-            }
         }
     }
 
@@ -690,90 +602,6 @@ impl ChartEngine {
                 fill: color.unwrap_or(options.color),
                 border_width: 0.0,
                 border_color: Color::rgba(0, 0, 0, 0),
-            });
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn build_rounded_candles_feature(
-        &self,
-        bars: &[VisibleFeatureBar<'_>],
-        all_rows: &[crate::feature_series::FeatureRow],
-        options: &FeatureSeriesOptions,
-        hpr: f64,
-        vpr: f64,
-        out: &mut Vec<Prim>,
-        scale: &nucleuscharts_core::scale::price_scale_core::PriceScaleCore,
-        base: f64,
-    ) {
-        let mut previous_close = f64::NEG_INFINITY;
-        let first_row = bars.first().map_or(0, |bar| bar.row);
-        for row in all_rows.iter().take(first_row) {
-            if let Some(FeatureValue::RoundedCandles { close, .. }) = &row.value {
-                previous_close = *close;
-            }
-        }
-        let spacing = self.time_scale.bar_spacing();
-        let body_width =
-            apply_crosshair_parity(optimal_candlestick_width(spacing, 1.0), 1.0).max(1) as f64;
-        let wick_width = hpr.floor().max(1.0) / hpr;
-        let radius = options
-            .radius
-            .unwrap_or(if spacing < 4.0 { 0.0 } else { spacing / 3.0 }) as f32;
-        for bar in bars {
-            let FeatureValue::RoundedCandles {
-                open,
-                high,
-                low,
-                close,
-            } = bar.value
-            else {
-                continue;
-            };
-            let rising = *close >= previous_close;
-            previous_close = *close;
-            let body_color = if rising {
-                options.up_color
-            } else {
-                options.down_color
-            };
-            let wick_color = if rising {
-                options.wick_up_color
-            } else {
-                options.wick_down_color
-            };
-            // `RoundedCandleSeriesRenderer._drawWicks` in the official example does not consult
-            // the inherited `wickVisible` option. Preserve that observable plugin behavior.
-            let high_y = scale.price_to_coordinate(*high, base);
-            let low_y = scale.price_to_coordinate(*low, base);
-            let (top, height) = positions_box(high_y, low_y, vpr);
-            let (x, width) = positions_line(bar.x_media, hpr, wick_width);
-            out.push(Prim::Rect {
-                rect: IRect {
-                    x,
-                    y: top,
-                    w: width,
-                    h: height,
-                },
-                color: wick_color,
-            });
-            let open_y = scale.price_to_coordinate(*open, base);
-            let close_y = scale.price_to_coordinate(*close, base);
-            let (top, height) = positions_box(open_y, close_y, vpr);
-            let (x, width) = positions_line(bar.x_media, hpr, body_width);
-            // Canvas `roundRect` proportionally normalizes an oversized uniform radius to fit
-            // the rectangle. Normalize once in the shared frame so Canvas2D, WebGPU, and GPUI
-            // execute the same official geometry.
-            let radius = radius.min(width as f32 / 2.0).min(height as f32 / 2.0);
-            out.push(Prim::RoundRect {
-                x: x as f32,
-                y: top as f32,
-                w: width as f32,
-                h: height as f32,
-                radii: [radius; 4],
-                fill: body_color,
-                border_width: 0.0,
-                border_color: body_color,
             });
         }
     }

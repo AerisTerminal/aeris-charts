@@ -163,7 +163,7 @@ const TOOLBAR_FEATURE_MANIFEST: &[&str] = &[
     "axes:border-visible,border-color,text-color,separator",
     "watermark:visible,text,color,size",
     "interaction:axis-scaling,mouse-kinetic,reset-view",
-    "native-visual-approximations:day-bands,position-band,autoscale-band,rounded-candles,markers,plugin-watermark,vertical-line",
+    "native-visual-approximations:day-bands,position-band,autoscale-band,markers,plugin-watermark,vertical-line",
 ];
 
 /// Column-major OHLC, in the shape `ChartEngine::set_series_data` takes.
@@ -406,7 +406,6 @@ struct NativeFixtures {
     day_bands: bool,
     position_band: bool,
     autoscale_band: bool,
-    rounded_candles: bool,
     markers: bool,
     plugin_watermark: bool,
     vertical_line: bool,
@@ -906,36 +905,6 @@ impl Probe {
                     width: 2,
                     style: LineStyle::Dashed,
                     color: Color::rgb(0x9c, 0x27, 0xb0),
-                });
-            }
-        }
-        if self.fixtures.rounded_candles && count > 0 {
-            let step = (count / 16).max(1);
-            let body_w = (self.engine.bar_spacing() * dpr * 0.65).max(3.0) as f32;
-            for i in (0..count).step_by(step) {
-                let Some(cx) = device_x(i as f64) else {
-                    continue;
-                };
-                let (Some(open), Some(close)) = (
-                    device_y(self.source_bars.open[i]),
-                    device_y(self.source_bars.close[i]),
-                ) else {
-                    continue;
-                };
-                let y = open.min(close);
-                top.push(Prim::RoundRect {
-                    x: cx as f32 - body_w / 2.0,
-                    y: y as f32,
-                    w: body_w,
-                    h: (open - close).abs().max(2) as f32,
-                    radii: [2.0 * dpr as f32; 4],
-                    fill: if self.source_bars.close[i] >= self.source_bars.open[i] {
-                        Color::rgba(0x26, 0xa6, 0x9a, 210)
-                    } else {
-                        Color::rgba(0xef, 0x53, 0x50, 210)
-                    },
-                    border_width: 1.0,
-                    border_color: Color::rgba(0xff, 0xff, 0xff, 100),
                 });
             }
         }
@@ -2690,9 +2659,8 @@ impl InteractiveDemo {
                 0 => p.fixtures.day_bands = !p.fixtures.day_bands,
                 1 => p.fixtures.position_band = !p.fixtures.position_band,
                 2 => p.fixtures.autoscale_band = !p.fixtures.autoscale_band,
-                3 => p.fixtures.rounded_candles = !p.fixtures.rounded_candles,
-                4 => p.toggle_markers(),
-                5 => p.fixtures.plugin_watermark = !p.fixtures.plugin_watermark,
+                3 => p.toggle_markers(),
+                4 => p.fixtures.plugin_watermark = !p.fixtures.plugin_watermark,
                 _ => p.fixtures.vertical_line = !p.fixtures.vertical_line,
             }),
         }
@@ -2812,9 +2780,8 @@ impl InteractiveDemo {
                     0 => fixtures.day_bands,
                     1 => fixtures.position_band,
                     2 => fixtures.autoscale_band,
-                    3 => fixtures.rounded_candles,
-                    4 => fixtures.markers,
-                    5 => fixtures.plugin_watermark,
+                    3 => fixtures.markers,
+                    4 => fixtures.plugin_watermark,
                     _ => fixtures.vertical_line,
                 }
             }),
@@ -3317,10 +3284,9 @@ impl Render for InteractiveDemo {
                     b("day bands", DemoAction::Fixture(0)),
                     b("position band", DemoAction::Fixture(1)),
                     b("autoscale band", DemoAction::Fixture(2)),
-                    b("rounded fixture", DemoAction::Fixture(3)),
-                    b("markers", DemoAction::Fixture(4)),
-                    b("plugin watermark", DemoAction::Fixture(5)),
-                    b("vertical line", DemoAction::Fixture(6)),
+                    b("markers", DemoAction::Fixture(3)),
+                    b("plugin watermark", DemoAction::Fixture(4)),
+                    b("vertical line", DemoAction::Fixture(5)),
                 ],
             ),
         ];
@@ -3680,7 +3646,6 @@ mod tests {
             "bid-ask",
             "separator",
             "mouse-kinetic",
-            "rounded-candles",
             "plugin-watermark",
             "vertical-line",
         ] {

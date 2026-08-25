@@ -19,12 +19,10 @@ import type { accessibility_handle, accessibility_options } from "./accessibilit
  */
 export type feature_series_kind =
   | "brushable_area"
-  | "dual_range_histogram"
   | "grouped_bars"
   | "heatmap"
   | "hlc_area"
   | "pretty_histogram"
-  | "rounded_candles"
   | "background_shade"
   | "stacked_area"
   | "stacked_bars"
@@ -106,14 +104,12 @@ export interface whitespace_data {
 }
 
 export interface brushable_area_data { time: time; value: number }
-export interface dual_range_histogram_data { time: time; values: readonly number[] }
 export interface grouped_bars_data { time: time; values: readonly number[] }
 export interface heatmap_cell { low: number; high: number; amount: number }
 export interface heatmap_data { time: time; cells: readonly heatmap_cell[] }
 export type heatmap_cell_shader = (amount: number) => string;
 export interface hlc_area_data { time: time; high: number; low: number; close: number }
 export interface pretty_histogram_data { time: time; value: number; color?: string }
-export interface rounded_candle_data { time: time; open: number; high: number; low: number; close: number }
 export interface background_shade_data { time: time; value: number }
 /** Every non-whitespace row in one stacked-area series must carry the same number of layers. */
 export interface stacked_area_data { time: time; values: readonly number[] }
@@ -127,12 +123,10 @@ export interface whisker_box_data {
 
 export type feature_series_data =
   | brushable_area_data
-  | dual_range_histogram_data
   | grouped_bars_data
   | heatmap_data
   | hlc_area_data
   | pretty_histogram_data
-  | rounded_candle_data
   | background_shade_data
   | stacked_area_data
   | stacked_bars_data
@@ -383,6 +377,12 @@ export interface mouse_event_params {
 }
 
 export type mouse_event_handler = (params: mouse_event_params) => void;
+/** Engine-resolved context delivered for a secondary click inside a pane. */
+export interface chart_context_params extends mouse_event_params {
+  /** Exact price at the click Y on the hit series' scale, or the pane's canonical default scale. */
+  price: number;
+}
+export type chart_context_handler = (params: chart_context_params) => void;
 export type dbl_click_handler = (params: mouse_event_params) => void;
 export type visible_logical_range_handler = (range: logical_range | null) => void;
 export type visible_time_range_handler = (range: time_range | null) => void;
@@ -951,8 +951,6 @@ export interface feature_series_options {
   bottom_color: string;
   base_price: number;
   brush_ranges: readonly feature_brush_range[];
-  border_radius: readonly number[];
-  max_height: number;
   cell_border_width: number;
   cell_border_color: string;
   /** Official Heat Map `cellShader`; evaluated at the host boundary and retained as engine color. */
@@ -1057,12 +1055,10 @@ export const KIND_TO_U8: Record<series_kind, number> = {
   histogram: 4,
   baseline: 5,
   brushable_area: 7,
-  dual_range_histogram: 7,
   grouped_bars: 7,
   heatmap: 7,
   hlc_area: 7,
   pretty_histogram: 7,
-  rounded_candles: 7,
   background_shade: 7,
   stacked_area: 7,
   stacked_bars: 7,
@@ -1072,12 +1068,10 @@ export const KIND_TO_U8: Record<series_kind, number> = {
 
 export const FEATURE_KIND_TO_U8: Record<feature_series_kind, number> = {
   brushable_area: 0,
-  dual_range_histogram: 1,
   grouped_bars: 2,
   heatmap: 3,
   hlc_area: 4,
   pretty_histogram: 5,
-  rounded_candles: 6,
   background_shade: 7,
   stacked_area: 8,
   stacked_bars: 9,
@@ -1891,6 +1885,9 @@ export interface chart_api {
   /** Fire on a click/tap inside the pane. */
   subscribe_click(handler: mouse_event_handler): void;
   unsubscribe_click(handler: mouse_event_handler): void;
+  /** Fire once for a secondary click inside a pane. Hosts own any menu or action UI. */
+  subscribe_chart_context(handler: chart_context_handler): void;
+  unsubscribe_chart_context(handler: chart_context_handler): void;
   /** Fire on a double-click inside the pane (the default fit-content action still runs). */
   subscribe_dbl_click(handler: dbl_click_handler): void;
   unsubscribe_dbl_click(handler: dbl_click_handler): void;

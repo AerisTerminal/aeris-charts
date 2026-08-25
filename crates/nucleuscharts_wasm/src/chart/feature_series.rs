@@ -39,13 +39,11 @@ fn parse_feature_value(kind: FeatureSeriesKind, item: &JsValue) -> Option<Featur
         FeatureSeriesKind::BrushableArea
         | FeatureSeriesKind::PrettyHistogram
         | FeatureSeriesKind::BackgroundShade => has_any(item, &["value"]),
-        FeatureSeriesKind::DualRangeHistogram
-        | FeatureSeriesKind::GroupedBars
+        FeatureSeriesKind::GroupedBars
         | FeatureSeriesKind::StackedArea
         | FeatureSeriesKind::StackedBars => has_any(item, &["values"]),
         FeatureSeriesKind::Heatmap => has_any(item, &["cells"]),
         FeatureSeriesKind::HlcArea => has_any(item, &["high", "low", "close"]),
-        FeatureSeriesKind::RoundedCandles => has_any(item, &["open", "high", "low", "close"]),
         FeatureSeriesKind::WhiskerBox => has_any(item, &["quartiles", "outliers"]),
     };
     if !payload_present {
@@ -55,10 +53,6 @@ fn parse_feature_value(kind: FeatureSeriesKind, item: &JsValue) -> Option<Featur
         FeatureSeriesKind::BrushableArea => FeatureValue::BrushableArea {
             value: number(item, "value").unwrap_or(f64::NAN),
         },
-        FeatureSeriesKind::DualRangeHistogram => {
-            let values = numbers(item, "values").unwrap_or_default();
-            FeatureValue::DualRangeHistogram { values }
-        }
         FeatureSeriesKind::GroupedBars => {
             let values = numbers(item, "values").unwrap_or_default();
             FeatureValue::GroupedBars { values }
@@ -87,12 +81,6 @@ fn parse_feature_value(kind: FeatureSeriesKind, item: &JsValue) -> Option<Featur
         FeatureSeriesKind::PrettyHistogram => FeatureValue::PrettyHistogram {
             value: number(item, "value").unwrap_or(f64::NAN),
             color: color(item, "color"),
-        },
-        FeatureSeriesKind::RoundedCandles => FeatureValue::RoundedCandles {
-            open: number(item, "open").unwrap_or(f64::NAN),
-            high: number(item, "high").unwrap_or(f64::NAN),
-            low: number(item, "low").unwrap_or(f64::NAN),
-            close: number(item, "close").unwrap_or(f64::NAN),
         },
         FeatureSeriesKind::BackgroundShade => FeatureValue::BackgroundShade {
             value: number(item, "value").unwrap_or(f64::NAN),
@@ -150,8 +138,7 @@ fn feature_point_to_js(point: FeatureDataPoint) -> JsValue {
                 set_property(&object, "color", color.to_css());
             }
         }
-        FeatureValue::DualRangeHistogram { values }
-        | FeatureValue::GroupedBars { values }
+        FeatureValue::GroupedBars { values }
         | FeatureValue::StackedArea { values }
         | FeatureValue::StackedBars { values } => {
             set_property(&object, "values", number_array(&values));
@@ -168,17 +155,6 @@ fn feature_point_to_js(point: FeatureDataPoint) -> JsValue {
             set_property(&object, "cells", output);
         }
         FeatureValue::HlcArea { high, low, close } => {
-            set_property(&object, "high", high);
-            set_property(&object, "low", low);
-            set_property(&object, "close", close);
-        }
-        FeatureValue::RoundedCandles {
-            open,
-            high,
-            low,
-            close,
-        } => {
-            set_property(&object, "open", open);
             set_property(&object, "high", high);
             set_property(&object, "low", low);
             set_property(&object, "close", close);
@@ -266,16 +242,6 @@ fn parse_options(json: &str) -> FeatureSeriesOptionsPatch {
         line_width: json_number(&value, "line_width"),
         base_price: json_number(&value, "base_price"),
         brush_ranges,
-        border_radius: value
-            .get("border_radius")
-            .and_then(serde_json::Value::as_array)
-            .map(|values| {
-                values
-                    .iter()
-                    .filter_map(serde_json::Value::as_f64)
-                    .collect()
-            }),
-        max_height: json_number(&value, "max_height"),
         cell_border_width: json_number(&value, "cell_border_width"),
         cell_border_color: json_color(&value, "cell_border_color"),
         high_line_color: json_color(&value, "high_line_color"),
@@ -288,13 +254,6 @@ fn parse_options(json: &str) -> FeatureSeriesOptionsPatch {
         close_line_width: json_number(&value, "close_line_width"),
         width_percent: json_number(&value, "width_percent"),
         radius: json_number(&value, "radius"),
-        up_color: json_color(&value, "up_color"),
-        down_color: json_color(&value, "down_color"),
-        wick_up_color: json_color(&value, "wick_up_color"),
-        wick_down_color: json_color(&value, "wick_down_color"),
-        wick_visible: value
-            .get("wick_visible")
-            .and_then(serde_json::Value::as_bool),
         low_color: json_color(&value, "low_color"),
         high_color: json_color(&value, "high_color"),
         low_value: json_number(&value, "low_value"),

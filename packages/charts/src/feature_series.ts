@@ -92,7 +92,11 @@ export function enable_brushable_area_interaction(
     tooltip.clear();
   };
   const on_dbl_click = (): void => clear();
+  const on_keydown = (event: KeyboardEvent): void => {
+    if (event.key === "Escape" && tooltip.active_range() !== null) clear();
+  };
   chart.subscribe_dbl_click(on_dbl_click);
+  chart.chart_element().addEventListener("keydown", on_keydown, { capture: true });
   return {
     active_range: tooltip.active_range,
     clear,
@@ -100,6 +104,7 @@ export function enable_brushable_area_interaction(
       if (detached) return;
       detached = true;
       chart.unsubscribe_dbl_click(on_dbl_click);
+      chart.chart_element().removeEventListener("keydown", on_keydown, { capture: true });
       tooltip.clear();
       tooltip.detach();
       chart.apply_options({ handle_scroll: previous_scroll, handle_scale: previous_scale });

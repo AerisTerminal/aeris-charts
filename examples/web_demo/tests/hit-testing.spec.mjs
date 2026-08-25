@@ -122,6 +122,94 @@ test("engine series hit test sets hovered_series; leaving the geometry clears it
   expect(await overlay_cursor(page)).toBe("crosshair");
 });
 
+test("secondary click emits pane- and scale-correct chart context without selecting", async ({ page }) => {
+  await goto_fixture(page);
+  const target = await page.evaluate(async () => {
+    const chart = window.__chart;
+    const scale = chart.add_price_scale({ id: "context-scale", side: "left", order: 0 });
+    const series = chart.add_series("line", {
+      color: "#ff00ff",
+      line_width: 6,
+      price_scale_id: "context-scale",
+    });
+    const range = chart.time_scale().get_visible_logical_range();
+    const logical = Math.floor((range.from + range.to) / 2);
+    const time = window.__data[logical].time;
+    series.set_data(window.__data.map((bar) => ({ time: bar.time, value: 1_000 })));
+    scale.set_visible_range({ from: 900, to: 1_100 });
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    window.__contexts = [];
+    window.__clicks = 0;
+    chart.subscribe_click(() => { window.__clicks += 1; });
+    chart.subscribe_chart_context((context) => {
+      window.__contexts.push({
+        price: context.price,
+        time: context.time,
+        logical: context.logical,
+        point: context.point,
+        pane_index: context.pane_index,
+        hovered_series: context.hovered_series?.id ?? null,
+        hovered_object_id: context.hovered_object_id,
+      });
+    });
+    const pane = chart.panes()[0].get_geometry();
+    const bounds = chart.chart_element().getBoundingClientRect();
+    const x = chart.time_scale().logical_to_coordinate(logical);
+    const y = series.price_to_coordinate(1_000);
+    return {
+      client_x: bounds.left + pane.left + x,
+      client_y: bounds.top + pane.top + y,
+      x,
+      y,
+      time,
+      logical,
+      series_id: series.id,
+    };
+  });
+  await settle_frames(page);
+
+  const dispatch = await page.evaluate(({ client_x, client_y }) => {
+    window.__chart.clear_hover();
+    const canvases = document.querySelectorAll("#chart_container canvas");
+    const overlay = canvases[canvases.length - 1];
+    const accepted = overlay.dispatchEvent(new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: client_x,
+      clientY: client_y,
+    }));
+    return { default_prevented: !accepted, hover_series: window.__chart.hover_series_id() };
+  }, target);
+  const result = await page.evaluate(() => {
+    const context = window.__contexts[0];
+    const hovered = window.__chart.series_order().find((series) => series.id === context.hovered_series);
+    return {
+      contexts: window.__contexts,
+      clicks: window.__clicks,
+      selection_anchors: JSON.parse(window.__chart.wasm.selection_anchor_identities_json()),
+      expected_price: hovered.coordinate_to_price(context.point.y),
+      expected_time: window.__chart.time_scale().coordinate_to_time(context.point.x),
+      expected_logical: window.__chart.time_scale().coordinate_to_logical(context.point.x),
+      default_price: window.__chart.coordinate_to_price(context.point.y),
+    };
+  });
+  expect(dispatch).toEqual({ default_prevented: true, hover_series: null });
+  expect(result.clicks).toBe(0);
+  expect(result.selection_anchors).toEqual([]);
+  expect(result.contexts).toHaveLength(1);
+  expect(result.contexts[0]).toMatchObject({
+    pane_index: 0,
+    hovered_series: target.series_id,
+    hovered_object_id: null,
+  });
+  expect(result.contexts[0].price).toBeCloseTo(result.expected_price, 9);
+  expect(result.contexts[0].time).toBe(result.expected_time);
+  expect(result.contexts[0].logical).toBe(result.expected_logical);
+  expect(Math.abs(result.contexts[0].price - result.default_price)).toBeGreaterThan(100);
+  expect(Math.abs(result.contexts[0].point.x - target.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(result.contexts[0].point.y - target.y)).toBeLessThanOrEqual(1);
+});
+
 test("hoveredSeriesOnTop repaints the hovered series above an overlapping one", async ({ page }) => {
   await goto_fixture(page);
   // No crosshair pixels in the sampled band.

@@ -70,15 +70,14 @@ const profile = create_volume_profile(candles, {
 // profile.set_data(next_time_anchored_profile); profile.detach();
 ```
 
-The engine-owned feature set includes brushable area, dual-range histogram, grouped bars,
-heatmap, HLC area, pretty histogram, rounded candles, shaded background, stacked area,
+The engine-owned feature set includes brushable area, grouped bars, heatmap, HLC area,
+pretty histogram, shaded background, stacked area,
 stacked bars, and box-and-whisker series. Primitive helpers include accessibility, anchored text,
 official ±10% price bands, delta and ordinary tooltips, expiring/user price alerts, highlighted-bar
 crosshair, image watermark, overlay price scale, partial price line, rectangle/trend/vertical
 drawings, session highlighting, volume profile, and user-defined price lines.
 
-As in the upstream examples, dual-range histogram is composed beneath a normal baseline series,
-while heatmap-around-line and shaded-background examples are composed beneath a normal line series.
+Heatmap-around-line and shaded-background examples are composed beneath a normal line series.
 
 Features that Nucleus already owns—drawings, bands, price lines, overlay scales, partial-last-price
 lines, session shading, highlighted bar slots, and time-anchored volume profiles—are thin helpers

@@ -454,49 +454,6 @@ impl ChartEngine {
                             HIT_TEST_TOLERANCE,
                         )
                     }
-                    FeatureSeriesKind::DualRangeHistogram => {
-                        let maximum = feature
-                            .rows
-                            .iter()
-                            .filter_map(|row| match row.value.as_ref()? {
-                                FeatureValue::DualRangeHistogram { values } => {
-                                    Some(values.as_slice())
-                                }
-                                _ => None,
-                            })
-                            .flatten()
-                            .map(|value| value.abs())
-                            .fold(0.0, f64::max);
-                        let zero = scale.price_to_coordinate(0.0, base_value);
-                        let items = plot
-                            .visible_rows(from, to)
-                            .filter_map(|row| {
-                                let FeatureValue::DualRangeHistogram { values } =
-                                    feature.rows.get(row)?.value.as_ref()?
-                                else {
-                                    return None;
-                                };
-                                let low = values.iter().copied().fold(0.0, f64::min);
-                                let high = values.iter().copied().fold(0.0, f64::max);
-                                let coordinate = |value: f64| {
-                                    if maximum == 0.0 {
-                                        zero
-                                    } else {
-                                        zero - value / maximum * (feature.options.max_height / 2.0)
-                                    }
-                                };
-                                let logical = plot.index_at(row)?;
-                                Some((
-                                    self.time_scale.index_to_coordinate(logical),
-                                    logical,
-                                    coordinate(high),
-                                    coordinate(low),
-                                ))
-                            })
-                            .collect::<Vec<_>>();
-                        hit_test_series_range(&items, x_css, y_css, bar_spacing, HIT_TEST_TOLERANCE)
-                            .map(|distance| (distance, SeriesHitKind::Range))
-                    }
                     _ => {
                         let items = plot
                             .visible_rows(from, to)

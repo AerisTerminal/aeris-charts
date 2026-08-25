@@ -18,8 +18,8 @@
     },
     {
       "path": "custom_series.d.ts",
-      "bytes": 5957,
-      "sha256": "f6fae555f43769dd304179629f95f6c60b6744f176c3e78245967beed4c87d70"
+      "bytes": 5953,
+      "sha256": "d382ba0b1d5ac20089bc4369399969a1d9331c996bf1e46f34f643c55a08870f"
     },
     {
       "path": "errors.d.ts",
@@ -63,13 +63,13 @@
     },
     {
       "path": "theme.d.ts",
-      "bytes": 1430,
-      "sha256": "a9439cfee5185241527d81e011a3e9a82bc52731ed761c3bac4e313e18d38b05"
+      "bytes": 1536,
+      "sha256": "4f7e12a79bc83913d65ff977f44e0962b075d13364fbfab34a364c8a8562aaed"
     },
     {
       "path": "types.d.ts",
-      "bytes": 93813,
-      "sha256": "ecaa92f5ad3687a3ca85f5ccf89b1eab7e50355a92f3ba0642f6befc9ec3c4c1"
+      "bytes": 94005,
+      "sha256": "fc1d65a3ce8990f8312d0dea54490d68f513ae723e9d32981d39317d471f14a4"
     }
   ]
 }

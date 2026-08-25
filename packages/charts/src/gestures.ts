@@ -765,6 +765,11 @@ export function install_gestures(chart: chart_impl): () => void {
     chart.emit_click(p.x, p.y);
   };
 
+  const on_contextmenu = (e: MouseEvent) => {
+    const p = local_xy(e);
+    if (chart.emit_chart_context(p.x, p.y)) e.preventDefault();
+  };
+
   // reference `preventScrollByWheelClick` (helpers/events.ts): suppress Chrome's middle-click
   // autoscroll; registered Chrome-only like reference (`window.chrome !== undefined`).
   const on_mousedown = (e: MouseEvent) => {
@@ -1191,6 +1196,7 @@ export function install_gestures(chart: chart_impl): () => void {
   overlay.addEventListener("pointerleave", on_leave);
   overlay.addEventListener("dblclick", on_dblclick);
   overlay.addEventListener("click", on_click);
+  overlay.addEventListener("contextmenu", on_contextmenu);
   overlay.addEventListener("keydown", on_keydown);
   if (is_chrome) {
     overlay.addEventListener("mousedown", on_mousedown);
@@ -1216,6 +1222,7 @@ export function install_gestures(chart: chart_impl): () => void {
     overlay.removeEventListener("pointerleave", on_leave);
     overlay.removeEventListener("dblclick", on_dblclick);
     overlay.removeEventListener("click", on_click);
+    overlay.removeEventListener("contextmenu", on_contextmenu);
     overlay.removeEventListener("keydown", on_keydown);
     overlay.removeEventListener("mousedown", on_mousedown);
     window.removeEventListener("keydown", on_modifier_key);

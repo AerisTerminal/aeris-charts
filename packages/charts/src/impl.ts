@@ -19,7 +19,7 @@ import {
 import { nucleuscharts_error } from "./errors.js";
 import type { nucleuscharts_error_code } from "./errors.js";
 import type {
-  any_series_options, backend_status, bars_info, chart_api, chart_options, chart_state_v1, chart_value_snapshot, data_changed_handler, dbl_click_handler,
+  any_series_options, backend_status, bars_info, chart_api, chart_context_handler, chart_context_params, chart_options, chart_state_v1, chart_value_snapshot, data_changed_handler, dbl_click_handler,
   deep_partial, drawing_api, drawing_created_handler, drawing_info, drawing_kind, drawing_options,
   drawing_point, drawing_tool_change_handler,
   feature_series_kind, frame_stats,
@@ -157,17 +157,17 @@ const PRICE_SCALE_JSON_OPTION_KEYS = [
 const KIND_NAMES = ["candlestick", "bar", "line", "area", "histogram", "baseline", "custom"] as const;
 const FEATURE_KIND_NAMES = [
   "brushable_area",
-  "dual_range_histogram",
+  undefined,
   "grouped_bars",
   "heatmap",
   "hlc_area",
   "pretty_histogram",
-  "rounded_candles",
+  undefined,
   "background_shade",
   "stacked_area",
   "stacked_bars",
   "whisker_box",
-] as const satisfies readonly feature_series_kind[];
+] as const satisfies readonly (feature_series_kind | undefined)[];
 
 /**
  * Slot layout of the `frame_stats_into` f64 buffer. Must match `crate::telemetry::slot` in
@@ -2389,6 +2389,7 @@ export class chart_impl implements chart_api {
   private readonly series_by_id = new Map<number, series_impl>();
   private readonly crosshair_subs = new Set<mouse_event_handler>();
   private readonly click_subs = new Set<mouse_event_handler>();
+  private readonly chart_context_subs = new Set<chart_context_handler>();
   private readonly dbl_click_subs = new Set<dbl_click_handler>();
   private readonly visible_logical_range_subs = new Set<visible_logical_range_handler>();
   private readonly visible_time_range_subs = new Set<visible_time_range_handler>();
@@ -3189,6 +3190,12 @@ export class chart_impl implements chart_api {
   unsubscribe_click(handler: mouse_event_handler): void {
     this.click_subs.delete(handler);
   }
+  subscribe_chart_context(handler: chart_context_handler): void {
+    this.chart_context_subs.add(handler);
+  }
+  unsubscribe_chart_context(handler: chart_context_handler): void {
+    this.chart_context_subs.delete(handler);
+  }
   subscribe_dbl_click(handler: dbl_click_handler): void {
     this.dbl_click_subs.add(handler);
   }
@@ -3382,6 +3389,23 @@ export class chart_impl implements chart_api {
     if (this.click_subs.size === 0) return;
     const params = this.build_params(x, y);
     for (const h of this.click_subs) h(params);
+  }
+
+  /** Emit engine-resolved context without running primary-click selection or activation paths. */
+  emit_chart_context(x: number, y: number): boolean {
+    if (this.chart_context_subs.size === 0) return false;
+    const context = this.wasm.chart_context_at(x, y);
+    if (context.length !== 7) return false;
+    const params = this.build_params(context[0]!, context[1]!) as chart_context_params;
+    params.pane_index = context[2]!;
+    params.time = Number.isNaN(context[3]!) ? null : context[3]!;
+    params.logical = Number.isNaN(context[4]!) ? null : context[4]!;
+    params.price = context[5]!;
+    const series_id = context[6]!;
+    params.hovered_series = Number.isNaN(series_id) ? null : this.series_handle(series_id);
+    params.hovered_object_id = null;
+    for (const handler of this.chart_context_subs) handler(params);
+    return true;
   }
 
   /** Announce the current visible time range to assistive tech (used after keyboard navigation). */
@@ -4291,6 +4315,7 @@ export class chart_impl implements chart_api {
     this.series_by_id.clear();
     this.crosshair_subs.clear();
     this.click_subs.clear();
+    this.chart_context_subs.clear();
     this.dbl_click_subs.clear();
     this.visible_logical_range_subs.clear();
     this.visible_time_range_subs.clear();

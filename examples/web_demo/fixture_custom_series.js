@@ -1,12 +1,9 @@
 /**
- * Port of the reference's plugin-examples `rounded-candles-series` to the Nucleus custom-series contract
- * (plugin platform Phase C-c). Source: tmp/refsrc/plugin-examples/src/plugins/
- * rounded-candles-series/{rounded-candles-series.ts,renderer.ts} plus the dimension helpers in
- * src/helpers/dimensions/{positions,candles,crosshair-width}.ts.
+ * OHLC custom-series fixture for the Nucleus plugin contract (plugin platform Phase C-c).
  *
  * The draw body mirrors the reference's `_drawImpl` 1:1: the same up/down rule (close vs the PREVIOUS
- * close — the example's own rule), the same crisp-position math, the same media-px `radius`
- * used as a bitmap radius. The only adaptation is the coordinate space: Nucleus's render context
+ * close), the same crisp-position math, and the same media-px `radius`. The only adaptation is
+ * the coordinate space: Nucleus's render context
  * carries absolute BITMAP px (item x and `price_to_y` outputs), where the reference's renderer receives
  * pane-media coordinates and scales by `horizontal/verticalPixelRatio` inside its
  * `useBitmapCoordinateSpace` scope — so the helpers below run at pixelRatio 1, with widths
@@ -70,14 +67,13 @@ function gridAndCrosshairMediaWidth(horizontalPixelRatio) {
 }
 
 /**
- * The reference `RoundedCandleSeries` pane view as a Nucleus `custom_series_pane_view`.
- * `overrides` matches the reference's `RoundedCandleSeriesOptions` rendering options (they stay
- * plugin-side here, like every plugin rendering option); `hooks.on_render` is a demo/test
+ * An OHLC pane view as a Nucleus `custom_series_pane_view`.
+ * `overrides` supplies plugin-side rendering options; `hooks.on_render` is a demo/test
  * observability hook receiving each frame's visible items.
  */
-export function rounded_candles_pane_view(overrides = {}, hooks = {}) {
-  // reference rounded-candles-series.ts `defaultOptions` (rendering half; the engine half —
-  // `customStyleDefaults.color` — arrives via `default_options` below).
+export function custom_ohlc_pane_view(overrides = {}, hooks = {}) {
+  // Rendering defaults stay plugin-side; the engine's custom-series color arrives through
+  // `default_options` below.
   const options = {
     upColor: "#089981",
     downColor: "#f7525f",
@@ -87,9 +83,9 @@ export function rounded_candles_pane_view(overrides = {}, hooks = {}) {
     ...overrides,
   };
   return {
-    // reference RoundedCandleSeries.priceValueBuilder.
+    // OHLC values contributing to autoscale.
     price_value_builder: (item) => [item.high, item.low, item.close],
-    // reference RoundedCandleSeries.isWhitespace.
+    // A missing close denotes whitespace.
     is_whitespace: (item) => item.close === undefined,
     // reference customStyleDefaults (custom-series.ts): the engine's custom-series `color` default.
     default_options: { color: "#2196f3" },

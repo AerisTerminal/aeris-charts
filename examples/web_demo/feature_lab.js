@@ -122,42 +122,6 @@ function series_features(bars) {
       data: () => bars.map((bar) => ({ time: bar.time, value: bar.close })),
     },
     {
-      id: "dual-range-histogram", label: "Dual range", detail: "Symmetric histogram", icon: "chart",
-      preserve_time_spacing: true,
-      series_kind: "dual_range_histogram", options: {},
-      data: () => bars.map((bar, index) => ({ time: bar.time, values: [12 + index % 17, 6 + index % 9, -(8 + index % 13), -(4 + index % 7)] })),
-      compose: (chart, histogram) => {
-        const restore_spacing = use_official_feature_spacing(chart);
-        const hovered_series_on_top = chart.options().hoveredSeriesOnTop;
-        chart.apply_options({ hoveredSeriesOnTop: false });
-        const values = bars.map((bar) => bar.close);
-        const middle = (Math.min(...values) + Math.max(...values)) / 2;
-        const remove_baseline = add_line_companion(
-          chart,
-          bars.map((bar) => ({ time: bar.time, value: bar.close - middle })),
-          { baseline_value: 0 },
-          "baseline",
-        );
-        const scale = histogram.price_scale();
-        const previous_margins = scale.options().scale_margins;
-        const update_margins = () => {
-          const height = chart.panes()[0].get_geometry().height;
-          const margin = Math.min(0.3, histogram.options().max_height / 2 / height);
-          scale.apply_options({ scale_margins: { top: margin, bottom: margin } });
-        };
-        const resize_observer = new ResizeObserver(update_margins);
-        resize_observer.observe(chart.chart_element());
-        update_margins();
-        return () => {
-          resize_observer.disconnect();
-          scale.apply_options({ scale_margins: previous_margins });
-          remove_baseline();
-          chart.apply_options({ hoveredSeriesOnTop: hovered_series_on_top });
-          restore_spacing();
-        };
-      },
-    },
-    {
       id: "grouped-bars", label: "Grouped bars", detail: "Side-by-side values", icon: "chart",
       series_kind: "grouped_bars", options: { base_price: 0 },
       data: () => sampled.map((bar, index) => ({ time: bar.time, values: [12 + index % 13, 18 + index % 9, 8 + index % 16] })),
@@ -218,11 +182,6 @@ function series_features(bars) {
       id: "pretty-histogram", label: "Pretty histogram", detail: "Rounded columns", icon: "chart",
       series_kind: "pretty_histogram", options: { base_price: base, color: "#a459d1", width_percent: 64 },
       data: () => sampled.map((bar) => ({ time: bar.time, value: bar.close, color: bar.close >= bar.open ? "#089981" : "#f7525f" })),
-    },
-    {
-      id: "rounded-candles", label: "Rounded candles", detail: "Custom OHLC", icon: "candles",
-      series_kind: "rounded_candles", options: {},
-      data: () => sampled.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })),
     },
     {
       id: "shaded-background", label: "Shaded backdrop", detail: "LWC shade field + line", icon: "chart",

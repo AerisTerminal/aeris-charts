@@ -3657,9 +3657,7 @@ fn text_tool_selection_paints_a_focus_border_without_anchor_handles() {
     // rectangle tools carry their own colors).
     let is_chrome = |color: Color| color.0 & 0xFFFF_FF00 == PRIMARY.0 & 0xFFFF_FF00;
     let border_frames = |chart: &mut ChartEngine| -> Vec<(IRect, i32, Color)> {
-        chart
-            .build_frame()
-            .panes[0]
+        chart.build_frame().panes[0]
             .main
             .iter()
             .filter_map(|prim| match prim {
@@ -3729,7 +3727,10 @@ fn text_tool_selection_paints_a_focus_border_without_anchor_handles() {
     let selected = border_frames(&mut chart);
     assert_eq!(selected.len(), 1);
     assert_eq!(selected[0].2, PRIMARY, "selected border at full strength");
-    assert_eq!(selected[0].0, hover[0].0, "selection keeps the hover ring's box");
+    assert_eq!(
+        selected[0].0, hover[0].0,
+        "selection keeps the hover ring's box"
+    );
     assert!(frame_discs(&mut chart).is_empty());
 
     // The hover ring never double-paints over the selection border.
@@ -3741,7 +3742,10 @@ fn text_tool_selection_paints_a_focus_border_without_anchor_handles() {
     chart.set_editing_drawing(Some(text));
     let editing = border_frames(&mut chart);
     assert_eq!(editing.len(), 1, "focus border stays while editing");
-    assert_eq!(editing[0].0, selected[0].0, "edit does not move the focus border");
+    assert_eq!(
+        editing[0].0, selected[0].0,
+        "edit does not move the focus border"
+    );
     chart.set_editing_drawing(None);
 
     // The trend line keeps its anchor handles on selection (border discs + fill discs).

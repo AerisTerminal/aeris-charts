@@ -52,7 +52,7 @@ function max_channel_delta(a, b) {
   return max_delta;
 }
 
-// (a) The custom series (the ported reference rounded-candles plugin example) records the same Prim
+// (a) The custom OHLC series records the same Prim
 // commands once per frame, so WebGPU and Canvas2D present pixel-identical frames with it active.
 // Bar spacing 3 puts the example's `radius` rule at 0, so its bodies emit crisp quad-family
 // rects — the family both backends rasterize bit-exactly (nonzero radii take the tessellated
@@ -65,7 +65,7 @@ test("custom series paints identically on both backends with the plugin active",
   expect(await page.evaluate(() => window.__custom_series_active())).toBe(true);
   const canvas_active = PNG.sync.read(await page.screenshot({ animations: "disabled", fullPage: false }));
 
-  // The plugin actually painted: the pane region (rounded candles over the built-in ones) changed.
+  // The plugin actually painted: the pane region changed.
   const pane_width = Math.round((fixture.css_width - fixture.price_axis_width) * fixture.pixel_ratio);
   const pane_height = Math.round((fixture.css_height - fixture.time_axis_height) * fixture.pixel_ratio);
   const painted = count_different(

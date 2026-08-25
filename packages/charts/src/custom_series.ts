@@ -64,7 +64,7 @@ export interface custom_series_render_context
  * model — the reference's `renderer()`/`update()` pair collapses into one per-frame `render(ctx)`).
  * Plain objects and class instances both work — the package binds the methods it finds.
  *
- * Rendering options the engine does not model (reference style options like the rounded-candles
+ * Rendering options the engine does not model (reference style options for custom renderers
  * example's `radius`) stay plugin-side (closure state); {@link default_options} covers the
  * engine series options (`visible`, `price_scale_id`, `last_value_visible`, ...). Unsupported
  * style keys in those options are ignored, like every series kind.

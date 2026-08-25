@@ -53,12 +53,10 @@ test("all advanced series render through the shared Rust engine", async ({ page 
     const bars = window.__data.slice(0, 20);
     const definitions = [
       ["brushable_area", { brush_ranges: [{ range: { from: 5, to: 10 }, style: { line_color: "#f23645", top_color: "#f2364555", bottom_color: "#f2364500", line_width: 2 } }] }, bars.map((bar) => ({ time: bar.time, value: bar.close }))],
-      ["dual_range_histogram", {}, bars.map((bar, index) => ({ time: bar.time, values: [index + 1, index / 2 + 1, index / 3 + 1, index / 4 + 1] }))],
       ["grouped_bars", {}, bars.map((bar, index) => ({ time: bar.time, values: [index + 1, index + 3, index + 2] }))],
       ["heatmap", {}, bars.map((bar, index) => ({ time: bar.time, cells: [{ low: bar.low, high: bar.close, amount: index * 5 }, { low: bar.close, high: bar.high, amount: 100 - index * 5 }] }))],
       ["hlc_area", {}, bars.map((bar) => ({ time: bar.time, high: bar.high, low: bar.low, close: bar.close }))],
       ["pretty_histogram", { base_price: 90 }, bars.map((bar) => ({ time: bar.time, value: bar.close }))],
-      ["rounded_candles", {}, bars.map(({ time, open, high, low, close }) => ({ time, open, high, low, close }))],
       ["background_shade", { low_value: 90, high_value: 120 }, bars.map((bar) => ({ time: bar.time, value: bar.close }))],
       ["stacked_area", {}, bars.map((bar, index) => ({ time: bar.time, values: [10 + index, 5 + index / 2, 3] }))],
       ["stacked_bars", {}, bars.map((bar, index) => ({ time: bar.time, values: [10 + index, 5, 3] }))],
@@ -75,10 +73,10 @@ test("all advanced series render through the shared Rust engine", async ({ page 
     return { count: series.length, kinds: series.map((item) => item.series_type()) };
   });
   const after = await page.screenshot();
-  expect(result.count).toBe(11);
+  expect(result.count).toBe(9);
   expect(new Set(result.kinds)).toEqual(new Set([
-    "brushable_area", "dual_range_histogram", "grouped_bars", "heatmap", "hlc_area",
-    "pretty_histogram", "rounded_candles", "background_shade", "stacked_area",
+    "brushable_area", "grouped_bars", "heatmap", "hlc_area",
+    "pretty_histogram", "background_shade", "stacked_area",
     "stacked_bars", "whisker_box",
   ]));
   expect(after.equals(before)).toBe(false);
@@ -747,7 +745,7 @@ test("brushable area retains committed state, preserves crosshair options, and f
   );
 });
 
-test("brushable area guides reproject through keyboard pan and resize, then double click clears", async ({ page }) => {
+test("brushable area guides reproject and Escape or double click clears", async ({ page }) => {
   await open_chart(page);
   const selection = await page.evaluate(async () => {
     const api = await import("/dist/nucleuscharts_financial.js");
@@ -824,6 +822,16 @@ test("brushable area guides reproject through keyboard pan and resize, then doub
   expect(await page.evaluate(() => window.__reproject_interaction.active_range())).toEqual(committed);
   const resized_probes = await probes();
   await expect_handles(resized_probes, { width: 1500, height: 840 });
+
+  await page.keyboard.press("Escape");
+  await expect.poll(() => page.evaluate(() => window.__reproject_interaction.active_range())).toBe(null);
+  expect(await page.evaluate(() => window.__reproject_brush.options().brush_ranges)).toEqual([]);
+
+  await page.mouse.move(selection.start.x, selection.start.y);
+  await page.mouse.down();
+  await page.mouse.move(selection.end.x, selection.end.y, { steps: 4 });
+  await page.mouse.up();
+  expect(await page.evaluate(() => window.__reproject_interaction.active_range())).not.toBe(null);
 
   const pane_center = await page.evaluate(() => {
     const chart = window.__chart;

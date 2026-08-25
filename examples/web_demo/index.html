@@ -269,7 +269,7 @@
       <label title="Pane primitive (plugin platform): alternating day shading behind the series"><input type="checkbox" id="bands_toggle"> day bands</label>
       <label title="Series primitive (plugin platform): position band with a price-axis tag on the main series"><input type="checkbox" id="pos_band_toggle"> position band</label>
       <label title="Series primitive (plugin platform): autoscale-expanding band beyond the data"><input type="checkbox" id="scale_band_toggle"> scale band</label>
-      <label title="Custom series (plugin platform): the reference rounded-candles plugin example, drawn by the plugin"><input type="checkbox" id="custom_toggle"> rounded candles</label>
+      <label title="Custom series (plugin platform): an OHLC renderer drawn by the plugin"><input type="checkbox" id="custom_toggle"> custom OHLC</label>
       <label title="Built-in plugin (reference createSeriesMarkers): the markers fixture drawn by the plugin platform — A/B against ?feature=markers (engine markers)"><input type="checkbox" id="plugin_markers_toggle"> plugin markers</label>
       <label title="Built-in plugin (reference createTextWatermark): two-line watermark painted through the overlay-text hook"><input type="checkbox" id="plugin_watermark_toggle"> plugin watermark</label>
       <label title="Canvas primitive (plugin platform C-e): the reference vertical-line plugin example, painted with raw Canvas2D calls on the plugin overlay"><input type="checkbox" id="vertline_toggle"> vert line</label>
@@ -414,7 +414,7 @@ import { create_chart, create_chart_grid, create_series_markers, create_text_wat
 import { generate_fixture_data } from "./fixture_data.js";
 import { fixture_theme } from "./fixture_styles.js";
 import { marker_fixture, volume_fixture } from "./fixture_features.js";
-import { rounded_candles_pane_view } from "./fixture_custom_series.js";
+import { custom_ohlc_pane_view } from "./fixture_custom_series.js";
 import { vert_line_canvas_primitive } from "./fixture_canvas_plugin.js";
 import { install_feature_lab } from "./feature_lab.js";
 
@@ -759,7 +759,7 @@ window.__set_scale_band = set_scale_band; // test hook
 window.__scale_band_active = () => scale_band_handle !== null; // test hook
 
 // ---- custom series demo (plugin platform Phase C-c) -----------------------------------------
-// The reference plugin-examples rounded-candles series, ported to the custom-series contract
+// An OHLC fixture implemented through the custom-series contract
 // (fixture_custom_series.js): the engine owns the time mapping/autoscale, the plugin draws
 // each bar through the command-recording render context — identical on both backends. Off by
 // default so the fidelity fixtures don't shift; `?feature=custom_series` enables it.
@@ -768,7 +768,7 @@ let custom_destroy_count = 0;
 function set_custom_series(on) {
   if (on && custom_series === null) {
     custom_series = chart.add_custom_series(
-      rounded_candles_pane_view({}, {
+      custom_ohlc_pane_view({}, {
         on_render: (items) => {
           // Test observability: each frame's visible (x, time) pairs the plugin received.
           window.__custom_render_items = items.map(({ x, item }) => ({ x, time: item.time }));
@@ -776,8 +776,7 @@ function set_custom_series(on) {
         on_destroy: () => { custom_destroy_count += 1; },
       }),
     );
-    // The demo's candle data transformed into the plugin's item shape (OHLC + optional
-    // `rounded`; the reference's RoundedCandleSeriesData).
+    // The demo's candle data transformed into the plugin's OHLC item shape.
     custom_series.set_data(data.map((bar) => ({
       time: bar.time, open: bar.open, high: bar.high, low: bar.low, close: bar.close,
     })));
