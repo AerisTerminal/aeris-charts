@@ -38,6 +38,19 @@ fn session_color(time: i64, options: crate::SessionHighlightingOptions) -> Optio
     })
 }
 
+fn surface_contrast_line_color(explicit: Option<Color>, surface_css: &str) -> Color {
+    explicit.unwrap_or_else(|| {
+        let fallback = nucleuscharts_core::style::DEFAULT_SURFACE_RGB;
+        let surface =
+            Color::parse_css(surface_css).unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2));
+        if surface.luminance() > 160.0 {
+            Color::rgba(0, 0, 0, 51)
+        } else {
+            Color::rgba(255, 255, 255, 31)
+        }
+    })
+}
+
 impl ChartEngine {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn build_native_series_background_primitives_frame(
@@ -201,6 +214,8 @@ impl ChartEngine {
                     .as_deref()
                     .and_then(Color::parse_css)
                     .unwrap_or(Color::rgb(0x88, 0x88, 0x88));
+                let line_color =
+                    surface_contrast_line_color(state.options.line_color, &layout.background.color);
                 let top = pane.top + state.options.top_offset;
                 for (x, _, price, _) in &items {
                     let y = self
@@ -212,7 +227,7 @@ impl ChartEngine {
                         y1: ((pane.top + pane.height) * vpr).round() as i32,
                         width: hpr.round().max(1.0) as i32,
                         style: LineStyle::Solid,
-                        color: state.options.line_color,
+                        color: line_color,
                     });
                     if y.is_finite() {
                         out.push(Prim::Circle {
@@ -708,16 +723,8 @@ impl ChartEngine {
                 else {
                     continue;
                 };
-                let color = color.unwrap_or_else(|| {
-                    let fallback = nucleuscharts_core::style::DEFAULT_SURFACE_RGB;
-                    let surface = Color::parse_css(&self.options.get().layout.background.color)
-                        .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2));
-                    if surface.luminance() > 160.0 {
-                        Color::rgba(0, 0, 0, 51)
-                    } else {
-                        Color::rgba(255, 255, 255, 31)
-                    }
-                });
+                let color =
+                    surface_contrast_line_color(color, &self.options.get().layout.background.color);
                 out.push(Prim::Rect {
                     rect: IRect {
                         x: left,
@@ -860,7 +867,10 @@ impl ChartEngine {
                         w: width,
                         h: ((bottom - top) * vpr).round().max(1.0) as i32,
                     },
-                    color: options.line_color,
+                    color: surface_contrast_line_color(
+                        options.line_color,
+                        &self.options.get().layout.background.color,
+                    ),
                 });
             }
         }
@@ -922,12 +932,15 @@ impl ChartEngine {
                         OverlayPriceScaleSide::Left => SIDE_MARGIN + width / 2.0,
                         OverlayPriceScaleSide::Right => self.pane_w - SIDE_MARGIN - width / 2.0,
                     };
+                    let text_color = options
+                        .text_color
+                        .unwrap_or_else(|| self.primary_text_color());
                     for (position, label) in labels {
                         out.push(Prim::Text {
                             x: (text_x * hpr) as f32,
                             y: ((pane.top + position) * vpr) as f32,
                             text: label,
-                            color: options.text_color,
+                            color: text_color,
                             size: (FONT_SIZE * vpr) as f32,
                             family: FAMILY.into(),
                             align: TextAlign::Center,

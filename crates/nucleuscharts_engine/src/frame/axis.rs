@@ -325,7 +325,7 @@ impl ChartEngine {
             .solid()
     }
 
-    fn primary_text_color(&self) -> Color {
+    pub(super) fn primary_text_color(&self) -> Color {
         let fallback = nucleuscharts_core::style::DEFAULT_FOREGROUND_RGB;
         Color::parse_css(&self.options.get().layout.text_color)
             .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2))

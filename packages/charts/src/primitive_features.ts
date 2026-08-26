@@ -386,6 +386,7 @@ export function use_overlay_price_scale(series: series_api): price_scale_api {
 }
 
 export interface overlay_price_scale_options {
+  /** Tick-label color. Omit to follow the chart layout text color. */
   text_color?: string;
   side?: "left" | "right";
 }
@@ -602,6 +603,7 @@ export interface tooltip_options {
   series?: series_api;
   class_name?: string;
   title?: string;
+  /** Vertical-guide color. Omit to use a contrasting tint for the chart surface. */
   line_color?: string;
   follow_mode?: "top" | "tracking";
   horizontal_deadzone_width?: number;
@@ -640,11 +642,12 @@ function tooltip_date_time(timestamp: number): [string, string] {
 
 /** Official structured DOM tooltip; source lookup and its vertical guide are engine-owned. */
 export function create_tooltip(chart: chart_api, options: tooltip_options = {}): tooltip_handle {
-  let current: Required<Omit<tooltip_options, "series" | "format">> & Pick<tooltip_options, "series" | "format"> = {
+  let current: Required<Omit<tooltip_options, "series" | "format" | "line_color">>
+    & Pick<tooltip_options, "series" | "format" | "line_color"> = {
     series: options.series,
     class_name: options.class_name ?? "nucleuscharts-tooltip",
     title: options.title ?? "",
-    line_color: options.line_color ?? "rgba(0, 0, 0, 0.2)",
+    line_color: options.line_color,
     follow_mode: options.follow_mode ?? "tracking",
     horizontal_deadzone_width: options.horizontal_deadzone_width ?? 45,
     vertical_deadzone_height: options.vertical_deadzone_height ?? 100,
@@ -751,6 +754,7 @@ export interface delta_tooltip_active_range {
 
 export interface delta_tooltip_options {
   series: series_api;
+  /** Vertical-guide color. Omit to use a contrasting tint for the chart surface. */
   line_color?: string;
   show_time?: boolean;
   top_offset?: number;

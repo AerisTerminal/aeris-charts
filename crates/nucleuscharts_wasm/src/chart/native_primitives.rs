@@ -75,14 +75,13 @@ fn parse_bands_indicator_options(json: &str) -> Option<BandsIndicatorOptions> {
 
 fn parse_overlay_price_scale_options(json: &str) -> Option<OverlayPriceScaleOptions> {
     let value: serde_json::Value = serde_json::from_str(json).ok()?;
-    let defaults = OverlayPriceScaleOptions::default();
     let side = match value.get("side").and_then(serde_json::Value::as_str) {
         None | Some("left") => OverlayPriceScaleSide::Left,
         Some("right") => OverlayPriceScaleSide::Right,
         _ => return None,
     };
     Some(OverlayPriceScaleOptions {
-        text_color: json_color(&value, "text_color", defaults.text_color),
+        text_color: json_optional_color(&value, "text_color"),
         side,
     })
 }
@@ -218,7 +217,7 @@ impl ChartInner {
             .add_delta_tooltip(
                 series_id,
                 DeltaTooltipOptions {
-                    line_color: json_color(&value, "line_color", defaults.line_color),
+                    line_color: json_optional_color(&value, "line_color"),
                     show_time: value
                         .get("show_time")
                         .and_then(serde_json::Value::as_bool)
@@ -480,7 +479,7 @@ fn parse_tooltip_options(options_json: &str) -> Option<TooltipOptions> {
     let value: serde_json::Value = serde_json::from_str(options_json).ok()?;
     let defaults = TooltipOptions::default();
     Some(TooltipOptions {
-        line_color: json_color(&value, "line_color", defaults.line_color),
+        line_color: json_optional_color(&value, "line_color"),
         top_margin: value
             .get("top_margin")
             .and_then(serde_json::Value::as_f64)

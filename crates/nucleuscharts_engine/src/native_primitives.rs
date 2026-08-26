@@ -42,14 +42,14 @@ pub(crate) struct AccessibilityFocusState {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TooltipOptions {
-    pub line_color: Color,
+    pub line_color: Option<Color>,
     pub top_margin: f64,
 }
 
 impl Default for TooltipOptions {
     fn default() -> Self {
         Self {
-            line_color: Color::rgba(0, 0, 0, 51),
+            line_color: None,
             top_margin: 0.0,
         }
     }
@@ -65,7 +65,7 @@ pub struct TooltipSnapshot {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DeltaTooltipOptions {
-    pub line_color: Color,
+    pub line_color: Option<Color>,
     pub show_time: bool,
     pub top_offset: f64,
 }
@@ -73,7 +73,7 @@ pub struct DeltaTooltipOptions {
 impl Default for DeltaTooltipOptions {
     fn default() -> Self {
         Self {
-            line_color: Color::rgba(0, 0, 0, 51),
+            line_color: None,
             show_time: false,
             top_offset: 20.0,
         }
@@ -173,14 +173,14 @@ pub enum OverlayPriceScaleSide {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OverlayPriceScaleOptions {
-    pub text_color: Color,
+    pub text_color: Option<Color>,
     pub side: OverlayPriceScaleSide,
 }
 
 impl Default for OverlayPriceScaleOptions {
     fn default() -> Self {
         Self {
-            text_color: Color::rgb(0, 0, 0),
+            text_color: None,
             side: OverlayPriceScaleSide::Left,
         }
     }
@@ -1581,6 +1581,47 @@ mod tests {
     }
 
     #[test]
+    fn implicit_tooltip_guides_track_the_engine_surface() {
+        fn has_tooltip_guide(chart: &mut ChartEngine, expected: Color) -> bool {
+            chart.build_frame().panes[0].under.iter().any(
+                |primitive| matches!(primitive, Prim::Rect { color, .. } if *color == expected),
+            )
+        }
+
+        fn delta_guide_count(chart: &mut ChartEngine, expected: Color) -> usize {
+            chart.build_frame().panes[0]
+                .main
+                .iter()
+                .filter(|primitive| {
+                    matches!(primitive, Prim::VLine { color, .. } if *color == expected)
+                })
+                .count()
+        }
+
+        let mut chart = chart();
+        chart.add_tooltip(0, TooltipOptions::default()).unwrap();
+        chart
+            .add_delta_tooltip(0, DeltaTooltipOptions::default())
+            .unwrap();
+        let x2 = chart.time_scale.index_to_coordinate(2);
+        let x7 = chart.time_scale.index_to_coordinate(7);
+        chart.set_crosshair_at(x2, 250.0);
+        assert!(chart.delta_tooltip_mouse_down(x2));
+        assert!(chart.delta_tooltip_mouse_move(x7));
+
+        let dark_guide = Color::rgba(255, 255, 255, 31);
+        assert!(has_tooltip_guide(&mut chart, dark_guide));
+        assert_eq!(delta_guide_count(&mut chart, dark_guide), 2);
+
+        chart
+            .apply_options(r##"{"layout":{"background":{"color":"#ffffff"}}}"##)
+            .unwrap();
+        let light_guide = Color::rgba(0, 0, 0, 51);
+        assert!(has_tooltip_guide(&mut chart, light_guide));
+        assert_eq!(delta_guide_count(&mut chart, light_guide), 2);
+    }
+
+    #[test]
     fn bands_indicator_uses_official_ten_percent_data_background_and_visible_autoscale() {
         let mut chart = chart();
         let options = BandsIndicatorOptions::default();
@@ -1649,31 +1690,56 @@ mod tests {
         let mut chart = chart();
         chart.set_series_price_scale(0, crate::PriceScaleTarget::Overlay);
         let defaults = OverlayPriceScaleOptions::default();
+        assert_eq!(defaults.text_color, None);
         let id = chart.add_overlay_price_scale(0, defaults).unwrap();
         let frame = chart.build_frame();
         assert!(!frame.panes[0]
             .main
             .iter()
             .any(|primitive| matches!(primitive, Prim::RoundRect { .. })));
+        let dark_text = Color::parse_css(nucleuscharts_core::style::DARK_FOREGROUND_CSS).unwrap();
         let labels = frame.panes[0]
             .main
             .iter()
             .filter(|primitive| {
                 matches!(primitive, Prim::Text { color, size, .. }
-                    if *color == defaults.text_color && *size == 12.0)
+                    if *color == dark_text && *size == 12.0)
             })
             .count();
         assert_eq!(labels, 13);
 
+        chart
+            .apply_options(r##"{"layout":{"textColor":"#141414"}}"##)
+            .unwrap();
+        let light_text = Color::parse_css(nucleuscharts_core::style::LIGHT_FOREGROUND_CSS).unwrap();
+        assert_eq!(
+            chart.build_frame().panes[0]
+                .main
+                .iter()
+                .filter(|primitive| matches!(
+                    primitive,
+                    Prim::Text { color, size, .. } if *color == light_text && *size == 12.0
+                ))
+                .count(),
+            13
+        );
+
         let right = OverlayPriceScaleOptions {
-            text_color: Color::rgb(1, 2, 3),
+            text_color: Some(Color::rgb(1, 2, 3)),
             side: OverlayPriceScaleSide::Right,
         };
         assert!(chart.set_overlay_price_scale_options(id, right));
         let frame = chart.build_frame();
         assert!(frame.panes[0].main.iter().any(|primitive| {
             matches!(primitive, Prim::Text { x, color, .. }
-                if *color == right.text_color && *x > 700.0)
+                if Some(*color) == right.text_color && *x > 700.0)
+        }));
+
+        chart
+            .apply_options(r##"{"layout":{"textColor":"#f0f0f0"}}"##)
+            .unwrap();
+        assert!(chart.build_frame().panes[0].main.iter().any(|primitive| {
+            matches!(primitive, Prim::Text { color, .. } if Some(*color) == right.text_color)
         }));
     }
 
@@ -1735,7 +1801,11 @@ mod tests {
     #[test]
     fn delta_tooltip_owns_pointer_state_sorted_range_and_official_frame_content() {
         let mut chart = chart();
-        let options = DeltaTooltipOptions::default();
+        let guide_color = Color::rgb(12, 34, 56);
+        let options = DeltaTooltipOptions {
+            line_color: Some(guide_color),
+            ..DeltaTooltipOptions::default()
+        };
         let primitive = chart.add_delta_tooltip(0, options).unwrap();
         let x2 = chart.time_scale.index_to_coordinate(2);
         let x7 = chart.time_scale.index_to_coordinate(7);
@@ -1757,7 +1827,7 @@ mod tests {
                 .iter()
                 .filter(|primitive| matches!(
                     primitive,
-                    Prim::VLine { color, .. } if *color == options.line_color
+                    Prim::VLine { color, .. } if *color == guide_color
                 ))
                 .count(),
             2
@@ -1817,6 +1887,12 @@ mod tests {
                 Prim::Text { text, .. } if text == expected
             )));
         }
+        chart
+            .apply_options(r##"{"layout":{"background":{"color":"#ffffff"}}}"##)
+            .unwrap();
+        assert!(chart.build_frame().panes[0].main.iter().any(|primitive| {
+            matches!(primitive, Prim::VLine { color, .. } if *color == guide_color)
+        }));
 
         // Mouse-up commits the comparison; later hover and leave must not clear it.
         assert!(chart.delta_tooltip_mouse_up());
@@ -1841,20 +1917,24 @@ mod tests {
         chart.delta_tooltip_leave();
         assert!(chart.delta_tooltip_active_range(primitive).is_some());
         assert!(chart.build_frame().panes[0].main.iter().any(|primitive| {
-            matches!(primitive, Prim::VLine { color, .. } if *color == options.line_color)
+            matches!(primitive, Prim::VLine { color, .. } if *color == guide_color)
         }));
 
         assert!(chart.clear_delta_tooltip(primitive));
         assert!(chart.delta_tooltip_active_range(primitive).is_none());
         assert!(chart.build_frame().panes[0].main.iter().all(|primitive| {
-            !matches!(primitive, Prim::VLine { color, .. } if *color == options.line_color)
+            !matches!(primitive, Prim::VLine { color, .. } if *color == guide_color)
         }));
     }
 
     #[test]
     fn delta_tooltip_guides_reproject_with_the_time_scale() {
         let mut chart = chart();
-        let options = DeltaTooltipOptions::default();
+        let guide_color = Color::rgb(12, 34, 56);
+        let options = DeltaTooltipOptions {
+            line_color: Some(guide_color),
+            ..DeltaTooltipOptions::default()
+        };
         let primitive = chart.add_delta_tooltip(0, options).unwrap();
         let first_index = 2;
         let second_index = 7;
@@ -1871,7 +1951,7 @@ mod tests {
                 .main
                 .iter()
                 .filter_map(|primitive| match primitive {
-                    Prim::VLine { x, color, .. } if *color == options.line_color => Some(*x),
+                    Prim::VLine { x, color, .. } if *color == guide_color => Some(*x),
                     _ => None,
                 })
                 .collect::<Vec<_>>();
@@ -2048,7 +2128,7 @@ mod tests {
             .add_tooltip(
                 0,
                 TooltipOptions {
-                    line_color: color,
+                    line_color: Some(color),
                     top_margin: 30.0,
                 },
             )
@@ -2072,6 +2152,16 @@ mod tests {
                 primitive,
                 Prim::Rect { rect, color: actual }
                     if *actual == color && rect.y == 30 && rect.h == 470
+            )));
+        chart
+            .apply_options(r##"{"layout":{"background":{"color":"#ffffff"}}}"##)
+            .unwrap();
+        assert!(chart.build_frame().panes[0]
+            .under
+            .iter()
+            .any(|primitive| matches!(
+                primitive,
+                Prim::Rect { color: actual, .. } if *actual == color
             )));
         assert!(chart.set_tooltip_options(primitive, TooltipOptions::default()));
         chart.clear_crosshair_at();
