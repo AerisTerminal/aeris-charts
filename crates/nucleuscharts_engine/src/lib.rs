@@ -53,14 +53,12 @@ pub use interaction::{
     MAX_ACTIVE_POINTERS, PINCH_ZOOM_INTENSITY, WHEEL_SCROLL_PX_PER_DELTA,
 };
 pub use native_primitives::{
-    AccessibilityFocusOptions, AlertCrossingDirection, AnchoredTextHorizontalAlign,
-    AnchoredTextOptions, AnchoredTextVerticalAlign, BandsIndicatorOptions, DeltaTooltipActiveRange,
-    DeltaTooltipOptions, DeltaTooltipPoint, ExpiringPriceAlert, ExpiringPriceAlertsOptions,
-    ImageWatermarkOptions, NativePrimitiveId, OverlayPriceScaleOptions, OverlayPriceScaleSide,
-    SessionHighlightingData, SessionHighlightingOptions, TextWatermarkLine, TextWatermarkOptions,
-    TooltipOptions, TooltipSnapshot, TrendLineOptions, UserPriceAlert, UserPriceAlertsHit,
-    UserPriceAlertsOptions, UserPriceLinesButtonOptions, VerticalLineOptions, VolumeProfileData,
-    VolumeProfileOptions, VolumeProfilePoint, MAX_RASTER_IMAGE_DIMENSION,
+    AccessibilityFocusOptions, AnchoredTextHorizontalAlign, AnchoredTextOptions,
+    AnchoredTextVerticalAlign, BandsIndicatorOptions, DeltaTooltipActiveRange, DeltaTooltipOptions,
+    DeltaTooltipPoint, ImageWatermarkOptions, NativePrimitiveId, OverlayPriceScaleOptions,
+    OverlayPriceScaleSide, SessionHighlightingData, SessionHighlightingOptions, TextWatermarkLine,
+    TextWatermarkOptions, TooltipOptions, TooltipSnapshot, TrendLineOptions, VerticalLineOptions,
+    VolumeProfileData, VolumeProfileOptions, VolumeProfilePoint, MAX_RASTER_IMAGE_DIMENSION,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use persistence::PersistenceRestoreProfile;
@@ -1651,7 +1649,6 @@ impl ChartEngine {
         {
             self.selection = None;
         }
-        self.sync_native_time_points();
         self.sync_time_points();
         // reference chart-model.ts `removeSeries`: prune the pane the series left when it is empty
         // and not preserved (a pane-less index — after an explicit `remove_pane` — prunes

@@ -6,16 +6,13 @@ import {
   attach_native_anchored_text,
   attach_native_crosshair_highlight,
   attach_native_delta_tooltip,
-  attach_native_expiring_price_alerts,
   attach_native_image_watermark,
   attach_native_overlay_price_scale,
   attach_native_partial_price_line,
   attach_native_session_highlighting,
   attach_native_tooltip,
   attach_native_trend_line,
-  attach_native_user_price_alerts,
   attach_native_vertical_line,
-  attach_native_user_price_lines_button,
   attach_native_volume_profile,
 } from "./impl.js";
 import type {
@@ -165,7 +162,7 @@ const RECTANGLE_DEFAULTS = {
   fill_color: "rgba(200, 50, 100, 0.75)",
   preview_fill_color: "rgba(200, 50, 100, 0.25)",
   label_color: "rgba(200, 50, 100, 1)",
-  show_labels: true,
+  show_labels: false,
 } as const;
 
 function normalize_rectangle_options(
@@ -178,7 +175,7 @@ function normalize_rectangle_options(
     preview_fill_color: options.preview_fill_color ?? RECTANGLE_DEFAULTS.preview_fill_color,
     border_visible: options.border_visible ?? false,
     show_labels: options.show_labels ?? RECTANGLE_DEFAULTS.show_labels,
-    axis_bands_visible: options.axis_bands_visible ?? true,
+    axis_bands_visible: options.axis_bands_visible ?? false,
     label_color: options.label_color ?? options.color ?? RECTANGLE_DEFAULTS.label_color,
     label_text_color: options.label_text_color,
     snap_time_to_data: options.snap_time_to_data ?? true,
@@ -382,22 +379,6 @@ export function create_user_price_line(series: series_api, options: price_line_o
   return series.create_price_line(options);
 }
 
-export interface user_price_lines_options {
-  color?: string;
-  hover_color?: string;
-  limit_to_one?: boolean;
-}
-
-/** Official crosshair-following add-price-line button at the pane's right edge. */
-export function create_user_price_lines(
-  chart: chart_api,
-  series: series_api,
-  options: user_price_lines_options = {},
-): detachable_feature {
-  chart.apply_options({ crosshair: { mode: 0 } });
-  return attach_native_user_price_lines_button(series, JSON.stringify(options));
-}
-
 /** Move a series to the pane's independent overlay scale and return that scale. */
 export function use_overlay_price_scale(series: series_api): price_scale_api {
   series.apply_options({ price_scale_id: "" });
@@ -518,7 +499,7 @@ export function create_highlight_bar_crosshair(
   chart.apply_options({
     crosshair: { mode: 0, vertLine: { visible: false } },
   });
-  return attach_native_crosshair_highlight(series, options.color ?? "rgba(0, 0, 0, 0.2)");
+  return attach_native_crosshair_highlight(series, options.color);
 }
 
 export interface image_watermark_options {
@@ -858,113 +839,5 @@ export function create_volume_profile(
       }
     },
     detach: handle.detach,
-  };
-}
-
-export interface expiring_price_alert_parameters {
-  title: string;
-  crossing_direction: "up" | "down";
-}
-
-export interface expiring_price_alert {
-  id: number;
-  price: number;
-  /** UTC seconds after conversion at the package boundary. */
-  start: number;
-  /** UTC seconds after conversion at the package boundary. */
-  end: number;
-  parameters: expiring_price_alert_parameters;
-  crossed: boolean;
-  expired: boolean;
-}
-
-export interface expiring_price_alerts_options {
-  /** Interval between the engine-owned future whitespace points, in seconds. */
-  interval?: number;
-  /** Delay before a crossed or expired alert is removed, in milliseconds. */
-  clear_timeout?: number;
-}
-
-export interface expiring_price_alerts_handle extends detachable_feature {
-  add(
-    price: number,
-    start: time,
-    end: time,
-    parameters: expiring_price_alert_parameters,
-  ): expiring_price_alert;
-  remove(id: number): void;
-  alerts(): readonly expiring_price_alert[];
-}
-
-/**
- * Reference-compatible expiring price alerts. Timeline extension, crossing/expiry state,
- * autoscaling, and pane geometry are all owned by the shared Rust engine.
- */
-export function create_expiring_price_alerts(
-  series: series_api,
-  options: expiring_price_alerts_options = {},
-): expiring_price_alerts_handle {
-  const native = attach_native_expiring_price_alerts(series, JSON.stringify(options));
-  const alerts = (): readonly expiring_price_alert[] =>
-    JSON.parse(native.alerts_json()) as expiring_price_alert[];
-  return {
-    add(price, start, end, parameters) {
-      const id = native.add(
-        price,
-        time_to_utc_seconds(start),
-        time_to_utc_seconds(end),
-        parameters.title,
-        parameters.crossing_direction,
-      );
-      const added = alerts().find((alert) => alert.id === id);
-      if (added === undefined) throw new Error("Nucleus failed to retain the expiring price alert");
-      return added;
-    },
-    remove(id) {
-      native.remove(id);
-    },
-    alerts,
-    detach: native.detach,
-  };
-}
-
-export interface user_price_alert {
-  id: number;
-  price: number;
-}
-
-export interface user_price_alerts_options {
-  symbol_name?: string;
-  color?: string;
-  hover_color?: string;
-}
-
-export interface user_price_alerts_handle extends detachable_feature {
-  add(price: number): user_price_alert;
-  remove(id: number): void;
-  alerts(): readonly user_price_alert[];
-}
-
-/** Official price-scale button, alert lines, hover label, and removal interaction. */
-export function create_user_price_alerts(
-  chart: chart_api,
-  series: series_api,
-  options: user_price_alerts_options = {},
-): user_price_alerts_handle {
-  const native = attach_native_user_price_alerts(series, JSON.stringify(options));
-  const alerts = (): readonly user_price_alert[] =>
-    JSON.parse(native.alerts_json()) as user_price_alert[];
-  return {
-    add(price) {
-      const id = native.add(price);
-      const added = alerts().find((alert) => alert.id === id);
-      if (added === undefined) throw new Error("Nucleus failed to retain the user price alert");
-      return added;
-    },
-    remove(id) {
-      native.remove(id);
-    },
-    alerts,
-    detach: native.detach,
   };
 }

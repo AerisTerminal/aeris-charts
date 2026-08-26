@@ -2,7 +2,6 @@ import {
   create_anchored_text,
   create_bands_indicator,
   create_delta_tooltip,
-  create_expiring_price_alerts,
   create_highlight_bar_crosshair,
   create_image_watermark,
   create_overlay_price_scale,
@@ -11,8 +10,6 @@ import {
   create_session_highlighting,
   create_tooltip,
   create_trend_line,
-  create_user_price_alerts,
-  create_user_price_lines,
   create_vertical_line,
   create_volume_profile,
   default_theme_name,
@@ -226,7 +223,6 @@ function primitive_features(chart, series, bars) {
     { id: "rectangle", label: "Rectangle", detail: "Two-click tool + axis labels", icon: "draw", interactive: true, activate: () => { const tool = create_rectangle_drawing_tool(chart, series, undefined, { fill_color: "rgba(164,89,209,.75)", preview_fill_color: "rgba(164,89,209,.25)", label_color: "#a459d1" }); tool.start_drawing(); return () => tool.remove(); } },
     { id: "trend-line", label: "Trend line", detail: "Line + endpoint labels", icon: "draw", activate: () => { const handle = create_trend_line(series, [{ time: start.time, price: start.low }, { time: end.time, price: end.high }], { line_color: "#f59e0b" }); return () => handle.detach(); } },
     { id: "vertical-line", label: "Vertical line", detail: "Pane + time-axis primitive", icon: "draw", activate: () => { const handle = create_vertical_line(series, middle.time, { color: "#e1575a", label_text: "Event", label_background_color: "#e1575a", show_label: true }); return () => handle.detach(); } },
-    { id: "user-price-line", label: "User price lines", detail: "Hover the pane's right edge", icon: "analysis", activate: () => { const handle = create_user_price_lines(chart, series, { color: "#f59e0b" }); return () => handle.detach(); } },
     { id: "overlay-scale", label: "Overlay scale", detail: "In-pane rounded price labels", icon: "analysis", activate: () => { const overlay = chart.add_series("line", { color: "#a459d1", line_width: 2, price_line_visible: false }); overlay.set_data(bars.filter((_, index) => index % 4 === 0).map((bar) => ({ time: bar.time, value: bar.close * .35 }))); const labels = create_overlay_price_scale(overlay); return () => { labels.detach(); chart.remove_series(overlay); }; } },
     { id: "partial-price-line", label: "Partial line", detail: "Last value → edge", icon: "analysis", activate: () => { const handle = create_partial_price_line(series); return () => handle.detach(); } },
     { id: "session-highlighting", label: "Sessions", detail: "Weekday / weekend", icon: "analysis", activate: () => { const handle = create_session_highlighting(series); return () => handle.detach(); } },
@@ -235,8 +231,6 @@ function primitive_features(chart, series, bars) {
     { id: "tooltip", label: "Tooltip", detail: "Hover values", icon: "lab", activate: () => { const handle = create_tooltip(chart, { series }); return () => handle.detach(); } },
     { id: "delta-tooltip", label: "Delta tooltip", detail: "Drag comparison", icon: "lab", activate: () => { const handle = create_delta_tooltip(chart, { series }); return () => handle.detach(); } },
     { id: "volume-profile", label: "Volume profile", detail: "Time-anchored rows", icon: "chart", activate: () => { const base = start.close; const profile = Array.from({ length: 15 }, (_, index) => ({ price: base + (index - 7) * .45, vol: 4 + (index * 13) % 25 })); const handle = create_volume_profile(series, { time: start.time, profile, width: 12 }); return () => handle.detach(); } },
-    { id: "expiring-alerts", label: "Expiring alerts", detail: "Data-time ranges and directional crossing", icon: "analysis", activate: () => { const alerts = create_expiring_price_alerts(series); const last = bars[bars.length - 1]; alerts.add(middle.close, middle.time, last.time + 86_400 * 4, { title: "Crossing up", crossing_direction: "up" }); alerts.add(middle.close * 1.015, middle.time, last.time + 86_400 * 7, { title: "Crossing down", crossing_direction: "down" }); return () => alerts.detach(); } },
-    { id: "user-alerts", label: "User alerts", detail: "Right-click chart", icon: "analysis", activate: () => { const handle = create_user_price_alerts(chart, series); return () => handle.detach(); } },
     { id: "accessibility", label: "Accessibility", detail: "Keyboard + live text", icon: "lab", activate: () => { const handle = enable_accessibility(chart, { chart_title: "Nucleus feature lab chart" }); return () => handle.detach(); } },
   ];
 }

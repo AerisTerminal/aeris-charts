@@ -32,6 +32,60 @@ struct LastValueLabel {
     top_height: f64,
     color: Color,
     align: bool,
+    primary: bool,
+    hollow: bool,
+}
+
+#[derive(Clone, Copy)]
+struct LivePriceRegion {
+    pane_index: usize,
+    target: PriceScaleTarget,
+    top: f64,
+    bottom: f64,
+    primary: bool,
+}
+
+fn vertical_regions_overlap(
+    first_y: f64,
+    first_height: f64,
+    second_y: f64,
+    second_height: f64,
+) -> bool {
+    (first_y - second_y).abs() < (first_height + second_height) / 2.0
+}
+
+struct OccupiedAxisRegion {
+    primary: LivePriceRegion,
+    top: f64,
+    bottom: f64,
+}
+
+impl OccupiedAxisRegion {
+    fn place(&mut self, raw_y: f64, height: f64, pane_top: f64, pane_bottom: f64) -> f64 {
+        if pane_bottom - pane_top <= height {
+            return (pane_top + pane_bottom) / 2.0;
+        }
+        let half = height / 2.0;
+        if raw_y + half <= self.top || raw_y - half >= self.bottom {
+            return raw_y;
+        }
+        let primary_center = (self.primary.top + self.primary.bottom) / 2.0;
+        let prefer_above = raw_y < primary_center;
+        let above = self.top - half;
+        let below = self.bottom + half;
+        let y = if prefer_above && above - half >= pane_top {
+            above
+        } else if !prefer_above && below + half <= pane_bottom {
+            below
+        } else if above - half >= pane_top {
+            above
+        } else {
+            below.clamp(pane_top + half, pane_bottom - half)
+        };
+        self.top = self.top.min(y - half);
+        self.bottom = self.bottom.max(y + half);
+        y
+    }
 }
 
 /// Median of the last up-to-10 inter-bar deltas of a series' bar times (fallback: with a single
@@ -264,6 +318,13 @@ fn recalculate_overlapping(
 }
 
 impl ChartEngine {
+    fn chart_surface_color(&self) -> Color {
+        let fallback = nucleuscharts_core::style::DEFAULT_SURFACE_RGB;
+        Color::parse_css(&self.options.get().layout.background.color)
+            .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2))
+            .solid()
+    }
+
     fn primary_text_color(&self) -> Color {
         let fallback = nucleuscharts_core::style::DEFAULT_FOREGROUND_RGB;
         Color::parse_css(&self.options.get().layout.text_color)
@@ -271,9 +332,7 @@ impl ChartEngine {
     }
 
     fn axis_label_text_color(&self, background: Color) -> Color {
-        let fallback = nucleuscharts_core::style::DEFAULT_SURFACE_RGB;
-        let surface = Color::parse_css(&self.options.get().layout.background.color)
-            .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2));
+        let surface = self.chart_surface_color();
         background.contrast_text_over(surface)
     }
 
@@ -666,11 +725,14 @@ impl ChartEngine {
         self.append_rectangle_drawing_axis_views(&mut out, &measure);
         self.append_price_line_labels(&mut out.labels, &measure);
         self.append_drawing_line_labels(&mut out.labels, &measure);
-        self.append_last_value_label(&mut out.labels, &measure);
-        self.append_trading_axis_labels(&mut out.labels, &measure);
+        let last_value_start = out.labels.len();
+        let live_price_regions = self.append_last_value_label(&mut out.labels, &measure);
+        let mut trading_labels = Vec::new();
+        self.append_trading_axis_labels(&mut trading_labels, &live_price_regions, &measure);
+        out.labels
+            .splice(last_value_start..last_value_start, trading_labels);
         if include_transient {
             self.append_crosshair_labels(&mut out.labels, &measure);
-            self.append_native_user_price_alert_crosshair_labels(&mut out.labels, &measure);
         }
         out.separators = self
             .panes
@@ -687,7 +749,14 @@ impl ChartEngine {
     {
         for drawing in &self.drawings {
             if drawing.kind == DrawingKind::Rectangle && drawing.points.len() == 2 {
-                self.append_rectangle_axis_view(drawing, &drawing.points, false, out, measure);
+                self.append_rectangle_axis_view(
+                    drawing,
+                    &drawing.points,
+                    self.selected_drawing == Some(drawing.id),
+                    false,
+                    out,
+                    measure,
+                );
             }
         }
         let Some(pending) = self.pending_drawing() else {
@@ -703,7 +772,7 @@ impl ChartEngine {
             }
         }
         if points.len() == 2 {
-            self.append_rectangle_axis_view(&pending.drawing, &points, true, out, measure);
+            self.append_rectangle_axis_view(&pending.drawing, &points, true, true, out, measure);
         }
     }
 
@@ -711,6 +780,7 @@ impl ChartEngine {
         &self,
         drawing: &crate::Drawing,
         points: &[crate::DrawingPoint],
+        active: bool,
         preview: bool,
         out: &mut AxisFrame,
         measure: &F,
@@ -743,17 +813,20 @@ impl ChartEngine {
             fill.b(),
             u16::from(fill.a()).div_ceil(2) as u8,
         );
+        let active_band_color = Color::rgba(PRIMARY.r(), PRIMARY.g(), PRIMARY.b(), 64);
 
-        if drawing.axis_bands_visible {
+        if active || drawing.axis_bands_visible {
             let top = first.1.min(second.1).max(pane.top);
             let bottom = first.1.max(second.1).min(pane.top + pane.height);
             if bottom >= top {
                 let left_visible = self.options.get().left_price_scale.visible
                     && self.left_axis_w > 0.0
-                    && matches!(
-                        drawing.price_scale,
-                        crate::DrawingPriceScale::Left | crate::DrawingPriceScale::Overlay
-                    );
+                    && matches!(drawing.price_scale, crate::DrawingPriceScale::Left);
+                let left_visible = left_visible
+                    || (!active
+                        && self.options.get().left_price_scale.visible
+                        && self.left_axis_w > 0.0
+                        && drawing.price_scale == crate::DrawingPriceScale::Overlay);
                 let right_visible = self.options.get().right_price_scale.visible
                     && self.axis_w > 0.0
                     && matches!(
@@ -766,7 +839,11 @@ impl ChartEngine {
                         y: top,
                         width: self.left_axis_w.min(15.0),
                         height: (bottom - top).max(1.0 / self.dpr),
-                        color: band_color,
+                        color: if active {
+                            active_band_color
+                        } else {
+                            band_color
+                        },
                     });
                 }
                 if right_visible {
@@ -775,11 +852,15 @@ impl ChartEngine {
                         y: top,
                         width: self.axis_w.min(15.0),
                         height: (bottom - top).max(1.0 / self.dpr),
-                        color: band_color,
+                        color: if active {
+                            active_band_color
+                        } else {
+                            band_color
+                        },
                     });
                 }
             }
-            if self.time_axis_visible {
+            if drawing.axis_bands_visible && self.time_axis_visible {
                 let left = first.0.min(second.0).max(0.0);
                 let right = first.0.max(second.0).min(self.pane_w);
                 if right >= left {
@@ -794,27 +875,32 @@ impl ChartEngine {
             }
         }
 
-        if !drawing.show_labels {
+        if !active && !drawing.show_labels {
             return;
         }
-        let label_background = drawing
+        let drawing_label_background = drawing
             .label_color
             .as_deref()
             .and_then(Color::parse_css)
             .unwrap_or(stroke);
-        let label_text = drawing
+        let drawing_label_text = drawing
             .label_text_color
             .as_deref()
             .and_then(Color::parse_css)
-            .unwrap_or_else(|| self.axis_label_text_color(label_background));
+            .unwrap_or_else(|| self.axis_label_text_color(drawing_label_background));
+        let (price_label_background, price_label_text) = if active {
+            (PRIMARY, self.axis_label_text_color(PRIMARY))
+        } else {
+            (drawing_label_background, drawing_label_text)
+        };
         let font_size = self.options.get().layout.font_size;
         for left_side in [true, false] {
             let visible = if left_side {
                 self.options.get().left_price_scale.visible
-                    && matches!(
-                        drawing.price_scale,
-                        crate::DrawingPriceScale::Left | crate::DrawingPriceScale::Overlay
-                    )
+                    && matches!(drawing.price_scale, crate::DrawingPriceScale::Left)
+                    || (!active
+                        && self.options.get().left_price_scale.visible
+                        && drawing.price_scale == crate::DrawingPriceScale::Overlay)
             } else {
                 self.options.get().right_price_scale.visible
                     && matches!(
@@ -849,7 +935,7 @@ impl ChartEngine {
                     text,
                     x,
                     y,
-                    color: label_text,
+                    color: price_label_text,
                     align,
                     midpoint: AxisTextMidpoint::Label,
                     font_scale: 1.0,
@@ -859,7 +945,7 @@ impl ChartEngine {
                         y - height / 2.0,
                         width,
                         height,
-                        label_background,
+                        price_label_background,
                     )),
                     background_corners: AxisLabelCorners::for_align(align),
                     measure_extra: 0.0,
@@ -868,7 +954,7 @@ impl ChartEngine {
                 });
             }
         }
-        if self.time_axis_visible {
+        if drawing.show_labels && self.time_axis_visible {
             const BORDER: f64 = 1.0;
             const TICK: f64 = 5.0;
             const PADDING: f64 = 3.0;
@@ -895,12 +981,12 @@ impl ChartEngine {
                     text,
                     x: box_x + width / 2.0,
                     y: self.pane_h + BORDER + TICK + PADDING + font_size / 2.0,
-                    color: label_text,
+                    color: drawing_label_text,
                     align: AxisTextAlign::Center,
                     midpoint: AxisTextMidpoint::None,
                     font_scale: 1.0,
                     bold: false,
-                    background: Some((box_x, self.pane_h, width, height, label_background)),
+                    background: Some((box_x, self.pane_h, width, height, drawing_label_background)),
                     background_corners: AxisLabelCorners::BOTTOM,
                     measure_extra: 0.0,
                     attach_group: None,
@@ -1302,8 +1388,12 @@ impl ChartEngine {
         }
     }
 
-    fn append_trading_axis_labels<F>(&self, labels: &mut Vec<AxisLabel>, measure: &F)
-    where
+    fn append_trading_axis_labels<F>(
+        &self,
+        labels: &mut Vec<AxisLabel>,
+        live_price_regions: &[LivePriceRegion],
+        measure: &F,
+    ) where
         F: Fn(&str) -> f64,
     {
         let font_size = self.options.get().layout.font_size;
@@ -1311,6 +1401,24 @@ impl ChartEngine {
         let chip_fill = Color::parse_css(&self.options.get().layout.background.color)
             .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2))
             .solid();
+        let mut occupied_axes: Vec<OccupiedAxisRegion> = live_price_regions
+            .iter()
+            .filter(|region| region.primary)
+            .map(|primary| {
+                let mut occupied = OccupiedAxisRegion {
+                    primary: *primary,
+                    top: primary.top,
+                    bottom: primary.bottom,
+                };
+                for region in live_price_regions.iter().filter(|region| {
+                    region.pane_index == primary.pane_index && region.target == primary.target
+                }) {
+                    occupied.top = occupied.top.min(region.top);
+                    occupied.bottom = occupied.bottom.max(region.bottom);
+                }
+                occupied
+            })
+            .collect();
         let mut append = |pane_index: usize,
                           target: crate::TradingPriceScale,
                           price: f64,
@@ -1332,6 +1440,17 @@ impl ChartEngine {
             let text = self.format_trading_price(price);
             let width = 1.0 + 5.0 + 5.0 + 5.0 + measure(&text);
             let height = font_size + 5.0;
+            let occupied = occupied_axes.iter_mut().find(|occupied| {
+                occupied.primary.pane_index == pane_index && occupied.primary.target == target
+            });
+            let meets_live_price = occupied.as_ref().is_some_and(|occupied| {
+                y + height / 2.0 > occupied.primary.top
+                    && y - height / 2.0 < occupied.primary.bottom
+            });
+            let solid = solid && !meets_live_price;
+            let y = occupied.map_or(y, |occupied| {
+                occupied.place(y, height, pane.top, pane.top + pane.height)
+            });
             let (x, align, background_x) = if target == PriceScaleTarget::Left {
                 (
                     self.pane_left - 10.0,
@@ -1534,12 +1653,16 @@ impl ChartEngine {
     /// ANY part is enabled (e.g. `lastValueVisible: false` still leaves title chip + countdown).
     /// The overlap pass runs on the cluster's total height, and the axis-facing corners of the
     /// cluster's outer edges are rounded (internal boundaries stay sharp).
-    pub(super) fn append_last_value_label<F>(&self, labels: &mut Vec<AxisLabel>, measure: &F)
+    fn append_last_value_label<F>(
+        &self,
+        labels: &mut Vec<AxisLabel>,
+        measure: &F,
+    ) -> Vec<LivePriceRegion>
     where
         F: Fn(&str) -> f64,
     {
         let Some((from, to)) = self.visible_range_for_frame() else {
-            return;
+            return Vec::new();
         };
         let row_height = self.options.get().layout.font_size + 2.5 * 2.0;
         // TradingView-style countdown row: 11px secondary text and tighter vertical padding than
@@ -1642,6 +1765,9 @@ impl ChartEngine {
                     continue;
                 }
                 let align = pane_scale(pane, display_target).options().align_labels;
+                let primary = self
+                    .scale_formatter_source(pi, display_target)
+                    .is_some_and(|source| source.id == series.id);
                 let group_index = groups
                     .iter()
                     .position(|(pane, candidate, _)| *pane == pi && *candidate == display_target)
@@ -1684,6 +1810,8 @@ impl ChartEngine {
                     // translucent bar/line color must not bleed through the chips.
                     color: color.solid(),
                     align,
+                    primary,
+                    hollow: false,
                 });
                 // TradingView-style bid/ask chips (`bid_ask_visible`, default off): one
                 // title+price cluster per side with a live quote, centered on the quote's
@@ -1721,14 +1849,39 @@ impl ChartEngine {
                             top_height: row_height,
                             color: side_color,
                             align,
+                            primary: false,
+                            hollow: false,
                         });
                     }
                 }
             }
         }
         // Reference aligns labels independently per price-axis widget.
+        let mut live_price_regions = Vec::new();
         for (pane_index, target, mut group) in groups {
+            if let Some(primary) = group.iter().find(|label| label.primary) {
+                let primary_y = primary.y;
+                let primary_height = primary.height;
+                for label in &mut group {
+                    label.hollow = !label.primary
+                        && vertical_regions_overlap(
+                            primary_y,
+                            primary_height,
+                            label.y,
+                            label.height,
+                        );
+                }
+            }
             resolve_last_value_label_overlap(&mut group, self.pane_h);
+            for label in &group {
+                live_price_regions.push(LivePriceRegion {
+                    pane_index,
+                    target,
+                    top: label.y - label.height / 2.0,
+                    bottom: label.y + label.height / 2.0,
+                    primary: label.primary,
+                });
+            }
             let Some((side, strip_x, strip_width)) =
                 self.price_scale_axis_geometry(pane_index, target)
             else {
@@ -1758,7 +1911,11 @@ impl ChartEngine {
                         text,
                         x,
                         y: label.y,
-                        color: self.axis_label_text_color(label.color),
+                        color: if label.hollow {
+                            label.color
+                        } else {
+                            self.axis_label_text_color(label.color)
+                        },
                         align,
                         midpoint: AxisTextMidpoint::Label,
                         font_scale: 1.0,
@@ -1768,18 +1925,23 @@ impl ChartEngine {
                             label.y - label.height / 2.0,
                             width,
                             label.height,
-                            label.color,
+                            if label.hollow {
+                                self.chart_surface_color()
+                            } else {
+                                label.color
+                            },
                         )),
                         background_corners: AxisLabelCorners::for_align(align),
                         measure_extra: 0.0,
                         attach_group: None,
-                        border: None,
+                        border: label.hollow.then_some((1.0, label.color)),
                     });
                     continue;
                 }
                 self.append_last_value_cluster(labels, &label, pane_index, target, measure);
             }
         }
+        live_price_regions
     }
 
     /// Emit one TradingView-style last-value cluster (see `append_last_value_label`): one
@@ -1804,12 +1966,22 @@ impl ChartEngine {
             return;
         };
         let right_strip = side == PriceScaleSide::Right;
-        let text_color = self.axis_label_text_color(label.color);
+        let fill = if label.hollow {
+            self.chart_surface_color()
+        } else {
+            label.color
+        };
+        let border = label.hollow.then_some((1.0, label.color));
+        let text_color = if label.hollow {
+            label.color
+        } else {
+            self.axis_label_text_color(label.color)
+        };
         let countdown_text_color =
             Color::rgba(text_color.r(), text_color.g(), text_color.b(), 0xb3);
         // The title chip shares the main label color by default (matching the price and
         // countdown chips).
-        let chip_color = label.color;
+        let chip_color = fill;
         let fitted_title = label
             .title
             .as_deref()
@@ -1906,7 +2078,7 @@ impl ChartEngine {
                 // It lives on the pane, not in the strip: it never widens the axis.
                 measure_extra: 0.0,
                 attach_group: None,
-                border: None,
+                border,
             });
         }
         // The inside price chip renders only when the price text is present (never an empty box).
@@ -1920,7 +2092,7 @@ impl ChartEngine {
                 midpoint: AxisTextMidpoint::Label,
                 font_scale: 1.0,
                 bold: false,
-                background: Some((inner_x, top_y, inner_w, label.top_height, label.color)),
+                background: Some((inner_x, top_y, inner_w, label.top_height, fill)),
                 background_corners: axis_corners_top,
                 // text + the standard 21px label padding already covers the chip box.
                 measure_extra: 0.0,
@@ -1928,7 +2100,7 @@ impl ChartEngine {
                 // group id is the series id, so the attach never chains into another series'
                 // cluster on the same strip.
                 attach_group: Some(label.group_id),
-                border: None,
+                border,
             });
         }
         if let Some(countdown) = &label.countdown {
@@ -1959,14 +2131,14 @@ impl ChartEngine {
                 midpoint: AxisTextMidpoint::Label,
                 font_scale: COUNTDOWN_FONT_SCALE,
                 bold: false,
-                background: Some((inner_x, countdown_y, inner_w, countdown_height, label.color)),
+                background: Some((inner_x, countdown_y, inner_w, countdown_height, fill)),
                 background_corners: corners,
                 measure_extra: 0.0,
                 // Attached to the price chip above (shared edge, no rounding gap) — the
                 // group id is the series id, so the attach never chains into another series'
                 // cluster on the same strip.
                 attach_group: Some(label.group_id),
-                border: None,
+                border,
             });
         }
     }
@@ -2123,86 +2295,6 @@ impl ChartEngine {
                     border: None,
                 });
             }
-        }
-    }
-
-    fn append_native_user_price_alert_crosshair_labels<F>(
-        &self,
-        labels: &mut Vec<AxisLabel>,
-        measure: &F,
-    ) where
-        F: Fn(&str) -> f64,
-    {
-        let Some((_, y)) = self.clamped_crosshair() else {
-            return;
-        };
-        let Some(pane_index) = self.pane_at_y(y) else {
-            return;
-        };
-        for series in self
-            .series
-            .iter()
-            .filter(|series| series.visible && series.pane_index == pane_index)
-        {
-            let Some(state) = series.native_primitives.iter().find_map(|primitive| {
-                let crate::native_primitives::NativeSeriesPrimitiveKind::UserPriceAlerts(state) =
-                    &primitive.kind
-                else {
-                    return None;
-                };
-                Some(state)
-            }) else {
-                continue;
-            };
-            let Some(price) = self.series_coordinate_to_price(series.id, y) else {
-                continue;
-            };
-            let Some(text) = self.series_format_price(series.id, price) else {
-                continue;
-            };
-            let width = measure(&text) + 20.0;
-            let height = 21.0;
-            let target = series_scale_target(series);
-            let display_target = if target == PriceScaleTarget::Overlay {
-                PriceScaleTarget::Right
-            } else {
-                target
-            };
-            let Some((side, strip_x, strip_width)) =
-                self.price_scale_axis_geometry(pane_index, display_target)
-            else {
-                continue;
-            };
-            let (x, align, background_x) = if side == PriceScaleSide::Left {
-                (
-                    strip_x + strip_width - 10.0,
-                    AxisTextAlign::Right,
-                    strip_x + strip_width - width,
-                )
-            } else {
-                (strip_x + 10.0, AxisTextAlign::Left, strip_x)
-            };
-            labels.push(AxisLabel {
-                text,
-                x,
-                y,
-                color: self.axis_label_text_color(state.options.color),
-                align,
-                midpoint: AxisTextMidpoint::Label,
-                font_scale: 1.0,
-                bold: false,
-                background: Some((
-                    background_x,
-                    y - height * 0.5,
-                    width,
-                    height,
-                    state.options.color,
-                )),
-                background_corners: AxisLabelCorners::for_align(align),
-                measure_extra: 0.0,
-                attach_group: None,
-                border: None,
-            });
         }
     }
 }

@@ -1577,19 +1577,6 @@ impl ChartEngine {
                     vpr,
                     &mut cache.overlay.prims,
                 );
-                self.build_native_user_price_lines_button_frame(
-                    pi,
-                    hpr,
-                    vpr,
-                    &mut cache.overlay.prims,
-                );
-                self.build_native_user_price_alerts_frame(
-                    pi,
-                    hpr,
-                    vpr,
-                    &mut cache.overlay.prims,
-                    &mut cache.overlay.points,
-                );
                 self.build_native_delta_tooltip_frame(pi, hpr, vpr, &mut cache.overlay.prims);
                 if let Some((from, _)) = visible {
                     self.build_selection_anchors_frame(
@@ -1974,20 +1961,6 @@ impl ChartEngine {
                             first_price.min(*second_price),
                             first_price.max(*second_price),
                         )
-                    }
-                    crate::native_primitives::NativeSeriesPrimitiveKind::ExpiringPriceAlerts(
-                        state,
-                    ) => {
-                        let Some(first) = state.alerts.first() else {
-                            continue;
-                        };
-                        let (minimum, maximum) = state.alerts.iter().skip(1).fold(
-                            (first.price, first.price),
-                            |(minimum, maximum), alert| {
-                                (minimum.min(alert.price), maximum.max(alert.price))
-                            },
-                        );
-                        PriceRange::new(minimum, maximum)
                     }
                     _ => continue,
                 };

@@ -1,6 +1,7 @@
 //! Headless tests for the engine-owned drawing objects (drawings.rs): model validation,
 //! options JSON, hit-testing, anchor/body drag math, and the interactive creation flow.
 
+use nucleuscharts_core::style::DEFAULT_PRIMARY_RGB;
 use nucleuscharts_render::draw_list::Prim;
 
 use super::*;
@@ -1067,13 +1068,15 @@ fn text_hit_uses_measured_box() {
         )
         .unwrap();
     let (ax, ay) = (x_at(&chart, 5.0), y_at(&chart, 11.0));
-    // Center/middle placement: the 40×24 box centers on the anchor, plus the container
-    // padding (4 px) on every side.
+    // Center/middle placement: the 40×24 box centers on the anchor, plus the container's
+    // 4 px padding and 2 px editing border on every side.
     assert_eq!(chart.hit_test_drawing(ax, ay).unwrap().id, id);
     assert_eq!(chart.hit_test_drawing(ax + 19.0, ay).unwrap().id, id);
     assert_eq!(chart.hit_test_drawing(ax + 23.0, ay).unwrap().id, id);
-    assert!(chart.hit_test_drawing(ax + 25.0, ay).is_none());
-    assert!(chart.hit_test_drawing(ax, ay + 17.0).is_none());
+    assert_eq!(chart.hit_test_drawing(ax + 25.0, ay).unwrap().id, id);
+    assert!(chart.hit_test_drawing(ax + 27.0, ay).is_none());
+    assert_eq!(chart.hit_test_drawing(ax, ay + 17.0).unwrap().id, id);
+    assert!(chart.hit_test_drawing(ax, ay + 19.0).is_none());
 }
 
 #[test]
@@ -1247,6 +1250,11 @@ fn creation_flow_commits_after_the_kinds_anchor_count() {
 #[test]
 fn official_rectangle_preview_commit_and_axis_views_are_engine_owned() {
     let mut chart = settled_chart();
+    let primary = Color::rgb(
+        DEFAULT_PRIMARY_RGB.0,
+        DEFAULT_PRIMARY_RGB.1,
+        DEFAULT_PRIMARY_RGB.2,
+    );
     chart.axis_w = 80.0;
     chart.pane_w = 720.0;
     chart.time_scale.set_width(720.0);
@@ -1289,10 +1297,12 @@ fn official_rectangle_preview_commit_and_axis_views_are_engine_owned() {
     }));
     let preview_axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
     assert_eq!(preview_axis.bands.len(), 2);
+    assert!(preview_axis.bands.iter().any(|band| band.y < chart.pane_h
+        && band.color == Color::rgba(primary.r(), primary.g(), primary.b(), 64)));
     assert!(preview_axis
         .bands
         .iter()
-        .all(|band| band.color == Color::rgba(200, 50, 100, 32)));
+        .any(|band| band.y >= chart.pane_h && band.color == Color::rgba(200, 50, 100, 32)));
     assert_eq!(
         preview_axis
             .labels
@@ -1302,7 +1312,15 @@ fn official_rectangle_preview_commit_and_axis_views_are_engine_owned() {
                     && matches!(label.background, Some((.., color)) if color == Color::rgb(200, 50, 100))
             })
             .count(),
-        4
+        2
+    );
+    assert_eq!(
+        preview_axis
+            .labels
+            .iter()
+            .filter(|label| matches!(label.background, Some((.., color)) if color == primary))
+            .count(),
+        2
     );
 
     let id = chart.drawing_create_click(
@@ -1321,6 +1339,7 @@ fn official_rectangle_preview_commit_and_axis_views_are_engine_owned() {
         matches!(primitive, Prim::Rect { color, .. }
             if *color == Color::rgba(200, 50, 100, 191))
     }));
+    chart.set_selected_drawing(None);
     let committed_axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
     assert_eq!(committed_axis.bands.len(), 2);
     assert!(committed_axis
@@ -1349,6 +1368,116 @@ fn official_rectangle_preview_commit_and_axis_views_are_engine_owned() {
             .count(),
         2
     );
+}
+
+#[test]
+fn selected_rectangle_owns_live_price_scale_territory_by_default() {
+    let mut chart = settled_chart();
+    chart.axis_w = 80.0;
+    chart.pane_w = 720.0;
+    chart.time_scale.set_width(720.0);
+    chart.fit_content();
+    chart.build_frame();
+    let id = chart
+        .add_drawing(
+            DrawingKind::Rectangle,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 10.25,
+                },
+                DrawingPoint {
+                    logical: 6.0,
+                    price: 12.25,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    chart.set_selected_drawing(None);
+
+    let unselected = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    assert!(unselected.bands.is_empty());
+    assert!(!unselected.labels.iter().any(|label| {
+        label.background.is_some() && matches!(label.text.as_str(), "10.25" | "12.25")
+    }));
+
+    chart.set_selected_drawing(Some(id));
+    let selected = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let primary = Color::rgb(
+        DEFAULT_PRIMARY_RGB.0,
+        DEFAULT_PRIMARY_RGB.1,
+        DEFAULT_PRIMARY_RGB.2,
+    );
+    assert_eq!(
+        selected.bands.len(),
+        1,
+        "selection adds price territory only"
+    );
+    assert_eq!(
+        selected.bands[0].color,
+        Color::rgba(primary.r(), primary.g(), primary.b(), 64)
+    );
+    assert!(
+        selected
+            .labels
+            .iter()
+            .filter(|label| {
+                label.background.is_some() && matches!(label.text.as_str(), "10.25" | "12.25")
+            })
+            .count()
+            >= 2
+    );
+    assert!(selected
+        .labels
+        .iter()
+        .filter(|label| {
+            label.background.is_some() && matches!(label.text.as_str(), "10.25" | "12.25")
+        })
+        .all(|label| label.background.unwrap().4 == primary));
+    assert!(!selected
+        .labels
+        .iter()
+        .any(|label| { label.background.is_some() && label.text.contains('/') }));
+    let original_price_band = selected
+        .bands
+        .iter()
+        .find(|band| band.y < chart.pane_h)
+        .copied()
+        .unwrap();
+
+    let first = chart.drawing_point_to_coordinate(id, 0).unwrap();
+    assert!(chart.drawing_drag_start_at(first.0, first.1));
+    chart.drawing_drag_to(first.0, first.1 + 20.0, DrawingModifiers::default());
+    let dragging = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let dragged_price_band = dragging
+        .bands
+        .iter()
+        .find(|band| band.y < chart.pane_h)
+        .copied()
+        .unwrap();
+    assert_ne!(dragged_price_band, original_price_band);
+
+    chart.drawing_drag_end();
+    chart.set_selected_drawing(None);
+    let deselected = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    assert!(deselected.bands.is_empty());
+
+    chart.left_axis_w = 80.0;
+    chart
+        .apply_options(r#"{"leftPriceScale":{"visible":true}}"#)
+        .unwrap();
+    chart.set_series_price_scale(0, crate::PriceScaleTarget::Overlay);
+    assert!(chart.drawing_apply_options(id, r#"{"price_scale_id":"overlay"}"#));
+    chart.set_selected_drawing(Some(id));
+    let overlay = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    assert_eq!(
+        overlay.bands.len(),
+        1,
+        "active overlay drawings use the default right axis only"
+    );
+    assert_eq!(overlay.bands[0].x, chart.pane_left + chart.pane_w);
 }
 
 #[test]

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::{ChartEngine, PaneId, SeriesId};
 use nucleuscharts_render::color::Color;
-use nucleuscharts_render::draw_list::{LineStyle, RasterImage};
+use nucleuscharts_render::draw_list::RasterImage;
 
 pub type NativePrimitiveId = u32;
 
@@ -16,9 +16,6 @@ pub const MAX_RASTER_IMAGE_DIMENSION: u32 = 1024;
 const MAX_NATIVE_PANE_PRIMITIVES: usize = 16;
 const MAX_NATIVE_TEXT_BYTES: usize = 4 * 1024;
 const MAX_NATIVE_FONT_FAMILY_BYTES: usize = 256;
-pub const MAX_EXPIRING_PRICE_ALERTS: usize = 1_000;
-pub const MAX_EXPIRING_ALERT_TIME_POINTS: usize = 16_384;
-pub const MAX_USER_PRICE_ALERTS: usize = 1_000;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AccessibilityFocusOptions {
@@ -292,48 +289,6 @@ pub struct VerticalLineOptions {
     pub show_label: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct UserPriceLinesButtonOptions {
-    pub color: Color,
-    pub hover_color: Color,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct UserPriceAlertsOptions {
-    pub symbol_name: String,
-    pub color: Color,
-    pub hover_color: Color,
-}
-
-impl Default for UserPriceAlertsOptions {
-    fn default() -> Self {
-        Self {
-            symbol_name: String::new(),
-            color: Color::rgb(0x13, 0x17, 0x22),
-            hover_color: Color::rgb(0x50, 0x53, 0x5e),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct UserPriceAlert {
-    pub id: u32,
-    pub price: f64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UserPriceAlertsHit {
-    Add,
-    Remove(u32),
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct UserPriceAlertsState {
-    pub options: UserPriceAlertsOptions,
-    pub alerts: Vec<UserPriceAlert>,
-    pub next_alert_id: u32,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct TrendLineOptions {
     pub line_color: Color,
@@ -341,48 +296,6 @@ pub struct TrendLineOptions {
     pub show_labels: bool,
     pub label_background_color: Color,
     pub label_text_color: Color,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AlertCrossingDirection {
-    Up,
-    Down,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ExpiringPriceAlertsOptions {
-    pub interval: i64,
-    pub clear_timeout_ms: f64,
-}
-
-impl Default for ExpiringPriceAlertsOptions {
-    fn default() -> Self {
-        Self {
-            interval: 86_400,
-            clear_timeout_ms: 3_000.0,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ExpiringPriceAlert {
-    pub id: u32,
-    pub price: f64,
-    pub start: i64,
-    pub end: i64,
-    pub title: String,
-    pub crossing_direction: AlertCrossingDirection,
-    pub crossed: bool,
-    pub expired: bool,
-    pub remove_at_ms: Option<f64>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ExpiringPriceAlertsState {
-    pub options: ExpiringPriceAlertsOptions,
-    pub alerts: Vec<ExpiringPriceAlert>,
-    pub next_alert_id: u32,
-    pub last_value: Option<f64>,
 }
 
 impl Default for TrendLineOptions {
@@ -393,15 +306,6 @@ impl Default for TrendLineOptions {
             show_labels: true,
             label_background_color: Color::rgba(255, 255, 255, 217),
             label_text_color: Color::rgb(0, 0, 0),
-        }
-    }
-}
-
-impl Default for UserPriceLinesButtonOptions {
-    fn default() -> Self {
-        Self {
-            color: Color::rgb(0, 0, 0),
-            hover_color: Color::rgb(119, 119, 119),
         }
     }
 }
@@ -441,14 +345,12 @@ pub(crate) enum NativeSeriesPrimitiveKind {
     AccessibilityFocus(AccessibilityFocusState),
     SessionHighlighting(SessionHighlightingState),
     HighlightBarCrosshair {
-        color: Color,
+        color: Option<Color>,
     },
     VerticalLine {
         time: i64,
         options: VerticalLineOptions,
     },
-    UserPriceLinesButton(UserPriceLinesButtonOptions),
-    UserPriceAlerts(UserPriceAlertsState),
     Tooltip(TooltipOptions),
     DeltaTooltip(DeltaTooltipState),
     TrendLine {
@@ -458,7 +360,6 @@ pub(crate) enum NativeSeriesPrimitiveKind {
         second_price: f64,
         options: TrendLineOptions,
     },
-    ExpiringPriceAlerts(ExpiringPriceAlertsState),
     VolumeProfile {
         data: VolumeProfileData,
         options: VolumeProfileOptions,
@@ -500,18 +401,6 @@ impl NativeSeriesPrimitive {
             }
             NativeSeriesPrimitiveKind::VerticalLine { options, .. } => {
                 options.label_text.capacity()
-            }
-            NativeSeriesPrimitiveKind::ExpiringPriceAlerts(state) => {
-                state.alerts.capacity() * core::mem::size_of::<ExpiringPriceAlert>()
-                    + state
-                        .alerts
-                        .iter()
-                        .map(|alert| alert.title.capacity())
-                        .sum::<usize>()
-            }
-            NativeSeriesPrimitiveKind::UserPriceAlerts(state) => {
-                state.alerts.capacity() * core::mem::size_of::<UserPriceAlert>()
-                    + state.options.symbol_name.capacity()
             }
             NativeSeriesPrimitiveKind::DeltaTooltip(state) => {
                 (state.committed_points.capacity() + state.preview_points.capacity())
@@ -564,13 +453,6 @@ fn valid_trend_line(
         && options.width.is_finite()
         && options.width > 0.0
         && options.width <= 64.0
-}
-
-fn valid_expiring_alert_options(options: ExpiringPriceAlertsOptions) -> bool {
-    options.interval > 0
-        && options.interval <= 366 * 86_400
-        && options.clear_timeout_ms.is_finite()
-        && (0.0..=3_600_000.0).contains(&options.clear_timeout_ms)
 }
 
 fn valid_image_options(options: ImageWatermarkOptions) -> bool {
@@ -835,7 +717,7 @@ impl ChartEngine {
     pub fn add_highlight_bar_crosshair(
         &mut self,
         series_id: SeriesId,
-        color: Color,
+        color: Option<Color>,
     ) -> Option<NativePrimitiveId> {
         self.insert_native_primitive(
             series_id,
@@ -854,38 +736,6 @@ impl ChartEngine {
             series_id,
             NativeSeriesPrimitiveKind::VerticalLine { time, options },
         )
-    }
-
-    pub fn add_user_price_lines_button(
-        &mut self,
-        series_id: SeriesId,
-        options: UserPriceLinesButtonOptions,
-    ) -> Option<NativePrimitiveId> {
-        self.insert_native_primitive(
-            series_id,
-            NativeSeriesPrimitiveKind::UserPriceLinesButton(options),
-        )
-    }
-
-    pub fn add_user_price_alerts(
-        &mut self,
-        series_id: SeriesId,
-        options: UserPriceAlertsOptions,
-    ) -> Option<NativePrimitiveId> {
-        if options.symbol_name.len() > MAX_NATIVE_TEXT_BYTES {
-            return None;
-        }
-        let id = self.insert_native_primitive(
-            series_id,
-            NativeSeriesPrimitiveKind::UserPriceAlerts(UserPriceAlertsState {
-                options,
-                alerts: Vec::new(),
-                next_alert_id: 1,
-            }),
-        )?;
-        self.invalidate_frame_overlay();
-        self.invalidate_axis_frame();
-        Some(id)
     }
 
     pub fn add_delta_tooltip(
@@ -1360,231 +1210,6 @@ impl ChartEngine {
         changed
     }
 
-    pub fn add_user_price_alert(
-        &mut self,
-        primitive_id: NativePrimitiveId,
-        price: f64,
-    ) -> Option<u32> {
-        if !price.is_finite() {
-            return None;
-        }
-        let state = self.series.iter_mut().find_map(|series| {
-            series.native_primitives.iter_mut().find_map(|primitive| {
-                (primitive.id == primitive_id)
-                    .then_some(&mut primitive.kind)
-                    .and_then(|kind| {
-                        let NativeSeriesPrimitiveKind::UserPriceAlerts(state) = kind else {
-                            return None;
-                        };
-                        Some(state)
-                    })
-            })
-        })?;
-        if state.alerts.len() >= MAX_USER_PRICE_ALERTS {
-            return None;
-        }
-        let id = state.next_alert_id;
-        state.next_alert_id = id.checked_add(1)?;
-        state.alerts.push(UserPriceAlert { id, price });
-        state.alerts.sort_by(|a, b| b.price.total_cmp(&a.price));
-        self.invalidate_frame_overlay();
-        self.invalidate_axis_frame();
-        Some(id)
-    }
-
-    pub fn remove_user_price_alert(
-        &mut self,
-        primitive_id: NativePrimitiveId,
-        alert_id: u32,
-    ) -> bool {
-        let Some(state) = self.series.iter_mut().find_map(|series| {
-            series.native_primitives.iter_mut().find_map(|primitive| {
-                (primitive.id == primitive_id)
-                    .then_some(&mut primitive.kind)
-                    .and_then(|kind| {
-                        let NativeSeriesPrimitiveKind::UserPriceAlerts(state) = kind else {
-                            return None;
-                        };
-                        Some(state)
-                    })
-            })
-        }) else {
-            return false;
-        };
-        let Some(index) = state.alerts.iter().position(|alert| alert.id == alert_id) else {
-            return false;
-        };
-        state.alerts.remove(index);
-        self.invalidate_frame_overlay();
-        self.invalidate_axis_frame();
-        true
-    }
-
-    pub fn user_price_alerts(&self, primitive_id: NativePrimitiveId) -> Option<&[UserPriceAlert]> {
-        self.series.iter().find_map(|series| {
-            series.native_primitives.iter().find_map(|primitive| {
-                if primitive.id != primitive_id {
-                    return None;
-                }
-                let NativeSeriesPrimitiveKind::UserPriceAlerts(state) = &primitive.kind else {
-                    return None;
-                };
-                Some(state.alerts.as_slice())
-            })
-        })
-    }
-
-    pub fn user_price_alerts_hit_test(
-        &self,
-        primitive_id: NativePrimitiveId,
-        x: f64,
-        y: f64,
-    ) -> Option<UserPriceAlertsHit> {
-        if !x.is_finite() || !y.is_finite() {
-            return None;
-        }
-        let (series_id, pane_index, state) = self.series.iter().find_map(|series| {
-            series.native_primitives.iter().find_map(|primitive| {
-                if primitive.id != primitive_id {
-                    return None;
-                }
-                let NativeSeriesPrimitiveKind::UserPriceAlerts(state) = &primitive.kind else {
-                    return None;
-                };
-                Some((series.id, series.pane_index, state))
-            })
-        })?;
-        if self.pane_at_y(y) != Some(pane_index) {
-            return None;
-        }
-        let distance_to_scale = self.pane_w - x;
-        if (1.0..21.0).contains(&distance_to_scale) {
-            return Some(UserPriceAlertsHit::Add);
-        }
-        let closest = state
-            .alerts
-            .iter()
-            .filter_map(|alert| {
-                self.series_price_to_coordinate(series_id, alert.price)
-                    .map(|alert_y| (alert, alert_y, (y - alert_y).abs()))
-            })
-            .min_by(|a, b| a.2.total_cmp(&b.2))?;
-        if closest.2 >= 50.0 {
-            return None;
-        }
-        let price = self.series_format_price(series_id, closest.0.price)?;
-        let text_length = state.options.symbol_name.chars().count()
-            + " crossing ".chars().count()
-            + price.chars().count();
-        let label_width = 9.0 * 2.0 + 26.0 + text_length as f64 * 5.81;
-        let remove_left = (self.pane_w - label_width) * 0.5 + label_width - 26.0;
-        (x >= remove_left && x <= remove_left + 26.0 && (y - closest.1).abs() <= 10.0)
-            .then_some(UserPriceAlertsHit::Remove(closest.0.id))
-    }
-
-    pub fn hit_test_user_price_alerts(
-        &self,
-        x: f64,
-        y: f64,
-    ) -> Option<(SeriesId, NativePrimitiveId, UserPriceAlertsHit)> {
-        self.series_order.iter().rev().find_map(|series_id| {
-            let series = self.series_entry(*series_id)?;
-            series.native_primitives.iter().rev().find_map(|primitive| {
-                matches!(
-                    primitive.kind,
-                    NativeSeriesPrimitiveKind::UserPriceAlerts(_)
-                )
-                .then(|| {
-                    self.user_price_alerts_hit_test(primitive.id, x, y)
-                        .map(|hit| (*series_id, primitive.id, hit))
-                })
-                .flatten()
-            })
-        })
-    }
-
-    pub fn click_user_price_alerts(
-        &mut self,
-        primitive_id: NativePrimitiveId,
-        x: f64,
-        y: f64,
-    ) -> bool {
-        match self.user_price_alerts_hit_test(primitive_id, x, y) {
-            Some(UserPriceAlertsHit::Add) => self
-                .series
-                .iter()
-                .find_map(|series| {
-                    series
-                        .native_primitives
-                        .iter()
-                        .any(|primitive| primitive.id == primitive_id)
-                        .then_some(series.id)
-                })
-                .and_then(|series_id| self.series_coordinate_to_price(series_id, y))
-                .and_then(|price| self.add_user_price_alert(primitive_id, price))
-                .is_some(),
-            Some(UserPriceAlertsHit::Remove(alert_id)) => {
-                self.remove_user_price_alert(primitive_id, alert_id)
-            }
-            None => false,
-        }
-    }
-
-    /// Route a normal chart click through every attached native interactive primitive. Browser
-    /// hosts forward one normalized sample; price conversion and resulting chart state stay in
-    /// the shared engine.
-    pub fn click_native_primitives_at(&mut self, x: f64, y: f64) -> bool {
-        if !x.is_finite() || !y.is_finite() {
-            return false;
-        }
-        let alert_ids: Vec<_> = self
-            .series
-            .iter()
-            .flat_map(|series| {
-                series.native_primitives.iter().filter_map(|primitive| {
-                    matches!(
-                        primitive.kind,
-                        NativeSeriesPrimitiveKind::UserPriceAlerts(_)
-                    )
-                    .then_some(primitive.id)
-                })
-            })
-            .collect();
-        let mut changed = false;
-        for primitive_id in alert_ids {
-            changed |= self.click_user_price_alerts(primitive_id, x, y);
-        }
-
-        let pane = self.pane_at_y(y);
-        let pane_w = self.pane_w;
-        let add_lines: Vec<_> = self
-            .series
-            .iter()
-            .filter(|series| Some(series.pane_index) == pane)
-            .flat_map(|series| {
-                series
-                    .native_primitives
-                    .iter()
-                    .filter_map(move |primitive| {
-                        let NativeSeriesPrimitiveKind::UserPriceLinesButton(options) =
-                            primitive.kind
-                        else {
-                            return None;
-                        };
-                        (x >= 0.0 && pane_w - x >= 0.0 && pane_w - x <= 21.0)
-                            .then_some((series.id, options.color))
-                    })
-            })
-            .collect();
-        for (series_id, color) in add_lines {
-            if let Some(price) = self.series_coordinate_to_price(series_id, y) {
-                self.create_price_line(series_id, price, color, 1, LineStyle::Dashed, "");
-                changed = true;
-            }
-        }
-        changed
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub fn add_trend_line(
         &mut self,
@@ -1607,265 +1232,6 @@ impl ChartEngine {
                 options,
             },
         )
-    }
-
-    pub fn add_expiring_price_alerts(
-        &mut self,
-        series_id: SeriesId,
-        options: ExpiringPriceAlertsOptions,
-    ) -> Option<NativePrimitiveId> {
-        valid_expiring_alert_options(options).then_some(())?;
-        let last_value = {
-            let plot = self.data.plot(series_id);
-            plot.last_non_whitespace_row(i64::MAX)
-                .map(|row| {
-                    plot.value_at(
-                        row,
-                        nucleuscharts_core::model::plot_list::PlotValueIndex::Close,
-                    )
-                })
-                .filter(|value| value.is_finite())
-        };
-        self.insert_native_primitive(
-            series_id,
-            NativeSeriesPrimitiveKind::ExpiringPriceAlerts(ExpiringPriceAlertsState {
-                options,
-                alerts: Vec::new(),
-                next_alert_id: 1,
-                last_value,
-            }),
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn add_expiring_price_alert(
-        &mut self,
-        primitive_id: NativePrimitiveId,
-        price: f64,
-        start: i64,
-        end: i64,
-        title: String,
-        crossing_direction: AlertCrossingDirection,
-    ) -> Option<u32> {
-        if !price.is_finite() || start > end || title.len() > MAX_NATIVE_TEXT_BYTES {
-            return None;
-        }
-        let series_id = self.series.iter().find_map(|series| {
-            series
-                .native_primitives
-                .iter()
-                .any(|primitive| primitive.id == primitive_id)
-                .then_some(series.id)
-        })?;
-        let last_plot_time = self
-            .data
-            .series_data(series_id)
-            .and_then(|(times, _)| times.last().copied());
-        let state = self.series.iter_mut().find_map(|series| {
-            series.native_primitives.iter_mut().find_map(|primitive| {
-                (primitive.id == primitive_id)
-                    .then_some(&mut primitive.kind)
-                    .and_then(|kind| {
-                        let NativeSeriesPrimitiveKind::ExpiringPriceAlerts(state) = kind else {
-                            return None;
-                        };
-                        Some(state)
-                    })
-            })
-        })?;
-        let timeline_start = state
-            .alerts
-            .iter()
-            .map(|alert| alert.start)
-            .chain([start])
-            .chain(last_plot_time)
-            .min()?;
-        let timeline_end = state
-            .alerts
-            .iter()
-            .map(|alert| alert.end)
-            .chain([end])
-            .max()?;
-        let span = timeline_end.checked_sub(timeline_start)?;
-        let points = usize::try_from(span / state.options.interval)
-            .ok()?
-            .checked_add(1)?;
-        if points > MAX_EXPIRING_ALERT_TIME_POINTS
-            || state.alerts.len() >= MAX_EXPIRING_PRICE_ALERTS
-        {
-            return None;
-        }
-        let id = state.next_alert_id;
-        state.next_alert_id = id.checked_add(1)?;
-        state.alerts.push(ExpiringPriceAlert {
-            id,
-            price,
-            start,
-            end,
-            title,
-            crossing_direction,
-            crossed: false,
-            expired: false,
-            remove_at_ms: None,
-        });
-        self.invalidate_frame_series(series_id);
-        self.sync_native_time_points();
-        Some(id)
-    }
-
-    pub fn remove_expiring_price_alert(
-        &mut self,
-        primitive_id: NativePrimitiveId,
-        alert_id: u32,
-    ) -> bool {
-        let Some((series_id, state)) = self.series.iter_mut().find_map(|series| {
-            series.native_primitives.iter_mut().find_map(|primitive| {
-                (primitive.id == primitive_id)
-                    .then_some(&mut primitive.kind)
-                    .and_then(|kind| {
-                        let NativeSeriesPrimitiveKind::ExpiringPriceAlerts(state) = kind else {
-                            return None;
-                        };
-                        Some((series.id, state))
-                    })
-            })
-        }) else {
-            return false;
-        };
-        let Some(index) = state.alerts.iter().position(|alert| alert.id == alert_id) else {
-            return false;
-        };
-        state.alerts.remove(index);
-        self.invalidate_frame_series(series_id);
-        self.sync_native_time_points();
-        true
-    }
-
-    /// Advance alert crossing/expiry state from the owning series' latest data point. Returns the
-    /// delay until the next faded alert should be removed, if any.
-    pub fn refresh_expiring_price_alerts(
-        &mut self,
-        primitive_id: NativePrimitiveId,
-        time: i64,
-        value: f64,
-        now_ms: f64,
-    ) -> Option<f64> {
-        if !value.is_finite() || !now_ms.is_finite() {
-            return None;
-        }
-        let (series_id, state) = self.series.iter_mut().find_map(|series| {
-            series.native_primitives.iter_mut().find_map(|primitive| {
-                (primitive.id == primitive_id)
-                    .then_some(&mut primitive.kind)
-                    .and_then(|kind| {
-                        let NativeSeriesPrimitiveKind::ExpiringPriceAlerts(state) = kind else {
-                            return None;
-                        };
-                        Some((series.id, state))
-                    })
-            })
-        })?;
-        let mut changed = false;
-        if let Some(previous) = state.last_value {
-            for alert in &mut state.alerts {
-                if alert.crossed {
-                    continue;
-                }
-                let crossed = match alert.crossing_direction {
-                    AlertCrossingDirection::Up => previous <= alert.price && value > alert.price,
-                    AlertCrossingDirection::Down => previous >= alert.price && value < alert.price,
-                };
-                if crossed {
-                    alert.crossed = true;
-                    alert.remove_at_ms = Some(now_ms + state.options.clear_timeout_ms);
-                    changed = true;
-                }
-            }
-        }
-        state.last_value = Some(value);
-        for alert in &mut state.alerts {
-            if alert.end <= time && !alert.expired {
-                alert.expired = true;
-                alert
-                    .remove_at_ms
-                    .get_or_insert(now_ms + state.options.clear_timeout_ms);
-                changed = true;
-            }
-        }
-        let before = state.alerts.len();
-        state
-            .alerts
-            .retain(|alert| alert.remove_at_ms.is_none_or(|deadline| deadline > now_ms));
-        let removed = state.alerts.len() != before;
-        let next = state
-            .alerts
-            .iter()
-            .filter_map(|alert| alert.remove_at_ms)
-            .map(|deadline| (deadline - now_ms).max(0.0))
-            .min_by(f64::total_cmp);
-        if changed || removed {
-            self.invalidate_frame_series(series_id);
-        }
-        if removed {
-            self.sync_native_time_points();
-        }
-        next
-    }
-
-    pub fn expiring_price_alerts(
-        &self,
-        primitive_id: NativePrimitiveId,
-    ) -> Option<&[ExpiringPriceAlert]> {
-        self.series.iter().find_map(|series| {
-            series.native_primitives.iter().find_map(|primitive| {
-                if primitive.id != primitive_id {
-                    return None;
-                }
-                let NativeSeriesPrimitiveKind::ExpiringPriceAlerts(state) = &primitive.kind else {
-                    return None;
-                };
-                Some(state.alerts.as_slice())
-            })
-        })
-    }
-
-    pub(crate) fn sync_native_time_points(&mut self) {
-        let mut times = Vec::new();
-        for series in &self.series {
-            let last_plot_time = self
-                .data
-                .series_data(series.id)
-                .and_then(|(series_times, _)| series_times.last().copied());
-            for state in series.native_primitives.iter().filter_map(|primitive| {
-                let NativeSeriesPrimitiveKind::ExpiringPriceAlerts(state) = &primitive.kind else {
-                    return None;
-                };
-                Some(state)
-            }) {
-                let Some(mut time) = state
-                    .alerts
-                    .iter()
-                    .map(|alert| alert.start)
-                    .chain(last_plot_time)
-                    .min()
-                else {
-                    continue;
-                };
-                let Some(end) = state.alerts.iter().map(|alert| alert.end).max() else {
-                    continue;
-                };
-                while time <= end {
-                    times.push(time);
-                    let Some(next) = time.checked_add(state.options.interval) else {
-                        break;
-                    };
-                    time = next;
-                }
-            }
-        }
-        if self.data.set_auxiliary_times(times) {
-            self.sync_time_points();
-        }
     }
 
     pub fn add_volume_profile(
@@ -2023,14 +1389,6 @@ impl ChartEngine {
             let Some(series) = self.series_entry_mut(series_id) else {
                 return false;
             };
-            let removed_alerts = matches!(
-                series.native_primitives[index].kind,
-                NativeSeriesPrimitiveKind::ExpiringPriceAlerts(_)
-            );
-            let removed_user_alerts = matches!(
-                series.native_primitives[index].kind,
-                NativeSeriesPrimitiveKind::UserPriceAlerts(_)
-            );
             let removed_delta_tooltip = matches!(
                 series.native_primitives[index].kind,
                 NativeSeriesPrimitiveKind::DeltaTooltip(_)
@@ -2041,14 +1399,11 @@ impl ChartEngine {
             );
             series.native_primitives.remove(index);
             self.invalidate_frame_series(series_id);
-            if removed_user_alerts || removed_delta_tooltip || removed_tooltip {
+            if removed_delta_tooltip || removed_tooltip {
                 self.invalidate_frame_overlay();
-                if removed_user_alerts || removed_delta_tooltip {
+                if removed_delta_tooltip {
                     self.invalidate_axis_frame();
                 }
-            }
-            if removed_alerts {
-                self.sync_native_time_points();
             }
             return true;
         }
@@ -2145,7 +1500,9 @@ mod tests {
             .add_session_highlighting(0, SessionHighlightingOptions::default())
             .unwrap();
         let highlight = Color::rgba(10, 20, 30, 51);
-        chart.add_highlight_bar_crosshair(0, highlight).unwrap();
+        chart
+            .add_highlight_bar_crosshair(0, Some(highlight))
+            .unwrap();
         let profile_options = VolumeProfileOptions::default();
         chart
             .add_volume_profile(0, profile(), profile_options)
@@ -2190,6 +1547,37 @@ mod tests {
                 .count()
                 > 2
         );
+    }
+
+    #[test]
+    fn implicit_crosshair_highlight_tracks_the_engine_surface_and_explicit_color_wins() {
+        fn has_color(chart: &mut ChartEngine, expected: Color) -> bool {
+            chart.build_frame().panes[0].under.iter().any(
+                |primitive| matches!(primitive, Prim::Rect { color, .. } if *color == expected),
+            )
+        }
+
+        let mut implicit = chart();
+        implicit.add_highlight_bar_crosshair(0, None).unwrap();
+        let x = implicit.time_scale.index_to_coordinate(4);
+        implicit.set_crosshair_at(x, 250.0);
+        assert!(has_color(&mut implicit, Color::rgba(255, 255, 255, 31)));
+        implicit
+            .apply_options(r##"{"layout":{"background":{"color":"#ffffff"}}}"##)
+            .unwrap();
+        assert!(has_color(&mut implicit, Color::rgba(0, 0, 0, 51)));
+
+        let explicit_color = Color::rgba(12, 34, 56, 78);
+        let mut explicit = chart();
+        explicit
+            .add_highlight_bar_crosshair(0, Some(explicit_color))
+            .unwrap();
+        let x = explicit.time_scale.index_to_coordinate(4);
+        explicit.set_crosshair_at(x, 250.0);
+        explicit
+            .apply_options(r##"{"layout":{"background":{"color":"#ffffff"}}}"##)
+            .unwrap();
+        assert!(has_color(&mut explicit, explicit_color));
     }
 
     #[test]
@@ -2342,106 +1730,6 @@ mod tests {
         assert!(chart.memory_usage().native_primitive_capacity_bytes > 0);
         assert!(chart.remove_native_primitive(id));
         assert!(!chart.remove_native_primitive(id));
-    }
-
-    #[test]
-    fn expiring_alerts_own_timeline_state_autoscale_and_geometry() {
-        let mut chart = chart();
-        let primitive = chart
-            .add_expiring_price_alerts(
-                0,
-                ExpiringPriceAlertsOptions {
-                    interval: 86_400,
-                    clear_timeout_ms: 3_000.0,
-                },
-            )
-            .unwrap();
-        let alert = chart
-            .add_expiring_price_alert(
-                primitive,
-                120.0,
-                9 * 86_400,
-                12 * 86_400,
-                "$120".into(),
-                AlertCrossingDirection::Up,
-            )
-            .unwrap();
-        assert_eq!(alert, 1);
-        assert_eq!(chart.data.merged_times().len(), 13);
-        assert_eq!(chart.data.base_index(), Some(9));
-
-        chart.build_frame();
-        assert!(chart.panes[0]
-            .price_scale
-            .price_range()
-            .is_some_and(|range| range.max_value() >= 120.0));
-        let frame = chart.build_frame();
-        assert!(frame.panes[0].main.iter().any(|primitive| matches!(
-            primitive,
-            Prim::Text { text, .. } if text == "$120"
-        )));
-        assert!(frame.panes[0].main.iter().any(|primitive| matches!(
-            primitive,
-            Prim::Circle { fill, .. } if *fill == Color::rgb(0x64, 0xc7, 0x50)
-        )));
-
-        assert_eq!(
-            chart.refresh_expiring_price_alerts(primitive, 10 * 86_400, 121.0, 1_000.0),
-            Some(3_000.0)
-        );
-        assert!(chart.expiring_price_alerts(primitive).unwrap()[0].crossed);
-        let crossed = chart.build_frame();
-        assert!(crossed.panes[0].main.iter().any(|primitive| matches!(
-            primitive,
-            Prim::Circle { fill, .. } if *fill == Color::rgb(0x38, 0x6d, 0x2e)
-        )));
-
-        assert_eq!(
-            chart.refresh_expiring_price_alerts(primitive, 10 * 86_400, 121.0, 4_000.0),
-            None
-        );
-        assert!(chart.expiring_price_alerts(primitive).unwrap().is_empty());
-        assert_eq!(chart.data.merged_times().len(), 10);
-    }
-
-    #[test]
-    fn expiring_alert_timeline_steps_from_last_source_bar_without_forcing_the_end() {
-        let mut chart = chart();
-        let primitive = chart
-            .add_expiring_price_alerts(
-                0,
-                ExpiringPriceAlertsOptions {
-                    interval: 100,
-                    clear_timeout_ms: 3_000.0,
-                },
-            )
-            .unwrap();
-        let last = 9 * 86_400;
-        let start = last + 100;
-        let end = last + 250;
-        chart
-            .add_expiring_price_alert(
-                primitive,
-                105.0,
-                start,
-                end,
-                "stepped".into(),
-                AlertCrossingDirection::Up,
-            )
-            .unwrap();
-        assert!(chart.data.merged_times().contains(&last));
-        assert!(chart.data.merged_times().contains(&(last + 100)));
-        assert!(chart.data.merged_times().contains(&(last + 200)));
-        assert!(!chart.data.merged_times().contains(&end));
-        // The official primitive returns a normal `paneViews()` entry (no `zOrder()` override),
-        // so its label belongs in the series/main layer rather than the underlay.
-        assert!(chart.build_frame().panes[0]
-            .main
-            .iter()
-            .any(|primitive| matches!(
-                primitive,
-                Prim::Text { text, .. } if text == "stepped"
-            )));
     }
 
     #[test]
@@ -2999,110 +2287,6 @@ mod tests {
         assert_eq!(label.color, label_text);
         assert_eq!(label.background.unwrap().4, label_background);
         assert_eq!(label.background_corners, crate::AxisLabelCorners::BOTTOM);
-    }
-
-    #[test]
-    fn user_price_lines_button_only_appears_near_scale_and_tracks_hover() {
-        let mut chart = chart();
-        let hover = Color::rgb(1, 2, 3);
-        let line = Color::rgb(4, 5, 6);
-        chart
-            .add_user_price_lines_button(
-                0,
-                UserPriceLinesButtonOptions {
-                    color: line,
-                    hover_color: hover,
-                },
-            )
-            .unwrap();
-        chart.set_crosshair_at(700.0, 100.0);
-        assert!(chart.build_frame().panes[0]
-            .main
-            .iter()
-            .all(|primitive| !matches!(primitive, Prim::RoundRect { fill, .. } if fill == &hover)));
-
-        chart.set_crosshair_at(790.0, 100.0);
-        let frame = chart.build_frame();
-        assert!(frame.panes[0]
-            .main
-            .iter()
-            .any(|primitive| matches!(primitive, Prim::RoundRect { fill, .. } if fill == &hover)));
-        assert!(frame.panes[0]
-            .main
-            .iter()
-            .any(|primitive| matches!(primitive, Prim::Circle { .. })));
-
-        assert!(chart.click_native_primitives_at(790.0, 100.0));
-        assert_eq!(chart.series[0].price_lines.len(), 1);
-        assert_eq!(chart.series[0].price_lines[0].color, line);
-        assert_eq!(chart.series[0].price_lines[0].style, LineStyle::Dashed);
-    }
-
-    #[test]
-    fn user_price_alerts_own_sorted_state_top_geometry_axis_label_and_clicks() {
-        let mut chart = chart();
-        let options = UserPriceAlertsOptions {
-            symbol_name: "AAPL".into(),
-            color: Color::rgb(0xf0, 0xe6, 0x8c),
-            ..UserPriceAlertsOptions::default()
-        };
-        let primitive = chart.add_user_price_alerts(0, options.clone()).unwrap();
-        chart.add_user_price_alert(primitive, 106.0).unwrap();
-        chart.add_user_price_alert(primitive, 103.0).unwrap();
-        assert_eq!(
-            chart
-                .user_price_alerts(primitive)
-                .unwrap()
-                .iter()
-                .map(|alert| alert.price)
-                .collect::<Vec<_>>(),
-            vec![106.0, 103.0]
-        );
-
-        let _ = chart.build_frame();
-        let y = chart.series_price_to_coordinate(0, 104.0).unwrap();
-        chart.set_crosshair_at(790.0, y);
-        assert_eq!(
-            chart.user_price_alerts_hit_test(primitive, 790.0, y),
-            Some(UserPriceAlertsHit::Add)
-        );
-        assert!(chart.click_user_price_alerts(primitive, 790.0, y));
-        assert_eq!(chart.user_price_alerts(primitive).unwrap().len(), 3);
-
-        let frame = chart.build_frame();
-        assert!(frame.panes[0].main.iter().any(|primitive| matches!(
-            primitive,
-            Prim::HLine { color, .. } if *color == options.color
-        )));
-        assert!(frame.panes[0].main.iter().any(|primitive| matches!(
-            primitive,
-            Prim::RoundRect { w, fill, .. }
-                if (*w - 21.0).abs() < f32::EPSILON && *fill == options.hover_color
-        )));
-        let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
-        assert!(axis.labels.iter().any(|label| {
-            label.color == Color::rgb(0, 0, 0)
-                && label.background.is_some_and(|(_, _, _, height, color)| {
-                    height == 21.0 && color == options.color
-                })
-        }));
-
-        let alert = chart.user_price_alerts(primitive).unwrap()[0];
-        let alert_y = chart.series_price_to_coordinate(0, alert.price).unwrap();
-        let text = format!(
-            "{} crossing {}",
-            options.symbol_name,
-            chart.series_format_price(0, alert.price).unwrap()
-        );
-        let label_width = 18.0 + 26.0 + text.chars().count() as f64 * 5.81;
-        let remove_x = (chart.pane_w - label_width) * 0.5 + label_width - 13.0;
-        chart.set_crosshair_at(remove_x, alert_y);
-        assert_eq!(
-            chart.user_price_alerts_hit_test(primitive, remove_x, alert_y),
-            Some(UserPriceAlertsHit::Remove(alert.id))
-        );
-        assert!(chart.click_user_price_alerts(primitive, remove_x, alert_y));
-        assert_eq!(chart.user_price_alerts(primitive).unwrap().len(), 2);
     }
 
     #[test]

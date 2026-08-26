@@ -26,8 +26,8 @@ test("demo shell is responsive, icon-led, and has no horizontal control ribbon",
 
 test("feature lab exposes every first-class helper and manages series lifecycle", async ({ page }) => {
   await open_demo(page);
-  // The 28 official plugins expose 29 scenarios; the native trading engine adds one more.
-  await expect(page.locator("#feature_grid .feature-card")).toHaveCount(28);
+  // Every supported helper scenario remains represented after retiring three obsolete cards.
+  await expect(page.locator("#feature_grid .feature-card")).toHaveCount(25);
   await expect(page.locator('[data-feature-id="heatmap-standalone"]')).toBeVisible();
   await expect(page.locator('[data-feature-id="heatmap-line"]')).toBeVisible();
 

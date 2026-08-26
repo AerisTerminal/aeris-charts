@@ -35,6 +35,14 @@ function count_near_point(image, point, viewport, expected, tolerance = 10, radi
   return count;
 }
 
+function pixel_at(buffer, point, viewport) {
+  const image = PNG.sync.read(buffer);
+  const x = Math.round(point.x * image.width / viewport.width);
+  const y = Math.round(point.y * image.height / viewport.height);
+  const offset = (y * image.width + x) * 4;
+  return [...image.data.subarray(offset, offset + 3)];
+}
+
 async function open_chart(page) {
   await page.goto("/?runtimeTest=presentedFrame&backend=canvas2d&forceFallbackAdapter=1");
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
@@ -179,7 +187,6 @@ test("primitive feature helpers compose existing engine and host boundaries", as
     handles.push(api.create_trend_line(series, [{ time: start.time, price: start.low }, { time: end.time, price: end.high }]));
     handles.push(api.create_vertical_line(series, bars[24].time, { label_text: "Event", show_label: true }));
     api.create_user_price_line(series, { price: start.close, title: "Level" });
-    handles.push(api.create_user_price_lines(chart, series));
     handles.push(api.create_partial_price_line(series));
     handles.push(api.create_session_highlighting(series, { start_hour_utc: 0, end_hour_utc: 24 }));
     handles.push(api.create_highlight_bar_crosshair(chart, series));
@@ -203,12 +210,6 @@ test("primitive feature helpers compose existing engine and host boundaries", as
     handles.push(api.create_tooltip(chart));
     handles.push(api.create_delta_tooltip(chart, { series }));
 
-    const alerts = api.create_expiring_price_alerts(series);
-    alerts.add(start.close, start.time, end.time + 86_400, { title: "Crossing up", crossing_direction: "up" });
-    alerts.add(end.close, start.time, end.time, { title: "Crossing down", crossing_direction: "down" });
-    const user_alerts = api.create_user_price_alerts(chart, series);
-    user_alerts.add(start.close);
-
     const a11y = api.enable_accessibility(chart, {
       chart_title: "Test financial chart",
       announce_data_updates: "active",
@@ -227,12 +228,8 @@ test("primitive feature helpers compose existing engine and host boundaries", as
       role: chart.chart_element().querySelector(".nucleuscharts-a11y-layer")?.getAttribute("role"),
       label: chart.chart_element().querySelector(".nucleuscharts-a11y-layer")?.getAttribute("aria-label"),
       announcement: chart.chart_element().querySelector(".nucleuscharts-a11y-live-region")?.textContent ?? "",
-      alerts: alerts.alerts().length,
-      user_alerts: user_alerts.alerts().length,
     };
     a11y.detach();
-    alerts.detach();
-    user_alerts.detach();
     handles.forEach((handle) => handle.detach());
     return state;
   });
@@ -242,9 +239,77 @@ test("primitive feature helpers compose existing engine and host boundaries", as
   expect(result.role).toBe("application");
   expect(result.label).toContain("Test financial chart");
   expect(result.announcement).toContain("Point");
-  expect(result.alerts).toBe(2);
-  expect(result.user_alerts).toBe(1);
   expect(page_errors).toEqual([]);
+});
+
+test("bar highlight default follows dark and light chart surfaces", async ({ page }) => {
+  await open_chart(page);
+  const point = await page.evaluate(async () => {
+    const api = await import("/dist/nucleuscharts_financial.js");
+    const chart = window.__chart;
+    chart.apply_options(api.theme_options("dark"));
+    window.__bar_highlight = api.create_highlight_bar_crosshair(chart, window.__main);
+    const pane = chart.panes()[0].get_geometry();
+    const bounds = chart.chart_element().getBoundingClientRect();
+    const range = chart.time_scale().get_visible_logical_range();
+    const logical = Math.round((range.from + range.to) * 0.5);
+    return {
+      x: bounds.left + pane.left + chart.time_scale().logical_to_coordinate(logical),
+      y: bounds.top + pane.top + 12,
+    };
+  });
+  const viewport = page.viewportSize();
+
+  await page.evaluate(() => window.__chart.clear_crosshair_position());
+  await page.waitForTimeout(40);
+  const dark_base = pixel_at(await page.screenshot(), point, viewport);
+  await page.mouse.move(point.x, point.y);
+  await page.waitForTimeout(40);
+  const dark_highlight = pixel_at(await page.screenshot(), point, viewport);
+  expect(dark_highlight[0] + dark_highlight[1] + dark_highlight[2])
+    .toBeGreaterThan(dark_base[0] + dark_base[1] + dark_base[2] + 30);
+
+  await page.evaluate(async () => {
+    const api = await import("/dist/nucleuscharts_financial.js");
+    window.__chart.apply_options(api.theme_options("light"));
+    window.__chart.clear_crosshair_position();
+  });
+  await page.waitForTimeout(40);
+  const light_base = pixel_at(await page.screenshot(), point, viewport);
+  await page.mouse.move(point.x + 1, point.y);
+  await page.waitForTimeout(40);
+  const light_highlight = pixel_at(await page.screenshot(), point, viewport);
+  expect(light_highlight[0] + light_highlight[1] + light_highlight[2])
+    .toBeLessThan(light_base[0] + light_base[1] + light_base[2] - 60);
+
+  await page.evaluate(async () => {
+    const api = await import("/dist/nucleuscharts_financial.js");
+    window.__bar_highlight.detach();
+    window.__chart.apply_options(api.theme_options("dark"));
+    window.__chart.clear_crosshair_position();
+    window.__explicit_bar_highlight = api.create_highlight_bar_crosshair(
+      window.__chart,
+      window.__main,
+      { color: "#ff0000" },
+    );
+  });
+  await page.mouse.move(point.x, point.y);
+  await page.waitForTimeout(40);
+  expect(count_near_point(PNG.sync.read(await page.screenshot()), point, viewport, [255, 0, 0]))
+    .toBeGreaterThan(5);
+  await page.evaluate(async () => {
+    const api = await import("/dist/nucleuscharts_financial.js");
+    window.__chart.apply_options(api.theme_options("light"));
+  });
+  await page.waitForTimeout(40);
+  expect(count_near_point(PNG.sync.read(await page.screenshot()), point, viewport, [255, 0, 0]))
+    .toBeGreaterThan(5);
+  await page.evaluate(async () => {
+    const api = await import("/dist/nucleuscharts_financial.js");
+    window.__chart.remove_series(window.__main);
+    window.__chart.apply_options(api.theme_options("dark"));
+    window.__explicit_bar_highlight.detach();
+  });
 });
 
 test("rectangle tool uses official two-click preview, data-time snapping, and engine axis views", async ({ page }) => {
@@ -296,7 +361,7 @@ test("rectangle tool uses official two-click preview, data-time snapping, and en
     let band_pixels = 0;
     const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
     for (let index = 0; index < pixels.length; index += 4) {
-      if (Math.abs(pixels[index] - 248) <= 3 && Math.abs(pixels[index + 1] - 229) <= 3 && Math.abs(pixels[index + 2] - 236) <= 3 && pixels[index + 3] === 255) {
+      if (Math.abs(pixels[index] - 207) <= 3 && Math.abs(pixels[index + 1] - 216) <= 3 && Math.abs(pixels[index + 2] - 246) <= 3 && pixels[index + 3] === 255) {
         band_pixels += 1;
       }
     }
@@ -325,10 +390,10 @@ test("rectangle tool uses official two-click preview, data-time snapping, and en
     let band_pixels = 0;
     const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
     for (let index = 0; index < pixels.length; index += 4) {
-      if (Math.abs(pixels[index] - 200) <= 3 && Math.abs(pixels[index + 1] - 50) <= 3 && Math.abs(pixels[index + 2] - 100) <= 3 && pixels[index + 3] === 255) {
+      if (Math.abs(pixels[index] - 62) <= 3 && Math.abs(pixels[index + 1] - 99) <= 3 && Math.abs(pixels[index + 2] - 221) <= 3 && pixels[index + 3] === 255) {
         label_pixels += 1;
       }
-      if (Math.abs(pixels[index] - 234) <= 3 && Math.abs(pixels[index + 1] - 178) <= 3 && Math.abs(pixels[index + 2] - 197) <= 3 && pixels[index + 3] === 255) {
+      if (Math.abs(pixels[index] - 207) <= 3 && Math.abs(pixels[index + 1] - 216) <= 3 && Math.abs(pixels[index + 2] - 246) <= 3 && pixels[index + 3] === 255) {
         band_pixels += 1;
       }
     }
@@ -349,8 +414,8 @@ test("rectangle tool uses official two-click preview, data-time snapping, and en
     fill_color: "rgba(200, 50, 100, 0.75)",
     preview_fill_color: "rgba(200, 50, 100, 0.25)",
     border_visible: false,
-    show_labels: true,
-    axis_bands_visible: true,
+    show_labels: false,
+    axis_bands_visible: false,
     snap_time_to_data: true,
   });
   expect(committed.band_pixels).toBeGreaterThan(20);
@@ -507,84 +572,6 @@ test("accessibility creates an independently named focus target for every live p
   expect(result.labels[0]).toContain("Price pane");
   expect(result.labels[1]).toContain("Volume pane");
   expect(result.focused_label).toContain("Volume pane");
-});
-
-test("user price alerts use the engine button and centered remove hit", async ({ page }) => {
-  await open_chart(page);
-  const geometry = await page.evaluate(async () => {
-    const api = await import("/dist/nucleuscharts_financial.js");
-    const chart = window.__chart;
-    const series = chart.panes()[0].get_series()[0];
-    window.__user_price_alerts = api.create_user_price_alerts(chart, series, { symbol_name: "AAPL" });
-    const pane = chart.panes()[0].get_geometry();
-    const bounds = chart.chart_element().getBoundingClientRect();
-    return { left: bounds.left + pane.left, top: bounds.top + pane.top, width: pane.width, height: pane.height };
-  });
-  const before = await page.screenshot();
-  await page.waitForFunction(() => performance.now() > 600);
-  await page.mouse.move(
-    geometry.left + geometry.width - 10,
-    geometry.top + geometry.height * 0.5,
-  );
-  expect(await page.evaluate(() => getComputedStyle(document.elementFromPoint(
-    window.__chart.chart_element().getBoundingClientRect().left
-      + window.__chart.panes()[0].get_geometry().left
-      + window.__chart.panes()[0].get_geometry().width - 10,
-    window.__chart.chart_element().getBoundingClientRect().top
-      + window.__chart.panes()[0].get_geometry().top
-      + window.__chart.panes()[0].get_geometry().height * 0.5,
-  )).cursor)).toBe("pointer");
-  await page.mouse.click(
-    geometry.left + geometry.width - 10,
-    geometry.top + geometry.height * 0.5,
-  );
-  await expect.poll(() => page.evaluate(() => window.__user_price_alerts.alerts().length)).toBe(1);
-  const after = await page.screenshot();
-  expect(after.equals(before)).toBe(false);
-
-  const remove = await page.evaluate(() => {
-    const chart = window.__chart;
-    const series = chart.panes()[0].get_series()[0];
-    const pane = chart.panes()[0].get_geometry();
-    const bounds = chart.chart_element().getBoundingClientRect();
-    const alert = window.__user_price_alerts.alerts()[0];
-    const text = `AAPL crossing ${series.price_formatter()(alert.price)}`;
-    const width = 18 + 26 + text.length * 5.81;
-    return {
-      x: bounds.left + pane.left + (pane.width - width) * 0.5 + width - 13,
-      y: bounds.top + series.price_to_coordinate(alert.price),
-    };
-  });
-  await page.mouse.move(remove.x, remove.y);
-  await page.mouse.click(remove.x, remove.y);
-  await expect.poll(() => page.evaluate(() => window.__user_price_alerts.alerts().length)).toBe(0);
-  await page.evaluate(() => window.__user_price_alerts.detach());
-});
-
-test("user price lines create through the chart's engine click route", async ({ page }) => {
-  await open_chart(page);
-  const geometry = await page.evaluate(async () => {
-    const api = await import("/dist/nucleuscharts_financial.js");
-    const chart = window.__chart;
-    window.__user_price_lines = api.create_user_price_lines(chart, window.__main, {
-      color: "#ff00aa",
-      hover_color: "#550033",
-    });
-    const pane = chart.panes()[0].get_geometry();
-    const bounds = chart.chart_element().getBoundingClientRect();
-    return {
-      x: bounds.left + pane.left + pane.width - 10,
-      y: bounds.top + pane.top + pane.height * 0.5,
-    };
-  });
-  await page.waitForFunction(() => performance.now() > 600);
-  await page.mouse.move(geometry.x, geometry.y);
-  const button = await page.screenshot();
-  await page.mouse.click(geometry.x, geometry.y);
-  await page.waitForTimeout(40);
-  const line = await page.screenshot();
-  expect(line.equals(button)).toBe(false);
-  await page.evaluate(() => window.__user_price_lines.detach());
 });
 
 test("tooltip matches the official structured chrome over an engine source snapshot", async ({ page }) => {

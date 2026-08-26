@@ -1503,30 +1503,6 @@ impl NucleusChart {
             .add_native_vertical_line(series_id, time, options_json)
     }
 
-    /// Attach the crosshair-following add-price-line button from the official plugin.
-    pub fn add_native_user_price_lines_button(
-        &mut self,
-        series_id: u32,
-        options_json: &str,
-    ) -> u32 {
-        self.inner
-            .borrow_mut()
-            .add_native_user_price_lines_button(series_id, options_json)
-    }
-
-    pub fn click_native_primitives_at(&mut self, x: f64, y: f64) -> bool {
-        self.inner
-            .borrow_mut()
-            .engine
-            .click_native_primitives_at(x, y)
-    }
-
-    pub fn add_native_user_price_alerts(&mut self, series_id: u32, options_json: &str) -> u32 {
-        self.inner
-            .borrow_mut()
-            .add_native_user_price_alerts(series_id, options_json)
-    }
-
     pub fn add_native_delta_tooltip(&mut self, series_id: u32, options_json: &str) -> u32 {
         self.inner
             .borrow_mut()
@@ -1584,24 +1560,6 @@ impl NucleusChart {
         self.inner.borrow_mut().engine.delta_tooltip_leave()
     }
 
-    pub fn add_native_user_price_alert(&mut self, primitive_id: u32, price: f64) -> u32 {
-        self.inner
-            .borrow_mut()
-            .add_native_user_price_alert(primitive_id, price)
-    }
-
-    pub fn remove_native_user_price_alert(&mut self, primitive_id: u32, alert_id: u32) -> bool {
-        self.inner
-            .borrow_mut()
-            .remove_native_user_price_alert(primitive_id, alert_id)
-    }
-
-    pub fn native_user_price_alerts_json(&self, primitive_id: u32) -> String {
-        self.inner
-            .borrow()
-            .native_user_price_alerts_json(primitive_id)
-    }
-
     /// Attach the official two-point trend-line primitive with endpoint labels.
     #[allow(clippy::too_many_arguments)]
     pub fn add_native_trend_line(
@@ -1642,7 +1600,7 @@ impl NucleusChart {
     }
 
     /// Attach a retained-frame bar-slot highlight driven directly by the engine crosshair.
-    pub fn add_native_crosshair_highlight(&mut self, series_id: u32, color: &str) -> u32 {
+    pub fn add_native_crosshair_highlight(&mut self, series_id: u32, color: Option<String>) -> u32 {
         self.inner
             .borrow_mut()
             .add_native_crosshair_highlight(series_id, color)
@@ -1664,56 +1622,6 @@ impl NucleusChart {
         self.inner
             .borrow_mut()
             .set_native_volume_profile_data(id, data_json)
-    }
-
-    pub fn add_native_expiring_price_alerts(&mut self, series_id: u32, options_json: &str) -> u32 {
-        self.inner
-            .borrow_mut()
-            .add_native_expiring_price_alerts(series_id, options_json)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn add_native_expiring_price_alert(
-        &mut self,
-        primitive_id: u32,
-        price: f64,
-        start: f64,
-        end: f64,
-        title: &str,
-        crossing_direction: &str,
-    ) -> u32 {
-        self.inner.borrow_mut().add_native_expiring_price_alert(
-            primitive_id,
-            price,
-            start,
-            end,
-            title,
-            crossing_direction,
-        )
-    }
-
-    pub fn remove_native_expiring_price_alert(&mut self, primitive_id: u32, alert_id: u32) -> bool {
-        self.inner
-            .borrow_mut()
-            .remove_native_expiring_price_alert(primitive_id, alert_id)
-    }
-
-    pub fn refresh_native_expiring_price_alerts(
-        &mut self,
-        primitive_id: u32,
-        time: f64,
-        value: f64,
-        now_ms: f64,
-    ) -> f64 {
-        self.inner
-            .borrow_mut()
-            .refresh_native_expiring_price_alerts(primitive_id, time, value, now_ms)
-    }
-
-    pub fn native_expiring_price_alerts_json(&self, primitive_id: u32) -> String {
-        self.inner
-            .borrow()
-            .native_expiring_price_alerts_json(primitive_id)
     }
 
     pub fn remove_native_primitive(&mut self, id: u32) -> bool {

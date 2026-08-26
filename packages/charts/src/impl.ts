@@ -984,21 +984,13 @@ class series_impl implements series_api {
     if (changed) this.chart.repaint();
     return changed;
   }
-  native_add_crosshair_highlight(color: string): number {
+  native_add_crosshair_highlight(color?: string): number {
     this.assert_live();
     return this.chart.wasm.add_native_crosshair_highlight(this.id, color);
   }
   native_add_vertical_line(time: number, options_json: string): number {
     this.assert_live();
     return this.chart.wasm.add_native_vertical_line(this.id, time, options_json);
-  }
-  native_add_user_price_lines_button(options_json: string): number {
-    this.assert_live();
-    return this.chart.wasm.add_native_user_price_lines_button(this.id, options_json);
-  }
-  native_add_user_price_alerts(options_json: string): number {
-    this.assert_live();
-    return this.chart.wasm.add_native_user_price_alerts(this.id, options_json);
   }
   native_add_delta_tooltip(options_json: string): number {
     this.assert_live();
@@ -1028,22 +1020,6 @@ class series_impl implements series_api {
     if (changed) this.chart.repaint();
     return changed;
   }
-  native_add_user_price_alert(primitive_id: number, price: number): number {
-    this.assert_live();
-    const id = this.chart.wasm.add_native_user_price_alert(primitive_id, price);
-    if (id !== 0) this.chart.repaint();
-    return id;
-  }
-  native_remove_user_price_alert(primitive_id: number, alert_id: number): boolean {
-    this.assert_live();
-    const removed = this.chart.wasm.remove_native_user_price_alert(primitive_id, alert_id);
-    if (removed) this.chart.repaint();
-    return removed;
-  }
-  native_user_price_alerts_json(primitive_id: number): string {
-    this.assert_live();
-    return this.chart.wasm.native_user_price_alerts_json(primitive_id);
-  }
   native_add_trend_line(
     first_time: number,
     first_price: number,
@@ -1070,56 +1046,6 @@ class series_impl implements series_api {
     const changed = this.chart.wasm.set_native_volume_profile_data(id, data_json);
     if (changed) this.chart.repaint();
     return changed;
-  }
-  native_add_expiring_price_alerts(options_json: string): number {
-    this.assert_live();
-    return this.chart.wasm.add_native_expiring_price_alerts(this.id, options_json);
-  }
-  native_add_expiring_price_alert(
-    primitive_id: number,
-    price: number,
-    start: number,
-    end: number,
-    title: string,
-    crossing_direction: "up" | "down",
-  ): number {
-    this.assert_live();
-    const id = this.chart.wasm.add_native_expiring_price_alert(
-      primitive_id,
-      price,
-      start,
-      end,
-      title,
-      crossing_direction,
-    );
-    if (id !== 0) this.chart.repaint();
-    return id;
-  }
-  native_remove_expiring_price_alert(primitive_id: number, alert_id: number): boolean {
-    this.assert_live();
-    const removed = this.chart.wasm.remove_native_expiring_price_alert(primitive_id, alert_id);
-    if (removed) this.chart.repaint();
-    return removed;
-  }
-  native_refresh_expiring_price_alerts(
-    primitive_id: number,
-    time: number,
-    value: number,
-    now_ms: number,
-  ): number {
-    this.assert_live();
-    const delay = this.chart.wasm.refresh_native_expiring_price_alerts(
-      primitive_id,
-      time,
-      value,
-      now_ms,
-    );
-    this.chart.repaint();
-    return delay;
-  }
-  native_expiring_price_alerts_json(primitive_id: number): string {
-    this.assert_live();
-    return this.chart.wasm.native_expiring_price_alerts_json(primitive_id);
   }
   native_remove_primitive(id: number): void {
     if (this.chart.wasm.remove_native_primitive(id)) this.chart.repaint();
@@ -1174,24 +1100,6 @@ export interface native_anchored_text_handle extends native_primitive_handle {
 
 export interface native_text_watermark_handle extends native_primitive_handle {
   set_options_json(options_json: string): boolean;
-}
-
-export interface native_expiring_price_alerts_handle extends native_primitive_handle {
-  add(
-    price: number,
-    start: number,
-    end: number,
-    title: string,
-    crossing_direction: "up" | "down",
-  ): number;
-  remove(alert_id: number): boolean;
-  alerts_json(): string;
-}
-
-export interface native_user_price_alerts_handle extends native_primitive_handle {
-  add(price: number): number;
-  remove(alert_id: number): boolean;
-  alerts_json(): string;
 }
 
 export interface native_delta_tooltip_handle extends native_primitive_handle {
@@ -1294,7 +1202,7 @@ export function attach_native_session_highlighting(
 
 export function attach_native_crosshair_highlight(
   series: series_api,
-  color: string,
+  color?: string,
 ): native_primitive_handle {
   const owner = native_series(series);
   return native_handle(owner, owner.native_add_crosshair_highlight(color));
@@ -1307,39 +1215,6 @@ export function attach_native_vertical_line(
 ): native_primitive_handle {
   const owner = native_series(series);
   return native_handle(owner, owner.native_add_vertical_line(time, options_json));
-}
-
-export function attach_native_user_price_lines_button(
-  series: series_api,
-  options_json: string,
-): native_primitive_handle {
-  const owner = native_series(series);
-  return native_handle(owner, owner.native_add_user_price_lines_button(options_json));
-}
-
-export function attach_native_user_price_alerts(
-  series: series_api,
-  options_json: string,
-): native_user_price_alerts_handle {
-  const owner = native_series(series);
-  const id = owner.native_add_user_price_alerts(options_json);
-  const base = native_handle(owner, id);
-  return {
-    add(price) {
-      const alert_id = owner.native_add_user_price_alert(id, price);
-      if (alert_id === 0) {
-        throw new nucleuscharts_error("invalid_data", "engine rejected user price-alert data");
-      }
-      return alert_id;
-    },
-    remove(alert_id) {
-      return owner.native_remove_user_price_alert(id, alert_id);
-    },
-    alerts_json() {
-      return owner.native_user_price_alerts_json(id);
-    },
-    detach: base.detach,
-  };
 }
 
 export function attach_native_delta_tooltip(
@@ -1408,65 +1283,6 @@ export function attach_native_volume_profile(
     detach: base.detach,
     set_data_json(next) {
       return owner.native_set_volume_profile_data(id, next);
-    },
-  };
-}
-
-export function attach_native_expiring_price_alerts(
-  series: series_api,
-  options_json: string,
-): native_expiring_price_alerts_handle {
-  const owner = native_series(series);
-  const id = owner.native_add_expiring_price_alerts(options_json);
-  const base = native_handle(owner, id);
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  let attached = true;
-  const schedule_refresh = (): void => {
-    if (!attached) return;
-    if (timer !== null) {
-      clearTimeout(timer);
-      timer = null;
-    }
-    const last = owner.last_value_data(true);
-    if (last === null) return;
-    const delay = owner.native_refresh_expiring_price_alerts(
-      id,
-      time_to_utc_seconds(last.time),
-      last.value,
-      Date.now(),
-    );
-    if (delay >= 0) {
-      timer = setTimeout(schedule_refresh, Math.max(0, delay));
-    }
-  };
-  owner.subscribe_data_changed(schedule_refresh);
-  return {
-    add(price, start, end, title, crossing_direction) {
-      const alert_id = owner.native_add_expiring_price_alert(
-        id,
-        price,
-        start,
-        end,
-        title,
-        crossing_direction,
-      );
-      if (alert_id === 0) {
-        throw new nucleuscharts_error("invalid_data", "engine rejected expiring price-alert data");
-      }
-      return alert_id;
-    },
-    remove(alert_id) {
-      return owner.native_remove_expiring_price_alert(id, alert_id);
-    },
-    alerts_json() {
-      return owner.native_expiring_price_alerts_json(id);
-    },
-    detach() {
-      if (!attached) return;
-      attached = false;
-      owner.unsubscribe_data_changed(schedule_refresh);
-      if (timer !== null) clearTimeout(timer);
-      base.detach();
     },
   };
 }
@@ -3367,7 +3183,6 @@ export class chart_impl implements chart_api {
     // hit-test refreshes at the click point first, so a click without a preceding move still
     // arbitrates correctly.
     this.update_hover(x, y);
-    this.wasm.click_native_primitives_at(x, y);
     // TradingView-style click-to-select, drawings first: a drawing hit selects it and clears
     // the series selection; a miss clears the drawing selection and falls through to the
     // series under the click (or clears that on empty pane space).

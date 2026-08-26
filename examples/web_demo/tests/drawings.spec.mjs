@@ -1423,7 +1423,7 @@ test("typing mode matches the committed render: exact size and baseline (no jump
   await settle_frames(page);
   const p = await spot(page, s.l0, s.p_mid);
   // The committed canvas run's baseline from real pixels: the last purple ink row (+1)
-  // (the fixture page renders the chart at the viewport origin, so capture px are comparable
+  // (the fixture page renders the chart at the viewport top-left, so capture px are comparable
   // to viewport CSS px × the device ratio).
   const png = await capture(page);
   let run_baseline = -1;

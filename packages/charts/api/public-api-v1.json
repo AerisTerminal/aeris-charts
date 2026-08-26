@@ -48,8 +48,8 @@
     },
     {
       "path": "primitive_features.d.ts",
-      "bytes": 10977,
-      "sha256": "58db4cdb92be80c68ad05a00037f21fee32b31a21101367d41a2dd44f9a9f0a5"
+      "bytes": 8713,
+      "sha256": "8f03907aa4955c6ce3cfc25880c075e20ea713fbb6242578f529b1c24df98e45"
     },
     {
       "path": "primitives.d.ts",

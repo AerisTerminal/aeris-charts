@@ -2188,6 +2188,86 @@ mod tests {
     }
 
     #[test]
+    fn position_axis_tag_hollows_only_when_it_meets_the_live_price() {
+        let mut chart = chart_with_market();
+        let secondary = chart.add_series(crate::SeriesKind::Line);
+        chart
+            .set_series_data(
+                secondary,
+                &[10.0, 20.0, 30.0],
+                &[102.0; 3],
+                &[102.0; 3],
+                &[102.0; 3],
+                &[102.0; 3],
+            )
+            .unwrap();
+        assert!(chart.series_apply_options_json(secondary, r##"{"color":"#123456"}"##));
+        let mut live_position = position(PositionSide::Long);
+        live_position.average_price = 102.0;
+        chart
+            .set_trading_snapshot(TradingSnapshot {
+                positions: vec![live_position],
+                ..TradingSnapshot::default()
+            })
+            .unwrap();
+
+        chart.build_frame();
+        let axis = chart.build_axis_frame(100.0, |text| text.len() as f64 * 7.0);
+        let color = chart.trading_style().position;
+        let trading_index = axis
+            .labels
+            .iter()
+            .position(|label| label.text == "102.00" && label.border == Some((1.0, color)))
+            .expect("position tag at the live price must be hollow");
+        let colliding = &axis.labels[trading_index];
+        assert_ne!(colliding.background.unwrap().4, color);
+        let primary_index = axis
+            .labels
+            .iter()
+            .rposition(|label| {
+                label.text == "102.00" && label.background.is_some() && label.border.is_none()
+            })
+            .expect("primary live-price label");
+        let primary = &axis.labels[primary_index];
+        let (_, trading_top, _, trading_height, _) = colliding.background.unwrap();
+        let (_, primary_top, _, primary_height, _) = primary.background.unwrap();
+        assert!(
+            trading_top + trading_height <= primary_top
+                || primary_top + primary_height <= trading_top,
+            "hollow trading tag must be spaced outside the primary label"
+        );
+        for (index, label) in axis.labels.iter().enumerate() {
+            let Some((_, top, _, height, _)) = label.background else {
+                continue;
+            };
+            if index != trading_index && label.text == "102.00" {
+                assert!(
+                    trading_top + trading_height <= top || top + height <= trading_top,
+                    "trading tag must avoid every resolved last-value label"
+                );
+            }
+        }
+        assert!(trading_index < primary_index, "primary label paints last");
+
+        let mut separated_position = position(PositionSide::Long);
+        separated_position.average_price = 99.0;
+        chart
+            .set_trading_snapshot(TradingSnapshot {
+                positions: vec![separated_position],
+                ..TradingSnapshot::default()
+            })
+            .unwrap();
+        let axis = chart.build_axis_frame(100.0, |text| text.len() as f64 * 7.0);
+        let separated = axis
+            .labels
+            .iter()
+            .find(|label| label.text == "99.00" && label.background.is_some())
+            .expect("separated position tag");
+        assert!(separated.border.is_none());
+        assert_eq!(separated.background.unwrap().4, color);
+    }
+
+    #[test]
     fn touch_profile_expands_order_line_hits_to_a_44px_target() {
         let mut chart = chart_with_market();
         chart

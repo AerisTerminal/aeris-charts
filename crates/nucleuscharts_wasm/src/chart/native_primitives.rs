@@ -3,12 +3,11 @@
 use super::*;
 use nucleuscharts_core::model::data_validation::validate_timestamp;
 use nucleuscharts_engine::{
-    AccessibilityFocusOptions, AlertCrossingDirection, AnchoredTextHorizontalAlign,
-    AnchoredTextOptions, AnchoredTextVerticalAlign, BandsIndicatorOptions, DeltaTooltipOptions,
-    ExpiringPriceAlertsOptions, ImageWatermarkOptions, OverlayPriceScaleOptions,
-    OverlayPriceScaleSide, SessionHighlightingData, SessionHighlightingOptions, TextWatermarkLine,
-    TextWatermarkOptions, TooltipOptions, TrendLineOptions, UserPriceAlertsOptions,
-    UserPriceLinesButtonOptions, VerticalLineOptions, VolumeProfileData, VolumeProfileOptions,
+    AccessibilityFocusOptions, AnchoredTextHorizontalAlign, AnchoredTextOptions,
+    AnchoredTextVerticalAlign, BandsIndicatorOptions, DeltaTooltipOptions, ImageWatermarkOptions,
+    OverlayPriceScaleOptions, OverlayPriceScaleSide, SessionHighlightingData,
+    SessionHighlightingOptions, TextWatermarkLine, TextWatermarkOptions, TooltipOptions,
+    TrendLineOptions, VerticalLineOptions, VolumeProfileData, VolumeProfileOptions,
     VolumeProfilePoint,
 };
 use std::sync::Arc;
@@ -211,49 +210,6 @@ impl ChartInner {
             .unwrap_or(0)
     }
 
-    pub(super) fn add_native_user_price_lines_button(
-        &mut self,
-        series_id: u32,
-        options_json: &str,
-    ) -> u32 {
-        let value: serde_json::Value =
-            serde_json::from_str(options_json).unwrap_or(serde_json::Value::Null);
-        let defaults = UserPriceLinesButtonOptions::default();
-        self.engine
-            .add_user_price_lines_button(
-                series_id,
-                UserPriceLinesButtonOptions {
-                    color: json_color(&value, "color", defaults.color),
-                    hover_color: json_color(&value, "hover_color", defaults.hover_color),
-                },
-            )
-            .unwrap_or(0)
-    }
-
-    pub(super) fn add_native_user_price_alerts(
-        &mut self,
-        series_id: u32,
-        options_json: &str,
-    ) -> u32 {
-        let value: serde_json::Value =
-            serde_json::from_str(options_json).unwrap_or(serde_json::Value::Null);
-        let defaults = UserPriceAlertsOptions::default();
-        self.engine
-            .add_user_price_alerts(
-                series_id,
-                UserPriceAlertsOptions {
-                    symbol_name: value
-                        .get("symbol_name")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
-                    color: json_color(&value, "color", defaults.color),
-                    hover_color: json_color(&value, "hover_color", defaults.hover_color),
-                },
-            )
-            .unwrap_or(0)
-    }
-
     pub(super) fn add_native_delta_tooltip(&mut self, series_id: u32, options_json: &str) -> u32 {
         let value: serde_json::Value =
             serde_json::from_str(options_json).unwrap_or(serde_json::Value::Null);
@@ -318,33 +274,6 @@ impl ChartInner {
                 .to_string()
             })
             .unwrap_or_else(|| "null".into())
-    }
-
-    pub(super) fn add_native_user_price_alert(&mut self, primitive_id: u32, price: f64) -> u32 {
-        self.engine
-            .add_user_price_alert(primitive_id, price)
-            .unwrap_or(0)
-    }
-
-    pub(super) fn remove_native_user_price_alert(
-        &mut self,
-        primitive_id: u32,
-        alert_id: u32,
-    ) -> bool {
-        self.engine.remove_user_price_alert(primitive_id, alert_id)
-    }
-
-    pub(super) fn native_user_price_alerts_json(&self, primitive_id: u32) -> String {
-        let Some(alerts) = self.engine.user_price_alerts(primitive_id) else {
-            return "[]".into();
-        };
-        serde_json::Value::Array(
-            alerts
-                .iter()
-                .map(|alert| serde_json::json!({ "id": alert.id, "price": alert.price }))
-                .collect(),
-        )
-        .to_string()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -498,12 +427,14 @@ impl ChartInner {
         })
     }
 
-    pub(super) fn add_native_crosshair_highlight(&mut self, series_id: u32, color: &str) -> u32 {
+    pub(super) fn add_native_crosshair_highlight(
+        &mut self,
+        series_id: u32,
+        color: Option<String>,
+    ) -> u32 {
+        let color = color.map(|color| Color::parse_css(&color).unwrap_or(Color::rgba(0, 0, 0, 51)));
         self.engine
-            .add_highlight_bar_crosshair(
-                series_id,
-                Color::parse_css(color).unwrap_or(Color::rgba(0, 0, 0, 51)),
-            )
+            .add_highlight_bar_crosshair(series_id, color)
             .unwrap_or(0)
     }
 
@@ -538,117 +469,6 @@ impl ChartInner {
     pub(super) fn set_native_volume_profile_data(&mut self, id: u32, data_json: &str) -> bool {
         parse_volume_profile(data_json)
             .is_some_and(|data| self.engine.set_volume_profile_data(id, data))
-    }
-
-    pub(super) fn add_native_expiring_price_alerts(
-        &mut self,
-        series_id: u32,
-        options_json: &str,
-    ) -> u32 {
-        let value: serde_json::Value =
-            serde_json::from_str(options_json).unwrap_or(serde_json::Value::Null);
-        let defaults = ExpiringPriceAlertsOptions::default();
-        let interval = value
-            .get("interval")
-            .and_then(serde_json::Value::as_i64)
-            .unwrap_or(defaults.interval);
-        let clear_timeout_ms = value
-            .get("clear_timeout_ms")
-            .or_else(|| value.get("clear_timeout"))
-            .and_then(serde_json::Value::as_f64)
-            .unwrap_or(defaults.clear_timeout_ms);
-        self.engine
-            .add_expiring_price_alerts(
-                series_id,
-                ExpiringPriceAlertsOptions {
-                    interval,
-                    clear_timeout_ms,
-                },
-            )
-            .unwrap_or(0)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn add_native_expiring_price_alert(
-        &mut self,
-        primitive_id: u32,
-        price: f64,
-        start: f64,
-        end: f64,
-        title: &str,
-        crossing_direction: &str,
-    ) -> u32 {
-        let (Ok(start), Ok(end)) = (validate_timestamp(start), validate_timestamp(end)) else {
-            return 0;
-        };
-        let direction = match crossing_direction {
-            "up" => AlertCrossingDirection::Up,
-            "down" => AlertCrossingDirection::Down,
-            _ => return 0,
-        };
-        self.engine
-            .add_expiring_price_alert(
-                primitive_id,
-                price,
-                start,
-                end,
-                title.to_string(),
-                direction,
-            )
-            .unwrap_or(0)
-    }
-
-    pub(super) fn remove_native_expiring_price_alert(
-        &mut self,
-        primitive_id: u32,
-        alert_id: u32,
-    ) -> bool {
-        self.engine
-            .remove_expiring_price_alert(primitive_id, alert_id)
-    }
-
-    pub(super) fn refresh_native_expiring_price_alerts(
-        &mut self,
-        primitive_id: u32,
-        time: f64,
-        value: f64,
-        now_ms: f64,
-    ) -> f64 {
-        let Ok(time) = validate_timestamp(time) else {
-            return -1.0;
-        };
-        self.engine
-            .refresh_expiring_price_alerts(primitive_id, time, value, now_ms)
-            .unwrap_or(-1.0)
-    }
-
-    pub(super) fn native_expiring_price_alerts_json(&self, primitive_id: u32) -> String {
-        let Some(alerts) = self.engine.expiring_price_alerts(primitive_id) else {
-            return "[]".into();
-        };
-        serde_json::Value::Array(
-            alerts
-                .iter()
-                .map(|alert| {
-                    serde_json::json!({
-                        "id": alert.id,
-                        "price": alert.price,
-                        "start": alert.start,
-                        "end": alert.end,
-                        "parameters": {
-                            "title": alert.title,
-                            "crossing_direction": match alert.crossing_direction {
-                                AlertCrossingDirection::Up => "up",
-                                AlertCrossingDirection::Down => "down",
-                            },
-                        },
-                        "crossed": alert.crossed,
-                        "expired": alert.expired,
-                    })
-                })
-                .collect(),
-        )
-        .to_string()
     }
 
     pub(super) fn remove_native_primitive(&mut self, id: u32) -> bool {

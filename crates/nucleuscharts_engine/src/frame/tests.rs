@@ -1220,9 +1220,17 @@ fn last_value_labels_cover_every_visible_series_and_resolve_overlap() {
     // scale, in the series' bar color (the line color for a line series — not up/down).
     let labels = boxed(&mut chart);
     assert_eq!(labels.len(), 2);
-    assert!(labels
-        .iter()
-        .all(|l| matches!(l.background, Some((.., c)) if c == LINE)));
+    assert_eq!(
+        labels.iter().filter(|label| label.border.is_none()).count(),
+        1
+    );
+    assert_eq!(
+        labels
+            .iter()
+            .filter(|label| label.border == Some((1.0, LINE)))
+            .count(),
+        1
+    );
     // reference `_fixLabelOverlap`: colliding labels are pushed apart by their box height.
     let height = 12.0 + 2.5 * 2.0;
     let gap = (labels[0].y - labels[1].y).abs();
@@ -1230,6 +1238,22 @@ fn last_value_labels_cover_every_visible_series_and_resolve_overlap() {
         (gap - height).abs() < 1e-9,
         "overlapping labels must be pushed a full box height apart, got {gap}"
     );
+
+    // Once the secondary is outside the primary live-price region it returns to a solid chip.
+    let separated = [20.0, 21.0, 22.0, 21.5, 22.5];
+    chart
+        .set_series_data(
+            1,
+            &[1.0, 2.0, 3.0, 4.0, 5.0],
+            &separated,
+            &separated,
+            &separated,
+            &separated,
+        )
+        .unwrap();
+    let labels = boxed(&mut chart);
+    assert_eq!(labels.len(), 2);
+    assert!(labels.iter().all(|label| label.border.is_none()));
 
     // `lastValueVisible: false` on one series drops only its label.
     chart.series[1].last_value_visible = false;

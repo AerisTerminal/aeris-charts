@@ -73,7 +73,7 @@ const profile = create_volume_profile(candles, {
 The engine-owned feature set includes brushable area, grouped bars, heatmap, HLC area,
 pretty histogram, shaded background, stacked area,
 stacked bars, and box-and-whisker series. Primitive helpers include accessibility, anchored text,
-official ±10% price bands, delta and ordinary tooltips, expiring/user price alerts, highlighted-bar
+official ±10% price bands, delta and ordinary tooltips, highlighted-bar
 crosshair, image watermark, overlay price scale, partial price line, rectangle/trend/vertical
 drawings, session highlighting, volume profile, and user-defined price lines.
 
