@@ -424,6 +424,12 @@ struct Probe {
     dirty: bool,
     plan_dirty: bool,
     fitted: bool,
+    /// Newest brush pointer sample since the last painted frame. Wayland delivers per-HID-report
+    /// motion (~1000 Hz, often one axis per event); capturing every sample records that
+    /// axis-alternating staircase as stroke knots. Browsers coalesce pointer events to display
+    /// frames, so this host does the same for the brush: only the newest sample per painted frame
+    /// reaches `brush_create_add` (see `flush_pending_brush`).
+    pending_brush_point: Option<(f64, f64)>,
     viewport_offset: (f32, f32),
     gesture_config: GestureConfig,
     input: GestureResolver,
@@ -504,6 +510,7 @@ impl Probe {
             dirty: true,
             plan_dirty: true,
             fitted: false,
+            pending_brush_point: None,
             viewport_offset: (0.0, 0.0),
             gesture_config: GestureConfig::default(),
             input: GestureResolver::default(),
@@ -576,6 +583,7 @@ impl Probe {
     fn arm_drawing(&mut self, kind: DrawingKind) {
         self.engine.drawing_create_cancel();
         self.engine.brush_create_cancel();
+        self.pending_brush_point = None;
         self.armed_tool = (self.armed_tool != Some(kind)).then_some(kind);
         if let Some(tool) = self.armed_tool.filter(|tool| *tool != DrawingKind::Brush) {
             let template = self.drawing_template.json();
@@ -1003,7 +1011,6 @@ impl Probe {
             self.engine
                 .recompute_layout_with_measure(true, |text| measure(text));
         }
-
         let layout = self.engine.options.get().layout.clone();
         let max_label_width = (layout.font_size + 4.0) * 5.0 / 8.0
             * f64::from(self.engine.tick_mark_max_character_length.max(1));
@@ -1057,8 +1064,19 @@ impl Probe {
         );
     }
 
+    /// Capture the newest coalesced brush sample (at most one per painted frame). Only a captured
+    /// point dirties the frame; rejected sub-threshold samples leave the scene untouched.
+    fn flush_pending_brush(&mut self) {
+        if let Some((x, y)) = self.pending_brush_point.take() {
+            if self.engine.brush_create_add(x, y) {
+                self.dirty = true;
+            }
+        }
+    }
+
     /// GPUI prepaint entry: use the exact native shaper that the paint backend uses.
     fn rebuild(&mut self, width: f32, height: f32, scale_factor: f32, window: &Window) {
+        self.flush_pending_brush();
         if self.built_for == (width, height, scale_factor)
             && !self.dirty
             && !self.frame.panes.is_empty()
@@ -1371,7 +1389,10 @@ impl Probe {
                 self.engine.price_axis_end_scale(pane, target);
             }
             Some(DragMode::Drawing) => self.engine.drawing_drag_end(),
-            Some(DragMode::BrushCreation) => self.engine.brush_create_cancel(),
+            Some(DragMode::BrushCreation) => {
+                self.engine.brush_create_cancel();
+                self.pending_brush_point = None;
+            }
             Some(DragMode::PaneSeparator { .. }) | None => {}
         }
         self.cancel_kinetic_scroll();
@@ -1562,11 +1583,10 @@ impl Probe {
                 );
             }
             Some(DragMode::BrushCreation) if event.dragging() => {
-                // Only a captured point dirties the frame; rejected sub-threshold samples leave
-                // the scene untouched so fast drags don't rebuild per raw pointer event.
-                if self.engine.brush_create_add(pane_x, y) {
-                    self.dirty = true;
-                }
+                // Keep only the newest sample; `rebuild` captures it once per painted frame so the
+                // engine sees display-cadence samples (matching browser hosts) instead of the raw
+                // Wayland event rate.
+                self.pending_brush_point = Some((pane_x, y));
             }
             _ => {
                 if self
@@ -1628,6 +1648,9 @@ impl Probe {
                 false
             }
             Some(DragMode::BrushCreation) => {
+                // The stroke must end exactly at the release position, not one frame behind it.
+                self.pending_brush_point = Some((pane_x, y));
+                self.flush_pending_brush();
                 let id = self.engine.brush_create_end();
                 if id > 0 {
                     self.click_status = format!("created brush #{id}");
@@ -1806,6 +1829,7 @@ impl Probe {
             "escape" => {
                 self.engine.drawing_create_cancel();
                 self.engine.brush_create_cancel();
+                self.pending_brush_point = None;
                 self.armed_tool = None;
                 self.engine.set_selected_drawing(None);
                 self.engine.crosshair = None;
@@ -3497,6 +3521,53 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue #12: Wayland delivers per-HID-report pointer motion (~1000 Hz, often one axis per
+    /// event). The brush must capture at most one coalesced sample per painted frame — the newest
+    /// one — or the axis-alternating staircase becomes stroke knots and renders jagged.
+    #[test]
+    fn brush_capture_coalesces_pointer_samples_to_one_knot_per_frame() {
+        let mut probe = Probe::new(32, Some(1));
+        let measure = |text: &str| text.chars().count() as f64 * 7.0;
+        probe.rebuild_with_measure(1024.0, 640.0, 1.0, measure);
+        assert!(probe.engine.brush_create_start(None, 100.0, 100.0));
+
+        // A diagonal drag as Wayland reports it: one axis per event, far above frame cadence.
+        for (x, y) in [
+            (101.5, 100.0),
+            (101.5, 101.5),
+            (103.0, 101.5),
+            (103.0, 103.0),
+        ] {
+            probe.pending_brush_point = Some((x, y));
+        }
+        probe.flush_pending_brush();
+        assert!(probe.dirty, "a captured knot repaints the frame");
+        assert_eq!(
+            probe.pending_brush_point, None,
+            "the pending sample is consumed by the frame"
+        );
+
+        // An idle frame with no pending sample captures nothing.
+        probe.dirty = false;
+        probe.flush_pending_brush();
+        assert!(!probe.dirty);
+
+        // Only the newest sample became a knot: start + one coalesced capture.
+        let id = probe.engine.brush_create_end();
+        assert!(id > 0);
+        let drawing = probe
+            .engine
+            .drawings()
+            .iter()
+            .find(|d| d.id == id)
+            .expect("the committed brush exists");
+        assert_eq!(
+            drawing.points.len(),
+            2,
+            "intermediate staircase samples must not become knots"
+        );
+    }
 
     #[test]
     fn live_append_uses_the_latest_source_cadence() {
