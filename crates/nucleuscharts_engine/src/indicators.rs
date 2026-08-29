@@ -38,6 +38,23 @@ pub enum IndicatorKind {
     },
 }
 
+/// One live indicator producer's typed, runtime-independent definition.
+///
+/// Bindings are enumerated in creation order, which is also dependency order: an output must
+/// exist before it can become a later binding's source. Hosts can therefore recreate bindings in
+/// this order while remapping each old output identity to the newly returned output identity.
+#[derive(Clone, Debug, PartialEq)]
+pub struct IndicatorBindingInfo {
+    /// Stable chart-local binding identity, equal to the first output identity.
+    pub binding_id: SeriesId,
+    pub kind: IndicatorKind,
+    pub source: SeriesId,
+    /// Parallel volume column source for VWAP; `None` means unit weights.
+    pub volume_source: Option<SeriesId>,
+    /// Output identities in the indicator's documented order.
+    pub outputs: Vec<SeriesId>,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct IndicatorBinding {
     pub(crate) source: SeriesId,
@@ -127,6 +144,20 @@ impl ChartEngine {
             .iter()
             .map(|binding| binding.runtime.last_work_rows())
             .sum()
+    }
+
+    /// Return one typed definition for each live indicator binding in creation/dependency order.
+    pub fn indicator_bindings(&self) -> Vec<IndicatorBindingInfo> {
+        self.indicators
+            .iter()
+            .map(|binding| IndicatorBindingInfo {
+                binding_id: binding.outputs[0],
+                kind: binding.kind.clone(),
+                source: binding.source,
+                volume_source: binding.volume_source,
+                outputs: binding.outputs.clone(),
+            })
+            .collect()
     }
 
     /// The binding an output series belongs to, or `None` when `id` is not an indicator output
@@ -237,14 +268,14 @@ impl ChartEngine {
     /// Add a Rust-native simple moving-average producer. The returned line series is owned by the
     /// engine and is recomputed whenever its source series changes.
     pub fn add_sma(&mut self, source: SeriesId, period: usize) -> Option<SeriesId> {
-        self.add_indicator(source, IndicatorKind::Sma { period }, 1, None)
+        self.add_indicator_kind(source, IndicatorKind::Sma { period }, None)
             .into_iter()
             .next()
     }
 
     /// Add a Rust-native exponential moving-average producer.
     pub fn add_ema(&mut self, source: SeriesId, period: usize) -> Option<SeriesId> {
-        self.add_indicator(source, IndicatorKind::Ema { period }, 1, None)
+        self.add_indicator_kind(source, IndicatorKind::Ema { period }, None)
             .into_iter()
             .next()
     }
@@ -256,21 +287,14 @@ impl ChartEngine {
         period: usize,
         deviation: f64,
     ) -> Vec<SeriesId> {
-        self.add_indicator(
-            source,
-            IndicatorKind::Bollinger { period, deviation },
-            3,
-            None,
-        )
+        self.add_indicator_kind(source, IndicatorKind::Bollinger { period, deviation }, None)
     }
 
     /// Add a Wilder RSI line in its own oscillator pane (with dotted 30/70 band lines).
     pub fn add_rsi(&mut self, source: SeriesId, period: usize) -> Option<SeriesId> {
-        let ids = self.add_indicator(source, IndicatorKind::Rsi { period }, 1, None);
-        let &id = ids.first()?;
-        self.place_outputs_in_oscillator_pane(&[id]);
-        self.add_band_levels(id, &[30.0, 70.0]);
-        Some(id)
+        self.add_indicator_kind(source, IndicatorKind::Rsi { period }, None)
+            .into_iter()
+            .next()
     }
 
     /// Add MACD line, signal line, and histogram series in that order, in their own
@@ -283,12 +307,7 @@ impl ChartEngine {
         slow: usize,
         signal: usize,
     ) -> Vec<SeriesId> {
-        let ids = self.add_indicator(source, IndicatorKind::Macd { fast, slow, signal }, 3, None);
-        if let Some(&histogram) = ids.get(2) {
-            self.convert_series_kind(histogram, SeriesKind::Histogram);
-            self.place_outputs_in_oscillator_pane(&ids);
-        }
-        ids
+        self.add_indicator_kind(source, IndicatorKind::Macd { fast, slow, signal }, None)
     }
 
     /// Add Stochastic %K and %D lines in that order, in their own oscillator pane (with
@@ -299,25 +318,18 @@ impl ChartEngine {
         k_period: usize,
         d_period: usize,
     ) -> Vec<SeriesId> {
-        let ids = self.add_indicator(
+        self.add_indicator_kind(
             source,
             IndicatorKind::Stochastic { k_period, d_period },
-            2,
             None,
-        );
-        if let Some(&k) = ids.first() {
-            self.place_outputs_in_oscillator_pane(&ids);
-            self.add_band_levels(k, &[20.0, 80.0]);
-        }
-        ids
+        )
     }
 
     /// Add a Wilder ATR line in its own oscillator pane.
     pub fn add_atr(&mut self, source: SeriesId, period: usize) -> Option<SeriesId> {
-        let ids = self.add_indicator(source, IndicatorKind::Atr { period }, 1, None);
-        let &id = ids.first()?;
-        self.place_outputs_in_oscillator_pane(&[id]);
-        Some(id)
+        self.add_indicator_kind(source, IndicatorKind::Atr { period }, None)
+            .into_iter()
+            .next()
     }
 
     /// Add a session-anchored (UTC-day reset) VWAP line on the source's pane.
@@ -328,16 +340,59 @@ impl ChartEngine {
         source: SeriesId,
         volume_source: Option<SeriesId>,
     ) -> Option<SeriesId> {
-        self.add_indicator(source, IndicatorKind::Vwap, 1, volume_source)
+        self.add_indicator_kind(source, IndicatorKind::Vwap, volume_source)
             .into_iter()
             .next()
     }
 
     /// Add a weighted moving-average line (linear weights, recent heaviest) on the source's pane.
     pub fn add_wma(&mut self, source: SeriesId, period: usize) -> Option<SeriesId> {
-        self.add_indicator(source, IndicatorKind::Wma { period }, 1, None)
+        self.add_indicator_kind(source, IndicatorKind::Wma { period }, None)
             .into_iter()
             .next()
+    }
+
+    /// Add an indicator from its typed definition, applying the same output, pane, and chrome
+    /// defaults as the specialized convenience methods. Invalid definitions return no outputs and
+    /// leave the chart unchanged.
+    pub fn add_indicator_kind(
+        &mut self,
+        source: SeriesId,
+        kind: IndicatorKind,
+        volume_source: Option<SeriesId>,
+    ) -> Vec<SeriesId> {
+        let ids = self.add_indicator(source, kind.clone(), volume_source);
+        match kind {
+            IndicatorKind::Rsi { .. } => {
+                if let Some(&id) = ids.first() {
+                    self.place_outputs_in_oscillator_pane(&ids);
+                    self.add_band_levels(id, &[30.0, 70.0]);
+                }
+            }
+            IndicatorKind::Macd { .. } => {
+                if let Some(&histogram) = ids.get(2) {
+                    self.convert_series_kind(histogram, SeriesKind::Histogram);
+                    self.place_outputs_in_oscillator_pane(&ids);
+                }
+            }
+            IndicatorKind::Stochastic { .. } => {
+                if let Some(&k) = ids.first() {
+                    self.place_outputs_in_oscillator_pane(&ids);
+                    self.add_band_levels(k, &[20.0, 80.0]);
+                }
+            }
+            IndicatorKind::Atr { .. } => {
+                if !ids.is_empty() {
+                    self.place_outputs_in_oscillator_pane(&ids);
+                }
+            }
+            IndicatorKind::Sma { .. }
+            | IndicatorKind::Ema { .. }
+            | IndicatorKind::Bollinger { .. }
+            | IndicatorKind::Vwap
+            | IndicatorKind::Wma { .. } => {}
+        }
+        ids
     }
 
     /// Move output series into a fresh oscillator pane below everything (TradingView
@@ -428,11 +483,15 @@ impl ChartEngine {
         &mut self,
         source: SeriesId,
         kind: IndicatorKind,
-        outputs: usize,
         volume_source: Option<SeriesId>,
     ) -> Vec<SeriesId> {
         if self.series_entry(source).is_none()
-            || outputs == 0
+            || match &kind {
+                IndicatorKind::Vwap => {
+                    volume_source.is_some_and(|id| self.series_entry(id).is_none())
+                }
+                _ => volume_source.is_some(),
+            }
             || matches!(
                 &kind,
                 IndicatorKind::Sma { period: 0 }
@@ -450,6 +509,8 @@ impl ChartEngine {
         {
             return Vec::new();
         }
+        let runtime = incremental_state(&kind);
+        let output_count = runtime.output_count();
         let source_price_format = self.series_entry(source).map(|series| {
             (
                 series.price_format.kind,
@@ -457,7 +518,7 @@ impl ChartEngine {
                 series.price_format.min_move,
             )
         });
-        let ids = (0..outputs)
+        let ids = (0..output_count)
             .map(|_| self.add_series(SeriesKind::Line))
             .collect::<Vec<_>>();
         // Indicator chrome defaults: no candle-close countdown (theirs is a line value, not a
@@ -480,7 +541,7 @@ impl ChartEngine {
         }
         self.indicators.push(IndicatorBinding {
             source,
-            runtime: incremental_state(&kind),
+            runtime,
             kind,
             outputs: ids.clone(),
             volume_source,

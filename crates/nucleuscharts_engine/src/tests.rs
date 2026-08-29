@@ -1049,19 +1049,13 @@ fn add_test_indicator(
     kind: &IndicatorKind,
     volume: Option<SeriesId>,
 ) -> Vec<SeriesId> {
-    match *kind {
-        IndicatorKind::Sma { period } => vec![chart.add_sma(0, period).unwrap()],
-        IndicatorKind::Ema { period } => vec![chart.add_ema(0, period).unwrap()],
-        IndicatorKind::Bollinger { period, deviation } => chart.add_bollinger(0, period, deviation),
-        IndicatorKind::Rsi { period } => vec![chart.add_rsi(0, period).unwrap()],
-        IndicatorKind::Macd { fast, slow, signal } => chart.add_macd(0, fast, slow, signal),
-        IndicatorKind::Stochastic { k_period, d_period } => {
-            chart.add_stochastic(0, k_period, d_period)
-        }
-        IndicatorKind::Atr { period } => vec![chart.add_atr(0, period).unwrap()],
-        IndicatorKind::Vwap => vec![chart.add_vwap(0, volume).unwrap()],
-        IndicatorKind::Wma { period } => vec![chart.add_wma(0, period).unwrap()],
-    }
+    chart.add_indicator_kind(
+        0,
+        kind.clone(),
+        matches!(kind, IndicatorKind::Vwap)
+            .then_some(volume)
+            .flatten(),
+    )
 }
 
 fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usize) {
@@ -2048,6 +2042,118 @@ fn indicator_info_reports_lineage_and_output_slots() {
     // The source series itself and unknown ids are not indicator outputs.
     assert_eq!(chart.indicator_info(0), None);
     assert_eq!(chart.indicator_info(999), None);
+}
+
+#[test]
+fn typed_indicator_bindings_preserve_duplicates_output_order_and_dependencies() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let source = chart.add_series(SeriesKind::Candlestick);
+    let volume = chart.add_series(SeriesKind::Histogram);
+    let values = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    chart
+        .set_series_data(source, &values, &values, &values, &values, &values)
+        .unwrap();
+    chart
+        .set_series_data(volume, &values, &values, &values, &values, &values)
+        .unwrap();
+
+    let first = chart.add_sma(source, 2).unwrap();
+    let duplicate = chart.add_sma(source, 2).unwrap();
+    let bands = chart.add_bollinger(first, 3, 2.5);
+    let vwap = chart.add_vwap(source, Some(volume)).unwrap();
+
+    let bindings = chart.indicator_bindings();
+    assert_eq!(bindings.len(), 4);
+    assert_eq!(bindings[0].kind, IndicatorKind::Sma { period: 2 });
+    assert_eq!(bindings[0].binding_id, first);
+    assert_eq!(bindings[0].outputs, [first]);
+    assert_eq!(bindings[1].kind, IndicatorKind::Sma { period: 2 });
+    assert_eq!(bindings[1].outputs, [duplicate]);
+    assert_eq!(bindings[2].source, first);
+    assert_eq!(bindings[2].outputs, bands);
+    assert_eq!(bindings[3].volume_source, Some(volume));
+    assert_eq!(bindings[3].outputs, [vwap]);
+
+    let mut restored = ChartEngine::new(800.0, 500.0, 1.0);
+    let _unrelated = restored.add_series(SeriesKind::Line);
+    let restored_source = restored.add_series(SeriesKind::Candlestick);
+    let restored_volume = restored.add_series(SeriesKind::Histogram);
+    restored
+        .set_series_data(restored_source, &values, &values, &values, &values, &values)
+        .unwrap();
+    restored
+        .set_series_data(restored_volume, &values, &values, &values, &values, &values)
+        .unwrap();
+    let mut remapped = vec![(source, restored_source), (volume, restored_volume)];
+    for binding in &bindings {
+        let remap = |id| {
+            remapped
+                .iter()
+                .find_map(|&(old, new)| (old == id).then_some(new))
+                .expect("dependency was restored earlier")
+        };
+        let outputs = restored.add_indicator_kind(
+            remap(binding.source),
+            binding.kind.clone(),
+            binding.volume_source.map(remap),
+        );
+        assert_eq!(outputs.len(), binding.outputs.len());
+        remapped.extend(binding.outputs.iter().copied().zip(outputs));
+    }
+
+    let restored_bindings = restored.indicator_bindings();
+    assert_eq!(restored_bindings.len(), bindings.len());
+    for (old, new) in bindings.iter().zip(&restored_bindings) {
+        assert_eq!(new.kind, old.kind);
+        assert_eq!(
+            new.source,
+            remapped.iter().find(|pair| pair.0 == old.source).unwrap().1
+        );
+        assert_eq!(
+            new.volume_source,
+            old.volume_source
+                .map(|id| remapped.iter().find(|pair| pair.0 == id).unwrap().1)
+        );
+        assert_eq!(new.outputs.len(), old.outputs.len());
+        for (&old_output, &new_output) in old.outputs.iter().zip(&new.outputs) {
+            assert_eq!(
+                chart.data.series_data(old_output),
+                restored.data.series_data(new_output)
+            );
+        }
+    }
+}
+
+#[test]
+fn generic_indicator_creation_rejects_invalid_definitions_atomically() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let stale = chart.add_series(SeriesKind::Histogram);
+    assert!(chart.remove_series(stale));
+    let order = chart.series_order().to_vec();
+    let pane_count = chart.panes.len();
+
+    assert!(chart
+        .add_indicator_kind(u32::MAX, IndicatorKind::Sma { period: 2 }, None)
+        .is_empty());
+    assert!(chart
+        .add_indicator_kind(0, IndicatorKind::Sma { period: 0 }, None)
+        .is_empty());
+    assert!(chart
+        .add_indicator_kind(stale, IndicatorKind::Sma { period: 2 }, None)
+        .is_empty());
+    assert!(chart
+        .add_indicator_kind(0, IndicatorKind::Vwap, Some(u32::MAX))
+        .is_empty());
+    assert!(chart
+        .add_indicator_kind(0, IndicatorKind::Vwap, Some(stale))
+        .is_empty());
+    assert!(chart
+        .add_indicator_kind(0, IndicatorKind::Rsi { period: 2 }, Some(0))
+        .is_empty());
+
+    assert_eq!(chart.series_order(), order);
+    assert_eq!(chart.panes.len(), pane_count);
+    assert!(chart.indicator_bindings().is_empty());
 }
 
 #[test]

@@ -43,8 +43,8 @@ pub use frame::{
     FrameBuildStats, FramePane, FramePaneSegments, FrameSeriesSegment,
 };
 pub use hit_test::{SeriesHit, SeriesHitKind};
-pub use indicators::IndicatorKind;
 pub(crate) use indicators::{IndicatorBinding, IndicatorChange};
+pub use indicators::{IndicatorBindingInfo, IndicatorKind};
 pub use interaction::{
     pinch_zoom_scale, wheel_zoom_scale, CancelReason, ChartContext, GestureResolver, GestureState,
     GestureUpdate, GestureUpdateKind, HitProfile, InputDevice, InputEvent, InputModifiers,
