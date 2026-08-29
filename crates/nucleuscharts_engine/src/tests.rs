@@ -971,6 +971,7 @@ fn crosshair_geometry_is_host_independent() {
         .unwrap();
     chart.time_scale.set_width(800.0);
     chart.fit_content();
+    chart.series[0].crosshair_marker_visible = true;
     chart.crosshair = Some((200.0, 120.0));
     let frame = chart.build_frame();
     assert!(frame.panes[0]
@@ -3016,9 +3017,7 @@ fn time_scale_options_json_covers_all_fields() {
 }
 
 #[test]
-fn series_style_options_default_to_reference() {
-    // reference defaults: api/options/series-options-defaults.ts (common) and the per-kind style
-    // defaults in model/series/{line,area,baseline,bar,histogram}-series.ts.
+fn series_style_options_use_nucleus_defaults() {
     let chart = ChartEngine::new(800.0, 500.0, 1.0);
     let options: serde_json::Value =
         serde_json::from_str(&chart.series_options_json(0).unwrap()).unwrap();
@@ -3063,7 +3062,7 @@ fn series_style_options_default_to_reference() {
     assert_eq!(options["line_style"], 0); // LineStyle.Solid
     assert_eq!(options["line_visible"], true);
     assert_eq!(options["point_markers_radius"], serde_json::Value::Null);
-    assert_eq!(options["crosshair_marker_visible"], true);
+    assert_eq!(options["crosshair_marker_visible"], false);
     assert_eq!(options["crosshair_marker_radius"], 4.0);
     assert_eq!(options["crosshair_marker_border_color"], "");
     assert_eq!(options["crosshair_marker_background_color"], "");

@@ -881,7 +881,7 @@ export interface series_options {
   line_visible?: boolean;
   /** Point-marker disc radius in CSS px (reference `pointMarkersRadius`); unset = auto. */
   point_markers_radius?: number;
-  /** Show the crosshair marker on this series (reference `crosshairMarkerVisible`, default `true`). */
+  /** Show the crosshair marker on this series or indicator output (Nucleus default `false`). */
   crosshair_marker_visible?: boolean;
   /** Crosshair marker radius in CSS px (reference `crosshairMarkerRadius`, default 4). */
   crosshair_marker_radius?: number;

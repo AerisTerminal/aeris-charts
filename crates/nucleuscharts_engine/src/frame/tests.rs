@@ -2094,6 +2094,12 @@ fn crosshair_marks_cover_all_line_series_with_per_series_options() {
         chart.series[1].kind = kind;
         let x = chart.time_scale.index_to_coordinate(2);
         chart.crosshair = Some((x, 120.0));
+        assert!(
+            circles(&mut chart).is_empty(),
+            "crosshair markers default off for {kind:?} series"
+        );
+        chart.series[0].crosshair_marker_visible = true;
+        chart.series[1].crosshair_marker_visible = true;
         assert_eq!(
             circles(&mut chart).len(),
             4,
@@ -2108,6 +2114,7 @@ fn crosshair_marks_cover_all_line_series_with_per_series_options() {
     let mut chart = two_identical_line_series();
     let x = chart.time_scale.index_to_coordinate(2);
     chart.crosshair = Some((x, 120.0));
+    chart.series[0].crosshair_marker_visible = true;
     let background = css_color(
         &chart.options.get().layout.background.color,
         Color::rgb(0xff, 0xff, 0xff),

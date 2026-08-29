@@ -125,8 +125,12 @@ test("crosshair hover marker paints on an engine-created indicator line and rema
   await page.goto("/");
   await wait_grid(page);
   const probe = await page.evaluate(() => {
+    const default_sma = window.__chart.add_sma(window.__main, 5);
+    const default_visible = default_sma.options().crosshair_marker_visible;
+    window.__chart.remove_series(default_sma);
     window.__hover_sma = window.__chart.add_sma(window.__main, 5, {
       color: "#ff9900",
+      crosshair_marker_visible: true,
       crosshair_marker_radius: 6,
       crosshair_marker_border_width: 3,
       crosshair_marker_border_color: "#010203",
@@ -140,6 +144,7 @@ test("crosshair hover marker paints on an engine-created indicator line and rema
     return {
       x: window.__chart.time_scale().logical_to_coordinate(index),
       y: window.__hover_sma.price_to_coordinate(point.value),
+      default_visible,
       options: {
         visible: options.crosshair_marker_visible,
         radius: options.crosshair_marker_radius,
@@ -149,6 +154,7 @@ test("crosshair hover marker paints on an engine-created indicator line and rema
       },
     };
   });
+  expect(probe.default_visible).toBe(false);
   expect(probe.options).toEqual({
     visible: true,
     radius: 6,

@@ -653,7 +653,7 @@ pub struct SeriesEntry {
     /// reference `pointMarkersRadius` (default `undefined`): `None` = auto (`lineWidth / 2 + 2`,
     /// line-pane-view.ts).
     pub point_markers_radius: Option<f64>,
-    /// reference `crosshairMarkerVisible` (default true).
+    /// Host-configurable crosshair marker visibility (Nucleus default false).
     pub crosshair_marker_visible: bool,
     /// reference `crosshairMarkerRadius` in CSS px (default 4).
     pub crosshair_marker_radius: f64,
@@ -752,8 +752,8 @@ impl SeriesEntry {
             visible: true,
             baseline: None,
             last_price_animation: false,
-            // reference defaults: series-options-defaults.ts (common), line/area/baseline-series.ts
-            // (line family + baseline quadrants), bar-series.ts, histogram-series.ts.
+            // Reference defaults except for crosshair markers, which Nucleus leaves disabled until
+            // the host opts in per series or indicator output.
             last_value_visible: true,
             title: String::new(),
             title_visible: true,
@@ -773,7 +773,7 @@ impl SeriesEntry {
             line_style: 0,
             line_visible: true,
             point_markers_radius: None,
-            crosshair_marker_visible: true,
+            crosshair_marker_visible: false,
             crosshair_marker_radius: 4.0,
             crosshair_marker_border_color: None,
             crosshair_marker_background_color: None,
