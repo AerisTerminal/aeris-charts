@@ -585,15 +585,30 @@ impl Probe {
         self.engine.brush_create_cancel();
         self.pending_brush_point = None;
         self.armed_tool = (self.armed_tool != Some(kind)).then_some(kind);
-        if let Some(tool) = self.armed_tool.filter(|tool| *tool != DrawingKind::Brush) {
-            let template = self.drawing_template.json();
-            self.engine.drawing_create_begin(tool, Some(&template));
-        }
         self.click_status = self.armed_tool.map_or_else(
             || "drawing tool disarmed".to_string(),
             |tool| format!("{} armed", tool.name()),
         );
         self.dirty = true;
+    }
+
+    fn place_drawing_anchor(&mut self, x: f64, y: f64, modifiers: DrawingModifiers) -> i64 {
+        let Some(tool) = self.armed_tool.filter(|tool| *tool != DrawingKind::Brush) else {
+            return 0;
+        };
+        if !self.engine.drawing_create_active() {
+            let template = self.drawing_template.json();
+            if !self.engine.drawing_create_begin(tool, Some(&template)) {
+                self.armed_tool = None;
+                return 0;
+            }
+        }
+        let result = self.engine.drawing_create_click(x, y, modifiers);
+        if result > 0 {
+            self.click_status = format!("created drawing #{result}");
+            self.armed_tool = None;
+        }
+        result
     }
 
     fn update_drawing_template(&mut self, mutate: impl FnOnce(&mut DrawingTemplate)) {
@@ -1663,7 +1678,7 @@ impl Probe {
                 .is_some_and(|tool| tool != DrawingKind::Brush) =>
             {
                 if !moved {
-                    let result = self.engine.drawing_create_click(
+                    self.place_drawing_anchor(
                         pane_x,
                         y,
                         DrawingModifiers {
@@ -1671,10 +1686,6 @@ impl Probe {
                             straighten: event.modifiers.shift,
                         },
                     );
-                    if result > 0 {
-                        self.click_status = format!("created drawing #{result}");
-                        self.armed_tool = None;
-                    }
                 }
                 false
             }
@@ -3735,9 +3746,7 @@ mod tests {
         probe.engine.clear_drawings();
         probe.arm_drawing(DrawingKind::TrendLine);
         assert_eq!(
-            probe
-                .engine
-                .drawing_create_click(200.0, 180.0, DrawingModifiers::default()),
+            probe.place_drawing_anchor(200.0, 180.0, DrawingModifiers::default()),
             -1
         );
         probe.update_drawing_template(|template| {
@@ -3746,9 +3755,7 @@ mod tests {
             template.text_italic = true;
         });
         assert!(probe.engine.drawing_create_active());
-        let id = probe
-            .engine
-            .drawing_create_click(500.0, 300.0, DrawingModifiers::default());
+        let id = probe.place_drawing_anchor(500.0, 300.0, DrawingModifiers::default());
         assert!(id > 0, "changing style must not discard the first anchor");
         assert_eq!(probe.drawing_template.color, "#ff9800");
         assert_eq!(probe.drawing_template.width, 4);
@@ -3761,19 +3768,51 @@ mod tests {
         probe.rebuild_with_measure(1024.0, 640.0, 1.0, |text| text.chars().count() as f64 * 7.0);
         probe.engine.clear_drawings();
         probe.arm_drawing(DrawingKind::TrendLine);
-        assert!(probe.engine.drawing_create_active());
+        assert!(!probe.engine.drawing_create_active());
         assert_eq!(
-            probe
-                .engine
-                .drawing_create_click(200.0, 180.0, DrawingModifiers::default()),
+            probe.place_drawing_anchor(200.0, 180.0, DrawingModifiers::default()),
             -1
         );
-        let id = probe
-            .engine
-            .drawing_create_click(500.0, 300.0, DrawingModifiers::default());
+        let id = probe.place_drawing_anchor(500.0, 300.0, DrawingModifiers::default());
         assert!(id > 0);
         assert_eq!(probe.engine.drawings().len(), 1);
         assert_eq!(probe.engine.selected_drawing(), Some(id as u32));
+    }
+
+    #[test]
+    fn armed_ctrl_magnet_snaps_the_crosshair_without_a_preview_dot() {
+        let mut probe = Probe::new(64, Some(1));
+        probe.rebuild_with_measure(1024.0, 640.0, 1.0, |text| text.chars().count() as f64 * 7.0);
+        probe.engine.clear_drawings();
+        probe.arm_drawing(DrawingKind::TrendLine);
+        assert!(!probe.engine.drawing_create_active());
+
+        let x = probe.engine.time_scale.logical_to_coordinate(32.0);
+        let y = 200.0;
+        probe.update_crosshair(x, y);
+        let free = probe.engine.build_frame();
+        probe.update_crosshair_modifier(true, false);
+        let snapped = probe.engine.build_frame();
+        let crosshair_color =
+            Color::parse_css(&probe.engine.options.get().crosshair.horz_line.color)
+                .expect("the package crosshair color is valid");
+        let crosshair_y = |frame: &ChartFrame| {
+            frame.panes[0].main.iter().find_map(|prim| match prim {
+                Prim::HLine { y, color, .. } if *color == crosshair_color => Some(*y),
+                _ => None,
+            })
+        };
+
+        assert_ne!(crosshair_y(&free), crosshair_y(&snapped));
+        assert_eq!(
+            snapped.panes[0]
+                .main
+                .iter()
+                .filter(|prim| matches!(prim, Prim::Circle { .. }))
+                .count(),
+            0,
+            "arming a tool must not create a pre-click anchor handle"
+        );
     }
 }
 
@@ -3788,9 +3827,7 @@ mod semantic_regressions {
         probe.engine.clear_drawings();
         probe.arm_drawing(DrawingKind::TrendLine);
         assert_eq!(
-            probe
-                .engine
-                .drawing_create_click(200.0, 180.0, DrawingModifiers::default()),
+            probe.place_drawing_anchor(200.0, 180.0, DrawingModifiers::default()),
             -1
         );
         probe.update_drawing_template(|template| {
@@ -3798,9 +3835,7 @@ mod semantic_regressions {
             template.width = 4;
             template.text_italic = true;
         });
-        let id = probe
-            .engine
-            .drawing_create_click(500.0, 300.0, DrawingModifiers::default());
+        let id = probe.place_drawing_anchor(500.0, 300.0, DrawingModifiers::default());
         assert!(id > 0);
         let options = probe.engine.drawing_options_json(id as u32).unwrap();
         assert!(options.contains("\"color\":\"#ff9800\""));
