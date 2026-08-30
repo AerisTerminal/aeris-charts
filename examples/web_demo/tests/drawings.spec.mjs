@@ -281,15 +281,21 @@ test("path clicks add vertices, Backspace pops, and Enter or double-click finish
     expect(list[0].points).toHaveLength(3);
     expect(await page.evaluate(() => window.__chart.active_drawing_tool())).toBeNull();
 
-    // Probe away from the centerline, inside the terminal triangle. This verifies that each real
-    // executor paints the arrowhead and that the same geometry is a body-movement target.
+    // Probe one open chevron wing. This verifies that each real executor paints the arrowhead and
+    // that the same visible geometry is a body-movement target.
     const dx = replacement.x - second.x;
     const dy = replacement.y - second.y;
     const distance = Math.hypot(dx, dy);
     const direction = { x: dx / distance, y: dy / distance };
+    const angle = 40 * Math.PI / 180;
+    const wing_length = 16;
+    const wing_end = {
+      x: replacement.x - direction.x * wing_length * Math.cos(angle) - direction.y * wing_length * Math.sin(angle),
+      y: replacement.y - direction.y * wing_length * Math.cos(angle) + direction.x * wing_length * Math.sin(angle),
+    };
     const arrow_wing = {
-      x: replacement.x - direction.x * 8 - direction.y * 2.5,
-      y: replacement.y - direction.y * 8 + direction.x * 2.5,
+      x: (replacement.x + wing_end.x) / 2,
+      y: (replacement.y + wing_end.y) / 2,
     };
     const painted = await capture(page);
     const offset = (Math.round(arrow_wing.y * PR) * painted.width + Math.round(arrow_wing.x * PR)) * 4;
@@ -298,6 +304,16 @@ test("path clicks add vertices, Backspace pops, and Enter or double-click finish
       Math.max(...arrow_pixel.map((channel, index) => Math.abs(channel - [41, 98, 255][index]))),
       `${backend} paints the path arrowhead`,
     ).toBeLessThanOrEqual(64);
+    const open_gap = {
+      x: replacement.x - direction.x * 8 - direction.y * 3,
+      y: replacement.y - direction.y * 8 + direction.x * 3,
+    };
+    const gap_offset = (Math.round(open_gap.y * PR) * painted.width + Math.round(open_gap.x * PR)) * 4;
+    const gap_pixel = [painted.data[gap_offset], painted.data[gap_offset + 1], painted.data[gap_offset + 2]];
+    expect(
+      Math.max(...gap_pixel.map((channel, index) => Math.abs(channel - [41, 98, 255][index]))),
+      `${backend} keeps the path arrowhead open`,
+    ).toBeGreaterThan(64);
     await page.mouse.click(arrow_wing.x, arrow_wing.y);
     expect(await page.evaluate(() => window.__chart.selected_drawing()?.id ?? null)).toBe(list[0].id);
 

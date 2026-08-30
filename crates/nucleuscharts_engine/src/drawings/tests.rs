@@ -1331,24 +1331,36 @@ fn path_uses_straight_segments_and_every_vertex_is_editable() {
         .add_drawing(DrawingKind::Path, 0, points.clone(), None)
         .unwrap();
     let frame = chart.build_frame();
-    assert!(frame.panes[0].main.iter().any(|primitive| {
-        matches!(
-            primitive,
-            Prim::Polyline {
-                point_count: 3,
-                line_type: LineType::Simple,
-                ..
-            }
-        )
-    }));
-    assert!(frame.panes[0]
+    assert_eq!(
+        frame.panes[0]
+            .main
+            .iter()
+            .filter(|primitive| matches!(
+                primitive,
+                Prim::Polyline {
+                    point_count: 3,
+                    line_type: LineType::Simple,
+                    ..
+                }
+            ))
+            .count(),
+        2
+    );
+    assert!(!frame.panes[0]
         .main
         .iter()
         .any(|primitive| matches!(primitive, Prim::Triangle { .. })));
     let path_px = chart.drawing_px(chart.drawing(id).unwrap()).unwrap();
     let arrow = path_arrow_points(&path_px, chart.drawing(id).unwrap().width, 1.0).unwrap();
+    let wing_midpoint = (
+        (arrow[0].0 + arrow[1].0) / 2.0,
+        (arrow[0].1 + arrow[1].1) / 2.0,
+    );
     assert_eq!(
-        chart.hit_test_drawing(arrow[1].0, arrow[1].1).unwrap().part,
+        chart
+            .hit_test_drawing(wing_midpoint.0, wing_midpoint.1)
+            .unwrap()
+            .part,
         DrawingDragPart::Body
     );
 

@@ -29,8 +29,9 @@ pub type DrawingId = u32;
 /// Hard cap shared by live drawing APIs and persistence so variable-point tools remain bounded.
 pub(crate) const MAX_DRAWING_POINTS: usize = 100_000;
 
-/// Terminal arrowhead for the multi-click Path. `px` and `scale` are in the caller's coordinate
-/// space, allowing hit testing to use media px and frame emission to use bitmap px.
+/// Open terminal chevron for the multi-click Path, ordered wing-tip-wing. `px` and `scale` are in
+/// the caller's coordinate space, allowing hit testing to use media px and frame emission to use
+/// bitmap px.
 pub(crate) fn path_arrow_points(
     px: &[(f64, f64)],
     line_width: f64,
@@ -47,27 +48,17 @@ pub(crate) fn path_arrow_points(
         (tip.0 - previous.0) / distance,
         (tip.1 - previous.1) / distance,
     );
-    let length = (10.0 + line_width).clamp(10.0, 18.0) * scale;
-    let half_width = length * 0.45;
-    let base = (tip.0 - direction.0 * length, tip.1 - direction.1 * length);
-    let perpendicular = (-direction.1 * half_width, direction.0 * half_width);
+    let wing_length = (15.0 + line_width).clamp(16.0, 22.0) * scale;
+    // Each wing opens 40 degrees from the reverse shaft direction.
+    let back = wing_length * 0.766_044_443_118_978;
+    let side = wing_length * 0.642_787_609_686_539_4;
+    let base = (tip.0 - direction.0 * back, tip.1 - direction.1 * back);
+    let perpendicular = (-direction.1 * side, direction.0 * side);
     Some([
-        tip,
         (base.0 + perpendicular.0, base.1 + perpendicular.1),
+        tip,
         (base.0 - perpendicular.0, base.1 - perpendicular.1),
     ])
-}
-
-fn point_in_triangle(point: (f64, f64), triangle: [(f64, f64); 3]) -> bool {
-    let side = |a: (f64, f64), b: (f64, f64)| {
-        (point.0 - b.0) * (a.1 - b.1) - (a.0 - b.0) * (point.1 - b.1)
-    };
-    let first = side(triangle[0], triangle[1]);
-    let second = side(triangle[1], triangle[2]);
-    let third = side(triangle[2], triangle[0]);
-    let has_negative = first < 0.0 || second < 0.0 || third < 0.0;
-    let has_positive = first > 0.0 || second > 0.0 || third > 0.0;
-    !(has_negative && has_positive)
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
@@ -2404,16 +2395,20 @@ impl ChartEngine {
                 {
                     return true;
                 }
-                let Some(triangle) = path_arrow_points(px, drawing.width, 1.0) else {
+                let Some(arrow) = path_arrow_points(px, drawing.width, 1.0) else {
                     return false;
                 };
-                point_in_triangle((x, y), triangle)
-                    || (0..3).any(|index| {
-                        let first = triangle[index];
-                        let second = triangle[(index + 1) % 3];
-                        distance_to_segment(x, y, first.0, first.1, second.0, second.1)
-                            <= hit_tolerance
-                    })
+                crate::hit_test::hit_test_line_series(
+                    &arrow,
+                    x,
+                    y,
+                    LineType::Simple,
+                    drawing.width,
+                    None,
+                    self.time_scale.bar_spacing(),
+                    hit_tolerance,
+                )
+                .is_some()
             }
             DrawingKind::Text => {
                 // The click/hover target is the interaction-chrome box (the label run while

@@ -440,11 +440,17 @@ impl ChartEngine {
                     line_type: LineType::Simple,
                     color,
                 });
-                if let Some([a, b, c]) = path_arrow_points(px, drawing.width, vpr) {
-                    out.push(Prim::Triangle {
-                        a: [a.0 as f32, a.1 as f32],
-                        b: [b.0 as f32, b.1 as f32],
-                        c: [c.0 as f32, c.1 as f32],
+                if let Some(arrow) = path_arrow_points(px, drawing.width, vpr) {
+                    let first_point = points.len() as u32;
+                    for (x, y) in arrow {
+                        points.push([x as f32, y as f32]);
+                    }
+                    out.push(Prim::Polyline {
+                        first_point,
+                        point_count: 3,
+                        width: (drawing.width * vpr) as f32,
+                        style: LineStyle::Solid,
+                        line_type: LineType::Simple,
                         color,
                     });
                 }
