@@ -547,13 +547,15 @@ impl ChartInner {
             .map(|n| n as f64)
     }
 
-    /// Set candlestick/bar up & down body colors, stored verbatim (reference `options()` returns
-    /// the applied string). `""` clears the override back to the reference default palette; the
-    /// strings are parsed at render time.
-    pub fn set_series_updown_colors(&mut self, id: u32, up: &str, down: &str) {
+    /// Set candlestick/bar body colors per direction, stored verbatim (reference `options()`
+    /// returns the applied string; the strings are parsed at render time). Same keep/clear/pin
+    /// contract as the wick and border setters: `undefined` = keep current, `""` = clear the
+    /// override back to the reference default palette, a CSS color = pin it verbatim
+    /// (`"transparent"` gives a hollow body).
+    pub fn set_series_updown_colors(&mut self, id: u32, up: Option<String>, down: Option<String>) {
         if let Some(s) = self.series.iter_mut().find(|s| s.id == id as SeriesId) {
-            crate::color_policy::update_color_slot(&mut s.up_color, Some(up.to_string()));
-            crate::color_policy::update_color_slot(&mut s.down_color, Some(down.to_string()));
+            crate::color_policy::update_color_slot(&mut s.up_color, up);
+            crate::color_policy::update_color_slot(&mut s.down_color, down);
         }
     }
 

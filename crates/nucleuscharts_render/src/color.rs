@@ -38,15 +38,23 @@ impl Color {
         }
     }
 
-    /// Parses a CSS color string: hex (`#rgb`/`#rgba`/`#rrggbb`/`#rrggbbaa`) or the functional
-    /// `rgb(r, g, b)` / `rgba(r, g, b, a)` forms (r/g/b are 0–255 integers, a is 0–1 float).
-    /// Whitespace-tolerant; returns `None` for anything unrecognized (named colors, hsl, etc.).
+    /// Parses a CSS color string: the `transparent` keyword, hex
+    /// (`#rgb`/`#rgba`/`#rrggbb`/`#rrggbbaa`), or the functional `rgb(r, g, b)` /
+    /// `rgba(r, g, b, a)` forms (r/g/b are 0–255 integers, a is 0–1 float). Whitespace-tolerant;
+    /// returns `None` for anything unrecognized (named colors, hsl, etc.).
+    ///
+    /// `transparent` is the canonical spelling for "no fill" — a candlestick body set to it is
+    /// hollow, showing only its border and wick. Without it the keyword would fail to parse and
+    /// silently fall back to the series' solid default.
     pub fn parse_css(s: &str) -> Option<Self> {
         let s = s.trim();
         if s.starts_with('#') {
             return Self::from_hex(s);
         }
         let lower = s.to_ascii_lowercase();
+        if lower == "transparent" {
+            return Some(Color::rgba(0, 0, 0, 0));
+        }
         let inner = lower
             .strip_prefix("rgba(")
             .or_else(|| lower.strip_prefix("rgb("))?;
@@ -176,6 +184,32 @@ mod tests {
             Some(Color::rgba(0x08, 0x99, 0x81, 0x80))
         );
         assert_eq!(Color::from_hex("oops"), None);
+    }
+
+    #[test]
+    fn transparent_keyword_is_a_zero_alpha_color() {
+        // The canonical "no fill" spelling: a candlestick body set to it paints nothing, leaving
+        // the border and wick — a hollow candle. Case- and whitespace-tolerant like the rest.
+        assert_eq!(
+            Color::parse_css("transparent"),
+            Some(Color::rgba(0, 0, 0, 0))
+        );
+        assert_eq!(
+            Color::parse_css("  Transparent "),
+            Some(Color::rgba(0, 0, 0, 0))
+        );
+        assert_eq!(Color::parse_css("transparent").unwrap().a(), 0);
+        // Equivalent to the two spellings that already worked.
+        assert_eq!(
+            Color::parse_css("transparent"),
+            Color::parse_css("rgba(0,0,0,0)")
+        );
+        assert_eq!(
+            Color::parse_css("transparent"),
+            Color::parse_css("#00000000")
+        );
+        // Still not a general named-color table.
+        assert_eq!(Color::parse_css("rebeccapurple"), None);
     }
 
     #[test]

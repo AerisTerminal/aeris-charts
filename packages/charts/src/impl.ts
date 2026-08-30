@@ -600,8 +600,10 @@ class series_impl implements series_api {
       this.chart.wasm.set_series_visible(this.id, options.visible);
     }
     if (options.up_color !== undefined || options.down_color !== undefined) {
-      // CSS strings passed through so the engine keeps alpha; empty = leave unchanged.
-      this.chart.wasm.set_series_updown_colors(this.id, options.up_color ?? "", options.down_color ?? "");
+      // Pass each direction through unchanged: undefined = keep, "" = clear, CSS = pin (alpha
+      // preserved, so "transparent" yields a hollow body). A plain `?? ""` here would wrongly
+      // reset the direction the caller left unspecified back to the engine default.
+      this.chart.wasm.set_series_updown_colors(this.id, options.up_color, options.down_color);
     }
     if (options.wick_up_color !== undefined || options.wick_down_color !== undefined) {
       // Pass each direction through unchanged: undefined = keep, "" = clear (follow body), CSS = pin.

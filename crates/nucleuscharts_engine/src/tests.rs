@@ -5469,3 +5469,61 @@ fn pane_separators_span_the_full_chart_width_at_rest_and_on_hover() {
     assert_eq!(hover.w, bitmap_w, "the hover band matches the resting line");
     assert_eq!(hover.y, separator_y - 4);
 }
+
+/// A hollow candle's chrome follows what is painted, not the invisible body.
+#[test]
+fn hollow_candles_keep_their_direction_color_on_the_live_price_chip() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    // Last bar closes UP, so the cluster follows the up direction.
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0, 3.0],
+            &[10.0, 11.0, 12.0],
+            &[11.0, 12.0, 14.0],
+            &[9.0, 10.0, 11.0],
+            &[10.5, 11.5, 13.5],
+        )
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+
+    let up = Color::rgb(0x08, 0x99, 0x81);
+    let border_up = Color::rgb(0x26, 0xa6, 0x9a);
+    let wick_up = Color::rgb(0xff, 0x00, 0xff);
+    let chip_color = |chart: &mut ChartEngine| {
+        chart
+            .build_axis_frame(80.0, |t| t.len() as f64 * 7.0)
+            .labels
+            .into_iter()
+            .find_map(|label| match label.background {
+                Some((.., color)) if label.midpoint == AxisTextMidpoint::Label => Some(color),
+                _ => None,
+            })
+            .expect("a last-value chip")
+    };
+
+    // Solid body: the chip is the body color, as before.
+    chart.series[0].up_color = Some("#089981".into());
+    assert_eq!(chip_color(&mut chart), up);
+
+    // Hollow body with a pinned border: the border frame is what the eye sees, so the chip
+    // follows it instead of turning into a fully transparent (surface-colored) chip.
+    chart.series[0].up_color = Some("transparent".into());
+    chart.series[0].border_up_color = Some("#26a69a".into());
+    let hollow = chip_color(&mut chart);
+    assert_eq!(hollow, border_up);
+    assert_ne!(hollow.a(), 0, "the chip must never be painted transparent");
+
+    // Borders switched off: the wick is the only painted part left.
+    chart.series[0].border_visible = Some(false);
+    chart.series[0].wick_up_color = Some("#ff00ff".into());
+    assert_eq!(chip_color(&mut chart), wick_up);
+
+    // Nothing painted at all (an entirely invisible candle): there is no bar color to follow, so
+    // the body still stands. The chip stays opaque either way — `Color::solid` pins the chip
+    // alpha, which is what turned a transparent body into an opaque BLACK chip before this
+    // resolution existed.
+    chart.series[0].wick_visible = Some(false);
+    assert_eq!(chip_color(&mut chart).a(), 0xFF);
+}

@@ -219,6 +219,12 @@
 
     <!-- candle/bar colors: body, wick, and border per direction + part visibility -->
     <div class="group" id="candle_style" data-caption="Candle style">
+      <label>body <select id="candle_body" title="Hollow candles, TradingView-style: the body goes transparent while the border and wick keep the direction's color">
+        <option value="solid">solid</option>
+        <option value="hollow_up">hollow bullish</option>
+        <option value="hollow_down">hollow bearish</option>
+        <option value="hollow">hollow both</option>
+      </select></label>
       <label>up <input type="color" id="up_color" value="#089981"></label>
       <label>down <input type="color" id="down_color" value="#f7525f"></label>
       <label>wick up <input type="color" id="wick_up_color" value="#089981"></label>
@@ -1098,12 +1104,53 @@ function sync_style_visibility(kind) {
 // body pickers alone recolor the whole candle.
 const candle_part_touched = { wick_up: false, wick_down: false, border_up: false, border_down: false };
 
+// ---- hollow candles ---------------------------------------------------------------------------
+// TradingView needs no dedicated hollow-candle series: the body is just a separate channel from the
+// border frame, so a transparent body leaves the outline and wick behind. Ours works the same way.
+// The catch is the follow-or-pin default above — an unpinned wick/border tracks its direction's BODY
+// color, so a transparent body would take the whole candle with it. A hollow direction therefore
+// pins its border and wick to that direction's picker, which becomes the outline color.
+let candle_body_mode = "solid";
+const hollow_up = () => candle_body_mode === "hollow_up" || candle_body_mode === "hollow";
+const hollow_down = () => candle_body_mode === "hollow_down" || candle_body_mode === "hollow";
+// Parts pinned by hollow mode rather than by the user, so going solid again can hand them back to
+// the follow-the-body default instead of stranding them on a pinned color.
+const hollow_pinned = { up: false, down: false };
+
+// Body/border/wick options for the current mode and picker values. Both directions are always sent
+// together: the body pair is one engine call, and naming only one would clear the other.
+function candle_body_options() {
+  const up = document.getElementById("up_color").value;
+  const down = document.getElementById("down_color").value;
+  const options = {
+    up_color: hollow_up() ? "transparent" : up,
+    down_color: hollow_down() ? "transparent" : down,
+  };
+  for (const [dir, is_hollow, color] of [["up", hollow_up(), up], ["down", hollow_down(), down]]) {
+    if (is_hollow) {
+      options[`border_${dir}_color`] = color;
+      options[`wick_${dir}_color`] = color;
+      hollow_pinned[dir] = true;
+    } else if (hollow_pinned[dir]) {
+      // Release the pins this mode installed, unless the user has since picked their own.
+      if (!candle_part_touched[`border_${dir}`]) options[`border_${dir}_color`] = "";
+      if (!candle_part_touched[`wick_${dir}`]) options[`wick_${dir}_color`] = "";
+      hollow_pinned[dir] = false;
+    }
+  }
+  // The outline IS the candle when the body is gone.
+  if (hollow_up() || hollow_down()) {
+    options.border_visible = true;
+    document.getElementById("border_visible").checked = true;
+  }
+  return options;
+}
+
 // Re-apply the current control values to the active cell's series (used after a type change).
 function apply_main_style() {
   const kind = active_series().series_type();
   const options = {
-    up_color: document.getElementById("up_color").value,
-    down_color: document.getElementById("down_color").value,
+    ...candle_body_options(),
     wick_visible: document.getElementById("wick_visible").checked,
     border_visible: document.getElementById("border_visible").checked,
     color: kind === "area" ? document.getElementById("area_top").value : document.getElementById("line_color").value,
@@ -1112,10 +1159,10 @@ function apply_main_style() {
     // fade the fill to fully-transparent at the base (standard area look)
     area_bottom_color: document.getElementById("area_top").value + "00",
   };
-  if (candle_part_touched.wick_up) options.wick_up_color = document.getElementById("wick_up_color").value;
-  if (candle_part_touched.wick_down) options.wick_down_color = document.getElementById("wick_down_color").value;
-  if (candle_part_touched.border_up) options.border_up_color = document.getElementById("border_up_color").value;
-  if (candle_part_touched.border_down) options.border_down_color = document.getElementById("border_down_color").value;
+  if (candle_part_touched.wick_up && !hollow_up()) options.wick_up_color = document.getElementById("wick_up_color").value;
+  if (candle_part_touched.wick_down && !hollow_down()) options.wick_down_color = document.getElementById("wick_down_color").value;
+  if (candle_part_touched.border_up && !hollow_up()) options.border_up_color = document.getElementById("border_up_color").value;
+  if (candle_part_touched.border_down && !hollow_down()) options.border_down_color = document.getElementById("border_down_color").value;
   active_series().apply_options(options);
 }
 
@@ -1202,8 +1249,13 @@ document.getElementById("bid_ask_toggle").addEventListener("change", (e) => {
   }
 });
 
-document.getElementById("up_color").addEventListener("input", () => active_series().apply_options({ up_color: document.getElementById("up_color").value }));
-document.getElementById("down_color").addEventListener("input", () => active_series().apply_options({ down_color: document.getElementById("down_color").value }));
+const apply_candle_body = () => active_series().apply_options(candle_body_options());
+document.getElementById("up_color").addEventListener("input", apply_candle_body);
+document.getElementById("down_color").addEventListener("input", apply_candle_body);
+document.getElementById("candle_body").addEventListener("change", (e) => {
+  candle_body_mode = e.target.value;
+  apply_candle_body();
+});
 document.getElementById("wick_up_color").addEventListener("input", (e) => { candle_part_touched.wick_up = true; active_series().apply_options({ wick_up_color: e.target.value }); });
 document.getElementById("wick_down_color").addEventListener("input", (e) => { candle_part_touched.wick_down = true; active_series().apply_options({ wick_down_color: e.target.value }); });
 document.getElementById("border_up_color").addEventListener("input", (e) => { candle_part_touched.border_up = true; active_series().apply_options({ border_up_color: e.target.value }); });
@@ -1214,7 +1266,14 @@ document.getElementById("border_visible").addEventListener("change", (e) => acti
 // colors the parts now follow.
 document.getElementById("candle_parts_reset").addEventListener("click", () => {
   candle_part_touched.wick_up = candle_part_touched.wick_down = candle_part_touched.border_up = candle_part_touched.border_down = false;
-  active_series().apply_options({ wick_up_color: "", wick_down_color: "", border_up_color: "", border_down_color: "" });
+  // Hollow mode owns the border/wick pins, so clearing them means returning to solid bodies.
+  candle_body_mode = "solid";
+  hollow_pinned.up = hollow_pinned.down = false;
+  document.getElementById("candle_body").value = "solid";
+  active_series().apply_options({
+    ...candle_body_options(),
+    wick_up_color: "", wick_down_color: "", border_up_color: "", border_down_color: "",
+  });
   const up = document.getElementById("up_color").value;
   const down = document.getElementById("down_color").value;
   document.getElementById("wick_up_color").value = up;

@@ -1974,8 +1974,9 @@ impl NucleusChart {
         self.inner.borrow().series_max_points(id)
     }
 
-    /// Set candlestick/bar up & down body colors as CSS strings (empty string = keep default).
-    pub fn set_series_updown_colors(&mut self, id: u32, up: &str, down: &str) {
+    /// Set candlestick/bar body colors per direction; same keep/clear/pin contract as the wick
+    /// and border setters (`"transparent"` gives a hollow body).
+    pub fn set_series_updown_colors(&mut self, id: u32, up: Option<String>, down: Option<String>) {
         self.inner
             .borrow_mut()
             .set_series_updown_colors(id, up, down);

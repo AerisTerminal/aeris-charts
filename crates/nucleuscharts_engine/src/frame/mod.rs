@@ -693,6 +693,11 @@ impl ChartEngine {
         baseline_price: Option<f64>,
     ) -> Color {
         let plot = self.data.plot(series.id);
+        // A hollow candle has no body to take a color from, so chrome that stands for "this bar"
+        // resolves through what is actually painted instead of going invisible.
+        if series.kind == SeriesKind::Candlestick {
+            return self.candlestick_chrome_color(series, row);
+        }
         // reference data-item colors: a per-point `color` (area reads `lineColor`, mapped onto the
         // body channel here) wins over the series-level resolution for every kind that reads
         // it (bar/candlestick/line/area/histogram); Baseline's barColor ignores data-item
@@ -759,6 +764,56 @@ impl ChartEngine {
                 .unwrap_or_else(|| verbatim_color(&series.line_color, crate::DEFAULT_LINE_COLOR)),
             SeriesKind::Custom => verbatim_color(&series.line_color, crate::DEFAULT_LINE_COLOR),
         }
+    }
+
+    /// The visible color of one candlestick, for chrome that represents the bar itself — the
+    /// live price line, its last-value axis chip, and the crosshair marker.
+    ///
+    /// Normally that is the body color. A hollow candle (TradingView-style: a transparent body,
+    /// leaving the border frame and wick) has no body color to show, and following it anyway
+    /// would paint the chip with a fully transparent fill — it would read as the bare chart
+    /// surface rather than as the bar's bullish/bearish color. So a transparent body falls
+    /// through to the parts that are actually painted, in the order they are drawn over:
+    /// border, then wick. Each part follows the body color until pinned (reference parity), so
+    /// an unpinned part inherits the same transparency and is skipped in turn; if nothing is
+    /// visible at all, the body color stands.
+    fn candlestick_chrome_color(&self, series: &crate::SeriesEntry, row: usize) -> Color {
+        let plot = self.data.plot(series.id);
+        let rising =
+            plot.value_at(row, PlotValueIndex::Open) <= plot.value_at(row, PlotValueIndex::Close);
+        let point = |channel| self.data.point_color(series.id, channel, row).map(Color);
+        let pick = |up: &Option<String>, down: &Option<String>, fallback: Color| {
+            if rising {
+                verbatim_color(up, fallback)
+            } else {
+                verbatim_color(down, fallback)
+            }
+        };
+        let body = point(PointColorChannel::Body).unwrap_or_else(|| {
+            pick(
+                &series.up_color,
+                &series.down_color,
+                if rising { UP } else { DOWN },
+            )
+        });
+        if body.a() != 0 {
+            return body;
+        }
+        if series.border_visible.unwrap_or(true) {
+            let border = point(PointColorChannel::Border)
+                .unwrap_or_else(|| pick(&series.border_up_color, &series.border_down_color, body));
+            if border.a() != 0 {
+                return border;
+            }
+        }
+        if series.wick_visible.unwrap_or(true) {
+            let wick = point(PointColorChannel::Wick)
+                .unwrap_or_else(|| pick(&series.wick_up_color, &series.wick_down_color, body));
+            if wick.a() != 0 {
+                return wick;
+            }
+        }
+        body
     }
 
     /// One effective color for a series' built-in live line and complete last-value cluster.
