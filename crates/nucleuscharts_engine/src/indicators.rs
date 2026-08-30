@@ -1,4 +1,4 @@
-//! Engine-owned indicator producers (SMA/EMA/Bollinger).
+//! Engine-owned indicator producers.
 //!
 //! Indicators are bound to a source series and recomputed on source updates; their outputs are
 //! ordinary engine series (`nucleuscharts_indicators` holds the pure math). Extracted from `lib.rs`.
@@ -12,6 +12,9 @@ pub enum IndicatorKind {
     },
     Ema {
         period: usize,
+    },
+    EmaRibbon {
+        periods: [usize; nucleuscharts_indicators::MAX_OUTPUTS],
     },
     Bollinger {
         period: usize,
@@ -78,6 +81,11 @@ pub(crate) struct IndicatorChange {
 /// oscillators stack as a shorter strip under the price pane).
 pub(crate) const OSCILLATOR_PANE_STRETCH: f64 = 0.3;
 
+pub const EMA_RIBBON_DEFAULT_PERIODS: [usize; nucleuscharts_indicators::MAX_OUTPUTS] =
+    [5, 10, 20, 50, 200];
+pub const EMA_RIBBON_DEFAULT_COLORS: [&str; nucleuscharts_indicators::MAX_OUTPUTS] =
+    ["#335cff", "#FF9800", "#7d52f4", "#fb4ba3", "#fb3748"];
+
 /// TradingView oscillator band-line color (RSI 30/70, Stochastic 20/80).
 const BAND_LEVEL_COLOR: Color = Color::rgb(0x78, 0x7B, 0x86);
 
@@ -121,6 +129,7 @@ pub struct IndicatorInfo {
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct IndicatorParameters {
     pub period: Option<usize>,
+    pub periods: Option<[usize; nucleuscharts_indicators::MAX_OUTPUTS]>,
     pub deviation: Option<f64>,
     pub fast: Option<usize>,
     pub slow: Option<usize>,
@@ -185,6 +194,15 @@ impl ChartEngine {
                             None,
                             IndicatorParameters {
                                 period: Some(period),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
+                        IndicatorKind::EmaRibbon { periods } => (
+                            "ema_ribbon",
+                            periods[output_index],
+                            None,
+                            IndicatorParameters {
+                                periods: Some(periods),
                                 ..IndicatorParameters::default()
                             },
                         ),
@@ -278,6 +296,57 @@ impl ChartEngine {
         self.add_indicator_kind(source, IndicatorKind::Ema { period }, None)
             .into_iter()
             .next()
+    }
+
+    /// Add five exponential moving averages as one binding in fastest-to-slowest output order.
+    pub fn add_ema_ribbon(
+        &mut self,
+        source: SeriesId,
+        periods: [usize; nucleuscharts_indicators::MAX_OUTPUTS],
+    ) -> Vec<SeriesId> {
+        self.add_indicator_kind(source, IndicatorKind::EmaRibbon { periods }, None)
+    }
+
+    /// Atomically update all periods of an EMA ribbon while retaining its output identities and
+    /// presentation options. `id` may identify any output in the ribbon.
+    pub fn set_ema_ribbon_periods(
+        &mut self,
+        id: SeriesId,
+        periods: [usize; nucleuscharts_indicators::MAX_OUTPUTS],
+    ) -> bool {
+        if periods.contains(&0) {
+            return false;
+        }
+        let Some(index) = self.indicators.iter().position(|binding| {
+            matches!(binding.kind, IndicatorKind::EmaRibbon { .. }) && binding.outputs.contains(&id)
+        }) else {
+            return false;
+        };
+        let IndicatorKind::EmaRibbon { periods: previous } = self.indicators[index].kind else {
+            unreachable!("binding kind checked above")
+        };
+        if periods == previous {
+            return true;
+        }
+
+        let outputs = self.indicators[index].outputs.clone();
+        for (output_index, &output) in outputs.iter().enumerate() {
+            let previous_title = format!("EMA {}", previous[output_index]);
+            if let Some(series) = self.series.iter_mut().find(|series| series.id == output) {
+                if series.title == previous_title {
+                    series.title = format!("EMA {}", periods[output_index]);
+                }
+            }
+        }
+        let kind = IndicatorKind::EmaRibbon { periods };
+        self.indicators[index].kind = kind.clone();
+        self.indicators[index].runtime = incremental_state(&kind);
+        let changes = self.rebuild_indicator(index, 0, true);
+        self.indicator_changes.clear();
+        self.indicator_changes.extend(changes.into_iter().flatten());
+        self.propagate_indicator_changes();
+        self.sync_time_points();
+        true
     }
 
     /// Add upper, middle, and lower Bollinger-band line series in that order.
@@ -388,6 +457,7 @@ impl ChartEngine {
             }
             IndicatorKind::Sma { .. }
             | IndicatorKind::Ema { .. }
+            | IndicatorKind::EmaRibbon { .. }
             | IndicatorKind::Bollinger { .. }
             | IndicatorKind::Vwap
             | IndicatorKind::Wma { .. } => {}
@@ -492,20 +562,22 @@ impl ChartEngine {
                 }
                 _ => volume_source.is_some(),
             }
-            || matches!(
-                &kind,
-                IndicatorKind::Sma { period: 0 }
-                    | IndicatorKind::Ema { period: 0 }
-                    | IndicatorKind::Bollinger { period: 0, .. }
-                    | IndicatorKind::Rsi { period: 0 }
-                    | IndicatorKind::Macd { fast: 0, .. }
-                    | IndicatorKind::Macd { slow: 0, .. }
-                    | IndicatorKind::Macd { signal: 0, .. }
-                    | IndicatorKind::Stochastic { k_period: 0, .. }
-                    | IndicatorKind::Stochastic { d_period: 0, .. }
-                    | IndicatorKind::Atr { period: 0 }
-                    | IndicatorKind::Wma { period: 0 }
-            )
+            || match &kind {
+                IndicatorKind::Sma { period }
+                | IndicatorKind::Ema { period }
+                | IndicatorKind::Bollinger { period, .. }
+                | IndicatorKind::Rsi { period }
+                | IndicatorKind::Atr { period }
+                | IndicatorKind::Wma { period } => *period == 0,
+                IndicatorKind::EmaRibbon { periods } => periods.contains(&0),
+                IndicatorKind::Macd { fast, slow, signal } => {
+                    *fast == 0 || *slow == 0 || *signal == 0
+                }
+                IndicatorKind::Stochastic { k_period, d_period } => {
+                    *k_period == 0 || *d_period == 0
+                }
+                IndicatorKind::Vwap => false,
+            }
         {
             return Vec::new();
         }
@@ -525,13 +597,15 @@ impl ChartEngine {
         // bar close), the auto-generated name chip shows (platforms override the name through
         // the series `title` option — custom-script indicators will set their own), and the
         // line draws at 1px — every default is overridable through the ordinary series options.
-        let title = indicator_title(&kind);
-        for &id in &ids {
+        for (output_index, &id) in ids.iter().enumerate() {
             if let Some(s) = self.series.iter_mut().find(|s| s.id == id) {
                 s.countdown_visible = false;
                 s.title_visible = true;
-                s.title = title.clone();
+                s.title = indicator_output_title(&kind, output_index);
                 s.line_width = Some(1.0);
+                if let Some(color) = indicator_output_color(&kind, output_index) {
+                    s.line_color = Some(color.to_string());
+                }
                 if let Some((kind, precision, min_move)) = source_price_format {
                     s.price_format.kind = kind;
                     s.price_format.precision = precision;
@@ -614,9 +688,9 @@ impl ChartEngine {
         index: usize,
         from: usize,
         full_replace: bool,
-    ) -> [Option<(SeriesId, IndicatorChange)>; 3] {
-        let mut changes = [None; 3];
-        let outputs: [Option<SeriesId>; 3] =
+    ) -> [Option<(SeriesId, IndicatorChange)>; nucleuscharts_indicators::MAX_OUTPUTS] {
+        let mut changes = [None; nucleuscharts_indicators::MAX_OUTPUTS];
+        let outputs: [Option<SeriesId>; nucleuscharts_indicators::MAX_OUTPUTS] =
             std::array::from_fn(|slot| self.indicators[index].outputs.get(slot).copied());
         for &output in outputs.iter().flatten() {
             self.invalidate_frame_series(output);
@@ -726,6 +800,9 @@ fn incremental_state(kind: &IndicatorKind) -> nucleuscharts_indicators::Incremen
     match *kind {
         IndicatorKind::Sma { period } => nucleuscharts_indicators::IncrementalState::sma(period),
         IndicatorKind::Ema { period } => nucleuscharts_indicators::IncrementalState::ema(period),
+        IndicatorKind::EmaRibbon { periods } => {
+            nucleuscharts_indicators::IncrementalState::ema_ribbon(periods)
+        }
         IndicatorKind::Bollinger { period, deviation } => {
             nucleuscharts_indicators::IncrementalState::bollinger(period, deviation)
         }
@@ -771,6 +848,10 @@ fn indicator_title(kind: &IndicatorKind) -> String {
     match kind {
         IndicatorKind::Sma { period } => format!("SMA {period}"),
         IndicatorKind::Ema { period } => format!("EMA {period}"),
+        IndicatorKind::EmaRibbon { periods } => format!(
+            "EMA Ribbon {} {} {} {} {}",
+            periods[0], periods[1], periods[2], periods[3], periods[4]
+        ),
         IndicatorKind::Bollinger { period, deviation } => {
             format!("Bollinger {period} {}", params(*deviation))
         }
@@ -785,10 +866,24 @@ fn indicator_title(kind: &IndicatorKind) -> String {
     }
 }
 
+fn indicator_output_title(kind: &IndicatorKind, output_index: usize) -> String {
+    match kind {
+        IndicatorKind::EmaRibbon { periods } => format!("EMA {}", periods[output_index]),
+        _ => indicator_title(kind),
+    }
+}
+
+fn indicator_output_color(kind: &IndicatorKind, output_index: usize) -> Option<&'static str> {
+    matches!(kind, IndicatorKind::EmaRibbon { .. }).then(|| EMA_RIBBON_DEFAULT_COLORS[output_index])
+}
+
 fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static str {
     match kind {
         IndicatorKind::Sma { .. } => "SMA",
         IndicatorKind::Ema { .. } => "EMA",
+        IndicatorKind::EmaRibbon { .. } => {
+            ["EMA 1", "EMA 2", "EMA 3", "EMA 4", "EMA 5"][output_index]
+        }
         IndicatorKind::Bollinger { .. } => ["Upper", "Basis", "Lower"][output_index],
         IndicatorKind::Rsi { .. } => "RSI",
         IndicatorKind::Macd { .. } => ["MACD", "Signal", "Histogram"][output_index],

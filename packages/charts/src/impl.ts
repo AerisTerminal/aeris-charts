@@ -22,6 +22,7 @@ import type {
   any_series_options, backend_status, bars_info, chart_api, chart_context_handler, chart_context_params, chart_options, chart_state_v1, chart_value_snapshot, data_changed_handler, dbl_click_handler,
   deep_partial, drawing_api, drawing_created_handler, drawing_info, drawing_kind, drawing_options,
   drawing_point, drawing_tool_change_handler,
+  ema_ribbon_options, ema_ribbon_periods,
   feature_series_kind, frame_stats,
   ingestion_diagnostics,
   handle_scale_options, handle_scroll_options, indicator_info, kinetic_scroll_options,
@@ -2958,6 +2959,30 @@ export class chart_impl implements chart_api {
 
   add_ema(source: series_api, period: number, options?: Partial<series_options>): series_api {
     return this.indicator_series(this.wasm.add_ema(source.id, Math.max(1, Math.floor(period))), options);
+  }
+
+  add_ema_ribbon(
+    source: series_api,
+    periods: ema_ribbon_periods = [5, 10, 20, 50, 200],
+    options?: ema_ribbon_options,
+  ): [series_api, series_api, series_api, series_api, series_api] {
+    const normalized = periods.map((period) => Math.max(1, Math.floor(period))) as [number, number, number, number, number];
+    const ids = this.wasm.add_ema_ribbon(source.id, ...normalized);
+    if (ids.length !== 5) throw new nucleuscharts_error("invalid_options", "invalid EMA ribbon configuration");
+    return [
+      this.indicator_series(ids[0]!, options?.[0]),
+      this.indicator_series(ids[1]!, options?.[1]),
+      this.indicator_series(ids[2]!, options?.[2]),
+      this.indicator_series(ids[3]!, options?.[3]),
+      this.indicator_series(ids[4]!, options?.[4]),
+    ];
+  }
+
+  set_ema_ribbon_periods(indicator: series_api, periods: ema_ribbon_periods): boolean {
+    const normalized = periods.map((period) => Math.max(1, Math.floor(period))) as [number, number, number, number, number];
+    const updated = this.wasm.set_ema_ribbon_periods(indicator.id, ...normalized);
+    if (updated) this.repaint();
+    return updated;
   }
 
   add_bollinger(source: series_api, period: number, deviation = 2, options?: Partial<series_options>): [series_api, series_api, series_api] {

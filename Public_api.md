@@ -23,6 +23,9 @@ entry point and `./design.css` are the only npm export paths. The supported root
   remains valued-only;
 - additive complete indicator lineage metadata: stable binding ID, structured parameters, source and
   optional VWAP volume source, and stable output name/index/count, while legacy fields remain;
+- the five-output EMA ribbon through `chart.add_ema_ribbon()`, defaulting to periods
+  `5/10/20/50/200` and colors `#335cff/#FF9800/#7d52f4/#fb4ba3/#fb3748`, plus atomic in-place
+  period changes through `chart.set_ema_ribbon_periods()`;
 - first-party broker-neutral trading state, instant/manual confirmation, previews, hit testing,
   semantic style, and typed intent subscriptions exposed by `chart.trading()`;
 - default chart accessibility, its additive `chart.accessibility()` singleton handle, compatibility

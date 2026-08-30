@@ -403,15 +403,16 @@ export interface pane_geometry {
  * (kind + params), the source series it derives from, and which output slot it is — everything
  * a platform needs to render its own TradingView-style indicator chip (title, params, source,
  * hide/remove actions) without the engine owning any UI. Bollinger slots: 0 = upper,
- * 1 = middle, 2 = lower; SMA/EMA: always 0.
+ * 1 = middle, 2 = lower; EMA ribbon slots follow its five configured periods; SMA/EMA: always 0.
  */
 export interface indicator_info {
   /** Stable identity shared by all outputs in one indicator binding. */
   binding_id: number;
-  kind: "sma" | "ema" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "wma";
+  kind: "sma" | "ema" | "ema_ribbon" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "wma";
   /** Complete structured parameters. Fields not used by this kind are `null`. */
   parameters: {
     period: number | null;
+    periods: [number, number, number, number, number] | null;
     deviation: number | null;
     fast: number | null;
     slow: number | null;
@@ -428,11 +429,24 @@ export interface indicator_info {
   volume_source: series_api | null;
   /** Stable display name for this output, preserving binding output order. */
   output_name: string;
-  /** Bollinger: 0 = upper, 1 = middle, 2 = lower. MACD: 0 = line, 1 = signal, 2 = histogram.
-   *  Stochastic: 0 = %K, 1 = %D. Everything else: 0. */
+  /** Bollinger: 0 = upper, 1 = middle, 2 = lower. EMA ribbon: fastest-to-slowest configured
+   *  period. MACD: 0 = line, 1 = signal, 2 = histogram. Stochastic: 0 = %K, 1 = %D.
+   *  Single-output indicators: 0. */
   output_index: number;
   output_count: number;
 }
+
+/** Five EMA periods in fastest-to-slowest output order. */
+export type ema_ribbon_periods = readonly [number, number, number, number, number];
+
+/** Per-output style overrides in the same order as {@link ema_ribbon_periods}. */
+export type ema_ribbon_options = readonly [
+  Partial<series_options>?,
+  Partial<series_options>?,
+  Partial<series_options>?,
+  Partial<series_options>?,
+  Partial<series_options>?,
+];
 
 /** Series lifecycle event (platform chrome: legend chips, indicator counts). */
 export interface series_change_event {
@@ -1814,6 +1828,12 @@ export interface chart_api {
   add_sma(source: series_api, period: number, options?: Partial<series_options>): series_api;
   /** Add a Rust-native exponential moving-average line derived from an existing series. */
   add_ema(source: series_api, period: number, options?: Partial<series_options>): series_api;
+  /** Add one five-output EMA ribbon on the source pane. Defaults to 5/10/20/50/200; the third
+   *  output (EMA 20 by default) uses violet `#7d52f4`. */
+  add_ema_ribbon(source: series_api, periods?: ema_ribbon_periods, options?: ema_ribbon_options): [series_api, series_api, series_api, series_api, series_api];
+  /** Atomically update all EMA ribbon periods without replacing its five series handles.
+   *  `indicator` may be any output returned by {@link add_ema_ribbon}. */
+  set_ema_ribbon_periods(indicator: series_api, periods: ema_ribbon_periods): boolean;
   /** Add upper, middle, and lower Rust-native Bollinger-band lines (with the TradingView-style
    *  background fill between the bands). */
   add_bollinger(source: series_api, period: number, deviation?: number, options?: Partial<series_options>): [series_api, series_api, series_api];

@@ -91,6 +91,16 @@ impl ChartInner {
             .unwrap_or(u32::MAX)
     }
 
+    pub fn add_ema_ribbon(&mut self, source_id: u32, periods: [u32; 5]) -> Vec<u32> {
+        self.engine
+            .add_ema_ribbon(source_id as SeriesId, periods.map(|period| period as usize))
+    }
+
+    pub fn set_ema_ribbon_periods(&mut self, id: u32, periods: [u32; 5]) -> bool {
+        self.engine
+            .set_ema_ribbon_periods(id as SeriesId, periods.map(|period| period as usize))
+    }
+
     pub fn add_bollinger(&mut self, source_id: u32, period: u32, deviation: f64) -> Vec<u32> {
         self.engine
             .add_bollinger(source_id as SeriesId, period as usize, deviation)

@@ -44,7 +44,9 @@ pub use frame::{
 };
 pub use hit_test::{SeriesHit, SeriesHitKind};
 pub(crate) use indicators::{IndicatorBinding, IndicatorChange};
-pub use indicators::{IndicatorBindingInfo, IndicatorKind};
+pub use indicators::{
+    IndicatorBindingInfo, IndicatorKind, EMA_RIBBON_DEFAULT_COLORS, EMA_RIBBON_DEFAULT_PERIODS,
+};
 pub use interaction::{
     pinch_zoom_scale, wheel_zoom_scale, CancelReason, ChartContext, GestureResolver, GestureState,
     GestureUpdate, GestureUpdateKind, HitProfile, InputDevice, InputEvent, InputModifiers,

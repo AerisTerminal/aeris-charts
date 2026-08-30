@@ -426,6 +426,9 @@ fn ema_step(state: &mut EmaState, sample: f64, period: usize) -> Option<f64> {
     }
 }
 
+/// Maximum number of output columns retained by one built-in indicator runtime.
+pub const MAX_OUTPUTS: usize = 5;
+
 #[derive(Clone, Copy, Debug, Default)]
 struct RsiState {
     gain: f64,
@@ -460,6 +463,10 @@ enum IncrementalKind {
     Ema {
         period: usize,
         state: RecursiveHistory<EmaState>,
+    },
+    EmaRibbon {
+        periods: [usize; MAX_OUTPUTS],
+        states: Box<[RecursiveHistory<EmaState>; MAX_OUTPUTS]>,
     },
     Bollinger {
         period: usize,
@@ -500,8 +507,8 @@ enum IncrementalKind {
 #[derive(Clone, Debug)]
 pub struct IncrementalState {
     kind: IncrementalKind,
-    outputs: [Vec<f64>; 3],
-    output_from: [usize; 3],
+    outputs: [Vec<f64>; MAX_OUTPUTS],
+    output_from: [usize; MAX_OUTPUTS],
     output_count: usize,
     last_work_rows: usize,
 }
@@ -511,7 +518,7 @@ impl IncrementalState {
         Self {
             kind,
             outputs: std::array::from_fn(|_| Vec::new()),
-            output_from: [0; 3],
+            output_from: [0; MAX_OUTPUTS],
             output_count,
             last_work_rows: 0,
         }
@@ -528,6 +535,16 @@ impl IncrementalState {
                 state: RecursiveHistory::new(),
             },
             1,
+        )
+    }
+
+    pub fn ema_ribbon(periods: [usize; MAX_OUTPUTS]) -> Self {
+        Self::new(
+            IncrementalKind::EmaRibbon {
+                periods,
+                states: Box::new(std::array::from_fn(|_| RecursiveHistory::new())),
+            },
+            MAX_OUTPUTS,
         )
     }
 
@@ -633,6 +650,9 @@ impl IncrementalState {
     pub fn runtime_bytes(&self) -> usize {
         match &self.kind {
             IncrementalKind::Ema { state, .. } => state.bytes(),
+            IncrementalKind::EmaRibbon { states, .. } => {
+                states.iter().map(RecursiveHistory::bytes).sum()
+            }
             IncrementalKind::Rsi { state, .. } => state.bytes(),
             IncrementalKind::Macd { state, .. } => state.bytes(),
             IncrementalKind::Stochastic { state, tail_k, .. } => {
@@ -703,6 +723,30 @@ impl IncrementalState {
                     }
                 }
                 state.finish(n, tail, before_tail);
+            }
+            IncrementalKind::EmaRibbon { periods, states } => {
+                for (output_index, (&period, state)) in
+                    periods.iter().zip(states.iter_mut()).enumerate()
+                {
+                    let (start, mut accumulator) = state.begin(n, requested);
+                    self.last_work_rows = self.last_work_rows.saturating_add(n - start);
+                    let mut tail = None;
+                    let mut before_tail = None;
+                    for row in start..n {
+                        let previous = accumulator;
+                        let value = ema_step(&mut accumulator, input.close[row], period);
+                        state.checkpoint(row, accumulator);
+                        if row >= self.output_from[output_index] {
+                            self.outputs[output_index]
+                                .push(value.expect("EMA ribbon output after warmup"));
+                        }
+                        if row + 1 == n {
+                            tail = Some(accumulator);
+                            before_tail = (row > 0).then_some(previous);
+                        }
+                    }
+                    state.finish(n, tail, before_tail);
+                }
             }
             IncrementalKind::Bollinger { period, deviation } => {
                 let start = self.output_from[0];
@@ -951,14 +995,21 @@ impl IncrementalState {
     }
 }
 
-fn output_starts(kind: &IncrementalKind) -> [usize; 3] {
+fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
     match kind {
         IncrementalKind::Sma { period }
         | IncrementalKind::Ema { period, .. }
-        | IncrementalKind::Wma { period } => [period.saturating_sub(1), 0, 0],
-        IncrementalKind::Bollinger { period, .. } => [period.saturating_sub(1); 3],
+        | IncrementalKind::Wma { period } => [period.saturating_sub(1), 0, 0, 0, 0],
+        IncrementalKind::EmaRibbon { periods, .. } => {
+            periods.map(|period| period.saturating_sub(1))
+        }
+        IncrementalKind::Bollinger { period, .. } => {
+            let mut starts = [0; MAX_OUTPUTS];
+            starts[..3].fill(period.saturating_sub(1));
+            starts
+        }
         IncrementalKind::Rsi { period, .. } | IncrementalKind::Atr { period, .. } => {
-            [*period, 0, 0]
+            [*period, 0, 0, 0, 0]
         }
         IncrementalKind::Macd {
             slow_period,
@@ -967,7 +1018,7 @@ fn output_starts(kind: &IncrementalKind) -> [usize; 3] {
         } => {
             let line = slow_period.saturating_sub(1);
             let signal = line.saturating_add(signal_period.saturating_sub(1));
-            [line, signal, signal]
+            [line, signal, signal, 0, 0]
         }
         IncrementalKind::Stochastic {
             k_period, d_period, ..
@@ -975,8 +1026,10 @@ fn output_starts(kind: &IncrementalKind) -> [usize; 3] {
             k_period.saturating_sub(1),
             k_period.saturating_add(*d_period).saturating_sub(2),
             0,
+            0,
+            0,
         ],
-        IncrementalKind::Vwap { .. } => [0, 0, 0],
+        IncrementalKind::Vwap { .. } => [0; MAX_OUTPUTS],
     }
 }
 
@@ -1115,6 +1168,7 @@ mod tests {
     enum TestKind {
         Sma,
         Ema,
+        EmaRibbon,
         Bollinger,
         Rsi,
         Macd,
@@ -1128,6 +1182,10 @@ mod tests {
         match kind {
             TestKind::Sma => vec![sma(input.close, 5)],
             TestKind::Ema => vec![ema(input.close, 5)],
+            TestKind::EmaRibbon => [3, 5, 8, 13, 21]
+                .into_iter()
+                .map(|period| ema(input.close, period))
+                .collect(),
             TestKind::Bollinger => {
                 let points = bollinger(input.close, 5, 2.0);
                 vec![
@@ -1198,6 +1256,10 @@ mod tests {
         let mut states = vec![
             (TestKind::Sma, IncrementalState::sma(5)),
             (TestKind::Ema, IncrementalState::ema(5)),
+            (
+                TestKind::EmaRibbon,
+                IncrementalState::ema_ribbon([3, 5, 8, 13, 21]),
+            ),
             (TestKind::Bollinger, IncrementalState::bollinger(5, 2.0)),
             (TestKind::Rsi, IncrementalState::rsi(5)),
             (TestKind::Macd, IncrementalState::macd(3, 6, 4)),

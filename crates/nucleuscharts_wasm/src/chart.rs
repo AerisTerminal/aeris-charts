@@ -1688,6 +1688,37 @@ impl NucleusChart {
         self.inner.borrow_mut().add_ema(source_id, period)
     }
 
+    /// Add one five-output EMA ribbon on the source pane.
+    pub fn add_ema_ribbon(
+        &mut self,
+        source_id: u32,
+        period_1: u32,
+        period_2: u32,
+        period_3: u32,
+        period_4: u32,
+        period_5: u32,
+    ) -> Vec<u32> {
+        self.inner.borrow_mut().add_ema_ribbon(
+            source_id,
+            [period_1, period_2, period_3, period_4, period_5],
+        )
+    }
+
+    /// Atomically update an EMA ribbon while retaining all five output identities.
+    pub fn set_ema_ribbon_periods(
+        &mut self,
+        id: u32,
+        period_1: u32,
+        period_2: u32,
+        period_3: u32,
+        period_4: u32,
+        period_5: u32,
+    ) -> bool {
+        self.inner
+            .borrow_mut()
+            .set_ema_ribbon_periods(id, [period_1, period_2, period_3, period_4, period_5])
+    }
+
     /// Add upper, middle, and lower Bollinger-band lines. Returns an empty array for invalid input.
     pub fn add_bollinger(&mut self, source_id: u32, period: u32, deviation: f64) -> Vec<u32> {
         self.inner

@@ -1046,6 +1046,78 @@ fn indicators_are_engine_owned_series() {
 }
 
 #[test]
+fn ema_ribbon_owns_five_colored_outputs_and_updates_periods_atomically() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times = (0..300).map(|index| index as f64).collect::<Vec<_>>();
+    let values = (0..300)
+        .map(|index| 100.0 + index as f64 * 0.1 + (index as f64 * 0.17).sin())
+        .collect::<Vec<_>>();
+    chart
+        .set_series_data(0, &times, &values, &values, &values, &values)
+        .unwrap();
+
+    let outputs = chart.add_ema_ribbon(0, EMA_RIBBON_DEFAULT_PERIODS);
+    assert_eq!(outputs.len(), 5);
+    for (index, &output) in outputs.iter().enumerate() {
+        let series = chart.series_entry(output).unwrap();
+        assert_eq!(
+            series.line_color.as_deref(),
+            Some(EMA_RIBBON_DEFAULT_COLORS[index])
+        );
+        assert_eq!(
+            series.title,
+            format!("EMA {}", EMA_RIBBON_DEFAULT_PERIODS[index])
+        );
+        let info = chart.indicator_info(output).unwrap();
+        assert_eq!(info.kind, "ema_ribbon");
+        assert_eq!(info.binding_id, outputs[0]);
+        assert_eq!(info.parameters.periods, Some(EMA_RIBBON_DEFAULT_PERIODS));
+        assert_eq!(info.period, EMA_RIBBON_DEFAULT_PERIODS[index]);
+        assert_eq!(info.output_index, index);
+        assert_eq!(info.output_count, 5);
+        assert_eq!(
+            info.output_name,
+            ["EMA 1", "EMA 2", "EMA 3", "EMA 4", "EMA 5"][index]
+        );
+    }
+    assert_eq!(
+        chart
+            .series_entry(outputs[2])
+            .unwrap()
+            .line_color
+            .as_deref(),
+        Some("#7d52f4")
+    );
+    assert_indicator_binding_matches_full(&chart, 0);
+
+    let dependent = chart.add_ema(outputs[0], 2).unwrap();
+    chart.series_entry_mut(outputs[1]).unwrap().title = "Custom EMA".to_string();
+    let before = chart.indicator_bindings();
+    assert!(!chart.set_ema_ribbon_periods(outputs[4], [6, 12, 0, 60, 120]));
+    assert_eq!(chart.indicator_bindings(), before);
+
+    let updated = [6, 12, 24, 60, 120];
+    assert!(chart.set_ema_ribbon_periods(outputs[2], updated));
+    let binding = &chart.indicator_bindings()[0];
+    assert_eq!(binding.outputs, outputs);
+    assert_eq!(binding.kind, IndicatorKind::EmaRibbon { periods: updated });
+    assert_eq!(chart.series_entry(outputs[0]).unwrap().title, "EMA 6");
+    assert_eq!(chart.series_entry(outputs[1]).unwrap().title, "Custom EMA");
+    assert_eq!(chart.series_entry(outputs[2]).unwrap().title, "EMA 24");
+    assert_eq!(
+        chart
+            .series_entry(outputs[2])
+            .unwrap()
+            .line_color
+            .as_deref(),
+        Some("#7d52f4")
+    );
+    assert_indicator_binding_matches_full(&chart, 0);
+    assert_indicator_binding_matches_full(&chart, 1);
+    assert!(!chart.data.series_data(dependent).unwrap().0.is_empty());
+}
+
+#[test]
 fn indicator_source_can_be_replaced_below_warmup_and_repopulated() {
     for replacement_rows in [0usize, 10] {
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
@@ -1120,6 +1192,10 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
     let expected = match binding.kind {
         IndicatorKind::Sma { period } => vec![nucleuscharts_indicators::sma(source[3], period)],
         IndicatorKind::Ema { period } => vec![nucleuscharts_indicators::ema(source[3], period)],
+        IndicatorKind::EmaRibbon { periods } => periods
+            .into_iter()
+            .map(|period| nucleuscharts_indicators::ema(source[3], period))
+            .collect(),
         IndicatorKind::Bollinger { period, deviation } => {
             let points = nucleuscharts_indicators::bollinger(source[3], period, deviation);
             vec![
@@ -1185,6 +1261,9 @@ fn every_indicator_engine_path_matches_full_recomputation() {
     let kinds = [
         IndicatorKind::Sma { period: 5 },
         IndicatorKind::Ema { period: 5 },
+        IndicatorKind::EmaRibbon {
+            periods: [3, 5, 8, 13, 21],
+        },
         IndicatorKind::Bollinger {
             period: 5,
             deviation: 2.0,
@@ -1303,6 +1382,9 @@ fn batch_and_single_updates_are_semantically_identical_for_every_indicator() {
     let kinds = [
         IndicatorKind::Sma { period: 5 },
         IndicatorKind::Ema { period: 5 },
+        IndicatorKind::EmaRibbon {
+            periods: [3, 5, 8, 13, 21],
+        },
         IndicatorKind::Bollinger {
             period: 5,
             deviation: 2.0,
