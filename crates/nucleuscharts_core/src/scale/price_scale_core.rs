@@ -90,8 +90,9 @@ pub struct PriceScaleCore {
     /// Extra px margins requested by autoscale info providers.
     margin_above: f64,
     margin_below: f64,
-    /// Height the fractional scale margins resolve against (0 = the scale's own height).
-    margins_height: f64,
+    /// Origin of the owning pane in chart-content space. The scale's geometry is entirely
+    /// pane-local; this is the single explicit transform into the host's chart coordinates.
+    pane_offset: f64,
     log_formula: LogFormula,
     min_move: f64,
     scale_start_point: Option<f64>,
@@ -109,7 +110,7 @@ impl PriceScaleCore {
             price_range: None,
             margin_above: 0.0,
             margin_below: 0.0,
-            margins_height: 0.0,
+            pane_offset: 0.0,
             log_formula: DEF_LOG_FORMULA,
             min_move: 0.01,
             scale_start_point: None,
@@ -273,25 +274,19 @@ impl PriceScaleCore {
         }
     }
 
-    /// Set the height the FRACTIONAL scale margins (`scale_margins.top/bottom`) are computed
-    /// against (default 0 = the scale's own height). Stacked panes pin this to the pane's own
-    /// slot height: the scale itself spans the full content height (clipped into the slot by
-    /// the pixel internal margins), so taking the fractions of the full height would subtract
-    /// up to 30% of the WHOLE chart from a small pane and invert its coordinate mapping.
-    pub fn set_margins_height(&mut self, height: f64) {
-        if self.margins_height != height {
-            self.margins_height = height;
-            self.changed();
-        }
+    /// Offset of the owning pane's top edge in chart-content space.
+    pub fn pane_offset(&self) -> f64 {
+        self.pane_offset
     }
 
-    /// The height the fractional margins resolve against (the scale's own height unless a
-    /// pane pinned its slot height).
-    fn margins_height(&self) -> f64 {
-        if self.margins_height > 0.0 {
-            self.margins_height
-        } else {
-            self.height
+    /// Place this pane-local scale inside the chart content area. Every coordinate the scale
+    /// produces or consumes on its public API is chart-content space; everything in between —
+    /// height, margins, internal height, tick marks, gestures — is resolved against the pane's
+    /// own slot alone, so panes never share axis geometry.
+    pub fn set_pane_offset(&mut self, offset: f64) {
+        if self.pane_offset != offset {
+            self.pane_offset = offset;
+            self.changed();
         }
     }
 
@@ -365,17 +360,17 @@ impl PriceScaleCore {
 
     fn top_margin_px(&self) -> f64 {
         if self.is_inverted() {
-            self.options.scale_margins.bottom * self.margins_height() + self.margin_below
+            self.options.scale_margins.bottom * self.height + self.margin_below
         } else {
-            self.options.scale_margins.top * self.margins_height() + self.margin_above
+            self.options.scale_margins.top * self.height + self.margin_above
         }
     }
 
     fn bottom_margin_px(&self) -> f64 {
         if self.is_inverted() {
-            self.options.scale_margins.top * self.margins_height() + self.margin_above
+            self.options.scale_margins.top * self.height + self.margin_above
         } else {
-            self.options.scale_margins.bottom * self.margins_height() + self.margin_below
+            self.options.scale_margins.bottom * self.height + self.margin_below
         }
     }
 
@@ -441,6 +436,11 @@ impl PriceScaleCore {
     // `_logicalToCoordinate` re-transforms), while percent/indexed inputs are pre-transformed.
 
     pub fn logical_to_coordinate(&self, logical: f64) -> Coordinate {
+        self.logical_to_coordinate_local(logical) + self.pane_offset
+    }
+
+    /// Pane-local coordinate (0 = the pane's top edge), before the pane-origin transform.
+    fn logical_to_coordinate_local(&self, logical: f64) -> Coordinate {
         if self.is_empty() {
             return 0.0;
         }
@@ -460,6 +460,10 @@ impl PriceScaleCore {
     }
 
     pub fn coordinate_to_logical(&self, coordinate: f64) -> f64 {
+        self.coordinate_to_logical_local(coordinate - self.pane_offset)
+    }
+
+    fn coordinate_to_logical_local(&self, coordinate: f64) -> f64 {
         if self.is_empty() {
             return 0.0;
         }
@@ -521,6 +525,7 @@ impl PriceScaleCore {
         let max = range.max_value();
         let ih = self.internal_height() - 1.0;
         let is_inverted = self.is_inverted();
+        let pane_offset = self.pane_offset;
         let hmm = ih / (max - min);
         let needs_transform = self.options.mode != PriceScaleMode::Normal;
 
@@ -533,11 +538,12 @@ impl PriceScaleCore {
             }
             for (j, p) in prices.iter().enumerate() {
                 let inv_coordinate = bh + hmm * (p - min);
-                out[i][j] = if is_inverted {
-                    inv_coordinate
-                } else {
-                    self.height - 1.0 - inv_coordinate
-                };
+                out[i][j] = pane_offset
+                    + if is_inverted {
+                        inv_coordinate
+                    } else {
+                        self.height - 1.0 - inv_coordinate
+                    };
             }
         }
     }
@@ -555,8 +561,8 @@ impl PriceScaleCore {
             return;
         }
 
-        // invert x
-        self.scale_start_point = Some(self.height - x);
+        // invert x (pane-local)
+        self.scale_start_point = Some(self.height - (x - self.pane_offset));
         self.price_range_snapshot = self.price_range;
     }
 
@@ -571,7 +577,7 @@ impl PriceScaleCore {
         let before = (self.options.auto_scale, self.price_range);
         self.options.auto_scale = false;
 
-        let x = (self.height - x).max(0.0);
+        let x = (self.height - (x - self.pane_offset)).max(0.0);
 
         let mut scale_coeff =
             (scale_start_point + (self.height - 1.0) * 0.2) / (x + (self.height - 1.0) * 0.2);
@@ -598,7 +604,7 @@ impl PriceScaleCore {
 
     // --- wheel zoom (TradingView-style; the reference has no price-axis wheel) ---
 
-    /// Zoom the range by `factor` anchored at the price under pane-local coordinate `y`
+    /// Zoom the range by `factor` anchored at the price under chart-content coordinate `y`
     /// (that price stays fixed on screen). Mirrors the drag-to-scale guards: percentage and
     /// indexed-to-100 modes no-op, and an empty scale has nothing to zoom. Disables autoscale,
     /// like any manual range edit.
@@ -636,7 +642,7 @@ impl PriceScaleCore {
         if self.is_empty() {
             return;
         }
-        self.scroll_start_point = Some(x);
+        self.scroll_start_point = Some(x - self.pane_offset);
         self.price_range_snapshot = self.price_range;
     }
 
@@ -655,7 +661,7 @@ impl PriceScaleCore {
             return;
         };
         let price_units_per_pixel = price_range.length() / (self.internal_height() - 1.0);
-        let mut pixel_delta = x - scroll_start_point;
+        let mut pixel_delta = (x - self.pane_offset) - scroll_start_point;
         if self.is_inverted() {
             pixel_delta = -pixel_delta;
         }
@@ -788,7 +794,10 @@ impl PriceScaleCore {
             let visible = coord >= min_coord && coord <= max_coord;
 
             if fits && visible {
-                marks.push(PriceMark { coord, logical });
+                marks.push(PriceMark {
+                    coord: coord + self.pane_offset,
+                    logical,
+                });
                 prev_coord = Some(coord);
                 if self.is_log() {
                     span = composite_tick_span(
@@ -830,7 +839,7 @@ impl PriceScaleCore {
     }
 
     fn logical_to_coordinate_raw(&self, logical: f64) -> f64 {
-        self.logical_to_coordinate(logical)
+        self.logical_to_coordinate_local(logical)
     }
 
     /// Convenience: format-facing conversion used by tests and axis code.

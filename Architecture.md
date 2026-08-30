@@ -67,6 +67,14 @@ the strip. The horizontal grid uses only the innermost visible populated scale, 
 side when equal orders meet. Hidden and empty named scales retain state without consuming layout or
 receiving labels and input.
 
+Pane scale geometry is pane-local. Every scale a pane owns is laid out against that pane's own slot
+height and carries the pane's top edge as its single explicit transform into chart-content space, so
+autoscale, margins, internal height, tick marks, hit testing, and axis gestures resolve inside the
+owning pane alone and never against the stacked content height. Resizing one pane therefore cannot
+move another pane's range or coordinates. The pane divider is structural rather than plot chrome: its
+resting line, hover band, hit test, and drag geometry all describe the same boundary spanning the
+full chart width, including every visible left and right price-scale strip.
+
 Series pane/scale rebinding is one validated engine mutation. An unknown destination leaves pane,
 scale, data, type, style, visibility, streaming state, and handle identity unchanged. Percentage
 and indexed geometry always uses each series' own first visible value, including when several

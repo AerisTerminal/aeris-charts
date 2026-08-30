@@ -131,7 +131,7 @@ fn pane_layout_is_host_independent() {
     let mut pane = Pane::new();
     pane.top = 100.0;
     pane.height = 200.0;
-    pane.layout(500.0);
+    pane.layout();
     pane.price_scale.apply_autoscale_range(
         Some(nucleuscharts_core::model::price_range::PriceRange::new(
             0.0, 2.0,
@@ -5171,4 +5171,301 @@ fn theme_switch_uses_nucleus_tokens_without_replacing_market_data() {
         nucleuscharts_core::style::DARK_BORDER_CSS
     );
     assert_eq!(row_count(&chart, 0), 20);
+}
+
+// --- pane-local price scale geometry (issue #25) ------------------------------------------------
+
+/// Main price pane (100..200) plus a bounded RSI pane, laid out through the real host path.
+fn chart_with_indicator_pane() -> ChartEngine {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let n = 40usize;
+    let times: Vec<f64> = (1..=n).map(|i| i as f64).collect();
+    let close: Vec<f64> = (0..n)
+        .map(|i| 100.0 + (i as f64 * 0.7).sin() * 45.0 + 50.0)
+        .collect();
+    let high: Vec<f64> = close.iter().map(|v| v + 2.0).collect();
+    let low: Vec<f64> = close.iter().map(|v| v - 2.0).collect();
+    chart
+        .set_series_data(0, &times, &close, &high, &low, &close)
+        .unwrap();
+    chart.add_rsi(0, 14).expect("valid rsi");
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    chart.recompute_layout_with_measure(true, |text| text.len() as f64 * 6.0);
+    chart.build_frame();
+    chart
+}
+
+/// Every scale a pane owns is laid out against that pane's own slot and carries the pane origin
+/// as its only chart-space transform — no full-content-height internal-margin simulation.
+fn assert_scales_are_pane_local(chart: &ChartEngine) {
+    for (pi, pane) in chart.panes.iter().enumerate() {
+        for target in [
+            PriceScaleTarget::Right,
+            PriceScaleTarget::Left,
+            PriceScaleTarget::Overlay,
+        ] {
+            let scale = pane.scale(target).unwrap();
+            assert_eq!(scale.height(), pane.height, "pane {pi} {target:?} height");
+            assert_eq!(scale.pane_offset(), pane.top, "pane {pi} {target:?} origin");
+            // Fractional margins resolve against the pane slot alone.
+            let margins = scale.options().scale_margins;
+            let expected = pane.height * (1.0 - margins.top - margins.bottom);
+            assert!(
+                (scale.internal_height() - expected).abs() < 1e-9,
+                "pane {pi} {target:?} internal height {} is not the pane-local {expected}",
+                scale.internal_height()
+            );
+        }
+    }
+}
+
+#[test]
+fn pane_scales_own_local_geometry_and_round_trip_inside_their_pane() {
+    let mut chart = chart_with_indicator_pane();
+    assert_eq!(chart.panes.len(), 2);
+    assert_scales_are_pane_local(&chart);
+
+    let round_trip = |chart: &ChartEngine, pi: usize| {
+        let pane = &chart.panes[pi];
+        let scale = &pane.price_scale;
+        let range = *scale.price_range().expect("an autoscaled range");
+        for price in [
+            range.min_value(),
+            (range.min_value() + range.max_value()) / 2.0,
+            range.max_value(),
+        ] {
+            let y = scale.price_to_coordinate(price, 0.0);
+            assert!(
+                y >= pane.top - 1.0 && y <= pane.top + pane.height + 1.0,
+                "pane {pi}: price {price} maps to {y}, outside its slot \
+                 [{}, {}]",
+                pane.top,
+                pane.top + pane.height
+            );
+            let back = scale.coordinate_to_price(y, 0.0);
+            assert!(
+                (back - price).abs() < 1e-6,
+                "pane {pi}: {price} -> {y} -> {back} is not a round trip"
+            );
+        }
+    };
+
+    // The two panes hold materially different ranges.
+    let main = *chart.panes[0].price_scale.price_range().unwrap();
+    let rsi = *chart.panes[1].price_scale.price_range().unwrap();
+    assert!(
+        main.min_value() > rsi.max_value() || rsi.min_value() > main.max_value(),
+        "the fixture panes must hold disjoint ranges (main {main:?}, rsi {rsi:?})"
+    );
+    round_trip(&chart, 0);
+    round_trip(&chart, 1);
+
+    // ...and still round-trip inside the owning pane after a divider resize.
+    chart.drag_pane_separator(0, 90.0);
+    chart.build_frame();
+    assert_scales_are_pane_local(&chart);
+    round_trip(&chart, 0);
+    round_trip(&chart, 1);
+}
+
+#[test]
+fn repeated_divider_resizes_keep_every_pane_scale_local() {
+    let mut chart = chart_with_indicator_pane();
+    let content_h = chart.pane_h;
+
+    for delta in [60.0, -35.0, 120.0, -200.0, 15.0] {
+        chart.drag_pane_separator(0, delta);
+        chart.build_frame();
+        let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 6.0);
+        assert_scales_are_pane_local(&chart);
+
+        let total: f64 = chart.panes.iter().map(|p| p.height).sum();
+        assert!(
+            (total + PANE_SEPARATOR - content_h).abs() < 1e-6,
+            "panes still tile the content area"
+        );
+        for pane in &chart.panes {
+            assert!(pane.height >= 24.0, "the reference 24px minimum holds");
+            let range = pane.price_scale.price_range().expect("a live range");
+            assert!(
+                range.length() > 0.0 && range.min_value().is_finite(),
+                "pane keeps a valid independent range across resizes"
+            );
+            assert!(
+                pane.price_scale.internal_height() > 0.0,
+                "pane keeps a positive internal height"
+            );
+        }
+        // Ticks and labels resolve inside the pane that owns their scale.
+        for tick in &axis.price_ticks {
+            let pane = &chart.panes[chart.pane_index_at_y(tick.y)];
+            assert!(
+                tick.y >= pane.top - 0.5 && tick.y <= pane.top + pane.height + 0.5,
+                "tick {} escapes its pane [{}, {}]",
+                tick.y,
+                pane.top,
+                pane.top + pane.height
+            );
+        }
+    }
+}
+
+#[test]
+fn panning_or_zooming_one_pane_scale_leaves_the_other_panes_untouched() {
+    let mut chart = chart_with_indicator_pane();
+    let target = PriceScaleTarget::Right;
+    chart.set_price_scale_auto_scale_for(0, target, false);
+    chart.set_price_scale_auto_scale_for(1, target, false);
+    chart.build_frame();
+
+    let main_before = *chart.panes[0].price_scale.price_range().unwrap();
+    let main_revision = chart.panes[0].price_scale.revision();
+    let main_probe = chart.panes[0].price_scale.price_to_coordinate(150.0, 0.0);
+    let lower_before = *chart.panes[1].price_scale.price_range().unwrap();
+
+    // Pan the lower pane's axis with chart-space coordinates inside that pane.
+    let inside = chart.panes[1].top + chart.panes[1].height / 2.0;
+    chart.price_axis_start_scroll(1, target, inside);
+    chart.price_axis_scroll_to(1, target, inside + 25.0);
+    chart.price_axis_end_scroll(1, target);
+    // ...then zoom it.
+    chart.price_axis_wheel_zoom(1, target, inside, 1.0);
+
+    assert_ne!(
+        *chart.panes[1].price_scale.price_range().unwrap(),
+        lower_before,
+        "the dragged pane's own range moved"
+    );
+    assert_eq!(
+        *chart.panes[0].price_scale.price_range().unwrap(),
+        main_before,
+        "the main pane's range is untouched"
+    );
+    assert_eq!(
+        chart.panes[0].price_scale.revision(),
+        main_revision,
+        "the main pane's scale state did not change"
+    );
+    assert_eq!(
+        chart.panes[0].price_scale.price_to_coordinate(150.0, 0.0),
+        main_probe,
+        "the main pane's coordinates do not depend on the other pane's scale"
+    );
+}
+
+#[test]
+fn two_indicator_panes_and_a_named_pane_scale_stay_independent() {
+    let mut chart = chart_with_indicator_pane();
+    let extra = chart.add_series(SeriesKind::Line);
+    chart.set_series_pane(extra, 2, 1.0);
+    let times: Vec<f64> = (1..=40).map(|i| i as f64).collect();
+    let values: Vec<f64> = (0..40).map(|i| -50.0 - i as f64).collect();
+    chart
+        .set_series_data(extra, &times, &values, &values, &values, &values)
+        .unwrap();
+    let named = chart
+        .add_price_scale(1, "indicator-left", PriceScaleSide::Left, None, true)
+        .expect("a named pane scale");
+    let named_series = chart.add_series(SeriesKind::Line);
+    chart.set_series_pane(named_series, 1, 1.0);
+    let named_values: Vec<f64> = (0..40).map(|i| 1000.0 + i as f64 * 3.0).collect();
+    chart
+        .set_series_data(
+            named_series,
+            &times,
+            &named_values,
+            &named_values,
+            &named_values,
+            &named_values,
+        )
+        .unwrap();
+    chart.set_series_price_scale(named_series, named);
+    chart.recompute_layout_with_measure(true, |text| text.len() as f64 * 6.0);
+    chart.build_frame();
+
+    assert_eq!(chart.panes.len(), 3);
+    assert_scales_are_pane_local(&chart);
+    for (pi, pane) in chart.panes.iter().enumerate() {
+        for entry in &pane.named_scales {
+            assert_eq!(entry.scale.height(), pane.height, "pane {pi} named height");
+            assert_eq!(
+                entry.scale.pane_offset(),
+                pane.top,
+                "pane {pi} named origin"
+            );
+        }
+    }
+
+    // The named scale inside the indicator pane round-trips against its own pane, not the chart.
+    let pane = &chart.panes[1];
+    let scale = pane.scale(named).expect("the named scale");
+    let range = *scale.price_range().expect("an autoscaled range");
+    let y = scale.price_to_coordinate(range.max_value(), 0.0);
+    assert!(
+        y >= pane.top - 1.0 && y <= pane.top + pane.height + 1.0,
+        "named scale coordinate {y} escapes its pane"
+    );
+    assert!((scale.coordinate_to_price(y, 0.0) - range.max_value()).abs() < 1e-6);
+
+    // Each pane's main scale keeps its own disjoint range.
+    let ranges: Vec<_> = chart
+        .panes
+        .iter()
+        .map(|p| *p.price_scale.price_range().unwrap())
+        .collect();
+    assert!(ranges[0].min_value() > ranges[1].max_value());
+    assert!(ranges[1].min_value() > ranges[2].max_value());
+}
+
+#[test]
+fn pane_separators_span_the_full_chart_width_at_rest_and_on_hover() {
+    use nucleuscharts_render::draw_list::Prim;
+
+    let mut chart = chart_with_indicator_pane();
+    chart
+        .apply_options(r##"{"leftPriceScale":{"visible":true}}"##)
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |text| text.len() as f64 * 6.0);
+    chart.build_frame();
+    assert!(chart.left_axis_w > 0.0, "the left axis strip is visible");
+    assert!(chart.axis_w > 0.0, "the right axis strip is visible");
+
+    let bitmap_w = (chart.css_width * chart.dpr).round().max(1.0) as i32;
+    let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 6.0);
+    assert_eq!(axis.separators.len(), 1);
+    let separator_y = (axis.separators[0] * chart.dpr).round() as i32;
+
+    let mut prims = Vec::new();
+    chart.build_axis_primitives_into(&axis, &mut prims, |_| 0.0);
+    let resting = prims
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Rect { rect, .. } if rect.y == separator_y && rect.h == 1 => Some(*rect),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(resting.len(), 1, "one resting separator line");
+    assert_eq!(
+        resting[0].x, 0,
+        "the divider starts at the chart's left edge"
+    );
+    assert_eq!(
+        resting[0].w, bitmap_w,
+        "the divider covers the complete bitmap width, price-scale strips included"
+    );
+
+    chart.set_separator_hover(Some(0));
+    let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 6.0);
+    chart.build_axis_primitives_into(&axis, &mut prims, |_| 0.0);
+    let hover = prims
+        .iter()
+        .find_map(|p| match p {
+            Prim::Rect { rect, .. } if rect.h == 9 => Some(*rect),
+            _ => None,
+        })
+        .expect("the hover band");
+    assert_eq!(hover.x, 0);
+    assert_eq!(hover.w, bitmap_w, "the hover band matches the resting line");
+    assert_eq!(hover.y, separator_y - 4);
 }

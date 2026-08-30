@@ -644,6 +644,8 @@ impl ChartInner {
         // boundary. An unset `layout.panes.separatorColor` follows the price-axis border color
         // (theme-aware like the axis chrome); an explicit value pins it. Painted regardless of
         // the time-axis border's visibility since they are functional dividers, not axis chrome.
+        // The divider is structural, so it spans the complete bitmap width — through every
+        // visible price-scale strip — matching the hover band and the separator hit test.
         let separator_color = Color::parse_css(&options.layout.panes.separator_color)
             .unwrap_or_else(|| {
                 Color::parse_css(&options.right_price_scale.border_color).unwrap_or(fallback)
@@ -652,12 +654,7 @@ impl ChartInner {
         ctx.set_fill_style_str(&separator_color);
         for separator in &axis_frame.separators {
             let y = (separator * dpr).round();
-            ctx.fill_rect(
-                (pane_left * dpr).round(),
-                y,
-                (pane_w * dpr).round(),
-                (PANE_SEPARATOR * dpr).max(border_w),
-            );
+            ctx.fill_rect(0.0, y, bitmap_w, (PANE_SEPARATOR * dpr).max(border_w));
             ops += 1;
         }
 

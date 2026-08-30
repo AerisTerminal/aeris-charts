@@ -168,12 +168,15 @@ impl ChartEngine {
                 }
             }
 
+            // A pane boundary is a structural divider, not plot chrome: it spans the complete
+            // chart width, crossing every visible left/right price-scale strip, so the resting
+            // line describes the same full-width boundary as the hover band and the hit test.
             let separator_color = parse(&layout.panes.separator_color, right_border);
             for separator in &axis_frame.separators {
                 rect(
-                    (pane_left * dpr).round(),
+                    0.0,
                     (separator * dpr).round(),
-                    (pane_w * dpr).round(),
+                    bitmap_w,
                     (PANE_SEPARATOR * dpr).max(f64::from(border_w)),
                     separator_color,
                 );

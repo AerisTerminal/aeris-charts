@@ -127,7 +127,7 @@ impl ChartEngine {
             scale: PriceScaleCore::new(PriceScaleCoreOptions::default()),
         });
         pane.move_axis_target(target, side, order.unwrap_or(usize::MAX));
-        pane.layout(self.pane_h);
+        pane.layout();
         self.invalidate_frame_all();
         Ok(target)
     }

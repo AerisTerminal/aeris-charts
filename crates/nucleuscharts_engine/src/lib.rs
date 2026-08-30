@@ -961,46 +961,46 @@ impl Pane {
         self.persistent_id
     }
 
-    pub fn layout(&mut self, content_h: f64) {
-        self.price_scale.set_height(content_h);
-        self.left_scale.set_height(content_h);
-        self.overlay_scale.set_height(content_h);
-        for entry in &mut self.named_scales {
-            entry.scale.set_height(content_h);
-        }
-        // Fractional scale margins (top 0.2 / bottom 0.1) resolve against the pane's OWN slot,
-        // not the full content height — a small pane would otherwise go negative inside and
-        // flip its coordinate mapping (a dragged-short pane inverting its scale).
-        self.price_scale.set_margins_height(self.height);
-        self.left_scale.set_margins_height(self.height);
-        self.overlay_scale.set_margins_height(self.height);
-        for entry in &mut self.named_scales {
-            entry.scale.set_margins_height(self.height);
+    /// Give every scale this pane owns its own axis geometry: the scale height is the pane's
+    /// slot height and its origin is the pane's top edge, so autoscale, margins, ticks, and
+    /// gestures resolve inside the pane alone. Panes share no axis coordinate space; only the
+    /// final pane-origin transform maps a scale coordinate into chart-content space.
+    pub fn layout(&mut self) {
+        let (top, height) = (self.top, self.height);
+        for scale in self.scales_mut() {
+            scale.set_height(height);
+            scale.set_pane_offset(top);
         }
         self.refresh_internal_margins();
     }
 
+    /// Pixel margins requested by autoscale marker providers. Pane placement is carried by the
+    /// pane offset, so these are only the marker reservations.
     pub fn refresh_internal_margins(&mut self) {
-        let content_h = self.price_scale.height();
-        let below = (content_h - self.top - self.height).max(0.0);
-        self.price_scale.set_internal_margins(
-            self.top + self.marker_margin_above,
-            below + self.marker_margin_below,
-        );
-        self.left_scale.set_internal_margins(
-            self.top + self.left_marker_margin_above,
-            below + self.left_marker_margin_below,
-        );
+        self.price_scale
+            .set_internal_margins(self.marker_margin_above, self.marker_margin_below);
+        self.left_scale
+            .set_internal_margins(self.left_marker_margin_above, self.left_marker_margin_below);
         self.overlay_scale.set_internal_margins(
-            self.top + self.overlay_marker_margin_above,
-            below + self.overlay_marker_margin_below,
+            self.overlay_marker_margin_above,
+            self.overlay_marker_margin_below,
         );
         for entry in &mut self.named_scales {
-            entry.scale.set_internal_margins(
-                self.top + entry.marker_margin_above,
-                below + entry.marker_margin_below,
-            );
+            entry
+                .scale
+                .set_internal_margins(entry.marker_margin_above, entry.marker_margin_below);
         }
+    }
+
+    /// Every price scale this pane owns, in axis-declaration order.
+    fn scales_mut(&mut self) -> impl Iterator<Item = &mut PriceScaleCore> {
+        [
+            &mut self.price_scale,
+            &mut self.left_scale,
+            &mut self.overlay_scale,
+        ]
+        .into_iter()
+        .chain(self.named_scales.iter_mut().map(|entry| &mut entry.scale))
     }
 }
 
@@ -3119,7 +3119,7 @@ impl ChartEngine {
         for (i, pane) in self.panes.iter_mut().enumerate() {
             pane.top = top;
             pane.height = usable * pane.stretch_factor.max(0.01) / total;
-            pane.layout(content_h);
+            pane.layout();
             top += pane.height;
             if i + 1 < pane_count {
                 top += PANE_SEPARATOR;
