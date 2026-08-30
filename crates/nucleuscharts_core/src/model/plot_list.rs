@@ -253,18 +253,19 @@ impl PlotList {
     /// installs and retention trims call this repeatedly; replacing the vectors would fragment
     /// the WASM allocator even though the retained row count is bounded.
     pub(crate) fn rebuild_from(&mut self, merged_times: &[i64], times: &[i64]) {
+        if times.is_empty() {
+            self.indices = PlotIndices::Empty;
+            self.min_max_cache.clear();
+            return;
+        }
         let dense_start = times
             .first()
             .and_then(|time| merged_times.binary_search(time).ok())
             .filter(|&start| merged_times.get(start..start + times.len()) == Some(times));
         if let Some(start) = dense_start {
-            self.indices = if times.is_empty() {
-                PlotIndices::Empty
-            } else {
-                PlotIndices::Dense {
-                    start: start as TimePointIndex,
-                    len: times.len(),
-                }
+            self.indices = PlotIndices::Dense {
+                start: start as TimePointIndex,
+                len: times.len(),
             };
         } else {
             let mut indices = match std::mem::take(&mut self.indices) {

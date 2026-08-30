@@ -23,6 +23,47 @@ function count_color(png, target, tol = 10) {
   return n;
 }
 
+test("indicator sources recover from empty, short, and retention-trimmed warm-up", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+  const result = await page.evaluate(() => {
+    const rows = Array.from({ length: 20 }, (_, index) => ({
+      time: 1_700_000_000 + index * 60,
+      value: 100 + index,
+    }));
+    const repopulate = (replacement_rows) => {
+      const source = window.__chart.add_series("line", { visible: false });
+      source.set_data(rows);
+      const sma = window.__chart.add_sma(source, 20);
+      source.set_data(rows.slice(0, replacement_rows));
+      const empty_rows = sma.data().length;
+      for (const row of rows.slice(replacement_rows)) source.update(row);
+      const output = sma.data();
+      window.__chart.remove_series(source);
+      return { empty_rows, output };
+    };
+
+    const retained = window.__chart.add_series("line", { visible: false });
+    retained.set_data(rows);
+    const retained_sma = window.__chart.add_sma(retained, 20);
+    retained.apply_options({ max_points: 1 });
+    for (let index = 20; index < 40; index += 1) {
+      retained.update({ time: 1_700_000_000 + index * 60, value: 100 + index });
+    }
+    return {
+      empty: repopulate(0),
+      short: repopulate(10),
+      retained_rows: retained_sma.data().length,
+    };
+  });
+
+  for (const replacement of [result.empty, result.short]) {
+    expect(replacement.empty_rows).toBe(0);
+    expect(replacement.output).toEqual([{ time: 1_700_001_140, value: 109.5 }]);
+  }
+  expect(result.retained_rows).toBe(0);
+});
+
 /** Chart screenshot decoded to a PNG plus a row-crop counter (geometry is CSS px, shots are device px). */
 async function shot(page) {
   const { url, chart_width } = await page.evaluate(() => ({

@@ -1045,6 +1045,61 @@ fn indicators_are_engine_owned_series() {
     assert!((ema_rows.1[3].last().copied().unwrap() - 5.388888888888889).abs() < 1e-12);
 }
 
+#[test]
+fn indicator_source_can_be_replaced_below_warmup_and_repopulated() {
+    for replacement_rows in [0usize, 10] {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let times = (0..20)
+            .map(|index| (1_700_000_000 + index * 60) as f64)
+            .collect::<Vec<_>>();
+        let values = (0..20)
+            .map(|index| 100.0 + index as f64)
+            .collect::<Vec<_>>();
+        chart
+            .set_series_data(0, &times, &values, &values, &values, &values)
+            .unwrap();
+        let sma = chart.add_sma(0, 20).expect("valid indicator");
+
+        chart
+            .set_series_data(
+                0,
+                &times[..replacement_rows],
+                &values[..replacement_rows],
+                &values[..replacement_rows],
+                &values[..replacement_rows],
+                &values[..replacement_rows],
+            )
+            .unwrap();
+        assert!(chart.series_data(sma).is_empty());
+
+        for row in replacement_rows..20 {
+            assert!(chart.update_series_bar(0, times[row], [values[row]; 4]));
+        }
+        let output = chart.series_data(sma);
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0].time, times[19] as i64);
+        assert_eq!(output[0].close, 109.5);
+    }
+}
+
+#[test]
+fn indicator_source_can_stream_after_retention_trims_below_warmup() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times = (0..20).map(|index| index as f64).collect::<Vec<_>>();
+    let values = (0..20).map(|index| index as f64).collect::<Vec<_>>();
+    chart
+        .set_series_data(0, &times, &values, &values, &values, &values)
+        .unwrap();
+    let sma = chart.add_sma(0, 20).expect("valid indicator");
+
+    assert!(chart.set_series_max_points(0, Some(1)));
+    assert!(chart.series_data(sma).is_empty());
+    for time in 20..40 {
+        assert!(chart.update_series_bar(0, time as f64, [time as f64; 4]));
+        assert!(chart.series_data(sma).is_empty());
+    }
+}
+
 fn add_test_indicator(
     chart: &mut ChartEngine,
     kind: &IndicatorKind,

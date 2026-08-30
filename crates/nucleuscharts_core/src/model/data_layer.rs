@@ -808,15 +808,30 @@ impl DataLayer {
         let target_slot = self.series_slot(id)?;
         let source_slot = self.series_slot(source)?;
         let alias = self.series[target_slot].time_alias?;
-        if alias.source != source || source_from < alias.offset {
+        if alias.source != source {
+            return None;
+        }
+        // Before an indicator reaches warm-up it has no output rows. Keep that empty alias at the
+        // current source suffix so successive appends do not manufacture a gap in the output.
+        let alias_offset = if self.series[target_slot].values.len() == 0 && values.is_empty() {
+            source_from
+        } else {
+            alias.offset
+        };
+        if source_from < alias_offset {
             return None;
         }
         let source_len = self.series_times_by_slot(source_slot)?.len();
         if source_from + values.len() != source_len {
             return None;
         }
-        let output_row = source_from - alias.offset;
-        let output_len = source_len.saturating_sub(alias.offset);
+        let output_row = source_from - alias_offset;
+        let source_plot_len = self.series[source_slot].plot.size();
+        let plot_offset = alias_offset.min(source_plot_len);
+        let output_len = source_len
+            .saturating_sub(alias_offset)
+            .min(source_plot_len - plot_offset);
+        let changed_from = output_row.min(output_len);
         if output_row > self.series[target_slot].values.len() {
             return None;
         }
@@ -829,10 +844,11 @@ impl DataLayer {
                 };
             column.truncate(output_row);
             column.extend_from_slice(values);
+            column.truncate(output_len);
             target.values = SeriesValues::Single(column);
             target.time_alias = Some(TimeAlias {
                 source,
-                offset: alias.offset,
+                offset: alias_offset,
                 len: output_len,
             });
             for colors in &mut target.point_colors {
@@ -842,10 +858,10 @@ impl DataLayer {
                 }
             }
             target.generation = target.generation.wrapping_add(1);
-            target.rebuild_lod_range(output_row..output_len);
+            target.rebuild_lod_range(changed_from..output_len);
         }
-        self.copy_plot_range(target_slot, source_slot, alias.offset, output_len);
-        Some(output_row)
+        self.copy_plot_range(target_slot, source_slot, plot_offset, output_len);
+        Some(changed_from)
     }
 
     fn copy_plot_range(
@@ -1386,7 +1402,9 @@ impl DataLayer {
         let mut aliased = false;
         for _ in 0..self.series.len().max(1) {
             let Some(alias) = self.series.get(slot)?.time_alias else {
-                let available = self.series[slot].plot.size().saturating_sub(offset);
+                let source_size = self.series[slot].plot.size();
+                let offset = offset.min(source_size);
+                let available = source_size - offset;
                 return aliased.then_some((slot, offset, len.min(available)));
             };
             aliased = true;
