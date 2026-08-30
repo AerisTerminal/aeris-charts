@@ -281,6 +281,26 @@ test("path clicks add vertices, Backspace pops, and Enter or double-click finish
     expect(list[0].points).toHaveLength(3);
     expect(await page.evaluate(() => window.__chart.active_drawing_tool())).toBeNull();
 
+    // Probe away from the centerline, inside the terminal triangle. This verifies that each real
+    // executor paints the arrowhead and that the same geometry is a body-movement target.
+    const dx = replacement.x - second.x;
+    const dy = replacement.y - second.y;
+    const distance = Math.hypot(dx, dy);
+    const direction = { x: dx / distance, y: dy / distance };
+    const arrow_wing = {
+      x: replacement.x - direction.x * 8 - direction.y * 2.5,
+      y: replacement.y - direction.y * 8 + direction.x * 2.5,
+    };
+    const painted = await capture(page);
+    const offset = (Math.round(arrow_wing.y * PR) * painted.width + Math.round(arrow_wing.x * PR)) * 4;
+    const arrow_pixel = [painted.data[offset], painted.data[offset + 1], painted.data[offset + 2]];
+    expect(
+      Math.max(...arrow_pixel.map((channel, index) => Math.abs(channel - [41, 98, 255][index]))),
+      `${backend} paints the path arrowhead`,
+    ).toBeLessThanOrEqual(64);
+    await page.mouse.click(arrow_wing.x, arrow_wing.y);
+    expect(await page.evaluate(() => window.__chart.selected_drawing()?.id ?? null)).toBe(list[0].id);
+
     await page.evaluate(() => window.__chart.set_drawing_tool("path", { color: "#e91e63" }));
     await page.mouse.click(first.x, first.y);
     await page.mouse.dblclick(replacement.x, replacement.y);

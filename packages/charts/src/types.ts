@@ -1089,8 +1089,8 @@ export function is_feature_series_kind(kind: series_kind): kind is feature_serie
 /**
  * The drawing-tool kinds. Each tool is an engine-owned drawing object with defining anchor
  * points: trend line (2), rectangle (2), horizontal line/ray, vertical line, and text
- * (1 each), a multi-click straight-segment path (variable length, every vertex editable), and
- * the freehand brush (a variable-length curve, anchor handles at the two ends).
+ * (1 each), a multi-click arrow-ended straight-segment path (variable length, every vertex
+ * editable), and the freehand brush (a variable-length curve, anchor handles at the two ends).
  */
 export type drawing_kind =
   | "trend_line"

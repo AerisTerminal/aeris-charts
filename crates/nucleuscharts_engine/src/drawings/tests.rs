@@ -1341,6 +1341,16 @@ fn path_uses_straight_segments_and_every_vertex_is_editable() {
             }
         )
     }));
+    assert!(frame.panes[0]
+        .main
+        .iter()
+        .any(|primitive| matches!(primitive, Prim::Triangle { .. })));
+    let path_px = chart.drawing_px(chart.drawing(id).unwrap()).unwrap();
+    let arrow = path_arrow_points(&path_px, chart.drawing(id).unwrap().width, 1.0).unwrap();
+    assert_eq!(
+        chart.hit_test_drawing(arrow[1].0, arrow[1].1).unwrap().part,
+        DrawingDragPart::Body
+    );
 
     chart.set_selected_drawing(Some(id));
     let middle = (

@@ -29,6 +29,47 @@ pub type DrawingId = u32;
 /// Hard cap shared by live drawing APIs and persistence so variable-point tools remain bounded.
 pub(crate) const MAX_DRAWING_POINTS: usize = 100_000;
 
+/// Terminal arrowhead for the multi-click Path. `px` and `scale` are in the caller's coordinate
+/// space, allowing hit testing to use media px and frame emission to use bitmap px.
+pub(crate) fn path_arrow_points(
+    px: &[(f64, f64)],
+    line_width: f64,
+    scale: f64,
+) -> Option<[(f64, f64); 3]> {
+    let &tip = px.last()?;
+    let previous = px[..px.len().saturating_sub(1)]
+        .iter()
+        .rev()
+        .copied()
+        .find(|point| (tip.0 - point.0).hypot(tip.1 - point.1) > f64::EPSILON)?;
+    let distance = (tip.0 - previous.0).hypot(tip.1 - previous.1);
+    let direction = (
+        (tip.0 - previous.0) / distance,
+        (tip.1 - previous.1) / distance,
+    );
+    let length = (10.0 + line_width).clamp(10.0, 18.0) * scale;
+    let half_width = length * 0.45;
+    let base = (tip.0 - direction.0 * length, tip.1 - direction.1 * length);
+    let perpendicular = (-direction.1 * half_width, direction.0 * half_width);
+    Some([
+        tip,
+        (base.0 + perpendicular.0, base.1 + perpendicular.1),
+        (base.0 - perpendicular.0, base.1 - perpendicular.1),
+    ])
+}
+
+fn point_in_triangle(point: (f64, f64), triangle: [(f64, f64); 3]) -> bool {
+    let side = |a: (f64, f64), b: (f64, f64)| {
+        (point.0 - b.0) * (a.1 - b.1) - (a.0 - b.0) * (point.1 - b.1)
+    };
+    let first = side(triangle[0], triangle[1]);
+    let second = side(triangle[1], triangle[2]);
+    let third = side(triangle[2], triangle[0]);
+    let has_negative = first < 0.0 || second < 0.0 || third < 0.0;
+    let has_positive = first > 0.0 || second > 0.0 || third > 0.0;
+    !(has_negative && has_positive)
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
 #[doc(hidden)]
 pub struct DrawingWorkStats {
@@ -2348,17 +2389,32 @@ impl ChartEngine {
                 )
                 .is_some()
             }
-            DrawingKind::Path => crate::hit_test::hit_test_line_series(
-                px,
-                x,
-                y,
-                LineType::Simple,
-                drawing.width,
-                None,
-                self.time_scale.bar_spacing(),
-                hit_tolerance,
-            )
-            .is_some(),
+            DrawingKind::Path => {
+                if crate::hit_test::hit_test_line_series(
+                    px,
+                    x,
+                    y,
+                    LineType::Simple,
+                    drawing.width,
+                    None,
+                    self.time_scale.bar_spacing(),
+                    hit_tolerance,
+                )
+                .is_some()
+                {
+                    return true;
+                }
+                let Some(triangle) = path_arrow_points(px, drawing.width, 1.0) else {
+                    return false;
+                };
+                point_in_triangle((x, y), triangle)
+                    || (0..3).any(|index| {
+                        let first = triangle[index];
+                        let second = triangle[(index + 1) % 3];
+                        distance_to_segment(x, y, first.0, first.1, second.0, second.1)
+                            <= hit_tolerance
+                    })
+            }
             DrawingKind::Text => {
                 // The click/hover target is the interaction-chrome box (the label run while
                 // non-empty, else a one-em caret box — empty text paints nothing on the chart)

@@ -14,7 +14,8 @@ use nucleuscharts_render::draw_list::{IRect, LineStyle, LineType, Prim, TextAlig
 
 use super::PRIMARY;
 use crate::drawings::{
-    Drawing, DrawingId, DrawingKind, DrawingTextHAlign, TEXT_CHROME_PAD, TEXT_PAD,
+    path_arrow_points, Drawing, DrawingId, DrawingKind, DrawingTextHAlign, TEXT_CHROME_PAD,
+    TEXT_PAD,
 };
 use crate::ChartEngine;
 
@@ -439,6 +440,14 @@ impl ChartEngine {
                     line_type: LineType::Simple,
                     color,
                 });
+                if let Some([a, b, c]) = path_arrow_points(px, drawing.width, vpr) {
+                    out.push(Prim::Triangle {
+                        a: [a.0 as f32, a.1 as f32],
+                        b: [b.0 as f32, b.1 as f32],
+                        c: [c.0 as f32, c.1 as f32],
+                        color,
+                    });
+                }
             }
         }
     }
