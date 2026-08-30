@@ -2,7 +2,7 @@
 //! options JSON, hit-testing, anchor/body drag math, and the interactive creation flow.
 
 use nucleuscharts_core::style::DEFAULT_PRIMARY_RGB;
-use nucleuscharts_render::draw_list::Prim;
+use nucleuscharts_render::draw_list::{LineType, Prim};
 
 use super::*;
 
@@ -588,6 +588,20 @@ fn add_drawing_validates_inputs() {
                 logical: f64::NAN,
                 price: 11.0
             }],
+            None,
+        )
+        .is_none());
+    assert!(chart
+        .add_drawing(
+            DrawingKind::Path,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 1.0,
+                    price: 11.0,
+                };
+                MAX_DRAWING_POINTS + 1
+            ],
             None,
         )
         .is_none());
@@ -1248,6 +1262,143 @@ fn creation_flow_commits_after_the_kinds_anchor_count() {
 }
 
 #[test]
+fn path_creation_requires_finish_and_supports_pop_and_history() {
+    let mut chart = settled_chart();
+    assert!(chart.drawing_create_begin(DrawingKind::Path, None));
+
+    let first = (x_at(&chart, 2.0), y_at(&chart, 10.5));
+    let second = (x_at(&chart, 4.0), y_at(&chart, 12.5));
+    let third = (x_at(&chart, 7.0), y_at(&chart, 11.0));
+    assert_eq!(
+        chart.drawing_create_click(first.0, first.1, DrawingModifiers::default()),
+        -1
+    );
+    assert_eq!(chart.drawing_create_finish(), 0);
+    assert!(chart.drawing_create_active());
+    assert_eq!(
+        chart.drawing_create_click(second.0, second.1, DrawingModifiers::default()),
+        -1
+    );
+    assert_eq!(
+        chart.drawing_create_click(second.0, second.1, DrawingModifiers::default()),
+        -1
+    );
+    assert_eq!(chart.pending_drawing().unwrap().drawing.points.len(), 2);
+    assert_eq!(
+        chart.drawing_create_click(third.0, third.1, DrawingModifiers::default()),
+        -1
+    );
+    assert_eq!(chart.pending_drawing().unwrap().drawing.points.len(), 3);
+
+    assert!(chart.drawing_create_pop_anchor());
+    assert_eq!(chart.pending_drawing().unwrap().drawing.points.len(), 2);
+    assert_eq!(
+        chart.drawing_create_click(third.0, third.1, DrawingModifiers::default()),
+        -1
+    );
+
+    let id = chart.drawing_create_finish();
+    assert!(id > 0);
+    assert!(!chart.drawing_create_active());
+    assert_eq!(chart.selected_drawing(), Some(id));
+    let drawing = chart.drawing(id).unwrap();
+    assert_eq!(drawing.kind, DrawingKind::Path);
+    assert_eq!(drawing.points.len(), 3);
+    assert!(chart.undo_drawing());
+    assert!(chart.drawing(id).is_none());
+    assert!(chart.redo_drawing());
+    assert_eq!(chart.drawing(id).unwrap().points.len(), 3);
+}
+
+#[test]
+fn path_uses_straight_segments_and_every_vertex_is_editable() {
+    let mut chart = settled_chart();
+    let points = vec![
+        DrawingPoint {
+            logical: 2.0,
+            price: 10.5,
+        },
+        DrawingPoint {
+            logical: 4.0,
+            price: 12.5,
+        },
+        DrawingPoint {
+            logical: 7.0,
+            price: 11.0,
+        },
+    ];
+    let id = chart
+        .add_drawing(DrawingKind::Path, 0, points.clone(), None)
+        .unwrap();
+    let frame = chart.build_frame();
+    assert!(frame.panes[0].main.iter().any(|primitive| {
+        matches!(
+            primitive,
+            Prim::Polyline {
+                point_count: 3,
+                line_type: LineType::Simple,
+                ..
+            }
+        )
+    }));
+
+    chart.set_selected_drawing(Some(id));
+    let middle = (
+        x_at(&chart, points[1].logical),
+        y_at(&chart, points[1].price),
+    );
+    assert_eq!(
+        chart.hit_test_drawing(middle.0, middle.1),
+        Some(DrawingHit {
+            id,
+            part: DrawingDragPart::Anchor(1),
+            cursor: "pointer"
+        })
+    );
+    assert!(chart.drawing_drag_start_at(middle.0, middle.1));
+    chart.drawing_drag_to(
+        middle.0 + 20.0,
+        middle.1 + 10.0,
+        DrawingModifiers::default(),
+    );
+    chart.drawing_drag_end();
+    assert_ne!(chart.drawing(id).unwrap().points[1], points[1]);
+    assert_eq!(chart.drawing(id).unwrap().points[0], points[0]);
+    assert_eq!(chart.drawing(id).unwrap().points[2], points[2]);
+
+    chart.set_selected_drawing(None);
+    let updated = chart.drawing(id).unwrap().points.clone();
+    let path_px = chart.drawing_px(chart.drawing(id).unwrap()).unwrap();
+    let first_px = path_px[0];
+    let second_px = path_px[1];
+    let segment_mid = (
+        (first_px.0 + second_px.0) / 2.0,
+        (first_px.1 + second_px.1) / 2.0,
+    );
+    assert_eq!(
+        chart
+            .hit_test_drawing(segment_mid.0, segment_mid.1)
+            .unwrap()
+            .part,
+        DrawingDragPart::Body
+    );
+    assert!(chart.drawing_drag_start_at(segment_mid.0, segment_mid.1));
+    chart.drawing_drag_to(
+        segment_mid.0 + 15.0,
+        segment_mid.1,
+        DrawingModifiers::default(),
+    );
+    chart.drawing_drag_end();
+    assert!(chart
+        .drawing(id)
+        .unwrap()
+        .points
+        .iter()
+        .zip(updated)
+        .all(|(after, before)| after.logical != before.logical));
+}
+
+#[test]
 fn official_rectangle_preview_commit_and_axis_views_are_engine_owned() {
     let mut chart = settled_chart();
     let primary = Color::rgb(
@@ -1738,6 +1889,36 @@ fn magnet_snaps_placement_to_nearest_bar_and_ohlc() {
     let raw = chart.pending_drawing().unwrap().drawing.points[0];
     assert!((raw.logical - 3.0).abs() > 1e-9);
     assert!((raw.price - 12.0).abs() > 1e-9);
+}
+
+#[test]
+fn path_magnet_snaps_every_placed_vertex() {
+    let mut chart = ohlc_chart();
+    assert!(chart.drawing_create_begin(DrawingKind::Path, None));
+    assert_eq!(
+        chart.drawing_create_click(x_at(&chart, 2.0), y_at(&chart, 12.9), MAGNET),
+        -1
+    );
+    assert_eq!(
+        chart.drawing_create_click(x_at(&chart, 7.0), y_at(&chart, 12.1), MAGNET),
+        -1
+    );
+    let id = chart.drawing_create_finish();
+    let drawing = chart.drawing(id).unwrap();
+    assert_eq!(
+        drawing.points[0],
+        DrawingPoint {
+            logical: 2.0,
+            price: 13.0
+        }
+    );
+    assert_eq!(
+        drawing.points[1],
+        DrawingPoint {
+            logical: 7.0,
+            price: 12.0
+        }
+    );
 }
 
 #[test]
@@ -2519,9 +2700,13 @@ fn every_tool_has_conservative_viewport_inclusion_and_clear_exclusion() {
         DrawingKind::Rectangle,
         DrawingKind::Text,
         DrawingKind::Brush,
+        DrawingKind::Path,
     ] {
         let visible = match kind {
-            DrawingKind::TrendLine | DrawingKind::Rectangle | DrawingKind::Brush => vec![
+            DrawingKind::TrendLine
+            | DrawingKind::Rectangle
+            | DrawingKind::Brush
+            | DrawingKind::Path => vec![
                 DrawingPoint {
                     logical: 2.0,
                     price: 10.5,
@@ -2544,7 +2729,10 @@ fn every_tool_has_conservative_viewport_inclusion_and_clear_exclusion() {
                 logical: 0.0,
                 price: 1_000.0,
             }],
-            DrawingKind::TrendLine | DrawingKind::Rectangle | DrawingKind::Brush => vec![
+            DrawingKind::TrendLine
+            | DrawingKind::Rectangle
+            | DrawingKind::Brush
+            | DrawingKind::Path => vec![
                 DrawingPoint {
                     logical: 1_000.0,
                     price: 1_000.0,
@@ -2645,6 +2833,7 @@ fn indexed_hit_matches_bruteforce_for_randomized_catalog() {
         DrawingKind::Rectangle,
         DrawingKind::Text,
         DrawingKind::Brush,
+        DrawingKind::Path,
     ];
     let mut state = 0x9e37_79b9_u32;
     let mut random = || {
@@ -2662,7 +2851,10 @@ fn indexed_hit_matches_bruteforce_for_randomized_catalog() {
         let mut points = vec![first];
         if matches!(
             kind,
-            DrawingKind::TrendLine | DrawingKind::Rectangle | DrawingKind::Brush
+            DrawingKind::TrendLine
+                | DrawingKind::Rectangle
+                | DrawingKind::Brush
+                | DrawingKind::Path
         ) {
             points.push(DrawingPoint {
                 logical: first.logical + random() * 8.0,
@@ -2700,6 +2892,7 @@ fn candidate_frame_matches_full_reference_across_viewports_and_mutations() {
         DrawingKind::Rectangle,
         DrawingKind::Text,
         DrawingKind::Brush,
+        DrawingKind::Path,
     ];
     let mut ids = Vec::new();
     for index in 0..210 {
@@ -2711,7 +2904,10 @@ fn candidate_frame_matches_full_reference_across_viewports_and_mutations() {
         }];
         if matches!(
             kind,
-            DrawingKind::TrendLine | DrawingKind::Rectangle | DrawingKind::Brush
+            DrawingKind::TrendLine
+                | DrawingKind::Rectangle
+                | DrawingKind::Brush
+                | DrawingKind::Path
         ) {
             points.push(DrawingPoint {
                 logical: logical + 4.0,

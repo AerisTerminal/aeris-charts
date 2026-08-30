@@ -3029,6 +3029,15 @@ impl NucleusChart {
             .borrow_mut()
             .drawing_create_move(x_css, y_css, magnet, straighten);
     }
+    /// Finish an active multi-click path. Returns the committed drawing id, or 0 when the
+    /// pending creation is not a valid path.
+    pub fn drawing_create_finish(&mut self) -> u32 {
+        self.inner.borrow_mut().drawing_create_finish()
+    }
+    /// Remove the latest placed vertex from an active multi-click path.
+    pub fn drawing_create_pop_anchor(&mut self) -> bool {
+        self.inner.borrow_mut().drawing_create_pop_anchor()
+    }
     pub fn drawing_create_cancel(&mut self) {
         self.inner.borrow_mut().drawing_create_cancel();
     }

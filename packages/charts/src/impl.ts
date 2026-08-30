@@ -3438,6 +3438,23 @@ export class chart_impl implements chart_api {
     return true;
   }
 
+  /** Commit an active multi-click path (double-click/Enter). */
+  creation_finish(): boolean {
+    if (this.active_tool !== "path") return false;
+    const created_id = Number(this.wasm.drawing_create_finish());
+    if (created_id <= 0) return false;
+    const pane = this.selected_drawing()?.pane_index() ?? this.active_tool_pane ?? 0;
+    const created = new drawing_impl(this, created_id, "path", pane);
+    for (const handler of this.drawing_created_subs) handler(created);
+    this.set_drawing_tool(null);
+    return true;
+  }
+
+  /** Remove the latest placed vertex from an active multi-click path. */
+  creation_pop_anchor(): boolean {
+    return this.active_tool === "path" && this.wasm.drawing_create_pop_anchor();
+  }
+
   /** Escape: disarm the tool (cancelling any pending creation) and deselect any drawing. */
   cancel_drawing_interaction(): void {
     this.set_drawing_tool(null);

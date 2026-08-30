@@ -12,6 +12,7 @@
     {"id": 4, "kind": "vertical_line", "pane_id": "pane-9", "anchors": [{"logical": 4.0, "price": 0.0}], "style": {"color": "#195bd6"}},
     {"id": 5, "kind": "rectangle", "pane_id": "pane-9", "anchors": [{"logical": 1.0, "price": 8.0}, {"logical": 5.0, "price": 13.0}], "style": {"fill_color": "rgba(41, 98, 255, 0.2)", "box_border_width": 2.0}},
     {"id": 6, "kind": "text", "pane_id": "pane-9", "anchors": [{"logical": 3.0, "price": 10.0}], "style": {"text": "earnings", "text_size": 14.0, "text_italic": true, "text_h_align": "left", "text_v_align": "top", "box_color": "#101828", "box_border_color": "#ffffff"}},
-    {"id": 7, "kind": "brush", "pane_id": "pane-9", "anchors": [{"logical": 1.0, "price": 9.0}, {"logical": 1.5, "price": 10.0}, {"logical": 2.0, "price": 9.5}], "style": {"width": 4.0}}
+    {"id": 7, "kind": "brush", "pane_id": "pane-9", "anchors": [{"logical": 1.0, "price": 9.0}, {"logical": 1.5, "price": 10.0}, {"logical": 2.0, "price": 9.5}], "style": {"width": 4.0}},
+    {"id": 8, "kind": "path", "pane_id": "pane-9", "anchors": [{"logical": 2.0, "price": 12.0}, {"logical": 4.0, "price": 9.0}, {"logical": 6.0, "price": 11.0}], "style": {"color": "#089981", "line_style": "dashed"}}
   ]
 }

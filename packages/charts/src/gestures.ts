@@ -711,6 +711,10 @@ export function install_gestures(chart: chart_impl): () => void {
   };
 
   const run_dblclick = (x: number, y: number) => {
+    if (chart.creation_finish()) {
+      chart.repaint();
+      return;
+    }
     chart.emit_dbl_click(x, y);
     const cfg = chart.gesture_config();
     const rect = overlay.getBoundingClientRect();
@@ -1061,7 +1065,12 @@ export function install_gestures(chart: chart_impl): () => void {
     tap_count += 1;
     if (tap_timer !== null && tap_count > 1) {
       const distance = Math.abs(e.clientX - tap_position.x) + Math.abs(e.clientY - tap_position.y);
-      if (distance < DBL_TAP_MANHATTAN && was_tap) run_dblclick(p.x, p.y);
+      if (distance < DBL_TAP_MANHATTAN && was_tap) {
+        // Unlike mouse compatibility events, the second tap has no preceding `click` event.
+        // Place its endpoint before the shared double-click path finishes the drawing.
+        if (chart.active_drawing_tool() === "path") chart.creation_click(p.x, p.y, false, false);
+        run_dblclick(p.x, p.y);
+      }
       reset_tap();
     } else if (was_tap) {
       const trading_hit = chart.trading_hit_at_device(p.x, p.y, InputDeviceCode.Touch);
@@ -1149,10 +1158,17 @@ export function install_gestures(chart: chart_impl): () => void {
       case "Home":
         wasm.fit_content();
         break;
-      case "Delete":
+      case "Enter":
+        handled = chart.creation_finish();
+        break;
       case "Backspace":
-        // TradingView-style: remove the selected drawing (engine-owned). Unhandled when
-        // nothing is selected, so the keys keep their browser behavior then.
+        // During path placement Backspace removes only the latest pending vertex. Otherwise it
+        // retains the ordinary selected-drawing deletion behavior.
+        handled = chart.active_drawing_tool() === "path" && chart.creation_active()
+          ? chart.creation_pop_anchor()
+          : wasm.remove_selected_drawing();
+        break;
+      case "Delete":
         handled = wasm.remove_selected_drawing();
         break;
       case "Escape":

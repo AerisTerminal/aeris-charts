@@ -255,6 +255,43 @@ test("two-anchor creation previews the pending drawing; Escape cancels it", asyn
   expect(await drawings(page)).toHaveLength(0);
 });
 
+test("path clicks add vertices, Backspace pops, and Enter or double-click finishes", async ({ page }) => {
+  for (const backend of ["canvas2d", "auto"]) {
+    await goto_fixture(page, backend);
+    expect(await page.evaluate(() => window.__chart.backend())).toBe(backend === "auto" ? "webgpu" : backend);
+    const s = await anchor_spots(page);
+    const first = await spot(page, s.l0, s.p_lo);
+    const second = await spot(page, Math.floor((s.l0 + s.l1) / 2), s.p_hi);
+    const removed = await spot(page, s.l1, s.p_mid);
+    const replacement = await spot(page, s.l1, s.p_lo);
+
+    await page.evaluate(() => window.__chart.set_drawing_tool("path", { color: "#2962ff" }));
+    await page.mouse.click(first.x, first.y);
+    await page.mouse.click(second.x, second.y);
+    await page.mouse.click(removed.x, removed.y);
+    expect(await drawings(page)).toHaveLength(0);
+    await focus_overlay(page);
+    await page.keyboard.press("Backspace");
+    await page.mouse.click(replacement.x, replacement.y);
+    await page.keyboard.press("Enter");
+
+    let list = await drawings(page);
+    expect(list).toHaveLength(1);
+    expect(list[0].kind).toBe("path");
+    expect(list[0].points).toHaveLength(3);
+    expect(await page.evaluate(() => window.__chart.active_drawing_tool())).toBeNull();
+
+    await page.evaluate(() => window.__chart.set_drawing_tool("path", { color: "#e91e63" }));
+    await page.mouse.click(first.x, first.y);
+    await page.mouse.dblclick(replacement.x, replacement.y);
+    list = await drawings(page);
+    expect(list).toHaveLength(2);
+    expect(list[1].kind).toBe("path");
+    expect(list[1].points).toHaveLength(2);
+    expect(await page.evaluate(() => window.__chart.active_drawing_tool())).toBeNull();
+  }
+});
+
 test("click selects with anchor handles and part cursors; empty click deselects", async ({ page }) => {
   await goto_fixture(page);
   const s = await anchor_spots(page);
@@ -615,6 +652,11 @@ test("drawing tools render pixel-identical on WebGPU and Canvas2D (AA coverage s
         { logical: Math.floor((l0 + l1) / 2), price: hi + 0.8 },
         { logical: l1 - 2, price: lo - 0.5 },
       ], { color: "#7b1fa2", width: 3 });
+      chart.add_drawing("path", [
+        { logical: l0 + 1, price: hi + 0.2 },
+        { logical: Math.floor((l0 + l1) / 2), price: lo - 0.8 },
+        { logical: l1 - 1, price: hi + 0.2 },
+      ], { color: "#089981", width: 2 });
       // One interactive creation through the click flow shares the engine path too.
       chart.set_drawing_tool("trend_line", { color: "#089981" });
     });
@@ -642,7 +684,7 @@ test("drawing tools render pixel-identical on WebGPU and Canvas2D (AA coverage s
   expect(gpu.backend).toBe("webgpu");
   expect([canvas.png.width, canvas.png.height]).toEqual([gpu.png.width, gpu.png.height]);
 
-  // Vacuousness guard: the scenario paints substantially on EACH backend (all seven drawings).
+  // Vacuousness guard: the scenario paints substantially on EACH backend (all eight drawings).
   const clean_probe = await (async () => {
     await goto_fixture(page, "canvas2d");
     await page.evaluate(() => window.__chart.apply_options({ crosshair: { mode: 2 } }));

@@ -133,12 +133,18 @@ impl ChartEngine {
         if let Some(pending) = self.pending_drawing() {
             if pending.drawing.pane_index == pane_index {
                 let mut anchors = pending.drawing.points.clone();
+                let is_path = pending.drawing.kind == DrawingKind::Path;
                 if let Some(preview) = pending.preview {
-                    if anchors.len() < pending.drawing.kind.anchor_count() {
+                    if is_path || anchors.len() < pending.drawing.kind.anchor_count() {
                         anchors.push(preview);
                     }
                 }
-                if anchors.len() == pending.drawing.kind.anchor_count() {
+                let ready = if is_path {
+                    anchors.len() >= pending.drawing.kind.anchor_count()
+                } else {
+                    anchors.len() == pending.drawing.kind.anchor_count()
+                };
+                if ready {
                     let px: Option<Vec<(f64, f64)>> = anchors
                         .iter()
                         .map(|&point| {
@@ -417,6 +423,20 @@ impl ChartEngine {
                     width: (drawing.width * vpr) as f32,
                     style: drawing.style,
                     line_type: LineType::Curved,
+                    color,
+                });
+            }
+            DrawingKind::Path => {
+                let first_point = points.len() as u32;
+                for &(x, y) in px {
+                    points.push([x as f32, y as f32]);
+                }
+                out.push(Prim::Polyline {
+                    first_point,
+                    point_count: px.len() as u32,
+                    width: (drawing.width * vpr) as f32,
+                    style: drawing.style,
+                    line_type: LineType::Simple,
                     color,
                 });
             }

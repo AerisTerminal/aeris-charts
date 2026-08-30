@@ -2135,6 +2135,12 @@ impl ChartInner {
         self.engine
             .drawing_create_move(x_css, y_css, DrawingModifiers { magnet, straighten });
     }
+    pub fn drawing_create_finish(&mut self) -> u32 {
+        self.engine.drawing_create_finish()
+    }
+    pub fn drawing_create_pop_anchor(&mut self) -> bool {
+        self.engine.drawing_create_pop_anchor()
+    }
     pub fn drawing_create_cancel(&mut self) {
         self.engine.drawing_create_cancel();
     }

@@ -1089,8 +1089,8 @@ export function is_feature_series_kind(kind: series_kind): kind is feature_serie
 /**
  * The drawing-tool kinds. Each tool is an engine-owned drawing object with defining anchor
  * points: trend line (2), rectangle (2), horizontal line/ray, vertical line, and text
- * (1 each), and the freehand brush (a variable-length path, anchor handles at the two ends) —
- * TradingView's drawing tools in the spirit of the reference's plugin-examples.
+ * (1 each), a multi-click straight-segment path (variable length, every vertex editable), and
+ * the freehand brush (a variable-length curve, anchor handles at the two ends).
  */
 export type drawing_kind =
   | "trend_line"
@@ -1099,7 +1099,8 @@ export type drawing_kind =
   | "vertical_line"
   | "rectangle"
   | "text"
-  | "brush";
+  | "brush"
+  | "path";
 
 export const DRAWING_KIND_TO_U8: Record<drawing_kind, number> = {
   trend_line: 0,
@@ -1109,6 +1110,7 @@ export const DRAWING_KIND_TO_U8: Record<drawing_kind, number> = {
   rectangle: 4,
   text: 5,
   brush: 6,
+  path: 7,
 };
 
 /**
@@ -1938,8 +1940,9 @@ export interface chart_api {
   /**
    * Arm an interactive drawing tool (TradingView-style), or disarm with `null`. While armed,
    * pane clicks place the tool's anchors through the engine's creation flow — one click for the
-   * single-anchor kinds, two for `trend_line`/`rectangle` — the mouse previews the pending
-   * anchor, and Escape cancels. `options` templates the drawing created this way. One-shot:
+   * single-anchor kinds, two for `trend_line`/`rectangle`, and repeated clicks for `path` until
+   * double-click or Enter — the mouse previews the pending anchor, Backspace removes the latest
+   * path vertex, and Escape cancels. `options` templates the drawing created this way. One-shot:
    * the tool disarms after each commit (listen with {@link chart_api.set_drawing_tool_listener}
    * to sync a toolbar).
    */

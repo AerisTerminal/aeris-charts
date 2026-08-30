@@ -62,7 +62,10 @@ fn points(kind: DrawingKind, index: usize, mostly_offscreen: bool) -> Vec<Drawin
     };
     let first = DrawingPoint { logical, price };
     match kind {
-        DrawingKind::TrendLine | DrawingKind::Rectangle | DrawingKind::Brush => vec![
+        DrawingKind::TrendLine
+        | DrawingKind::Rectangle
+        | DrawingKind::Brush
+        | DrawingKind::Path => vec![
             first,
             DrawingPoint {
                 logical: logical + 8.0,
@@ -78,6 +81,7 @@ fn install_drawings(chart: &mut ChartEngine, count: usize, mix: &str, mostly_off
         DrawingKind::TrendLine,
         DrawingKind::Rectangle,
         DrawingKind::Brush,
+        DrawingKind::Path,
         DrawingKind::Text,
         DrawingKind::HorizontalLine,
         DrawingKind::HorizontalRay,

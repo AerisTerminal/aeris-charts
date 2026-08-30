@@ -19,7 +19,7 @@ pub const PERSISTENCE_SCHEMA_VERSION: u32 = 1;
 pub const PERSISTENCE_MAX_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
 pub const PERSISTENCE_MAX_PANES: usize = 64;
 pub const PERSISTENCE_MAX_DRAWINGS: usize = 10_000;
-pub const PERSISTENCE_MAX_POINTS_PER_DRAWING: usize = 100_000;
+pub const PERSISTENCE_MAX_POINTS_PER_DRAWING: usize = crate::drawings::MAX_DRAWING_POINTS;
 pub const PERSISTENCE_MAX_TOTAL_POINTS: usize = 250_000;
 const MAX_TEXT_BYTES: usize = 65_536;
 const MAX_TOTAL_TEXT_BYTES: usize = 1_048_576;
@@ -726,11 +726,11 @@ mod tests {
     }
 
     #[test]
-    fn all_seven_kinds_and_multi_pane_associations_restore() {
+    fn all_eight_kinds_and_multi_pane_associations_restore() {
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
         let restored = chart.import_state_json(ALL_DRAWINGS).unwrap();
         assert_eq!(restored.panes, 2);
-        assert_eq!(restored.drawings, 7);
+        assert_eq!(restored.drawings, 8);
         assert_eq!(
             chart
                 .drawings
@@ -745,6 +745,7 @@ mod tests {
                 DrawingKind::Rectangle,
                 DrawingKind::Text,
                 DrawingKind::Brush,
+                DrawingKind::Path,
             ]
         );
         assert!(chart.drawings[..3]

@@ -156,7 +156,7 @@ const TOOLBAR_FEATURE_MANIFEST: &[&str] = &[
     "style:candle-body,wick-colors,border-colors,wick-visible,border-visible,reset-parts,line-color,line-width,area-fill",
     "overlay:sma20,volume,rsi14",
     "workspace:split-horizontal,split-vertical,shortcuts,maximize,restore,close,cap,usage,active,resize",
-    "drawing:trend,h-line,h-ray,v-line,rect,text,brush,clear,color,style,width,label,text-color,size,weight,italic",
+    "drawing:trend,h-line,h-ray,v-line,rect,text,path,brush,clear,color,style,width,label,text-color,size,weight,italic",
     "crosshair:mode,color,width,style,label-background,labels",
     "chart:theme,grid,grid-color,grid-style,font-family,font-size",
     "series-chrome:price-line,style,last-value,title-visible,title-text,countdown,bid-ask",
@@ -609,6 +609,29 @@ impl Probe {
             self.armed_tool = None;
         }
         result
+    }
+
+    fn finish_path_creation(&mut self) -> bool {
+        if self.armed_tool != Some(DrawingKind::Path) {
+            return false;
+        }
+        let id = self.engine.drawing_create_finish();
+        if id == 0 {
+            return false;
+        }
+        self.click_status = format!("created path #{id}");
+        self.armed_tool = None;
+        self.dirty = true;
+        true
+    }
+
+    fn pop_path_anchor(&mut self) -> bool {
+        if self.armed_tool != Some(DrawingKind::Path) {
+            return false;
+        }
+        let changed = self.engine.drawing_create_pop_anchor();
+        self.dirty |= changed;
+        changed
     }
 
     fn update_drawing_template(&mut self, mutate: impl FnOnce(&mut DrawingTemplate)) {
@@ -1472,6 +1495,22 @@ impl Probe {
             }
         }
 
+        if event.click_count >= 2 && self.armed_tool == Some(DrawingKind::Path) {
+            self.place_drawing_anchor(
+                pane_x,
+                y,
+                DrawingModifiers {
+                    magnet: event.modifiers.control || event.modifiers.platform,
+                    straighten: event.modifiers.shift,
+                },
+            );
+            self.finish_path_creation();
+            self.press_moved = true;
+            self.dirty = true;
+            cx.notify();
+            return;
+        }
+
         if event.click_count >= 2 {
             if y > self.engine.pane_h && self.gesture_config.axis_dblclick_reset_time {
                 self.engine.reset_time_scale();
@@ -1836,6 +1875,8 @@ impl Probe {
                 self.engine.fit_content();
                 true
             }
+            "enter" => self.finish_path_creation(),
+            "backspace" if self.armed_tool == Some(DrawingKind::Path) => self.pop_path_anchor(),
             "delete" | "backspace" => self.engine.remove_selected_drawing(),
             "escape" => {
                 self.engine.drawing_create_cancel();
@@ -3236,6 +3277,7 @@ impl Render for InteractiveDemo {
                     b("v-line", DemoAction::Drawing(DrawingKind::VerticalLine)),
                     b("rect", DemoAction::Drawing(DrawingKind::Rectangle)),
                     b("text", DemoAction::Drawing(DrawingKind::Text)),
+                    b("path", DemoAction::Drawing(DrawingKind::Path)),
                     b("brush", DemoAction::Drawing(DrawingKind::Brush)),
                     b("clear", DemoAction::ClearDrawings),
                 ],
@@ -3722,6 +3764,7 @@ mod tests {
             "split-horizontal",
             "resize",
             "brush",
+            "path",
             "text-color",
             "crosshair",
             "price-line",
@@ -3777,6 +3820,26 @@ mod tests {
         assert!(id > 0);
         assert_eq!(probe.engine.drawings().len(), 1);
         assert_eq!(probe.engine.selected_drawing(), Some(id as u32));
+    }
+
+    #[test]
+    fn native_path_creation_pops_and_finishes_as_one_drawing() {
+        let mut probe = Probe::new(64, Some(1));
+        probe.rebuild_with_measure(1024.0, 640.0, 1.0, |text| text.chars().count() as f64 * 7.0);
+        probe.engine.clear_drawings();
+        probe.arm_drawing(DrawingKind::Path);
+        for (x, y) in [(200.0, 180.0), (350.0, 260.0), (500.0, 200.0)] {
+            assert_eq!(
+                probe.place_drawing_anchor(x, y, DrawingModifiers::default()),
+                -1
+            );
+        }
+        assert!(probe.pop_path_anchor());
+        assert!(probe.finish_path_creation());
+        assert_eq!(probe.engine.drawings().len(), 1);
+        assert_eq!(probe.engine.drawings()[0].kind, DrawingKind::Path);
+        assert_eq!(probe.engine.drawings()[0].points.len(), 2);
+        assert_eq!(probe.armed_tool, None);
     }
 
     #[test]

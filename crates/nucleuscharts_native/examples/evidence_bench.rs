@@ -701,6 +701,7 @@ fn drawing_density_rows() -> Vec<serde_json::Value> {
         DrawingKind::TrendLine,
         DrawingKind::Rectangle,
         DrawingKind::Brush,
+        DrawingKind::Path,
         DrawingKind::Text,
         DrawingKind::HorizontalLine,
         DrawingKind::HorizontalRay,
@@ -728,7 +729,10 @@ fn drawing_density_rows() -> Vec<serde_json::Value> {
                 let mut points = vec![DrawingPoint { logical, price }];
                 if matches!(
                     kind,
-                    DrawingKind::TrendLine | DrawingKind::Rectangle | DrawingKind::Brush
+                    DrawingKind::TrendLine
+                        | DrawingKind::Rectangle
+                        | DrawingKind::Brush
+                        | DrawingKind::Path
                 ) {
                     points.push(DrawingPoint {
                         logical: logical + 2.0,

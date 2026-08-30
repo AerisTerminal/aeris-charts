@@ -1,11 +1,11 @@
-//! Drawing tools (trend line, horizontal line/ray, vertical line, rectangle, text) as
+//! Drawing tools (trend line, horizontal line/ray, vertical line, rectangle, text, path, brush) as
 //! engine-owned drawing objects — TradingView's drawing tools in the spirit of the reference's
 //! plugin-examples (trend-line.ts, rectangle-drawing-tool.ts, vertical-line.ts, anchored-text.ts),
 //! but with all state, hit-testing, and anchor-dragging math living headless here: hosts only
 //! forward gestures and render the frame, exactly like the interaction-model split
 //! at the headless engine boundary.
 //!
-//! Anchor model: a drawing is defined by 1 or 2 [`DrawingPoint`]s in `{logical, price}` space
+//! Anchor model: a drawing is defined by one or more [`DrawingPoint`]s in `{logical, price}` space
 //! (fractional logical bar index + price — the time scale's interpolation space, so an anchor
 //! may sit between bars, like the reference examples' `timeToCoordinate`/`priceToCoordinate`
 //! inputs). Coordinates resolve against the pane's RIGHT price scale each frame, mirroring the
@@ -26,6 +26,8 @@ use super::*;
 
 /// Chart-unique drawing id (never reused within a chart; 0 is the "no drawing" sentinel).
 pub type DrawingId = u32;
+/// Hard cap shared by live drawing APIs and persistence so variable-point tools remain bounded.
+pub(crate) const MAX_DRAWING_POINTS: usize = 100_000;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
 #[doc(hidden)]
@@ -314,6 +316,9 @@ pub enum DrawingKind {
     /// Freehand path (TradingView's brush): a variable-length point list drawn as a smooth
     /// interpolating curve, with anchor handles at the two ENDS when selected.
     Brush,
+    /// Multi-click path: a variable-length point list joined by straight segments, with every
+    /// vertex exposed as an editable anchor.
+    Path,
 }
 
 impl DrawingKind {
@@ -326,6 +331,7 @@ impl DrawingKind {
             4 => Self::Rectangle,
             5 => Self::Text,
             6 => Self::Brush,
+            7 => Self::Path,
             _ => return None,
         })
     }
@@ -339,6 +345,7 @@ impl DrawingKind {
             Self::Rectangle => 4,
             Self::Text => 5,
             Self::Brush => 6,
+            Self::Path => 7,
         }
     }
 
@@ -352,6 +359,7 @@ impl DrawingKind {
             Self::Rectangle => "rectangle",
             Self::Text => "text",
             Self::Brush => "brush",
+            Self::Path => "path",
         }
     }
 
@@ -364,24 +372,24 @@ impl DrawingKind {
             "rectangle" => Self::Rectangle,
             "text" => Self::Text,
             "brush" => Self::Brush,
+            "path" => Self::Path,
             _ => return None,
         })
     }
 
-    /// The number of defining anchors the kind is placed with (and its handles show). The brush
-    /// is variable-length: this is its MINIMUM (two ends).
+    /// The number of defining anchors the kind is placed with (and its handles show). Brush and
+    /// path are variable-length: this is their minimum.
     pub fn anchor_count(self) -> usize {
         match self {
-            Self::TrendLine | Self::Rectangle | Self::Brush => 2,
+            Self::TrendLine | Self::Rectangle | Self::Brush | Self::Path => 2,
             Self::HorizontalLine | Self::HorizontalRay | Self::VerticalLine | Self::Text => 1,
         }
     }
 
-    /// Whether `count` is a valid point count for a stored drawing of this kind (the brush
-    /// takes any count at or above its two-end minimum).
+    /// Whether `count` is a valid point count for a stored drawing of this kind.
     pub fn valid_point_count(self, count: usize) -> bool {
         match self {
-            Self::Brush => count >= self.anchor_count(),
+            Self::Brush | Self::Path => count >= self.anchor_count(),
             _ => count == self.anchor_count(),
         }
     }
@@ -1775,8 +1783,8 @@ impl ChartEngine {
                     bottom: a.1.max(b.1),
                 }
             }
-            DrawingKind::Brush => {
-                // The whole stroke's bounding box.
+            DrawingKind::Brush | DrawingKind::Path => {
+                // The whole stroke/path's bounding box.
                 let (mut left, mut right, mut top, mut bottom) = (
                     f64::INFINITY,
                     f64::NEG_INFINITY,
@@ -1926,7 +1934,10 @@ impl ChartEngine {
         options_json: Option<&str>,
     ) -> Option<DrawingId> {
         self.invalidate_frame_drawings();
-        if pane_index >= self.panes.len() || !kind.valid_point_count(points.len()) {
+        if pane_index >= self.panes.len()
+            || points.len() > MAX_DRAWING_POINTS
+            || !kind.valid_point_count(points.len())
+        {
             return None;
         }
         if points
@@ -1987,7 +1998,8 @@ impl ChartEngine {
             return false;
         };
         let drawing = &self.drawings[index];
-        if !drawing.kind.valid_point_count(points.len())
+        if points.len() > MAX_DRAWING_POINTS
+            || !drawing.kind.valid_point_count(points.len())
             || points
                 .iter()
                 .any(|p| !p.logical.is_finite() || !p.price.is_finite())
@@ -2336,6 +2348,17 @@ impl ChartEngine {
                 )
                 .is_some()
             }
+            DrawingKind::Path => crate::hit_test::hit_test_line_series(
+                px,
+                x,
+                y,
+                LineType::Simple,
+                drawing.width,
+                None,
+                self.time_scale.bar_spacing(),
+                hit_tolerance,
+            )
+            .is_some(),
             DrawingKind::Text => {
                 // The click/hover target is the interaction-chrome box (the label run while
                 // non-empty, else a one-em caret box — empty text paints nothing on the chart)
@@ -2797,8 +2820,20 @@ impl ChartEngine {
             return -1;
         };
         pending.drawing.pane_index = pane;
+        // Native and browser double-click sequences both deliver the endpoint click twice. A
+        // zero-length final segment has no semantic value, so retain one vertex before finish.
+        if kind == DrawingKind::Path && pending.drawing.points.last() == Some(&point) {
+            pending.preview = None;
+            return -1;
+        }
+        if kind == DrawingKind::Path && pending.drawing.points.len() == MAX_DRAWING_POINTS {
+            return -1;
+        }
         pending.drawing.points.push(point);
         pending.preview = None;
+        if kind == DrawingKind::Path {
+            return -1;
+        }
         if pending.drawing.points.len() < anchor_count {
             pending.preview = Some(point);
             return -1;
@@ -2806,6 +2841,10 @@ impl ChartEngine {
         let Some(pending) = self.pending_drawing.take() else {
             return -1;
         };
+        i64::from(self.commit_pending_drawing(pending))
+    }
+
+    fn commit_pending_drawing(&mut self, pending: PendingDrawing) -> DrawingId {
         let Some(id) = self.take_drawing_id() else {
             return 0;
         };
@@ -2819,7 +2858,40 @@ impl ChartEngine {
             drawing: self.drawings[index].clone(),
             index,
         });
-        i64::from(id)
+        id
+    }
+
+    /// Commit an active multi-click path. Enter and double-click route here after at least two
+    /// vertices have been placed. Other tools and degenerate paths are left unchanged.
+    pub fn drawing_create_finish(&mut self) -> DrawingId {
+        let ready = self.pending_drawing.as_ref().is_some_and(|pending| {
+            pending.drawing.kind == DrawingKind::Path
+                && pending
+                    .drawing
+                    .kind
+                    .valid_point_count(pending.drawing.points.len())
+        });
+        if !ready {
+            return 0;
+        }
+        self.invalidate_frame_drawings();
+        let Some(pending) = self.pending_drawing.take() else {
+            return 0;
+        };
+        self.commit_pending_drawing(pending)
+    }
+
+    /// Remove the latest committed vertex from an active multi-click path. The live preview is
+    /// retained so the next segment continues following the pointer.
+    pub fn drawing_create_pop_anchor(&mut self) -> bool {
+        let Some(pending) = self.pending_drawing.as_mut() else {
+            return false;
+        };
+        if pending.drawing.kind != DrawingKind::Path || pending.drawing.points.pop().is_none() {
+            return false;
+        }
+        self.invalidate_frame_drawings();
+        true
     }
 
     /// Update the creation preview point from a mouse move (no-op while unarmed or off the data).
@@ -2947,6 +3019,9 @@ impl ChartEngine {
         let Some(capture) = &self.brush_capture else {
             return false;
         };
+        if capture.points.len() == MAX_DRAWING_POINTS {
+            return false;
+        }
         if (x - capture.last_px.0).hypot(y - capture.last_px.1) < BRUSH_MIN_POINT_DISTANCE {
             return false;
         }
