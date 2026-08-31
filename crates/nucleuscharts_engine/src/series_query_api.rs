@@ -94,7 +94,10 @@ impl ChartEngine {
                 .then(|| self.format_series_resolved(series, value))
         };
         let close = plot.value_at(row, PlotValueIndex::Close);
-        if matches!(series.kind, SeriesKind::Candlestick | SeriesKind::Bar) {
+        if matches!(
+            series.kind,
+            SeriesKind::Candlestick | SeriesKind::Bar | SeriesKind::Footprint
+        ) {
             let open = plot.value_at(row, PlotValueIndex::Open);
             let high = plot.value_at(row, PlotValueIndex::High);
             let low = plot.value_at(row, PlotValueIndex::Low);

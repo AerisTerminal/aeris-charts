@@ -174,6 +174,8 @@ pub enum ValidationError {
     UnknownSeries(u32),
     /// The caller supplied an identity whose series has already been removed.
     StaleSeries(u32),
+    /// The caller tried to replace an engine-owned advanced series with generic OHLC rows.
+    UnsupportedSeriesData(u32),
     /// A timestamp failed the shared whole-UTC-seconds contract.
     InvalidTimestamp { index: usize, error: TimestampError },
     /// The time column and the value columns have differing lengths.
@@ -197,6 +199,10 @@ impl core::fmt::Display for ValidationError {
         match self {
             ValidationError::UnknownSeries(id) => write!(f, "unknown series id {id}"),
             ValidationError::StaleSeries(id) => write!(f, "stale series id {id}"),
+            ValidationError::UnsupportedSeriesData(id) => write!(
+                f,
+                "series {id} owns its source data; use its series-specific ingestion API"
+            ),
             ValidationError::InvalidTimestamp { index, error } => {
                 write!(f, "invalid timestamp at row {index}: {error}")
             }

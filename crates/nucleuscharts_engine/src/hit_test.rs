@@ -308,7 +308,7 @@ impl ChartEngine {
         // pixels, so the tested items must be selected with the same ratio they were drawn.
         let hpr = (self.pane_w * self.dpr.max(0.01)).round().max(1.0) / self.pane_w.max(1.0);
         let result = match series.kind {
-            SeriesKind::Candlestick | SeriesKind::Bar => {
+            SeriesKind::Candlestick | SeriesKind::Bar | SeriesKind::Footprint => {
                 let mut work = crate::frame::conflation::DensityWork::default();
                 let visible = crate::frame::conflation::visible_ohlc_with_work(
                     plot,

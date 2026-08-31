@@ -24,6 +24,7 @@ import type {
   drawing_point, drawing_tool_change_handler,
   ema_ribbon_options, ema_ribbon_periods,
   feature_series_kind, frame_stats,
+  footprint_bar, footprint_series_api, footprint_series_options, footprint_trade, footprint_trade_columns,
   ingestion_diagnostics,
   handle_scale_options, handle_scroll_options, indicator_info, kinetic_scroll_options,
   last_value_data, localization_options, logical_range,
@@ -39,7 +40,7 @@ import type {
 } from "./types.js";
 import {
   DRAWING_KIND_TO_U8, FEATURE_KIND_TO_U8, KIND_TO_U8, LINE_STYLE_TO_U8, LINE_TYPE_TO_U8,
-  is_feature_series_kind,
+  is_feature_series_kind, is_footprint_series_kind,
 } from "./types.js";
 import { default_theme_name, theme_palette } from "./theme.js";
 
@@ -155,7 +156,7 @@ const PRICE_SCALE_JSON_OPTION_KEYS = [
 ] as const;
 
 /** Engine kind ordinal → public kind name (index-aligned with `KIND_TO_U8`). */
-const KIND_NAMES = ["candlestick", "bar", "line", "area", "histogram", "baseline", "custom"] as const;
+const KIND_NAMES = ["candlestick", "bar", "line", "area", "histogram", "baseline", "custom", undefined, "footprint"] as const;
 const FEATURE_KIND_NAMES = [
   "brushable_area",
   undefined,
@@ -706,7 +707,7 @@ class series_impl implements series_api {
 
   set_type(kind: series_kind): void {
     this.assert_live();
-    if (kind === "custom" || is_feature_series_kind(kind)) {
+    if (kind === "custom" || is_feature_series_kind(kind) || is_footprint_series_kind(kind)) {
       throw new nucleuscharts_error(
         "unsupported_operation",
         "set_type() only converts built-in series; remove and re-add custom or advanced series",
@@ -1558,6 +1559,212 @@ class feature_series_impl extends series_impl {
     throw new nucleuscharts_error(
       "unsupported_operation",
       "set_type() does not change an advanced series schema; remove and re-add the series",
+    );
+  }
+}
+
+function footprint_side(side: footprint_trade["aggressor"]): number {
+  return side === "buy" ? 1 : side === "sell" ? 2 : 0;
+}
+
+function pack_footprint_trades(trades: readonly footprint_trade[]): footprint_trade_columns {
+  const length = trades.length;
+  const columns: footprint_trade_columns = {
+    timestamps_micros: new Float64Array(length),
+    prices: new Float64Array(length),
+    volumes: new Float64Array(length),
+    aggressors: new Uint8Array(length),
+    bids: new Float64Array(length).fill(Number.NaN),
+    asks: new Float64Array(length).fill(Number.NaN),
+    sequences: new Float64Array(length).fill(Number.NaN),
+    trade_ids: new Float64Array(length).fill(Number.NaN),
+    conditions: new Uint32Array(length),
+    session_ids: new Float64Array(length).fill(Number.NaN),
+  };
+  for (let index = 0; index < length; index += 1) {
+    const trade = trades[index]!;
+    columns.timestamps_micros[index] = trade.timestamp_micros;
+    columns.prices[index] = trade.price;
+    columns.volumes[index] = trade.volume;
+    columns.aggressors[index] = footprint_side(trade.aggressor);
+    if (trade.bid !== undefined) columns.bids[index] = trade.bid;
+    if (trade.ask !== undefined) columns.asks[index] = trade.ask;
+    if (trade.sequence !== undefined) columns.sequences[index] = trade.sequence;
+    if (trade.trade_id !== undefined) columns.trade_ids[index] = trade.trade_id;
+    if (trade.conditions !== undefined) columns.conditions[index] = trade.conditions;
+    if (trade.session_id !== undefined) columns.session_ids[index] = trade.session_id;
+  }
+  return columns;
+}
+
+function throw_footprint_error(result: string): never {
+  let message = result;
+  try {
+    const parsed = JSON.parse(result) as { error?: string };
+    message = parsed.error ?? result;
+  } catch {
+    // Preserve the engine string when it is not an error envelope.
+  }
+  throw new nucleuscharts_error("invalid_data", message);
+}
+
+/** A public handle whose authoritative payload is a raw trade tape in the Rust engine. */
+class footprint_series_impl extends series_impl implements footprint_series_api {
+  constructor(id: number, chart: chart_impl) {
+    super(id, "footprint", chart);
+  }
+
+  set_trades(trades: readonly footprint_trade[]): void {
+    this.set_trades_typed(pack_footprint_trades(trades));
+  }
+
+  set_trades_typed(columns: footprint_trade_columns): void {
+    this.assert_live();
+    const result = this.chart.wasm.set_footprint_trades_typed(
+      this.id,
+      columns.timestamps_micros,
+      columns.prices,
+      columns.volumes,
+      columns.aggressors,
+      columns.bids,
+      columns.asks,
+      columns.sequences,
+      columns.trade_ids,
+      columns.conditions,
+      columns.session_ids,
+    );
+    if (result !== "") throw_footprint_error(result);
+    this.chart.sync_countdown_timer();
+    this.chart.repaint();
+    for (const handler of this.data_changed_subs) handler("full");
+  }
+
+  update_trades(trades: readonly footprint_trade[]): "tip" | "historical" {
+    return this.update_trades_typed(pack_footprint_trades(trades));
+  }
+
+  update_trades_typed(columns: footprint_trade_columns): "tip" | "historical" {
+    this.assert_live();
+    const result = this.chart.wasm.update_footprint_trades_typed(
+      this.id,
+      columns.timestamps_micros,
+      columns.prices,
+      columns.volumes,
+      columns.aggressors,
+      columns.bids,
+      columns.asks,
+      columns.sequences,
+      columns.trade_ids,
+      columns.conditions,
+      columns.session_ids,
+    );
+    if (result !== "tip" && result !== "historical") throw_footprint_error(result);
+    if (this.chart.countdown_series_present) this.chart.sync_countdown_timer();
+    this.chart.schedule_repaint();
+    for (const handler of this.data_changed_subs) handler(result === "tip" ? "update" : "full");
+    return result;
+  }
+
+  update_trade(trade: footprint_trade): "tip" | "historical" {
+    this.assert_live();
+    const result = this.chart.wasm.update_footprint_trade_typed(
+      this.id,
+      trade.timestamp_micros,
+      trade.price,
+      trade.volume,
+      footprint_side(trade.aggressor),
+      trade.bid ?? Number.NaN,
+      trade.ask ?? Number.NaN,
+      trade.sequence ?? Number.NaN,
+      trade.trade_id ?? Number.NaN,
+      trade.conditions ?? 0,
+      trade.session_id ?? Number.NaN,
+    );
+    if (result !== "tip" && result !== "historical") throw_footprint_error(result);
+    if (this.chart.countdown_series_present) this.chart.sync_countdown_timer();
+    this.chart.schedule_repaint();
+    for (const handler of this.data_changed_subs) handler(result === "tip" ? "update" : "full");
+    return result;
+  }
+
+  footprint_bars(): readonly footprint_bar[] {
+    this.assert_live();
+    return JSON.parse(this.chart.wasm.footprint_bars_json(this.id)) as footprint_bar[];
+  }
+
+  footprint_bar(index: number): footprint_bar | null {
+    this.assert_live();
+    return JSON.parse(this.chart.wasm.footprint_bar_json(this.id, index)) as footprint_bar | null;
+  }
+
+  set_data(): void {
+    this.assert_live();
+    throw new nucleuscharts_error(
+      "unsupported_operation",
+      "footprint series require set_trades() or set_trades_typed(); OHLC data cannot supply order-flow truth",
+    );
+  }
+
+  set_data_typed(): void {
+    this.set_data();
+  }
+
+  update(): void {
+    this.assert_live();
+    throw new nucleuscharts_error(
+      "unsupported_operation",
+      "footprint series require update_trade(); OHLC updates cannot supply order-flow truth",
+    );
+  }
+
+  update_typed(): void {
+    this.update();
+  }
+
+  set_ring_source(): void {
+    this.assert_live();
+    throw new nucleuscharts_error(
+      "unsupported_operation",
+      "the OHLC shared ring does not apply to footprint trades",
+    );
+  }
+
+  pop(): void {
+    this.assert_live();
+    throw new nucleuscharts_error(
+      "unsupported_operation",
+      "pop() cannot remove a derived footprint bar independently of its trade tape",
+    );
+  }
+
+  apply_options(options: Partial<any_series_options> & Partial<footprint_series_options>): void {
+    this.assert_live();
+    super.apply_options(options);
+    const current = JSON.parse(this.chart.wasm.footprint_options_json(this.id)) as footprint_series_options;
+    const result = this.chart.wasm.apply_footprint_options(
+      this.id,
+      JSON.stringify({ ...current, ...options }),
+    );
+    if (result !== "") throw_footprint_error(result);
+    this.chart.repaint();
+  }
+
+  options(): any_series_options & footprint_series_options {
+    return {
+      ...super.options(),
+      ...(JSON.parse(this.chart.wasm.footprint_options_json(this.id)) as footprint_series_options),
+    };
+  }
+
+  series_type(): "footprint" {
+    return "footprint";
+  }
+
+  set_type(): void {
+    this.assert_live();
+    throw new nucleuscharts_error(
+      "unsupported_operation",
+      "set_type() does not change a footprint trade schema; remove and re-add the series",
     );
   }
 }
@@ -2805,12 +3012,30 @@ export class chart_impl implements chart_api {
     }
   }
 
+  add_series(
+    kind: "footprint",
+    options?: Partial<any_series_options> & Partial<footprint_series_options>,
+  ): footprint_series_api;
+  add_series(kind: series_kind, options?: Partial<any_series_options>): series_api;
   add_series(kind: series_kind, options?: Partial<any_series_options>): series_api {
     if (kind === "custom") {
       throw new nucleuscharts_error(
         "invalid_options",
         "add_series does not accept 'custom'; use add_custom_series(pane_view)",
       );
+    }
+    if (is_footprint_series_kind(kind)) {
+      const adopt_primary = !this.next_extra_series;
+      this.next_extra_series = true;
+      const id = this.wasm.add_footprint_series(adopt_primary, JSON.stringify(options ?? {}));
+      if (id === 0xffffffff) {
+        throw new nucleuscharts_error("invalid_options", "footprint series options were rejected by the engine");
+      }
+      const series = new footprint_series_impl(id, this);
+      this.series_by_id.set(id, series);
+      if (options) series.apply_options(options);
+      this.emit_series_change(this.series_added_subs, series, this.pane_of_series(id));
+      return series;
     }
     if (is_feature_series_kind(kind)) {
       const adopt_primary = !this.next_extra_series;
@@ -2928,6 +3153,8 @@ export class chart_impl implements chart_api {
         series = feature_kind === undefined
           ? new series_impl(id, "candlestick", this)
           : new feature_series_impl(id, feature_kind, this);
+      } else if (kind === 8) {
+        series = new footprint_series_impl(id, this);
       } else {
         series = new series_impl(id, KIND_NAMES[kind] ?? "candlestick", this);
       }

@@ -96,6 +96,14 @@ Built-in frame geometry and series hit testing share one viewport-density query.
 
 The official advanced-series examples are engine-owned feature series, not browser drawing callbacks. Each retains its complete validated payload beside an OHLC-shaped canonical projection used by the shared time/price-scale and query machinery. Brushable area, grouped bars, heatmap, HLC area, pretty histogram, background shade, stacked area/bars, and whisker boxes all construct backend-neutral primitives in the same ordered series layer as built-in geometry. Their official defaults, visible-range rules, pixel snapping, autoscale semantics, and source-data lifecycle are therefore identical in browser and native hosts.
 
+Professional footprint / numbers-bar data has a separate tick-truth owner described in
+`Footprint.md`. The engine retains canonical microsecond trade events with explicit or deterministically
+classified aggressor side and derives integer tick-grid levels, bid/ask/unknown/total volume, POC,
+final/session delta, running Max/Min Delta, and diagonal stacked imbalances. Live tip events update
+only the active derived bar; late events and provider corrections reconstruct canonical event order
+rather than patching final totals. Footprint bars ultimately emit the same ordered `ChartFrame` as
+every other series, and no backend may infer order flow from OHLC or recalculate footprint math.
+
 The upstream heatmap-around-line and background-shade examples are compositions: the specialized engine series is ordered beneath an ordinary line series rather than duplicating that base-series geometry. Heatmap `cell_shader` callbacks are the one styling boundary in this group; the browser evaluates the callback while normalizing input, and Rust retains the resolved color with each bounded cell so every renderer executes the same prepared frame.
 
 Trading is a first-party engine domain, not a drawing, series, primitive, or plugin. Each chart owns host-supplied typed position, order, group, and execution identities; broker relationships and instrument metadata; semantic trading style; dedicated hit state; and a bounded intent queue. The host remains authoritative for broker state. Pointer movement changes only a chart-local snapped preview. Instant confirmation emits one broker-neutral typed intent on release; manual confirmation retains the dotted preview behind canonical inline Confirm and Discard controls and emits only after Confirm. Confirmed objects change only through a subsequent host snapshot or incremental update. Accepted previews remain visibly dotted and pending until that authoritative update arrives; rejected or discarded previews disappear without mutating the confirmed object. Trading state, previews, intents, and executions are runtime-only and never enter drawing persistence.

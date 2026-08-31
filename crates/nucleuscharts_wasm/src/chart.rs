@@ -17,6 +17,7 @@
 
 mod custom_series;
 mod feature_series;
+mod footprint;
 mod image_runs;
 mod inner_api;
 mod inner_render;
@@ -1376,6 +1377,128 @@ impl NucleusChart {
             .engine
             .feature_series_options_json(id)
             .unwrap_or_else(|| "{}".to_string())
+    }
+
+    pub fn add_footprint_series(&mut self, adopt_primary: bool, options_json: &str) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_footprint_series(adopt_primary, options_json)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_footprint_trades_typed(
+        &mut self,
+        id: u32,
+        timestamps: &[f64],
+        prices: &[f64],
+        volumes: &[f64],
+        sides: &[u8],
+        bids: &[f64],
+        asks: &[f64],
+        sequences: &[f64],
+        trade_ids: &[f64],
+        conditions: &[u32],
+        session_ids: &[f64],
+    ) -> String {
+        self.inner.borrow_mut().set_footprint_trades_typed(
+            id,
+            timestamps,
+            prices,
+            volumes,
+            sides,
+            bids,
+            asks,
+            sequences,
+            trade_ids,
+            conditions,
+            session_ids,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_footprint_trades_typed(
+        &mut self,
+        id: u32,
+        timestamps: &[f64],
+        prices: &[f64],
+        volumes: &[f64],
+        sides: &[u8],
+        bids: &[f64],
+        asks: &[f64],
+        sequences: &[f64],
+        trade_ids: &[f64],
+        conditions: &[u32],
+        session_ids: &[f64],
+    ) -> String {
+        self.inner.borrow_mut().update_footprint_trades_typed(
+            id,
+            timestamps,
+            prices,
+            volumes,
+            sides,
+            bids,
+            asks,
+            sequences,
+            trade_ids,
+            conditions,
+            session_ids,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_footprint_trade_typed(
+        &mut self,
+        id: u32,
+        timestamp: f64,
+        price: f64,
+        volume: f64,
+        side: u8,
+        bid: f64,
+        ask: f64,
+        sequence: f64,
+        trade_id: f64,
+        conditions: u32,
+        session_id: f64,
+    ) -> String {
+        self.inner.borrow_mut().update_footprint_trade_typed(
+            id, timestamp, price, volume, side, bid, ask, sequence, trade_id, conditions,
+            session_id,
+        )
+    }
+
+    pub fn footprint_bars_json(&self, id: u32) -> String {
+        self.inner
+            .borrow()
+            .engine
+            .footprint_bars(id)
+            .and_then(|bars| serde_json::to_string(bars).ok())
+            .unwrap_or_else(|| "null".to_string())
+    }
+
+    pub fn footprint_bar_json(&self, id: u32, index: usize) -> String {
+        self.inner
+            .borrow()
+            .engine
+            .footprint_bar(id, index)
+            .and_then(|bar| serde_json::to_string(bar).ok())
+            .unwrap_or_else(|| "null".to_string())
+    }
+
+    pub fn footprint_options_json(&self, id: u32) -> String {
+        self.inner
+            .borrow()
+            .engine
+            .footprint_series_options(id)
+            .map_or_else(
+                || "{}".to_string(),
+                |options| footprint::options_json(&options),
+            )
+    }
+
+    pub fn apply_footprint_options(&mut self, id: u32, options_json: &str) -> String {
+        self.inner
+            .borrow_mut()
+            .apply_footprint_options(id, options_json)
     }
 
     /// Merge advanced-series options into the engine-owned state.

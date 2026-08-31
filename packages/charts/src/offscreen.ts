@@ -7,13 +7,16 @@ import { create_offscreen_chart as wasm_create_offscreen_chart, NucleusChart } f
 import { ensure_init, time_to_utc_seconds } from "./impl.js";
 import { nucleuscharts_error } from "./errors.js";
 import { default_theme_name, theme_options } from "./theme.js";
-import { FEATURE_KIND_TO_U8, KIND_TO_U8, is_feature_series_kind } from "./types.js";
+import { FEATURE_KIND_TO_U8, KIND_TO_U8, is_feature_series_kind, is_footprint_series_kind } from "./types.js";
 import type {
   any_series_options,
   backend_status,
   chart_options,
   deep_partial,
   frame_stats,
+  footprint_bar,
+  footprint_trade,
+  footprint_trade_columns,
   ingestion_diagnostics,
   ohlc_columns,
   series_kind,
@@ -215,6 +218,15 @@ export class offscreen_chart {
     if (kind === "custom") {
       throw new nucleuscharts_error("unsupported_operation", "custom series need a DOM host renderer");
     }
+    if (is_footprint_series_kind(kind)) {
+      const id = this.wasm.add_footprint_series(!this.primary_adopted, JSON.stringify(options));
+      this.primary_adopted = true;
+      if (id === 0xffffffff) {
+        throw new nucleuscharts_error("invalid_options", "footprint series options were rejected by the engine");
+      }
+      this.render();
+      return id;
+    }
     if (is_feature_series_kind(kind)) {
       const id = this.wasm.add_feature_series(
         FEATURE_KIND_TO_U8[kind],
@@ -241,7 +253,7 @@ export class offscreen_chart {
 
   set_data_typed(columns: ohlc_columns, series_id = 0): void {
     this.assert_live();
-    if (this.wasm.series_kind(series_id) === 7) {
+    if (this.wasm.series_kind(series_id) === 7 || this.wasm.series_kind(series_id) === 8) {
       throw new nucleuscharts_error(
         "unsupported_operation",
         "set_data_typed() does not apply to structured advanced-series payloads",
@@ -255,7 +267,7 @@ export class offscreen_chart {
 
   update_typed(columns: ohlc_columns, series_id = 0): void {
     this.assert_live();
-    if (this.wasm.series_kind(series_id) === 7) {
+    if (this.wasm.series_kind(series_id) === 7 || this.wasm.series_kind(series_id) === 8) {
       throw new nucleuscharts_error(
         "unsupported_operation",
         "update_typed() does not apply to structured advanced-series payloads",
@@ -283,6 +295,78 @@ export class offscreen_chart {
       { ...item, time: time_to_utc_seconds(item.time) },
     ))) return;
     this.render();
+  }
+
+  set_footprint_trades_typed(columns: footprint_trade_columns, series_id = 0): void {
+    this.assert_live();
+    const result = this.wasm.set_footprint_trades_typed(
+      series_id,
+      columns.timestamps_micros,
+      columns.prices,
+      columns.volumes,
+      columns.aggressors,
+      columns.bids,
+      columns.asks,
+      columns.sequences,
+      columns.trade_ids,
+      columns.conditions,
+      columns.session_ids,
+    );
+    if (result !== "") throw new nucleuscharts_error("invalid_data", result);
+    this.render();
+  }
+
+  update_footprint_trades_typed(
+    columns: footprint_trade_columns,
+    series_id = 0,
+  ): "tip" | "historical" {
+    this.assert_live();
+    const result = this.wasm.update_footprint_trades_typed(
+      series_id,
+      columns.timestamps_micros,
+      columns.prices,
+      columns.volumes,
+      columns.aggressors,
+      columns.bids,
+      columns.asks,
+      columns.sequences,
+      columns.trade_ids,
+      columns.conditions,
+      columns.session_ids,
+    );
+    if (result !== "tip" && result !== "historical") {
+      throw new nucleuscharts_error("invalid_data", result);
+    }
+    this.render();
+    return result;
+  }
+
+  update_footprint_trade(trade: footprint_trade, series_id = 0): "tip" | "historical" {
+    this.assert_live();
+    const side = trade.aggressor === "buy" ? 1 : trade.aggressor === "sell" ? 2 : 0;
+    const result = this.wasm.update_footprint_trade_typed(
+      series_id,
+      trade.timestamp_micros,
+      trade.price,
+      trade.volume,
+      side,
+      trade.bid ?? Number.NaN,
+      trade.ask ?? Number.NaN,
+      trade.sequence ?? Number.NaN,
+      trade.trade_id ?? Number.NaN,
+      trade.conditions ?? 0,
+      trade.session_id ?? Number.NaN,
+    );
+    if (result !== "tip" && result !== "historical") {
+      throw new nucleuscharts_error("invalid_data", result);
+    }
+    this.render();
+    return result;
+  }
+
+  footprint_bars(series_id = 0): readonly footprint_bar[] {
+    this.assert_live();
+    return JSON.parse(this.wasm.footprint_bars_json(series_id)) as footprint_bar[];
   }
 
   apply_options(options: offscreen_chart_options): void {
@@ -584,7 +668,14 @@ export async function create_offscreen_chart(
   if (Object.keys(engine_options).length > 0) {
     wasm.apply_options(JSON.stringify(engine_options));
   }
-  wasm.set_series_type(KIND_TO_U8[init.series_kind ?? "candlestick"]);
+  const initial_kind = init.series_kind ?? "candlestick";
+  if (initial_kind === "footprint") {
+    if (wasm.add_footprint_series(true, "{}") === 0xffffffff) {
+      throw new nucleuscharts_error("invalid_options", "default footprint series was rejected");
+    }
+  } else {
+    wasm.set_series_type(KIND_TO_U8[initial_kind]);
+  }
   const chart = new offscreen_chart(
     wasm, gpu_canvas, fallback_canvas, width, height, dpr, wheel_behavior ?? "auto",
   );

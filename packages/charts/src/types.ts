@@ -35,6 +35,7 @@ export type series_kind =
   | "area"
   | "histogram"
   | "baseline"
+  | "footprint"
   | feature_series_kind
   | "custom";
 
@@ -133,6 +134,77 @@ export type feature_series_data =
   | whisker_box_data;
 
 export type series_data = ohlc_data | single_value_data | feature_series_data | whitespace_data;
+
+export type footprint_aggressor_side = "buy" | "sell" | "unknown";
+
+/** One raw trade consumed by a tick-driven footprint series. */
+export interface footprint_trade {
+  /** Signed Unix timestamp in integer microseconds; must be a JavaScript safe integer. */
+  timestamp_micros: number;
+  price: number;
+  volume: number;
+  aggressor?: footprint_aggressor_side;
+  /** Contemporaneous quote used only when `aggressor` is unknown. */
+  bid?: number;
+  ask?: number;
+  sequence?: number;
+  trade_id?: number;
+  conditions?: number;
+  /** Host-defined session identity. A change resets session cumulative delta. */
+  session_id?: number;
+}
+
+/** Allocation-conscious historical footprint input. Every column must have equal length. */
+export interface footprint_trade_columns {
+  timestamps_micros: Float64Array;
+  prices: Float64Array;
+  volumes: Float64Array;
+  /** 0 unknown, 1 buy, 2 sell. */
+  aggressors: Uint8Array;
+  /** Optional numeric columns use NaN for a missing value. */
+  bids: Float64Array;
+  asks: Float64Array;
+  sequences: Float64Array;
+  trade_ids: Float64Array;
+  conditions: Uint32Array;
+  session_ids: Float64Array;
+}
+
+export interface footprint_level {
+  level: number;
+  price: number;
+  bid_volume: number;
+  ask_volume: number;
+  unknown_volume: number;
+  total_volume: number;
+  delta: number;
+  bid_imbalance: boolean;
+  ask_imbalance: boolean;
+  stacked_bid_imbalance: boolean;
+  stacked_ask_imbalance: boolean;
+}
+
+export interface footprint_bar {
+  start_timestamp_micros: number;
+  end_timestamp_micros: number;
+  session_id: number | null;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  bid_volume: number;
+  ask_volume: number;
+  unknown_volume: number;
+  total_volume: number;
+  delta: number;
+  max_delta: number;
+  min_delta: number;
+  session_delta: number;
+  trade_count: number;
+  poc_level: number;
+  poc_price: number;
+  levels: footprint_level[];
+}
 
 /**
  * Columnar input for {@link series_api.set_data_typed} and {@link series_api.update_typed}: one
@@ -988,7 +1060,30 @@ export interface feature_series_options {
   outlier_color: string;
 }
 
-export type any_series_options = series_options & Partial<feature_series_options>;
+export interface footprint_series_options {
+  /** Exact exchange price increment. Off-grid trades are rejected. */
+  tick_size: number;
+  /** Whole-second aligned time-bar period. */
+  interval_seconds: number;
+  anchor_seconds: number;
+  imbalance_ratio: number;
+  imbalance_minimum_volume: number;
+  stacked_imbalance_levels: number;
+  cell_mode: "bid_ask" | "total" | "delta";
+  font_size: number;
+  bid_color: string;
+  ask_color: string;
+  positive_delta_color: string;
+  negative_delta_color: string;
+  /** `null` follows the live chart layout foreground. */
+  text_color: string | null;
+  poc_color: string;
+  stacked_bid_color: string;
+  stacked_ask_color: string;
+  show_bar_summary: boolean;
+}
+
+export type any_series_options = series_options & Partial<feature_series_options> & Partial<footprint_series_options>;
 
 export const LINE_TYPE_TO_U8: Record<NonNullable<series_options["line_type"]>, number> = {
   simple: 0,
@@ -1068,6 +1163,7 @@ export const KIND_TO_U8: Record<series_kind, number> = {
   area: 3,
   histogram: 4,
   baseline: 5,
+  footprint: 8,
   brushable_area: 7,
   grouped_bars: 7,
   heatmap: 7,
@@ -1094,6 +1190,10 @@ export const FEATURE_KIND_TO_U8: Record<feature_series_kind, number> = {
 
 export function is_feature_series_kind(kind: series_kind): kind is feature_series_kind {
   return kind !== "custom" && KIND_TO_U8[kind] === 7;
+}
+
+export function is_footprint_series_kind(kind: series_kind): kind is "footprint" {
+  return kind === "footprint";
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1460,6 +1560,20 @@ export interface series_api {
   readonly id: number;
 }
 
+/** A first-class tick-driven footprint handle. Generic OHLC setters are rejected at runtime. */
+export interface footprint_series_api extends series_api {
+  set_trades(trades: readonly footprint_trade[]): void;
+  set_trades_typed(columns: footprint_trade_columns): void;
+  update_trades(trades: readonly footprint_trade[]): "tip" | "historical";
+  update_trades_typed(columns: footprint_trade_columns): "tip" | "historical";
+  update_trade(trade: footprint_trade): "tip" | "historical";
+  footprint_bars(): readonly footprint_bar[];
+  footprint_bar(index: number): footprint_bar | null;
+  apply_options(options: Partial<any_series_options> & Partial<footprint_series_options>): void;
+  options(): any_series_options & footprint_series_options;
+  series_type(): "footprint";
+}
+
 /** The horizontal (time) scale. */
 export interface time_scale_api {
   /** Distance in logical bars between the latest point and the right edge. */
@@ -1792,6 +1906,7 @@ export interface chart_api {
    * and whitespace remain present with null data and never borrow a neighboring value.
    */
   value_snapshot(logical_index?: number): chart_value_snapshot[];
+  add_series(kind: "footprint", options?: Partial<any_series_options> & Partial<footprint_series_options>): footprint_series_api;
   add_series(kind: series_kind, options?: Partial<any_series_options>): series_api;
   /**
    * Add a custom series (plugin platform Phase C-c; reference `IChartApi.addCustomSeries`): a

@@ -13,6 +13,11 @@ entry point and `./design.css` are the only npm export paths. The supported root
   `chart.price_scale()`/`pane.price_scale()`, and series scale identity/rebinding;
 - built-in series, indicators, drawing kinds, options, themes, data ingestion, interactions,
   subscriptions, screenshots, and lifecycle operations declared by those handles;
+- first-class tick-driven footprint / numbers-bar series through `chart.add_series("footprint")`,
+  including object and typed-column trade ingestion, explicit/quote/tick-rule aggressor handling,
+  per-level Bid × Ask/total/delta, POC, final/Max/Min/session delta, configurable diagonal and
+  stacked imbalances, density LOD, and derived bar/level queries; generic OHLC setters are rejected
+  because they cannot supply order-flow truth;
 - engine-resolved secondary-click context through `chart.subscribe_chart_context()`, including
   pane, time, logical index, coordinates, hit series, and the exact price on its scale; hosts own
   menus, clipboard operations, and order actions;

@@ -8,6 +8,7 @@
 mod axis_primitives;
 mod drawings;
 mod feature_series;
+mod footprint;
 mod frame;
 mod hit_test;
 mod host_layout;
@@ -37,6 +38,12 @@ pub use drawings::{
 pub use feature_series::{
     BrushRange, BrushStyle, FeatureDataPoint, FeatureSeriesKind, FeatureSeriesOptionsPatch,
     FeatureValue, HeatmapCell, StackedAreaColor,
+};
+pub use footprint::{
+    AggressorSide, FootprintAggregationOptions, FootprintAggregator, FootprintBar,
+    FootprintBarAggregation, FootprintCellMode, FootprintError, FootprintImbalanceOptions,
+    FootprintLevel, FootprintSeriesOptions, FootprintTrade, FootprintUpdateKind,
+    FootprintVisualOptions, FootprintWorkStats,
 };
 pub use frame::{
     AxisBand, AxisFrame, AxisLabel, AxisLabelCorners, AxisTextAlign, AxisTextMidpoint, ChartFrame,
@@ -119,6 +126,7 @@ pub struct EngineMemoryUsage {
     pub retained_frame_capacity_bytes: usize,
     pub drawing_runtime_capacity_bytes: usize,
     pub feature_series_capacity_bytes: usize,
+    pub footprint_capacity_bytes: usize,
     pub native_primitive_capacity_bytes: usize,
     pub trading_capacity_bytes: usize,
 }
@@ -140,6 +148,7 @@ impl EngineMemoryUsage {
             + self.retained_frame_capacity_bytes
             + self.drawing_runtime_capacity_bytes
             + self.feature_series_capacity_bytes
+            + self.footprint_capacity_bytes
             + self.native_primitive_capacity_bytes
             + self.trading_capacity_bytes
     }
@@ -307,6 +316,9 @@ pub enum SeriesKind {
     /// An engine-owned advanced series. Unlike [`Self::Custom`], its typed data, scaling,
     /// geometry, and backend-neutral frame primitives never execute host renderer callbacks.
     Feature,
+    /// A first-class tick-driven footprint / numbers-bar series. Its OHLC projection participates
+    /// in shared scales and queries while the authoritative tape and clusters remain engine-owned.
+    Footprint,
 }
 
 /// One custom series' last-value record (Phase C-c): the plugin's current value for the item
@@ -467,6 +479,7 @@ impl SeriesKind {
             5 => Self::Baseline,
             6 => Self::Custom,
             7 => Self::Feature,
+            8 => Self::Footprint,
             _ => Self::Candlestick,
         }
     }
@@ -481,6 +494,7 @@ impl SeriesKind {
             Self::Baseline => 5,
             Self::Custom => 6,
             Self::Feature => 7,
+            Self::Footprint => 8,
         }
     }
 
@@ -721,6 +735,8 @@ pub struct SeriesEntry {
     pub custom_frame: CustomSeriesFrameValues,
     /// Engine-owned advanced-series state. Present only when `kind == SeriesKind::Feature`.
     pub(crate) feature: Option<feature_series::FeatureSeriesState>,
+    /// Tick-truth footprint state. Present only when `kind == SeriesKind::Footprint`.
+    pub(crate) footprint: Option<footprint::FootprintSeriesState>,
     /// First-class financial primitives whose state and geometry live in the shared engine.
     pub(crate) native_primitives: Vec<native_primitives::NativeSeriesPrimitive>,
     /// Retention ceiling: the series holds at most this many rows, oldest evicted first.
@@ -802,6 +818,7 @@ impl SeriesEntry {
             removed: false,
             custom_frame: CustomSeriesFrameValues::default(),
             feature: None,
+            footprint: None,
             native_primitives: Vec::new(),
             max_points: None,
         }
@@ -1453,6 +1470,7 @@ impl ChartEngine {
             retained_frame_capacity_bytes: self.retained_frame.capacity_bytes(),
             drawing_runtime_capacity_bytes: self.drawing_runtime.borrow().capacity_bytes(),
             feature_series_capacity_bytes: self.feature_series_capacity_bytes(),
+            footprint_capacity_bytes: self.footprint_capacity_bytes(),
             native_primitive_capacity_bytes: self.native_primitive_capacity_bytes(),
             trading_capacity_bytes: self.trading_state.estimated_bytes(),
         }
@@ -1551,11 +1569,20 @@ impl ChartEngine {
         } else {
             self.series[slot] = SeriesEntry::new(id, kind);
         }
+        if kind == SeriesKind::Footprint {
+            self.series[slot].footprint = Some(footprint::FootprintSeriesState {
+                aggregator: footprint::FootprintAggregator::new(Default::default())
+                    .expect("default footprint options must remain valid"),
+                visual: Default::default(),
+            });
+        }
         // new series paint on top (reference appends to the pane's data sources)
         self.series_order.push(id);
-        // A custom series' time-only rows still count as data rows for the base index.
-        self.data
-            .set_rows_count_as_data(id, kind == SeriesKind::Custom);
+        // Custom time-only rows and footprint scale-projection rows both anchor the base index.
+        self.data.set_rows_count_as_data(
+            id,
+            matches!(kind, SeriesKind::Custom | SeriesKind::Footprint),
+        );
         self.invalidate_frame_scene();
         id
     }
@@ -1565,9 +1592,17 @@ impl ChartEngine {
     /// times only, yet still count as data rows for the time-scale base index.
     pub fn convert_series_kind(&mut self, id: SeriesId, kind: SeriesKind) {
         if let Some(s) = self.series.iter_mut().find(|s| s.id == id && !s.removed) {
+            // A footprint is not an OHLC presentation variant. It requires raw trades plus
+            // aggregation options, which `configure_footprint_series` installs atomically.
+            if kind == SeriesKind::Footprint {
+                return;
+            }
             s.kind = kind;
             if kind != SeriesKind::Feature {
                 s.feature = None;
+            }
+            if kind != SeriesKind::Footprint {
+                s.footprint = None;
             }
             self.data
                 .set_rows_count_as_data(id, kind == SeriesKind::Custom);
@@ -1628,6 +1663,7 @@ impl ChartEngine {
                 entry.price_lines.clear();
                 entry.markers.clear();
                 entry.feature = None;
+                entry.footprint = None;
                 entry.native_primitives.clear();
             }
             // Release the data slot; its opaque identity is invalid forever and the storage may
@@ -2102,10 +2138,13 @@ impl ChartEngine {
     /// Per-point color channels truncate with their rows. Returns the new data length, or
     /// `None` for an unknown/removed id.
     pub fn series_pop(&mut self, id: SeriesId, count: usize) -> Option<usize> {
-        self.invalidate_frame_series(id);
         if self.is_series_removed(id) || !self.series.iter().any(|s| s.id == id) {
             return None;
         }
+        if self.is_footprint_series(id) {
+            return None;
+        }
+        self.invalidate_frame_series(id);
         let previous_generation = self.data.series_generation(id).unwrap_or(0);
         let len = self.data.pop(id, count)?;
         self.truncate_feature_rows(id, len);
@@ -2162,10 +2201,10 @@ impl ChartEngine {
     where
         I: IntoIterator<Item = (f64, [f64; 4])>,
     {
-        self.invalidate_frame_series(id);
-        if self.validate_series_id(id).is_err() {
+        if self.validate_series_id(id).is_err() || self.is_footprint_series(id) {
             return 0;
         }
+        self.invalidate_frame_series(id);
         let previous_generation = self.data.series_generation(id).unwrap_or(0);
         let mut from = usize::MAX;
         let mut accepted = 0;
@@ -2214,10 +2253,23 @@ impl ChartEngine {
         low: Vec<f64>,
         close: Vec<f64>,
     ) -> usize {
-        self.invalidate_frame_series(id);
-        if self.validate_series_id(id).is_err() || times.is_empty() {
+        if self.validate_series_id(id).is_err() || self.is_footprint_series(id) || times.is_empty()
+        {
             return 0;
         }
+        self.update_series_bars_sanitized_inner(id, times, open, high, low, close)
+    }
+
+    fn update_series_bars_sanitized_inner(
+        &mut self,
+        id: SeriesId,
+        times: Vec<i64>,
+        open: Vec<f64>,
+        high: Vec<f64>,
+        low: Vec<f64>,
+        close: Vec<f64>,
+    ) -> usize {
+        self.invalidate_frame_series(id);
         let previous_generation = self.data.series_generation(id).unwrap_or(0);
         let Some(from) = self
             .data
@@ -2249,9 +2301,19 @@ impl ChartEngine {
         values: [f64; 4],
         colors: [Option<u32>; 3],
     ) -> bool {
-        if self.validate_series_id(id).is_err() {
+        if self.validate_series_id(id).is_err() || self.is_footprint_series(id) {
             return false;
         }
+        self.update_series_bar_styled_inner(id, time, values, colors)
+    }
+
+    fn update_series_bar_styled_inner(
+        &mut self,
+        id: SeriesId,
+        time: f64,
+        values: [f64; 4],
+        colors: [Option<u32>; 3],
+    ) -> bool {
         let Some((time, values)) = sanitize_point(time, values) else {
             return false;
         };
@@ -2306,7 +2368,7 @@ impl ChartEngine {
         wick: Option<Vec<u32>>,
         border: Option<Vec<u32>>,
     ) -> bool {
-        if self.validate_series_id(id).is_err() {
+        if self.validate_series_id(id).is_err() || self.is_footprint_series(id) {
             return false;
         }
         let changed = self.data.set_point_colors(id, [body, wick, border]);
@@ -2334,6 +2396,9 @@ impl ChartEngine {
             SeriesIdError::Unknown(id) => ValidationError::UnknownSeries(id),
             SeriesIdError::Stale(id) => ValidationError::StaleSeries(id),
         })?;
+        if self.is_footprint_series(id) {
+            return Err(ValidationError::UnsupportedSeriesData(id));
+        }
         let s = sanitize_ohlc_styled(times, open, high, low, close, colors)?;
         self.invalidate_frame_series(id);
         let report = s.data.report.clone();
@@ -2376,6 +2441,9 @@ impl ChartEngine {
             SeriesIdError::Unknown(id) => ValidationError::UnknownSeries(id),
             SeriesIdError::Stale(id) => ValidationError::StaleSeries(id),
         })?;
+        if self.is_footprint_series(id) {
+            return Err(ValidationError::UnsupportedSeriesData(id));
+        }
         let sanitized = sanitize_ohlc(times, open, high, low, close)?;
         self.invalidate_frame_series(id);
         let report = sanitized.report.clone();
@@ -2407,10 +2475,22 @@ impl ChartEngine {
         low: Vec<f64>,
         close: Vec<f64>,
     ) -> bool {
-        self.invalidate_frame_series(id);
-        if self.validate_series_id(id).is_err() {
+        if self.validate_series_id(id).is_err() || self.is_footprint_series(id) {
             return false;
         }
+        self.install_series_data_inner(id, times, open, high, low, close)
+    }
+
+    fn install_series_data_inner(
+        &mut self,
+        id: SeriesId,
+        times: Vec<i64>,
+        open: Vec<f64>,
+        high: Vec<f64>,
+        low: Vec<f64>,
+        close: Vec<f64>,
+    ) -> bool {
+        self.invalidate_frame_series(id);
         if !self.install_series_columns(id, times, open, high, low, close) {
             return false;
         }
@@ -2421,6 +2501,48 @@ impl ChartEngine {
         self.recompute_indicators_for(id);
         self.restart_selection_anchor_snapshot_after_replacement(id);
         true
+    }
+
+    fn is_footprint_series(&self, id: SeriesId) -> bool {
+        self.series.iter().any(|series| {
+            series.id == id && !series.removed && series.kind == SeriesKind::Footprint
+        })
+    }
+
+    pub(crate) fn install_footprint_projection(
+        &mut self,
+        id: SeriesId,
+        times: Vec<i64>,
+        open: Vec<f64>,
+        high: Vec<f64>,
+        low: Vec<f64>,
+        close: Vec<f64>,
+    ) -> bool {
+        debug_assert!(self.is_footprint_series(id));
+        self.install_series_data_inner(id, times, open, high, low, close)
+    }
+
+    pub(crate) fn update_footprint_projection_bar(
+        &mut self,
+        id: SeriesId,
+        time: f64,
+        values: [f64; 4],
+    ) -> bool {
+        debug_assert!(self.is_footprint_series(id));
+        self.update_series_bar_styled_inner(id, time, values, [None; 3])
+    }
+
+    pub(crate) fn update_footprint_projection_bars(
+        &mut self,
+        id: SeriesId,
+        times: Vec<i64>,
+        open: Vec<f64>,
+        high: Vec<f64>,
+        low: Vec<f64>,
+        close: Vec<f64>,
+    ) -> usize {
+        debug_assert!(self.is_footprint_series(id));
+        self.update_series_bars_sanitized_inner(id, times, open, high, low, close)
     }
 
     fn install_series_columns(
@@ -2502,6 +2624,7 @@ impl ChartEngine {
         let keep = max_points - margin;
         self.data.trim_front(id, keep);
         self.trim_feature_rows_front(id, keep);
+        self.trim_footprint_rows_front(id, keep);
         true
     }
 

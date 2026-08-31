@@ -15,7 +15,9 @@
 use std::time::Instant;
 
 use nucleuscharts_engine::{
-    ChartEngine, ChartFrame, GestureResolver, InputDevice, InputTarget, PointerSample, SeriesKind,
+    AggressorSide, ChartEngine, ChartFrame, FootprintAggregationOptions, FootprintBarAggregation,
+    FootprintSeriesOptions, FootprintTrade, FootprintVisualOptions, GestureResolver, InputDevice,
+    InputTarget, PointerSample, SeriesKind,
 };
 
 /// Parallel `(times, open, high, low, close)` columns.
@@ -50,6 +52,37 @@ fn report(label: &str, measured_ms: f64, budget_ms: f64) -> bool {
     pass
 }
 
+fn gen_footprint_trades(
+    start_bar: usize,
+    bars: usize,
+    trades_per_bar: usize,
+) -> Vec<FootprintTrade> {
+    let mut trades = Vec::with_capacity(bars * trades_per_bar);
+    for bar in start_bar..start_bar + bars {
+        let bar_time = bar as i64 * 60_000_000;
+        for tick in 0..trades_per_bar {
+            let level = ((bar + tick * 7) % 21) as i64 - 10;
+            trades.push(FootprintTrade {
+                timestamp_micros: bar_time + tick as i64 * 1_000,
+                price: 100.0 + level as f64 * 0.25,
+                volume: (tick % 17 + 1) as f64,
+                aggressor: if (bar + tick) % 2 == 0 {
+                    AggressorSide::Buy
+                } else {
+                    AggressorSide::Sell
+                },
+                bid: None,
+                ask: None,
+                sequence: Some(tick as u64),
+                trade_id: Some((bar * trades_per_bar + tick) as u64),
+                conditions: 0,
+                session_id: Some((bar / 1_440) as u64),
+            });
+        }
+    }
+    trades
+}
+
 fn main() {
     const SERIES: usize = 10;
     const FRAME_BARS: usize = 50_000;
@@ -59,6 +92,11 @@ fn main() {
     const LOAD_BUDGET_MS: f64 = 300.0;
     const INPUT_SAMPLES: usize = 1_000_000;
     const INPUT_SAMPLE_BUDGET_MS: f64 = 0.01;
+    const FOOTPRINT_HISTORY_BARS: usize = 2_500;
+    const FOOTPRINT_TRADES_PER_BAR: usize = 100;
+    const FOOTPRINT_LOAD_BUDGET_MS: f64 = 300.0;
+    const FOOTPRINT_LIVE_BARS: usize = 100;
+    const FOOTPRINT_LIVE_BUDGET_MS: f64 = 50.0;
 
     println!("nucleuscharts perf gate (release build recommended)\n");
 
@@ -129,7 +167,84 @@ fn main() {
     );
     let c_pass = report("pointer_move", per_sample_ms, INPUT_SAMPLE_BUDGET_MS);
 
-    let all_pass = a_pass && b_pass && c_pass;
+    // ---- Target D: tick-truth footprint history + one synchronized live batch ----------------
+    let mut footprint = ChartEngine::new(1600.0, 800.0, 1.0);
+    footprint
+        .configure_footprint_series(
+            0,
+            FootprintSeriesOptions {
+                aggregation: FootprintAggregationOptions {
+                    tick_size: 0.25,
+                    bars: FootprintBarAggregation::Time {
+                        interval_micros: 60_000_000,
+                        anchor_micros: 0,
+                    },
+                    ..FootprintAggregationOptions::default()
+                },
+                visual: FootprintVisualOptions::default(),
+            },
+        )
+        .expect("valid footprint options");
+    let history = gen_footprint_trades(0, FOOTPRINT_HISTORY_BARS, FOOTPRINT_TRADES_PER_BAR);
+    let start = Instant::now();
+    footprint
+        .set_footprint_trades(0, history)
+        .expect("valid footprint history");
+    let footprint_load_ms = start.elapsed().as_secs_f64() * 1000.0;
+    assert!(footprint.set_series_max_points(0, Some(FOOTPRINT_HISTORY_BARS)));
+    let footprint_memory_before = footprint.memory_usage().footprint_capacity_bytes;
+    footprint.time_scale.set_width(1600.0);
+    footprint.fit_content();
+    let mut footprint_frame = ChartFrame::default();
+    let start = Instant::now();
+    footprint.build_frame_into(&mut footprint_frame);
+    let footprint_frame_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let live = gen_footprint_trades(
+        FOOTPRINT_HISTORY_BARS,
+        FOOTPRINT_LIVE_BARS,
+        FOOTPRINT_TRADES_PER_BAR,
+    );
+    let start = Instant::now();
+    footprint
+        .update_footprint_trades(0, live)
+        .expect("valid footprint live batch");
+    let footprint_live_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let footprint_stats = footprint
+        .footprint_work_stats(0)
+        .expect("footprint work stats");
+    let footprint_retained_bars = footprint.footprint_bars(0).expect("footprint bars").len();
+    let footprint_memory_after = footprint.memory_usage().footprint_capacity_bytes;
+    println!(
+        "Target D — {} footprint trades / {} bars + {}-trade live batch ({} incremental ticks, {} historical rebuilds, {} retained bars, {:.2}/{:.2} MiB footprint capacity):",
+        FOOTPRINT_HISTORY_BARS * FOOTPRINT_TRADES_PER_BAR,
+        FOOTPRINT_HISTORY_BARS,
+        FOOTPRINT_LIVE_BARS * FOOTPRINT_TRADES_PER_BAR,
+        footprint_stats.incremental_ticks,
+        footprint_stats.historical_rebuilds,
+        footprint_retained_bars,
+        footprint_memory_before as f64 / (1024.0 * 1024.0),
+        footprint_memory_after as f64 / (1024.0 * 1024.0),
+    );
+    let d_load_pass = report(
+        "set_footprint_trades",
+        footprint_load_ms,
+        FOOTPRINT_LOAD_BUDGET_MS,
+    );
+    let d_live_pass = report(
+        "update_footprint_trades",
+        footprint_live_ms,
+        FOOTPRINT_LIVE_BUDGET_MS,
+    );
+    let d_frame_pass = report("footprint build_frame", footprint_frame_ms, FRAME_BUDGET_MS);
+    let d_retention_pass = footprint_retained_bars <= FOOTPRINT_HISTORY_BARS;
+    println!(
+        "  {:<24} {:>8}",
+        "retention ceiling",
+        if d_retention_pass { "PASS" } else { "FAIL" }
+    );
+    let d_pass = d_load_pass && d_live_pass && d_frame_pass && d_retention_pass;
+
+    let all_pass = a_pass && b_pass && c_pass && d_pass;
     println!(
         "\n{}",
         if all_pass {

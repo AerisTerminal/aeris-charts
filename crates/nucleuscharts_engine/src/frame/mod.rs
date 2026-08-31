@@ -36,6 +36,7 @@ pub(crate) mod conflation;
 mod crosshair;
 mod drawings;
 mod feature_geometry;
+mod footprint_geometry;
 mod native_primitive_geometry;
 mod series_geometry;
 #[cfg(test)]
@@ -762,6 +763,17 @@ impl ChartEngine {
             SeriesKind::Feature => self
                 .feature_bar_color(series.id, row)
                 .unwrap_or_else(|| verbatim_color(&series.line_color, crate::DEFAULT_LINE_COLOR)),
+            SeriesKind::Footprint => series
+                .footprint
+                .as_ref()
+                .and_then(|state| state.aggregator.bars().get(row).map(|bar| (state, bar)))
+                .map_or(UP, |(state, bar)| {
+                    if bar.delta >= 0.0 {
+                        state.visual.positive_delta_color
+                    } else {
+                        state.visual.negative_delta_color
+                    }
+                }),
             SeriesKind::Custom => verbatim_color(&series.line_color, crate::DEFAULT_LINE_COLOR),
         }
     }
@@ -1455,6 +1467,15 @@ impl ChartEngine {
                                 pane.height,
                                 &mut series_layer.layer.prims,
                                 &mut series_layer.layer.points,
+                                scale,
+                            ),
+                            SeriesKind::Footprint => self.build_footprint_series_frame(
+                                *rs,
+                                from,
+                                to,
+                                hpr,
+                                vpr,
+                                &mut series_layer.layer.prims,
                                 scale,
                             ),
                             SeriesKind::Custom => {}
