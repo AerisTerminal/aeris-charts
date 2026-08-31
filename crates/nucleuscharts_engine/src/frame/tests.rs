@@ -3109,9 +3109,14 @@ fn countdown_text_tracks_the_pinned_host_clock() {
     assert_eq!(chart.series_countdown_text(0).as_deref(), Some("00:50"));
     chart.now_override = Some(299.7);
     assert_eq!(chart.series_countdown_text(0).as_deref(), Some("00:00"));
-    // Past the close the remaining time clamps at zero instead of going negative.
+    // A quiet market keeps counting subsequent inferred intervals rather than
+    // freezing at zero until the next data point arrives.
+    chart.now_override = Some(300.0);
+    assert_eq!(chart.series_countdown_text(0).as_deref(), Some("01:00"));
+    chart.now_override = Some(302.0);
+    assert_eq!(chart.series_countdown_text(0).as_deref(), Some("00:58"));
     chart.now_override = Some(480.0);
-    assert_eq!(chart.series_countdown_text(0).as_deref(), Some("00:00"));
+    assert_eq!(chart.series_countdown_text(0).as_deref(), Some("01:00"));
 }
 
 #[test]

@@ -2210,8 +2210,9 @@ impl ChartEngine {
     }
 
     /// The series' candle-close countdown text (TradingView-style `countdown_visible`): the time
-    /// until the inferred next bar close — `last_time + interval` minus the host clock — clamped
-    /// at zero and formatted by magnitude. The interval is the median of the last up-to-10
+    /// until the inferred next bar close. After a quiet interval with no new point, the deadline
+    /// continues from the last point's interval grid instead of freezing at zero until data
+    /// resumes. The interval is the median of the last up-to-10
     /// inter-bar deltas of the series' own bar times (fallback: the last delta). `None` (the row
     /// hides) with fewer than two bars or no installed host clock (`now_override`).
     fn series_countdown_remaining_at(&self, id: SeriesId, now: f64) -> Option<f64> {
@@ -2224,7 +2225,16 @@ impl ChartEngine {
             .collect();
         let interval = median_bar_interval(&tail_times)?;
         let last_time = *tail_times.last()?;
-        Some((last_time as f64 + interval - now).max(0.0))
+        let elapsed = now - last_time as f64;
+        if elapsed < interval {
+            return Some((interval - elapsed).max(0.0));
+        }
+        let phase = elapsed.rem_euclid(interval);
+        Some(if phase == 0.0 {
+            interval
+        } else {
+            interval - phase
+        })
     }
 
     pub(crate) fn series_countdown_layout_key_at(
