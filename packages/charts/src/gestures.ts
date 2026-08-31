@@ -496,6 +496,7 @@ export function install_gestures(chart: chart_impl): () => void {
     if (trading_hit !== null) {
       pointer_targets.set(e.pointerId, InputTargetCode.Trading);
       feed_pointer("down", e, InputTargetCode.Trading);
+      chart.trading_pressed_at(p.x, p.y);
       trading_dragging = chart.trading_drag_start_at(p.x, p.y);
       set_crosshair(p.x, p.y);
       chart.repaint();
@@ -665,6 +666,7 @@ export function install_gestures(chart: chart_impl): () => void {
     feed_pointer("up", e);
     pointers.delete(e.pointerId);
     pointer_targets.delete(e.pointerId);
+    chart.clear_trading_pressed();
     if (pointers.size === 0) chart.set_interacting(false);
     if (pointers.size !== 0) return;
     if (sep_drag !== null) {
@@ -828,6 +830,7 @@ export function install_gestures(chart: chart_impl): () => void {
       trading_dragging = false;
       chart.cancel_trading_drag();
     }
+    chart.clear_trading_pressed();
     if (drawing_dragging) {
       drawing_dragging = false;
       wasm.drawing_drag_cancel();
@@ -917,6 +920,7 @@ export function install_gestures(chart: chart_impl): () => void {
       } else if (chart.trading_hit_at_device(p.x, p.y, InputDeviceCode.Touch) !== null) {
         target = InputTargetCode.Trading;
         trading_press = true;
+        chart.trading_pressed_at_device(p.x, p.y, InputDeviceCode.Touch);
         trading_dragging = chart.trading_drag_start_at_device(p.x, p.y, InputDeviceCode.Touch);
       } else if (chart.creation_armed()) {
         target = InputTargetCode.Drawing;
@@ -1039,6 +1043,7 @@ export function install_gestures(chart: chart_impl): () => void {
     const update = feed_pointer("up", e);
     pointers.delete(e.pointerId);
     pointer_targets.delete(e.pointerId);
+    chart.clear_trading_pressed();
     clear_longpress();
 
     if (update.kind === GestureUpdateCode.RebasedSinglePointer) {

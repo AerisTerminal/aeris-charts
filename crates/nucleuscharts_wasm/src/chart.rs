@@ -1183,6 +1183,25 @@ impl NucleusChart {
         self.inner.borrow_mut().engine.clear_trading_hover()
     }
 
+    pub fn trading_pressed_at(&mut self, x_css: f64, y_css: f64) -> bool {
+        self.inner
+            .borrow_mut()
+            .engine
+            .set_trading_pressed(x_css, y_css)
+    }
+
+    pub fn trading_pressed_at_device(&mut self, x_css: f64, y_css: f64, device: u8) -> bool {
+        let profile = nucleuscharts_engine::HitProfile::for_device(input_device_from_u8(device));
+        self.inner
+            .borrow_mut()
+            .engine
+            .set_trading_pressed_with_profile(x_css, y_css, profile)
+    }
+
+    pub fn clear_trading_pressed(&mut self) -> bool {
+        self.inner.borrow_mut().engine.clear_trading_pressed()
+    }
+
     pub fn deactivate_trading_group(&mut self) -> bool {
         self.inner.borrow_mut().engine.deactivate_trading_group()
     }

@@ -504,6 +504,8 @@ pub(crate) struct TradingState {
     pub style: TradingStyle,
     pub confirmation_mode: TradingConfirmationMode,
     pub interaction: TradingInteractionState,
+    pub feedback_hover: Option<TradingHit>,
+    pub feedback_pressed: Option<TradingHit>,
     pub group_visual: TradingGroupVisualState,
     intents: VecDeque<TradingIntent>,
     next_intent_sequence: u32,
@@ -577,6 +579,14 @@ impl TradingState {
             + self.orders.capacity() * std::mem::size_of::<WorkingOrder>()
             + self.executions.capacity() * std::mem::size_of::<TradingExecution>()
             + self.intents.capacity() * std::mem::size_of::<TradingIntent>()
+            + self
+                .feedback_hover
+                .as_ref()
+                .map_or(0, TradingHit::heap_bytes)
+            + self
+                .feedback_pressed
+                .as_ref()
+                .map_or(0, TradingHit::heap_bytes)
             + retained_strings
     }
 }
@@ -606,6 +616,16 @@ pub struct TradingHit {
     pub object: TradingObjectId,
     pub kind: TradingHitKind,
     pub distance: f64,
+}
+
+impl TradingHit {
+    fn heap_bytes(&self) -> usize {
+        match &self.object {
+            TradingObjectId::Position(id) => id.heap_bytes(),
+            TradingObjectId::Order(id) => id.heap_bytes(),
+            TradingObjectId::Execution(id) => id.heap_bytes(),
+        }
+    }
 }
 
 fn invalid(message: impl Into<String>) -> ChartError {
@@ -827,28 +847,62 @@ impl ChartEngine {
     }
 
     pub fn set_trading_hover(&mut self, x_css: f64, y_css: f64) -> bool {
-        if !self.trading_state.interaction.is_idle_or_hovering() {
-            return false;
-        }
         let next = self.trading_hit_at(x_css, y_css);
-        if self.trading_state.interaction.hover() == next.as_ref() {
+        let feedback_changed = self.trading_state.feedback_hover.as_ref() != next.as_ref();
+        let interaction_changed = self.trading_state.interaction.is_idle_or_hovering()
+            && self.trading_state.interaction.hover() != next.as_ref();
+        if !feedback_changed && !interaction_changed {
             return false;
         }
-        self.trading_state.interaction = next.map_or(TradingInteractionState::Idle, |hit| {
-            TradingInteractionState::Hovering { hit }
-        });
+        self.trading_state.feedback_hover = next.clone();
+        if interaction_changed {
+            self.trading_state.interaction = next.map_or(TradingInteractionState::Idle, |hit| {
+                TradingInteractionState::Hovering { hit }
+            });
+        }
         self.invalidate_frame_trading();
         true
     }
 
     pub fn clear_trading_hover(&mut self) -> bool {
-        if !matches!(
+        let had_feedback = self.trading_state.feedback_hover.take().is_some();
+        let had_interaction = matches!(
             self.trading_state.interaction,
             TradingInteractionState::Hovering { .. }
-        ) {
+        );
+        if !had_feedback && !had_interaction {
             return false;
         }
-        self.trading_state.interaction = TradingInteractionState::Idle;
+        if had_interaction {
+            self.trading_state.interaction = TradingInteractionState::Idle;
+        }
+        self.invalidate_frame_trading();
+        true
+    }
+
+    pub fn set_trading_pressed(&mut self, x_css: f64, y_css: f64) -> bool {
+        self.set_trading_pressed_with_profile(x_css, y_css, HitProfile::PRECISION)
+    }
+
+    pub fn set_trading_pressed_with_profile(
+        &mut self,
+        x_css: f64,
+        y_css: f64,
+        profile: HitProfile,
+    ) -> bool {
+        let next = self.trading_hit_at_with_profile(x_css, y_css, profile);
+        if self.trading_state.feedback_pressed.as_ref() == next.as_ref() {
+            return false;
+        }
+        self.trading_state.feedback_pressed = next;
+        self.invalidate_frame_trading();
+        true
+    }
+
+    pub fn clear_trading_pressed(&mut self) -> bool {
+        if self.trading_state.feedback_pressed.take().is_none() {
+            return false;
+        }
         self.invalidate_frame_trading();
         true
     }
@@ -1510,6 +1564,8 @@ impl ChartEngine {
             style: prior.style,
             confirmation_mode: prior.confirmation_mode,
             interaction: prior.interaction,
+            feedback_hover: prior.feedback_hover,
+            feedback_pressed: prior.feedback_pressed,
             group_visual: prior.group_visual,
             intents: prior.intents,
             next_intent_sequence: prior.next_intent_sequence,
@@ -1941,26 +1997,46 @@ impl ChartEngine {
         true
     }
 
+    fn trading_hit_source_exists(&self, hit: &TradingHit) -> bool {
+        match &hit.object {
+            TradingObjectId::Position(id) => self
+                .trading_state
+                .positions
+                .iter()
+                .any(|position| &position.id == id),
+            TradingObjectId::Order(id) => self
+                .trading_state
+                .orders
+                .iter()
+                .any(|order| &order.id == id),
+            TradingObjectId::Execution(id) => self
+                .trading_state
+                .executions
+                .iter()
+                .any(|execution| &execution.id == id),
+        }
+    }
+
     fn reconcile_trading_interaction(&mut self) {
+        if self
+            .trading_state
+            .feedback_hover
+            .as_ref()
+            .is_some_and(|hit| !self.trading_hit_source_exists(hit))
+        {
+            self.trading_state.feedback_hover = None;
+        }
+        if self
+            .trading_state
+            .feedback_pressed
+            .as_ref()
+            .is_some_and(|hit| !self.trading_hit_source_exists(hit))
+        {
+            self.trading_state.feedback_pressed = None;
+        }
         let source_exists = match &self.trading_state.interaction {
             TradingInteractionState::Idle => return,
-            TradingInteractionState::Hovering { hit } => match &hit.object {
-                TradingObjectId::Position(id) => self
-                    .trading_state
-                    .positions
-                    .iter()
-                    .any(|position| &position.id == id),
-                TradingObjectId::Order(id) => self
-                    .trading_state
-                    .orders
-                    .iter()
-                    .any(|order| &order.id == id),
-                TradingObjectId::Execution(id) => self
-                    .trading_state
-                    .executions
-                    .iter()
-                    .any(|execution| &execution.id == id),
-            },
+            TradingInteractionState::Hovering { hit } => self.trading_hit_source_exists(hit),
             TradingInteractionState::CreatingProtection { preview }
             | TradingInteractionState::DraggingOrder { preview, .. }
             | TradingInteractionState::AwaitingManualConfirmation { preview } => {
@@ -2645,7 +2721,7 @@ mod tests {
         let target_y = chart
             .trading_price_coordinate(0, TradingPriceScale::Right, 104.0)
             .unwrap();
-        assert!(chart.trading_drag_start_at(chart.trading_position_chip_start() + 43.0, entry_y));
+        assert!(chart.trading_drag_start_at(chart.trading_position_chip_start() + 15.0, entry_y));
         assert!(matches!(
             chart.trading_preview().unwrap().source,
             TradingPreviewSource::TakeProfit { .. }
@@ -2770,7 +2846,7 @@ mod tests {
         let y = chart
             .trading_price_coordinate(0, TradingPriceScale::Right, 101.0)
             .unwrap();
-        let cancel_x = chart.trading_position_chip_start() + 242.0;
+        let cancel_x = chart.trading_position_chip_start() + 226.0;
         assert!(chart.trading_activate_at(cancel_x, y));
         let intent = chart.take_trading_intents().pop().unwrap();
         assert_eq!(intent.action, TradingIntentAction::ClosePosition);
@@ -2858,7 +2934,7 @@ mod tests {
                 OrderRole::TakeProfit,
             ),
             (
-                47.0,
+                48.0,
                 101.0,
                 TradingIntentAction::CreateStopLoss,
                 OrderRole::StopLoss,
@@ -3028,7 +3104,7 @@ mod tests {
         let target_y = chart
             .trading_price_coordinate(0, TradingPriceScale::Right, 104.0)
             .unwrap();
-        let tp_x = chart.trading_position_chip_start() + 43.0;
+        let tp_x = chart.trading_position_chip_start() + 15.0;
 
         assert!(chart.set_trading_hover(tp_x, entry_y));
         assert!(matches!(
@@ -3112,7 +3188,7 @@ mod tests {
                     assert!((*y + *h / 2.0 - expected_y).abs() <= 0.5);
                 }
                 Prim::Text { y, text, .. }
-                    if matches!(text.as_str(), "↕" | "TP" | "SL" | "12" | "—" | "×") =>
+                    if matches!(text.as_str(), "TP" | "SL" | "12" | "—" | "×") =>
                 {
                     assert!((*y - expected_y).abs() <= 0.5);
                 }
@@ -3123,7 +3199,7 @@ mod tests {
         let target_y = chart
             .trading_price_coordinate(0, TradingPriceScale::Right, 104.0)
             .unwrap();
-        assert!(chart.trading_drag_start_at(chart.trading_position_chip_start() + 43.0, entry_y));
+        assert!(chart.trading_drag_start_at(chart.trading_position_chip_start() + 15.0, entry_y));
         assert!(chart.trading_drag_to(target_y));
         let preview = chart.build_frame();
         let segments = chart.frame_pane_segments(0).unwrap();
@@ -3167,13 +3243,13 @@ mod tests {
         for (role, x_offset, price, action) in [
             (
                 OrderRole::TakeProfit,
-                43.0,
+                15.0,
                 104.0,
                 TradingIntentAction::CreateTakeProfit,
             ),
             (
                 OrderRole::StopLoss,
-                73.0,
+                48.0,
                 98.0,
                 TradingIntentAction::CreateStopLoss,
             ),
@@ -3265,15 +3341,26 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(right_edges.len(), 4);
-        assert!(right_edges
-            .iter()
-            .all(|right| (*right - (chart.pane_w - 12.0) as f32).abs() <= 0.5));
-        for expected in ["↕", "TP", "SL", "Buy Limit", "+24.00 USD", "-24.00 USD"] {
+        assert_eq!(right_edges.len(), 16);
+        assert_eq!(
+            right_edges
+                .iter()
+                .filter(|right| (*right - (chart.pane_w - 12.0) as f32).abs() <= 0.5)
+                .count(),
+            4
+        );
+        assert!(trading.iter().all(|primitive| !matches!(
+            primitive,
+            Prim::RoundRect { radii, .. } if *radii != [0.0; 4]
+        )));
+        for expected in ["TP", "SL", "Buy Limit", "+24.00 USD", "-24.00 USD"] {
             assert!(trading
                 .iter()
                 .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == expected)));
         }
+        assert!(trading
+            .iter()
+            .all(|primitive| !matches!(primitive, Prim::Text { text, .. } if text == "↕")));
     }
 
     #[test]
@@ -3297,7 +3384,7 @@ mod tests {
         let stop_y = chart
             .trading_price_coordinate(0, TradingPriceScale::Right, 98.0)
             .unwrap();
-        assert!(chart.trading_drag_start_at(chart.trading_position_chip_start() + 73.0, entry_y,));
+        assert!(chart.trading_drag_start_at(chart.trading_position_chip_start() + 48.0, entry_y,));
         assert!(chart.trading_drag_to(stop_y));
         let intent = chart.trading_drag_end().expect("instant stop-loss intent");
         assert!(chart.resolve_trading_intent(intent.sequence, true));
@@ -3360,7 +3447,7 @@ mod tests {
                 _ => None,
             })
             .unwrap();
-        assert!(chart.set_trading_hover(chart.trading_position_chip_start() + 242.0, y,));
+        assert!(chart.set_trading_hover(chart.trading_position_chip_start() + 226.0, y,));
         let hovered = chart.build_frame();
         let pane_segments = chart.frame_pane_segments(0).unwrap();
         let trading = &hovered.panes[0].main[pane_segments.drawings_end..pane_segments.trading_end];
@@ -3385,5 +3472,78 @@ mod tests {
             })
             .unwrap();
         assert_eq!(hovered_bounds, bounds);
+    }
+
+    #[test]
+    fn position_controls_are_separate_square_buttons_with_press_feedback() {
+        let mut chart = chart_with_market();
+        chart
+            .update_trading_position(position(PositionSide::Long))
+            .unwrap();
+        chart.build_frame();
+        let y = chart
+            .trading_price_coordinate(0, TradingPriceScale::Right, 101.0)
+            .unwrap();
+        let start = chart.trading_position_chip_start();
+        let cancel_left = start + 212.0;
+        let cancel_center = start + 226.0;
+
+        assert_eq!(
+            chart.trading_position_chip_hit(start + 15.0),
+            TradingHitKind::CreateTargetButton
+        );
+        assert_eq!(
+            chart.trading_position_chip_hit(start + 31.0),
+            TradingHitKind::QuantityLabel,
+            "the visual gap between TP and SL must not activate either button"
+        );
+
+        let button_fill = |chart: &mut ChartEngine| {
+            chart.build_frame();
+            let pane_segments = chart.frame_pane_segments(0).unwrap();
+            let frame = chart.build_frame();
+            frame.panes[0].main[pane_segments.drawings_end..pane_segments.trading_end]
+                .iter()
+                .find_map(|primitive| match primitive {
+                    Prim::RoundRect { x, fill, radii, .. }
+                        if (*x - cancel_left as f32).abs() <= 0.5 =>
+                    {
+                        Some((*fill, *radii))
+                    }
+                    _ => None,
+                })
+                .expect("position close button")
+        };
+
+        let (idle_fill, radii) = button_fill(&mut chart);
+        assert_eq!(radii, [0.0; 4]);
+        assert_eq!(idle_fill.a(), 255);
+
+        assert!(chart.set_trading_hover(cancel_center, y));
+        let (hover_fill, _) = button_fill(&mut chart);
+        let color = chart.trading_style().position;
+        assert_eq!(hover_fill, Color::rgba(color.r(), color.g(), color.b(), 44));
+        assert_ne!(hover_fill, idle_fill);
+
+        assert!(chart.set_trading_pressed(cancel_center, y));
+        let (pressed_fill, _) = button_fill(&mut chart);
+        assert_eq!(
+            pressed_fill,
+            Color::rgba(color.r(), color.g(), color.b(), 78)
+        );
+        let pane_segments = chart.frame_pane_segments(0).unwrap();
+        let frame = chart.build_frame();
+        assert!(
+            frame.panes[0].main[pane_segments.drawings_end..pane_segments.trading_end]
+                .iter()
+                .any(|primitive| matches!(
+                    primitive,
+                    Prim::Text { text, size, weight, .. }
+                        if text == "×"
+                            && *size > chart.options.get().layout.font_size as f32
+                            && *weight == 700
+                ))
+        );
+        assert!(chart.clear_trading_pressed());
     }
 }

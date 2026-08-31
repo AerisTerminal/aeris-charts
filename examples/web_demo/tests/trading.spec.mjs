@@ -75,12 +75,12 @@ test("trading lines use dedicated hits and render semantic colors through the sh
     const target = trading.state().orders.find((order) => order.id === "demo-target");
     const position = trading.state().positions[0];
     const position_y = window.__main.price_to_coordinate(position.average_price);
-    const position_start = window.__chart.time_scale().width() - 268;
+    const position_start = window.__chart.time_scale().width() - 252;
     return {
       order: trading.hit_at(80, window.__main.price_to_coordinate(target.price)),
-      quantity: trading.hit_at(position_start + 110, position_y),
-      pnl: trading.hit_at(position_start + 180, position_y),
-      close: trading.hit_at(position_start + 242, position_y),
+      quantity: trading.hit_at(position_start + 88, position_y),
+      pnl: trading.hit_at(position_start + 161, position_y),
+      close: trading.hit_at(position_start + 226, position_y),
     };
   });
   expect(probe.order).toMatchObject({
@@ -470,12 +470,12 @@ for (const backend of ["canvas2d", "webgpu"]) {
       trading.subscribe_intents((intent) => window.__creation_intents.push(intent));
       const overlay = document.querySelector("#chart_container canvas:last-of-type").getBoundingClientRect();
       const width = window.__chart.time_scale().width();
-      const position_start = width - 268;
+      const position_start = width - 252;
       return {
         overlay: { left: overlay.left, top: overlay.top },
         width,
-        tp_x: position_start + 43,
-        sl_x: position_start + 73,
+        tp_x: position_start + 15,
+        sl_x: position_start + 48,
         entry_y: window.__main.price_to_coordinate(100),
         tp_y: window.__main.price_to_coordinate(102),
         sl_y: window.__main.price_to_coordinate(98),

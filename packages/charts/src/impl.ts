@@ -2610,6 +2610,18 @@ export class chart_impl implements chart_api {
     return this.wasm.clear_trading_hover();
   }
 
+  trading_pressed_at(x: number, y: number): boolean {
+    return this.wasm.trading_pressed_at(x, y);
+  }
+
+  trading_pressed_at_device(x: number, y: number, device: number): boolean {
+    return this.wasm.trading_pressed_at_device(x, y, device);
+  }
+
+  clear_trading_pressed(): boolean {
+    return this.wasm.clear_trading_pressed();
+  }
+
   deactivate_trading_group(): boolean {
     return this.wasm.deactivate_trading_group();
   }
