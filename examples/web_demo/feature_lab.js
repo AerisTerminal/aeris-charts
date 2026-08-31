@@ -106,12 +106,92 @@ function stacked_series_data(bars, layer_count = 4) {
   });
 }
 
+function footprint_trades(bars) {
+  const tick_size = 0.25;
+  const sample = bars.slice(-8);
+  const trades = [];
+  let trade_id = 1;
+  for (let bar_index = 0; bar_index < sample.length; bar_index += 1) {
+    const bar = sample[bar_index];
+    const start_seconds = Math.floor(bar.time / 3600) * 3600;
+    const center_level = Math.round(bar.close / tick_size) + (bar_index % 3) - 1;
+    const ask_dominant = bar_index % 2 === 0;
+    const levels = [-2, -1, 0, 1, 2].map((offset) => center_level + offset);
+    const events = [];
+    for (let index = 0; index < levels.length; index += 1) {
+      const level = levels[index];
+      const edge = index === 0 || index === levels.length - 1;
+      const bid_volume = ask_dominant
+        ? 4 + index
+        : (index <= 2 ? 54 - index * 8 : 8 + index);
+      const ask_volume = ask_dominant
+        ? (index >= 2 ? 46 + (index - 2) * 9 : 6 + index)
+        : 5 + index;
+      events.push(
+        { level, volume: edge ? Math.max(2, bid_volume - 2) : bid_volume, aggressor: "sell" },
+        { level, volume: edge ? Math.max(2, ask_volume - 2) : ask_volume, aggressor: "buy" },
+      );
+    }
+    // Reverse alternate bars so the running path visibly exercises both positive and negative
+    // Max/Min Delta before mean-reverting to the same final accounting.
+    if (!ask_dominant) events.reverse();
+    for (let event_index = 0; event_index < events.length; event_index += 1) {
+      const event = events[event_index];
+      trades.push({
+        timestamp_micros: start_seconds * 1_000_000 + event_index * 10_000 + 1,
+        price: event.level * tick_size,
+        volume: event.volume,
+        aggressor: event.aggressor,
+        sequence: event_index,
+        trade_id,
+        session_id: 1,
+      });
+      trade_id += 1;
+    }
+  }
+  return trades;
+}
+
+function use_footprint_spacing(chart) {
+  const scale = chart.time_scale();
+  const previous = scale.options();
+  scale.apply_options({ min_bar_spacing: 4, bar_spacing: 96, right_offset: 0 });
+  scale.scroll_to_real_time();
+  return () => scale.apply_options({
+    min_bar_spacing: previous.min_bar_spacing,
+    bar_spacing: previous.bar_spacing,
+    right_offset: previous.right_offset,
+  });
+}
+
 function series_features(bars) {
   const sampled = bars.filter((_, index) => index % 5 === 0);
   const closes = sampled.map((bar) => bar.close);
   const shade_data = background_shade_data(bars);
   const base = Math.floor(Math.min(...closes) - 2);
   return [
+    {
+      id: "footprint", label: "Footprint", detail: "Bid × Ask · POC · stacked delta", icon: "chart",
+      preserve_time_spacing: true,
+      create: (chart) => {
+        const footprint = chart.add_series("footprint", {
+          tick_size: 0.25,
+          interval_seconds: 3600,
+          imbalance_ratio: 3,
+          imbalance_minimum_volume: 20,
+          stacked_imbalance_levels: 3,
+          cell_mode: "bid_ask",
+          font_size: 10,
+          show_bar_summary: true,
+          price_line_visible: false,
+          last_value_visible: false,
+          title: "ORDER FLOW",
+        });
+        footprint.set_trades(footprint_trades(bars));
+        return footprint;
+      },
+      compose: (chart) => use_footprint_spacing(chart),
+    },
     {
       id: "brushable-area", label: "Brushable area", detail: "Drag to brush", icon: "chart", interactive: true,
       series_kind: "brushable_area",
@@ -358,12 +438,12 @@ export function install_feature_lab({ chart, series, data }) {
         const was_active = active_series?.id === feature.id;
         clear_series();
         if (!was_active) {
-          const handle = chart.add_series(feature.series_kind, {
+          const handle = feature.create?.(chart) ?? chart.add_series(feature.series_kind, {
             ...feature.options,
             price_line_visible: false,
             last_value_visible: false,
           });
-          handle.set_data(feature.data());
+          if (feature.create === undefined) handle.set_data(feature.data());
           const interaction = feature.interactive === true
             ? enable_brushable_area_interaction(chart, handle)
             : null;

@@ -27,7 +27,8 @@ test("demo shell is responsive, icon-led, and has no horizontal control ribbon",
 test("feature lab exposes every first-class helper and manages series lifecycle", async ({ page }) => {
   await open_demo(page);
   // Every supported helper scenario remains represented after retiring three obsolete cards.
-  await expect(page.locator("#feature_grid .feature-card")).toHaveCount(25);
+  await expect(page.locator("#feature_grid .feature-card")).toHaveCount(26);
+  await expect(page.locator('[data-feature-id="footprint"]')).toBeVisible();
   await expect(page.locator('[data-feature-id="heatmap-standalone"]')).toBeVisible();
   await expect(page.locator('[data-feature-id="heatmap-line"]')).toBeVisible();
 
@@ -43,6 +44,35 @@ test("feature lab exposes every first-class helper and manages series lifecycle"
   expect(await page.evaluate(() => window.__feature_lab.active_ids())).toEqual([]);
   expect(await page.evaluate(() => window.__chart.series_order().filter((item) => item.series_type() === "hlc_area").length)).toBe(0);
   expect(await page.evaluate(() => window.__main.options().visible)).toBe(true);
+});
+
+test("feature lab launches a readable tick-driven footprint preview", async ({ page }) => {
+  await open_demo(page);
+  await page.locator('[data-feature-id="footprint"]').click();
+  const state = await page.evaluate(() => {
+    const footprint = window.__chart.series_order().find((series) => series.series_type() === "footprint");
+    const bars = footprint?.footprint_bars() ?? [];
+    return {
+      active: window.__feature_lab.active_ids(),
+      visible: footprint?.options().visible,
+      bars: bars.length,
+      levels: bars[0]?.levels.length ?? 0,
+      has_stacked: bars.some((bar) => bar.levels.some(
+        (level) => level.stacked_ask_imbalance || level.stacked_bid_imbalance,
+      )),
+      spacing: window.__chart.time_scale().options().bar_spacing,
+      main_visible: window.__main.options().visible,
+    };
+  });
+  expect(state).toMatchObject({
+    active: ["footprint"],
+    visible: true,
+    bars: 8,
+    levels: 5,
+    has_stacked: true,
+    spacing: 96,
+    main_visible: false,
+  });
 });
 
 test("every feature-lab card activates through its real public API wiring", async ({ page }) => {
