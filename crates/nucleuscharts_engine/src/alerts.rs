@@ -507,6 +507,8 @@ mod tests {
         assert!((plus_height - chip.size).abs() < 1e-9);
         assert_eq!(plus_color, Color::rgb(0x12, 0x34, 0x56));
         assert_eq!(plus.color, plus_color.contrast_text());
+        assert!((plus.font_scale - 1.15).abs() < 1e-9);
+        assert_eq!(plus.background_corners, crate::AxisLabelCorners::LEFT);
         let price_chip = axis
             .labels
             .iter()

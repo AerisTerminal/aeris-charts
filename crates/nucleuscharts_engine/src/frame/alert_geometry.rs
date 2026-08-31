@@ -115,7 +115,7 @@ impl ChartEngine {
             color: self.axis_label_text_color(background),
             align: AxisTextAlign::Center,
             midpoint: AxisTextMidpoint::Label,
-            font_scale: 1.0,
+            font_scale: 1.15,
             bold: true,
             background: Some((
                 x,
@@ -124,11 +124,11 @@ impl ChartEngine {
                 chip.size,
                 background,
             )),
-            background_corners: AxisLabelCorners {
-                top_left: true,
-                top_right: true,
-                bottom_left: true,
-                bottom_right: true,
+            // Keep the outer edge rounded and the edge adjoining the primary price chip square,
+            // so the pair reads as one attached crosshair control.
+            background_corners: match chip.price_scale {
+                AlertPriceScale::Left => AxisLabelCorners::RIGHT,
+                AlertPriceScale::Right | AlertPriceScale::Overlay => AxisLabelCorners::LEFT,
             },
             measure_extra: 0.0,
             attach_group: None,
