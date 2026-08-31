@@ -115,7 +115,7 @@ pub(crate) fn trading_order_color(
 }
 
 impl ChartEngine {
-    fn trading_scale_base(&self, pane_index: usize, target: PriceScaleTarget) -> f64 {
+    pub(crate) fn runtime_scale_base(&self, pane_index: usize, target: PriceScaleTarget) -> f64 {
         self.visible_range()
             .and_then(|(from, _)| {
                 let series = self.series.iter().find(|series| {
@@ -129,20 +129,28 @@ impl ChartEngine {
             .unwrap_or(0.0)
     }
 
+    pub(crate) fn runtime_price_coordinate(
+        &self,
+        pane_index: usize,
+        target: PriceScaleTarget,
+        price: f64,
+    ) -> Option<f64> {
+        let pane = self.panes.get(pane_index)?;
+        let scale = pane_scale(pane, target);
+        if scale.is_empty() {
+            return None;
+        }
+        Some(scale.price_to_coordinate(price, self.runtime_scale_base(pane_index, target)))
+    }
+
     pub(crate) fn trading_price_coordinate(
         &self,
         pane_index: usize,
         target: crate::TradingPriceScale,
         price: f64,
     ) -> Option<f64> {
-        let pane = self.panes.get(pane_index)?;
         let target = PriceScaleTarget::from(target);
-        let scale = pane_scale(pane, target);
-        if scale.is_empty() {
-            return None;
-        }
-        let base = self.trading_scale_base(pane_index, target);
-        Some(scale.price_to_coordinate(price, base))
+        self.runtime_price_coordinate(pane_index, target, price)
     }
 
     pub(crate) fn trading_coordinate_to_price(
@@ -157,7 +165,7 @@ impl ChartEngine {
         if scale.is_empty() {
             return None;
         }
-        Some(scale.coordinate_to_price(y, self.trading_scale_base(pane_index, target)))
+        Some(scale.coordinate_to_price(y, self.runtime_scale_base(pane_index, target)))
     }
 
     pub(crate) fn format_trading_price(&self, value: f64) -> String {

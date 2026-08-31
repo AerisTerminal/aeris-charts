@@ -207,19 +207,27 @@ impl ChartEngine {
     /// The pane's default price scale (reference `Pane.defaultPriceScale`): the scale of the first
     /// visible, non-overlay series on the pane, else the pane's right scale. Returns the scale
     /// and its base (first) value for coordinate conversion.
-    pub(crate) fn pane_default_scale(
-        &self,
-        pane_index: usize,
-        from: i64,
-    ) -> (&PriceScaleCore, f64) {
+    pub(crate) fn pane_default_scale_target(&self, pane_index: usize) -> PriceScaleTarget {
         let series = self.series.iter().find(|s| {
             s.visible
                 && s.price_scale_target != PriceScaleTarget::Overlay
                 && s.pane_index == pane_index
         });
-        let target = series
+        series
             .map(series_scale_target)
-            .unwrap_or(PriceScaleTarget::Right);
+            .unwrap_or(PriceScaleTarget::Right)
+    }
+
+    pub(crate) fn pane_default_scale(
+        &self,
+        pane_index: usize,
+        from: i64,
+    ) -> (&PriceScaleCore, f64) {
+        let target = self.pane_default_scale_target(pane_index);
+        let series = self
+            .series
+            .iter()
+            .find(|s| s.visible && s.pane_index == pane_index && series_scale_target(s) == target);
         let base_value = series
             .and_then(|s| self.series_base_value(s.id, from))
             .unwrap_or(0.0);
@@ -298,7 +306,7 @@ impl ChartEngine {
     /// candidate wins in *pixel* space (after conversion on its own series scale), then converts
     /// back to a price on the pane's default scale. Normal/Hidden mode, or no candidates, keeps
     /// the raw cursor price.
-    pub(super) fn crosshair_snap(
+    pub(crate) fn crosshair_snap(
         &self,
         pane_index: usize,
         x_css: f64,

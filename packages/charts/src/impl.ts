@@ -19,6 +19,7 @@ import {
 import { nucleuscharts_error } from "./errors.js";
 import type { nucleuscharts_error_code } from "./errors.js";
 import type {
+  alert_api, alert_create_request, alert_create_request_handler, alert_line, alert_snapshot,
   any_series_options, backend_status, bars_info, chart_api, chart_context_handler, chart_context_params, chart_options, chart_state_v1, chart_value_snapshot, data_changed_handler, dbl_click_handler,
   deep_partial, drawing_api, drawing_created_handler, drawing_info, drawing_kind, drawing_options,
   drawing_point, drawing_tool_change_handler,
@@ -2392,6 +2393,53 @@ class trading_impl implements trading_api {
   }
 }
 
+class alert_impl implements alert_api {
+  private readonly create_request_handlers = new Set<alert_create_request_handler>();
+
+  constructor(private readonly chart: chart_impl) {}
+
+  apply_snapshot(snapshot: alert_snapshot): void {
+    assert_trading_result(this.chart.wasm.set_alert_snapshot_json(JSON.stringify(snapshot)));
+    this.chart.repaint();
+  }
+
+  state(): Required<alert_snapshot> {
+    return JSON.parse(this.chart.wasm.alert_snapshot_json()) as Required<alert_snapshot>;
+  }
+
+  update_line(line: alert_line): void {
+    assert_trading_result(this.chart.wasm.update_alert_line_json(JSON.stringify(line)));
+    this.chart.repaint();
+  }
+
+  remove_line(id: string): boolean {
+    const changed = this.chart.wasm.remove_alert_line(id);
+    if (changed) this.chart.repaint();
+    return changed;
+  }
+
+  set_create_button_visible(visible: boolean): void {
+    if (this.chart.wasm.set_alert_create_button_visible(visible)) this.chart.repaint();
+  }
+
+  subscribe_create_requests(handler: alert_create_request_handler): void {
+    this.create_request_handlers.add(handler);
+  }
+
+  unsubscribe_create_requests(handler: alert_create_request_handler): void {
+    this.create_request_handlers.delete(handler);
+  }
+
+  dispatch_pending_create_requests(): void {
+    const requests = JSON.parse(
+      this.chart.wasm.take_alert_create_requests_json(),
+    ) as alert_create_request[];
+    for (const request of requests) {
+      for (const handler of this.create_request_handlers) handler(request);
+    }
+  }
+}
+
 export class chart_impl implements chart_api {
   private wasm_instance: NucleusChart | null;
   private next_extra_series = false;
@@ -2415,6 +2463,7 @@ export class chart_impl implements chart_api {
   private accessibility_handle: accessibility_handle | null = null;
   private readonly ts = new time_scale_impl(this);
   private readonly trading_handle = new trading_impl(this);
+  private readonly alert_handle = new alert_impl(this);
   private observer: ResizeObserver | null = null;
   private detach_gestures: (() => void) | null = null;
   private removed = false;
@@ -2500,6 +2549,10 @@ export class chart_impl implements chart_api {
     return this.trading_handle;
   }
 
+  alerts(): alert_api {
+    return this.alert_handle;
+  }
+
   accessibility(): accessibility_handle {
     if (this.accessibility_handle === null) {
       throw new nucleuscharts_error("unsupported_operation", "accessibility is disabled for this chart");
@@ -2528,6 +2581,16 @@ export class chart_impl implements chart_api {
 
   trading_hover_at(x: number, y: number): boolean {
     return this.wasm.trading_hover_at(x, y);
+  }
+
+  alert_create_hit_at(x: number, y: number): boolean {
+    return this.wasm.alert_create_hit_at(x, y);
+  }
+
+  activate_alert_create_at(x: number, y: number): boolean {
+    const activated = this.wasm.activate_alert_create_at(x, y);
+    this.alert_handle.dispatch_pending_create_requests();
+    return activated;
   }
 
   trading_hit_at(x: number, y: number): trading_hit | null {

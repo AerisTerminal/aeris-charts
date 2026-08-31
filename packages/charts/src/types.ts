@@ -1683,6 +1683,69 @@ export interface pane_api {
   price_scale(id: string): price_scale_api;
 }
 
+export type alert_price_scale = "right" | "left" | "overlay";
+export type alert_condition =
+  | "crossing"
+  | "crossing_up"
+  | "crossing_down"
+  | "greater_than"
+  | "less_than";
+/**
+ * Alert evaluation frequency retained by the chart for visual fidelity. Regular live-price
+ * alerts normally use `only_once` or `every_time`; interval-dependent hosts may also expose the
+ * per-bar and per-minute modes. Nucleus does not evaluate or deliver alerts.
+ */
+export type alert_frequency =
+  | "only_once"
+  | "every_time"
+  | "once_per_bar"
+  | "once_per_bar_close"
+  | "once_per_minute";
+export type alert_line_status = "active" | "triggered" | "expired";
+
+/** Host-authoritative alert indicator rendered by the shared engine frame. */
+export interface alert_line {
+  id: string;
+  pane_index?: number;
+  price_scale?: alert_price_scale;
+  price: number;
+  condition?: alert_condition;
+  frequency?: alert_frequency;
+  status?: alert_line_status;
+  label?: string;
+}
+
+export interface alert_snapshot {
+  lines?: alert_line[];
+}
+
+/** Exact chart location emitted when the crosshair's plus chip is clicked. */
+export interface alert_create_request {
+  sequence: number;
+  pane_index: number;
+  price_scale: alert_price_scale;
+  price: number;
+  condition: alert_condition;
+  frequency: alert_frequency;
+}
+
+export type alert_create_request_handler = (request: alert_create_request) => void;
+
+/**
+ * Alert presentation boundary. The host owns dialogs, persistence, condition evaluation,
+ * expiration, notifications, and server/background delivery; Nucleus owns only the create chip
+ * and backend-neutral line indicators.
+ */
+export interface alert_api {
+  apply_snapshot(snapshot: alert_snapshot): void;
+  state(): Required<alert_snapshot>;
+  update_line(line: alert_line): void;
+  remove_line(id: string): boolean;
+  set_create_button_visible(visible: boolean): void;
+  subscribe_create_requests(handler: alert_create_request_handler): void;
+  unsubscribe_create_requests(handler: alert_create_request_handler): void;
+}
+
 export type position_side = "long" | "short";
 export type order_side = "buy" | "sell";
 export type order_kind = "limit" | "stop" | "stop_limit";
@@ -1898,6 +1961,8 @@ export interface chart_api {
   frame_stats(): frame_stats;
   /** The chart-local first-party trading domain. Broker state remains host-authoritative. */
   trading(): trading_api;
+  /** Host-authoritative price-alert indicators and crosshair create requests. */
+  alerts(): alert_api;
   /** The singleton accessibility controller installed for this chart. */
   accessibility(): accessibility_handle;
   /**

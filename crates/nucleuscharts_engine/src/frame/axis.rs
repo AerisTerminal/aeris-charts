@@ -86,7 +86,9 @@ fn selected_chip_accent(
 }
 
 struct OccupiedAxisRegion {
-    primary: LivePriceRegion,
+    pane_index: usize,
+    target: PriceScaleTarget,
+    primary: Option<LivePriceRegion>,
     top: f64,
     bottom: f64,
 }
@@ -98,9 +100,15 @@ impl OccupiedAxisRegion {
         }
         let half = height / 2.0;
         if raw_y + half <= self.top || raw_y - half >= self.bottom {
+            self.top = self.top.min(raw_y - half);
+            self.bottom = self.bottom.max(raw_y + half);
             return raw_y;
         }
-        let primary_center = (self.primary.top + self.primary.bottom) / 2.0;
+        let primary_center = self
+            .primary
+            .map_or((self.top + self.bottom) / 2.0, |primary| {
+                (primary.top + primary.bottom) / 2.0
+            });
         let prefer_above = raw_y < primary_center;
         let above = self.top - half;
         let below = self.bottom + half;
@@ -758,12 +766,13 @@ impl ChartEngine {
         self.append_drawing_line_labels(&mut out.labels, &measure);
         let last_value_start = out.labels.len();
         let live_price_regions = self.append_last_value_label(&mut out.labels, &measure);
-        let mut trading_labels = Vec::new();
-        self.append_trading_axis_labels(&mut trading_labels, &live_price_regions, &measure);
+        let mut action_labels = Vec::new();
+        self.append_action_axis_labels(&mut action_labels, &live_price_regions, &measure);
         out.labels
-            .splice(last_value_start..last_value_start, trading_labels);
+            .splice(last_value_start..last_value_start, action_labels);
         if include_transient {
             self.append_crosshair_labels(&mut out.labels, &measure);
+            self.append_alert_create_chip(&mut out.labels);
         }
         out.separators = self
             .panes
@@ -1419,7 +1428,7 @@ impl ChartEngine {
         }
     }
 
-    fn append_trading_axis_labels<F>(
+    fn append_action_axis_labels<F>(
         &self,
         labels: &mut Vec<AxisLabel>,
         live_price_regions: &[LivePriceRegion],
@@ -1437,7 +1446,9 @@ impl ChartEngine {
             .filter(|region| region.primary)
             .map(|primary| {
                 let mut occupied = OccupiedAxisRegion {
-                    primary: *primary,
+                    pane_index: primary.pane_index,
+                    target: primary.target,
+                    primary: Some(*primary),
                     top: primary.top,
                     bottom: primary.bottom,
                 };
@@ -1451,37 +1462,48 @@ impl ChartEngine {
             })
             .collect();
         let mut append = |pane_index: usize,
-                          target: crate::TradingPriceScale,
+                          target: PriceScaleTarget,
                           price: f64,
+                          text: String,
                           color: Color,
-                          solid: bool| {
+                          solid: bool,
+                          hollow_at_live_price: bool,
+                          bold: bool| {
             let Some(pane) = self.panes.get(pane_index) else {
                 return;
             };
-            let Some(y) = self.trading_price_coordinate(pane_index, target, price) else {
+            let Some(y) = self.runtime_price_coordinate(pane_index, target, price) else {
                 return;
             };
             if y < pane.top || y > pane.top + pane.height {
                 return;
             }
-            let target = PriceScaleTarget::from(target);
             if target == PriceScaleTarget::Overlay {
                 return;
             }
-            let text = self.format_trading_price(price);
             let width = 1.0 + 5.0 + 5.0 + 5.0 + measure(&text);
             let height = font_size + 5.0;
-            let occupied = occupied_axes.iter_mut().find(|occupied| {
-                occupied.primary.pane_index == pane_index && occupied.primary.target == target
-            });
+            let occupied = occupied_axes
+                .iter_mut()
+                .find(|occupied| occupied.pane_index == pane_index && occupied.target == target);
             let meets_live_price = occupied.as_ref().is_some_and(|occupied| {
-                y + height / 2.0 > occupied.primary.top
-                    && y - height / 2.0 < occupied.primary.bottom
+                occupied.primary.is_some_and(|primary| {
+                    y + height / 2.0 > primary.top && y - height / 2.0 < primary.bottom
+                })
             });
-            let solid = solid && !meets_live_price;
-            let y = occupied.map_or(y, |occupied| {
+            let solid = solid && !(hollow_at_live_price && meets_live_price);
+            let y = if let Some(occupied) = occupied {
                 occupied.place(y, height, pane.top, pane.top + pane.height)
-            });
+            } else {
+                occupied_axes.push(OccupiedAxisRegion {
+                    pane_index,
+                    target,
+                    primary: None,
+                    top: y - height / 2.0,
+                    bottom: y + height / 2.0,
+                });
+                y
+            };
             let (x, align, background_x) = if target == PriceScaleTarget::Left {
                 (
                     self.pane_left - 10.0,
@@ -1503,7 +1525,7 @@ impl ChartEngine {
                 align,
                 midpoint: AxisTextMidpoint::Label,
                 font_scale: 1.0,
-                bold: true,
+                bold,
                 background: Some((
                     background_x,
                     y - height / 2.0,
@@ -1522,13 +1544,16 @@ impl ChartEngine {
                 self.trading_state.interaction.pending_position_id() == Some(&position.id);
             append(
                 position.pane_index,
-                position.price_scale,
+                position.price_scale.into(),
                 position.average_price,
+                self.format_trading_price(position.average_price),
                 if pending {
                     self.trading_state.style.pending
                 } else {
                     self.trading_position_color(position.side)
                 },
+                true,
+                true,
                 true,
             );
         }
@@ -1553,19 +1578,25 @@ impl ChartEngine {
             };
             append(
                 order.pane_index,
-                order.price_scale,
+                order.price_scale.into(),
                 self.trading_effective_order_price(order),
+                self.format_trading_price(self.trading_effective_order_price(order)),
                 color,
                 order.role == crate::OrderRole::Working,
+                true,
+                true,
             );
             if order.kind == crate::OrderKind::StopLimit {
                 if let Some(stop_price) = order.stop_price {
                     append(
                         order.pane_index,
-                        order.price_scale,
+                        order.price_scale.into(),
                         stop_price,
+                        self.format_trading_price(stop_price),
                         color,
                         false,
+                        true,
+                        true,
                     );
                 }
             }
@@ -1577,8 +1608,9 @@ impl ChartEngine {
         {
             append(
                 preview.pane_index,
-                preview.price_scale,
+                preview.price_scale.into(),
                 preview.price,
+                self.format_trading_price(preview.price),
                 if preview.phase == crate::TradingPreviewPhase::Pending {
                     self.trading_state.style.pending
                 } else {
@@ -1590,6 +1622,38 @@ impl ChartEngine {
                     )
                 },
                 preview.role == crate::OrderRole::Working,
+                true,
+                true,
+            );
+        }
+        for line in &self.alert_state.lines {
+            let target = line.price_scale.into();
+            let price = self
+                .visible_range_for_frame()
+                .and_then(|(from, _)| {
+                    let series = self.scale_formatter_source(line.pane_index, target)?;
+                    let scale = pane_scale(self.panes.get(line.pane_index)?, target);
+                    let base = self.series_base_value(series.id, from)?;
+                    Some(self.format_series_value(
+                        series,
+                        scale,
+                        scale.price_to_logical_value(line.price, base),
+                    ))
+                })
+                .unwrap_or_else(|| self.price_formatter.format(line.price));
+            let text = line
+                .label
+                .as_ref()
+                .map_or_else(|| format!("A {price}"), |label| format!("A {label}"));
+            append(
+                line.pane_index,
+                target,
+                line.price,
+                text,
+                super::alert_geometry::alert_color(line.status),
+                true,
+                false,
+                false,
             );
         }
     }

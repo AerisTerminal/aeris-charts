@@ -426,6 +426,19 @@ impl TradingInteractionState {
         }
     }
 
+    fn preview_mut(&mut self) -> Option<&mut TradingPreview> {
+        match self {
+            Self::CreatingProtection { preview }
+            | Self::DraggingOrder { preview, .. }
+            | Self::AwaitingManualConfirmation { preview }
+            | Self::PendingHostAck {
+                preview: Some(preview),
+                ..
+            } => Some(preview),
+            Self::Idle | Self::Hovering { .. } | Self::PendingHostAck { preview: None, .. } => None,
+        }
+    }
+
     pub(crate) fn hover(&self) -> Option<&TradingHit> {
         match self {
             Self::Hovering { hit } => Some(hit),
@@ -896,14 +909,21 @@ impl ChartEngine {
         if preview.role == OrderRole::Working {
             return true;
         }
-        self.trading_preview_relation(preview)
-            .is_some_and(|(anchor, long)| match (long, preview.role) {
-                (true, OrderRole::TakeProfit) => preview.price > anchor,
-                (true, OrderRole::StopLoss) => preview.price < anchor,
-                (false, OrderRole::TakeProfit) => preview.price < anchor,
-                (false, OrderRole::StopLoss) => preview.price > anchor,
-                (_, OrderRole::Working) => true,
-            })
+        let Some((anchor, long)) = self.trading_preview_relation(preview) else {
+            // Existing broker-owned protection orders can be displayed without a local position
+            // or parent order (for example after restoring a broker snapshot incrementally). In
+            // that case the chart has no relationship from which to enforce a TP/SL side, but it
+            // must still allow the authoritative order to be modified. New protection previews
+            // always have a position or parent relation and continue to require the correct side.
+            return matches!(preview.source, TradingPreviewSource::Order { .. });
+        };
+        match (long, preview.role) {
+            (true, OrderRole::TakeProfit) => preview.price > anchor,
+            (true, OrderRole::StopLoss) => preview.price < anchor,
+            (false, OrderRole::TakeProfit) => preview.price < anchor,
+            (false, OrderRole::StopLoss) => preview.price > anchor,
+            (_, OrderRole::Working) => true,
+        }
     }
 
     fn commit_trading_preview(&mut self) -> Option<TradingIntent> {
@@ -919,36 +939,48 @@ impl ChartEngine {
         let sequence = self.trading_state.next_sequence();
         preview.phase = TradingPreviewPhase::Pending;
         preview.intent_sequence = Some(sequence);
-        let (action, order_id, position_id, kind) = match &preview.source {
-            TradingPreviewSource::Order { order_id } => (
-                TradingIntentAction::ModifyOrder,
-                Some(order_id.clone()),
-                None,
-                None,
-            ),
+        let (action, order_id, position_id, kind, stop_price) = match &preview.source {
+            TradingPreviewSource::Order { order_id } => {
+                let order = self
+                    .trading_state
+                    .orders
+                    .iter()
+                    .find(|order| &order.id == order_id);
+                (
+                    TradingIntentAction::ModifyOrder,
+                    Some(order_id.clone()),
+                    None,
+                    order.map(|order| order.kind),
+                    order.and_then(|order| order.stop_price),
+                )
+            }
             TradingPreviewSource::StopLoss { position_id } => (
                 TradingIntentAction::CreateStopLoss,
                 None,
                 Some(position_id.clone()),
                 Some(OrderKind::Stop),
+                None,
             ),
             TradingPreviewSource::TakeProfit { position_id } => (
                 TradingIntentAction::CreateTakeProfit,
                 None,
                 Some(position_id.clone()),
                 Some(OrderKind::Limit),
+                None,
             ),
             TradingPreviewSource::OrderStopLoss { order_id } => (
                 TradingIntentAction::CreateStopLoss,
                 Some(order_id.clone()),
                 None,
                 Some(OrderKind::Stop),
+                None,
             ),
             TradingPreviewSource::OrderTakeProfit { order_id } => (
                 TradingIntentAction::CreateTakeProfit,
                 Some(order_id.clone()),
                 None,
                 Some(OrderKind::Limit),
+                None,
             ),
         };
         let relationships = order_id.as_ref().and_then(|order_id| {
@@ -967,7 +999,7 @@ impl ChartEngine {
             kind,
             role: Some(preview.role),
             price: Some(preview.price),
-            stop_price: None,
+            stop_price,
             quantity: Some(preview.quantity),
             bracket_id: relationships.as_ref().and_then(|value| value.0.clone()),
             oco_group_id: relationships.and_then(|value| value.1),
@@ -1648,6 +1680,15 @@ impl ChartEngine {
     }
 
     pub(crate) fn remove_trading_pane(&mut self, index: usize) {
+        let remap = |pane: usize| {
+            if pane == index {
+                PANELESS
+            } else if pane != PANELESS && pane > index {
+                pane - 1
+            } else {
+                pane
+            }
+        };
         for pane in self
             .trading_state
             .positions
@@ -1666,11 +1707,85 @@ impl ChartEngine {
                     .map(|value| &mut value.pane_index),
             )
         {
-            if *pane == index {
-                *pane = PANELESS;
-            } else if *pane != PANELESS && *pane > index {
-                *pane -= 1;
+            *pane = remap(*pane);
+        }
+        if let Some(preview) = self.trading_state.interaction.preview_mut() {
+            preview.pane_index = remap(preview.pane_index);
+        }
+    }
+
+    pub(crate) fn swap_trading_panes(&mut self, first: usize, second: usize) {
+        for pane in self
+            .trading_state
+            .positions
+            .iter_mut()
+            .map(|value| &mut value.pane_index)
+            .chain(
+                self.trading_state
+                    .orders
+                    .iter_mut()
+                    .map(|value| &mut value.pane_index),
+            )
+            .chain(
+                self.trading_state
+                    .executions
+                    .iter_mut()
+                    .map(|value| &mut value.pane_index),
+            )
+        {
+            if *pane == first {
+                *pane = second;
+            } else if *pane == second {
+                *pane = first;
             }
+        }
+        if let Some(preview) = self.trading_state.interaction.preview_mut() {
+            let mut pane = preview.pane_index;
+            if pane == first {
+                pane = second;
+            } else if pane == second {
+                pane = first;
+            }
+            preview.pane_index = pane;
+        }
+    }
+
+    pub(crate) fn move_trading_pane(&mut self, from: usize, to: usize) {
+        let remap = |pane: usize| {
+            if pane == PANELESS {
+                pane
+            } else if pane == from {
+                to
+            } else if from < to && pane > from && pane <= to {
+                pane - 1
+            } else if to < from && pane >= to && pane < from {
+                pane + 1
+            } else {
+                pane
+            }
+        };
+        for pane in self
+            .trading_state
+            .positions
+            .iter_mut()
+            .map(|value| &mut value.pane_index)
+            .chain(
+                self.trading_state
+                    .orders
+                    .iter_mut()
+                    .map(|value| &mut value.pane_index),
+            )
+            .chain(
+                self.trading_state
+                    .executions
+                    .iter_mut()
+                    .map(|value| &mut value.pane_index),
+            )
+        {
+            *pane = remap(*pane);
+        }
+        if let Some(preview) = self.trading_state.interaction.preview_mut() {
+            preview.pane_index = remap(preview.pane_index);
         }
     }
 
@@ -2039,6 +2154,57 @@ mod tests {
     }
 
     #[test]
+    fn active_order_preview_follows_pane_move_swap_and_removal() {
+        let mut chart = chart_with_market();
+        assert_eq!(chart.add_pane(false), Some(1));
+        assert_eq!(chart.add_pane(false), Some(2));
+        let mut working = order("working-1", OrderRole::Working, 102.0);
+        working.pane_index = 2;
+        let order_id = working.id.clone();
+        chart
+            .set_trading_snapshot(TradingSnapshot {
+                orders: vec![working],
+                ..TradingSnapshot::default()
+            })
+            .unwrap();
+        assert!(chart.trading_keyboard_start_order(&order_id));
+
+        assert!(chart.move_pane(2, 0));
+        assert_eq!(chart.trading_state.orders[0].pane_index, 0);
+        assert_eq!(
+            chart
+                .trading_state
+                .interaction
+                .preview()
+                .unwrap()
+                .pane_index,
+            0
+        );
+        assert!(chart.swap_panes(0, 1));
+        assert_eq!(chart.trading_state.orders[0].pane_index, 1);
+        assert_eq!(
+            chart
+                .trading_state
+                .interaction
+                .preview()
+                .unwrap()
+                .pane_index,
+            1
+        );
+        assert!(chart.remove_pane(1));
+        assert_eq!(chart.trading_state.orders[0].pane_index, PANELESS);
+        assert_eq!(
+            chart
+                .trading_state
+                .interaction
+                .preview()
+                .unwrap()
+                .pane_index,
+            PANELESS
+        );
+    }
+
+    #[test]
     fn trading_frame_owns_regions_lines_labels_executions_and_axis_tags() {
         let mut chart = chart_with_market();
         chart
@@ -2328,6 +2494,51 @@ mod tests {
         assert_eq!(intent.action, TradingIntentAction::ModifyOrder);
         assert_eq!(intent.price, Some(105.5));
         assert_eq!(chart.trading_snapshot().orders[0].price, 103.0);
+    }
+
+    #[test]
+    fn unlinked_protection_order_remains_draggable_and_preserves_modify_fields() {
+        let mut chart = chart_with_market();
+        let mut protection = order("orphan-stop", OrderRole::StopLoss, 99.0);
+        protection.kind = OrderKind::StopLimit;
+        protection.stop_price = Some(98.5);
+        protection.position_id = None;
+        protection.parent_order_id = None;
+        protection.bracket_id = None;
+        protection.oco_group_id = None;
+        chart
+            .set_trading_snapshot(TradingSnapshot {
+                instrument: InstrumentMetadata {
+                    tick_size: Some(0.25),
+                    ..InstrumentMetadata::default()
+                },
+                orders: vec![protection],
+                ..TradingSnapshot::default()
+            })
+            .unwrap();
+        chart.build_frame();
+
+        let y = chart
+            .trading_price_coordinate(0, TradingPriceScale::Right, 99.0)
+            .unwrap();
+        let chip_x = chart.trading_order_chip_start(&chart.trading_snapshot().orders[0]) + 20.0;
+        assert_eq!(
+            chart.trading_hit_at(chip_x, y).unwrap().kind,
+            TradingHitKind::OrderLine,
+            "the protection chip body is a drag surface"
+        );
+        assert!(chart.trading_drag_start_at(chip_x, y));
+        let next_y = chart
+            .trading_price_coordinate(0, TradingPriceScale::Right, 97.5)
+            .unwrap();
+        assert!(chart.trading_drag_to(next_y));
+        let intent = chart
+            .trading_drag_end()
+            .expect("unlinked broker protection remains modifiable");
+        assert_eq!(intent.action, TradingIntentAction::ModifyOrder);
+        assert_eq!(intent.kind, Some(OrderKind::StopLimit));
+        assert_eq!(intent.stop_price, Some(98.5));
+        assert_eq!(intent.price, Some(97.5));
     }
 
     #[test]

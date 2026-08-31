@@ -53,14 +53,14 @@ use nucleuscharts_core::model::plot_list::MismatchDirection;
 use nucleuscharts_core::options::{ChartOptions, WatermarkOptions};
 use nucleuscharts_core::scale::price_scale_core::PriceScaleMode;
 use nucleuscharts_engine::{
-    crosshair_mode_from_u8, line_style_from_u8, marker_pos, marker_shape, AxisFrame, AxisLabel,
-    AxisLabelCorners, AxisTextAlign, AxisTextMidpoint, ChartEngine, DrawingKind, DrawingModifiers,
-    DrawingPoint, ExecutionId, FeatureSeriesKind, GestureResolver, GestureUpdate, InputDevice,
-    InputModifiers, InputTarget, InstrumentMetadata, Marker, OrderId, PaneId, PointerSample,
-    PositionId, PriceFormatterFn, PriceScaleId, PriceScaleSide, PriceScaleTarget,
-    PrimitiveAutoscaleContribution, SeriesKind, TickMarkFormatterFn, TimeFormatterFn,
-    TradingConfirmationMode, TradingExecution, TradingPosition, TradingSnapshot,
-    TradingStyleOptions, WorkingOrder,
+    crosshair_mode_from_u8, line_style_from_u8, marker_pos, marker_shape, AlertId, AlertLine,
+    AlertSnapshot, AxisFrame, AxisLabel, AxisLabelCorners, AxisTextAlign, AxisTextMidpoint,
+    ChartEngine, DrawingKind, DrawingModifiers, DrawingPoint, ExecutionId, FeatureSeriesKind,
+    GestureResolver, GestureUpdate, InputDevice, InputModifiers, InputTarget, InstrumentMetadata,
+    Marker, OrderId, PaneId, PointerSample, PositionId, PriceFormatterFn, PriceScaleId,
+    PriceScaleSide, PriceScaleTarget, PrimitiveAutoscaleContribution, SeriesKind,
+    TickMarkFormatterFn, TimeFormatterFn, TradingConfirmationMode, TradingExecution,
+    TradingPosition, TradingSnapshot, TradingStyleOptions, WorkingOrder,
 };
 use nucleuscharts_render::canvas2d::{
     execute as execute_canvas2d, Canvas2d, Viewport as CanvasViewport,
@@ -213,6 +213,7 @@ fn input_target_from_u8(value: u8) -> InputTarget {
         3 => InputTarget::PriceAxis,
         4 => InputTarget::TimeAxis,
         5 => InputTarget::Separator,
+        6 => InputTarget::Alert,
         _ => InputTarget::Pane,
     }
 }
@@ -925,6 +926,65 @@ pub async fn create_offscreen_chart(
 /// delegate straight through to the inner chart.
 #[wasm_bindgen]
 impl NucleusChart {
+    /// Replace the chart-local, host-authoritative alert indicators transactionally.
+    pub fn set_alert_snapshot_json(&mut self, snapshot_json: &str) -> String {
+        let snapshot = match serde_json::from_str::<AlertSnapshot>(snapshot_json) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                return trading_result_json(Err(nucleuscharts_engine::ChartError::new(
+                    nucleuscharts_engine::ErrorCode::InvalidData,
+                    error.to_string(),
+                )))
+            }
+        };
+        trading_result_json(self.inner.borrow_mut().engine.set_alert_snapshot(snapshot))
+    }
+
+    pub fn alert_snapshot_json(&self) -> String {
+        serde_json::to_string(&self.inner.borrow().engine.alert_snapshot())
+            .unwrap_or_else(|_| "{}".to_string())
+    }
+
+    pub fn update_alert_line_json(&mut self, line_json: &str) -> String {
+        let line = match serde_json::from_str::<AlertLine>(line_json) {
+            Ok(line) => line,
+            Err(error) => {
+                return trading_result_json(Err(nucleuscharts_engine::ChartError::new(
+                    nucleuscharts_engine::ErrorCode::InvalidData,
+                    error.to_string(),
+                )))
+            }
+        };
+        trading_result_json(self.inner.borrow_mut().engine.update_alert_line(line))
+    }
+
+    pub fn remove_alert_line(&mut self, id: &str) -> bool {
+        AlertId::new(id).is_ok_and(|id| self.inner.borrow_mut().engine.remove_alert_line(&id))
+    }
+
+    pub fn set_alert_create_button_visible(&mut self, visible: bool) -> bool {
+        self.inner
+            .borrow_mut()
+            .engine
+            .set_alert_create_button_visible(visible)
+    }
+
+    pub fn alert_create_hit_at(&self, x_css: f64, y_css: f64) -> bool {
+        self.inner.borrow().engine.alert_create_hit_at(x_css, y_css)
+    }
+
+    pub fn activate_alert_create_at(&mut self, x_css: f64, y_css: f64) -> bool {
+        self.inner
+            .borrow_mut()
+            .engine
+            .activate_alert_create_at(x_css, y_css)
+    }
+
+    pub fn take_alert_create_requests_json(&mut self) -> String {
+        serde_json::to_string(&self.inner.borrow_mut().engine.take_alert_create_requests())
+            .unwrap_or_else(|_| "[]".to_string())
+    }
+
     /// Replace the chart-local, host-authoritative runtime trading state transactionally.
     pub fn set_trading_snapshot_json(&mut self, snapshot_json: &str) -> String {
         let snapshot = match serde_json::from_str::<TradingSnapshot>(snapshot_json) {
@@ -1102,16 +1162,20 @@ impl NucleusChart {
     pub fn trading_cursor_at(&self, x_css: f64, y_css: f64) -> u8 {
         match self.inner.borrow().engine.trading_hit_at(x_css, y_css) {
             None => 0,
+            Some(hit) if hit.kind == nucleuscharts_engine::TradingHitKind::OrderLine => 2,
             Some(hit)
                 if matches!(
                     hit.kind,
-                    nucleuscharts_engine::TradingHitKind::OrderLine
-                        | nucleuscharts_engine::TradingHitKind::PositionLine
+                    nucleuscharts_engine::TradingHitKind::CancelButton
+                        | nucleuscharts_engine::TradingHitKind::CreateStopButton
+                        | nucleuscharts_engine::TradingHitKind::CreateTargetButton
+                        | nucleuscharts_engine::TradingHitKind::ConfirmButton
+                        | nucleuscharts_engine::TradingHitKind::DiscardButton
                 ) =>
             {
-                2
+                1
             }
-            Some(_) => 1,
+            Some(_) => 0,
         }
     }
 

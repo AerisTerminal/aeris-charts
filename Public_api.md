@@ -33,6 +33,9 @@ entry point and `./design.css` are the only npm export paths. The supported root
   period changes through `chart.set_ema_ribbon_periods()`;
 - first-party broker-neutral trading state, instant/manual confirmation, previews, hit testing,
   semantic style, and typed intent subscriptions exposed by `chart.trading()`;
+- host-authoritative alert-line indicators and crosshair plus-chip creation requests exposed by
+  `chart.alerts()`; conditions/frequencies are retained configuration metadata while the host owns
+  dialogs, evaluation, persistence, limits, expiration, background delivery, and notifications;
 - default chart accessibility, its additive `chart.accessibility()` singleton handle, compatibility
   `enable_accessibility()`, accessibility options, and keyboard data/drawing operation;
 - the additive `wheel_behavior` chart option (`auto`, `pan`, or `zoom`); existing gesture option
@@ -113,10 +116,11 @@ Persistence schema versioning is independent of the npm package version. V1 cont
 - ordered built-in drawings with persistent ID, kind, pane reference, semantic anchors, and style.
 
 Host market history, series and indicator definitions, chart options, trading positions/orders/
-executions/previews/intents, custom extensions, callbacks, subscriptions, selections, interaction
-sessions, generations, LOD, drawing bounds/indexes, retained frames, and GPU resources are not
-persisted. Hosts restore V1 into a fresh chart, then reinstall host-owned data, series/indicator
-configuration, trading state, options, and extensions.
+executions/previews/intents, alert lines/create requests, custom extensions, callbacks,
+subscriptions, selections, interaction sessions, generations, LOD, drawing bounds/indexes,
+retained frames, and GPU resources are not persisted. Hosts restore V1 into a fresh chart, then
+reinstall host-owned data, series/indicator configuration, trading state, alert state, options, and
+extensions.
 
 Named price-scale descriptors and series-to-scale bindings are also host-owned. Hosts recreate
 named scales in each pane before restoring comparison-series bindings; chart-state V1 is unchanged.

@@ -31,6 +31,7 @@ use nucleuscharts_render::draw_list::{Gradient, IRect, LineStyle, LineType, Prim
 use nucleuscharts_render::histogram::{build_histogram, HistogramItem, HistogramParams};
 use nucleuscharts_render::line::{dash_split, expand_line, LinePoint};
 
+mod alert_geometry;
 mod axis;
 pub(crate) mod conflation;
 mod crosshair;
@@ -1598,6 +1599,13 @@ impl ChartEngine {
                 cache.trading_regions.points.clear();
                 cache.trading.prims.clear();
                 cache.trading.points.clear();
+                self.build_alert_lines_frame(
+                    pi,
+                    pane_w_px as i32,
+                    hpr,
+                    vpr,
+                    &mut cache.trading.prims,
+                );
                 self.build_trading_frame(
                     pi,
                     hpr,

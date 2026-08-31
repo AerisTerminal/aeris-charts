@@ -20,7 +20,7 @@ const KEY_SCROLL_MS = 160; // keyboard scroll animation (TradingView-style smoot
 const INPUT_UPDATE_LEN = 12;
 
 const enum InputDeviceCode { Mouse = 0, Touch = 1, Pen = 2 }
-const enum InputTargetCode { Pane = 0, Drawing = 1, Trading = 2, PriceAxis = 3, TimeAxis = 4, Separator = 5 }
+const enum InputTargetCode { Pane = 0, Drawing = 1, Trading = 2, PriceAxis = 3, TimeAxis = 4, Separator = 5, Alert = 6 }
 const enum GestureUpdateCode {
   None = 0, Hover = 1, Pressed = 2, DragStarted = 3, DragMoved = 4,
   PinchStarted = 5, PinchMoved = 6, RebasedSinglePointer = 7, Released = 8,
@@ -69,6 +69,7 @@ export function install_gestures(chart: chart_impl): () => void {
   // engine's local preview; confirmed broker state is never mutated by this gesture path.
   let trading_dragging = false;
   let trading_press = false;
+  let alert_press = false;
   // Freehand brush capture in progress (the engine decimates the stroke by distance).
   let brush_drawing = false;
   // A text-tool press that already committed (mousedown placement) — the trailing click is
@@ -293,6 +294,7 @@ export function install_gestures(chart: chart_impl): () => void {
     dragging = false;
     touch_scrolling = false;
     trading_press = false;
+    alert_press = false;
     disarm_price_pan();
     const cfg = chart.gesture_config();
     const enabled =
@@ -482,6 +484,14 @@ export function install_gestures(chart: chart_impl): () => void {
       feed_pointer("down", e, target);
       return;
     }
+    if (chart.alert_create_hit_at(p.x, p.y)) {
+      pointer_targets.set(e.pointerId, InputTargetCode.Alert);
+      feed_pointer("down", e, InputTargetCode.Alert);
+      alert_press = true;
+      set_crosshair(p.x, p.y);
+      chart.repaint();
+      return;
+    }
     const trading_hit = chart.trading_hit_at(p.x, p.y);
     if (trading_hit !== null) {
       pointer_targets.set(e.pointerId, InputTargetCode.Trading);
@@ -638,7 +648,7 @@ export function install_gestures(chart: chart_impl): () => void {
       // region cursor off the geometry.
       overlay.style.cursor =
         region_cursor === "crosshair"
-          ? (chart.trading_cursor_at(p.x, p.y) ?? chart.hover_cursor() ??
+          ? (chart.alert_create_hit_at(p.x, p.y) ? "pointer" : chart.trading_cursor_at(p.x, p.y) ?? chart.hover_cursor() ??
             (chart.hover_series_id() !== null ? "pointer" : region_cursor))
           : region_cursor;
     }
@@ -743,6 +753,8 @@ export function install_gestures(chart: chart_impl): () => void {
   };
 
   const on_click = (e: MouseEvent) => {
+    const pressed_alert = alert_press;
+    alert_press = false;
     if (moved) return;
     if (suppress_compatibility_click) {
       suppress_compatibility_click = false;
@@ -753,6 +765,11 @@ export function install_gestures(chart: chart_impl): () => void {
     // placement opened the typing-mode editor).
     if (text_tool_press_committed) {
       text_tool_press_committed = false;
+      return;
+    }
+    if (pressed_alert && chart.alert_create_hit_at(p.x, p.y)) {
+      chart.activate_alert_create_at(p.x, p.y);
+      chart.repaint();
       return;
     }
     const trading_hit = chart.trading_hit_at(p.x, p.y);
@@ -816,6 +833,7 @@ export function install_gestures(chart: chart_impl): () => void {
       wasm.drawing_drag_cancel();
     }
     trading_press = false;
+    alert_press = false;
     touch_tracking = false;
     track_point = null;
     init_crosshair = null;
@@ -850,6 +868,7 @@ export function install_gestures(chart: chart_impl): () => void {
       track_point = null;
       touch_moved = true;
       trading_press = false;
+      alert_press = false;
       if (drawing_dragging) {
         drawing_dragging = false;
         wasm.drawing_drag_cancel();
@@ -892,7 +911,10 @@ export function install_gestures(chart: chart_impl): () => void {
     const region = arm_press(p, true);
     let target = region_target(region);
     if (region === "pane") {
-      if (chart.trading_hit_at_device(p.x, p.y, InputDeviceCode.Touch) !== null) {
+      if (chart.alert_create_hit_at(p.x, p.y)) {
+        target = InputTargetCode.Alert;
+        alert_press = true;
+      } else if (chart.trading_hit_at_device(p.x, p.y, InputDeviceCode.Touch) !== null) {
         target = InputTargetCode.Trading;
         trading_press = true;
         trading_dragging = chart.trading_drag_start_at_device(p.x, p.y, InputDeviceCode.Touch);
@@ -1050,18 +1072,6 @@ export function install_gestures(chart: chart_impl): () => void {
       end_drag("touch");
     }
 
-    if (chart.gesture_config().tracking_exit_mode === "on_touch_end") exit_tracking_on_next_try = true;
-    if (touch_tracking && exit_tracking_on_next_try) {
-      touch_tracking = false;
-      track_point = null;
-      init_crosshair = null;
-      wasm.clear_crosshair();
-      chart.emit_crosshair_left();
-    } else if (!touch_tracking) {
-      wasm.clear_crosshair();
-      chart.emit_crosshair_left();
-    }
-
     const was_tap = !touch_moved && !long_tap_active;
     tap_count += 1;
     if (tap_timer !== null && tap_count > 1) {
@@ -1075,7 +1085,9 @@ export function install_gestures(chart: chart_impl): () => void {
       reset_tap();
     } else if (was_tap) {
       const trading_hit = chart.trading_hit_at_device(p.x, p.y, InputDeviceCode.Touch);
-      if (trading_press && trading_hit !== null) {
+      if (alert_press && chart.alert_create_hit_at(p.x, p.y)) {
+        chart.activate_alert_create_at(p.x, p.y);
+      } else if (trading_press && trading_hit !== null) {
         chart.trading_activate_at(p.x, p.y);
       } else if (chart.creation_armed() && chart.creation_click(p.x, p.y, false, false)) {
         // creation handled
@@ -1083,10 +1095,22 @@ export function install_gestures(chart: chart_impl): () => void {
         chart.emit_click(p.x, p.y);
       }
     }
+    if (chart.gesture_config().tracking_exit_mode === "on_touch_end") exit_tracking_on_next_try = true;
+    if (touch_tracking && exit_tracking_on_next_try) {
+      touch_tracking = false;
+      track_point = null;
+      init_crosshair = null;
+      wasm.clear_crosshair();
+      chart.emit_crosshair_left();
+    } else if (!touch_tracking) {
+      wasm.clear_crosshair();
+      chart.emit_crosshair_left();
+    }
     suppress_compatibility_click = true;
     if (e.cancelable) e.preventDefault();
     if (pointers.size === 0) active_touch_id = null;
     trading_press = false;
+    alert_press = false;
     long_tap_active = false;
     chart.repaint();
   };

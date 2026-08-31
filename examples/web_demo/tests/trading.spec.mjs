@@ -163,6 +163,54 @@ test("pointer drag has trading priority and emits one broker-neutral modify inte
   expect(await page.evaluate(() => window.__chart.trading().preview())).toBeNull();
 });
 
+test("unlinked TP/SL chips remain draggable and preserve stop-limit modify fields", async ({ page }) => {
+  await open_trading_demo(page);
+  const probe = await page.evaluate(() => {
+    const trading = window.__chart.trading();
+    trading.apply_snapshot({
+      instrument: { tick_size: 0.25, price_precision: 2 },
+      orders: [{
+        id: "orphan-stop",
+        side: "sell",
+        kind: "stop_limit",
+        role: "stop_loss",
+        status: "working",
+        price: 100,
+        stop_price: 99.5,
+        quantity: 2,
+        revision: 7,
+      }],
+    });
+    window.__orphan_intents = [];
+    trading.subscribe_intents((intent) => window.__orphan_intents.push(intent));
+    const overlay = document.querySelector("#chart_container canvas:last-of-type").getBoundingClientRect();
+    const width = window.__chart.time_scale().width();
+    const chip_x = width - 174 + 20;
+    const y = window.__main.price_to_coordinate(100);
+    return {
+      from: { x: overlay.left + chip_x, y: overlay.top + y },
+      to: { x: overlay.left + chip_x, y: overlay.top + window.__main.price_to_coordinate(98) },
+      hit: trading.hit_at(chip_x, y),
+    };
+  });
+  expect(probe.hit).toMatchObject({ id: "orphan-stop", kind: "order_line" });
+  await page.mouse.move(probe.from.x, probe.from.y);
+  expect(await page.locator("#chart_container canvas:last-of-type").evaluate((canvas) => canvas.style.cursor)).toBe("grab");
+  await page.mouse.down();
+  await page.mouse.move(probe.to.x, probe.to.y, { steps: 6 });
+  await page.mouse.up();
+  expect(await page.evaluate(() => window.__orphan_intents)).toEqual([
+    expect.objectContaining({
+      action: "modify_order",
+      order_id: "orphan-stop",
+      kind: "stop_limit",
+      stop_price: 99.5,
+      price: 98,
+      base_revision: 7,
+    }),
+  ]);
+});
+
 test("cancel control emits intent without removing authoritative order", async ({ page }) => {
   await open_trading_demo(page);
   const probe = await page.evaluate(() => {

@@ -5,6 +5,7 @@
 //! frame produced from this state. During the architecture recovery, frame construction is being
 //! migrated here incrementally from `nucleuscharts_wasm`.
 
+mod alerts;
 mod axis_primitives;
 mod drawings;
 mod feature_series;
@@ -28,6 +29,10 @@ use std::cell::{Cell, RefCell};
 use std::num::NonZeroU32;
 use std::ops::{Deref, DerefMut};
 
+pub use alerts::{
+    AlertCondition, AlertCreateRequest, AlertFrequency, AlertId, AlertLine, AlertLineStatus,
+    AlertPriceScale, AlertSnapshot, MAX_ALERT_LINES,
+};
 pub(crate) use drawings::{
     BrushCapture, DrawingDrag, DrawingHistory, DrawingRuntime, PendingDrawing,
 };
@@ -129,6 +134,7 @@ pub struct EngineMemoryUsage {
     pub footprint_capacity_bytes: usize,
     pub native_primitive_capacity_bytes: usize,
     pub trading_capacity_bytes: usize,
+    pub alert_capacity_bytes: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -151,6 +157,7 @@ impl EngineMemoryUsage {
             + self.footprint_capacity_bytes
             + self.native_primitive_capacity_bytes
             + self.trading_capacity_bytes
+            + self.alert_capacity_bytes
     }
 }
 
@@ -1229,6 +1236,7 @@ pub struct ChartEngine {
     next_native_primitive_id: NativePrimitiveId,
     native_pane_primitives: Vec<native_primitives::NativePanePrimitive>,
     trading_state: trading::TradingState,
+    alert_state: alerts::AlertState,
     /// reference `timeScale.timeVisible` — label semantics only: whether axis/crosshair time labels
     /// include the time of day. Strip reservation is [`Self::time_axis_visible`].
     pub time_visible: bool,
@@ -1371,6 +1379,7 @@ impl ChartEngine {
             next_native_primitive_id: 1,
             native_pane_primitives: Vec::new(),
             trading_state: trading::TradingState::default(),
+            alert_state: alerts::AlertState::default(),
             time_visible: true,
             time_axis_visible: true,
             time_ticks_visible: false,
@@ -1473,6 +1482,7 @@ impl ChartEngine {
             footprint_capacity_bytes: self.footprint_capacity_bytes(),
             native_primitive_capacity_bytes: self.native_primitive_capacity_bytes(),
             trading_capacity_bytes: self.trading_state.estimated_bytes(),
+            alert_capacity_bytes: self.alert_state.estimated_bytes(),
         }
     }
 
@@ -1782,6 +1792,7 @@ impl ChartEngine {
             }
         }
         self.remove_trading_pane(index);
+        self.remove_alert_pane(index);
         self.drawing_runtime
             .borrow_mut()
             .rebuild_panes(&self.drawings, self.panes.len());
@@ -1814,6 +1825,8 @@ impl ChartEngine {
                 drawing.pane_index = first;
             }
         }
+        self.swap_trading_panes(first, second);
+        self.swap_alert_panes(first, second);
         self.drawing_runtime
             .borrow_mut()
             .rebuild_panes(&self.drawings, self.panes.len());
@@ -1863,6 +1876,8 @@ impl ChartEngine {
                 pane
             };
         }
+        self.move_trading_pane(from, to);
+        self.move_alert_pane(from, to);
         self.drawing_runtime
             .borrow_mut()
             .rebuild_panes(&self.drawings, self.panes.len());
