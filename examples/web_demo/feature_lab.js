@@ -331,6 +331,23 @@ function trading_features(chart, bars) {
     icon: "analysis",
     activate: () => {
       const trading = chart.trading();
+      const alerts = chart.alerts();
+      const demo_alert_ids = new Set();
+      const create_demo_alert = (request) => {
+        const id = `demo-alert-${request.sequence}`;
+        demo_alert_ids.add(id);
+        alerts.update_line({
+          id,
+          pane_index: request.pane_index,
+          price_scale: request.price_scale,
+          price: request.price,
+          condition: request.condition,
+          frequency: request.frequency,
+          status: "active",
+          label: "Demo alert",
+        });
+      };
+      alerts.subscribe_create_requests(create_demo_alert);
       trading.apply_snapshot({
         instrument: {
           tick_size: 0.01,
@@ -392,7 +409,11 @@ function trading_features(chart, bars) {
           position_id: "demo-position",
         }],
       });
-      return () => trading.apply_snapshot({});
+      return () => {
+        alerts.unsubscribe_create_requests(create_demo_alert);
+        for (const id of demo_alert_ids) alerts.remove_line(id);
+        trading.apply_snapshot({});
+      };
     },
   }];
 }

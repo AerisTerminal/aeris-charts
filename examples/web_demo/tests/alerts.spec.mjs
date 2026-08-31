@@ -32,6 +32,15 @@ test("crosshair plus chip emits an exact host request and host alert lines stay 
   });
   expect(request.price).toBeCloseTo(104, 6);
 
+  const demo_line = await page.evaluate(() => window.__chart.alerts().state().lines.find((line) => line.id.startsWith("demo-alert-")));
+  expect(demo_line).toMatchObject({
+    price: request.price,
+    condition: "crossing",
+    frequency: "only_once",
+    status: "active",
+    label: "Demo alert",
+  });
+
   const state = await page.evaluate((price) => {
     const alerts = window.__chart.alerts();
     alerts.update_line({
@@ -44,7 +53,7 @@ test("crosshair plus chip emits an exact host request and host alert lines stay 
     });
     return alerts.state();
   }, request.price);
-  expect(state.lines).toEqual([
+  expect(state.lines).toEqual(expect.arrayContaining([
     expect.objectContaining({
       id: "host-alert",
       condition: "crossing_up",
@@ -52,5 +61,5 @@ test("crosshair plus chip emits an exact host request and host alert lines stay 
       status: "active",
       label: "Breakout",
     }),
-  ]);
+  ]));
 });

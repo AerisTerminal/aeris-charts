@@ -3544,6 +3544,15 @@ mod tests {
                             && *weight == 700
                 ))
         );
+        assert!(
+            frame.panes[0].main[pane_segments.drawings_end..pane_segments.trading_end]
+                .iter()
+                .any(|primitive| matches!(
+                    primitive,
+                    Prim::Text { text, weight, .. } if text == "TP" && *weight == 400
+                )),
+            "ordinary trading labels must use the same normal weight as chart labels"
+        );
         assert!(chart.clear_trading_pressed());
     }
 }

@@ -424,7 +424,7 @@ impl ChartEngine {
             size: (font_size * if is_close_icon { 1.45 } else { 1.0 } * vpr) as f32,
             family: self.options.get().layout.font_family.clone(),
             align: TextAlign::Center,
-            weight: if is_close_icon { 700 } else { 600 },
+            weight: if is_close_icon { 700 } else { 400 },
             italic: false,
         });
     }
@@ -534,7 +534,7 @@ impl ChartEngine {
             text,
             font_size,
             &self.options.get().layout.font_family,
-            500,
+            400,
             false,
         ) + 12.0;
         let x = (center_x - width / 2.0).clamp(4.0, (self.pane_w - width - 4.0).max(4.0));
@@ -562,7 +562,7 @@ impl ChartEngine {
             size: (font_size * vpr) as f32,
             family: self.options.get().layout.font_family.clone(),
             align: TextAlign::Center,
-            weight: 500,
+            weight: 400,
             italic: false,
         });
     }
