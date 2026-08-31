@@ -226,14 +226,16 @@ impl ChartEngine {
         (pane_scale(&self.panes[pane_index], target), base_value)
     }
 
-    /// Resolve the OHLC candidate nearest `(x_css, y_css)` in pixel space. Drawings and the
-    /// crosshair share this path so they choose the same bar, visible series, and OHLC field.
-    pub(crate) fn ohlc_magnet_snap_coordinate(
+    /// Resolve the rendered series candidate nearest `(x_css, y_css)` in pixel space. Drawings
+    /// and the crosshair share this path so they choose the same bar, visible series, and field.
+    /// OHLC mode exposes all four prices only for series that paint them; scalar-rendered series
+    /// expose their close/value so hidden input columns cannot attract the magnet.
+    pub(crate) fn magnet_snap_coordinate(
         &self,
         pane_index: usize,
         x_css: f64,
         y_css: f64,
-        keys: &[PlotValueIndex],
+        include_ohlc: bool,
     ) -> Option<(i64, f64)> {
         if !(0.0..=self.pane_w).contains(&x_css) || !y_css.is_finite() {
             return None;
@@ -264,6 +266,20 @@ impl ChartEngine {
             let Some(base_value) = self.series_base_value(series.id, from) else {
                 continue;
             };
+            let keys: &[PlotValueIndex] = if include_ohlc
+                && matches!(
+                    series.kind,
+                    SeriesKind::Candlestick | SeriesKind::Bar | SeriesKind::Footprint
+                ) {
+                &[
+                    PlotValueIndex::Open,
+                    PlotValueIndex::High,
+                    PlotValueIndex::Low,
+                    PlotValueIndex::Close,
+                ]
+            } else {
+                &[PlotValueIndex::Close]
+            };
             candidates.extend(keys.iter().filter_map(|&key| {
                 let value = plot.value_at(row, key);
                 value
@@ -275,12 +291,13 @@ impl ChartEngine {
         magnet_snap_coordinate(y_css, &candidates).map(|coordinate| (index, coordinate))
     }
 
-    /// Port of reference `Magnet.align` (model/magnet.ts:30-86): in Magnet modes the horizontal line
-    /// snaps to the OHLC candidate — gathered from every visible, non-overlay series on the pane
-    /// with a bar exactly at the snapped index — nearest the cursor in *pixel* space (each
-    /// candidate converted on its own series' scale, so log modes compare correctly), then
-    /// converted back to a price on the pane's default scale. Normal/Hidden mode, or no
-    /// candidates, keeps the raw cursor price.
+    /// Port of reference `Magnet.align` (model/magnet.ts:30-86): in Magnet modes the horizontal
+    /// line snaps to the rendered-price candidate gathered from every visible, non-overlay series
+    /// on the pane with a bar exactly at the snapped index. OHLC-rendered series contribute all
+    /// requested fields; scalar-rendered series contribute only their close/value. The nearest
+    /// candidate wins in *pixel* space (after conversion on its own series scale), then converts
+    /// back to a price on the pane's default scale. Normal/Hidden mode, or no candidates, keeps
+    /// the raw cursor price.
     pub(super) fn crosshair_snap(
         &self,
         pane_index: usize,
@@ -295,27 +312,16 @@ impl ChartEngine {
         // (`crosshair_ohlc_magnet`, TradingView's temporary Ctrl magnet) which upgrades a
         // Normal-mode crosshair to the MagnetOhlc candidate set without touching the
         // configured mode.
-        let keys: Option<&[PlotValueIndex]> = match self.crosshair_mode {
-            // reference magnetOHLCPlotRowKeys vs magnetPlotRowKeys (magnet.ts:13-21)
-            CrosshairMode::MagnetOhlc => Some(&[
-                PlotValueIndex::Open,
-                PlotValueIndex::High,
-                PlotValueIndex::Low,
-                PlotValueIndex::Close,
-            ]),
-            CrosshairMode::Magnet => Some(&[PlotValueIndex::Close]),
-            CrosshairMode::Normal if self.crosshair_ohlc_magnet => Some(&[
-                PlotValueIndex::Open,
-                PlotValueIndex::High,
-                PlotValueIndex::Low,
-                PlotValueIndex::Close,
-            ]),
+        let include_ohlc = match self.crosshair_mode {
+            CrosshairMode::MagnetOhlc => Some(true),
+            CrosshairMode::Magnet => Some(false),
+            CrosshairMode::Normal if self.crosshair_ohlc_magnet => Some(true),
             _ => None,
         };
-        let Some(keys) = keys else {
+        let Some(include_ohlc) = include_ohlc else {
             return (price, y_css);
         };
-        match self.ohlc_magnet_snap_coordinate(pane_index, x_css, y_css, keys) {
+        match self.magnet_snap_coordinate(pane_index, x_css, y_css, include_ohlc) {
             Some((_, nearest)) => (
                 default_scale.coordinate_to_price(nearest, default_base),
                 nearest,

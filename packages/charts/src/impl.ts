@@ -3669,8 +3669,9 @@ export class chart_impl implements chart_api {
   }
 
   /** Forward a mouse move to the engine's creation preview (no-op while unarmed). Modifiers:
-   * `magnet` snaps the preview anchor to the nearest bar's OHLC, `straighten` constrains a
-   * second anchor to 0°/45°/90° (a rectangle to a square). */
+   * `magnet` snaps the preview anchor to the nearest rendered bar price (OHLC for candles/bars,
+   * close/value for scalar series); `straighten` constrains a second anchor to 0°/45°/90°
+   * (a rectangle to a square). */
   creation_move(x: number, y: number, magnet = false, straighten = false): void {
     if (this.active_tool_pane !== null && this.pane_index_at(x, y) !== this.active_tool_pane) return;
     this.wasm.drawing_create_move(x, y, magnet, straighten);
@@ -3680,8 +3681,9 @@ export class chart_impl implements chart_api {
    * Route a pane click into interactive creation (the gesture recognizer's click path): begins
    * the engine's creation flow on the first click and places anchors on each click, disarming
    * the tool after a commit (one-shot, TradingView default). `magnet` snaps the placed anchor
-   * to the nearest bar's OHLC, `straighten` constrains a second anchor. Returns whether the
-   * click was consumed (an armed tool over a pane).
+   * to the nearest rendered bar price (OHLC for candles/bars, close/value for scalar series);
+   * `straighten` constrains a second anchor. Returns whether the click was consumed (an armed
+   * tool over a pane).
    */
   creation_click(x: number, y: number, magnet = false, straighten = false): boolean {
     const pane = this.pane_index_at(x, y);

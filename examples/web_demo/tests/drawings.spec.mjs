@@ -841,6 +841,37 @@ test("Ctrl magnet snaps placement to the nearest bar's OHLC", async ({ page }) =
   expect(probe.prices).not.toContainEqual(second.price);
 });
 
+test("Ctrl magnet ignores hidden OHLC fields after switching to an area series", async ({ page }) => {
+  await goto_fixture(page);
+  const probe = await page.evaluate(() => {
+    const range = window.__chart.time_scale().get_visible_logical_range();
+    const index = Math.floor(range.from + (range.to - range.from) * 0.45);
+    const bar = window.__data[index];
+    window.__main.set_type("area");
+    window.__chart.time_scale().fit_content();
+    window.__chart.set_drawing_tool("horizontal_line");
+    return {
+      index,
+      close: bar.close,
+      hidden_high: bar.high,
+      x: window.__chart.time_scale().logical_to_coordinate(index),
+      y: window.__main.price_to_coordinate(bar.high),
+    };
+  });
+  expect(probe.hidden_high).not.toBe(probe.close);
+  await settle_frames(page);
+
+  await page.keyboard.down("Control");
+  await page.mouse.click(probe.x, probe.y);
+  await page.keyboard.up("Control");
+
+  const list = await drawings(page);
+  expect(list).toHaveLength(1);
+  expect(list[0].points[0].logical).toBeCloseTo(probe.index, 6);
+  expect(list[0].points[0].price).toBeCloseTo(probe.close, 9);
+  expect(list[0].points[0].price).not.toBeCloseTo(probe.hidden_high, 9);
+});
+
 test("Ctrl magnets an anchor drag to a bar's OHLC (and never straightens)", async ({ page }) => {
   await goto_fixture(page);
   const s = await anchor_spots(page);

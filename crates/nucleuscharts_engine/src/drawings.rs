@@ -684,7 +684,8 @@ pub struct DrawingHit {
 
 /// Modifier keys the host gesture layer forwards with pointer positions (TradingView modifier
 /// semantics): `magnet` snaps anchors to the nearest bar — x to the bar's center, the price to
-/// the closest of its open/high/low/close (Ctrl/Cmd — the same key that magnets the crosshair);
+/// its closest rendered field (OHLC for candles/bars, value for scalar series; Ctrl/Cmd — the
+/// same key that magnets the crosshair);
 /// `straighten` constrains the dragged anchor of a two-anchor tool so the segment snaps to
 /// 0°/45°/90° (a rectangle to a square) and body drags to the dominant axis (Shift only —
 /// Ctrl never straightens). Where the two compose, straighten wins for the dragged anchor.
@@ -1367,8 +1368,8 @@ impl ChartEngine {
     }
 
     /// TradingView magnet (Ctrl held): resolve the live pointer through the same pixel-space
-    /// OHLC candidate path as the crosshair, then encode the winning coordinate on the drawing's
-    /// own price scale. A bar with no visible real candidate keeps the unsnapped point.
+    /// rendered-price candidate path as the crosshair, then encode the winning coordinate on the
+    /// drawing's own price scale. A bar with no visible real candidate keeps the unsnapped point.
     fn magnet_snap_point_at(
         &self,
         pane_index: usize,
@@ -1377,17 +1378,7 @@ impl ChartEngine {
         y: f64,
         point: DrawingPoint,
     ) -> DrawingPoint {
-        let Some((logical, snapped_y)) = self.ohlc_magnet_snap_coordinate(
-            pane_index,
-            x,
-            y,
-            &[
-                PlotValueIndex::Open,
-                PlotValueIndex::High,
-                PlotValueIndex::Low,
-                PlotValueIndex::Close,
-            ],
-        ) else {
+        let Some((logical, snapped_y)) = self.magnet_snap_coordinate(pane_index, x, y, true) else {
             return point;
         };
         let Some(mut snapped) = self.drawing_from_px_for(pane_index, price_scale, x, snapped_y)
@@ -2480,10 +2471,10 @@ impl ChartEngine {
     /// body drag translates every anchor in coordinate space and converts back per anchor, so
     /// the shape stays pixel-rigid on any scale mode. The unused coordinate of the full-span
     /// kinds is frozen (a horizontal line moves only vertically, a vertical line only
-    /// horizontally). `modifiers` applies magnet (OHLC snap) before straighten (0°/45°/90° for
-    /// a trend anchor, square for a rectangle corner, dominant-axis for a body move) — the
-    /// session recomputes from its start snapshot each call, so toggling a modifier mid-drag
-    /// responds live (TradingView parity).
+    /// horizontally). `modifiers` applies magnet (rendered-price snap) before straighten
+    /// (0°/45°/90° for a trend anchor, square for a rectangle corner, dominant-axis for a body
+    /// move) — the session recomputes from its start snapshot each call, so toggling a modifier
+    /// mid-drag responds live (TradingView parity).
     pub fn drawing_drag_to(&mut self, x: f64, y: f64, modifiers: DrawingModifiers) {
         self.invalidate_frame_drawings();
         let Some(drag) = self.drawing_drag.as_mut() else {
@@ -2674,7 +2665,7 @@ impl ChartEngine {
                     }
                     // Single-anchor kinds drag by their line, not a handle — the body drag IS
                     // the anchor drag, so the magnet applies here too (a Ctrl-dragged vertical
-                    // line snaps to bar centers, a horizontal one to the nearest OHLC price).
+                    // line snaps to bar centers, a horizontal one to the nearest rendered price).
                     if modifiers.magnet && single_anchor {
                         let snapped = self.magnet_snap_point_at(pane, price_scale, x, y, point);
                         point = match kind {

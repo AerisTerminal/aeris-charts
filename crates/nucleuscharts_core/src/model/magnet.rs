@@ -1,9 +1,9 @@
 //! Crosshair magnet, ported from `src/model/magnet.ts`.
 //!
-//! In Magnet mode the crosshair's horizontal line snaps to the close price of the bar under
-//! the cursor; in MagnetOHLC it snaps to whichever of open/high/low/close is nearest the
-//! cursor in *pixel* space. The comparison is done on coordinates (not prices) so it behaves
-//! correctly on log scales.
+//! In Magnet mode the crosshair's horizontal line snaps to the close/value of the bar under
+//! the cursor; in MagnetOHLC it considers open/high/low/close for OHLC-rendered series and only
+//! the painted value for scalar-rendered series. The comparison is done in *pixel* coordinates
+//! (not prices) so it behaves correctly on log scales.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CrosshairMode {
@@ -13,7 +13,7 @@ pub enum CrosshairMode {
     Magnet,
     /// Hidden (rendering suppressed).
     Hidden,
-    /// Horizontal line sticks to the nearest of O/H/L/C of the hovered bar.
+    /// Horizontal line sticks to the nearest rendered price of the hovered bar.
     MagnetOhlc,
 }
 

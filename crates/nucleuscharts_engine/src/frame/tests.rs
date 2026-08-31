@@ -768,6 +768,46 @@ fn magnet_ohlc_picks_nearest_of_open_high_low_close() {
 }
 
 #[test]
+fn magnet_ohlc_ignores_unpainted_columns_for_scalar_series() {
+    for kind in [
+        SeriesKind::Line,
+        SeriesKind::Area,
+        SeriesKind::Histogram,
+        SeriesKind::Baseline,
+    ] {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        chart.convert_series_kind(0, kind);
+        chart.crosshair_mode = CrosshairMode::MagnetOhlc;
+        chart
+            .set_series_data(
+                0,
+                &[1.0, 2.0, 3.0],
+                &[11.0, 22.0, 31.0],
+                &[12.0, 25.0, 32.0],
+                &[9.0, 15.0, 29.0],
+                &[10.0, 20.0, 30.0],
+            )
+            .unwrap();
+        chart.time_scale.set_width(800.0);
+        chart.fit_content();
+        chart.build_frame();
+
+        let (from, to) = chart.visible_range_for_frame().unwrap();
+        let scale = pane_scale(&chart.panes[0], PriceScaleTarget::Right);
+        let base = chart.series_base_value(0, from).unwrap();
+        let x = chart.time_scale.index_to_coordinate(1);
+        let hidden_high_y = scale.price_to_coordinate(25.0, base);
+        let rendered_value_y = scale.price_to_coordinate(20.0, base);
+        let (_, snapped_y) = chart.crosshair_snap(0, x, hidden_high_y, from, to);
+
+        assert_eq!(
+            snapped_y, rendered_value_y,
+            "{kind:?} must snap to its painted close/value"
+        );
+    }
+}
+
+#[test]
 fn normal_mode_keeps_the_raw_cursor_price() {
     let mut chart = crosshair_chart();
     chart.crosshair_mode = CrosshairMode::Normal;

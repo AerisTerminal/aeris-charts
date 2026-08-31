@@ -2091,7 +2091,7 @@ impl ChartInner {
     pub fn drawing_drag_start_at(&mut self, x_css: f64, y_css: f64) -> bool {
         self.engine.drawing_drag_start_at(x_css, y_css)
     }
-    /// Forward a drag position with the modifier state (magnet = OHLC snap, straighten =
+    /// Forward a drag position with the modifier state (magnet = rendered-price snap, straighten =
     /// 0°/45°/90° anchor constraint / dominant-axis body move; drawings.rs `DrawingModifiers`).
     pub fn drawing_drag_to(&mut self, x_css: f64, y_css: f64, magnet: bool, straighten: bool) {
         self.engine

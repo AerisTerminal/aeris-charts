@@ -2979,7 +2979,8 @@ impl NucleusChart {
         self.inner.borrow_mut().set_crosshair(x_css, y_css);
     }
     /// TradingView's Ctrl-held magnet: the gesture layer forwards the live modifier state; a
-    /// Normal-mode crosshair then snaps to the hovered bar's OHLC on the next `render()`.
+    /// Normal-mode crosshair then snaps to the hovered bar's rendered prices on the next
+    /// `render()` (OHLC for candles/bars, close/value for scalar series).
     pub fn set_crosshair_ohlc_magnet(&mut self, enabled: bool) {
         self.inner.borrow_mut().engine.crosshair_ohlc_magnet = enabled;
     }
@@ -3166,8 +3167,8 @@ impl NucleusChart {
     }
     /// Place the next creation anchor: 0 unarmed, -1 pending more anchors, > 0 the committed
     /// drawing's id (left selected, TradingView-style). `magnet` snaps the anchor to the nearest
-    /// bar's OHLC; `straighten` constrains a second anchor to 0°/45°/90° (a rectangle to a
-    /// square).
+    /// rendered bar price (OHLC for candles/bars, close/value for scalar series); `straighten`
+    /// constrains a second anchor to 0°/45°/90° (a rectangle to a square).
     pub fn drawing_create_click(
         &mut self,
         x_css: f64,

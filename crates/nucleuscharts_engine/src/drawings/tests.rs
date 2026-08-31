@@ -2212,6 +2212,40 @@ fn ctrl_magnet_snaps_the_crosshair_to_ohlc() {
     assert_eq!(crosshair_hline_y(&mut chart), None);
 }
 
+#[test]
+fn ohlc_magnet_snaps_scalar_series_to_the_rendered_value() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart.convert_series_kind(0, SeriesKind::Area);
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0, 3.0],
+            &[11.0, 22.0, 31.0],
+            &[12.0, 25.0, 32.0],
+            &[9.0, 15.0, 29.0],
+            &[10.0, 20.0, 30.0],
+        )
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    chart.build_frame();
+
+    let x = x_at(&chart, 1.0);
+    let empty_y = y_at(&chart, 25.0);
+    let rendered_y = y_at(&chart, 20.0);
+    chart.crosshair = Some((x, empty_y));
+    chart.crosshair_ohlc_magnet = true;
+    assert_eq!(
+        crosshair_hline_y(&mut chart),
+        Some(rendered_y.round() as i32),
+        "an area series exposes only its rendered close/value to the OHLC magnet"
+    );
+
+    assert!(chart.drawing_create_begin(DrawingKind::HorizontalLine, None));
+    let drawing_id = chart.drawing_create_click(x, empty_y, MAGNET) as DrawingId;
+    assert!((chart.drawing(drawing_id).unwrap().points[0].price - 20.0).abs() < 1e-9);
+}
+
 // --- brush (freehand) ---
 
 fn add_brush(chart: &mut ChartEngine) -> DrawingId {

@@ -205,7 +205,8 @@ export function install_gestures(chart: chart_impl): () => void {
   };
 
   // TradingView's Ctrl-held magnet, scoped to DRAWING work: the Normal-mode crosshair snaps
-  // to the hovered bar's OHLC only while a drawing tool is armed (anchor placement/preview) —
+  // to the hovered bar's rendered prices only while a drawing tool is armed (anchor
+  // placement/preview) —
   // plain browsing never price-snaps on Ctrl. Forwarded on every pointer move/down and on
   // modifier key events, so a press/release without mouse movement still refreshes the snap live.
   const apply_crosshair_magnet = (e: { ctrlKey: boolean; metaKey: boolean }) => {
@@ -590,8 +591,8 @@ export function install_gestures(chart: chart_impl): () => void {
       // Engine-owned anchor/body drag (drawings.rs): the engine re-anchors from the start
       // snapshot; the crosshair feed below keeps tracking the cursor. Modifier keys are
       // forwarded live (toggling mid-drag responds immediately, TradingView parity): Ctrl/Cmd =
-      // magnet (snap anchors to the nearest bar's OHLC), Shift = straighten (0°/45°/90° anchor
-      // constraint, dominant-axis body move). Ctrl never straightens.
+      // magnet (snap anchors to the nearest rendered bar price), Shift = straighten
+      // (0°/45°/90° anchor constraint, dominant-axis body move). Ctrl never straightens.
       wasm.drawing_drag_to(p.x, p.y, e.ctrlKey || e.metaKey, e.shiftKey);
     } else if (dragging) {
       wasm.scroll_move(p.x);
@@ -614,7 +615,7 @@ export function install_gestures(chart: chart_impl): () => void {
       chart.emit_crosshair_left();
     }
     // Interactive creation preview: the pending anchor follows the mouse (engine-owned), with
-    // the same live modifier snaps as a placement click (Ctrl = magnet to OHLC, Shift =
+    // the same live modifier snaps as a placement click (Ctrl = magnet to rendered price, Shift =
     // straighten).
     if (chart.creation_active()) {
       chart.creation_move(p.x, p.y, e.ctrlKey || e.metaKey, e.shiftKey);

@@ -1219,10 +1219,10 @@ pub struct ChartEngine {
     pub options: ChartOptionsStore,
     pub crosshair_mode: CrosshairMode,
     /// TradingView's Ctrl-held magnet: while set, a Normal-mode crosshair snaps to the hovered
-    /// bar's OHLC exactly like `CrosshairMode::MagnetOhlc` (frame/crosshair.rs
-    /// `crosshair_snap`). The gesture layer forwards the live modifier state; the configured
-    /// `crosshair_mode` is untouched (Magnet/MagnetOhlc stay as configured, Hidden stays
-    /// hidden).
+    /// bar's rendered prices exactly like `CrosshairMode::MagnetOhlc` (OHLC for candles/bars,
+    /// close/value for scalar series; frame/crosshair.rs `crosshair_snap`). The gesture layer
+    /// forwards the live modifier state; the configured `crosshair_mode` is untouched
+    /// (Magnet/MagnetOhlc stay as configured, Hidden stays hidden).
     pub crosshair_ohlc_magnet: bool,
     pub animation_time: f64,
     pub next_price_line_id: u32,
