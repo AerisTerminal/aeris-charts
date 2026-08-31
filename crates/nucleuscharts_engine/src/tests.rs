@@ -680,6 +680,16 @@ fn reset_view_restores_time_defaults_and_reenables_autoscale() {
     chart.reset_view();
     // Time scale back to the configured defaults (LWC resetTimeScale)…
     assert_eq!(chart.bar_spacing(), 6.0);
+    // …except that a view reset leaves a right margin worth 10% of the plot width instead of
+    // pinning the newest bar to the axis under its own live-price cluster (TradingView-style).
+    // 300px plot / 6px bars => 5 empty bars.
+    assert_eq!(chart.right_offset(), 5.0);
+    assert!(
+        chart.right_offset() * chart.bar_spacing() - chart.pane_w * 0.10 < 1e-9,
+        "the margin is a fraction of the plot width, not a fixed bar count"
+    );
+    // The reference `resetTimeScale` itself keeps its zero-offset semantics for direct callers.
+    chart.reset_time_scale();
     assert_eq!(chart.right_offset(), 0.0);
     // …and every pane's price scales autoscale again (LWC pane resetPriceScale); the next
     // frame recalculates the range, so the contracted data fits the pane once more.

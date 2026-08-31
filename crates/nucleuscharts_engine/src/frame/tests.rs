@@ -1218,18 +1218,12 @@ fn last_value_labels_cover_every_visible_series_and_resolve_overlap() {
 
     // reference SeriesPriceAxisView: every visible series with lastValueVisible gets a label on its
     // scale, in the series' bar color (the line color for a line series — not up/down).
+    // Colliding chips are SPACED, never restyled: both stay solid while their values are live.
     let labels = boxed(&mut chart);
     assert_eq!(labels.len(), 2);
-    assert_eq!(
-        labels.iter().filter(|label| label.border.is_none()).count(),
-        1
-    );
-    assert_eq!(
-        labels
-            .iter()
-            .filter(|label| label.border == Some((1.0, LINE)))
-            .count(),
-        1
+    assert!(
+        labels.iter().all(|label| label.border.is_none()),
+        "overlapping chips stay filled — collision is resolved by spacing, not by hollowing"
     );
     // reference `_fixLabelOverlap`: colliding labels are pushed apart by their box height.
     let height = 12.0 + 2.5 * 2.0;
@@ -1239,7 +1233,7 @@ fn last_value_labels_cover_every_visible_series_and_resolve_overlap() {
         "overlapping labels must be pushed a full box height apart, got {gap}"
     );
 
-    // Once the secondary is outside the primary live-price region it returns to a solid chip.
+    // Separated values are likewise solid.
     let separated = [20.0, 21.0, 22.0, 21.5, 22.5];
     chart
         .set_series_data(
@@ -1263,6 +1257,57 @@ fn last_value_labels_cover_every_visible_series_and_resolve_overlap() {
     chart.series[1].last_value_visible = true;
     chart.set_series_visible(1, false);
     assert_eq!(boxed(&mut chart).len(), 1);
+}
+
+/// TradingView marks a last-value chip hollow only when its value is no longer live — i.e. the
+/// series' final bar has been scrolled out of view (what a negative right offset produces).
+#[test]
+fn last_value_chips_hollow_only_once_the_final_bar_leaves_the_view() {
+    let mut chart = two_identical_line_series();
+    let boxed = |chart: &mut ChartEngine| {
+        chart
+            .build_axis_frame(80.0, |t| t.len() as f64 * 7.0)
+            .labels
+            .into_iter()
+            .filter(|l| l.background.is_some())
+            .collect::<Vec<_>>()
+    };
+
+    // Fitted: the last bar is on screen, so every chip is filled.
+    assert!(chart.right_offset() >= 0.0);
+    assert!(boxed(&mut chart).iter().all(|label| label.border.is_none()));
+
+    // Whitespace after the last bar (positive right offset) is still live.
+    chart.set_right_offset(6.0);
+    chart.build_frame();
+    assert!(boxed(&mut chart).iter().all(|label| label.border.is_none()));
+
+    // Scrolled back far enough to push the final bar off the right edge: the SECONDARY chip
+    // outlines, because it is now showing the last visible bar rather than its latest value.
+    // The scale's primary source keeps its filled chip — the symbol the scale belongs to is
+    // never rendered as stale.
+    chart.set_right_offset(-3.0);
+    chart.build_frame();
+    let labels = boxed(&mut chart);
+    assert_eq!(labels.len(), 2);
+    assert_eq!(
+        labels
+            .iter()
+            .filter(|label| label.border == Some((1.0, LINE)))
+            .count(),
+        1,
+        "only the non-primary chip outlines when the value goes stale"
+    );
+    assert_eq!(
+        labels.iter().filter(|label| label.border.is_none()).count(),
+        1,
+        "the scale's primary chip stays filled"
+    );
+
+    // Scrolling back to the end fills them again.
+    chart.set_right_offset(0.0);
+    chart.build_frame();
+    assert!(boxed(&mut chart).iter().all(|label| label.border.is_none()));
 }
 
 #[test]
@@ -3137,8 +3182,9 @@ fn last_value_cluster_rows_toggle_independently() {
     assert_eq!(chip_bg, LINE);
     assert_eq!(price_bg, LINE);
     assert_eq!(cd_bg, LINE);
-    // Both boxes meet at the logical border. The primitive encoder excludes the border's exact
-    // device pixels from the axis-side box at fractional scale factors.
+    // The title chip ends at the logical border. The primitive encoder starts the axis-side box
+    // after the border's device pixels, so the border alone is the seam: no overlap and no extra
+    // chart-surface gap.
     assert_eq!(chip_y, price_y);
     let border_x = chart.pane_left + chart.pane_w;
     assert_eq!(chip_x + chip_w, border_x);
@@ -3387,6 +3433,18 @@ fn boxed_labels_begin_beyond_the_axis_border_at_every_dpr() {
 
         let border_w = 1f64.max(dpr.floor()) as i32;
         let price_border = ((chart.pane_left + chart.pane_w) * dpr).round() as i32;
+        let title_box = primitives.iter().find_map(|primitive| match primitive {
+            Prim::RoundRect { x, w, fill, .. } if *x < price_border as f32 && *fill == LINE => {
+                Some((*x, *w))
+            }
+            _ => None,
+        });
+        let (title_x, title_w) = title_box.expect("title chip primitive");
+        assert_eq!(
+            title_x + title_w,
+            price_border as f32,
+            "title chip must end at the border with no overlap or surface gap at dpr {dpr}"
+        );
         assert!(
             primitives.iter().any(|primitive| matches!(
                 primitive,
@@ -4529,4 +4587,56 @@ fn indicator_tick_rebuilds_only_source_and_dependent_output_layers() {
         Some(unrelated_generation)
     );
     assert!(chart.data.series_generation(rsi).unwrap() > 0);
+}
+
+/// The selected series' chip carries TradingView's active-state accent on its axis-facing edge.
+#[test]
+fn selecting_a_series_accents_its_last_value_chip() {
+    let mut chart = two_identical_line_series();
+    let accents = |chart: &mut ChartEngine| {
+        chart
+            .build_axis_frame(80.0, |t| t.len() as f64 * 7.0)
+            .labels
+            .into_iter()
+            .filter(|l| l.text.is_empty() && l.background.is_some())
+            .collect::<Vec<_>>()
+    };
+
+    // Nothing selected: no accent anywhere.
+    assert!(accents(&mut chart).is_empty());
+
+    let second = chart.series[1].id;
+    chart.set_selected_series(Some(second));
+    assert_eq!(
+        chart.selected_series(),
+        Some(second),
+        "selection took effect"
+    );
+    let marks = accents(&mut chart);
+    assert_eq!(marks.len(), 1, "exactly the selected series is accented");
+    let (x, y, w, h, color) = marks[0].background.unwrap();
+    assert_eq!(w, 3.0);
+    // Lighter than the series color it marks, and the same hue family.
+    assert_eq!(color, LINE.lighten(0.45));
+    assert!(color.r() >= LINE.r() && color.g() >= LINE.g() && color.b() >= LINE.b());
+    // Pinned to the axis-facing (right) edge of the right-strip chip, spanning the cluster.
+    // Flush with the axis-facing (right) edge of a real price chip, spanning its full height.
+    let chip = chart
+        .build_axis_frame(80.0, |t| t.len() as f64 * 7.0)
+        .labels
+        .into_iter()
+        .filter_map(|l| (!l.text.is_empty()).then_some(l.background).flatten())
+        .find(|(bx, by, bw, bh, _)| {
+            (bx + bw - (x + w)).abs() < 1e-9 && (*by - y).abs() < 1e-9 && (*bh - h).abs() < 1e-9
+        });
+    assert!(
+        chip.is_some(),
+        "the accent must sit on the axis edge of the chip it marks"
+    );
+
+    // Selecting the other series moves the accent; clearing removes it.
+    chart.set_selected_series(Some(chart.series[0].id));
+    assert_eq!(accents(&mut chart).len(), 1);
+    chart.set_selected_series(None);
+    assert!(accents(&mut chart).is_empty());
 }

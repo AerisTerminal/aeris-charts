@@ -146,6 +146,15 @@ impl Color {
         )
     }
 
+    /// Lighter shade of this color: every sRGB channel blended toward white by `factor`
+    /// (clamped to 0..=1), alpha preserved. Used for the selected series' axis-chip accent,
+    /// which must read as the same hue one step brighter.
+    pub fn lighten(&self, factor: f64) -> Color {
+        let f = factor.clamp(0.0, 1.0);
+        let mix = |c: u8| (c as f64 + (255.0 - c as f64) * f).round() as u8;
+        Color::rgba(mix(self.r()), mix(self.g()), mix(self.b()), self.a())
+    }
+
     /// CSS `#rrggbb` string (ignores alpha).
     pub fn to_hex(&self) -> String {
         format!("#{:02x}{:02x}{:02x}", self.r(), self.g(), self.b())

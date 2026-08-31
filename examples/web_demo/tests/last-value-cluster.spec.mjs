@@ -74,8 +74,8 @@ function near(a, b, tol = 12) {
 
 const is_box = (c) => near(c, LABEL) || near(c, CHIP);
 
-// Locate the OUTSIDE title chip (TradingView geometry: it sits on the pane side, a ~2px gap
-// before the axis border). Since the chip shares the label color (candle bodies/wicks match
+// Locate the OUTSIDE title chip (TradingView geometry: it ends at the pane-side edge of the axis
+// border). Since the chip shares the label color (candle bodies/wicks match
 // too), detection is by box coverage: a chip is a solid rectangle (≥ 70% LABEL pixels over a
 // 20px window on the row band); wicks/bodies never fill a window like that.
 const is_label = (c) => near(c, LABEL);
@@ -112,7 +112,9 @@ function chip_boxes_at(png, y, x0, x1, row_h = 17) {
 
 function chip_run_near(png, pane_w, anchor_y) {
   const y = Math.round(anchor_y) - Math.floor(17 / 2);
-  const boxes = chip_boxes_at(png, y, Math.max(0, pane_w - 120), pane_w - 1);
+  // `x1` is exclusive. Include `pane_w - 1`, the final chart-side pixel before the border, so
+  // this probe can distinguish a flush title chip from a one-pixel surface gap.
+  const boxes = chip_boxes_at(png, y, Math.max(0, pane_w - 120), pane_w);
   if (boxes.length === 0) return { left: -1, right: -1, top: -1, bottom: -1, found: false };
   const last = boxes[boxes.length - 1]; // the border-most box
   return { left: last.s, right: last.e, top: y, bottom: y + 17, found: true };
@@ -130,7 +132,7 @@ function find_chip(png, pane_w, anchor_y) {
 function count_chip_left(png, pane_w, anchor_y) {
   const y = Math.round(anchor_y) - Math.floor(17 / 2);
   let n = 0;
-  for (const box of chip_boxes_at(png, y, Math.max(0, pane_w - 120), pane_w - 1)) n += box.e - box.s + 1;
+  for (const box of chip_boxes_at(png, y, Math.max(0, pane_w - 120), pane_w)) n += box.e - box.s + 1;
   return n;
 }
 
@@ -252,12 +254,12 @@ test("last-value cluster paints chip, price, and countdown rows; the chip matche
   // One connected two-row box (~34px at the default 12px font).
   expect(box.bottom - box.top).toBeGreaterThanOrEqual(ROW * 2 - 4);
   expect(box.bottom - box.top).toBeLessThanOrEqual(ROW * 2 + 4);
-  // The title chip sits OUTSIDE the axis strip (pane side, ~2px gap before the border), in the
-  // SAME color as the price/countdown chips by default.
+  // The title chip sits OUTSIDE the axis strip and ends exactly at the border's pane-side edge,
+  // in the SAME color as the price/countdown chips by default.
   const chip = find_chip(on, anchor.pane_w, anchor.y);
   expect(chip.found, "title chip outside the strip").toBe(true);
   const gap = anchor.pane_w - chip.right - 1;
-  expect(Math.abs(gap - 2)).toBeLessThanOrEqual(2);
+  expect(gap, "no chart-surface pixels between title chip and border").toBe(0);
   const chip_pixel = px(on, chip.left + 3, box.top + Math.floor(ROW / 2));
   const price_pixel = px(on, box.left + 3, box.top + Math.floor(ROW / 2));
   expect(near(chip_pixel, CHIP), `chip pixel ${chip_pixel}`).toBe(true);
@@ -558,8 +560,8 @@ test("cluster parts toggle independently", async ({ browser }) => {
   box = find_cluster(shot, anchor.pane_w);
   const extent = chip_extent(shot, anchor.pane_w, anchor.y);
   expect(extent.found, "outside title chip present").toBe(true);
-  // Gap between the chip's right edge and the axis border (~2px, ±2 for AA).
-  expect(Math.abs(anchor.pane_w - extent.right - 1 - 2)).toBeLessThanOrEqual(2);
+  // The title chip ends at the axis border with no intervening chart-surface pixel.
+  expect(anchor.pane_w - extent.right - 1).toBe(0);
   // Inside the strip the top row is empty above the countdown. Its text is the dark-theme
   // foreground at 70% opacity, composited over the red label background.
   const is_faded_white = (c) => near(c, [247, 200, 199], 20);

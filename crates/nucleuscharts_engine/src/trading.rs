@@ -2202,6 +2202,20 @@ mod tests {
             )
             .unwrap();
         assert!(chart.series_apply_options_json(secondary, r##"{"color":"#123456"}"##));
+        // This test is about the TRADING tag hollowing where it meets the live price, so the main
+        // series' own chip must be live and sit AT that price: close the last bar at 102 and keep
+        // it on screen (a series chip is itself outlined once its final bar scrolls away).
+        chart
+            .set_series_data(
+                0,
+                &[10.0, 20.0, 30.0],
+                &[99.0, 100.0, 101.0],
+                &[102.0, 103.0, 104.0],
+                &[98.0, 99.0, 100.0],
+                &[101.0, 102.0, 102.0],
+            )
+            .unwrap();
+        chart.fit_content();
         let mut live_position = position(PositionSide::Long);
         live_position.average_price = 102.0;
         chart

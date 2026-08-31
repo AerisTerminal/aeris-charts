@@ -242,14 +242,16 @@ impl ChartEngine {
                 let mut right = ((x + w) * dpr).round();
                 let bottom = ((y + h) * dpr).round();
                 match (label.align, label.midpoint) {
-                    (AxisTextAlign::Left, AxisTextMidpoint::Label)
-                        if right_scale.border_visible =>
-                    {
+                    // The price box always starts one border thickness past the strip boundary,
+                    // leaving a seam between it and the title chip that ends on the boundary.
+                    // The reservation is unconditional: with the axis border visible the border
+                    // paints INTO that seam (the line reads between the two chips), and with it
+                    // hidden the chart surface shows through instead. Gating it on the border
+                    // would butt the two chips into one solid bar whenever the border is off.
+                    (AxisTextAlign::Left, AxisTextMidpoint::Label) => {
                         bx = bx.max(((pane_left + pane_w) * dpr).round() + f64::from(border_w));
                     }
-                    (AxisTextAlign::Right, AxisTextMidpoint::Label)
-                        if left_scale.border_visible =>
-                    {
+                    (AxisTextAlign::Right, AxisTextMidpoint::Label) => {
                         right = right.min((pane_left * dpr).round() - f64::from(border_w));
                     }
                     (AxisTextAlign::Center, AxisTextMidpoint::StableTime)

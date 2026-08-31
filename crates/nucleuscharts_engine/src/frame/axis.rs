@@ -34,6 +34,8 @@ struct LastValueLabel {
     align: bool,
     primary: bool,
     hollow: bool,
+    /// The owning series is the chart's current selection — its chip carries the active accent.
+    selected: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -45,13 +47,42 @@ struct LivePriceRegion {
     primary: bool,
 }
 
-fn vertical_regions_overlap(
-    first_y: f64,
-    first_height: f64,
-    second_y: f64,
-    second_height: f64,
-) -> bool {
-    (first_y - second_y).abs() < (first_height + second_height) / 2.0
+/// TradingView's active-chip indication: a bar in a lighter shade of the series color pinned to
+/// the axis-facing edge of that series' last-value chip, painted over the chip it marks. Emitted
+/// after the chip so it lands on top, and with no attach group so it cannot join the
+/// price/countdown shared-edge chain.
+#[allow(clippy::too_many_arguments)]
+fn selected_chip_accent(
+    chip_x: f64,
+    chip_y: f64,
+    chip_w: f64,
+    chip_h: f64,
+    color: Color,
+    right_strip: bool,
+    align: AxisTextAlign,
+) -> AxisLabel {
+    /// Accent thickness in media px.
+    const ACCENT_W: f64 = 3.0;
+    let x = if right_strip {
+        chip_x + chip_w - ACCENT_W
+    } else {
+        chip_x
+    };
+    AxisLabel {
+        text: String::new(),
+        x,
+        y: chip_y + chip_h / 2.0,
+        color,
+        align,
+        midpoint: AxisTextMidpoint::Label,
+        font_scale: 1.0,
+        bold: false,
+        background: Some((x, chip_y, ACCENT_W, chip_h, color.lighten(0.45))),
+        background_corners: AxisLabelCorners::NONE,
+        measure_extra: 0.0,
+        attach_group: None,
+        border: None,
+    }
 }
 
 struct OccupiedAxisRegion {
@@ -1698,7 +1729,7 @@ impl ChartEngine {
                 // The cluster anchors at the last VISIBLE bar's value in the series' bar color,
                 // exactly like the plain label (reference series.ts lastValueData(false));
                 // a custom series reads its host-recorded frame values instead (Phase C-c).
-                let (y, color, text) = if series.kind == SeriesKind::Custom {
+                let (y, color, text, stale) = if series.kind == SeriesKind::Custom {
                     let Some(last) = series.custom_frame.last_visible else {
                         continue;
                     };
@@ -1718,6 +1749,9 @@ impl ChartEngine {
                         y,
                         self.effective_series_live_color(series, last.color),
                         text,
+                        // A custom series reports only its last VISIBLE frame value, so there is
+                        // no final row to compare against — treat it as live.
+                        false,
                     )
                 } else {
                     // whitespace rows are skipped (the reference's plot list omits them).
@@ -1751,7 +1785,14 @@ impl ChartEngine {
                         scale,
                         scale.price_to_logical_value(close, base_value),
                     );
-                    (y, color, text)
+                    // reference `lastValueData(false)` anchors on the last VISIBLE bar. When the
+                    // series' real final bar is scrolled out of view — what a negative right
+                    // offset produces — the chip is showing a stale value, and TradingView marks
+                    // that by outlining the chip instead of filling it.
+                    let stale = plot
+                        .last_non_whitespace_row_before(plot.size())
+                        .is_some_and(|last| last != row);
+                    (y, color, text, stale)
                 };
                 // reference appends overlay (no-scale) series' labels to the pane's default axis
                 // (price-axis-widget.ts:601-607); the engine's default axis is the right one.
@@ -1811,7 +1852,12 @@ impl ChartEngine {
                     color: color.solid(),
                     align,
                     primary,
-                    hollow: false,
+                    // The scale's primary source is the symbol that scale belongs to, and its
+                    // chip is always filled — a comparison series on its own scale or pane is
+                    // primary there too, so it stays filled as well. Only a secondary source
+                    // sharing someone else's scale outlines, and only once its value goes stale.
+                    hollow: stale && !primary,
+                    selected: self.selected_series() == Some(series.id),
                 });
                 // TradingView-style bid/ask chips (`bid_ask_visible`, default off): one
                 // title+price cluster per side with a live quote, centered on the quote's
@@ -1851,6 +1897,8 @@ impl ChartEngine {
                             align,
                             primary: false,
                             hollow: false,
+                            // Bid/ask quote chips are not selectable sources of their own.
+                            selected: false,
                         });
                     }
                 }
@@ -1859,19 +1907,9 @@ impl ChartEngine {
         // Reference aligns labels independently per price-axis widget.
         let mut live_price_regions = Vec::new();
         for (pane_index, target, mut group) in groups {
-            if let Some(primary) = group.iter().find(|label| label.primary) {
-                let primary_y = primary.y;
-                let primary_height = primary.height;
-                for label in &mut group {
-                    label.hollow = !label.primary
-                        && vertical_regions_overlap(
-                            primary_y,
-                            primary_height,
-                            label.y,
-                            label.height,
-                        );
-                }
-            }
+            // Chips that would collide are SPACED, not restyled: `resolve_last_value_label_overlap`
+            // already pushes them a full box apart, so a chip's fill carries only whether its
+            // value is live (see `hollow`) rather than doubling as collision feedback.
             resolve_last_value_label_overlap(&mut group, self.pane_h);
             for label in &group {
                 live_price_regions.push(LivePriceRegion {
@@ -1936,6 +1974,17 @@ impl ChartEngine {
                         attach_group: None,
                         border: label.hollow.then_some((1.0, label.color)),
                     });
+                    if label.selected {
+                        labels.push(selected_chip_accent(
+                            background_x,
+                            label.y - label.height / 2.0,
+                            width,
+                            label.height,
+                            label.color,
+                            side == PriceScaleSide::Right,
+                            align,
+                        ));
+                    }
                     continue;
                 }
                 self.append_last_value_cluster(labels, &label, pane_index, target, measure);
@@ -2044,7 +2093,9 @@ impl ChartEngine {
         } else {
             AxisLabelCorners::LEFT
         };
-        // Title chip: outside the strip, a small standalone rounded box next to the border.
+        // Title chip: outside the strip, ending exactly at the border's chart-side edge. The
+        // primitive encoder starts the price box after the border's strip-side edge, so the border
+        // is the complete seam: neither chip overlaps it and no chart-surface gap is introduced.
         if let (Some(title), Some(_)) = (&fitted_title, title_w) {
             let chip_x = if right_strip {
                 border_x - chip_w
@@ -2140,6 +2191,21 @@ impl ChartEngine {
                 attach_group: Some(label.group_id),
                 border,
             });
+        }
+        // Selected-series accent (TradingView's active-chip indication): a bar in a lighter shade
+        // of the series color, pinned to the cluster's axis-facing edge and painted over the
+        // chips it marks. Pushed last so it lands on top; it carries no attach group so it cannot
+        // disturb the price/countdown shared-edge chain.
+        if label.selected && label.price_text.is_some() {
+            labels.push(selected_chip_accent(
+                inner_x,
+                top_y,
+                inner_w,
+                label.height,
+                label.color,
+                right_strip,
+                text_align,
+            ));
         }
     }
 

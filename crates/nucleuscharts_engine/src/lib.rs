@@ -2794,7 +2794,29 @@ impl ChartEngine {
     /// contracted or over-zoomed price scale fits the data again.
     pub fn reset_view(&mut self) {
         self.reset_time_scale();
+        self.apply_reset_right_margin();
         self.reset_price_scales();
+    }
+
+    /// Leave breathing room after the last bar on a view reset.
+    ///
+    /// `reset_time_scale` restores the reference default right offset (0), which pins the newest
+    /// bar against the price axis and puts the live-price cluster on top of the data. TradingView
+    /// resets to a visible right margin instead, so the product-level reset adds one worth
+    /// [`RESET_RIGHT_MARGIN_FRACTION`] of the plot width — a fraction rather than a bar count, so
+    /// the gap looks the same at any window size or zoom. The reference `resetTimeScale`
+    /// semantics stay untouched for hosts that call it directly.
+    fn apply_reset_right_margin(&mut self) {
+        /// Share of the plot width left empty after the last bar by a view reset.
+        const RESET_RIGHT_MARGIN_FRACTION: f64 = 0.10;
+        let spacing = self.time_scale.bar_spacing();
+        if spacing <= 0.0 || self.pane_w <= 0.0 {
+            return;
+        }
+        let offset = self.pane_w * RESET_RIGHT_MARGIN_FRACTION / spacing;
+        if offset.is_finite() && offset > 0.0 {
+            self.set_right_offset(offset);
+        }
     }
 
     /// Deep-merge a JSON options patch into the chart options store (reference `applyOptions`
