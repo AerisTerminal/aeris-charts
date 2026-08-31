@@ -100,9 +100,12 @@ Professional footprint / numbers-bar data has a separate tick-truth owner descri
 `Footprint.md`. The engine retains canonical microsecond trade events with explicit or deterministically
 classified aggressor side and derives integer tick-grid levels, bid/ask/unknown/total volume, POC,
 final/session delta, running Max/Min Delta, and diagonal stacked imbalances. Live tip events update
-only the active derived bar; late events and provider corrections reconstruct canonical event order
-rather than patching final totals. Footprint bars ultimately emit the same ordered `ChartFrame` as
-every other series, and no backend may infer order flow from OHLC or recalculate footprint math.
+only the active derived bar; a late-event or provider-correction batch merges atomically into the
+final canonical tape, validates its final session/bar projection, and reconstructs exactly once.
+The configured tick size owns the series min-move/formatter and the shared autoscale, frame, and hit
+paths use complete half-tick outer cell bounds on the series' ordinary pane-local price scale.
+Footprint bars ultimately emit the same ordered `ChartFrame` as every other series, and no backend
+may infer order flow from OHLC or recalculate footprint math.
 
 The upstream heatmap-around-line and background-shade examples are compositions: the specialized engine series is ordered beneath an ordinary line series rather than duplicating that base-series geometry. Heatmap `cell_shader` callbacks are the one styling boundary in this group; the browser evaluates the callback while normalizing input, and Rust retains the resolved color with each bounded cell so every renderer executes the same prepared frame.
 

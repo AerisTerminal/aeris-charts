@@ -174,7 +174,11 @@ function series_features(bars) {
       id: "footprint", label: "Footprint", detail: "Bid × Ask · POC · stacked delta", icon: "chart",
       preserve_time_spacing: true,
       create: (chart) => {
+        if (!chart.price_scales().some((scale) => scale.id === "footprint-dedicated")) {
+          chart.add_price_scale({ id: "footprint-dedicated", side: "right", visible: true });
+        }
         const footprint = chart.add_series("footprint", {
+          price_scale_id: "footprint-dedicated",
           tick_size: 0.25,
           interval_seconds: 3600,
           imbalance_ratio: 3,

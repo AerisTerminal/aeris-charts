@@ -1,5 +1,5 @@
 use super::*;
-use crate::footprint::{FootprintBar, FootprintCellMode};
+use crate::footprint::{footprint_cell_price_bounds, FootprintBar, FootprintCellMode};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FootprintLod {
@@ -65,10 +65,10 @@ impl ChartEngine {
                 .levels
                 .first()
                 .map(|level| {
-                    let upper =
-                        scale.price_to_coordinate(level.price + tick_size / 2.0, rs.base_value);
-                    let lower =
-                        scale.price_to_coordinate(level.price - tick_size / 2.0, rs.base_value);
+                    let (lower_price, upper_price) =
+                        footprint_cell_price_bounds(level.price, level.price, tick_size);
+                    let upper = scale.price_to_coordinate(upper_price, rs.base_value);
+                    let lower = scale.price_to_coordinate(lower_price, rs.base_value);
                     (lower - upper).abs()
                 })
                 .unwrap_or(0.0);
@@ -82,10 +82,10 @@ impl ChartEngine {
             match lod {
                 FootprintLod::Detailed | FootprintLod::Cells => {
                     for level in &bar.levels {
-                        let upper =
-                            scale.price_to_coordinate(level.price + tick_size / 2.0, rs.base_value);
-                        let lower =
-                            scale.price_to_coordinate(level.price - tick_size / 2.0, rs.base_value);
+                        let (lower_price, upper_price) =
+                            footprint_cell_price_bounds(level.price, level.price, tick_size);
+                        let upper = scale.price_to_coordinate(upper_price, rs.base_value);
+                        let lower = scale.price_to_coordinate(lower_price, rs.base_value);
                         let top = (upper.min(lower) * vpr).round() as i32;
                         let bottom = (upper.max(lower) * vpr).round() as i32;
                         let height = (bottom - top).max(1);
@@ -206,8 +206,10 @@ impl ChartEngine {
                     }
                 }
                 FootprintLod::Summary => {
-                    let high = scale.price_to_coordinate(bar.high, rs.base_value);
-                    let low = scale.price_to_coordinate(bar.low, rs.base_value);
+                    let (low_price, high_price) =
+                        footprint_cell_price_bounds(bar.low, bar.high, tick_size);
+                    let high = scale.price_to_coordinate(high_price, rs.base_value);
+                    let low = scale.price_to_coordinate(low_price, rs.base_value);
                     let top = (high.min(low) * vpr).round() as i32;
                     let bottom = (high.max(low) * vpr).round() as i32;
                     out.push(Prim::Rect {

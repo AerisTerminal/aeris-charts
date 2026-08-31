@@ -1945,13 +1945,25 @@ impl ChartEngine {
             let Some(mm) = mm else {
                 continue;
             };
+            let (minimum, maximum) = if s.kind == SeriesKind::Footprint {
+                let Some(state) = s.footprint.as_ref() else {
+                    continue;
+                };
+                crate::footprint::footprint_cell_price_bounds(
+                    mm.min,
+                    mm.max,
+                    state.aggregator.options().tick_size,
+                )
+            } else {
+                (mm.min, mm.max)
+            };
             let Some(base_value) = self.series_base_value(s.id, from) else {
                 continue;
             };
             let scale_target = series_scale_target(s);
             let scale = pane_scale(&self.panes[pane_index], scale_target);
             let Some(range) =
-                scale.price_range_to_logical(&PriceRange::new(mm.min, mm.max), base_value)
+                scale.price_range_to_logical(&PriceRange::new(minimum, maximum), base_value)
             else {
                 continue;
             };

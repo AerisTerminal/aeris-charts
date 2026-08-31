@@ -2522,16 +2522,6 @@ impl ChartEngine {
         self.install_series_data_inner(id, times, open, high, low, close)
     }
 
-    pub(crate) fn update_footprint_projection_bar(
-        &mut self,
-        id: SeriesId,
-        time: f64,
-        values: [f64; 4],
-    ) -> bool {
-        debug_assert!(self.is_footprint_series(id));
-        self.update_series_bar_styled_inner(id, time, values, [None; 3])
-    }
-
     pub(crate) fn update_footprint_projection_bars(
         &mut self,
         id: SeriesId,

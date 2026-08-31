@@ -62,6 +62,9 @@ test("feature lab launches a readable tick-driven footprint preview", async ({ p
       )),
       spacing: window.__chart.time_scale().options().bar_spacing,
       main_visible: window.__main.options().visible,
+      footprint_scale_id: footprint?.price_scale_id(),
+      main_scale_id: window.__main.price_scale_id(),
+      scale_ids: window.__chart.price_scales().map((scale) => scale.id),
     };
   });
   expect(state).toMatchObject({
@@ -72,7 +75,10 @@ test("feature lab launches a readable tick-driven footprint preview", async ({ p
     has_stacked: true,
     spacing: 96,
     main_visible: false,
+    footprint_scale_id: "footprint-dedicated",
+    main_scale_id: "right",
   });
+  expect(state.scale_ids).toContain("footprint-dedicated");
 });
 
 test("every feature-lab card activates through its real public API wiring", async ({ page }) => {

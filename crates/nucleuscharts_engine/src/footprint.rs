@@ -10,7 +10,7 @@ use nucleuscharts_core::model::data_layer::{SeriesId, SeriesIdError};
 use nucleuscharts_core::model::data_validation::{MAX_SAFE_VALUE, MIN_SAFE_VALUE};
 use nucleuscharts_render::color::Color;
 
-use crate::{ChartEngine, SeriesKind};
+use crate::{ChartEngine, PriceFormatKind, SeriesKind, SeriesPriceFormat};
 
 const MICROS_PER_SECOND: i64 = 1_000_000;
 const MIN_TIMESTAMP_MICROS: i64 = -62_167_219_200 * MICROS_PER_SECOND;
@@ -423,44 +423,94 @@ impl FootprintAggregator {
         &mut self,
         event: FootprintTrade,
     ) -> Result<FootprintUpdateKind, FootprintError> {
-        validate_trade(self.options, &event, 0)?;
-        if let Some(trade_id) = event.trade_id {
-            if let Some(&position) = self.trade_ids.get(&trade_id) {
-                self.trades[position] = StoredTrade {
+        self.update_trades(vec![event])
+    }
+
+    /// Atomically apply a provider batch. Monotonic new events retain the incremental path;
+    /// corrections or late events merge into the final canonical tape and rebuild exactly once.
+    pub fn update_trades(
+        &mut self,
+        input: Vec<FootprintTrade>,
+    ) -> Result<FootprintUpdateKind, FootprintError> {
+        validate_trade_batch(self.options, &input)?;
+        if input.is_empty() {
+            return Ok(FootprintUpdateKind::Tip);
+        }
+        if self.batch_is_tip(&input) {
+            for event in input {
+                let stored = StoredTrade {
                     event,
-                    input_order: self.trades[position].input_order,
+                    input_order: self.next_input_order,
                 };
-                self.trades.sort_by_key(trade_order_key);
-                self.reindex_trade_ids();
-                self.rebuild();
-                return Ok(FootprintUpdateKind::Historical);
+                self.next_input_order = self.next_input_order.saturating_add(1);
+                self.apply_trade(&stored.event);
+                if let Some(trade_id) = stored.event.trade_id {
+                    self.trade_ids.insert(trade_id, self.trades.len());
+                }
+                self.trades.push(stored);
+                self.work.incremental_ticks += 1;
+            }
+            return Ok(FootprintUpdateKind::Tip);
+        }
+
+        let mut next_input_order = self.next_input_order;
+        for event in input {
+            if let Some(position) = event
+                .trade_id
+                .and_then(|trade_id| self.trade_ids.get(&trade_id).copied())
+            {
+                let input_order = self.trades[position].input_order;
+                self.trades[position] = StoredTrade { event, input_order };
+            } else {
+                self.trades.push(StoredTrade {
+                    event,
+                    input_order: next_input_order,
+                });
+                next_input_order = next_input_order.saturating_add(1);
             }
         }
-        let stored = StoredTrade {
-            event,
-            input_order: self.next_input_order,
-        };
-        self.next_input_order = self.next_input_order.saturating_add(1);
-        let at_tip = self
-            .trades
-            .last()
-            .is_none_or(|last| trade_order_key(last) <= trade_order_key(&stored));
-        if at_tip {
-            self.apply_trade(&stored.event);
-            if let Some(trade_id) = stored.event.trade_id {
-                self.trade_ids.insert(trade_id, self.trades.len());
+        self.trades.sort_by_key(trade_order_key);
+        self.next_input_order = next_input_order;
+        self.reindex_trade_ids();
+        self.rebuild();
+        Ok(FootprintUpdateKind::Historical)
+    }
+
+    pub(crate) fn batch_is_tip(&self, input: &[FootprintTrade]) -> bool {
+        let mut previous = self.trades.last().map(trade_order_key);
+        for (index, event) in input.iter().enumerate() {
+            if event
+                .trade_id
+                .is_some_and(|trade_id| self.trade_ids.contains_key(&trade_id))
+            {
+                return false;
             }
-            self.trades.push(stored);
-            self.work.incremental_ticks += 1;
-            Ok(FootprintUpdateKind::Tip)
-        } else {
-            let position = self
-                .trades
-                .partition_point(|existing| trade_order_key(existing) <= trade_order_key(&stored));
-            self.trades.insert(position, stored);
-            self.reindex_trade_ids();
-            self.rebuild();
-            Ok(FootprintUpdateKind::Historical)
+            let key = (
+                event.timestamp_micros,
+                event.sequence.unwrap_or(u64::MAX),
+                self.next_input_order.saturating_add(index as u64),
+            );
+            if previous.is_some_and(|previous| previous > key) {
+                return false;
+            }
+            previous = Some(key);
+        }
+        true
+    }
+
+    fn historical_update_candidate(&self) -> Self {
+        Self {
+            options: self.options,
+            trades: self.trades.clone(),
+            trade_ids: self.trade_ids.clone(),
+            bars: Vec::with_capacity(self.bars.len()),
+            next_input_order: self.next_input_order,
+            rebuild_seed: self.rebuild_seed,
+            last_trade_price: self.last_trade_price,
+            last_classified_side: self.last_classified_side,
+            active_session: self.active_session,
+            session_delta: self.session_delta,
+            work: self.work,
         }
     }
 
@@ -661,6 +711,7 @@ impl ChartEngine {
             aggregator,
             visual: options.visual,
         });
+        series.price_format = footprint_price_format(options.aggregation.tick_size);
         series.custom_frame = Default::default();
         self.data.set_rows_count_as_data(id, true);
         if had_data {
@@ -710,13 +761,18 @@ impl ChartEngine {
         let mut aggregator = FootprintAggregator::new(options.aggregation)?;
         aggregator.set_trades(trades)?;
         let (times, open, high, low, close) = projection_columns(aggregator.bars())?;
-        self.series_entry_mut(id)
-            .and_then(|series| series.footprint.as_mut())
+        let series = self
+            .series_entry_mut(id)
+            .expect("validated footprint series");
+        series
+            .footprint
+            .as_mut()
             .expect("validated footprint series")
             .clone_from(&FootprintSeriesState {
                 aggregator,
                 visual: options.visual,
             });
+        series.price_format = footprint_price_format(options.aggregation.tick_size);
         if !self.install_footprint_projection(id, times, open, high, low, close) {
             return Err(FootprintError::UnknownSeries(id));
         }
@@ -776,62 +832,7 @@ impl ChartEngine {
         id: SeriesId,
         trade: FootprintTrade,
     ) -> Result<FootprintUpdateKind, FootprintError> {
-        self.validate_series_id(id).map_err(series_error)?;
-        let state = self
-            .series_entry(id)
-            .and_then(|series| series.footprint.as_ref())
-            .ok_or(FootprintError::UnknownSeries(id))?;
-        let FootprintBarAggregation::Time {
-            interval_micros,
-            anchor_micros,
-        } = state.aggregator.options().bars
-        else {
-            return Err(FootprintError::UnsupportedChartAggregation);
-        };
-        let bucket = aligned_bucket_start(
-            trade.timestamp_micros,
-            interval_micros as i64,
-            anchor_micros,
-        );
-        if state
-            .aggregator
-            .bars()
-            .binary_search_by_key(&bucket, |bar| bar.start_timestamp_micros)
-            .ok()
-            .and_then(|index| state.aggregator.bars().get(index))
-            .is_some_and(|bar| bar.session_id != trade.session_id)
-        {
-            return Err(FootprintError::ProjectionTimeCollision);
-        }
-        let update = self
-            .series_entry_mut(id)
-            .and_then(|series| series.footprint.as_mut())
-            .expect("validated footprint series")
-            .aggregator
-            .update_trade(trade)?;
-        match update {
-            FootprintUpdateKind::Tip => {
-                let bar = self
-                    .footprint_bars(id)
-                    .and_then(|bars| bars.last())
-                    .expect("accepted trade creates a bar");
-                let time = bar.start_timestamp_micros.div_euclid(MICROS_PER_SECOND) as f64;
-                let ohlc = [bar.open, bar.high, bar.low, bar.close];
-                if !self.update_footprint_projection_bar(id, time, ohlc) {
-                    return Err(FootprintError::UnknownSeries(id));
-                }
-            }
-            FootprintUpdateKind::Historical => {
-                let (times, open, high, low, close) = projection_columns(
-                    self.footprint_bars(id).expect("validated footprint series"),
-                )?;
-                if !self.install_footprint_projection(id, times, open, high, low, close) {
-                    return Err(FootprintError::UnknownSeries(id));
-                }
-            }
-        }
-        self.invalidate_frame_series(id);
-        Ok(update)
+        self.update_footprint_trades(id, vec![trade])
     }
 
     /// Apply a live trade batch while synchronizing the shared time/scale projection once. A batch
@@ -852,39 +853,40 @@ impl ChartEngine {
             .ok_or(FootprintError::UnknownSeries(id))?;
         let options = state.aggregator.options();
         validate_trade_batch(options, &trades)?;
-        validate_projection_sessions(state.aggregator.bars(), options, &trades)?;
+        let historical = !state.aggregator.batch_is_tip(&trades);
         let previous_bar_count = state.aggregator.bars().len();
-        let mut result = FootprintUpdateKind::Tip;
-        {
+        if historical {
+            let mut next = state.aggregator.historical_update_candidate();
+            let result = next.update_trades(trades)?;
+            debug_assert_eq!(result, FootprintUpdateKind::Historical);
+            let (times, open, high, low, close) = projection_columns(next.bars())?;
+            self.series_entry_mut(id)
+                .and_then(|series| series.footprint.as_mut())
+                .expect("validated footprint series")
+                .aggregator = next;
+            if !self.install_footprint_projection(id, times, open, high, low, close) {
+                return Err(FootprintError::UnknownSeries(id));
+            }
+            self.invalidate_frame_series(id);
+            return Ok(FootprintUpdateKind::Historical);
+        }
+
+        validate_projection_sessions(state.aggregator.bars(), options, &trades)?;
+        let result = {
             let aggregator = &mut self
                 .series_entry_mut(id)
                 .and_then(|series| series.footprint.as_mut())
                 .expect("validated footprint series")
                 .aggregator;
-            for trade in trades {
-                if aggregator.update_trade(trade)? == FootprintUpdateKind::Historical {
-                    result = FootprintUpdateKind::Historical;
-                }
-            }
-        }
-        match result {
-            FootprintUpdateKind::Tip => {
-                let from = previous_bar_count.saturating_sub(1);
-                let (times, open, high, low, close) = projection_columns(
-                    &self.footprint_bars(id).expect("validated footprint series")[from..],
-                )?;
-                if self.update_footprint_projection_bars(id, times, open, high, low, close) == 0 {
-                    return Err(FootprintError::UnknownSeries(id));
-                }
-            }
-            FootprintUpdateKind::Historical => {
-                let (times, open, high, low, close) = projection_columns(
-                    self.footprint_bars(id).expect("validated footprint series"),
-                )?;
-                if !self.install_footprint_projection(id, times, open, high, low, close) {
-                    return Err(FootprintError::UnknownSeries(id));
-                }
-            }
+            aggregator.update_trades(trades)?
+        };
+        debug_assert_eq!(result, FootprintUpdateKind::Tip);
+        let from = previous_bar_count.saturating_sub(1);
+        let (times, open, high, low, close) = projection_columns(
+            &self.footprint_bars(id).expect("validated footprint series")[from..],
+        )?;
+        if self.update_footprint_projection_bars(id, times, open, high, low, close) == 0 {
+            return Err(FootprintError::UnknownSeries(id));
         }
         self.invalidate_frame_series(id);
         Ok(result)
@@ -962,6 +964,25 @@ fn validate_visual_options(options: &FootprintVisualOptions) -> Result<(), Footp
     } else {
         Err(FootprintError::InvalidVisualOptions)
     }
+}
+
+fn footprint_price_format(tick_size: f64) -> SeriesPriceFormat {
+    let precision = (0..=15)
+        .find(|precision| {
+            let scaled = tick_size * 10_f64.powi(*precision as i32);
+            (scaled - scaled.round()).abs() <= scaled.abs().max(1.0) * 1e-10
+        })
+        .unwrap_or(15);
+    SeriesPriceFormat {
+        kind: PriceFormatKind::Price,
+        precision,
+        min_move: tick_size,
+        formatter: None,
+    }
+}
+
+pub(crate) fn footprint_cell_price_bounds(low: f64, high: f64, tick_size: f64) -> (f64, f64) {
+    (low - tick_size / 2.0, high + tick_size / 2.0)
 }
 
 fn series_error(error: SeriesIdError) -> FootprintError {
@@ -1370,6 +1391,56 @@ mod tests {
     }
 
     #[test]
+    fn historical_batch_merges_final_tape_with_one_rebuild() {
+        let options = FootprintAggregationOptions {
+            tick_size: 1.0,
+            ..FootprintAggregationOptions::default()
+        };
+        let mut aggregator = FootprintAggregator::new(options).unwrap();
+        let mut history = (0..100)
+            .map(|index| {
+                let mut event = trade(
+                    index * 1_000,
+                    100.0 + (index % 3) as f64,
+                    1.0,
+                    AggressorSide::Buy,
+                );
+                event.trade_id = Some(index as u64);
+                event
+            })
+            .collect::<Vec<_>>();
+        aggregator.set_trades(history.clone()).unwrap();
+        aggregator.reset_work_stats();
+
+        let corrections = [10, 30, 70]
+            .into_iter()
+            .map(|index| {
+                let mut event = history[index].clone();
+                event.volume = 5.0;
+                event.aggressor = AggressorSide::Sell;
+                history[index] = event.clone();
+                event
+            })
+            .collect();
+        assert_eq!(
+            aggregator.update_trades(corrections).unwrap(),
+            FootprintUpdateKind::Historical
+        );
+        assert_eq!(
+            aggregator.work_stats(),
+            FootprintWorkStats {
+                incremental_ticks: 0,
+                historical_rebuilds: 1,
+                rebuilt_ticks: 100,
+            }
+        );
+
+        let mut expected = FootprintAggregator::new(options).unwrap();
+        expected.set_trades(history).unwrap();
+        assert_eq!(aggregator.bars(), expected.bars());
+    }
+
+    #[test]
     fn session_change_resets_cumulative_delta_and_forces_a_bar_boundary() {
         let mut aggregator = FootprintAggregator::new(FootprintAggregationOptions {
             tick_size: 1.0,
@@ -1471,6 +1542,95 @@ mod tests {
         );
         assert_eq!((bar.max_delta, bar.min_delta), (0.0, -5.0));
         assert_eq!(aggregator.trades().len(), 1);
+    }
+
+    #[test]
+    fn session_correction_validates_final_tape_and_collision_failure_is_atomic() {
+        let mut chart = ChartEngine::new(800.0, 420.0, 1.0);
+        chart
+            .configure_footprint_series(
+                0,
+                FootprintSeriesOptions {
+                    aggregation: FootprintAggregationOptions {
+                        tick_size: 1.0,
+                        ..FootprintAggregationOptions::default()
+                    },
+                    visual: FootprintVisualOptions::default(),
+                },
+            )
+            .unwrap();
+        let mut original = trade(1_000_000, 100.0, 4.0, AggressorSide::Buy);
+        original.trade_id = Some(7);
+        chart
+            .set_footprint_trades(0, vec![original.clone()])
+            .unwrap();
+
+        let mut correction = original;
+        correction.session_id = Some(2);
+        assert_eq!(
+            chart.update_footprint_trade(0, correction).unwrap(),
+            FootprintUpdateKind::Historical
+        );
+        assert_eq!(chart.footprint_bars(0).unwrap()[0].session_id, Some(2));
+
+        let before_bars = chart.footprint_bars(0).unwrap().to_vec();
+        let before_stats = chart.footprint_work_stats(0).unwrap();
+        let mut collision = trade(2_000_000, 101.0, 2.0, AggressorSide::Sell);
+        collision.session_id = Some(3);
+        assert_eq!(
+            chart.update_footprint_trade(0, collision).unwrap_err(),
+            FootprintError::ProjectionTimeCollision
+        );
+        assert_eq!(chart.footprint_bars(0).unwrap(), before_bars);
+        assert_eq!(chart.footprint_work_stats(0).unwrap(), before_stats);
+    }
+
+    #[test]
+    fn tick_size_owns_named_scale_format_autoscale_and_outer_cell_hit_bounds() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.5);
+        let target = chart
+            .add_price_scale(
+                0,
+                "footprint-dedicated",
+                crate::PriceScaleSide::Right,
+                None,
+                true,
+            )
+            .unwrap();
+        assert!(chart.try_set_series_pane_and_scale(0, 0, 1.0, "footprint-dedicated"));
+        chart
+            .configure_footprint_series(
+                0,
+                FootprintSeriesOptions {
+                    aggregation: FootprintAggregationOptions {
+                        tick_size: 1.0,
+                        ..FootprintAggregationOptions::default()
+                    },
+                    visual: FootprintVisualOptions::default(),
+                },
+            )
+            .unwrap();
+        chart
+            .set_footprint_trades(0, vec![trade(1_000_000, 100.0, 4.0, AggressorSide::Buy)])
+            .unwrap();
+        chart.time_scale.set_width(800.0);
+        chart.fit_content();
+        chart.build_frame();
+
+        assert_eq!(
+            chart.price_scale_id_for_target(0, target),
+            Some("footprint-dedicated")
+        );
+        let options: serde_json::Value =
+            serde_json::from_str(&chart.series_options_json(0).unwrap()).unwrap();
+        assert_eq!(options["price_format"]["precision"], 0);
+        assert_eq!(options["price_format"]["min_move"], 1.0);
+        let range = chart.price_scale_visible_range_for(0, target).unwrap();
+        assert!(range.0 <= 99.5 && range.1 >= 100.5, "range was {range:?}");
+
+        let x = chart.logical_to_coordinate(0.0).unwrap();
+        let outer_cell_y = chart.series_price_to_coordinate(0, 100.45).unwrap();
+        assert!(chart.hit_test_one_series(0, x, outer_cell_y).is_some());
     }
 
     #[test]

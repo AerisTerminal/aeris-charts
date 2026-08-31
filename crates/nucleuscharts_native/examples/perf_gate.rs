@@ -5,6 +5,7 @@
 //!   Target A — 60fps @ 10 series x 50k bars:  `build_frame` under 16.67 ms/frame
 //!   Target B — 1M-bar load under 300 ms:      `set_series_data` of 1,000,000 bars
 //!   Target C — canonical pointer sample:      fixed-capacity resolver under 0.01 ms/sample
+//!   Target D — footprint history/live/correction ingestion plus shared-frame construction
 //!
 //! Report-only by default (prints numbers + PASS/FAIL). Set `NUCLEUSCHARTS_PERF_STRICT=1` to exit non-zero
 //! on any failure so CI can treat it as a hard gate; thresholds are machine-dependent, so the
@@ -97,6 +98,8 @@ fn main() {
     const FOOTPRINT_LOAD_BUDGET_MS: f64 = 300.0;
     const FOOTPRINT_LIVE_BARS: usize = 100;
     const FOOTPRINT_LIVE_BUDGET_MS: f64 = 50.0;
+    const FOOTPRINT_CORRECTION_BARS: usize = 10;
+    const FOOTPRINT_CORRECTION_BUDGET_MS: f64 = 300.0;
 
     println!("nucleuscharts perf gate (release build recommended)\n");
 
@@ -212,6 +215,30 @@ fn main() {
     let footprint_stats = footprint
         .footprint_work_stats(0)
         .expect("footprint work stats");
+    let mut corrections = gen_footprint_trades(
+        FOOTPRINT_HISTORY_BARS + FOOTPRINT_LIVE_BARS - FOOTPRINT_CORRECTION_BARS,
+        FOOTPRINT_CORRECTION_BARS,
+        FOOTPRINT_TRADES_PER_BAR,
+    );
+    for trade in &mut corrections {
+        trade.volume += 1.0;
+    }
+    let before_correction = footprint_stats;
+    let start = Instant::now();
+    footprint
+        .update_footprint_trades(0, corrections)
+        .expect("valid footprint correction batch");
+    let footprint_correction_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let after_correction = footprint
+        .footprint_work_stats(0)
+        .expect("footprint work stats after correction");
+    let correction_rebuilds =
+        after_correction.historical_rebuilds - before_correction.historical_rebuilds;
+    let correction_rebuilt_ticks = after_correction.rebuilt_ticks - before_correction.rebuilt_ticks;
+    assert_eq!(
+        correction_rebuilds, 1,
+        "one correction batch must reconstruct once"
+    );
     let footprint_retained_bars = footprint.footprint_bars(0).expect("footprint bars").len();
     let footprint_memory_after = footprint.memory_usage().footprint_capacity_bytes;
     println!(
@@ -235,6 +262,14 @@ fn main() {
         footprint_live_ms,
         FOOTPRINT_LIVE_BUDGET_MS,
     );
+    let d_correction_pass = report(
+        &format!(
+            "correct_footprint_trades ({} trades, {correction_rebuilds} rebuild, {correction_rebuilt_ticks} rebuilt ticks)",
+            FOOTPRINT_CORRECTION_BARS * FOOTPRINT_TRADES_PER_BAR,
+        ),
+        footprint_correction_ms,
+        FOOTPRINT_CORRECTION_BUDGET_MS,
+    );
     let d_frame_pass = report("footprint build_frame", footprint_frame_ms, FRAME_BUDGET_MS);
     let d_retention_pass = footprint_retained_bars <= FOOTPRINT_HISTORY_BARS;
     println!(
@@ -242,7 +277,8 @@ fn main() {
         "retention ceiling",
         if d_retention_pass { "PASS" } else { "FAIL" }
     );
-    let d_pass = d_load_pass && d_live_pass && d_frame_pass && d_retention_pass;
+    let d_pass =
+        d_load_pass && d_live_pass && d_correction_pass && d_frame_pass && d_retention_pass;
 
     let all_pass = a_pass && b_pass && c_pass && d_pass;
     println!(

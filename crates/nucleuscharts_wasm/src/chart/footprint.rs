@@ -166,13 +166,25 @@ fn error_json(error: impl core::fmt::Display) -> String {
     serde_json::json!({ "ok": false, "error": error.to_string() }).to_string()
 }
 
-fn optional_number(value: f64) -> Option<f64> {
-    value.is_finite().then_some(value)
+fn optional_number(value: f64) -> Result<Option<f64>, &'static str> {
+    if value.is_nan() {
+        Ok(None)
+    } else if value.is_finite() {
+        Ok(Some(value))
+    } else {
+        Err("optional numeric fields accept NaN as missing but not infinity")
+    }
 }
 
-fn optional_safe_u64(value: f64) -> Option<u64> {
-    (value.is_finite() && (0.0..=MAX_SAFE_INTEGER).contains(&value) && value.fract() == 0.0)
-        .then_some(value as u64)
+fn optional_safe_u64(value: f64) -> Result<Option<u64>, &'static str> {
+    if value.is_nan() {
+        Ok(None)
+    } else if value.is_finite() && (0.0..=MAX_SAFE_INTEGER).contains(&value) && value.fract() == 0.0
+    {
+        Ok(Some(value as u64))
+    } else {
+        Err("optional identifiers accept NaN as missing or a safe non-negative integer")
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -194,27 +206,23 @@ fn trade(
     {
         return Err("timestamp_micros must be a safe integer");
     }
-    if (sequence.is_finite() && optional_safe_u64(sequence).is_none())
-        || (trade_id.is_finite() && optional_safe_u64(trade_id).is_none())
-        || (session_id.is_finite() && optional_safe_u64(session_id).is_none())
-    {
-        return Err("sequence, trade_id, and session_id must be safe non-negative integers");
-    }
+    let aggressor = match side {
+        0 => AggressorSide::Unknown,
+        1 => AggressorSide::Buy,
+        2 => AggressorSide::Sell,
+        _ => return Err("aggressor must be encoded as 0 (unknown), 1 (buy), or 2 (sell)"),
+    };
     Ok(FootprintTrade {
         timestamp_micros: timestamp_micros as i64,
         price,
         volume,
-        aggressor: match side {
-            1 => AggressorSide::Buy,
-            2 => AggressorSide::Sell,
-            _ => AggressorSide::Unknown,
-        },
-        bid: optional_number(bid),
-        ask: optional_number(ask),
-        sequence: optional_safe_u64(sequence),
-        trade_id: optional_safe_u64(trade_id),
+        aggressor,
+        bid: optional_number(bid)?,
+        ask: optional_number(ask)?,
+        sequence: optional_safe_u64(sequence)?,
+        trade_id: optional_safe_u64(trade_id)?,
         conditions,
-        session_id: optional_safe_u64(session_id),
+        session_id: optional_safe_u64(session_id)?,
     })
 }
 

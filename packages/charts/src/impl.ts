@@ -1563,8 +1563,14 @@ class feature_series_impl extends series_impl {
   }
 }
 
-function footprint_side(side: footprint_trade["aggressor"]): number {
-  return side === "buy" ? 1 : side === "sell" ? 2 : 0;
+function footprint_side(side: footprint_trade["aggressor"], index = 0): number {
+  if (side === undefined || side === "unknown") return 0;
+  if (side === "buy") return 1;
+  if (side === "sell") return 2;
+  throw new nucleuscharts_error(
+    "invalid_data",
+    `invalid footprint trade at index ${index}: aggressor must be 'buy', 'sell', or 'unknown'`,
+  );
 }
 
 function pack_footprint_trades(trades: readonly footprint_trade[]): footprint_trade_columns {
@@ -1586,7 +1592,7 @@ function pack_footprint_trades(trades: readonly footprint_trade[]): footprint_tr
     columns.timestamps_micros[index] = trade.timestamp_micros;
     columns.prices[index] = trade.price;
     columns.volumes[index] = trade.volume;
-    columns.aggressors[index] = footprint_side(trade.aggressor);
+    columns.aggressors[index] = footprint_side(trade.aggressor, index);
     if (trade.bid !== undefined) columns.bids[index] = trade.bid;
     if (trade.ask !== undefined) columns.asks[index] = trade.ask;
     if (trade.sequence !== undefined) columns.sequences[index] = trade.sequence;
@@ -3025,15 +3031,27 @@ export class chart_impl implements chart_api {
       );
     }
     if (is_footprint_series_kind(kind)) {
+      const requested_scale = options?.overlay
+        ? ""
+        : options?.priceScaleId ?? options?.price_scale_id;
+      const pane = options?.pane ?? 0;
+      if (requested_scale !== undefined
+        && !["left", "right", ""].includes(requested_scale)
+        && undef_to_null(this.wasm.price_scale_target_by_id(pane, requested_scale)) === null) {
+        throw new nucleuscharts_error(
+          "invalid_options",
+          `price scale '${requested_scale}' does not exist in pane ${pane}`,
+        );
+      }
       const adopt_primary = !this.next_extra_series;
-      this.next_extra_series = true;
       const id = this.wasm.add_footprint_series(adopt_primary, JSON.stringify(options ?? {}));
       if (id === 0xffffffff) {
         throw new nucleuscharts_error("invalid_options", "footprint series options were rejected by the engine");
       }
       const series = new footprint_series_impl(id, this);
-      this.series_by_id.set(id, series);
       if (options) series.apply_options(options);
+      this.next_extra_series = true;
+      this.series_by_id.set(id, series);
       this.emit_series_change(this.series_added_subs, series, this.pane_of_series(id));
       return series;
     }

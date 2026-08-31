@@ -151,3 +151,123 @@ test("typed footprint columns reject off-grid data without replacing accepted ba
   expect(result.error.message).toContain("tick_size");
   expect(result.after).toEqual(result.before);
 });
+
+test("footprint validation rejects malformed aggressors and infinities atomically", async ({ page }) => {
+  await open_chart(page);
+  const result = await page.evaluate(() => {
+    const chart = window.__chart;
+    const footprint = chart.add_series("footprint", { tick_size: 0.25, interval_seconds: 60 });
+    const second = Math.floor(window.__data[0].time / 60) * 60;
+    const columns = (aggressor = 1, bid = Number.NaN) => ({
+      timestamps_micros: new Float64Array([second * 1_000_000 + 1]),
+      prices: new Float64Array([100.25]),
+      volumes: new Float64Array([4]),
+      aggressors: new Uint8Array([aggressor]),
+      bids: new Float64Array([bid]),
+      asks: new Float64Array([Number.NaN]),
+      sequences: new Float64Array([Number.NaN]),
+      trade_ids: new Float64Array([1]),
+      conditions: new Uint32Array([0]),
+      session_ids: new Float64Array([1]),
+    });
+    footprint.set_trades_typed(columns());
+    const before = footprint.footprint_bars();
+    const errors = [];
+    for (const invalid of [columns(9), columns(1, Number.POSITIVE_INFINITY)]) {
+      try {
+        footprint.set_trades_typed(invalid);
+      } catch (error) {
+        errors.push({ code: error.code, message: error.message });
+      }
+    }
+    try {
+      footprint.update_trade({
+        timestamp_micros: second * 1_000_000 + 2,
+        price: 100.25,
+        volume: 1,
+        aggressor: "crossed",
+      });
+    } catch (error) {
+      errors.push({ code: error.code, message: error.message });
+    }
+    return { before, after: footprint.footprint_bars(), errors };
+  });
+  expect(result.errors).toHaveLength(3);
+  expect(result.errors.every((error) => error.code === "invalid_data")).toBe(true);
+  expect(result.errors[0].message).toContain("index 0");
+  expect(result.errors[0].message).toContain("aggressor");
+  expect(result.errors[1].message).toContain("infinity");
+  expect(result.errors[2].message).toContain("aggressor");
+  expect(result.after).toEqual(result.before);
+});
+
+test("historical correction batches and session replacements use final canonical truth", async ({ page }) => {
+  await open_chart(page);
+  const result = await page.evaluate(() => {
+    const chart = window.__chart;
+    const footprint = chart.add_series("footprint", { tick_size: 1, interval_seconds: 60 });
+    const second = Math.floor(window.__data[0].time / 60) * 60;
+    const micros = second * 1_000_000;
+    footprint.set_trades([
+      { timestamp_micros: micros + 1, price: 100, volume: 4, aggressor: "buy", trade_id: 1, session_id: 1 },
+      { timestamp_micros: micros + 2, price: 101, volume: 2, aggressor: "sell", trade_id: 2, session_id: 1 },
+    ]);
+    const batch = footprint.update_trades([
+      { timestamp_micros: micros + 1, price: 100, volume: 6, aggressor: "sell", trade_id: 1, session_id: 2 },
+      { timestamp_micros: micros + 2, price: 101, volume: 3, aggressor: "buy", trade_id: 2, session_id: 2 },
+    ]);
+    return { batch, bars: footprint.footprint_bars() };
+  });
+  expect(result.batch).toBe("historical");
+  expect(result.bars).toHaveLength(1);
+  expect(result.bars[0]).toMatchObject({ session_id: 2, bid_volume: 6, ask_volume: 3, delta: -3 });
+});
+
+test("failed footprint creation leaves engine order, handles, scale membership, and notifications unchanged", async ({ page }) => {
+  await open_chart(page);
+  const result = await page.evaluate(() => {
+    const chart = window.__chart;
+    const before = {
+      handles: chart.series_order().map((series) => series.id),
+      snapshots: chart.value_snapshot().map((entry) => entry.series_id),
+    };
+    const added = [];
+    chart.subscribe_series_added((event) => added.push(event.series.id));
+    let failure = null;
+    try {
+      chart.add_series("footprint", { price_scale_id: "footprint-dedicated", tick_size: 0.25 });
+    } catch (error) {
+      failure = { code: error.code, message: error.message };
+    }
+    const rejected = {
+      handles: chart.series_order().map((series) => series.id),
+      snapshots: chart.value_snapshot().map((entry) => entry.series_id),
+      added: [...added],
+      scales: chart.price_scales().map((scale) => ({ id: scale.id, series_ids: scale.series_ids })),
+    };
+    chart.add_price_scale({ id: "footprint-dedicated", side: "right" });
+    const footprint = chart.add_series("footprint", {
+      price_scale_id: "footprint-dedicated",
+      tick_size: 0.25,
+    });
+    return {
+      before,
+      failure,
+      rejected,
+      accepted: {
+        id: footprint.id,
+        scale_id: footprint.price_scale_id(),
+        added,
+        members: chart.price_scales().find((scale) => scale.id === "footprint-dedicated")?.series_ids,
+      },
+    };
+  });
+  expect(result.failure).toMatchObject({ code: "invalid_options" });
+  expect(result.rejected.handles).toEqual(result.before.handles);
+  expect(result.rejected.snapshots).toEqual(result.before.snapshots);
+  expect(result.rejected.added).toEqual([]);
+  expect(result.rejected.scales.some((scale) => scale.id === "footprint-dedicated")).toBe(false);
+  expect(result.accepted.scale_id).toBe("footprint-dedicated");
+  expect(result.accepted.added).toEqual([result.accepted.id]);
+  expect(result.accepted.members).toEqual([result.accepted.id]);
+});
