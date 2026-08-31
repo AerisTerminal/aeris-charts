@@ -370,7 +370,7 @@ impl ChartEngine {
             .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2))
     }
 
-    fn axis_label_text_color(&self, background: Color) -> Color {
+    pub(super) fn axis_label_text_color(&self, background: Color) -> Color {
         let surface = self.chart_surface_color();
         background.contrast_text_over(surface)
     }

@@ -346,7 +346,7 @@ impl ChartEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nucleuscharts_render::draw_list::Prim;
+    use nucleuscharts_render::{color::Color, draw_list::Prim};
 
     fn chart_with_market() -> ChartEngine {
         let mut chart = ChartEngine::new(400.0, 240.0, 1.0);
@@ -484,6 +484,10 @@ mod tests {
     #[test]
     fn crosshair_plus_chip_queues_exact_default_create_request() {
         let mut chart = chart_with_market();
+        chart
+            .options
+            .apply_str(r##"{"crosshair":{"horzLine":{"labelBackgroundColor":"#123456"}}}"##)
+            .unwrap();
         let y = chart
             .runtime_price_coordinate(0, PriceScaleTarget::Right, 102.0)
             .expect("populated right scale");
@@ -492,14 +496,32 @@ mod tests {
             .alert_create_chip()
             .expect("visible crosshair alert chip");
         let axis = chart.build_axis_frame(100.0, |text| text.len() as f64 * 7.0);
-        assert!(axis.labels.iter().any(|label| {
-            label.text == "+"
-                && label.background.is_some_and(|(x, _, width, height, _)| {
-                    (x - (chip.x + chart.pane_left)).abs() < 1e-9
-                        && (width - chip.size).abs() < 1e-9
-                        && (height - chip.size).abs() < 1e-9
-                })
-        }));
+        let plus = axis
+            .labels
+            .iter()
+            .find(|label| label.text == "+")
+            .expect("crosshair alert chip");
+        let (plus_x, _, plus_width, plus_height, plus_color) = plus.background.unwrap();
+        assert!((plus_x - (chip.x + chart.pane_left)).abs() < 1e-9);
+        assert!((plus_width - chip.size).abs() < 1e-9);
+        assert!((plus_height - chip.size).abs() < 1e-9);
+        assert_eq!(plus_color, Color::rgb(0x12, 0x34, 0x56));
+        assert_eq!(plus.color, plus_color.contrast_text());
+        let price_chip = axis
+            .labels
+            .iter()
+            .find(|label| {
+                label.text != "+"
+                    && label.y == plus.y
+                    && label
+                        .background
+                        .is_some_and(|(_, _, _, _, color)| color == plus_color)
+            })
+            .expect("primary crosshair price chip");
+        assert!(
+            (plus_x + plus_width - price_chip.background.unwrap().0).abs() < 1e-9,
+            "the plus chip meets the price chip at the same border seam as an attached name chip"
+        );
         assert!(chart.alert_create_hit_at(chip.x + chip.size / 2.0, chip.y));
         assert!(chart.activate_alert_create_at(chip.x + chip.size / 2.0, chip.y));
         let requests = chart.take_alert_create_requests();

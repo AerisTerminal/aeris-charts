@@ -873,7 +873,8 @@ fn crosshair_labels_cover_every_visible_populated_price_scale() {
         .labels
         .iter()
         .filter(|label| {
-            matches!(label.background, Some((.., color)) if color == magenta)
+            label.text != "+"
+                && matches!(label.background, Some((.., color)) if color == magenta)
                 && label.midpoint == AxisTextMidpoint::Label
         })
         .collect();
@@ -894,7 +895,10 @@ fn crosshair_labels_cover_every_visible_populated_price_scale() {
         labels
             .labels
             .iter()
-            .filter(|label| matches!(label.background, Some((.., color)) if color == magenta))
+            .filter(|label| {
+                label.text != "+"
+                    && matches!(label.background, Some((.., color)) if color == magenta)
+            })
             .count(),
         1
     );
@@ -911,7 +915,10 @@ fn crosshair_labels_cover_every_visible_populated_price_scale() {
         labels
             .labels
             .iter()
-            .filter(|label| matches!(label.background, Some((.., color)) if color == magenta))
+            .filter(|label| {
+                label.text != "+"
+                    && matches!(label.background, Some((.., color)) if color == magenta)
+            })
             .count(),
         1
     );
@@ -984,7 +991,10 @@ fn crosshair_labels_share_y_across_crosshair_and_scale_modes() {
             let crosshair: Vec<&AxisLabel> = labels
                 .labels
                 .iter()
-                .filter(|label| matches!(label.background, Some((.., color)) if color == magenta))
+                .filter(|label| {
+                    label.text != "+"
+                        && matches!(label.background, Some((.., color)) if color == magenta)
+                })
                 .collect();
             assert_eq!(
                 crosshair.len(),
@@ -1072,7 +1082,8 @@ fn named_scale_crosshair_labels_use_exact_strips_ranges_and_formatters() {
         .labels
         .iter()
         .filter(|label| {
-            label.midpoint == AxisTextMidpoint::Label
+            label.text != "+"
+                && label.midpoint == AxisTextMidpoint::Label
                 && matches!(label.background, Some((.., color)) if color == cyan)
         })
         .collect();
@@ -1108,7 +1119,9 @@ fn named_scale_crosshair_labels_use_exact_strips_ranges_and_formatters() {
     assert_eq!(
         axis.labels
             .iter()
-            .filter(|label| matches!(label.background, Some((.., color)) if color == cyan))
+            .filter(|label| {
+                label.text != "+" && matches!(label.background, Some((.., color)) if color == cyan)
+            })
             .count(),
         2
     );
@@ -1120,7 +1133,9 @@ fn named_scale_crosshair_labels_use_exact_strips_ranges_and_formatters() {
     assert_eq!(
         axis.labels
             .iter()
-            .filter(|label| matches!(label.background, Some((.., color)) if color == cyan))
+            .filter(|label| {
+                label.text != "+" && matches!(label.background, Some((.., color)) if color == cyan)
+            })
             .count(),
         1
     );

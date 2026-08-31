@@ -4,7 +4,6 @@ use crate::{AlertLineStatus, AlertPriceScale, PriceScaleSide};
 const ALERT_ACTIVE: Color = PRIMARY;
 const ALERT_TRIGGERED: Color = Color::rgb(0xf5, 0xa6, 0x23);
 const ALERT_EXPIRED: Color = Color::rgb(0x78, 0x7b, 0x86);
-const ALERT_CHIP_GAP: f64 = 3.0;
 
 #[derive(Clone, Copy)]
 pub(crate) struct AlertCreateChip {
@@ -54,9 +53,9 @@ impl ChartEngine {
         };
         let size = self.options.get().layout.font_size + 5.0;
         let full_x = if side == PriceScaleSide::Right {
-            strip_x - ALERT_CHIP_GAP - size
+            strip_x - size
         } else {
-            strip_x + strip_width + ALERT_CHIP_GAP
+            strip_x + strip_width
         };
         Some(AlertCreateChip {
             pane_index,
@@ -100,11 +99,20 @@ impl ChartEngine {
             return;
         };
         let x = chip.x + self.pane_left;
+        let background = css_color(
+            &self
+                .options
+                .get()
+                .crosshair
+                .horz_line
+                .label_background_color,
+            CROSSHAIR_LABEL_BG,
+        );
         labels.push(AxisLabel {
             text: "+".to_string(),
             x: x + chip.size / 2.0,
             y: chip.y,
-            color: Color::rgb(0xff, 0xff, 0xff),
+            color: self.axis_label_text_color(background),
             align: AxisTextAlign::Center,
             midpoint: AxisTextMidpoint::Label,
             font_scale: 1.0,
@@ -114,7 +122,7 @@ impl ChartEngine {
                 chip.y - chip.size / 2.0,
                 chip.size,
                 chip.size,
-                ALERT_ACTIVE,
+                background,
             )),
             background_corners: AxisLabelCorners {
                 top_left: true,
