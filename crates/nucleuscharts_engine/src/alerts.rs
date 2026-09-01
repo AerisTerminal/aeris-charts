@@ -416,11 +416,19 @@ mod tests {
         assert!(actionable
             .iter()
             .any(|primitive| matches!(primitive, Prim::HLine { .. })));
+        // The line is named by an attached bell badge — drawn geometry, not a glyph — so the
+        // axis tag itself carries nothing but the price, like every other tag.
+        let color = crate::frame::alert_geometry::alert_color(AlertLineStatus::Active);
+        assert!(actionable.iter().any(|primitive| matches!(
+            primitive,
+            Prim::RoundRect { fill, radii, .. }
+                if *fill == color && radii[0] > 0.0 && radii[1] == 0.0
+        )));
         assert!(actionable
             .iter()
-            .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "A")));
+            .all(|primitive| !matches!(primitive, Prim::Text { text, .. } if text == "A")));
         let axis = chart.build_axis_frame(100.0, |text| text.len() as f64 * 7.0);
-        assert!(axis.labels.iter().any(|label| label.text.starts_with("A ")));
+        assert!(axis.labels.iter().any(|label| label.text == "102.00"));
     }
 
     #[test]
@@ -466,7 +474,7 @@ mod tests {
         let alert = axis
             .labels
             .iter()
-            .find(|label| label.text.starts_with("A "))
+            .find(|label| label.text == "102.00")
             .expect("alert axis tag");
         let expected_y = chart
             .runtime_price_coordinate(0, PriceScaleTarget::Right, 102.0)

@@ -39,6 +39,7 @@ function add_line_companion(chart, data, options = {}, kind = "line") {
     line_width: 2,
     price_line_visible: false,
     last_value_visible: true,
+    countdown_visible: false,
     ...options,
   });
   line.set_data(data);
@@ -189,6 +190,7 @@ function series_features(bars) {
           show_bar_summary: true,
           price_line_visible: false,
           last_value_visible: false,
+          countdown_visible: false,
           title: "ORDER FLOW",
         });
         footprint.set_trades(footprint_trades(bars));
@@ -307,7 +309,7 @@ function primitive_features(chart, series, bars) {
     { id: "rectangle", label: "Rectangle", detail: "Two-click tool + axis labels", icon: "draw", interactive: true, activate: () => { const tool = create_rectangle_drawing_tool(chart, series, undefined, { fill_color: "rgba(164,89,209,.75)", preview_fill_color: "rgba(164,89,209,.25)", label_color: "#a459d1" }); tool.start_drawing(); return () => tool.remove(); } },
     { id: "trend-line", label: "Trend line", detail: "Line + endpoint labels", icon: "draw", activate: () => { const handle = create_trend_line(series, [{ time: start.time, price: start.low }, { time: end.time, price: end.high }], { line_color: "#f59e0b" }); return () => handle.detach(); } },
     { id: "vertical-line", label: "Vertical line", detail: "Pane + time-axis primitive", icon: "draw", activate: () => { const handle = create_vertical_line(series, middle.time, { color: "#e1575a", label_text: "Event", label_background_color: "#e1575a", show_label: true }); return () => handle.detach(); } },
-    { id: "overlay-scale", label: "Overlay scale", detail: "In-pane rounded price labels", icon: "analysis", activate: () => { const overlay = chart.add_series("line", { color: "#a459d1", line_width: 2, price_line_visible: false }); overlay.set_data(bars.filter((_, index) => index % 4 === 0).map((bar) => ({ time: bar.time, value: bar.close * .35 }))); const labels = create_overlay_price_scale(overlay); return () => { labels.detach(); chart.remove_series(overlay); }; } },
+    { id: "overlay-scale", label: "Overlay scale", detail: "In-pane rounded price labels", icon: "analysis", activate: () => { const overlay = chart.add_series("line", { color: "#a459d1", line_width: 2, price_line_visible: false, countdown_visible: false }); overlay.set_data(bars.filter((_, index) => index % 4 === 0).map((bar) => ({ time: bar.time, value: bar.close * .35 }))); const labels = create_overlay_price_scale(overlay); return () => { labels.detach(); chart.remove_series(overlay); }; } },
     { id: "partial-price-line", label: "Partial line", detail: "Last value → edge", icon: "analysis", activate: () => { const handle = create_partial_price_line(series); return () => handle.detach(); } },
     { id: "session-highlighting", label: "Sessions", detail: "Weekday / weekend", icon: "analysis", activate: () => { const handle = create_session_highlighting(series); return () => handle.detach(); } },
     { id: "highlight-crosshair", label: "Bar highlight", detail: "Follow crosshair", icon: "analysis", activate: () => { const handle = create_highlight_bar_crosshair(chart, series); return () => handle.detach(); } },
@@ -467,6 +469,7 @@ export function install_feature_lab({ chart, series, data }) {
             ...feature.options,
             price_line_visible: false,
             last_value_visible: false,
+            countdown_visible: false,
           });
           if (feature.create === undefined) handle.set_data(feature.data());
           const interaction = feature.interactive === true
@@ -539,6 +542,7 @@ export function install_feature_lab({ chart, series, data }) {
   return {
     activate(id) { const feature = features.find((item) => item.id === id); if (feature !== undefined) toggle(feature); },
     active_ids() { return [...(active_series === null ? [] : [active_series.id]), ...cleanups.keys()]; },
+    interaction_series() { return active_series?.handle ?? series; },
     clear() { document.getElementById("feature_clear").click(); },
   };
 }

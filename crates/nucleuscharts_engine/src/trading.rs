@@ -114,14 +114,6 @@ pub enum TradingPriceScale {
     Overlay,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TradingConfirmationMode {
-    #[default]
-    Instant,
-    Manual,
-}
-
 impl From<TradingPriceScale> for PriceScaleTarget {
     fn from(value: TradingPriceScale) -> Self {
         match value {
@@ -333,14 +325,6 @@ pub struct TradingIntent {
     pub base_revision: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TradingPreviewPhase {
-    Dragging,
-    AwaitingConfirmation,
-    Pending,
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "source", rename_all = "snake_case")]
 pub enum TradingPreviewSource {
@@ -355,7 +339,6 @@ pub enum TradingPreviewSource {
 pub struct TradingPreview {
     #[serde(flatten)]
     pub source: TradingPreviewSource,
-    pub phase: TradingPreviewPhase,
     pub pane_index: usize,
     pub price_scale: TradingPriceScale,
     pub price: f64,
@@ -363,8 +346,6 @@ pub struct TradingPreview {
     pub side: OrderSide,
     pub role: OrderRole,
     pub base_revision: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub intent_sequence: Option<u32>,
 }
 
 const MAX_PENDING_TRADING_INTENTS: usize = 256;
@@ -380,12 +361,28 @@ pub(crate) enum TradingInteractionState {
         authoritative_price: f64,
         preview: TradingPreview,
     },
-    AwaitingManualConfirmation {
-        preview: TradingPreview,
-    },
+    /// The chart already applied the change and emitted the intent. It keeps only what it needs
+    /// to put things back if the host rejects — there is no shadow copy of the object and no
+    /// pending chrome, because closing means the object is gone and moving means it has moved.
     PendingHostAck {
-        operation: TradingIntent,
-        preview: Option<TradingPreview>,
+        sequence: u32,
+        rollback: TradingRollback,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum TradingRollback {
+    RemovedOrder {
+        index: usize,
+        order: Box<WorkingOrder>,
+    },
+    RemovedPosition {
+        index: usize,
+        position: Box<TradingPosition>,
+    },
+    MovedOrder {
+        id: OrderId,
+        price: f64,
     },
 }
 
@@ -406,13 +403,8 @@ pub(crate) enum TradingGroupVisualState {
 impl TradingInteractionState {
     pub(crate) fn preview(&self) -> Option<&TradingPreview> {
         match self {
-            Self::DraggingOrder { preview, .. }
-            | Self::AwaitingManualConfirmation { preview }
-            | Self::PendingHostAck {
-                preview: Some(preview),
-                ..
-            } => Some(preview),
-            Self::Idle | Self::Hovering { .. } | Self::PendingHostAck { preview: None, .. } => None,
+            Self::DraggingOrder { preview, .. } => Some(preview),
+            Self::Idle | Self::Hovering { .. } | Self::PendingHostAck { .. } => None,
         }
     }
 
@@ -423,32 +415,9 @@ impl TradingInteractionState {
         }
     }
 
-    fn preview_mut(&mut self) -> Option<&mut TradingPreview> {
-        match self {
-            Self::DraggingOrder { preview, .. }
-            | Self::AwaitingManualConfirmation { preview }
-            | Self::PendingHostAck {
-                preview: Some(preview),
-                ..
-            } => Some(preview),
-            Self::Idle | Self::Hovering { .. } | Self::PendingHostAck { preview: None, .. } => None,
-        }
-    }
-
     pub(crate) fn hover(&self) -> Option<&TradingHit> {
         match self {
             Self::Hovering { hit } => Some(hit),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn pending_position_id(&self) -> Option<&PositionId> {
-        match self {
-            Self::PendingHostAck { operation, .. }
-                if operation.action == TradingIntentAction::ClosePosition =>
-            {
-                operation.position_id.as_ref()
-            }
             _ => None,
         }
     }
@@ -467,7 +436,7 @@ impl TradingInteractionState {
                     | TradingPreviewSource::TakeProfit { position_id }
                     if position_id == id
             )
-        }) || self.pending_position_id() == Some(id)
+        })
     }
 
     fn references_order(&self, id: &OrderId) -> bool {
@@ -498,10 +467,12 @@ pub(crate) struct TradingState {
     pub orders: Vec<WorkingOrder>,
     pub executions: Vec<TradingExecution>,
     pub style: TradingStyle,
-    pub confirmation_mode: TradingConfirmationMode,
     pub interaction: TradingInteractionState,
     pub feedback_hover: Option<TradingHit>,
     pub feedback_pressed: Option<TradingHit>,
+    /// Set by the host once its hover dwell elapses. Action tooltips stay hidden until then, so
+    /// sweeping the pointer across a row of markers never flashes a tooltip per marker.
+    pub tooltip_armed: bool,
     pub group_visual: TradingGroupVisualState,
     intents: VecDeque<TradingIntent>,
     next_intent_sequence: u32,
@@ -598,10 +569,7 @@ pub enum TradingObjectId {
 pub enum TradingHitKind {
     PositionLine,
     OrderLine,
-    QuantityLabel,
     CancelButton,
-    ConfirmButton,
-    DiscardButton,
     ExecutionMarker,
 }
 
@@ -737,37 +705,6 @@ impl ChartEngine {
         let pane_index = self.pane_at_y(y_css)?;
         let line_tolerance = profile.trading_line_tolerance;
 
-        if let Some(preview) = self.trading_state.interaction.preview().filter(|preview| {
-            preview.pane_index == pane_index
-                && preview.phase == TradingPreviewPhase::AwaitingConfirmation
-        }) {
-            if let Some(y) =
-                self.trading_price_coordinate(pane_index, preview.price_scale, preview.price)
-            {
-                let distance = (y_css - y).abs();
-                if distance <= line_tolerance {
-                    if let Some(kind) = self.trading_confirmation_hit(preview, x_css) {
-                        let object = match &preview.source {
-                            TradingPreviewSource::Order { order_id }
-                            | TradingPreviewSource::OrderStopLoss { order_id }
-                            | TradingPreviewSource::OrderTakeProfit { order_id } => {
-                                TradingObjectId::Order(order_id.clone())
-                            }
-                            TradingPreviewSource::StopLoss { position_id }
-                            | TradingPreviewSource::TakeProfit { position_id } => {
-                                TradingObjectId::Position(position_id.clone())
-                            }
-                        };
-                        return Some(TradingHit {
-                            object,
-                            kind,
-                            distance,
-                        });
-                    }
-                }
-            }
-        }
-
         for order in self.trading_state.orders.iter().rev() {
             if order.pane_index != pane_index {
                 continue;
@@ -869,11 +806,30 @@ impl ChartEngine {
             return false;
         }
         self.trading_state.feedback_hover = next.clone();
+        // A new hover target restarts the dwell; the host arms the tooltip again when it elapses.
+        self.trading_state.tooltip_armed = false;
         if interaction_changed {
             self.trading_state.interaction = next.map_or(TradingInteractionState::Idle, |hit| {
                 TradingInteractionState::Hovering { hit }
             });
         }
+        self.invalidate_frame_trading();
+        true
+    }
+
+    /// Reveal the hovered control's action tooltip. The host calls this once its hover dwell
+    /// elapses — the engine is headless and owns no timer of its own. Returns whether the frame
+    /// changed, so the host can skip a repaint when the hover already moved on.
+    pub fn arm_trading_tooltip(&mut self) -> bool {
+        let hovering_control = self
+            .trading_state
+            .feedback_hover
+            .as_ref()
+            .is_some_and(|hit| hit.kind == TradingHitKind::CancelButton);
+        if !hovering_control || self.trading_state.tooltip_armed {
+            return false;
+        }
+        self.trading_state.tooltip_armed = true;
         self.invalidate_frame_trading();
         true
     }
@@ -884,6 +840,7 @@ impl ChartEngine {
             self.trading_state.interaction,
             TradingInteractionState::Hovering { .. }
         );
+        self.trading_state.tooltip_armed = false;
         if !had_feedback && !had_interaction {
             return false;
         }
@@ -994,88 +951,60 @@ impl ChartEngine {
         }
     }
 
+    /// Apply the dragged price to the order and emit the modify intent. The chart moves the line
+    /// straight away rather than parking it in a pending state — a host that gates modifications
+    /// runs its confirmation around the intent, and rejects it if the answer is no.
     fn commit_trading_preview(&mut self) -> Option<TradingIntent> {
-        let mut preview = self.trading_state.interaction.preview()?.clone();
+        let preview = self.trading_state.interaction.preview()?.clone();
         if !matches!(
             self.trading_state.interaction,
             TradingInteractionState::DraggingOrder { .. }
-                | TradingInteractionState::AwaitingManualConfirmation { .. }
         ) {
             return None;
         }
-        let sequence = self.trading_state.next_sequence();
-        preview.phase = TradingPreviewPhase::Pending;
-        preview.intent_sequence = Some(sequence);
-        let (action, order_id, position_id, kind, stop_price) = match &preview.source {
-            TradingPreviewSource::Order { order_id } => {
-                let order = self
-                    .trading_state
-                    .orders
-                    .iter()
-                    .find(|order| &order.id == order_id);
-                (
-                    TradingIntentAction::ModifyOrder,
-                    Some(order_id.clone()),
-                    None,
-                    order.map(|order| order.kind),
-                    order.and_then(|order| order.stop_price),
-                )
-            }
-            TradingPreviewSource::StopLoss { position_id } => (
-                TradingIntentAction::CreateStopLoss,
-                None,
-                Some(position_id.clone()),
-                Some(OrderKind::Stop),
-                None,
-            ),
-            TradingPreviewSource::TakeProfit { position_id } => (
-                TradingIntentAction::CreateTakeProfit,
-                None,
-                Some(position_id.clone()),
-                Some(OrderKind::Limit),
-                None,
-            ),
-            TradingPreviewSource::OrderStopLoss { order_id } => (
-                TradingIntentAction::CreateStopLoss,
-                Some(order_id.clone()),
-                None,
-                Some(OrderKind::Stop),
-                None,
-            ),
-            TradingPreviewSource::OrderTakeProfit { order_id } => (
-                TradingIntentAction::CreateTakeProfit,
-                Some(order_id.clone()),
-                None,
-                Some(OrderKind::Limit),
-                None,
-            ),
+        let TradingPreviewSource::Order { order_id } = &preview.source else {
+            return None;
         };
-        let relationships = order_id.as_ref().and_then(|order_id| {
-            self.trading_state
-                .orders
-                .iter()
-                .find(|order| &order.id == order_id)
-                .map(|order| (order.bracket_id.clone(), order.oco_group_id.clone()))
-        });
+        let order = self
+            .trading_state
+            .orders
+            .iter_mut()
+            .find(|order| &order.id == order_id)?;
+        let rollback = TradingRollback::MovedOrder {
+            id: order.id.clone(),
+            price: order.price,
+        };
+        order.price = preview.price;
+        let sequence = self.trading_state.next_sequence();
+        let order = self
+            .trading_state
+            .orders
+            .iter()
+            .find(|order| &order.id == order_id)?;
         let intent = TradingIntent {
             sequence,
-            action,
-            order_id,
-            position_id,
+            action: TradingIntentAction::ModifyOrder,
+            order_id: Some(order.id.clone()),
+            position_id: None,
             side: Some(preview.side),
-            kind,
+            kind: Some(order.kind),
             role: Some(preview.role),
             price: Some(preview.price),
-            stop_price,
+            stop_price: order.stop_price,
             quantity: Some(preview.quantity),
-            bracket_id: relationships.as_ref().and_then(|value| value.0.clone()),
-            oco_group_id: relationships.and_then(|value| value.1),
+            bracket_id: order.bracket_id.clone(),
+            oco_group_id: order.oco_group_id.clone(),
             base_revision: preview.base_revision,
         };
-        self.trading_state.interaction = TradingInteractionState::PendingHostAck {
-            operation: intent.clone(),
-            preview: Some(preview),
-        };
+        // Moving a protection order asserts its bracket, so the connector chrome comes up with the
+        // change rather than waiting on the host — the same moment the line itself moves.
+        if preview.role != OrderRole::Working {
+            if let Some(group) = self.trading_group_key_for_preview(&preview) {
+                self.trading_state.group_visual = TradingGroupVisualState::Active(group);
+            }
+        }
+        self.trading_state.interaction =
+            TradingInteractionState::PendingHostAck { sequence, rollback };
         self.trading_state.push_intent(intent.clone());
         self.invalidate_frame_trading();
         Some(intent)
@@ -1108,7 +1037,6 @@ impl ChartEngine {
             source: TradingPreviewSource::Order {
                 order_id: id.clone(),
             },
-            phase: TradingPreviewPhase::Dragging,
             pane_index: order.pane_index,
             price_scale: order.price_scale,
             price: order.price,
@@ -1116,7 +1044,6 @@ impl ChartEngine {
             side: order.side,
             role: order.role,
             base_revision: order.revision,
-            intent_sequence: None,
         };
         self.trading_state.interaction = TradingInteractionState::DraggingOrder {
             authoritative_price: preview.price,
@@ -1144,16 +1071,10 @@ impl ChartEngine {
         true
     }
 
-    /// Commit the keyboard preview, including the second confirmation step in manual mode.
+    /// Commit the keyboard preview. Like a pointer release, this emits the intent directly — a
+    /// host that wants a confirmation step runs it around the intent, not inside the chart.
     pub fn trading_keyboard_commit(&mut self) -> Option<TradingIntent> {
-        if matches!(
-            self.trading_state.interaction,
-            TradingInteractionState::AwaitingManualConfirmation { .. }
-        ) {
-            self.commit_trading_preview()
-        } else {
-            self.trading_drag_end()
-        }
+        self.trading_drag_end()
     }
 
     pub fn trading_drag_start_at_with_profile(
@@ -1190,7 +1111,6 @@ impl ChartEngine {
             source: TradingPreviewSource::Order {
                 order_id: id.clone(),
             },
-            phase: TradingPreviewPhase::Dragging,
             pane_index: order.pane_index,
             price_scale: order.price_scale,
             price: order.price,
@@ -1198,7 +1118,6 @@ impl ChartEngine {
             side: order.side,
             role: order.role,
             base_revision: order.revision,
-            intent_sequence: None,
         };
         self.trading_state.interaction = TradingInteractionState::DraggingOrder {
             authoritative_price: preview.price,
@@ -1264,14 +1183,6 @@ impl ChartEngine {
             self.invalidate_frame_trading();
             return None;
         }
-        if self.trading_state.confirmation_mode == TradingConfirmationMode::Manual {
-            let mut preview = preview;
-            preview.phase = TradingPreviewPhase::AwaitingConfirmation;
-            self.trading_state.interaction =
-                TradingInteractionState::AwaitingManualConfirmation { preview };
-            self.invalidate_frame_trading();
-            return None;
-        }
         self.commit_trading_preview()
     }
 
@@ -1287,24 +1198,14 @@ impl ChartEngine {
         true
     }
 
+    /// Activate the close control under the pointer. Closing REMOVES the object and emits the
+    /// intent: there is no pending tint and no second gate, because "close" means the order or
+    /// position is gone. A host that gates closes runs its confirmation around the intent and
+    /// rejects it to put the object back.
     pub fn trading_activate_at(&mut self, x_css: f64, y_css: f64) -> bool {
         let Some(hit) = self.trading_hit_at(x_css, y_css) else {
             return false;
         };
-        if matches!(
-            self.trading_state.interaction,
-            TradingInteractionState::AwaitingManualConfirmation { .. }
-        ) {
-            return match hit.kind {
-                TradingHitKind::ConfirmButton => self.commit_trading_preview().is_some(),
-                TradingHitKind::DiscardButton => {
-                    self.trading_state.interaction = TradingInteractionState::Idle;
-                    self.invalidate_frame_trading();
-                    true
-                }
-                _ => false,
-            };
-        }
         if !self.trading_state.interaction.is_idle_or_hovering() {
             return false;
         }
@@ -1312,16 +1213,17 @@ impl ChartEngine {
             return false;
         }
         let sequence = self.trading_state.next_sequence();
-        let (intent, pending_preview) = match hit.object {
+        let (intent, rollback) = match hit.object {
             TradingObjectId::Order(order_id) => {
-                let Some(order) = self
+                let Some(index) = self
                     .trading_state
                     .orders
                     .iter()
-                    .find(|order| order.id == order_id)
+                    .position(|order| order.id == order_id)
                 else {
                     return false;
                 };
+                let order = &self.trading_state.orders[index];
                 if !matches!(
                     order.status,
                     OrderStatus::Working | OrderStatus::PartiallyFilled
@@ -1329,38 +1231,40 @@ impl ChartEngine {
                     return false;
                 }
                 let remaining = (order.quantity - order.filled_quantity).max(0.0);
+                let intent = TradingIntent {
+                    sequence,
+                    action: TradingIntentAction::CancelOrder,
+                    order_id: Some(order_id.clone()),
+                    position_id: order.position_id.clone(),
+                    side: Some(order.side),
+                    kind: Some(order.kind),
+                    role: Some(order.role),
+                    price: Some(order.price),
+                    stop_price: order.stop_price,
+                    quantity: Some(remaining),
+                    bracket_id: order.bracket_id.clone(),
+                    oco_group_id: order.oco_group_id.clone(),
+                    base_revision: order.revision,
+                };
+                let order = self.trading_state.orders.remove(index);
                 (
-                    TradingIntent {
-                        sequence,
-                        action: TradingIntentAction::CancelOrder,
-                        order_id: Some(order_id.clone()),
-                        position_id: order.position_id.clone(),
-                        side: Some(order.side),
-                        kind: Some(order.kind),
-                        role: Some(order.role),
-                        price: Some(order.price),
-                        stop_price: order.stop_price,
-                        quantity: Some(remaining),
-                        bracket_id: order.bracket_id.clone(),
-                        oco_group_id: order.oco_group_id.clone(),
-                        base_revision: order.revision,
+                    intent,
+                    TradingRollback::RemovedOrder {
+                        index,
+                        order: Box::new(order),
                     },
-                    Some(TradingPreview {
-                        source: TradingPreviewSource::Order { order_id },
-                        phase: TradingPreviewPhase::Pending,
-                        pane_index: order.pane_index,
-                        price_scale: order.price_scale,
-                        price: order.price,
-                        quantity: remaining,
-                        side: order.side,
-                        role: order.role,
-                        base_revision: order.revision,
-                        intent_sequence: Some(sequence),
-                    }),
                 )
             }
-            TradingObjectId::Position(position_id) => (
-                TradingIntent {
+            TradingObjectId::Position(position_id) => {
+                let Some(index) = self
+                    .trading_state
+                    .positions
+                    .iter()
+                    .position(|position| position.id == position_id)
+                else {
+                    return false;
+                };
+                let intent = TradingIntent {
                     sequence,
                     action: TradingIntentAction::ClosePosition,
                     order_id: None,
@@ -1374,28 +1278,66 @@ impl ChartEngine {
                     bracket_id: None,
                     oco_group_id: None,
                     base_revision: 0,
-                },
-                None,
-            ),
+                };
+                let position = self.trading_state.positions.remove(index);
+                (
+                    intent,
+                    TradingRollback::RemovedPosition {
+                        index,
+                        position: Box::new(position),
+                    },
+                )
+            }
             TradingObjectId::Execution(_) => return false,
         };
-        self.trading_state.interaction = TradingInteractionState::PendingHostAck {
-            operation: intent.clone(),
-            preview: pending_preview,
-        };
-        self.trading_state.push_intent(intent.clone());
+        // The object is gone, so nothing may still point at it.
+        self.trading_state.feedback_hover = None;
+        self.trading_state.feedback_pressed = None;
+        self.trading_state.tooltip_armed = false;
+        self.trading_state.interaction =
+            TradingInteractionState::PendingHostAck { sequence, rollback };
+        self.trading_state.push_intent(intent);
+        self.reconcile_trading_group_visual();
         self.invalidate_frame_trading();
+        self.invalidate_frame_scene();
         true
     }
 
+    /// Answer an emitted intent. Acceptance simply releases the rollback — the chart already shows
+    /// the change. Rejection puts the object back exactly where it was.
     pub fn resolve_trading_intent(&mut self, sequence: u32, accepted: bool) -> bool {
-        let matches = matches!(
-            &self.trading_state.interaction,
-            TradingInteractionState::PendingHostAck { operation, .. }
-                if operation.sequence == sequence
-        );
-        if !matches || accepted {
-            return matches;
+        let TradingInteractionState::PendingHostAck {
+            sequence: pending,
+            rollback,
+        } = &self.trading_state.interaction
+        else {
+            return false;
+        };
+        if *pending != sequence {
+            return false;
+        }
+        if !accepted {
+            match rollback.clone() {
+                TradingRollback::RemovedOrder { index, order } => {
+                    let index = index.min(self.trading_state.orders.len());
+                    self.trading_state.orders.insert(index, *order);
+                }
+                TradingRollback::RemovedPosition { index, position } => {
+                    let index = index.min(self.trading_state.positions.len());
+                    self.trading_state.positions.insert(index, *position);
+                }
+                TradingRollback::MovedOrder { id, price } => {
+                    if let Some(order) = self
+                        .trading_state
+                        .orders
+                        .iter_mut()
+                        .find(|order| order.id == id)
+                    {
+                        order.price = price;
+                    }
+                }
+            }
+            self.invalidate_frame_scene();
         }
         self.trading_state.interaction = TradingInteractionState::Idle;
         self.invalidate_frame_trading();
@@ -1410,7 +1352,6 @@ impl ChartEngine {
         if !matches!(
             self.trading_state.interaction,
             TradingInteractionState::DraggingOrder { .. }
-                | TradingInteractionState::AwaitingManualConfirmation { .. }
         ) {
             return false;
         }
@@ -1464,10 +1405,10 @@ impl ChartEngine {
             orders: snapshot.orders,
             executions: snapshot.executions,
             style: prior.style,
-            confirmation_mode: prior.confirmation_mode,
             interaction: prior.interaction,
             feedback_hover: prior.feedback_hover,
             feedback_pressed: prior.feedback_pressed,
+            tooltip_armed: false,
             group_visual: prior.group_visual,
             intents: prior.intents,
             next_intent_sequence: prior.next_intent_sequence,
@@ -1591,24 +1532,6 @@ impl ChartEngine {
         self.trading_state.style
     }
 
-    pub fn trading_confirmation_mode(&self) -> TradingConfirmationMode {
-        self.trading_state.confirmation_mode
-    }
-
-    pub fn set_trading_confirmation_mode(&mut self, mode: TradingConfirmationMode) {
-        if self.trading_state.confirmation_mode == mode {
-            return;
-        }
-        self.trading_state.confirmation_mode = mode;
-        if matches!(
-            self.trading_state.interaction,
-            TradingInteractionState::AwaitingManualConfirmation { .. }
-        ) {
-            self.trading_state.interaction = TradingInteractionState::Idle;
-        }
-        self.invalidate_frame_trading();
-    }
-
     pub fn apply_trading_style(&mut self, options: TradingStyleOptions) -> Result<(), ChartError> {
         let mut style = self.trading_state.style;
         macro_rules! apply {
@@ -1667,7 +1590,7 @@ impl ChartEngine {
         {
             *pane = remap(*pane);
         }
-        if let Some(preview) = self.trading_state.interaction.preview_mut() {
+        if let Some(preview) = self.trading_state.interaction.dragging_preview_mut() {
             preview.pane_index = remap(preview.pane_index);
         }
     }
@@ -1697,7 +1620,7 @@ impl ChartEngine {
                 *pane = first;
             }
         }
-        if let Some(preview) = self.trading_state.interaction.preview_mut() {
+        if let Some(preview) = self.trading_state.interaction.dragging_preview_mut() {
             let mut pane = preview.pane_index;
             if pane == first {
                 pane = second;
@@ -1742,7 +1665,7 @@ impl ChartEngine {
         {
             *pane = remap(*pane);
         }
-        if let Some(preview) = self.trading_state.interaction.preview_mut() {
+        if let Some(preview) = self.trading_state.interaction.dragging_preview_mut() {
             preview.pane_index = remap(preview.pane_index);
         }
     }
@@ -1919,6 +1842,9 @@ impl ChartEngine {
         }
     }
 
+    /// Keep interaction state honest when the host replaces the snapshot underneath it. There is
+    /// no pending object to reconcile any more: a released change is already applied, so this only
+    /// drops feedback and drags whose object the host removed.
     fn reconcile_trading_interaction(&mut self) {
         if self
             .trading_state
@@ -1927,6 +1853,7 @@ impl ChartEngine {
             .is_some_and(|hit| !self.trading_hit_source_exists(hit))
         {
             self.trading_state.feedback_hover = None;
+            self.trading_state.tooltip_armed = false;
         }
         if self
             .trading_state
@@ -1937,109 +1864,15 @@ impl ChartEngine {
             self.trading_state.feedback_pressed = None;
         }
         let source_exists = match &self.trading_state.interaction {
-            TradingInteractionState::Idle => return,
+            TradingInteractionState::Idle | TradingInteractionState::PendingHostAck { .. } => {
+                return
+            }
             TradingInteractionState::Hovering { hit } => self.trading_hit_source_exists(hit),
-            TradingInteractionState::DraggingOrder { preview, .. }
-            | TradingInteractionState::AwaitingManualConfirmation { preview } => {
+            TradingInteractionState::DraggingOrder { preview, .. } => {
                 self.trading_preview_source_exists(preview)
             }
-            TradingInteractionState::PendingHostAck { .. } => true,
         };
         if !source_exists {
-            self.trading_state.interaction = TradingInteractionState::Idle;
-            return;
-        }
-        let (operation, preview) = match &self.trading_state.interaction {
-            TradingInteractionState::PendingHostAck { operation, preview } => {
-                (operation.clone(), preview.clone())
-            }
-            _ => return,
-        };
-        let Some(preview) = preview else {
-            let reconciled = operation.action == TradingIntentAction::ClosePosition
-                && operation.position_id.as_ref().is_some_and(|position_id| {
-                    !self
-                        .trading_state
-                        .positions
-                        .iter()
-                        .any(|position| &position.id == position_id)
-                });
-            if reconciled {
-                self.trading_state.interaction = TradingInteractionState::Idle;
-            }
-            return;
-        };
-        let tolerance = self
-            .trading_state
-            .instrument
-            .tick_size
-            .unwrap_or(f64::EPSILON)
-            * 0.5;
-        let reconciled = match &preview.source {
-            TradingPreviewSource::Order { order_id } => self
-                .trading_state
-                .orders
-                .iter()
-                .find(|order| &order.id == order_id)
-                .is_none_or(|order| {
-                    order.revision > preview.base_revision
-                        || (order.price - preview.price).abs() <= tolerance
-                }),
-            TradingPreviewSource::StopLoss { position_id } => {
-                !self
-                    .trading_state
-                    .positions
-                    .iter()
-                    .any(|position| &position.id == position_id)
-                    || self.trading_state.orders.iter().any(|order| {
-                        order.position_id.as_ref() == Some(position_id)
-                            && order.role == OrderRole::StopLoss
-                            && (order.price - preview.price).abs() <= tolerance
-                    })
-            }
-            TradingPreviewSource::TakeProfit { position_id } => {
-                !self
-                    .trading_state
-                    .positions
-                    .iter()
-                    .any(|position| &position.id == position_id)
-                    || self.trading_state.orders.iter().any(|order| {
-                        order.position_id.as_ref() == Some(position_id)
-                            && order.role == OrderRole::TakeProfit
-                            && (order.price - preview.price).abs() <= tolerance
-                    })
-            }
-            TradingPreviewSource::OrderStopLoss { order_id } => {
-                !self
-                    .trading_state
-                    .orders
-                    .iter()
-                    .any(|order| &order.id == order_id)
-                    || self.trading_state.orders.iter().any(|order| {
-                        order.parent_order_id.as_ref() == Some(order_id)
-                            && order.role == OrderRole::StopLoss
-                            && (order.price - preview.price).abs() <= tolerance
-                    })
-            }
-            TradingPreviewSource::OrderTakeProfit { order_id } => {
-                !self
-                    .trading_state
-                    .orders
-                    .iter()
-                    .any(|order| &order.id == order_id)
-                    || self.trading_state.orders.iter().any(|order| {
-                        order.parent_order_id.as_ref() == Some(order_id)
-                            && order.role == OrderRole::TakeProfit
-                            && (order.price - preview.price).abs() <= tolerance
-                    })
-            }
-        };
-        if reconciled {
-            if preview.role != OrderRole::Working {
-                if let Some(group) = self.trading_group_key_for_preview(&preview) {
-                    self.trading_state.group_visual = TradingGroupVisualState::Active(group);
-                }
-            }
             self.trading_state.interaction = TradingInteractionState::Idle;
         }
     }
@@ -2277,7 +2110,7 @@ mod tests {
 
         let axis = chart.build_axis_frame(100.0, |text| text.len() as f64 * 7.0);
         for price in ["99.00", "103.00"] {
-            let color = chart.trading_style().sell;
+            let color = chart.trading_style().working_order;
             assert!(axis
                 .labels
                 .iter()
@@ -2286,7 +2119,7 @@ mod tests {
         let mut axis_primitives = Vec::new();
         chart.build_axis_primitives_into(&axis, &mut axis_primitives, |_| 0.0);
         for name in ["SL", "TP"] {
-            let color = chart.trading_style().sell;
+            let color = chart.trading_style().working_order;
             assert!(
                 axis_primitives.iter().any(|primitive| matches!(
                     primitive,
@@ -2502,6 +2335,9 @@ mod tests {
             .expect("instant mode emits an intent");
         assert_eq!(intent.action, TradingIntentAction::ModifyOrder);
         assert_eq!(intent.price, Some(105.5));
+        // Keyboard commit applies the move the same way a pointer release does.
+        assert_eq!(chart.trading_snapshot().orders[0].price, 105.5);
+        assert!(chart.resolve_trading_intent(intent.sequence, false));
         assert_eq!(chart.trading_snapshot().orders[0].price, 103.0);
     }
 
@@ -2530,7 +2366,7 @@ mod tests {
         let y = chart
             .trading_price_coordinate(0, TradingPriceScale::Right, 99.0)
             .unwrap();
-        let chip_x = chart.trading_order_chip_start(&chart.trading_snapshot().orders[0]) + 20.0;
+        let chip_x = chart.trading_marker_start() + 20.0;
         assert_eq!(
             chart.trading_hit_at(chip_x, y).unwrap().kind,
             TradingHitKind::OrderLine,
@@ -2563,7 +2399,7 @@ mod tests {
     }
 
     #[test]
-    fn order_drag_snaps_previews_and_emits_once_without_mutating_confirmed_state() {
+    fn order_drag_snaps_previews_and_emits_once_with_a_rollback_on_rejection() {
         let mut chart = chart_with_market();
         chart
             .set_trading_snapshot(TradingSnapshot {
@@ -2593,7 +2429,8 @@ mod tests {
         assert_eq!(intent.order_id.as_ref().unwrap().as_str(), "tp-1");
         assert_eq!(intent.price, Some(102.25));
         assert_eq!(intent.base_revision, 1);
-        assert_eq!(chart.trading_snapshot().orders[0].price, 103.0);
+        // Release applies the snapped price and emits exactly one intent for the whole gesture.
+        assert_eq!(chart.trading_snapshot().orders[0].price, 102.25);
         assert_eq!(chart.take_trading_intents(), vec![intent.clone()]);
         assert!(chart.take_trading_intents().is_empty());
         assert!(chart.resolve_trading_intent(intent.sequence, false));
@@ -2625,16 +2462,14 @@ mod tests {
         assert!(chart.trading_drag_start_at(chart.trading_marker_start() + 20.0, start_y));
         assert!(chart.trading_drag_to(target_y));
         let intent = chart.trading_drag_end().unwrap();
+        // The move is applied the moment it is released; acceptance just releases the rollback.
+        assert_eq!(chart.trading_snapshot().orders[0].price, 104.0);
         assert!(chart.resolve_trading_intent(intent.sequence, true));
-        assert_eq!(
-            chart.trading_preview().unwrap().phase,
-            TradingPreviewPhase::Pending
-        );
+        assert!(chart.trading_preview().is_none());
 
         let mut confirmed = order("tp-1", OrderRole::TakeProfit, 104.0);
         confirmed.revision = 2;
         chart.update_working_order(confirmed).unwrap();
-        assert!(chart.trading_preview().is_none());
         assert_eq!(chart.trading_snapshot().orders[0].price, 104.0);
     }
 
@@ -2706,37 +2541,38 @@ mod tests {
             &mut chart,
             TradingObjectId::Order(id("order-1", OrderId::new)),
         );
+        // Closing removes the order outright and emits the intent — no pending copy is left behind.
         assert!(chart.trading_activate_at(cancel_x, cancel_y));
         let rejected = chart.take_trading_intents().pop().unwrap();
         assert_eq!(rejected.action, TradingIntentAction::CancelOrder);
-        assert_eq!(
-            chart.trading_preview().unwrap().phase,
-            TradingPreviewPhase::Pending
-        );
+        assert!(chart.trading_snapshot().orders.is_empty());
+        assert!(chart.trading_preview().is_none());
+
+        // A rejecting host puts it back exactly as it was.
+        assert!(chart.resolve_trading_intent(rejected.sequence, false));
+        assert_eq!(chart.trading_snapshot().orders.len(), 1);
         assert_eq!(
             chart.trading_snapshot().orders[0].status,
             OrderStatus::Working
         );
-        assert!(chart.resolve_trading_intent(rejected.sequence, false));
-        assert!(chart.trading_preview().is_none());
+        assert_eq!(chart.trading_snapshot().orders[0].price, 102.0);
 
+        // An accepting host leaves it gone.
         assert!(chart.trading_activate_at(cancel_x, cancel_y));
         let accepted = chart.take_trading_intents().pop().unwrap();
         assert!(chart.resolve_trading_intent(accepted.sequence, true));
-        assert!(chart.trading_preview().is_some());
-        let mut authoritative = order("order-1", OrderRole::Working, 102.0);
-        authoritative.status = OrderStatus::PendingCancel;
-        authoritative.revision = 2;
-        chart.update_working_order(authoritative).unwrap();
-        assert!(chart.trading_preview().is_none());
-        assert_eq!(
-            chart.trading_snapshot().orders[0].status,
-            OrderStatus::PendingCancel
-        );
+        assert!(chart.trading_snapshot().orders.is_empty());
+        assert!(matches!(
+            chart.trading_state.interaction,
+            TradingInteractionState::Idle
+        ));
+        // A stale answer for an already-settled intent changes nothing.
+        assert!(!chart.resolve_trading_intent(accepted.sequence, false));
+        assert!(chart.trading_snapshot().orders.is_empty());
     }
 
     #[test]
-    fn close_position_intent_is_pending_without_mutating_the_position() {
+    fn closing_a_position_removes_it_and_a_rejection_puts_it_back() {
         let mut chart = chart_with_market();
         chart
             .set_trading_snapshot(TradingSnapshot {
@@ -2751,10 +2587,10 @@ mod tests {
         assert!(chart.trading_activate_at(cancel_x, cancel_y));
         let intent = chart.take_trading_intents().pop().unwrap();
         assert_eq!(intent.action, TradingIntentAction::ClosePosition);
-        assert_eq!(chart.trading_snapshot().positions.len(), 1);
+        assert!(chart.trading_snapshot().positions.is_empty());
         assert_eq!(
             match &chart.trading_state.interaction {
-                TradingInteractionState::PendingHostAck { operation, .. } => operation.sequence,
+                TradingInteractionState::PendingHostAck { sequence, .. } => *sequence,
                 state => panic!("expected pending host acknowledgement, got {state:?}"),
             },
             intent.sequence
@@ -2764,7 +2600,9 @@ mod tests {
             chart.trading_state.interaction,
             TradingInteractionState::Idle
         ));
-        assert_eq!(chart.trading_snapshot().positions.len(), 1);
+        let restored = chart.trading_snapshot();
+        assert_eq!(restored.positions.len(), 1);
+        assert_eq!(restored.positions[0].average_price, 101.0);
     }
 
     #[test]
@@ -2820,13 +2658,12 @@ mod tests {
     }
 
     #[test]
-    fn manual_confirmation_requires_confirm_and_discard_clears_without_intent() {
+    fn releasing_a_drag_emits_the_modify_intent_directly_with_no_confirmation_step() {
         let mut chart = chart_with_market();
         let mut working = order("working-1", OrderRole::Working, 102.0);
         working.position_id = None;
         working.side = OrderSide::Buy;
         chart.update_working_order(working).unwrap();
-        chart.set_trading_confirmation_mode(TradingConfirmationMode::Manual);
         chart.build_frame();
         let start_y = chart
             .trading_price_coordinate(0, TradingPriceScale::Right, 102.0)
@@ -2836,27 +2673,18 @@ mod tests {
             .unwrap();
         assert!(chart.trading_drag_start_at(chart.trading_marker_start() + 20.0, start_y));
         assert!(chart.trading_drag_to(target_y));
+
+        // The drag names its side and dots its line; it offers no Confirm/Discard surface.
         let dragging = chart.build_frame();
         let segments = chart.frame_pane_segments(0).unwrap();
-        assert!(
-            dragging.panes[0].main[segments.drawings_end..segments.trading_end]
-                .iter()
-                .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "Buy"))
-        );
-        assert!(chart.trading_drag_end().is_none());
-        assert!(chart.take_trading_intents().is_empty());
-        assert_eq!(
-            chart.trading_preview().unwrap().phase,
-            TradingPreviewPhase::AwaitingConfirmation
-        );
-        let frame = chart.build_frame();
-        let segments = chart.frame_pane_segments(0).unwrap();
-        let trading = &frame.panes[0].main[segments.drawings_end..segments.trading_end];
-        for expected in ["Discard", "Confirm", "Limit"] {
-            assert!(trading
-                .iter()
-                .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == expected)));
-        }
+        let trading = &dragging.panes[0].main[segments.drawings_end..segments.trading_end];
+        assert!(trading
+            .iter()
+            .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "Buy")));
+        assert!(trading.iter().all(|primitive| !matches!(
+            primitive,
+            Prim::Text { text, .. } if matches!(text.as_str(), "Confirm" | "Discard")
+        )));
         assert!(trading.iter().any(|primitive| matches!(
             primitive,
             Prim::HLine {
@@ -2865,30 +2693,35 @@ mod tests {
             }
         )));
 
-        let preview = chart.trading_preview().unwrap().clone();
-        let main_x = chart.trading_preview_chip_start(&preview);
-        assert!(chart.trading_activate_at(main_x - 36.0, target_y));
-        let intents = chart.take_trading_intents();
-        assert_eq!(intents.len(), 1);
-        assert_eq!(intents[0].action, TradingIntentAction::ModifyOrder);
-        assert_eq!(
-            chart.trading_preview().unwrap().phase,
-            TradingPreviewPhase::Pending
-        );
-        assert!(chart.resolve_trading_intent(intents[0].sequence, false));
-
-        assert!(chart.trading_drag_start_at(chart.trading_marker_start() + 20.0, start_y));
-        assert!(chart.trading_drag_to(target_y));
-        assert!(chart.trading_drag_end().is_none());
-        let preview = chart.trading_preview().unwrap().clone();
-        let main_x = chart.trading_preview_chip_start(&preview);
-        assert!(chart.trading_activate_at(main_x - 97.0, target_y));
+        // Release commits straight to an intent — hosts that want a confirmation run it around
+        // the intent, so the chart never parks the modification behind an inline second step.
+        let intent = chart
+            .trading_drag_end()
+            .expect("release emits the modify intent");
+        assert_eq!(intent.action, TradingIntentAction::ModifyOrder);
+        assert_eq!(chart.take_trading_intents().len(), 1);
+        // The move is applied on release, so nothing is left dimmed or dotted behind a pending
+        // state — and the released line paints in its own color again.
         assert!(chart.trading_preview().is_none());
-        assert!(chart.take_trading_intents().is_empty());
+        assert_eq!(chart.trading_snapshot().orders[0].price, 103.0);
+        let released = chart.build_frame();
+        let segments = chart.frame_pane_segments(0).unwrap();
+        let trading = &released.panes[0].main[segments.drawings_end..segments.trading_end];
+        let pending = chart.trading_style().pending;
+        assert!(trading.iter().all(|primitive| !matches!(
+            primitive,
+            Prim::HLine { style, color, .. }
+                if *style == nucleuscharts_render::draw_list::LineStyle::Dotted
+                    || *color == pending
+        )));
+
+        // A rejecting host puts the price back.
+        assert!(chart.resolve_trading_intent(intent.sequence, false));
+        assert_eq!(chart.trading_snapshot().orders[0].price, 102.0);
     }
 
     #[test]
-    fn manual_confirmation_shows_for_existing_tp_and_sl_adjustments() {
+    fn protection_drags_release_the_same_way_as_working_orders() {
         for (order_id, role, price, target) in [
             ("tp-1", OrderRole::TakeProfit, 103.0, 103.5),
             ("sl-1", OrderRole::StopLoss, 99.0, 98.5),
@@ -2900,7 +2733,6 @@ mod tests {
             let mut protection = order(order_id, role, price);
             protection.position_id = Some(id("position-1", PositionId::new));
             chart.update_working_order(protection).unwrap();
-            chart.set_trading_confirmation_mode(TradingConfirmationMode::Manual);
             chart.build_frame();
 
             let start_y = chart
@@ -2911,33 +2743,96 @@ mod tests {
                 .unwrap();
             assert!(chart.trading_drag_start_at(chart.trading_marker_start() + 20.0, start_y));
             assert!(chart.trading_drag_to(target_y));
-            assert!(chart.trading_drag_end().is_none());
-            let preview = chart
-                .trading_preview()
-                .expect("manual protection preview")
-                .clone();
-            assert_eq!(preview.phase, TradingPreviewPhase::AwaitingConfirmation);
-            assert_eq!(preview.role, role);
+            let intent = chart.trading_drag_end().expect("release emits the intent");
+            assert_eq!(intent.action, TradingIntentAction::ModifyOrder);
+            assert_eq!(intent.order_id.as_ref().unwrap().as_str(), order_id);
+            assert_eq!(intent.role, Some(role));
+            assert!(chart.trading_preview().is_none());
+            assert_eq!(
+                chart
+                    .trading_snapshot()
+                    .orders
+                    .iter()
+                    .find(|order| order.id.as_str() == order_id)
+                    .unwrap()
+                    .price,
+                target
+            );
 
             let frame = chart.build_frame();
             let segments = chart.frame_pane_segments(0).unwrap();
             let trading = &frame.panes[0].main[segments.drawings_end..segments.trading_end];
-            for expected in ["Discard", "Confirm"] {
-                assert!(trading.iter().any(
-                    |primitive| matches!(primitive, Prim::Text { text, .. } if text == expected)
-                ));
-            }
             assert!(trading.iter().all(|primitive| !matches!(
                 primitive,
-                Prim::Text { text, .. } if matches!(text.as_str(), "TP" | "SL")
+                Prim::Text { text, .. } if matches!(text.as_str(), "TP" | "SL" | "Confirm" | "Discard")
             )));
+        }
+    }
 
-            let main_x = chart.trading_preview_chip_start(&preview);
-            assert!(chart.trading_activate_at(main_x - 36.0, target_y));
-            let intents = chart.take_trading_intents();
-            assert_eq!(intents.len(), 1);
-            assert_eq!(intents[0].action, TradingIntentAction::ModifyOrder);
-            assert_eq!(intents[0].order_id.as_ref().unwrap().as_str(), order_id);
+    #[test]
+    fn action_tooltips_follow_the_theme_and_hollow_outlines_stay_hairline() {
+        let mut chart = chart_with_market();
+        chart
+            .update_trading_position(position(PositionSide::Long))
+            .unwrap();
+        let (cancel_x, cancel_y) = cancel_center(
+            &mut chart,
+            TradingObjectId::Position(id("position-1", PositionId::new)),
+        );
+        assert!(chart.set_trading_hover(cancel_x, cancel_y));
+        assert!(chart.arm_trading_tooltip());
+        let frame = chart.build_frame();
+        let segments = chart.frame_pane_segments(0).unwrap();
+        let trading = &frame.panes[0].main[segments.drawings_end..segments.trading_end];
+
+        let tooltip_y = trading
+            .iter()
+            .find_map(|primitive| match primitive {
+                Prim::Text { text, y, .. } if text == "Close Position" => Some(*y),
+                _ => None,
+            })
+            .expect("armed tooltip");
+        let (fill, border_color) = trading
+            .iter()
+            .find_map(|primitive| match primitive {
+                Prim::RoundRect {
+                    y,
+                    h,
+                    fill,
+                    border_width,
+                    border_color,
+                    ..
+                } if *border_width > 0.0 && *y <= tooltip_y && *y + *h >= tooltip_y => {
+                    Some((*fill, *border_color))
+                }
+                _ => None,
+            })
+            .expect("tooltip box");
+        // Chart chrome, not the object's chrome: the box takes the theme's surface and border,
+        // never the position's buy/sell color.
+        let position_color = chart.trading_position_color(PositionSide::Long);
+        assert_ne!(border_color, position_color);
+        assert_ne!(fill, position_color.solid());
+        let axis_border =
+            Color::parse_css(&chart.options.get().right_price_scale.border_color).unwrap();
+        assert_eq!(border_color, axis_border.solid());
+
+        // Every outlined chip in the marker draws a hairline, never a doubled frame.
+        for vpr in [1.0_f64, 1.5, 2.0, 3.0] {
+            let hairline = vpr.floor().max(1.0) as f32;
+            let mut out = Vec::new();
+            let mut regions = Vec::new();
+            chart.build_trading_frame_for_test(0, vpr, vpr, &mut regions, &mut out);
+            for primitive in &out {
+                if let Prim::RoundRect { border_width, .. } = primitive {
+                    if *border_width > 0.0 {
+                        assert_eq!(
+                            *border_width, hairline,
+                            "outline is not a hairline at dpr {vpr}"
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -3052,20 +2947,30 @@ mod tests {
     }
 
     #[test]
-    fn live_and_filled_orders_use_their_buy_or_sell_color() {
+    fn resting_limits_read_neutral_while_stops_and_fills_read_by_side() {
         let mut chart = chart_with_market();
+        // A resting limit is an intention parked at a price: neutral until it fills.
         let mut sell_limit = order("sell-limit", OrderRole::TakeProfit, 103.0);
         sell_limit.side = OrderSide::Sell;
         sell_limit.kind = OrderKind::Limit;
+        // A stop is a directional trigger, so it reads by side even while it rests.
+        let mut sell_stop = order("sell-stop", OrderRole::StopLoss, 101.5);
+        sell_stop.side = OrderSide::Sell;
+        sell_stop.kind = OrderKind::Stop;
+        // Once a limit fills it is a directional fact, so it takes its side color.
         let mut filled_sell_limit = order("filled-sell-limit", OrderRole::Working, 99.0);
         filled_sell_limit.position_id = None;
         filled_sell_limit.side = OrderSide::Sell;
         filled_sell_limit.kind = OrderKind::Limit;
         filled_sell_limit.status = OrderStatus::Filled;
         filled_sell_limit.filled_quantity = filled_sell_limit.quantity;
+        let mut buy_limit = order("buy-limit", OrderRole::Working, 100.5);
+        buy_limit.position_id = None;
+        buy_limit.side = OrderSide::Buy;
+        buy_limit.kind = OrderKind::Limit;
         chart
             .set_trading_snapshot(TradingSnapshot {
-                orders: vec![sell_limit, filled_sell_limit],
+                orders: vec![sell_limit, sell_stop, filled_sell_limit, buy_limit],
                 ..TradingSnapshot::default()
             })
             .unwrap();
@@ -3073,16 +2978,41 @@ mod tests {
         let frame = chart.build_frame();
         let segments = chart.frame_pane_segments(0).unwrap();
         let trading = &frame.panes[0].main[segments.drawings_end..segments.trading_end];
-        for price in [103.0, 99.0] {
+        let style = chart.trading_style();
+        // Both limits share the neutral accent regardless of side; the stop and the fill do not.
+        for (price, expected) in [
+            (103.0, style.working_order),
+            (100.5, style.working_order),
+            (101.5, style.sell),
+            (99.0, style.sell),
+        ] {
             let y = chart
                 .trading_price_coordinate(0, TradingPriceScale::Right, price)
                 .unwrap()
                 .round() as i32;
-            assert!(trading.iter().any(|primitive| matches!(
-                primitive,
-                Prim::HLine { y: line_y, color, .. }
-                    if *line_y == y && *color == chart.trading_style().sell
-            )));
+            assert!(
+                trading.iter().any(|primitive| matches!(
+                    primitive,
+                    Prim::HLine { y: line_y, color, .. } if *line_y == y && *color == expected
+                )),
+                "order at {price} did not paint its expected color"
+            );
+        }
+
+        // The price tag is solid only once the order is actually filled.
+        let axis = chart.build_axis_frame(100.0, |text| text.len() as f64 * 7.0);
+        for (price, filled) in [("103.00", false), ("100.50", false), ("99.00", true)] {
+            // Plain scale ticks carry the same text; the action tag is the one with a chip.
+            let label = axis
+                .labels
+                .iter()
+                .find(|label| label.text == price && label.background.is_some())
+                .unwrap_or_else(|| panic!("axis tag for {price}"));
+            assert_eq!(
+                label.border.is_none(),
+                filled,
+                "{price} tag solidity does not follow its fill state"
+            );
         }
     }
 
@@ -3114,36 +3044,67 @@ mod tests {
         let frame = chart.build_frame();
         let segments = chart.frame_pane_segments(0).unwrap();
         let trading = &frame.panes[0].main[segments.drawings_end..segments.trading_end];
-        // One outlined container per marker — quantity, detail, and close are cells inside it,
-        // never chips of their own — and every container starts at the shared marker origin.
-        let containers = trading
+        // Two outlined chips per marker: the readout (quantity + detail as ONE chip, no inner
+        // borders) and the close chip detached after a gap.
+        let chips = trading
             .iter()
             .filter_map(|primitive| match primitive {
                 Prim::RoundRect {
                     x,
+                    y,
                     w,
                     radii,
                     border_width,
                     ..
-                } if *border_width > 0.0 => Some((*x, *w, *radii)),
+                } if *border_width > 0.0 => Some((*x, *y, *w, *radii)),
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(containers.len(), 4);
-        for (start, width, radii) in &containers {
-            assert!((*start - chart.trading_marker_start() as f32).abs() <= 0.5);
-            assert!(radii.iter().all(|radius| *radius > 0.0));
+        assert_eq!(chips.len(), 8);
+        let marker_start = chart.trading_marker_start() as f32;
+        let readouts = chips
+            .iter()
+            .filter(|(start, _, _, _)| (*start - marker_start).abs() <= 0.5)
+            .collect::<Vec<_>>();
+        assert_eq!(readouts.len(), 4);
+        for (start, _, width, radii) in &chips {
             assert!(*width > 0.0);
+            assert!(*start >= marker_start - 0.5);
+            // Marker chips are square chart chrome, never rounded pills.
+            assert_eq!(*radii, [0.0; 4], "chip at {start} rounded a corner");
         }
-        // The quantity cell is the only solid one, and it is painted borderless inside the
-        // container rather than as a second bordered chip.
+        // Every readout is followed by a close chip that clears it, and the separation is the
+        // same on all four markers.
+        let gaps = readouts
+            .iter()
+            .map(|(start, row, width, _)| {
+                let readout_end = *start + *width;
+                // Match the close chip on this marker's own row, not one from a neighbouring one.
+                chips
+                    .iter()
+                    .find(|(other, other_row, _, _)| {
+                        *other > readout_end && (*other_row - *row).abs() <= 0.5
+                    })
+                    .map(|(other, _, _, _)| *other - readout_end)
+                    .expect("a close chip after every readout")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(gaps.len(), 4);
+        for gap in &gaps {
+            assert!(*gap > 0.0, "the close chip must not touch its readout");
+            assert!((*gap - gaps[0]).abs() <= 0.5, "markers disagree on the gap");
+        }
+        // The quantity cell is the only solid one, and it is painted borderless flush inside the
+        // readout chip rather than as a second bordered chip.
         assert_eq!(
             trading
                 .iter()
                 .filter(|primitive| matches!(
                     primitive,
-                    Prim::RoundRect { fill, border_width, .. }
-                        if *border_width == 0.0 && fill.a() == 255
+                    Prim::RoundRect { x, fill, border_width, .. }
+                        if *border_width == 0.0
+                            && fill.a() == 255
+                            && (*x - marker_start).abs() <= 0.5
                 ))
                 .count(),
             4
@@ -3263,6 +3224,19 @@ mod tests {
             TradingObjectId::Position(id("position-1", PositionId::new)),
         );
         assert!(chart.set_trading_hover(cancel_x, cancel_y));
+        let tooltip_shown = |chart: &mut ChartEngine| {
+            let frame = chart.build_frame();
+            let pane_segments = chart.frame_pane_segments(0).unwrap();
+            frame.panes[0].main[pane_segments.drawings_end..pane_segments.trading_end]
+                .iter()
+                .any(|primitive| {
+                    matches!(primitive, Prim::Text { text, .. } if text == "Close Position")
+                })
+        };
+        // Contact alone shows nothing: the tooltip waits for the host to arm it after its dwell.
+        assert!(!tooltip_shown(&mut chart));
+        assert!(chart.arm_trading_tooltip());
+        assert!(!chart.arm_trading_tooltip(), "arming twice is a no-op");
         let hovered = chart.build_frame();
         let pane_segments = chart.frame_pane_segments(0).unwrap();
         let trading = &hovered.panes[0].main[pane_segments.drawings_end..pane_segments.trading_end];
@@ -3337,14 +3311,22 @@ mod tests {
                 _ => None,
             })
             .expect("marker container");
-        // The close cell terminates the one container, so the container's right edge is half a
-        // close cell past the control's center.
-        assert!(
-            (f64::from(container_x + container_w) - (cancel_x + chart.trading_close_width() / 2.0))
-                .abs()
-                <= 0.5
-        );
+        // The readout chip stops short of the close chip: a destructive control never shares an
+        // edge with the readout it would destroy.
+        let close_left = cancel_x - chart.trading_close_width() / 2.0;
+        assert!(f64::from(container_x + container_w) < close_left);
         assert!((f64::from(container_x) - chart.trading_marker_start()).abs() <= 0.5);
+        let close_chip = trading
+            .iter()
+            .filter_map(|primitive| match primitive {
+                Prim::RoundRect {
+                    x, w, border_width, ..
+                } if *border_width > 0.0 => Some((*x, *w)),
+                _ => None,
+            })
+            .find(|(x, _)| (f64::from(*x) - close_left).abs() <= 0.5)
+            .expect("detached close chip");
+        assert!((f64::from(close_chip.1) - chart.trading_close_width()).abs() <= 0.5);
 
         // No TP/SL affordances, and the close mark is stroked geometry — never a font glyph the
         // host's `font_family` might not carry.
@@ -3365,38 +3347,44 @@ mod tests {
             Prim::Text { text, weight, .. } if text == "12" && *weight == 400
         )));
 
-        // Idle paints only the solid quantity cell; hover and press each tint the close cell on
-        // top of the shared container, with distinguishable fills.
-        let cell_fills = |primitives: &[Prim]| {
+        // The solid quantity cell is the marker's only borderless fill; the close chip carries its
+        // own outline, and idle, hover, and press each give it a distinguishable fill.
+        assert_eq!(
+            trading
+                .iter()
+                .filter(|primitive| matches!(
+                    primitive,
+                    Prim::RoundRect { border_width, .. } if *border_width == 0.0
+                ))
+                .count(),
+            1
+        );
+        let close_fill = |primitives: &[Prim]| {
             primitives
                 .iter()
-                .filter_map(|primitive| match primitive {
+                .find_map(|primitive| match primitive {
                     Prim::RoundRect {
                         x,
                         fill,
                         border_width,
                         ..
-                    } if *border_width == 0.0 => Some((*x, *fill)),
+                    } if *border_width > 0.0 && (f64::from(*x) - close_left).abs() <= 0.5 => {
+                        Some(*fill)
+                    }
                     _ => None,
                 })
-                .collect::<Vec<_>>()
+                .expect("close chip")
         };
-        let idle = cell_fills(&trading);
-        assert_eq!(idle.len(), 1);
+        let idle_fill = close_fill(&trading);
 
         assert!(chart.set_trading_hover(cancel_x, cancel_y));
-        let hovered = cell_fills(&marker(&mut chart));
-        assert_eq!(hovered.len(), 2);
-        let hover_fill = hovered[1];
-        assert!(
-            (f64::from(hover_fill.0) - (cancel_x - chart.trading_close_width() / 2.0)).abs() <= 0.5
-        );
-        assert!(hover_fill.1.a() > 0);
+        let hover_fill = close_fill(&marker(&mut chart));
+        assert_ne!(hover_fill, idle_fill);
 
         assert!(chart.set_trading_pressed(cancel_x, cancel_y));
-        let pressed = cell_fills(&marker(&mut chart));
-        assert_eq!(pressed.len(), 2);
-        assert_ne!(pressed[1].1, hover_fill.1);
+        let pressed_fill = close_fill(&marker(&mut chart));
+        assert_ne!(pressed_fill, hover_fill);
+        assert_ne!(pressed_fill, idle_fill);
         assert!(chart.clear_trading_pressed());
     }
 }

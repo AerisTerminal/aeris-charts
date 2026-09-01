@@ -15,7 +15,7 @@ pub(crate) struct AlertCreateChip {
     pub(crate) size: f64,
 }
 
-pub(super) fn alert_color(status: AlertLineStatus) -> Color {
+pub(crate) fn alert_color(status: AlertLineStatus) -> Color {
     match status {
         AlertLineStatus::Active => ALERT_ACTIVE,
         AlertLineStatus::Triggered => ALERT_TRIGGERED,
@@ -165,27 +165,90 @@ impl ChartEngine {
                 },
                 color,
             });
-            let radius = 7.0 * vpr as f32;
-            let cx = (self.pane_w * hpr - radius as f64 - 3.0).max(radius as f64) as f32;
-            out.push(Prim::Circle {
-                cx,
-                cy: (y * vpr) as f32,
-                radius,
-                fill: color,
-                stroke_width: 0.0,
-                stroke: color,
-            });
-            out.push(Prim::Text {
-                x: cx,
-                y: (y * vpr) as f32,
-                text: "A".to_string(),
-                color: Color::rgb(0xff, 0xff, 0xff),
-                size: (self.options.get().layout.font_size * 0.75 * vpr) as f32,
-                family: self.options.get().layout.font_family.clone(),
-                align: TextAlign::Center,
-                weight: 700,
-                italic: false,
-            });
+            self.push_alert_badge(out, y, color, hpr, vpr);
         }
+    }
+
+    /// The badge that names the line: a square chip attached to the pane-facing edge of the
+    /// alert's price tag, carrying a bell. It mirrors the crosshair's create chip — rounded on
+    /// its outer edge, square against the price tag — so the pair reads as one attached control
+    /// and the price tag itself is free to show nothing but the price, like every other tag.
+    fn push_alert_badge(&self, out: &mut Vec<Prim>, y: f64, color: Color, hpr: f64, vpr: f64) {
+        let size = self.options.get().layout.font_size + 5.0;
+        let left = (self.pane_w - size).max(0.0);
+        let radius = 2.0 * vpr as f32;
+        out.push(Prim::RoundRect {
+            x: (left * hpr) as f32,
+            y: ((y - size / 2.0) * vpr) as f32,
+            w: (size * hpr) as f32,
+            h: (size * vpr) as f32,
+            radii: [radius, 0.0, 0.0, radius],
+            fill: color,
+            border_width: 0.0,
+            border_color: color,
+        });
+        self.push_alert_bell(
+            out,
+            left + size / 2.0,
+            y,
+            size * 0.52,
+            color.contrast_text(),
+            hpr,
+            vpr,
+        );
+    }
+
+    /// A bell built from prims rather than a glyph: the badge has to read as an alert in every
+    /// embedding, and the host's `font_family` is not guaranteed to carry a bell character.
+    #[allow(clippy::too_many_arguments)] // center/size/color/scale map 1:1 onto the drawn glyph
+    fn push_alert_bell(
+        &self,
+        out: &mut Vec<Prim>,
+        center_x: f64,
+        center_y: f64,
+        size: f64,
+        color: Color,
+        hpr: f64,
+        vpr: f64,
+    ) {
+        let width = size * 0.68;
+        let body_h = size * 0.72;
+        let top = center_y - size / 2.0;
+        // Dome-topped body: a rounded rect whose top radii are half its width.
+        out.push(Prim::RoundRect {
+            x: ((center_x - width / 2.0) * hpr) as f32,
+            y: (top * vpr) as f32,
+            w: (width * hpr) as f32,
+            h: (body_h * vpr) as f32,
+            radii: [
+                (width / 2.0 * hpr) as f32,
+                (width / 2.0 * hpr) as f32,
+                0.0,
+                0.0,
+            ],
+            fill: color,
+            border_width: 0.0,
+            border_color: color,
+        });
+        // Rim, wider than the body, then the clapper below it.
+        let rim_w = size * 0.94;
+        let rim_h = (size * 0.15).max(1.0);
+        out.push(Prim::Rect {
+            rect: IRect {
+                x: ((center_x - rim_w / 2.0) * hpr).round() as i32,
+                y: ((top + body_h) * vpr).round() as i32,
+                w: (rim_w * hpr).round() as i32,
+                h: (rim_h * vpr).round().max(1.0) as i32,
+            },
+            color,
+        });
+        out.push(Prim::Circle {
+            cx: (center_x * hpr) as f32,
+            cy: ((top + body_h + rim_h + size * 0.1) * vpr) as f32,
+            radius: (size * 0.13).max(1.0) as f32 * vpr as f32,
+            fill: color,
+            stroke_width: 0.0,
+            stroke: color,
+        });
     }
 }

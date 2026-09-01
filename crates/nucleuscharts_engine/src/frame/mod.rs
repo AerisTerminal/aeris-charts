@@ -31,7 +31,7 @@ use nucleuscharts_render::draw_list::{Gradient, IRect, LineStyle, LineType, Prim
 use nucleuscharts_render::histogram::{build_histogram, HistogramItem, HistogramParams};
 use nucleuscharts_render::line::{dash_split, expand_line, LinePoint};
 
-mod alert_geometry;
+pub(crate) mod alert_geometry;
 mod axis;
 pub(crate) mod conflation;
 mod crosshair;

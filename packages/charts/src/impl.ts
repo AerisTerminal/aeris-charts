@@ -34,7 +34,7 @@ import type {
   price_scale_info, price_scale_options, ring_source_layout,
   series_api, series_change_handler, series_data, series_kind,
   series_marker, series_marker_options, series_options, single_value_data, size_change_handler, time, time_range,
-  time_scale_api, time_scale_options, tracking_mode_options, trading_api, trading_confirmation_mode, trading_execution, trading_hit,
+  time_scale_api, time_scale_options, tracking_mode_options, trading_api, trading_execution, trading_hit,
   trading_intent, trading_intent_handler, trading_position, trading_preview, trading_snapshot,
   trading_style_options, instrument_metadata, working_order,
   visible_logical_range_handler, visible_time_range_handler,
@@ -2354,11 +2354,6 @@ class trading_impl implements trading_api {
     this.chart.repaint();
   }
 
-  set_confirmation_mode(mode: trading_confirmation_mode): void {
-    this.chart.wasm.set_trading_manual_confirmation(mode === "manual");
-    this.chart.repaint();
-  }
-
   hit_at(x: number, y: number): trading_hit | null {
     return JSON.parse(this.chart.wasm.trading_hit_json(x, y)) as trading_hit | null;
   }
@@ -2604,6 +2599,10 @@ export class chart_impl implements chart_api {
   trading_cursor_at(x: number, y: number): string | null {
     const cursor = this.wasm.trading_cursor_at(x, y);
     return cursor === 2 ? "grab" : cursor === 1 ? "pointer" : null;
+  }
+
+  arm_trading_tooltip(): boolean {
+    return this.wasm.arm_trading_tooltip();
   }
 
   clear_trading_hover(): boolean {

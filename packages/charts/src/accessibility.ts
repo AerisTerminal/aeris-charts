@@ -446,10 +446,9 @@ class PaneAccessibility {
       };
       if (event.key === "Enter" || event.key === " ") {
         if (this.targets.querySelector(`[data-a11y-target="order:${CSS.escape(id)}"]`)?.getAttribute("aria-pressed") === "true") {
+          // Commit emits the modify intent directly; the host owns any confirmation around it.
           chart.trading_keyboard_commit();
-          const awaiting = this.controller.chart.trading().preview()?.phase === "awaiting_confirmation";
-          this.set_order_editing(id, awaiting);
-          if (awaiting) this.writer.write(`Order ${id} awaiting confirmation. Press Enter to confirm or Escape to discard.`);
+          this.set_order_editing(id, false);
         } else if (chart.trading_keyboard_start_order(id)) {
           this.set_order_editing(id, true);
         } else return false;

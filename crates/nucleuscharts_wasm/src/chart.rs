@@ -59,8 +59,8 @@ use nucleuscharts_engine::{
     GestureResolver, GestureUpdate, InputDevice, InputModifiers, InputTarget, InstrumentMetadata,
     Marker, OrderId, PaneId, PointerSample, PositionId, PriceFormatterFn, PriceScaleId,
     PriceScaleSide, PriceScaleTarget, PrimitiveAutoscaleContribution, SeriesKind,
-    TickMarkFormatterFn, TimeFormatterFn, TradingConfirmationMode, TradingExecution,
-    TradingPosition, TradingSnapshot, TradingStyleOptions, WorkingOrder,
+    TickMarkFormatterFn, TimeFormatterFn, TradingExecution, TradingPosition, TradingSnapshot,
+    TradingStyleOptions, WorkingOrder,
 };
 use nucleuscharts_render::canvas2d::{
     execute as execute_canvas2d, Canvas2d, Viewport as CanvasViewport,
@@ -1131,10 +1131,7 @@ impl NucleusChart {
                 let kind = match hit.kind {
                     nucleuscharts_engine::TradingHitKind::PositionLine => "position_line",
                     nucleuscharts_engine::TradingHitKind::OrderLine => "order_line",
-                    nucleuscharts_engine::TradingHitKind::QuantityLabel => "quantity_label",
                     nucleuscharts_engine::TradingHitKind::CancelButton => "cancel_button",
-                    nucleuscharts_engine::TradingHitKind::ConfirmButton => "confirm_button",
-                    nucleuscharts_engine::TradingHitKind::DiscardButton => "discard_button",
                     nucleuscharts_engine::TradingHitKind::ExecutionMarker => "execution_marker",
                 };
                 serde_json::json!({
@@ -1159,18 +1156,17 @@ impl NucleusChart {
         match self.inner.borrow().engine.trading_hit_at(x_css, y_css) {
             None => 0,
             Some(hit) if hit.kind == nucleuscharts_engine::TradingHitKind::OrderLine => 2,
-            Some(hit)
-                if matches!(
-                    hit.kind,
-                    nucleuscharts_engine::TradingHitKind::CancelButton
-                        | nucleuscharts_engine::TradingHitKind::ConfirmButton
-                        | nucleuscharts_engine::TradingHitKind::DiscardButton
-                ) =>
-            {
+            Some(hit) if matches!(hit.kind, nucleuscharts_engine::TradingHitKind::CancelButton) => {
                 1
             }
             Some(_) => 0,
         }
+    }
+
+    /// Reveal the hovered trading control's action tooltip once the host's hover dwell elapses.
+    /// Returns whether the frame changed, so the caller can skip the repaint.
+    pub fn arm_trading_tooltip(&mut self) -> bool {
+        self.inner.borrow_mut().engine.arm_trading_tooltip()
     }
 
     pub fn clear_trading_hover(&mut self) -> bool {
@@ -1254,17 +1250,6 @@ impl NucleusChart {
             .borrow_mut()
             .engine
             .trading_activate_at(x_css, y_css)
-    }
-
-    pub fn set_trading_manual_confirmation(&mut self, manual: bool) {
-        self.inner
-            .borrow_mut()
-            .engine
-            .set_trading_confirmation_mode(if manual {
-                TradingConfirmationMode::Manual
-            } else {
-                TradingConfirmationMode::Instant
-            });
     }
 
     pub fn trading_preview_json(&self) -> String {

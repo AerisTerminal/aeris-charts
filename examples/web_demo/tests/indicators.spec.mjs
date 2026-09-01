@@ -237,6 +237,25 @@ test("indicator chips: auto-name on, no countdown, 1px default, style overrides"
   expect(out.after).toEqual({ title: "RSI(14) 1h", title_visible: true, line_style: 1, line_width: 2 });
 });
 
+test("demo-created indicators and feature companions never enable candle countdowns", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+  const outputs = await page.evaluate(() => {
+    window.__feature_lab.activate("shaded-background");
+    window.__feature_lab.activate("overlay-scale");
+    document.getElementById("rsi_toggle").click();
+    return window.__chart.series_order()
+      .filter((series) => series !== window.__main)
+      .map((series) => ({
+        type: series.series_type(),
+        title: series.options().title,
+        countdown_visible: series.options().countdown_visible,
+      }));
+  });
+  expect(outputs.length).toBeGreaterThanOrEqual(5);
+  expect(outputs.every((series) => series.countdown_visible === false)).toBe(true);
+});
+
 test("crosshair hover marker paints on an engine-created indicator line and remains configurable", async ({ page }) => {
   await page.goto("/");
   await wait_grid(page);
