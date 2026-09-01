@@ -1,6 +1,5 @@
 [toolchain]
-# Pin the MSVC host explicitly: on this Windows machine the rustup default host is
-# x86_64-pc-windows-gnu, which fails to build native deps (no dlltool in PATH). CI runs on
-# Linux and overrides this file with RUSTUP_TOOLCHAIN=stable (see .github/workflows/ci.yml).
-channel = "stable-x86_64-pc-windows-msvc"
+channel = "stable"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
 targets = ["wasm32-unknown-unknown"]

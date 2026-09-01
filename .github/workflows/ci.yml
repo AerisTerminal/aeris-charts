@@ -9,9 +9,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # rust-toolchain.toml pins the Windows MSVC host for local development; on Linux runners the
-  # plain stable toolchain (installed below) must win instead.
-  RUSTUP_TOOLCHAIN: stable
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -47,6 +44,20 @@ jobs:
         run: cargo run -p nucleuscharts_native --example perf_gate --release
         env:
           NUCLEUSCHARTS_PERF_STRICT: "1"
+
+  native-gpui:
+    name: Native GPUI (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test native GPUI backend
+        run: cargo test -p nucleuscharts_render_gpui --features gpui-backend --all-targets --locked
 
   package:
     name: TypeScript package (lint, typecheck, build)

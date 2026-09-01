@@ -41,6 +41,7 @@ smallvec = { version = "1", optional = true }
 [dev-dependencies]
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "a66fb6aebdee68ee5ae7d191d9dff0d61a42b834", default-features = false, features = [
     "wayland",
+    "x11",
 ] }
 nucleuscharts_native = { path = "../nucleuscharts_native" }
 sha2 = "=0.10.9"
