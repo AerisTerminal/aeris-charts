@@ -443,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn alert_axis_tag_avoids_the_primary_live_price_tag() {
+    fn alert_axis_tag_remains_at_its_exact_price_coordinate() {
         let mut chart = chart_with_market();
         chart
             .set_series_data(
@@ -468,17 +468,10 @@ mod tests {
             .iter()
             .find(|label| label.text.starts_with("A "))
             .expect("alert axis tag");
-        let live = axis
-            .labels
-            .iter()
-            .rfind(|label| label.text == "102.00" && label.background.is_some())
-            .expect("primary live-price tag");
-        let (_, alert_top, _, alert_height, _) = alert.background.unwrap();
-        let (_, live_top, _, live_height, _) = live.background.unwrap();
-        assert!(
-            alert_top + alert_height <= live_top || live_top + live_height <= alert_top,
-            "alert tag must be spaced outside the primary live-price tag"
-        );
+        let expected_y = chart
+            .runtime_price_coordinate(0, PriceScaleTarget::Right, 102.0)
+            .expect("populated right scale");
+        assert!((alert.y - expected_y).abs() <= f64::EPSILON);
     }
 
     #[test]

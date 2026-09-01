@@ -5,6 +5,26 @@ async function open_trading_demo(page, backend = "canvas2d") {
   await page.goto(`/?feature=trading&backend=${backend}`);
   await page.waitForFunction(() => window.__feature_lab?.active_ids().includes("trading-bracket"));
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await page.evaluate(() => {
+    // The close control is the trailing cell of the marker's one container. Sweep the marker span
+    // for it instead of hardcoding the cell widths, and answer with the cell's center.
+    window.__close_x = (id, y) => {
+      const trading = window.__chart.trading();
+      const width = Math.round(window.__chart.time_scale().width());
+      let first = null;
+      let last = null;
+      for (let x = width; x > width - 320; x -= 1) {
+        const hit = trading.hit_at(x, y);
+        if (hit?.id === id && hit.kind === "cancel_button") {
+          if (last === null) last = x;
+          first = x;
+        } else if (last !== null) {
+          break;
+        }
+      }
+      return first === null ? null : (first + last) / 2;
+    };
+  });
 }
 
 function count_near(image, expected, tolerance = 10) {
@@ -76,11 +96,19 @@ test("trading lines use dedicated hits and render semantic colors through the sh
     const position = trading.state().positions[0];
     const position_y = window.__main.price_to_coordinate(position.average_price);
     const width = window.__chart.time_scale().width();
+    const exact_axis_controls = [
+      { id: position.id, price: position.average_price },
+      ...trading.state().orders.map((order) => ({ id: order.id, price: order.price })),
+    ].map(({ id, price }) => {
+      const y = window.__main.price_to_coordinate(price);
+      return { id, y, hit: trading.hit_at(window.__close_x(id, y), y) };
+    });
     return {
       empty_left: trading.hit_at(40, window.__main.price_to_coordinate(target.price)),
       order: trading.hit_at(width - 200, window.__main.price_to_coordinate(target.price)),
       position: trading.hit_at(width - 200, position_y),
-      close: trading.hit_at(width - 8, position_y),
+      close: trading.hit_at(window.__close_x(position.id, position_y), position_y),
+      exact_axis_controls,
     };
   });
   expect(probe.empty_left).toBeNull();
@@ -91,12 +119,17 @@ test("trading lines use dedicated hits and render semantic colors through the sh
   });
   expect(probe.position).toMatchObject({ object_type: "position", kind: "position_line" });
   expect(probe.close).toMatchObject({ object_type: "position", kind: "cancel_button" });
+  for (const control of probe.exact_axis_controls) {
+    expect(control.hit, `${control.id} close control must remain on its exact price coordinate`).toMatchObject({
+      id: control.id,
+      kind: "cancel_button",
+    });
+  }
 
   const url = await page.evaluate(() => window.__chart.take_screenshot().toDataURL("image/png"));
   const image = PNG.sync.read(Buffer.from(url.split(",")[1], "base64"));
-  expect(count_near(image, [62, 99, 221]), "position line/label pixels").toBeGreaterThan(100);
-  expect(count_near(image, [8, 153, 129]), "profit line/label pixels").toBeGreaterThan(100);
-  expect(count_near(image, [245, 166, 35]), "stop-loss line/label pixels").toBeGreaterThan(100);
+  expect(count_near(image, [247, 82, 95]), "sell order line/label pixels").toBeGreaterThan(100);
+  expect(count_near(image, [8, 153, 129]), "long position and buy order pixels").toBeGreaterThan(100);
 });
 
 test("trading state is chart-local and clear removes all live objects", async ({ page }) => {
@@ -218,17 +251,9 @@ test("cancel control emits intent without removing authoritative order", async (
     window.__chart.trading().subscribe_intents((intent) => window.__cancel_intents.push(intent));
     const order = window.__chart.trading().state().orders.find((item) => item.id === "demo-stop");
     const overlay = document.querySelector("#chart_container canvas:last-of-type").getBoundingClientRect();
-    const x = window.__chart.time_scale().width() - 8;
-    let y = window.__main.price_to_coordinate(order.price);
-    for (let candidate = 0; candidate <= overlay.height; candidate += 1) {
-      const hit = window.__chart.trading().hit_at(x, candidate);
-      if (hit?.id === order.id && hit.kind === "cancel_button") {
-        y = candidate;
-        break;
-      }
-    }
+    const y = window.__main.price_to_coordinate(order.price);
     return {
-      x: overlay.left + x,
+      x: overlay.left + window.__close_x(order.id, y),
       y: overlay.top + y,
     };
   });
@@ -325,7 +350,7 @@ test("working-order markers omit TP/SL controls and retain manual Confirm/Discar
     trading.subscribe_intents((intent) => window.__manual_intents.push(intent));
     const overlay = document.querySelector("#chart_container canvas:last-of-type").getBoundingClientRect();
     const width = window.__chart.time_scale().width();
-    const marker_start = width - 297;
+    const marker_start = width - 280;
     return {
       overlay: { left: overlay.left, top: overlay.top },
       width,
@@ -337,7 +362,10 @@ test("working-order markers omit TP/SL controls and retain manual Confirm/Discar
       hits: {
         empty_left: trading.hit_at(40, window.__main.price_to_coordinate(100)),
         marker: trading.hit_at(width - 200, window.__main.price_to_coordinate(100)),
-        cancel: trading.hit_at(width - 8, window.__main.price_to_coordinate(100)),
+        cancel: trading.hit_at(
+          window.__close_x("buy-limit", window.__main.price_to_coordinate(100)),
+          window.__main.price_to_coordinate(100),
+        ),
       },
     };
   });
@@ -486,7 +514,8 @@ for (const backend of ["canvas2d", "webgpu"]) {
         entry_y,
         empty_left: trading.hit_at(40, entry_y),
         marker: trading.hit_at(width - 200, entry_y),
-        close: trading.hit_at(width - 8, entry_y),
+        close_x: window.__close_x("position-only", entry_y),
+        close: trading.hit_at(window.__close_x("position-only", entry_y), entry_y),
       };
     });
     expect(probe.empty_left).toBeNull();
@@ -506,7 +535,7 @@ for (const backend of ["canvas2d", "webgpu"]) {
       preview: window.__chart.trading().preview(),
     }))).toEqual({ intents: [], preview: null });
 
-    await page.mouse.click(probe.overlay.left + probe.width - 8, probe.overlay.top + probe.entry_y);
+    await page.mouse.click(probe.overlay.left + probe.close_x, probe.overlay.top + probe.entry_y);
     expect(await page.evaluate(() => window.__creation_intents)).toEqual([
       expect.objectContaining({
         action: "close_position",

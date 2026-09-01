@@ -85,48 +85,6 @@ fn selected_chip_accent(
     }
 }
 
-struct OccupiedAxisRegion {
-    pane_index: usize,
-    target: PriceScaleTarget,
-    primary: Option<LivePriceRegion>,
-    top: f64,
-    bottom: f64,
-}
-
-impl OccupiedAxisRegion {
-    fn place(&mut self, raw_y: f64, height: f64, pane_top: f64, pane_bottom: f64) -> f64 {
-        if pane_bottom - pane_top <= height {
-            return (pane_top + pane_bottom) / 2.0;
-        }
-        let half = height / 2.0;
-        if raw_y + half <= self.top || raw_y - half >= self.bottom {
-            self.top = self.top.min(raw_y - half);
-            self.bottom = self.bottom.max(raw_y + half);
-            return raw_y;
-        }
-        let primary_center = self
-            .primary
-            .map_or((self.top + self.bottom) / 2.0, |primary| {
-                (primary.top + primary.bottom) / 2.0
-            });
-        let prefer_above = raw_y < primary_center;
-        let above = self.top - half;
-        let below = self.bottom + half;
-        let y = if prefer_above && above - half >= pane_top {
-            above
-        } else if !prefer_above && below + half <= pane_bottom {
-            below
-        } else if above - half >= pane_top {
-            above
-        } else {
-            below.clamp(pane_top + half, pane_bottom - half)
-        };
-        self.top = self.top.min(y - half);
-        self.bottom = self.bottom.max(y + half);
-        y
-    }
-}
-
 /// Median of the last up-to-10 inter-bar deltas of a series' bar times (fallback: with a single
 /// delta the median IS that delta); `None` with fewer than two usable bars, which hides the
 /// countdown row. Non-positive deltas (duplicate times) are skipped.
@@ -767,15 +725,7 @@ impl ChartEngine {
         let last_value_start = out.labels.len();
         let live_price_regions = self.append_last_value_label(&mut out.labels, &measure);
         let mut action_labels = Vec::new();
-        let mut axis_control_hits = std::mem::take(&mut self.trading_state.axis_control_hits);
-        axis_control_hits.clear();
-        self.append_action_axis_labels(
-            &mut action_labels,
-            &mut axis_control_hits,
-            &live_price_regions,
-            &measure,
-        );
-        self.trading_state.axis_control_hits = axis_control_hits;
+        self.append_action_axis_labels(&mut action_labels, &live_price_regions, &measure);
         out.labels
             .splice(last_value_start..last_value_start, action_labels);
         if include_transient {
@@ -1439,7 +1389,6 @@ impl ChartEngine {
     fn append_action_axis_labels<F>(
         &self,
         labels: &mut Vec<AxisLabel>,
-        axis_control_hits: &mut Vec<crate::trading::TradingAxisControlHit>,
         live_price_regions: &[LivePriceRegion],
         measure: &F,
     ) where
@@ -1450,26 +1399,6 @@ impl ChartEngine {
         let chip_fill = Color::parse_css(&self.options.get().layout.background.color)
             .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2))
             .solid();
-        let mut occupied_axes: Vec<OccupiedAxisRegion> = live_price_regions
-            .iter()
-            .filter(|region| region.primary)
-            .map(|primary| {
-                let mut occupied = OccupiedAxisRegion {
-                    pane_index: primary.pane_index,
-                    target: primary.target,
-                    primary: Some(*primary),
-                    top: primary.top,
-                    bottom: primary.bottom,
-                };
-                for region in live_price_regions.iter().filter(|region| {
-                    region.pane_index == primary.pane_index && region.target == primary.target
-                }) {
-                    occupied.top = occupied.top.min(region.top);
-                    occupied.bottom = occupied.bottom.max(region.bottom);
-                }
-                occupied
-            })
-            .collect();
         let mut append = |pane_index: usize,
                           target: PriceScaleTarget,
                           price: f64,
@@ -1477,8 +1406,7 @@ impl ChartEngine {
                           color: Color,
                           solid: bool,
                           hollow_at_live_price: bool,
-                          bold: bool,
-                          control: Option<crate::TradingObjectId>| {
+                          bold: bool| {
             let Some(pane) = self.panes.get(pane_index) else {
                 return;
             };
@@ -1493,27 +1421,12 @@ impl ChartEngine {
             }
             let width = 1.0 + 5.0 + 5.0 + 5.0 + measure(&text);
             let height = font_size + 5.0;
-            let occupied = occupied_axes
-                .iter_mut()
-                .find(|occupied| occupied.pane_index == pane_index && occupied.target == target);
-            let meets_live_price = occupied.as_ref().is_some_and(|occupied| {
-                occupied.primary.is_some_and(|primary| {
+            let meets_live_price = live_price_regions.iter().any(|primary| {
+                primary.primary && primary.pane_index == pane_index && primary.target == target && {
                     y + height / 2.0 > primary.top && y - height / 2.0 < primary.bottom
-                })
+                }
             });
             let solid = solid && !(hollow_at_live_price && meets_live_price);
-            let y = if let Some(occupied) = occupied {
-                occupied.place(y, height, pane.top, pane.top + pane.height)
-            } else {
-                occupied_axes.push(OccupiedAxisRegion {
-                    pane_index,
-                    target,
-                    primary: None,
-                    top: y - height / 2.0,
-                    bottom: y + height / 2.0,
-                });
-                y
-            };
             let (x, align, background_x) = if target == PriceScaleTarget::Left {
                 (
                     self.pane_left - 10.0,
@@ -1548,71 +1461,6 @@ impl ChartEngine {
                 attach_group: None,
                 border: (!solid).then_some((1.0, color)),
             });
-            if let Some(object) = control {
-                let control_size = self.trading_axis_control_size();
-                let control_x = if target == PriceScaleTarget::Left {
-                    self.pane_left
-                } else {
-                    self.pane_left + self.pane_w - control_size
-                };
-                let feedback = if self
-                    .trading_state
-                    .feedback_pressed
-                    .as_ref()
-                    .is_some_and(|hit| {
-                        hit.kind == crate::TradingHitKind::CancelButton && hit.object == object
-                    }) {
-                    2
-                } else if self
-                    .trading_state
-                    .feedback_hover
-                    .as_ref()
-                    .is_some_and(|hit| {
-                        hit.kind == crate::TradingHitKind::CancelButton && hit.object == object
-                    })
-                {
-                    1
-                } else {
-                    0
-                };
-                let control_fill = match feedback {
-                    2 => Color::rgba(color.r(), color.g(), color.b(), 78),
-                    1 => Color::rgba(color.r(), color.g(), color.b(), 44),
-                    _ => chip_fill,
-                };
-                labels.push(AxisLabel {
-                    text: "×".to_string(),
-                    x: control_x + control_size / 2.0,
-                    y,
-                    color,
-                    align: AxisTextAlign::Center,
-                    midpoint: AxisTextMidpoint::Label,
-                    font_scale: 1.35,
-                    bold: true,
-                    background: Some((
-                        control_x,
-                        y - control_size / 2.0,
-                        control_size,
-                        control_size,
-                        control_fill,
-                    )),
-                    background_corners: if target == PriceScaleTarget::Left {
-                        AxisLabelCorners::RIGHT
-                    } else {
-                        AxisLabelCorners::LEFT
-                    },
-                    measure_extra: 0.0,
-                    attach_group: None,
-                    border: Some((1.0, color)),
-                });
-                axis_control_hits.push(crate::trading::TradingAxisControlHit {
-                    object,
-                    x: control_x - self.pane_left,
-                    y: y - control_size / 2.0,
-                    width: control_size,
-                    height: control_size,
-                });
-            }
         };
         for position in &self.trading_state.positions {
             let pending =
@@ -1630,7 +1478,6 @@ impl ChartEngine {
                 true,
                 true,
                 false,
-                Some(crate::TradingObjectId::Position(position.id.clone())),
             );
         }
         for order in &self.trading_state.orders {
@@ -1647,7 +1494,6 @@ impl ChartEngine {
             } else {
                 super::trading_geometry::trading_order_color(
                     &self.trading_state.style,
-                    order.role,
                     order.side,
                     order.status,
                 )
@@ -1661,7 +1507,6 @@ impl ChartEngine {
                 order.role == crate::OrderRole::Working,
                 true,
                 false,
-                Some(crate::TradingObjectId::Order(order.id.clone())),
             );
             if order.kind == crate::OrderKind::StopLimit {
                 if let Some(stop_price) = order.stop_price {
@@ -1674,7 +1519,6 @@ impl ChartEngine {
                         false,
                         true,
                         false,
-                        None,
                     );
                 }
             }
@@ -1707,7 +1551,6 @@ impl ChartEngine {
                 true,
                 false,
                 false,
-                None,
             );
         }
     }

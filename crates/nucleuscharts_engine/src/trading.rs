@@ -261,7 +261,10 @@ impl Default for TradingStyle {
         Self {
             position: primary,
             working_order: primary,
-            buy: primary,
+            // Order and position chrome reads by direction, the way a trading terminal does:
+            // buy/long shares the up-bar green, sell/short the down-bar red. `primary` stays the
+            // neutral accent for connectors and group chrome, which carry no direction.
+            buy: market_up,
             sell,
             profit: market_up,
             risk: sell,
@@ -499,29 +502,9 @@ pub(crate) struct TradingState {
     pub interaction: TradingInteractionState,
     pub feedback_hover: Option<TradingHit>,
     pub feedback_pressed: Option<TradingHit>,
-    pub axis_control_hits: Vec<TradingAxisControlHit>,
     pub group_visual: TradingGroupVisualState,
     intents: VecDeque<TradingIntent>,
     next_intent_sequence: u32,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct TradingAxisControlHit {
-    pub object: TradingObjectId,
-    pub x: f64,
-    pub y: f64,
-    pub width: f64,
-    pub height: f64,
-}
-
-impl TradingAxisControlHit {
-    fn heap_bytes(&self) -> usize {
-        match &self.object {
-            TradingObjectId::Position(id) => id.heap_bytes(),
-            TradingObjectId::Order(id) => id.heap_bytes(),
-            TradingObjectId::Execution(id) => id.heap_bytes(),
-        }
-    }
 }
 
 impl TradingState {
@@ -600,12 +583,6 @@ impl TradingState {
                 .feedback_pressed
                 .as_ref()
                 .map_or(0, TradingHit::heap_bytes)
-            + self.axis_control_hits.capacity() * std::mem::size_of::<TradingAxisControlHit>()
-            + self
-                .axis_control_hits
-                .iter()
-                .map(TradingAxisControlHit::heap_bytes)
-                .sum::<usize>()
             + retained_strings
     }
 }
@@ -760,29 +737,6 @@ impl ChartEngine {
         let pane_index = self.pane_at_y(y_css)?;
         let line_tolerance = profile.trading_line_tolerance;
 
-        if let Some(control) = self
-            .trading_state
-            .axis_control_hits
-            .iter()
-            .rev()
-            .find(|control| {
-                let half_width = (control.width / 2.0).max(profile.control_half_size);
-                let half_height = (control.height / 2.0).max(profile.control_half_size);
-                let center_x = control.x + control.width / 2.0;
-                let center_y = control.y + control.height / 2.0;
-                x_css >= center_x - half_width
-                    && x_css <= center_x + half_width
-                    && y_css >= center_y - half_height
-                    && y_css <= center_y + half_height
-            })
-        {
-            return Some(TradingHit {
-                object: control.object.clone(),
-                kind: TradingHitKind::CancelButton,
-                distance: 0.0,
-            });
-        }
-
         if let Some(preview) = self.trading_state.interaction.preview().filter(|preview| {
             preview.pane_index == pane_index
                 && preview.phase == TradingPreviewPhase::AwaitingConfirmation
@@ -829,12 +783,20 @@ impl ChartEngine {
                 continue;
             };
             let distance = (y_css - y).abs();
-            if distance > line_tolerance {
+            let kind = self.trading_order_chip_hit(order, x_css);
+            // The control cluster is a chip, not a hairline: over it the marker answers across the
+            // chip's full height (and the device's control box, for touch), not the line tolerance.
+            let tolerance = if kind == TradingHitKind::CancelButton {
+                line_tolerance.max(self.trading_control_height() / 2.0)
+            } else {
+                line_tolerance
+            };
+            if distance > tolerance {
                 continue;
             }
             return Some(TradingHit {
                 object: TradingObjectId::Order(order.id.clone()),
-                kind: self.trading_order_chip_hit(order, x_css),
+                kind,
                 distance,
             });
         }
@@ -854,12 +816,18 @@ impl ChartEngine {
                 continue;
             };
             let distance = (y_css - y).abs();
-            if distance > line_tolerance {
+            let kind = self.trading_position_chip_hit(x_css);
+            let tolerance = if kind == TradingHitKind::CancelButton {
+                line_tolerance.max(self.trading_control_height() / 2.0)
+            } else {
+                line_tolerance
+            };
+            if distance > tolerance {
                 continue;
             }
             return Some(TradingHit {
                 object: TradingObjectId::Position(position.id.clone()),
-                kind: self.trading_position_chip_hit(x_css),
+                kind,
                 distance,
             });
         }
@@ -1490,8 +1458,6 @@ impl ChartEngine {
             "execution",
         )?;
         let prior = std::mem::take(&mut self.trading_state);
-        let mut axis_control_hits = prior.axis_control_hits;
-        axis_control_hits.clear();
         self.trading_state = TradingState {
             instrument: snapshot.instrument,
             positions: snapshot.positions,
@@ -1502,7 +1468,6 @@ impl ChartEngine {
             interaction: prior.interaction,
             feedback_hover: prior.feedback_hover,
             feedback_pressed: prior.feedback_pressed,
-            axis_control_hits,
             group_visual: prior.group_visual,
             intents: prior.intents,
             next_intent_sequence: prior.next_intent_sequence,
@@ -2106,16 +2071,45 @@ mod tests {
         chart
     }
 
-    fn axis_cancel_center(chart: &mut ChartEngine, object: TradingObjectId) -> (f64, f64) {
+    /// Center of the close cell that terminates the object's control cluster.
+    fn cancel_center(chart: &mut ChartEngine, object: TradingObjectId) -> (f64, f64) {
         chart.build_frame();
-        chart.build_axis_frame(100.0, |text| text.len() as f64 * 7.0);
-        let hit = chart
-            .trading_state
-            .axis_control_hits
-            .iter()
-            .find(|hit| hit.object == object)
-            .expect("attached axis cancel control");
-        (hit.x + hit.width / 2.0, hit.y + hit.height / 2.0)
+        let (price, price_scale, pane_index, width) = match &object {
+            TradingObjectId::Position(id) => {
+                let position = chart
+                    .trading_state
+                    .positions
+                    .iter()
+                    .find(|position| &position.id == id)
+                    .expect("position");
+                (
+                    position.average_price,
+                    position.price_scale,
+                    position.pane_index,
+                    chart.trading_position_cluster_width(),
+                )
+            }
+            TradingObjectId::Order(id) => {
+                let order = chart
+                    .trading_state
+                    .orders
+                    .iter()
+                    .find(|order| &order.id == id)
+                    .expect("order");
+                (
+                    chart.trading_effective_order_price(order),
+                    order.price_scale,
+                    order.pane_index,
+                    chart.trading_order_cluster_width(order),
+                )
+            }
+            TradingObjectId::Execution(_) => panic!("executions carry no close control"),
+        };
+        let y = chart
+            .trading_price_coordinate(pane_index, price_scale, price)
+            .expect("price coordinate");
+        let end = chart.trading_marker_start() + width;
+        (end - chart.trading_close_width() / 2.0, y)
     }
 
     fn position(side: PositionSide) -> TradingPosition {
@@ -2282,10 +2276,8 @@ mod tests {
             .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "B")));
 
         let axis = chart.build_axis_frame(100.0, |text| text.len() as f64 * 7.0);
-        for (price, color) in [
-            ("99.00", chart.trading_style().stop_loss),
-            ("103.00", chart.trading_style().take_profit),
-        ] {
+        for price in ["99.00", "103.00"] {
+            let color = chart.trading_style().sell;
             assert!(axis
                 .labels
                 .iter()
@@ -2293,10 +2285,8 @@ mod tests {
         }
         let mut axis_primitives = Vec::new();
         chart.build_axis_primitives_into(&axis, &mut axis_primitives, |_| 0.0);
-        for (name, color) in [
-            ("SL", chart.trading_style().stop_loss),
-            ("TP", chart.trading_style().take_profit),
-        ] {
+        for name in ["SL", "TP"] {
+            let color = chart.trading_style().sell;
             assert!(
                 axis_primitives.iter().any(|primitive| matches!(
                     primitive,
@@ -2311,9 +2301,9 @@ mod tests {
             .iter()
             .find(|label| {
                 label.text == "101.00"
-                    && label
-                        .background
-                        .is_some_and(|(_, _, _, _, color)| color == chart.trading_style().position)
+                    && label.background.is_some_and(|(_, _, _, _, color)| {
+                        color == chart.trading_position_color(PositionSide::Long)
+                    })
             })
             .expect("solid position price label");
         assert!(position_label.border.is_none());
@@ -2380,7 +2370,7 @@ mod tests {
     }
 
     #[test]
-    fn position_axis_tag_hollows_only_when_it_meets_the_live_price() {
+    fn position_axis_tag_hollows_at_live_price_without_leaving_its_line() {
         let mut chart = chart_with_market();
         let secondary = chart.add_series(crate::SeriesKind::Line);
         chart
@@ -2419,7 +2409,7 @@ mod tests {
 
         chart.build_frame();
         let axis = chart.build_axis_frame(100.0, |text| text.len() as f64 * 7.0);
-        let color = chart.trading_style().position;
+        let color = chart.trading_position_color(PositionSide::Long);
         let trading_index = axis
             .labels
             .iter()
@@ -2427,6 +2417,10 @@ mod tests {
             .expect("position tag at the live price must be hollow");
         let colliding = &axis.labels[trading_index];
         assert_ne!(colliding.background.unwrap().4, color);
+        let expected_y = chart
+            .trading_price_coordinate(0, TradingPriceScale::Right, 102.0)
+            .unwrap();
+        assert!((colliding.y - expected_y).abs() <= f64::EPSILON);
         let primary_index = axis
             .labels
             .iter()
@@ -2434,25 +2428,6 @@ mod tests {
                 label.text == "102.00" && label.background.is_some() && label.border.is_none()
             })
             .expect("primary live-price label");
-        let primary = &axis.labels[primary_index];
-        let (_, trading_top, _, trading_height, _) = colliding.background.unwrap();
-        let (_, primary_top, _, primary_height, _) = primary.background.unwrap();
-        assert!(
-            trading_top + trading_height <= primary_top
-                || primary_top + primary_height <= trading_top,
-            "hollow trading tag must be spaced outside the primary label"
-        );
-        for (index, label) in axis.labels.iter().enumerate() {
-            let Some((_, top, _, height, _)) = label.background else {
-                continue;
-            };
-            if index != trading_index && label.text == "102.00" {
-                assert!(
-                    trading_top + trading_height <= top || top + height <= trading_top,
-                    "trading tag must avoid every resolved last-value label"
-                );
-            }
-        }
         assert!(trading_index < primary_index, "primary label paints last");
 
         let mut separated_position = position(PositionSide::Long);
@@ -2727,7 +2702,7 @@ mod tests {
                 ..TradingSnapshot::default()
             })
             .unwrap();
-        let (cancel_x, cancel_y) = axis_cancel_center(
+        let (cancel_x, cancel_y) = cancel_center(
             &mut chart,
             TradingObjectId::Order(id("order-1", OrderId::new)),
         );
@@ -2769,7 +2744,7 @@ mod tests {
                 ..TradingSnapshot::default()
             })
             .unwrap();
-        let (cancel_x, cancel_y) = axis_cancel_center(
+        let (cancel_x, cancel_y) = cancel_center(
             &mut chart,
             TradingObjectId::Position(id("position-1", PositionId::new)),
         );
@@ -2985,12 +2960,12 @@ mod tests {
             match primitive {
                 Prim::HLine {
                     y, x0, x1, color, ..
-                } if *color == chart.trading_style().position => {
+                } if *color == chart.trading_position_color(PositionSide::Long) => {
                     assert_eq!(*y, entry_y.round() as i32);
                     assert_eq!(*x0, marker_start);
                     assert_eq!(*x1, marker_end);
                     assert!(*x0 > 0);
-                    assert!(*x1 < chart.pane_w.round() as i32);
+                    assert_eq!(*x1, chart.pane_w.round() as i32);
                 }
                 Prim::RoundRect { y, h, .. } => {
                     assert!((*y + *h / 2.0 - entry_y as f32).abs() <= 0.5);
@@ -3014,12 +2989,101 @@ mod tests {
                 .any(|primitive| matches!(
                     primitive,
                     Prim::HLine { y, x0, x1, color, .. }
-                        if *color == chart.trading_style().position
+                        if *color == chart.trading_position_color(PositionSide::Long)
                             && *y == reprojected_entry.round() as i32
                             && *x0 == marker_start
                             && *x1 == marker_end
                 ))
         );
+    }
+
+    #[test]
+    fn trading_close_controls_remain_at_their_exact_price_coordinates() {
+        let mut chart = chart_with_market();
+        let mut working = order("working-1", OrderRole::Working, 102.0);
+        working.position_id = None;
+        let mut partial = order("partial-1", OrderRole::Working, 100.0);
+        partial.position_id = None;
+        partial.quantity = 12.0;
+        partial.filled_quantity = 5.0;
+        partial.status = OrderStatus::PartiallyFilled;
+        chart
+            .set_trading_snapshot(TradingSnapshot {
+                positions: vec![position(PositionSide::Long)],
+                orders: vec![
+                    order("tp-1", OrderRole::TakeProfit, 103.0),
+                    order("sl-1", OrderRole::StopLoss, 99.0),
+                    working,
+                    partial,
+                ],
+                ..TradingSnapshot::default()
+            })
+            .unwrap();
+        chart.build_frame();
+
+        for (object, price) in [
+            (
+                TradingObjectId::Position(id("position-1", PositionId::new)),
+                101.0,
+            ),
+            (TradingObjectId::Order(id("tp-1", OrderId::new)), 103.0),
+            (TradingObjectId::Order(id("sl-1", OrderId::new)), 99.0),
+            (TradingObjectId::Order(id("working-1", OrderId::new)), 102.0),
+            (TradingObjectId::Order(id("partial-1", OrderId::new)), 100.0),
+        ] {
+            let expected_y = chart
+                .trading_price_coordinate(0, TradingPriceScale::Right, price)
+                .unwrap();
+            let (cancel_x, cancel_y) = cancel_center(&mut chart, object.clone());
+            assert!(
+                (cancel_y - expected_y).abs() <= f64::EPSILON,
+                "{object:?} moved away from its price: expected {expected_y}, got {cancel_y}"
+            );
+            assert_eq!(
+                chart.trading_hit_at(cancel_x, cancel_y),
+                Some(TradingHit {
+                    object: object.clone(),
+                    kind: TradingHitKind::CancelButton,
+                    distance: 0.0,
+                }),
+                "{object:?} close control is not reachable at its own price"
+            );
+        }
+    }
+
+    #[test]
+    fn live_and_filled_orders_use_their_buy_or_sell_color() {
+        let mut chart = chart_with_market();
+        let mut sell_limit = order("sell-limit", OrderRole::TakeProfit, 103.0);
+        sell_limit.side = OrderSide::Sell;
+        sell_limit.kind = OrderKind::Limit;
+        let mut filled_sell_limit = order("filled-sell-limit", OrderRole::Working, 99.0);
+        filled_sell_limit.position_id = None;
+        filled_sell_limit.side = OrderSide::Sell;
+        filled_sell_limit.kind = OrderKind::Limit;
+        filled_sell_limit.status = OrderStatus::Filled;
+        filled_sell_limit.filled_quantity = filled_sell_limit.quantity;
+        chart
+            .set_trading_snapshot(TradingSnapshot {
+                orders: vec![sell_limit, filled_sell_limit],
+                ..TradingSnapshot::default()
+            })
+            .unwrap();
+
+        let frame = chart.build_frame();
+        let segments = chart.frame_pane_segments(0).unwrap();
+        let trading = &frame.panes[0].main[segments.drawings_end..segments.trading_end];
+        for price in [103.0, 99.0] {
+            let y = chart
+                .trading_price_coordinate(0, TradingPriceScale::Right, price)
+                .unwrap()
+                .round() as i32;
+            assert!(trading.iter().any(|primitive| matches!(
+                primitive,
+                Prim::HLine { y: line_y, color, .. }
+                    if *line_y == y && *color == chart.trading_style().sell
+            )));
+        }
     }
 
     #[test]
@@ -3050,27 +3114,40 @@ mod tests {
         let frame = chart.build_frame();
         let segments = chart.frame_pane_segments(0).unwrap();
         let trading = &frame.panes[0].main[segments.drawings_end..segments.trading_end];
-        let button_starts = trading
+        // One outlined container per marker — quantity, detail, and close are cells inside it,
+        // never chips of their own — and every container starts at the shared marker origin.
+        let containers = trading
             .iter()
             .filter_map(|primitive| match primitive {
                 Prim::RoundRect {
-                    x, border_width, ..
-                } if *border_width > 0.0 => Some(*x),
+                    x,
+                    w,
+                    radii,
+                    border_width,
+                    ..
+                } if *border_width > 0.0 => Some((*x, *w, *radii)),
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(button_starts.len(), 8);
+        assert_eq!(containers.len(), 4);
+        for (start, width, radii) in &containers {
+            assert!((*start - chart.trading_marker_start() as f32).abs() <= 0.5);
+            assert!(radii.iter().all(|radius| *radius > 0.0));
+            assert!(*width > 0.0);
+        }
+        // The quantity cell is the only solid one, and it is painted borderless inside the
+        // container rather than as a second bordered chip.
         assert_eq!(
-            button_starts
+            trading
                 .iter()
-                .filter(|start| (**start - chart.trading_marker_start() as f32).abs() <= 0.5)
+                .filter(|primitive| matches!(
+                    primitive,
+                    Prim::RoundRect { fill, border_width, .. }
+                        if *border_width == 0.0 && fill.a() == 255
+                ))
                 .count(),
             4
         );
-        assert!(trading.iter().all(|primitive| !matches!(
-            primitive,
-            Prim::RoundRect { radii, .. } if *radii != [0.0; 4]
-        )));
         for expected in ["Buy Limit", "+24.00 USD", "-24.00 USD"] {
             assert!(trading
                 .iter()
@@ -3181,7 +3258,7 @@ mod tests {
                 _ => None,
             })
             .unwrap();
-        let (cancel_x, cancel_y) = axis_cancel_center(
+        let (cancel_x, cancel_y) = cancel_center(
             &mut chart,
             TradingObjectId::Position(id("position-1", PositionId::new)),
         );
@@ -3213,7 +3290,7 @@ mod tests {
     }
 
     #[test]
-    fn cancel_control_attaches_to_price_chip_and_tp_sl_controls_do_not_exist() {
+    fn close_control_terminates_the_marker_container_and_tp_sl_controls_do_not_exist() {
         let mut chart = chart_with_market();
         chart
             .update_trading_position(position(PositionSide::Long))
@@ -3222,7 +3299,7 @@ mod tests {
         let line_y = chart
             .trading_price_coordinate(0, TradingPriceScale::Right, 101.0)
             .unwrap();
-        let (cancel_x, cancel_y) = axis_cancel_center(
+        let (cancel_x, cancel_y) = cancel_center(
             &mut chart,
             TradingObjectId::Position(id("position-1", PositionId::new)),
         );
@@ -3245,63 +3322,81 @@ mod tests {
         ));
         assert!(chart.trading_hit_at(20.0, line_y).is_none());
 
-        let button_fill = |chart: &mut ChartEngine| {
-            let axis = chart.build_axis_frame(100.0, |text| text.len() as f64 * 7.0);
-            axis.labels
-                .iter()
-                .find(|label| label.text == "×")
-                .and_then(|label| {
-                    label
-                        .background
-                        .map(|background| (background, label.clone()))
-                })
-                .expect("attached position close button")
+        let marker = |chart: &mut ChartEngine| {
+            let frame = chart.build_frame();
+            let segments = chart.frame_pane_segments(0).unwrap();
+            frame.panes[0].main[segments.drawings_end..segments.trading_end].to_vec()
         };
-
-        let ((cancel_left, _, cancel_width, _, idle_fill), idle_label) = button_fill(&mut chart);
-        assert_eq!(idle_fill.a(), 255);
-        assert!(idle_label.bold);
-        assert!(idle_label.font_scale > 1.0);
-        let axis = chart.build_axis_frame(100.0, |text| text.len() as f64 * 7.0);
-        let price_left = axis
-            .labels
+        let trading = marker(&mut chart);
+        let (container_x, container_w) = trading
             .iter()
-            .find(|label| {
-                label.text != "×"
-                    && (label.y - idle_label.y).abs() <= f64::EPSILON
-                    && label
-                        .background
-                        .is_some_and(|background| background.0 > cancel_left)
+            .find_map(|primitive| match primitive {
+                Prim::RoundRect {
+                    x, w, border_width, ..
+                } if *border_width > 0.0 => Some((*x, *w)),
+                _ => None,
             })
-            .and_then(|label| label.background.map(|background| background.0))
-            .expect("position price chip");
-        assert!((cancel_left + cancel_width - price_left).abs() <= f64::EPSILON);
+            .expect("marker container");
+        // The close cell terminates the one container, so the container's right edge is half a
+        // close cell past the control's center.
+        assert!(
+            (f64::from(container_x + container_w) - (cancel_x + chart.trading_close_width() / 2.0))
+                .abs()
+                <= 0.5
+        );
+        assert!((f64::from(container_x) - chart.trading_marker_start()).abs() <= 0.5);
 
-        let frame = chart.build_frame();
-        let pane_segments = chart.frame_pane_segments(0).unwrap();
-        let trading = &frame.panes[0].main[pane_segments.drawings_end..pane_segments.trading_end];
+        // No TP/SL affordances, and the close mark is stroked geometry — never a font glyph the
+        // host's `font_family` might not carry.
         assert!(trading.iter().all(|primitive| !matches!(
             primitive,
-            Prim::Text { text, .. } if matches!(text.as_str(), "TP" | "SL" | "×")
+            Prim::Text { text, .. } if matches!(text.as_str(), "TP" | "SL" | "×" | "✕" | "↕")
         )));
+        assert_eq!(
+            trading
+                .iter()
+                .filter(|primitive| matches!(primitive, Prim::Triangle { .. }))
+                .count(),
+            4,
+            "the close mark is two crossing bars, two triangles each"
+        );
         assert!(trading.iter().any(|primitive| matches!(
             primitive,
             Prim::Text { text, weight, .. } if text == "12" && *weight == 400
         )));
 
+        // Idle paints only the solid quantity cell; hover and press each tint the close cell on
+        // top of the shared container, with distinguishable fills.
+        let cell_fills = |primitives: &[Prim]| {
+            primitives
+                .iter()
+                .filter_map(|primitive| match primitive {
+                    Prim::RoundRect {
+                        x,
+                        fill,
+                        border_width,
+                        ..
+                    } if *border_width == 0.0 => Some((*x, *fill)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let idle = cell_fills(&trading);
+        assert_eq!(idle.len(), 1);
+
         assert!(chart.set_trading_hover(cancel_x, cancel_y));
-        let ((_, _, _, _, hover_fill), _) = button_fill(&mut chart);
-        let color = chart.trading_style().position;
-        assert_eq!(hover_fill, Color::rgba(color.r(), color.g(), color.b(), 44));
-        assert_ne!(hover_fill, idle_fill);
+        let hovered = cell_fills(&marker(&mut chart));
+        assert_eq!(hovered.len(), 2);
+        let hover_fill = hovered[1];
+        assert!(
+            (f64::from(hover_fill.0) - (cancel_x - chart.trading_close_width() / 2.0)).abs() <= 0.5
+        );
+        assert!(hover_fill.1.a() > 0);
 
         assert!(chart.set_trading_pressed(cancel_x, cancel_y));
-        let ((_, _, _, _, pressed_fill), pressed_label) = button_fill(&mut chart);
-        assert_eq!(
-            pressed_fill,
-            Color::rgba(color.r(), color.g(), color.b(), 78)
-        );
-        assert!(pressed_label.bold);
+        let pressed = cell_fills(&marker(&mut chart));
+        assert_eq!(pressed.len(), 2);
+        assert_ne!(pressed[1].1, hover_fill.1);
         assert!(chart.clear_trading_pressed());
     }
 }
