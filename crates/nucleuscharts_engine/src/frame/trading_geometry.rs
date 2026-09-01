@@ -21,8 +21,6 @@ struct TradingTooltip<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TradingControlSegmentKind {
-    CreateTarget,
-    CreateStop,
     Quantity,
     Pnl,
     OrderType,
@@ -50,59 +48,20 @@ struct TradingControlSegment<'a> {
 
 struct TradingControlCluster<'a> {
     segments: &'a [TradingControlSegment<'a>],
-    right: f64,
+    left: f64,
 }
 
 impl TradingControlCluster<'_> {
-    fn width(&self) -> f64 {
-        self.segments
-            .iter()
-            .map(|segment| segment.width)
-            .sum::<f64>()
-            + CONTROL_GAP * self.segments.len().saturating_sub(1) as f64
-    }
-
     fn start(&self) -> f64 {
-        (self.right - self.width()).max(6.0)
-    }
-
-    fn segment_bounds(&self, kind: TradingControlSegmentKind) -> Option<(f64, f64)> {
-        let mut cursor = self.start();
-        for (index, segment) in self.segments.iter().enumerate() {
-            if index > 0 {
-                cursor += CONTROL_GAP;
-            }
-            if segment.kind == kind {
-                return Some((cursor, segment.width));
-            }
-            cursor += segment.width;
-        }
-        None
+        self.left
     }
 }
 
-const ACTION_WIDTH: f64 = 30.0;
 const QUANTITY_WIDTH: f64 = 44.0;
 const PNL_WIDTH: f64 = 96.0;
 const ORDER_TYPE_WIDTH: f64 = 92.0;
-const CANCEL_WIDTH: f64 = 28.0;
 const CONTROL_GAP: f64 = 3.0;
-
-const POSITION_WIDTHS: &[f64] = &[
-    ACTION_WIDTH,
-    ACTION_WIDTH,
-    QUANTITY_WIDTH,
-    PNL_WIDTH,
-    CANCEL_WIDTH,
-];
-const WORKING_ORDER_WIDTHS: &[f64] = &[
-    ACTION_WIDTH,
-    ACTION_WIDTH,
-    QUANTITY_WIDTH,
-    ORDER_TYPE_WIDTH,
-    CANCEL_WIDTH,
-];
-const PROTECTION_ORDER_WIDTHS: &[f64] = &[QUANTITY_WIDTH, PNL_WIDTH, CANCEL_WIDTH];
+const ORDER_MARKER_SPAN: f64 = 280.0;
 
 pub(crate) fn trading_order_color(
     style: &crate::TradingStyle,
@@ -132,10 +91,6 @@ pub(crate) fn trading_order_color(
 impl ChartEngine {
     fn trading_control_kind(kind: crate::TradingHitKind) -> Option<TradingControlSegmentKind> {
         match kind {
-            crate::TradingHitKind::CreateTargetButton => {
-                Some(TradingControlSegmentKind::CreateTarget)
-            }
-            crate::TradingHitKind::CreateStopButton => Some(TradingControlSegmentKind::CreateStop),
             crate::TradingHitKind::CancelButton => Some(TradingControlSegmentKind::Cancel),
             crate::TradingHitKind::ConfirmButton => Some(TradingControlSegmentKind::Confirm),
             crate::TradingHitKind::DiscardButton => Some(TradingControlSegmentKind::Discard),
@@ -269,87 +224,35 @@ impl ChartEngine {
             .solid()
     }
 
-    fn trading_lane_right(&self) -> f64 {
-        (self.pane_w - 12.0).max(6.0)
+    pub(crate) fn trading_axis_control_size(&self) -> f64 {
+        self.options.get().layout.font_size + 5.0
     }
 
-    fn trading_cluster_start(&self, widths: &[f64]) -> f64 {
-        let gaps = CONTROL_GAP * widths.len().saturating_sub(1) as f64;
-        (self.trading_lane_right() - widths.iter().sum::<f64>() - gaps).max(6.0)
+    pub(crate) fn trading_marker_end(&self) -> f64 {
+        (self.pane_w - self.trading_axis_control_size()).max(6.0)
     }
 
-    fn trading_order_segment_widths(role: OrderRole) -> &'static [f64] {
-        if role == OrderRole::Working {
-            WORKING_ORDER_WIDTHS
-        } else {
-            PROTECTION_ORDER_WIDTHS
-        }
+    pub(crate) fn trading_marker_start(&self) -> f64 {
+        (self.trading_marker_end() - ORDER_MARKER_SPAN).max(6.0)
     }
 
-    pub(crate) fn trading_order_chip_start(&self, order: &crate::WorkingOrder) -> f64 {
-        self.trading_cluster_start(Self::trading_order_segment_widths(order.role))
+    pub(crate) fn trading_order_chip_start(&self, _order: &crate::WorkingOrder) -> f64 {
+        self.trading_marker_start()
     }
 
-    pub(crate) fn trading_position_chip_start(&self) -> f64 {
-        self.trading_cluster_start(POSITION_WIDTHS)
-    }
-
-    pub(crate) fn trading_preview_chip_start(&self, preview: &crate::TradingPreview) -> f64 {
-        self.trading_cluster_start(Self::trading_order_segment_widths(preview.role))
+    pub(crate) fn trading_preview_chip_start(&self, _preview: &crate::TradingPreview) -> f64 {
+        self.trading_marker_start()
     }
 
     pub(crate) fn trading_order_chip_hit(
         &self,
-        order: &crate::WorkingOrder,
-        x: f64,
+        _order: &crate::WorkingOrder,
+        _x: f64,
     ) -> crate::TradingHitKind {
-        let mut cursor = self.trading_order_chip_start(order);
-        for (index, width) in Self::trading_order_segment_widths(order.role)
-            .iter()
-            .copied()
-            .enumerate()
-        {
-            if index > 0 {
-                if x >= cursor && x < cursor + CONTROL_GAP {
-                    return crate::TradingHitKind::QuantityLabel;
-                }
-                cursor += CONTROL_GAP;
-            }
-            if x >= cursor && x <= cursor + width {
-                return match (order.role, index) {
-                    (OrderRole::Working, 0) => crate::TradingHitKind::CreateTargetButton,
-                    (OrderRole::Working, 1) => crate::TradingHitKind::CreateStopButton,
-                    (_, 2) if order.role != OrderRole::Working => {
-                        crate::TradingHitKind::CancelButton
-                    }
-                    (OrderRole::Working, 4) => crate::TradingHitKind::CancelButton,
-                    _ => crate::TradingHitKind::OrderLine,
-                };
-            }
-            cursor += width;
-        }
         crate::TradingHitKind::OrderLine
     }
 
-    pub(crate) fn trading_position_chip_hit(&self, x: f64) -> crate::TradingHitKind {
-        let mut cursor = self.trading_position_chip_start();
-        for (index, width) in POSITION_WIDTHS.iter().copied().enumerate() {
-            if index > 0 {
-                if x >= cursor && x < cursor + CONTROL_GAP {
-                    return crate::TradingHitKind::QuantityLabel;
-                }
-                cursor += CONTROL_GAP;
-            }
-            if x >= cursor && x <= cursor + width {
-                return match index {
-                    0 => crate::TradingHitKind::CreateTargetButton,
-                    1 => crate::TradingHitKind::CreateStopButton,
-                    2 | 3 => crate::TradingHitKind::QuantityLabel,
-                    _ => crate::TradingHitKind::CancelButton,
-                };
-            }
-            cursor += width;
-        }
+    pub(crate) fn trading_position_chip_hit(&self, _x: f64) -> crate::TradingHitKind {
         crate::TradingHitKind::PositionLine
     }
 
@@ -608,8 +511,8 @@ impl ChartEngine {
             };
             lines.push(Prim::HLine {
                 y: (y * vpr).round() as i32,
-                x0: 0,
-                x1: width,
+                x0: (self.trading_marker_start() * hpr).round() as i32,
+                x1: (self.trading_marker_end() * hpr).round() as i32,
                 width: if hovered.is_some_and(|hit| hit.kind == crate::TradingHitKind::PositionLine)
                 {
                     min_line_width.max(2)
@@ -641,20 +544,6 @@ impl ChartEngine {
             });
             let segments = [
                 TradingControlSegment {
-                    kind: TradingControlSegmentKind::CreateTarget,
-                    text: "TP",
-                    width: ACTION_WIDTH,
-                    color: self.trading_state.style.take_profit,
-                    filled: false,
-                },
-                TradingControlSegment {
-                    kind: TradingControlSegmentKind::CreateStop,
-                    text: "SL",
-                    width: ACTION_WIDTH,
-                    color: self.trading_state.style.stop_loss,
-                    filled: false,
-                },
-                TradingControlSegment {
                     kind: TradingControlSegmentKind::Quantity,
                     text: quantity.as_str(),
                     width: QUANTITY_WIDTH,
@@ -668,17 +557,10 @@ impl ChartEngine {
                     color: pnl_color,
                     filled: false,
                 },
-                TradingControlSegment {
-                    kind: TradingControlSegmentKind::Cancel,
-                    text: "×",
-                    width: CANCEL_WIDTH,
-                    color: position_color,
-                    filled: false,
-                },
             ];
             let cluster = TradingControlCluster {
                 segments: &segments,
-                right: self.trading_lane_right(),
+                left: self.trading_marker_start(),
             };
             let hovered_segment = hovered.and_then(|hit| Self::trading_control_kind(hit.kind));
             let pressed_segment = pressed.and_then(|hit| Self::trading_control_kind(hit.kind));
@@ -695,20 +577,16 @@ impl ChartEngine {
                 },
             );
             if hovered.is_some_and(|hit| hit.kind == crate::TradingHitKind::CancelButton) {
-                if let Some((x, segment_width)) =
-                    cluster.segment_bounds(TradingControlSegmentKind::Cancel)
-                {
-                    tooltip = Some(TradingTooltip {
-                        text: "Close Position",
-                        color: position_color,
-                        layout: TradingChipLayout {
-                            x: x + segment_width / 2.0,
-                            y,
-                            hpr,
-                            vpr,
-                        },
-                    });
-                }
+                tooltip = Some(TradingTooltip {
+                    text: "Close Position",
+                    color: position_color,
+                    layout: TradingChipLayout {
+                        x: self.trading_marker_end() + self.trading_axis_control_size() / 2.0,
+                        y,
+                        hpr,
+                        vpr,
+                    },
+                });
             }
         }
 
@@ -745,8 +623,8 @@ impl ChartEngine {
             );
             lines.push(Prim::HLine {
                 y: (y * vpr).round() as i32,
-                x0: 0,
-                x1: width,
+                x0: (self.trading_marker_start() * hpr).round() as i32,
+                x1: (self.trading_marker_end() * hpr).round() as i32,
                 width: if hovered.is_some_and(|hit| hit.kind == crate::TradingHitKind::OrderLine) {
                     min_line_width.max(2)
                 } else {
@@ -875,20 +753,6 @@ impl ChartEngine {
             if order.role == OrderRole::Working {
                 let segments = [
                     TradingControlSegment {
-                        kind: TradingControlSegmentKind::CreateTarget,
-                        text: "TP",
-                        width: ACTION_WIDTH,
-                        color: self.trading_state.style.take_profit,
-                        filled: false,
-                    },
-                    TradingControlSegment {
-                        kind: TradingControlSegmentKind::CreateStop,
-                        text: "SL",
-                        width: ACTION_WIDTH,
-                        color: self.trading_state.style.stop_loss,
-                        filled: false,
-                    },
-                    TradingControlSegment {
                         kind: TradingControlSegmentKind::Quantity,
                         text: quantity.as_str(),
                         width: QUANTITY_WIDTH,
@@ -902,17 +766,10 @@ impl ChartEngine {
                         color,
                         filled: false,
                     },
-                    TradingControlSegment {
-                        kind: TradingControlSegmentKind::Cancel,
-                        text: "×",
-                        width: CANCEL_WIDTH,
-                        color,
-                        filled: false,
-                    },
                 ];
                 let cluster = TradingControlCluster {
                     segments: &segments,
-                    right: self.trading_lane_right(),
+                    left: self.trading_marker_start(),
                 };
                 self.push_trading_cluster(
                     lines,
@@ -927,14 +784,11 @@ impl ChartEngine {
                     },
                 );
                 if hovered.is_some_and(|hit| hit.kind == crate::TradingHitKind::CancelButton) {
-                    let (x, segment_width) = cluster
-                        .segment_bounds(TradingControlSegmentKind::Cancel)
-                        .expect("working order has cancel segment");
                     tooltip = Some(TradingTooltip {
                         text: "Cancel order",
                         color,
                         layout: TradingChipLayout {
-                            x: x + segment_width / 2.0,
+                            x: self.trading_marker_end() + self.trading_axis_control_size() / 2.0,
                             y,
                             hpr,
                             vpr,
@@ -960,17 +814,10 @@ impl ChartEngine {
                         color: pnl_color,
                         filled: false,
                     },
-                    TradingControlSegment {
-                        kind: TradingControlSegmentKind::Cancel,
-                        text: "×",
-                        width: CANCEL_WIDTH,
-                        color,
-                        filled: false,
-                    },
                 ];
                 let cluster = TradingControlCluster {
                     segments: &segments,
-                    right: self.trading_lane_right(),
+                    left: self.trading_marker_start(),
                 };
                 self.push_trading_cluster(
                     lines,
@@ -985,14 +832,11 @@ impl ChartEngine {
                     },
                 );
                 if hovered.is_some_and(|hit| hit.kind == crate::TradingHitKind::CancelButton) {
-                    let (x, segment_width) = cluster
-                        .segment_bounds(TradingControlSegmentKind::Cancel)
-                        .expect("protection order has cancel segment");
                     tooltip = Some(TradingTooltip {
                         text: "Cancel order",
                         color,
                         layout: TradingChipLayout {
-                            x: x + segment_width / 2.0,
+                            x: self.trading_marker_end() + self.trading_axis_control_size() / 2.0,
                             y,
                             hpr,
                             vpr,
@@ -1007,8 +851,8 @@ impl ChartEngine {
                     {
                         lines.push(Prim::HLine {
                             y: (stop_y * vpr).round() as i32,
-                            x0: 0,
-                            x1: width,
+                            x0: (self.trading_marker_start() * hpr).round() as i32,
+                            x1: (self.pane_w * hpr).round() as i32,
                             width: min_line_width,
                             style: LineStyle::Dotted,
                             color,
@@ -1026,7 +870,7 @@ impl ChartEngine {
                             },
                             TradingControlFeedback::Idle,
                             TradingChipLayout {
-                                x: (self.trading_lane_right() - 92.0).max(6.0),
+                                x: self.trading_marker_start(),
                                 y: stop_y,
                                 hpr,
                                 vpr,
@@ -1046,16 +890,6 @@ impl ChartEngine {
             if let Some(preview_y) =
                 self.trading_price_coordinate(pane_index, preview.price_scale, preview.price)
             {
-                let semantic = if preview.role == OrderRole::TakeProfit {
-                    self.trading_state.style.take_profit
-                } else if preview.role == OrderRole::StopLoss {
-                    self.trading_state.style.stop_loss
-                } else {
-                    match preview.side {
-                        OrderSide::Buy => self.trading_state.style.buy,
-                        OrderSide::Sell => self.trading_state.style.sell,
-                    }
-                };
                 if let Some((anchor_price, long)) = self.trading_preview_relation(preview) {
                     if let Some(anchor_y) =
                         self.trading_price_coordinate(pane_index, preview.price_scale, anchor_price)
@@ -1110,142 +944,6 @@ impl ChartEngine {
                             }
                         }
                     }
-                }
-
-                if !matches!(preview.source, crate::TradingPreviewSource::Order { .. }) {
-                    let color = match preview.phase {
-                        crate::TradingPreviewPhase::Pending => self.trading_state.style.pending,
-                        crate::TradingPreviewPhase::Dragging
-                        | crate::TradingPreviewPhase::AwaitingConfirmation => {
-                            Color::rgba(semantic.r(), semantic.g(), semantic.b(), 176)
-                        }
-                    };
-                    lines.push(Prim::HLine {
-                        y: (preview_y * vpr).round() as i32,
-                        x0: 0,
-                        x1: width,
-                        width: min_line_width,
-                        style: LineStyle::Dotted,
-                        color,
-                    });
-                    let main_x = self.trading_preview_chip_start(preview);
-                    match preview.phase {
-                        crate::TradingPreviewPhase::Dragging => {
-                            self.push_trading_segment(
-                                lines,
-                                TradingControlSegment {
-                                    kind: TradingControlSegmentKind::Quantity,
-                                    text: if preview.side == OrderSide::Buy {
-                                        "Buy"
-                                    } else {
-                                        "Sell"
-                                    },
-                                    width: 46.0,
-                                    color: semantic,
-                                    filled: true,
-                                },
-                                TradingControlFeedback::Idle,
-                                TradingChipLayout {
-                                    x: main_x - 52.0,
-                                    y: preview_y,
-                                    hpr,
-                                    vpr,
-                                },
-                            );
-                        }
-                        crate::TradingPreviewPhase::AwaitingConfirmation => {
-                            self.push_trading_segment(
-                                lines,
-                                TradingControlSegment {
-                                    kind: TradingControlSegmentKind::Discard,
-                                    text: "Discard",
-                                    width: 58.0,
-                                    color: self.trading_state.style.rejected,
-                                    filled: false,
-                                },
-                                self.trading_control_feedback(TradingControlSegmentKind::Discard),
-                                TradingChipLayout {
-                                    x: main_x - 126.0,
-                                    y: preview_y,
-                                    hpr,
-                                    vpr,
-                                },
-                            );
-                            self.push_trading_segment(
-                                lines,
-                                TradingControlSegment {
-                                    kind: TradingControlSegmentKind::Confirm,
-                                    text: "Confirm",
-                                    width: 60.0,
-                                    color: self.trading_state.style.position,
-                                    filled: true,
-                                },
-                                self.trading_control_feedback(TradingControlSegmentKind::Confirm),
-                                TradingChipLayout {
-                                    x: main_x - 66.0,
-                                    y: preview_y,
-                                    hpr,
-                                    vpr,
-                                },
-                            );
-                        }
-                        crate::TradingPreviewPhase::Pending => {}
-                    }
-                    let quantity = self.format_trading_quantity(preview.quantity);
-                    let (pnl, pnl_color) = self
-                        .trading_preview_relation(preview)
-                        .map(|(anchor, long)| {
-                            let value = (preview.price - anchor)
-                                * if long { 1.0 } else { -1.0 }
-                                * preview.quantity
-                                * self.trading_state.instrument.point_value.unwrap_or(1.0);
-                            let color = if value >= 0.0 {
-                                self.trading_state.style.profit
-                            } else {
-                                self.trading_state.style.risk
-                            };
-                            (self.trading_pnl_text(value, None), color)
-                        })
-                        .unwrap_or_else(|| ("—".to_string(), color));
-                    let segments = [
-                        TradingControlSegment {
-                            kind: TradingControlSegmentKind::Quantity,
-                            text: quantity.as_str(),
-                            width: QUANTITY_WIDTH,
-                            color,
-                            filled: true,
-                        },
-                        TradingControlSegment {
-                            kind: TradingControlSegmentKind::Pnl,
-                            text: pnl.as_str(),
-                            width: PNL_WIDTH,
-                            color: pnl_color,
-                            filled: false,
-                        },
-                        TradingControlSegment {
-                            kind: TradingControlSegmentKind::Cancel,
-                            text: "×",
-                            width: CANCEL_WIDTH,
-                            color,
-                            filled: false,
-                        },
-                    ];
-                    let cluster = TradingControlCluster {
-                        segments: &segments,
-                        right: self.trading_lane_right(),
-                    };
-                    self.push_trading_cluster(
-                        lines,
-                        &cluster,
-                        None,
-                        None,
-                        TradingChipLayout {
-                            x: main_x,
-                            y: preview_y,
-                            hpr,
-                            vpr,
-                        },
-                    );
                 }
             }
         }

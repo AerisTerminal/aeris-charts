@@ -1830,8 +1830,6 @@ export interface trading_hit {
     | "order_line"
     | "quantity_label"
     | "cancel_button"
-    | "create_stop_button"
-    | "create_target_button"
     | "confirm_button"
     | "discard_button"
     | "execution_marker";

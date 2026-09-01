@@ -75,21 +75,21 @@ test("trading lines use dedicated hits and render semantic colors through the sh
     const target = trading.state().orders.find((order) => order.id === "demo-target");
     const position = trading.state().positions[0];
     const position_y = window.__main.price_to_coordinate(position.average_price);
-    const position_start = window.__chart.time_scale().width() - 252;
+    const width = window.__chart.time_scale().width();
     return {
-      order: trading.hit_at(80, window.__main.price_to_coordinate(target.price)),
-      quantity: trading.hit_at(position_start + 88, position_y),
-      pnl: trading.hit_at(position_start + 161, position_y),
-      close: trading.hit_at(position_start + 226, position_y),
+      empty_left: trading.hit_at(40, window.__main.price_to_coordinate(target.price)),
+      order: trading.hit_at(width - 200, window.__main.price_to_coordinate(target.price)),
+      position: trading.hit_at(width - 200, position_y),
+      close: trading.hit_at(width - 8, position_y),
     };
   });
+  expect(probe.empty_left).toBeNull();
   expect(probe.order).toMatchObject({
     object_type: "order",
     id: "demo-target",
     kind: "order_line",
   });
-  expect(probe.quantity).toMatchObject({ object_type: "position", kind: "quantity_label" });
-  expect(probe.pnl).toMatchObject({ object_type: "position", kind: "quantity_label" });
+  expect(probe.position).toMatchObject({ object_type: "position", kind: "position_line" });
   expect(probe.close).toMatchObject({ object_type: "position", kind: "cancel_button" });
 
   const url = await page.evaluate(() => window.__chart.take_screenshot().toDataURL("image/png"));
@@ -124,8 +124,8 @@ test("pointer drag has trading priority and emits one broker-neutral modify inte
     const overlay = document.querySelector("#chart_container canvas:last-of-type").getBoundingClientRect();
     const before_range = window.__chart.time_scale().get_visible_logical_range();
     return {
-      from: { x: overlay.left + 100, y: overlay.top + window.__main.price_to_coordinate(order.price) },
-      to: { x: overlay.left + 100, y: overlay.top + window.__main.price_to_coordinate(order.price + 1.25) },
+      from: { x: overlay.left + window.__chart.time_scale().width() - 200, y: overlay.top + window.__main.price_to_coordinate(order.price) },
+      to: { x: overlay.left + window.__chart.time_scale().width() - 200, y: overlay.top + window.__main.price_to_coordinate(order.price + 1.25) },
       before_range,
       confirmed_price: order.price,
       drawing_points: window.__trading_blocker.points(),
@@ -163,7 +163,7 @@ test("pointer drag has trading priority and emits one broker-neutral modify inte
   expect(await page.evaluate(() => window.__chart.trading().preview())).toBeNull();
 });
 
-test("unlinked TP/SL chips remain draggable and preserve stop-limit modify fields", async ({ page }) => {
+test("unlinked protection orders remain draggable and preserve stop-limit modify fields", async ({ page }) => {
   await open_trading_demo(page);
   const probe = await page.evaluate(() => {
     const trading = window.__chart.trading();
@@ -185,7 +185,7 @@ test("unlinked TP/SL chips remain draggable and preserve stop-limit modify field
     trading.subscribe_intents((intent) => window.__orphan_intents.push(intent));
     const overlay = document.querySelector("#chart_container canvas:last-of-type").getBoundingClientRect();
     const width = window.__chart.time_scale().width();
-    const chip_x = width - 174 + 20;
+    const chip_x = width - 200;
     const y = window.__main.price_to_coordinate(100);
     return {
       from: { x: overlay.left + chip_x, y: overlay.top + y },
@@ -218,9 +218,18 @@ test("cancel control emits intent without removing authoritative order", async (
     window.__chart.trading().subscribe_intents((intent) => window.__cancel_intents.push(intent));
     const order = window.__chart.trading().state().orders.find((item) => item.id === "demo-stop");
     const overlay = document.querySelector("#chart_container canvas:last-of-type").getBoundingClientRect();
+    const x = window.__chart.time_scale().width() - 8;
+    let y = window.__main.price_to_coordinate(order.price);
+    for (let candidate = 0; candidate <= overlay.height; candidate += 1) {
+      const hit = window.__chart.trading().hit_at(x, candidate);
+      if (hit?.id === order.id && hit.kind === "cancel_button") {
+        y = candidate;
+        break;
+      }
+    }
     return {
-      x: overlay.left + window.__chart.time_scale().width() - 26,
-      y: overlay.top + window.__main.price_to_coordinate(order.price),
+      x: overlay.left + x,
+      y: overlay.top + y,
     };
   });
   await page.mouse.click(probe.x, probe.y);
@@ -245,7 +254,7 @@ test("confirmed bracket connector deactivates on an empty-canvas click without r
       to_y: window.__main.price_to_coordinate(target.price + 0.5),
     };
   });
-  await page.mouse.move(probe.overlay.left + 30, probe.overlay.top + probe.from_y);
+  await page.mouse.move(probe.overlay.left + probe.pane_width - 200, probe.overlay.top + probe.from_y);
   await page.mouse.down();
   await page.mouse.move(probe.overlay.left + 30, probe.overlay.top + probe.to_y, { steps: 5 });
   await page.mouse.up();
@@ -300,7 +309,7 @@ test("confirmed bracket connector deactivates on an empty-canvas click without r
   expect(connector_pixels(active.url)).toBeGreaterThan(connector_pixels(inactive.url) + 20);
 });
 
-test("working-order segments own TP, SL, cancel, and manual Confirm/Discard hits", async ({ page }) => {
+test("working-order markers omit TP/SL controls and retain manual Confirm/Discard", async ({ page }) => {
   await open_trading_demo(page);
   const probe = await page.evaluate(() => {
     const trading = window.__chart.trading();
@@ -316,27 +325,27 @@ test("working-order segments own TP, SL, cancel, and manual Confirm/Discard hits
     trading.subscribe_intents((intent) => window.__manual_intents.push(intent));
     const overlay = document.querySelector("#chart_container canvas:last-of-type").getBoundingClientRect();
     const width = window.__chart.time_scale().width();
-    const chip_start = width - 236;
+    const marker_start = width - 297;
     return {
       overlay: { left: overlay.left, top: overlay.top },
       width,
-      chip_start,
+      marker_start,
       buy_y: window.__main.price_to_coordinate(100),
       target_y: window.__main.price_to_coordinate(101.25),
       sell_y: window.__main.price_to_coordinate(98),
       sell_target_y: window.__main.price_to_coordinate(97.25),
       hits: {
-        tp: trading.hit_at(chip_start + 15, window.__main.price_to_coordinate(100)),
-        sl: trading.hit_at(chip_start + 45, window.__main.price_to_coordinate(100)),
-        cancel: trading.hit_at(chip_start + 210, window.__main.price_to_coordinate(100)),
+        empty_left: trading.hit_at(40, window.__main.price_to_coordinate(100)),
+        marker: trading.hit_at(width - 200, window.__main.price_to_coordinate(100)),
+        cancel: trading.hit_at(width - 8, window.__main.price_to_coordinate(100)),
       },
     };
   });
-  expect(probe.hits.tp).toMatchObject({ id: "buy-limit", kind: "create_target_button" });
-  expect(probe.hits.sl).toMatchObject({ id: "buy-limit", kind: "create_stop_button" });
+  expect(probe.hits.empty_left).toBeNull();
+  expect(probe.hits.marker).toMatchObject({ id: "buy-limit", kind: "order_line" });
   expect(probe.hits.cancel).toMatchObject({ id: "buy-limit", kind: "cancel_button" });
 
-  await page.mouse.move(probe.overlay.left + 30, probe.overlay.top + probe.buy_y);
+  await page.mouse.move(probe.overlay.left + probe.width - 200, probe.overlay.top + probe.buy_y);
   await page.mouse.down();
   await page.mouse.move(probe.overlay.left + 30, probe.overlay.top + probe.target_y, { steps: 5 });
   await page.mouse.up();
@@ -348,7 +357,7 @@ test("working-order segments own TP, SL, cancel, and manual Confirm/Discard hits
     intents: [],
   });
 
-  const manual_main_x = probe.width - 236;
+  const manual_main_x = probe.marker_start;
   await page.mouse.click(probe.overlay.left + manual_main_x - 36, probe.overlay.top + probe.target_y);
   const confirmed = await page.evaluate(() => ({
     preview: window.__chart.trading().preview(),
@@ -360,7 +369,7 @@ test("working-order segments own TP, SL, cancel, and manual Confirm/Discard hits
   expect(confirmed.order.price).toBe(100);
   await page.evaluate(() => window.__chart.trading().resolve_intent(window.__manual_intents[0].sequence, false));
 
-  await page.mouse.move(probe.overlay.left + 30, probe.overlay.top + probe.buy_y);
+  await page.mouse.move(probe.overlay.left + probe.width - 200, probe.overlay.top + probe.buy_y);
   await page.mouse.down();
   await page.mouse.move(probe.overlay.left + 30, probe.overlay.top + probe.target_y, { steps: 5 });
   await page.mouse.up();
@@ -370,7 +379,7 @@ test("working-order segments own TP, SL, cancel, and manual Confirm/Discard hits
     intent_count: window.__manual_intents.length,
   }))).toEqual({ preview: null, intent_count: 1 });
 
-  await page.mouse.move(probe.overlay.left + 30, probe.overlay.top + probe.sell_y);
+  await page.mouse.move(probe.overlay.left + probe.width - 200, probe.overlay.top + probe.sell_y);
   await page.mouse.down();
   await page.mouse.move(probe.overlay.left + 30, probe.overlay.top + probe.sell_target_y, { steps: 5 });
   await page.mouse.up();
@@ -412,9 +421,9 @@ test("existing TP and SL adjustments keep manual confirmation controls", async (
       stop_next_y: window.__main.price_to_coordinate(stop.price - 0.75),
     };
   });
-  const manual_main_x = probe.width - 180;
+  const manual_main_x = probe.width - 297;
 
-  await page.mouse.move(probe.overlay.left + 30, probe.overlay.top + probe.target_y);
+  await page.mouse.move(probe.overlay.left + probe.width - 200, probe.overlay.top + probe.target_y);
   await page.mouse.down();
   await page.mouse.move(probe.overlay.left + 30, probe.overlay.top + probe.target_next_y, { steps: 5 });
   await page.mouse.up();
@@ -435,7 +444,7 @@ test("existing TP and SL adjustments keep manual confirmation controls", async (
   ]);
   await page.evaluate(() => window.__chart.trading().resolve_intent(window.__protection_intents[0].sequence, false));
 
-  await page.mouse.move(probe.overlay.left + 30, probe.overlay.top + probe.stop_y);
+  await page.mouse.move(probe.overlay.left + probe.width - 200, probe.overlay.top + probe.stop_y);
   await page.mouse.down();
   await page.mouse.move(probe.overlay.left + 30, probe.overlay.top + probe.stop_next_y, { steps: 5 });
   await page.mouse.up();
@@ -458,7 +467,7 @@ test("existing TP and SL adjustments keep manual confirmation controls", async (
 });
 
 for (const backend of ["canvas2d", "webgpu"]) {
-  test(`${backend} protection creation follows one-click, manual, Escape, and host reconciliation`, async ({ page }) => {
+  test(`${backend} compact position marker has no TP/SL creation surface and uses an attached close chip`, async ({ page }) => {
     await open_trading_demo(page, backend);
     const probe = await page.evaluate(() => {
       const trading = window.__chart.trading();
@@ -470,94 +479,38 @@ for (const backend of ["canvas2d", "webgpu"]) {
       trading.subscribe_intents((intent) => window.__creation_intents.push(intent));
       const overlay = document.querySelector("#chart_container canvas:last-of-type").getBoundingClientRect();
       const width = window.__chart.time_scale().width();
-      const position_start = width - 252;
+      const entry_y = window.__main.price_to_coordinate(100);
       return {
         overlay: { left: overlay.left, top: overlay.top },
         width,
-        tp_x: position_start + 15,
-        sl_x: position_start + 48,
-        entry_y: window.__main.price_to_coordinate(100),
-        tp_y: window.__main.price_to_coordinate(102),
-        sl_y: window.__main.price_to_coordinate(98),
+        entry_y,
+        empty_left: trading.hit_at(40, entry_y),
+        marker: trading.hit_at(width - 200, entry_y),
+        close: trading.hit_at(width - 8, entry_y),
       };
     });
+    expect(probe.empty_left).toBeNull();
+    expect(probe.marker).toMatchObject({ id: "position-only", kind: "position_line" });
+    expect(probe.close).toMatchObject({ id: "position-only", kind: "cancel_button" });
 
-    await page.mouse.move(probe.overlay.left + probe.tp_x, probe.overlay.top + probe.entry_y);
+    await page.mouse.move(probe.overlay.left + probe.width - 200, probe.overlay.top + probe.entry_y);
     await page.mouse.down();
-    await page.mouse.move(probe.overlay.left + probe.tp_x, probe.overlay.top + probe.tp_y, { steps: 6 });
+    await page.mouse.move(
+      probe.overlay.left + probe.width - 200,
+      probe.overlay.top + probe.entry_y - 40,
+      { steps: 6 },
+    );
     await page.mouse.up();
-    const one_click = await page.evaluate(() => ({
+    expect(await page.evaluate(() => ({
       intents: window.__creation_intents,
       preview: window.__chart.trading().preview(),
-      authoritative: window.__chart.trading().state(),
-    }));
-    expect(one_click.intents).toEqual([
-      expect.objectContaining({
-        action: "create_take_profit",
-        position_id: "position-only",
-        price: 102,
-      }),
-    ]);
-    expect(one_click.preview).toMatchObject({ phase: "pending", price: 102 });
-    expect(one_click.authoritative.orders).toEqual([]);
+    }))).toEqual({ intents: [], preview: null });
 
-    await page.evaluate(() => {
-      const trading = window.__chart.trading();
-      const intent = window.__creation_intents[0];
-      trading.resolve_intent(intent.sequence, true);
-      trading.update_order({
-        id: "confirmed-tp",
-        side: "sell",
-        kind: "limit",
-        role: "take_profit",
-        status: "working",
-        price: 102,
-        quantity: 2,
-        position_id: "position-only",
-        revision: 1,
-      });
-      trading.set_confirmation_mode("manual");
-    });
-    expect(await page.evaluate(() => window.__chart.trading().preview())).toBeNull();
-
-    await page.mouse.move(probe.overlay.left + probe.sl_x, probe.overlay.top + probe.entry_y);
-    await page.mouse.down();
-    await page.mouse.move(probe.overlay.left + probe.sl_x, probe.overlay.top + probe.sl_y, { steps: 6 });
-    await page.mouse.up();
-    expect(await page.evaluate(() => ({
-      preview: window.__chart.trading().preview(),
-      intent_count: window.__creation_intents.length,
-    }))).toMatchObject({
-      preview: { source: "stop_loss", phase: "awaiting_confirmation", price: 98 },
-      intent_count: 1,
-    });
-
-    await page.keyboard.press("Escape");
-    expect(await page.evaluate(() => ({
-      preview: window.__chart.trading().preview(),
-      intent_count: window.__creation_intents.length,
-    }))).toEqual({ preview: null, intent_count: 1 });
-
-    await page.mouse.move(probe.overlay.left + probe.sl_x, probe.overlay.top + probe.entry_y);
-    await page.mouse.down();
-    await page.mouse.move(probe.overlay.left + probe.sl_x, probe.overlay.top + probe.sl_y, { steps: 6 });
-    await page.mouse.up();
-    const manual_main_x = probe.width - 180;
-    const manual_hits = await page.evaluate(({ x, y }) => ({
-      confirm: window.__chart.trading().hit_at(x - 36, y),
-      discard: window.__chart.trading().hit_at(x - 97, y),
-    }), { x: manual_main_x, y: probe.sl_y });
-    expect(manual_hits).toMatchObject({
-      confirm: { kind: "confirm_button" },
-      discard: { kind: "discard_button" },
-    });
-    await page.mouse.click(probe.overlay.left + manual_main_x - 36, probe.overlay.top + probe.sl_y);
+    await page.mouse.click(probe.overlay.left + probe.width - 8, probe.overlay.top + probe.entry_y);
     expect(await page.evaluate(() => window.__creation_intents)).toEqual([
-      expect.objectContaining({ action: "create_take_profit" }),
       expect.objectContaining({
-        action: "create_stop_loss",
+        action: "close_position",
         position_id: "position-only",
-        price: 98,
       }),
     ]);
   });

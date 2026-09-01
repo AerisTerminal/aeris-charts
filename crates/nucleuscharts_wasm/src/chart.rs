@@ -1133,10 +1133,6 @@ impl NucleusChart {
                     nucleuscharts_engine::TradingHitKind::OrderLine => "order_line",
                     nucleuscharts_engine::TradingHitKind::QuantityLabel => "quantity_label",
                     nucleuscharts_engine::TradingHitKind::CancelButton => "cancel_button",
-                    nucleuscharts_engine::TradingHitKind::CreateStopButton => "create_stop_button",
-                    nucleuscharts_engine::TradingHitKind::CreateTargetButton => {
-                        "create_target_button"
-                    }
                     nucleuscharts_engine::TradingHitKind::ConfirmButton => "confirm_button",
                     nucleuscharts_engine::TradingHitKind::DiscardButton => "discard_button",
                     nucleuscharts_engine::TradingHitKind::ExecutionMarker => "execution_marker",
@@ -1167,8 +1163,6 @@ impl NucleusChart {
                 if matches!(
                     hit.kind,
                     nucleuscharts_engine::TradingHitKind::CancelButton
-                        | nucleuscharts_engine::TradingHitKind::CreateStopButton
-                        | nucleuscharts_engine::TradingHitKind::CreateTargetButton
                         | nucleuscharts_engine::TradingHitKind::ConfirmButton
                         | nucleuscharts_engine::TradingHitKind::DiscardButton
                 ) =>

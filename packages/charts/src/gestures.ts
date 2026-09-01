@@ -484,20 +484,20 @@ export function install_gestures(chart: chart_impl): () => void {
       feed_pointer("down", e, target);
       return;
     }
-    if (chart.alert_create_hit_at(p.x, p.y)) {
-      pointer_targets.set(e.pointerId, InputTargetCode.Alert);
-      feed_pointer("down", e, InputTargetCode.Alert);
-      alert_press = true;
-      set_crosshair(p.x, p.y);
-      chart.repaint();
-      return;
-    }
     const trading_hit = chart.trading_hit_at(p.x, p.y);
     if (trading_hit !== null) {
       pointer_targets.set(e.pointerId, InputTargetCode.Trading);
       feed_pointer("down", e, InputTargetCode.Trading);
       chart.trading_pressed_at(p.x, p.y);
       trading_dragging = chart.trading_drag_start_at(p.x, p.y);
+      set_crosshair(p.x, p.y);
+      chart.repaint();
+      return;
+    }
+    if (chart.alert_create_hit_at(p.x, p.y)) {
+      pointer_targets.set(e.pointerId, InputTargetCode.Alert);
+      feed_pointer("down", e, InputTargetCode.Alert);
+      alert_press = true;
       set_crosshair(p.x, p.y);
       chart.repaint();
       return;
@@ -649,8 +649,8 @@ export function install_gestures(chart: chart_impl): () => void {
       // region cursor off the geometry.
       overlay.style.cursor =
         region_cursor === "crosshair"
-          ? (chart.alert_create_hit_at(p.x, p.y) ? "pointer" : chart.trading_cursor_at(p.x, p.y) ?? chart.hover_cursor() ??
-            (chart.hover_series_id() !== null ? "pointer" : region_cursor))
+          ? (chart.trading_cursor_at(p.x, p.y) ?? (chart.alert_create_hit_at(p.x, p.y) ? "pointer" : null) ??
+            chart.hover_cursor() ?? (chart.hover_series_id() !== null ? "pointer" : region_cursor))
           : region_cursor;
     }
     chart.repaint();
@@ -769,14 +769,14 @@ export function install_gestures(chart: chart_impl): () => void {
       text_tool_press_committed = false;
       return;
     }
-    if (pressed_alert && chart.alert_create_hit_at(p.x, p.y)) {
-      chart.activate_alert_create_at(p.x, p.y);
-      chart.repaint();
-      return;
-    }
     const trading_hit = chart.trading_hit_at(p.x, p.y);
     if (trading_hit !== null) {
       chart.trading_activate_at(p.x, p.y);
+      chart.repaint();
+      return;
+    }
+    if (pressed_alert && chart.alert_create_hit_at(p.x, p.y)) {
+      chart.activate_alert_create_at(p.x, p.y);
       chart.repaint();
       return;
     }
@@ -914,14 +914,14 @@ export function install_gestures(chart: chart_impl): () => void {
     const region = arm_press(p, true);
     let target = region_target(region);
     if (region === "pane") {
-      if (chart.alert_create_hit_at(p.x, p.y)) {
-        target = InputTargetCode.Alert;
-        alert_press = true;
-      } else if (chart.trading_hit_at_device(p.x, p.y, InputDeviceCode.Touch) !== null) {
+      if (chart.trading_hit_at_device(p.x, p.y, InputDeviceCode.Touch) !== null) {
         target = InputTargetCode.Trading;
         trading_press = true;
         chart.trading_pressed_at_device(p.x, p.y, InputDeviceCode.Touch);
         trading_dragging = chart.trading_drag_start_at_device(p.x, p.y, InputDeviceCode.Touch);
+      } else if (chart.alert_create_hit_at(p.x, p.y)) {
+        target = InputTargetCode.Alert;
+        alert_press = true;
       } else if (chart.creation_armed()) {
         target = InputTargetCode.Drawing;
         if (chart.active_drawing_tool() === "brush" && chart.brush_create_start(p.x, p.y)) {
@@ -1090,10 +1090,10 @@ export function install_gestures(chart: chart_impl): () => void {
       reset_tap();
     } else if (was_tap) {
       const trading_hit = chart.trading_hit_at_device(p.x, p.y, InputDeviceCode.Touch);
-      if (alert_press && chart.alert_create_hit_at(p.x, p.y)) {
-        chart.activate_alert_create_at(p.x, p.y);
-      } else if (trading_press && trading_hit !== null) {
+      if (trading_press && trading_hit !== null) {
         chart.trading_activate_at(p.x, p.y);
+      } else if (alert_press && chart.alert_create_hit_at(p.x, p.y)) {
+        chart.activate_alert_create_at(p.x, p.y);
       } else if (chart.creation_armed() && chart.creation_click(p.x, p.y, false, false)) {
         // creation handled
       } else {

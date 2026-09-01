@@ -767,7 +767,15 @@ impl ChartEngine {
         let last_value_start = out.labels.len();
         let live_price_regions = self.append_last_value_label(&mut out.labels, &measure);
         let mut action_labels = Vec::new();
-        self.append_action_axis_labels(&mut action_labels, &live_price_regions, &measure);
+        let mut axis_control_hits = std::mem::take(&mut self.trading_state.axis_control_hits);
+        axis_control_hits.clear();
+        self.append_action_axis_labels(
+            &mut action_labels,
+            &mut axis_control_hits,
+            &live_price_regions,
+            &measure,
+        );
+        self.trading_state.axis_control_hits = axis_control_hits;
         out.labels
             .splice(last_value_start..last_value_start, action_labels);
         if include_transient {
@@ -1431,6 +1439,7 @@ impl ChartEngine {
     fn append_action_axis_labels<F>(
         &self,
         labels: &mut Vec<AxisLabel>,
+        axis_control_hits: &mut Vec<crate::trading::TradingAxisControlHit>,
         live_price_regions: &[LivePriceRegion],
         measure: &F,
     ) where
@@ -1468,7 +1477,8 @@ impl ChartEngine {
                           color: Color,
                           solid: bool,
                           hollow_at_live_price: bool,
-                          bold: bool| {
+                          bold: bool,
+                          control: Option<crate::TradingObjectId>| {
             let Some(pane) = self.panes.get(pane_index) else {
                 return;
             };
@@ -1538,6 +1548,71 @@ impl ChartEngine {
                 attach_group: None,
                 border: (!solid).then_some((1.0, color)),
             });
+            if let Some(object) = control {
+                let control_size = self.trading_axis_control_size();
+                let control_x = if target == PriceScaleTarget::Left {
+                    self.pane_left
+                } else {
+                    self.pane_left + self.pane_w - control_size
+                };
+                let feedback = if self
+                    .trading_state
+                    .feedback_pressed
+                    .as_ref()
+                    .is_some_and(|hit| {
+                        hit.kind == crate::TradingHitKind::CancelButton && hit.object == object
+                    }) {
+                    2
+                } else if self
+                    .trading_state
+                    .feedback_hover
+                    .as_ref()
+                    .is_some_and(|hit| {
+                        hit.kind == crate::TradingHitKind::CancelButton && hit.object == object
+                    })
+                {
+                    1
+                } else {
+                    0
+                };
+                let control_fill = match feedback {
+                    2 => Color::rgba(color.r(), color.g(), color.b(), 78),
+                    1 => Color::rgba(color.r(), color.g(), color.b(), 44),
+                    _ => chip_fill,
+                };
+                labels.push(AxisLabel {
+                    text: "×".to_string(),
+                    x: control_x + control_size / 2.0,
+                    y,
+                    color,
+                    align: AxisTextAlign::Center,
+                    midpoint: AxisTextMidpoint::Label,
+                    font_scale: 1.35,
+                    bold: true,
+                    background: Some((
+                        control_x,
+                        y - control_size / 2.0,
+                        control_size,
+                        control_size,
+                        control_fill,
+                    )),
+                    background_corners: if target == PriceScaleTarget::Left {
+                        AxisLabelCorners::RIGHT
+                    } else {
+                        AxisLabelCorners::LEFT
+                    },
+                    measure_extra: 0.0,
+                    attach_group: None,
+                    border: Some((1.0, color)),
+                });
+                axis_control_hits.push(crate::trading::TradingAxisControlHit {
+                    object,
+                    x: control_x - self.pane_left,
+                    y: y - control_size / 2.0,
+                    width: control_size,
+                    height: control_size,
+                });
+            }
         };
         for position in &self.trading_state.positions {
             let pending =
@@ -1554,7 +1629,8 @@ impl ChartEngine {
                 },
                 true,
                 true,
-                true,
+                false,
+                Some(crate::TradingObjectId::Position(position.id.clone())),
             );
         }
         for order in &self.trading_state.orders {
@@ -1584,7 +1660,8 @@ impl ChartEngine {
                 color,
                 order.role == crate::OrderRole::Working,
                 true,
-                true,
+                false,
+                Some(crate::TradingObjectId::Order(order.id.clone())),
             );
             if order.kind == crate::OrderKind::StopLimit {
                 if let Some(stop_price) = order.stop_price {
@@ -1596,35 +1673,11 @@ impl ChartEngine {
                         color,
                         false,
                         true,
-                        true,
+                        false,
+                        None,
                     );
                 }
             }
-        }
-        if let Some(preview) =
-            self.trading_state.interaction.preview().filter(|preview| {
-                !matches!(preview.source, crate::TradingPreviewSource::Order { .. })
-            })
-        {
-            append(
-                preview.pane_index,
-                preview.price_scale.into(),
-                preview.price,
-                self.format_trading_price(preview.price),
-                if preview.phase == crate::TradingPreviewPhase::Pending {
-                    self.trading_state.style.pending
-                } else {
-                    super::trading_geometry::trading_order_color(
-                        &self.trading_state.style,
-                        preview.role,
-                        preview.side,
-                        crate::OrderStatus::Working,
-                    )
-                },
-                preview.role == crate::OrderRole::Working,
-                true,
-                true,
-            );
         }
         for line in &self.alert_state.lines {
             let target = line.price_scale.into();
@@ -1654,6 +1707,7 @@ impl ChartEngine {
                 true,
                 false,
                 false,
+                None,
             );
         }
     }
