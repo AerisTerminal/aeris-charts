@@ -264,9 +264,12 @@ impl ChartEngine {
                 let bw = right - bx;
                 let bh = bottom - by;
                 last_attach = label.attach_group.map(|group| (group, by + bh));
+                // A hollow chip's outline is a hairline, resolved the same way the axis border
+                // itself is (`border_w` above): rounding 1 CSS px UP at fractional DPRs made it
+                // read as a heavy 2px frame instead of a rule.
                 let border = label
                     .border
-                    .map(|(width, color)| ((width * dpr).round().max(1.0), color));
+                    .map(|(width, color)| ((width * dpr).floor().max(1.0), color));
                 if let Some((border_width, border_color)) = border {
                     if label.background_corners.is_empty() {
                         output.push(Prim::Rect {

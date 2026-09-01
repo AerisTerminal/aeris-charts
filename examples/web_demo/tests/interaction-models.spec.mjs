@@ -83,7 +83,9 @@ test("interaction models run engine-side with reference behavior", async ({ page
     window.__chart.price_scale("right").set_auto_scale(true);
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     const range = window.__chart.time_scale().get_visible_logical_range();
-    const logical = Math.floor(range.to);
+    // Stay clear of the pane-facing alert-create control attached to the crosshair price label at
+    // the right edge; this probe is specifically a series price-pan gesture.
+    const logical = Math.floor((range.from + range.to) / 2);
     const bar = window.__main.data_by_index(logical, -1);
     return {
       x: window.__chart.time_scale().logical_to_coordinate(logical),
@@ -234,4 +236,62 @@ test("interaction models run engine-side with reference behavior", async ({ page
   await page.keyboard.press("+");
   await page.clock.runFor(50);
   expect((await state(page)).spacing).toBeGreaterThan(kb0);
+});
+
+test("the demo pans its displayed manual price scale from empty pane space", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+  const box = await chart_box(page);
+  const geometry = await page.evaluate(() => ({
+    pane_left: window.__chart.wasm.pane_left(),
+    pane_width: window.__chart.wasm.time_scale_width(),
+    pane_height: window.__chart.wasm.pane_height(0),
+  }));
+
+  // A real axis drag is the demo's unlock gesture.
+  const axis_x = box.x + geometry.pane_left + geometry.pane_width + 10;
+  const axis_y = box.y + geometry.pane_height * 0.4;
+  await page.mouse.move(axis_x, axis_y);
+  await page.mouse.down();
+  await page.mouse.move(axis_x, axis_y + 60, { steps: 6 });
+  await page.mouse.up();
+
+  const before = await page.evaluate(() => ({
+    auto_scale: window.__chart.price_scale("right").options().auto_scale,
+    range: window.__chart.price_scale("right").get_visible_range(),
+    anchors: JSON.parse(window.__chart.wasm.selection_anchor_identities_json()).length,
+  }));
+  expect(before.auto_scale).toBe(false);
+  expect(before.anchors).toBe(0);
+
+  // Deliberately miss all series geometry: the demo still knows its displayed primary series and
+  // routes this vertical pan to that manual scale without leaving a visible series selection.
+  const empty = await page.evaluate(() => {
+    const range = window.__chart.time_scale().get_visible_logical_range();
+    let max_high = -Infinity;
+    for (let index = Math.ceil(range.from); index <= Math.floor(range.to); index += 1) {
+      const bar = window.__main.data_by_index(index);
+      if (bar !== null) max_high = Math.max(max_high, bar.high);
+    }
+    return {
+      x: window.__chart.time_scale().logical_to_coordinate(Math.floor((range.from + range.to) / 2)),
+      y: Math.max(10, window.__main.price_to_coordinate(max_high) - 20),
+    };
+  });
+  const pane_x = box.x + geometry.pane_left + empty.x;
+  const pane_y = box.y + empty.y;
+  await page.mouse.move(pane_x, pane_y);
+  await page.mouse.down();
+  await page.mouse.move(pane_x, pane_y + 44, { steps: 6 });
+  await page.mouse.up();
+
+  const after = await page.evaluate(() => ({
+    auto_scale: window.__chart.price_scale("right").options().auto_scale,
+    range: window.__chart.price_scale("right").get_visible_range(),
+    anchors: JSON.parse(window.__chart.wasm.selection_anchor_identities_json()).length,
+  }));
+  expect(after.auto_scale).toBe(false);
+  expect(after.range).not.toEqual(before.range);
+  expect(after.range.to - after.range.from).toBeCloseTo(before.range.to - before.range.from, 6);
+  expect(after.anchors).toBe(0);
 });

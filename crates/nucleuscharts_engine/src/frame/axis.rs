@@ -1463,48 +1463,31 @@ impl ChartEngine {
             });
         };
         for position in &self.trading_state.positions {
-            let pending =
-                self.trading_state.interaction.pending_position_id() == Some(&position.id);
             append(
                 position.pane_index,
                 position.price_scale.into(),
                 position.average_price,
                 self.format_trading_price(position.average_price),
-                if pending {
-                    self.trading_state.style.pending
-                } else {
-                    self.trading_position_color(position.side)
-                },
+                self.trading_position_color(position.side),
                 true,
                 true,
                 false,
             );
         }
         for order in &self.trading_state.orders {
-            let preview = self.trading_state.interaction.preview().filter(|preview| {
-                matches!(
-                    &preview.source,
-                    crate::TradingPreviewSource::Order { order_id } if order_id == &order.id
-                )
-            });
-            let color = if preview
-                .is_some_and(|preview| preview.phase == crate::TradingPreviewPhase::Pending)
-            {
-                self.trading_state.style.pending
-            } else {
-                super::trading_geometry::trading_order_color(
-                    &self.trading_state.style,
-                    order.side,
-                    order.status,
-                )
-            };
+            let color = super::trading_geometry::trading_order_color(
+                &self.trading_state.style,
+                order.kind,
+                order.side,
+                order.status,
+            );
             append(
                 order.pane_index,
                 order.price_scale.into(),
                 self.trading_effective_order_price(order),
                 self.format_trading_price(self.trading_effective_order_price(order)),
                 color,
-                order.role == crate::OrderRole::Working,
+                order.status == crate::OrderStatus::Filled,
                 true,
                 false,
             );
@@ -1538,10 +1521,9 @@ impl ChartEngine {
                     ))
                 })
                 .unwrap_or_else(|| self.price_formatter.format(line.price));
-            let text = line
-                .label
-                .as_ref()
-                .map_or_else(|| format!("A {price}"), |label| format!("A {label}"));
+            // The tag shows the price (or the host's label) and nothing else, exactly like every
+            // other axis tag; the attached bell badge is what marks the line as an alert.
+            let text = line.label.clone().unwrap_or(price);
             append(
                 line.pane_index,
                 target,

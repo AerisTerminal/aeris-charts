@@ -183,17 +183,23 @@ test("pointer drag has trading priority and emits one broker-neutral modify inte
     role: "take_profit",
     base_revision: 0,
   });
-  expect(result.preview).toMatchObject({ source: "order", order_id: "demo-target", phase: "pending" });
-  expect(result.preview.price).not.toBe(probe.confirmed_price);
-  expect(result.confirmed.price).toBe(probe.confirmed_price);
+  // Release applies the move; nothing lingers in a preview waiting on the host.
+  expect(result.preview).toBeNull();
+  expect(result.confirmed.price).not.toBe(probe.confirmed_price);
+  expect(result.confirmed.price).toBe(result.intents[0].price);
+  // The drag stayed inside trading: it neither panned the chart nor grabbed the drawing beneath it.
   expect(result.range).toEqual(probe.before_range);
   expect(result.drawing_points).toEqual(probe.drawing_points);
 
+  // Rejecting puts the price back where it was.
   expect(await page.evaluate(() => {
     const sequence = window.__trading_intents[0].sequence;
     return window.__chart.trading().resolve_intent(sequence, false);
   })).toBe(true);
-  expect(await page.evaluate(() => window.__chart.trading().preview())).toBeNull();
+  expect(await page.evaluate(() => ({
+    preview: window.__chart.trading().preview(),
+    price: window.__chart.trading().state().orders.find((item) => item.id === "demo-target").price,
+  }))).toEqual({ preview: null, price: probe.confirmed_price });
 });
 
 test("unlinked protection orders remain draggable and preserve stop-limit modify fields", async ({ page }) => {
@@ -244,7 +250,63 @@ test("unlinked protection orders remain draggable and preserve stop-limit modify
   ]);
 });
 
-test("cancel control emits intent without removing authoritative order", async ({ page }) => {
+test("a control's action tooltip waits out the hover dwell instead of appearing on contact", async ({ page }) => {
+  await open_trading_demo(page);
+  const probe = await page.evaluate(() => {
+    // Hide the crosshair so the band diff measures the tooltip alone, not the pointer's own chrome.
+    window.__chart.apply_options({ crosshair: { mode: 2 } });
+    const order = window.__chart.trading().state().orders.find((item) => item.id === "demo-target");
+    const overlay = document.querySelector("#chart_container canvas:last-of-type").getBoundingClientRect();
+    const y = window.__main.price_to_coordinate(order.price);
+    return {
+      x: overlay.left + window.__close_x(order.id, y),
+      y: overlay.top + y,
+      line_y: y,
+      pane_width: window.__chart.time_scale().width(),
+      dpr: window.devicePixelRatio,
+    };
+  });
+  const shot = async () => {
+    const url = await page.evaluate(() => window.__chart.take_screenshot().toDataURL("image/png"));
+    return PNG.sync.read(Buffer.from(url.split(",")[1], "base64"));
+  };
+  // The tooltip is drawn in the band just above the hovered control. Diffing only that band keeps
+  // the once-a-second countdown chip in the axis strip out of the measurement.
+  const band = {
+    top: Math.round((probe.line_y - 62) * probe.dpr),
+    bottom: Math.round((probe.line_y - 12) * probe.dpr),
+    right: Math.round((probe.pane_width - 40) * probe.dpr),
+  };
+  const changed_in_band = (a, b) => {
+    let count = 0;
+    for (let y = Math.max(band.top, 0); y < band.bottom; y += 1) {
+      for (let x = 0; x < Math.min(band.right, a.width); x += 1) {
+        const offset = (y * a.width + x) * 4;
+        if (a.data[offset] !== b.data[offset]
+          || a.data[offset + 1] !== b.data[offset + 1]
+          || a.data[offset + 2] !== b.data[offset + 2]) count += 1;
+      }
+    }
+    return count;
+  };
+
+  const resting = await shot();
+  await page.mouse.move(probe.x, probe.y);
+  await page.waitForTimeout(120);
+  const early = await shot();
+  expect(changed_in_band(resting, early), "nothing appears above the control within the dwell").toBe(0);
+
+  await page.waitForTimeout(700);
+  const late = await shot();
+  expect(changed_in_band(early, late), "the tooltip appears once the dwell elapses").toBeGreaterThan(300);
+
+  // Moving off the control retracts it and restarts the dwell.
+  await page.mouse.move(probe.x - 220, probe.y);
+  await page.waitForTimeout(120);
+  expect(changed_in_band(resting, await shot()), "the tooltip retracts with the hover").toBe(0);
+});
+
+test("cancel control removes the order, emits the intent, and a rejection restores it", async ({ page }) => {
   await open_trading_demo(page);
   const probe = await page.evaluate(() => {
     window.__cancel_intents = [];
@@ -261,7 +323,15 @@ test("cancel control emits intent without removing authoritative order", async (
   expect(await page.evaluate(() => window.__cancel_intents)).toEqual([
     expect.objectContaining({ action: "cancel_order", order_id: "demo-stop" }),
   ]);
-  expect(await page.evaluate(() => window.__chart.trading().state().orders.some((order) => order.id === "demo-stop"))).toBe(true);
+  // Closing means gone: the order leaves the chart with the intent, not after it.
+  expect(await page.evaluate(() => window.__chart.trading().state().orders.some((order) => order.id === "demo-stop"))).toBe(false);
+  expect(await page.evaluate(() => window.__chart.trading().preview())).toBeNull();
+
+  expect(await page.evaluate(() => window.__chart.trading().resolve_intent(window.__cancel_intents[0].sequence, false))).toBe(true);
+  expect(await page.evaluate(() => window.__chart.trading().state().orders.find((order) => order.id === "demo-stop"))).toMatchObject({
+    id: "demo-stop",
+    status: "working",
+  });
 });
 
 test("confirmed bracket connector deactivates on an empty-canvas click without removing orders", async ({ page }) => {
@@ -334,7 +404,7 @@ test("confirmed bracket connector deactivates on an empty-canvas click without r
   expect(connector_pixels(active.url)).toBeGreaterThan(connector_pixels(inactive.url) + 20);
 });
 
-test("working-order markers omit TP/SL controls and retain manual Confirm/Discard", async ({ page }) => {
+test("working-order markers omit TP/SL controls and release straight into a modify intent", async ({ page }) => {
   await open_trading_demo(page);
   const probe = await page.evaluate(() => {
     const trading = window.__chart.trading();
@@ -345,16 +415,13 @@ test("working-order markers omit TP/SL controls and retain manual Confirm/Discar
         { id: "sell-stop", side: "sell", kind: "stop", status: "working", price: 98, quantity: 1 },
       ],
     });
-    trading.set_confirmation_mode("manual");
     window.__manual_intents = [];
     trading.subscribe_intents((intent) => window.__manual_intents.push(intent));
     const overlay = document.querySelector("#chart_container canvas:last-of-type").getBoundingClientRect();
     const width = window.__chart.time_scale().width();
-    const marker_start = width - 280;
     return {
       overlay: { left: overlay.left, top: overlay.top },
       width,
-      marker_start,
       buy_y: window.__main.price_to_coordinate(100),
       target_y: window.__main.price_to_coordinate(101.25),
       sell_y: window.__main.price_to_coordinate(98),
@@ -373,39 +440,24 @@ test("working-order markers omit TP/SL controls and retain manual Confirm/Discar
   expect(probe.hits.marker).toMatchObject({ id: "buy-limit", kind: "order_line" });
   expect(probe.hits.cancel).toMatchObject({ id: "buy-limit", kind: "cancel_button" });
 
+  // Release emits the modify intent immediately — no inline Confirm/Discard step. A host that
+  // wants a confirmation runs it around the intent before answering resolve_intent.
   await page.mouse.move(probe.overlay.left + probe.width - 200, probe.overlay.top + probe.buy_y);
   await page.mouse.down();
   await page.mouse.move(probe.overlay.left + 30, probe.overlay.top + probe.target_y, { steps: 5 });
   await page.mouse.up();
   expect(await page.evaluate(() => ({
-    preview: window.__chart.trading().preview(),
-    intents: window.__manual_intents,
-  }))).toMatchObject({
-    preview: { source: "order", order_id: "buy-limit", phase: "awaiting_confirmation" },
-    intents: [],
-  });
-
-  const manual_main_x = probe.marker_start;
-  await page.mouse.click(probe.overlay.left + manual_main_x - 36, probe.overlay.top + probe.target_y);
-  const confirmed = await page.evaluate(() => ({
     preview: window.__chart.trading().preview(),
     intents: window.__manual_intents,
     order: window.__chart.trading().state().orders.find((order) => order.id === "buy-limit"),
-  }));
-  expect(confirmed.preview).toMatchObject({ phase: "pending", price: 101.25 });
-  expect(confirmed.intents).toEqual([expect.objectContaining({ action: "modify_order", order_id: "buy-limit", price: 101.25 })]);
-  expect(confirmed.order.price).toBe(100);
+  }))).toMatchObject({
+    preview: null,
+    intents: [expect.objectContaining({ action: "modify_order", order_id: "buy-limit", price: 101.25 })],
+    // The move lands on release rather than waiting on the host.
+    order: { price: 101.25 },
+  });
   await page.evaluate(() => window.__chart.trading().resolve_intent(window.__manual_intents[0].sequence, false));
-
-  await page.mouse.move(probe.overlay.left + probe.width - 200, probe.overlay.top + probe.buy_y);
-  await page.mouse.down();
-  await page.mouse.move(probe.overlay.left + 30, probe.overlay.top + probe.target_y, { steps: 5 });
-  await page.mouse.up();
-  await page.mouse.click(probe.overlay.left + manual_main_x - 97, probe.overlay.top + probe.target_y);
-  expect(await page.evaluate(() => ({
-    preview: window.__chart.trading().preview(),
-    intent_count: window.__manual_intents.length,
-  }))).toEqual({ preview: null, intent_count: 1 });
+  expect(await page.evaluate(() => window.__chart.trading().state().orders.find((order) => order.id === "buy-limit").price)).toBe(100);
 
   await page.mouse.move(probe.overlay.left + probe.width - 200, probe.overlay.top + probe.sell_y);
   await page.mouse.down();
@@ -413,28 +465,19 @@ test("working-order markers omit TP/SL controls and retain manual Confirm/Discar
   await page.mouse.up();
   expect(await page.evaluate(() => ({
     preview: window.__chart.trading().preview(),
+    intent: window.__manual_intents.at(-1),
     intent_count: window.__manual_intents.length,
   }))).toMatchObject({
-    preview: {
-      source: "order",
-      order_id: "sell-stop",
-      side: "sell",
-      phase: "awaiting_confirmation",
-    },
-    intent_count: 1,
+    preview: null,
+    intent: { action: "modify_order", order_id: "sell-stop", side: "sell" },
+    intent_count: 2,
   });
-  await page.mouse.click(probe.overlay.left + manual_main_x - 97, probe.overlay.top + probe.sell_target_y);
-  expect(await page.evaluate(() => ({
-    preview: window.__chart.trading().preview(),
-    intent_count: window.__manual_intents.length,
-  }))).toEqual({ preview: null, intent_count: 1 });
 });
 
-test("existing TP and SL adjustments keep manual confirmation controls", async ({ page }) => {
+test("existing TP and SL adjustments release into intents with no confirmation surface", async ({ page }) => {
   await open_trading_demo(page);
   const probe = await page.evaluate(() => {
     const trading = window.__chart.trading();
-    trading.set_confirmation_mode("manual");
     window.__protection_intents = [];
     trading.subscribe_intents((intent) => window.__protection_intents.push(intent));
     const overlay = document.querySelector("#chart_container canvas:last-of-type").getBoundingClientRect();
@@ -449,49 +492,30 @@ test("existing TP and SL adjustments keep manual confirmation controls", async (
       stop_next_y: window.__main.price_to_coordinate(stop.price - 0.75),
     };
   });
-  const manual_main_x = probe.width - 297;
 
-  await page.mouse.move(probe.overlay.left + probe.width - 200, probe.overlay.top + probe.target_y);
-  await page.mouse.down();
-  await page.mouse.move(probe.overlay.left + 30, probe.overlay.top + probe.target_next_y, { steps: 5 });
-  await page.mouse.up();
-  expect(await page.evaluate(({ x, y }) => ({
-    preview: window.__chart.trading().preview(),
-    confirm: window.__chart.trading().hit_at(x - 36, y),
-    discard: window.__chart.trading().hit_at(x - 97, y),
-    intents: window.__protection_intents,
-  }), { x: manual_main_x, y: probe.target_next_y })).toMatchObject({
-    preview: { source: "order", order_id: "demo-target", phase: "awaiting_confirmation", role: "take_profit" },
-    confirm: { id: "demo-target", kind: "confirm_button" },
-    discard: { id: "demo-target", kind: "discard_button" },
-    intents: [],
-  });
-  await page.mouse.click(probe.overlay.left + manual_main_x - 36, probe.overlay.top + probe.target_next_y);
-  expect(await page.evaluate(() => window.__protection_intents)).toEqual([
-    expect.objectContaining({ action: "modify_order", order_id: "demo-target" }),
-  ]);
-  await page.evaluate(() => window.__chart.trading().resolve_intent(window.__protection_intents[0].sequence, false));
+  for (const [id, role, from_y, to_y, expected_count] of [
+    ["demo-target", "take_profit", probe.target_y, probe.target_next_y, 1],
+    ["demo-stop", "stop_loss", probe.stop_y, probe.stop_next_y, 2],
+  ]) {
+    await page.mouse.move(probe.overlay.left + probe.width - 200, probe.overlay.top + from_y);
+    await page.mouse.down();
+    await page.mouse.move(probe.overlay.left + 30, probe.overlay.top + to_y, { steps: 5 });
+    await page.mouse.up();
+    expect(await page.evaluate(() => ({
+      preview: window.__chart.trading().preview(),
+      intents: window.__protection_intents,
+    }))).toMatchObject({
+      preview: null,
+      intents: expect.arrayContaining([
+        expect.objectContaining({ action: "modify_order", order_id: id, role }),
+      ]),
+    });
+    expect(await page.evaluate(() => window.__protection_intents.length)).toBe(expected_count);
+    await page.evaluate((sequence) => window.__chart.trading().resolve_intent(sequence, false), (await page.evaluate(() => window.__protection_intents.at(-1).sequence)));
+  }
 
-  await page.mouse.move(probe.overlay.left + probe.width - 200, probe.overlay.top + probe.stop_y);
-  await page.mouse.down();
-  await page.mouse.move(probe.overlay.left + 30, probe.overlay.top + probe.stop_next_y, { steps: 5 });
-  await page.mouse.up();
-  expect(await page.evaluate(({ x, y }) => ({
-    preview: window.__chart.trading().preview(),
-    confirm: window.__chart.trading().hit_at(x - 36, y),
-    discard: window.__chart.trading().hit_at(x - 97, y),
-    intent_count: window.__protection_intents.length,
-  }), { x: manual_main_x, y: probe.stop_next_y })).toMatchObject({
-    preview: { source: "order", order_id: "demo-stop", phase: "awaiting_confirmation", role: "stop_loss" },
-    confirm: { id: "demo-stop", kind: "confirm_button" },
-    discard: { id: "demo-stop", kind: "discard_button" },
-    intent_count: 1,
-  });
-  await page.mouse.click(probe.overlay.left + manual_main_x - 97, probe.overlay.top + probe.stop_next_y);
-  expect(await page.evaluate(() => ({
-    preview: window.__chart.trading().preview(),
-    intent_count: window.__protection_intents.length,
-  }))).toEqual({ preview: null, intent_count: 1 });
+  // Nothing on the chart offers a confirm or discard control any more.
+  expect(await page.evaluate(() => "set_confirmation_mode" in window.__chart.trading())).toBe(false);
 });
 
 for (const backend of ["canvas2d", "webgpu"]) {

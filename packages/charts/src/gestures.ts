@@ -14,6 +14,7 @@ import type { chart_impl } from "./impl.js";
 const SLOP_MANHATTAN = 5; // px before a press becomes a drag (reference CancelClick/CancelTapManhattanDistance)
 const SEP_HIT = 4; // css px hit tolerance around a pane boundary
 const LONGPRESS_MS = 240; // touch hold before entering crosshair tracking (reference Delay.LongTap)
+const TRADING_TOOLTIP_MS = 450; // hover dwell before a trading control reveals its action tooltip
 const TAP_RESET_MS = 500; // window for a second tap to count as a double-tap (reference Delay.ResetClick)
 const DBL_TAP_MANHATTAN = 30; // max distance between the taps of a double-tap (reference DoubleTapManhattanDistance)
 const KEY_SCROLL_MS = 160; // keyboard scroll animation (TradingView-style smooth step)
@@ -195,13 +196,37 @@ export function install_gestures(chart: chart_impl): () => void {
   };
   const pane_of = (y: number): number => wasm.pane_index_at_y(y);
 
+  // A trading control's action tooltip waits out a hover dwell instead of appearing on contact,
+  // so sweeping the pointer across stacked markers never flashes one tooltip per marker. The
+  // engine is headless and owns no timer, so the dwell lives here and arms the engine when it
+  // elapses.
+  let tooltip_timer: ReturnType<typeof setTimeout> | null = null;
+  const clear_tooltip_dwell = () => {
+    if (tooltip_timer === null) return;
+    clearTimeout(tooltip_timer);
+    tooltip_timer = null;
+  };
+  const start_tooltip_dwell = (x: number, y: number) => {
+    clear_tooltip_dwell();
+    if (chart.trading_hit_at(x, y)?.kind !== "cancel_button") return;
+    tooltip_timer = setTimeout(() => {
+      tooltip_timer = null;
+      if (chart.arm_trading_tooltip()) chart.repaint();
+    }, TRADING_TOOLTIP_MS);
+  };
+
   const set_crosshair = (x: number, y: number) => {
     last_crosshair = { x, y };
-    wasm.set_crosshair(x, y);
+    // Pointing at a trading button suppresses the crosshair lines: the button is a control, not a
+    // price to read, and drawing the crosshair over it puts a line straight through the icon.
+    // Subscribers still receive the move — only the on-chart lines and their labels step aside.
+    if (chart.trading_hit_at(x, y)?.kind === "cancel_button") wasm.clear_crosshair();
+    else wasm.set_crosshair(x, y);
     // Phase C-d: refresh the hover hit-test (primitives + series) before the repaint that
     // follows, so a hovered series' `hoveredSeriesOnTop` z-bump lands on the same frame.
     chart.update_hover(x, y);
-    chart.trading_hover_at(x, y);
+    // Only a changed hover restarts the dwell — holding still over one control lets it elapse.
+    if (chart.trading_hover_at(x, y)) start_tooltip_dwell(x, y);
     chart.emit_crosshair(x, y);
   };
 
@@ -717,6 +742,7 @@ export function install_gestures(chart: chart_impl): () => void {
     set_sep_hover(-1);
     wasm.set_crosshair_ohlc_magnet(false); // release the Ctrl-magnet with the hover
     chart.clear_hover(); // Phase C-d: release the hover hit + hovered-series z-bump
+    clear_tooltip_dwell();
     chart.clear_trading_hover();
     wasm.clear_crosshair();
     chart.emit_crosshair_left();
@@ -1258,6 +1284,7 @@ export function install_gestures(chart: chart_impl): () => void {
     stop_kinetic();
     stop_scroll_anim();
     clear_longpress();
+    clear_tooltip_dwell();
     reset_tap();
     overlay.removeEventListener("wheel", on_wheel);
     overlay.removeEventListener("pointerdown", on_down);

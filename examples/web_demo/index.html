@@ -1173,6 +1173,32 @@ function active_series() {
   return (grid?.active_cell().chart.__seed_series ?? main);
 }
 
+// The shared engine deliberately refuses to guess which price scale an empty-pane vertical drag
+// should move when several series/scales coexist. The demo does know which series it is presenting,
+// so while that series' scale is manual it supplies that target for the duration of the press. This
+// keeps demo panning natural after an axis drag unlocks the scale without weakening the package's
+// multi-scale arbitration or leaving selection anchors behind.
+let transient_price_pan_selection = null;
+container.addEventListener("pointerdown", () => {
+  const target = active_chart();
+  const series = target === chart
+    ? window.__feature_lab?.interaction_series?.() ?? main
+    : target.__seed_series ?? null;
+  if (series === null || target.price_scale(series.price_scale_id()).options().auto_scale !== false) return;
+  const had_selection = JSON.parse(target.wasm.selection_anchor_identities_json()).length > 0;
+  if (had_selection) return;
+  target.wasm.set_selected_series(series.id);
+  transient_price_pan_selection = target;
+}, true);
+const clear_transient_price_pan_selection = () => {
+  if (transient_price_pan_selection === null) return;
+  transient_price_pan_selection.wasm.set_selected_series(undefined);
+  transient_price_pan_selection.render();
+  transient_price_pan_selection = null;
+};
+container.addEventListener("pointerup", clear_transient_price_pan_selection);
+container.addEventListener("pointercancel", clear_transient_price_pan_selection);
+
 // Reflect the active chart in the toolbar: its series type selects the matching radio and
 // shows that type's style groups (called whenever the active cell changes).
 function sync_active_toolbar() {
@@ -1341,7 +1367,12 @@ function rsi_fixture(bars, period = 14) {
 let rsi_series = null;
 document.getElementById("rsi_toggle").addEventListener("change", (e) => {
   if (e.target.checked && rsi_series === null) {
-    rsi_series = chart.add_series("line", { color: "#ab47bc", line_width: 2, title: "RSI(14)" });
+    rsi_series = chart.add_series("line", {
+      color: "#ab47bc",
+      line_width: 2,
+      title: "RSI(14)",
+      countdown_visible: false,
+    });
     rsi_series.set_data(rsi_fixture(data));
     // Pane 1 at ~30% of the main pane's stretch (heights split by stretch-factor ratio).
     rsi_series.move_to_pane(1, 0.3);

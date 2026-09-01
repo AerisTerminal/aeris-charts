@@ -1761,7 +1761,6 @@ export type order_status =
   | "rejected"
   | "expired";
 export type trading_price_scale = "right" | "left" | "overlay";
-export type trading_confirmation_mode = "instant" | "manual";
 
 export interface instrument_metadata {
   tick_size?: number;
@@ -1828,10 +1827,7 @@ export interface trading_hit {
   kind:
     | "position_line"
     | "order_line"
-    | "quantity_label"
     | "cancel_button"
-    | "confirm_button"
-    | "discard_button"
     | "execution_marker";
   distance: number;
 }
@@ -1863,7 +1859,6 @@ export interface trading_preview {
   source: "order" | "stop_loss" | "take_profit" | "order_stop_loss" | "order_take_profit";
   order_id?: string;
   position_id?: string;
-  phase: "dragging" | "awaiting_confirmation" | "pending";
   pane_index: number;
   price_scale: trading_price_scale;
   price: number;
@@ -1871,7 +1866,6 @@ export interface trading_preview {
   side: order_side;
   role: order_role;
   base_revision: number;
-  intent_sequence?: number;
 }
 
 export type trading_intent_handler = (intent: trading_intent) => void;
@@ -1903,11 +1897,13 @@ export interface trading_api {
   remove_execution(id: string): boolean;
   set_instrument(instrument: instrument_metadata): void;
   apply_options(options: Partial<trading_style_options>): void;
-  /** Choose immediate release intents or an explicit inline Confirm/Discard step. */
-  set_confirmation_mode(mode: trading_confirmation_mode): void;
   hit_at(x: number, y: number): trading_hit | null;
+  /** The live drag preview, or `null` when no drag is in flight. A released change is already
+   * applied to the chart's own state, so nothing lingers here waiting on the host. */
   preview(): trading_preview | null;
   take_intents(): trading_intent[];
+  /** Answer an emitted intent. Accepting releases the rollback the chart kept; rejecting undoes
+   * the change — restoring a closed order or position, or moving a dragged line back. */
   resolve_intent(sequence: number, accepted: boolean): boolean;
   subscribe_intents(handler: trading_intent_handler): void;
   unsubscribe_intents(handler: trading_intent_handler): void;
