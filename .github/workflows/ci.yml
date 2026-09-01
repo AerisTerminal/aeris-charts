@@ -55,6 +55,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux GPUI dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev
       - uses: Swatinem/rust-cache@v2
       - name: Test native GPUI backend
         run: cargo test -p nucleuscharts_render_gpui --features gpui-backend --all-targets --locked
