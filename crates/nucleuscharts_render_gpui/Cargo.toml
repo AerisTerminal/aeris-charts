@@ -21,8 +21,8 @@ nucleuscharts_engine = { path = "../nucleuscharts_engine" }
 nucleuscharts_render = { path = "../nucleuscharts_render" }
 
 # GPUI is sourced from Zed because Nucleus and Axiusflow intentionally track the current pre-1.0
-# API. The workspace lockfile records the reviewed immutable commit; upgrades are explicit lockfile
-# changes and must pass the complete GPUI parity suite.
+# API. Both dependencies pin the same reviewed immutable commit; upgrades are explicit manifest and
+# lockfile changes and must pass the complete GPUI parity suite.
 #
 # `default-features = false` keeps unrelated platform feature paths out of the graph, so Windows
 # resolves cleanly to GPUI's native backend.
@@ -31,7 +31,7 @@ nucleuscharts_render = { path = "../nucleuscharts_render" }
 # only resolves under a comctl32 v6 activation context. That context comes from the application
 # manifest this feature embeds. Without it the executable fails to load at all
 # (STATUS_ENTRYPOINT_NOT_FOUND, 0xC0000139) before `main` runs.
-gpui = { git = "https://github.com/zed-industries/zed", version = "=0.2.2", optional = true, default-features = false, features = [
+gpui = { git = "https://github.com/zed-industries/zed", rev = "a66fb6aebdee68ee5ae7d191d9dff0d61a42b834", version = "=0.2.2", optional = true, default-features = false, features = [
     "windows-manifest",
 ] }
 image = { version = "0.25", optional = true, default-features = false }
@@ -39,7 +39,7 @@ smallvec = { version = "1", optional = true }
 
 # The pixel-parity harness diffs GPUI's real output against Nucleus's existing native rasterizer.
 [dev-dependencies]
-gpui_platform = { git = "https://github.com/zed-industries/zed", default-features = false, features = [
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "a66fb6aebdee68ee5ae7d191d9dff0d61a42b834", default-features = false, features = [
     "wayland",
 ] }
 nucleuscharts_native = { path = "../nucleuscharts_native" }
