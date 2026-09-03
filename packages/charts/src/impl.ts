@@ -2388,9 +2388,56 @@ class trading_impl implements trading_api {
   }
 }
 
+/**
+ * PlusSignSquare glyph for the crosshair alert-create chip (HugeIcons free
+ * set, MIT — path data inlined, not the asset file): 24-grid stroked paths.
+ * The engine cannot load SVG on any backend, so the package rasterizes these
+ * exact paths to RGBA once per size and hands the pixels to the engine, which
+ * retains and paints them like a watermark on every backend. Round caps and
+ * joins come from the canvas rasterizer, which box-composed prims cannot do.
+ */
+const ALERT_CREATE_ICON_SQUARE_D =
+  "M2.5 12C2.5 7.52166 2.5 5.28249 3.89124 3.89124C5.28249 2.5 7.52166 2.5 12 2.5C16.4783 2.5 18.7175 2.5 20.1088 3.89124C21.5 5.28249 21.5 7.52166 21.5 12C21.5 16.4783 21.5 18.7175 20.1088 20.1088C18.7175 21.5 16.4783 21.5 12 21.5C7.52166 21.5 5.28249 21.5 3.89124 20.1088C2.5 18.7175 2.5 16.4783 2.5 12Z";
+const ALERT_CREATE_ICON_PLUS_D = "M12 8V16M16 12H8";
+/** Fixed white: the chip fill is dark on both themes. */
+const ALERT_CREATE_ICON_COLOR = "#ffffff";
+/** Raster supersample of the CSS draw size; crisp past DPR 3, tiny either way. */
+const ALERT_CREATE_ICON_SCALE = 3;
+/** Absolute pixel cap matching the engine's `MAX_ALERT_ICON_PX`. */
+const ALERT_CREATE_ICON_MAX_PX = 96;
+
+function rasterize_alert_create_icon(css_size: number): { pixels: Uint8Array; size: number } | null {
+  try {
+    const size = Math.min(
+      ALERT_CREATE_ICON_MAX_PX,
+      Math.max(1, Math.ceil(css_size * ALERT_CREATE_ICON_SCALE)),
+    );
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext("2d", { alpha: true });
+    if (ctx === null) return null;
+    const unit = size / 24;
+    ctx.scale(unit, unit);
+    ctx.strokeStyle = ALERT_CREATE_ICON_COLOR;
+    ctx.lineWidth = 1.5;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.stroke(new Path2D(ALERT_CREATE_ICON_SQUARE_D));
+    ctx.stroke(new Path2D(ALERT_CREATE_ICON_PLUS_D));
+    const data = ctx.getImageData(0, 0, size, size).data;
+    return {
+      pixels: new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
+      size,
+    };
+  } catch {
+    // No canvas 2D (or no Path2D): the engine keeps its prim-composed icon.
+    return null;
+  }
+}
+
 class alert_impl implements alert_api {
   private readonly create_request_handlers = new Set<alert_create_request_handler>();
-
   constructor(private readonly chart: chart_impl) {}
 
   apply_snapshot(snapshot: alert_snapshot): void {
@@ -2456,6 +2503,8 @@ export class chart_impl implements chart_api {
     tracking_exit_mode: "on_next_tap",
   };
   private accessibility_handle: accessibility_handle | null = null;
+  /** Raster pixel size of the uploaded alert-create icon; `null` until first upload. */
+  private alert_icon_size: number | null = null;
   private readonly ts = new time_scale_impl(this);
   private readonly trading_handle = new trading_impl(this);
   private readonly alert_handle = new alert_impl(this);
@@ -2863,6 +2912,27 @@ export class chart_impl implements chart_api {
     this.ring_raf = requestAnimationFrame(this.ring_tick);
   };
 
+  /**
+   * Keep the engine's create-chip icon fed with the rasterized glyph. Runs
+   * before every render but only rasterizes when the target size changed
+   * (font option) — a few compares on steady frames. Failures keep the
+   * engine's prim-composed fallback, so headless and restricted hosts (and
+   * offscreen workers, which never call this) keep working.
+   */
+  private ensure_alert_create_icon(): void {
+    const css = this.wasm.alert_create_icon_css_size();
+    if (!(css > 0)) return;
+    const size = Math.min(
+      ALERT_CREATE_ICON_MAX_PX,
+      Math.max(1, Math.ceil(css * ALERT_CREATE_ICON_SCALE)),
+    );
+    if (size === this.alert_icon_size) return;
+    const raster = rasterize_alert_create_icon(css);
+    if (raster === null) return;
+    if (!this.wasm.set_alert_create_icon(raster.pixels, raster.size, raster.size)) return;
+    this.alert_icon_size = raster.size;
+  }
+
   /** Repaint unless torn down. Named distinctly from the public `render` for internal use. */
   repaint(): void {
     if (this.repaint_raf !== null) {
@@ -2870,6 +2940,7 @@ export class chart_impl implements chart_api {
       this.repaint_raf = null;
     }
     if (!this.removed) {
+      this.ensure_alert_create_icon();
       this.wasm.render();
       // The text editor tracks its anchor through the change that drove this repaint
       // (wheel zoom/scroll, pinch, resize, data update) — before plugin passes composite.

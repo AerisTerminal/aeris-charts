@@ -27,7 +27,9 @@ use nucleuscharts_core::style::{
 use nucleuscharts_render::bars::{build_bars, BarItem, BarsParams};
 use nucleuscharts_render::candles::{build_candles, CandleItem, CandlesParams};
 use nucleuscharts_render::color::Color;
-use nucleuscharts_render::draw_list::{Gradient, IRect, LineStyle, LineType, Prim, TextAlign};
+use nucleuscharts_render::draw_list::{
+    Gradient, IRect, LineStyle, LineType, Prim, RasterImage, TextAlign,
+};
 use nucleuscharts_render::histogram::{build_histogram, HistogramItem, HistogramParams};
 use nucleuscharts_render::line::{dash_split, expand_line, LinePoint};
 
@@ -508,6 +510,13 @@ impl AxisLabelCorners {
         bottom_left: true,
         bottom_right: true,
     };
+    /// Every corner (small floating icon boxes such as the alert create glyph).
+    pub const ALL: Self = Self {
+        top_left: true,
+        top_right: true,
+        bottom_left: true,
+        bottom_right: true,
+    };
 
     /// The whole-side selection for a single-row boxed label from its text alignment: `Left`
     /// (text starting at the right strip's left edge) rounds the right corners, `Right` the
@@ -564,10 +573,23 @@ pub struct AxisBand {
     pub color: Color,
 }
 
+/// A host-rasterized icon painted on an axis strip in media px, chart space —
+/// the same [`RasterImage`] contract pane watermarks use, so every backend
+/// uploads/caches and paints it without engine drawing code per host.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AxisIcon {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub image: RasterImage,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AxisFrame {
     pub bands: Vec<AxisBand>,
     pub labels: Vec<AxisLabel>,
+    pub images: Vec<AxisIcon>,
     pub separators: Vec<f64>,
     /// Price-axis tick stubs (reference `ticksVisible`): 5 css px horizontal marks painted from the
     /// pane edge into the axis strip at each tick coordinate, in the strip's border color.

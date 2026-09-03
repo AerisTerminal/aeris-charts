@@ -730,7 +730,7 @@ impl ChartEngine {
             .splice(last_value_start..last_value_start, action_labels);
         if include_transient {
             self.append_crosshair_labels(&mut out.labels, &measure);
-            self.append_alert_create_chip(&mut out.labels);
+            self.append_alert_create_chip(&mut out);
         }
         out.separators = self
             .panes

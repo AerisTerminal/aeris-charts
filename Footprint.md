@@ -107,6 +107,8 @@ the summary and queryable even when LOD hides text.
 LOD is selected from horizontal bar width and vertical tick-row height:
 
 - **Detailed:** bid/ask (or selected mode) text, cells, POC, imbalance, and summary.
+  The two-line summary is omitted while the bar is too narrow to fit it without
+  overprinting neighboring bars (`bar_spacing < 9 × font_size`).
 - **Cells:** colored level cells and POC/stacked emphasis, without glyphs.
 - **Summary:** one delta/volume body plus POC marker per bar.
 Frame work is bounded to the visible logical range. At the densest zoom, Summary mode is already one

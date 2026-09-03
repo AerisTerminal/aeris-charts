@@ -1782,9 +1782,15 @@ mod tests {
         assert!(prims.iter().any(|primitive| {
             matches!(primitive, Prim::Rect { color, .. } if *color == stacked_ask)
         }));
+        // POC reads as a side stripe on its row, not a full outline.
         assert!(prims.iter().any(|primitive| {
-            matches!(primitive, Prim::RoundRect { border_color, .. } if *border_color == poc)
+            matches!(primitive, Prim::Rect { rect, color }
+                if *color == poc.solid() && rect.w == 2 && rect.h > 1)
         }));
+        // Imbalance glyphs are bold so the signal scans at a glance.
+        assert!(prims
+            .iter()
+            .any(|primitive| { matches!(primitive, Prim::Text { weight, .. } if *weight == 700) }));
 
         chart.set_theme(crate::ChartTheme::Light);
         let expected_text = Color::parse_css(&chart.options.get().layout.text_color).unwrap();
@@ -1809,9 +1815,10 @@ mod tests {
         assert!(!prims
             .iter()
             .any(|primitive| matches!(primitive, Prim::Text { .. })));
-        assert!(prims
-            .iter()
-            .any(|primitive| matches!(primitive, Prim::RoundRect { border_color, .. } if *border_color == poc)));
+        assert!(prims.iter().any(|primitive| {
+            matches!(primitive, Prim::Rect { rect, color }
+                if *color == poc.solid() && rect.w == 2 && rect.h > 1)
+        }));
         assert!(
             prims
                 .iter()
@@ -1834,6 +1841,274 @@ mod tests {
         assert!(prims
             .iter()
             .any(|primitive| matches!(primitive, Prim::Rect { color, .. } if *color == poc)));
+    }
+
+    #[test]
+    fn footprint_volume_profile_scales_cell_intensity() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let visual = FootprintVisualOptions {
+            font_size: 9.0,
+            ..FootprintVisualOptions::default()
+        };
+        let bid = visual.bid_color;
+        chart
+            .configure_footprint_series(
+                0,
+                FootprintSeriesOptions {
+                    aggregation: FootprintAggregationOptions {
+                        tick_size: 1.0,
+                        bars: FootprintBarAggregation::Time {
+                            interval_micros: 60_000_000,
+                            anchor_micros: 0,
+                        },
+                        // Disable imbalance so raw volume heat is directly comparable.
+                        imbalance: FootprintImbalanceOptions {
+                            ratio: 3.0,
+                            minimum_volume: 1_000_000.0,
+                            consecutive_levels: 3,
+                        },
+                    },
+                    visual,
+                },
+            )
+            .unwrap();
+        chart
+            .set_footprint_trades(
+                0,
+                vec![
+                    trade(1, 100.0, 5.0, AggressorSide::Sell),
+                    trade(2, 101.0, 50.0, AggressorSide::Sell),
+                    // POC settles here so the two compared rows keep raw profile bars.
+                    trade(3, 102.0, 200.0, AggressorSide::Sell),
+                ],
+            )
+            .unwrap();
+        chart.time_scale.set_width(800.0);
+        chart.fit_content();
+        chart.set_bar_spacing(100.0);
+        let frame = chart.build_frame();
+        let segment = chart
+            .frame_series_segments(0)
+            .iter()
+            .find(|segment| segment.series_id == Some(0))
+            .unwrap();
+        let prims = &frame.panes[0].main[segment.start..segment.end];
+        let mut alphas = prims
+            .iter()
+            .filter_map(|primitive| match primitive {
+                Prim::Rect { rect: _, color }
+                    if color.r() == bid.r() && color.g() == bid.g() && color.b() == bid.b() =>
+                {
+                    Some(color.a())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        alphas.sort_unstable();
+        alphas.dedup();
+        assert!(
+            alphas.len() >= 2,
+            "quiet and heavy prints must differ in intensity, got {alphas:?}"
+        );
+        assert!(
+            alphas.iter().all(|alpha| *alpha >= 26),
+            "faint cells must keep their shape, got {alphas:?}"
+        );
+        // Profile silhouette: the heavy print's bar must extend further than the
+        // quiet print's bar within the same half-width.
+        let mut bar_widths = prims
+            .iter()
+            .filter_map(|primitive| match primitive {
+                Prim::Rect { rect, color }
+                    if color.r() == bid.r()
+                        && color.g() == bid.g()
+                        && color.b() == bid.b()
+                        && color.a() > 26 =>
+                {
+                    Some(rect.w)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        bar_widths.sort_unstable();
+        bar_widths.dedup();
+        assert!(
+            bar_widths.len() >= 2,
+            "profile bars must grow with volume, got {bar_widths:?}"
+        );
+    }
+
+    #[test]
+    fn footprint_numbers_grow_into_tall_rows() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        chart
+            .configure_footprint_series(
+                0,
+                FootprintSeriesOptions {
+                    aggregation: FootprintAggregationOptions {
+                        tick_size: 1.0,
+                        bars: FootprintBarAggregation::Time {
+                            interval_micros: 60_000_000,
+                            anchor_micros: 0,
+                        },
+                        imbalance: FootprintImbalanceOptions {
+                            ratio: 3.0,
+                            minimum_volume: 1_000_000.0,
+                            consecutive_levels: 3,
+                        },
+                    },
+                    visual: FootprintVisualOptions {
+                        font_size: 9.0,
+                        ..FootprintVisualOptions::default()
+                    },
+                },
+            )
+            .unwrap();
+        // Three levels across a tall pane: rows are far taller than the
+        // configured 9px, so numbers must grow instead of floating tiny.
+        chart
+            .set_footprint_trades(
+                0,
+                vec![
+                    trade(1, 100.0, 5.0, AggressorSide::Sell),
+                    trade(2, 101.0, 50.0, AggressorSide::Sell),
+                    trade(3, 102.0, 200.0, AggressorSide::Sell),
+                ],
+            )
+            .unwrap();
+        chart.time_scale.set_width(800.0);
+        chart.fit_content();
+        chart.set_bar_spacing(100.0);
+        let frame = chart.build_frame();
+        let segment = chart
+            .frame_series_segments(0)
+            .iter()
+            .find(|segment| segment.series_id == Some(0))
+            .unwrap();
+        let largest = frame.panes[0].main[segment.start..segment.end]
+            .iter()
+            .filter_map(|primitive| match primitive {
+                Prim::Text { size, .. } => Some(*size),
+                _ => None,
+            })
+            .fold(0.0f32, f32::max);
+        assert!(
+            largest > 9.0,
+            "tall rows must grow numbers past the configured 9px, got {largest}"
+        );
+    }
+
+    #[test]
+    fn footprint_summary_drops_out_when_the_bar_cannot_fit_it() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        chart
+            .configure_footprint_series(
+                0,
+                FootprintSeriesOptions {
+                    aggregation: FootprintAggregationOptions {
+                        tick_size: 1.0,
+                        bars: FootprintBarAggregation::Time {
+                            interval_micros: 60_000_000,
+                            anchor_micros: 0,
+                        },
+                        ..FootprintAggregationOptions::default()
+                    },
+                    visual: FootprintVisualOptions {
+                        font_size: 9.0,
+                        ..FootprintVisualOptions::default()
+                    },
+                },
+            )
+            .unwrap();
+        chart
+            .set_footprint_trades(
+                0,
+                vec![
+                    trade(1, 100.0, 5.0, AggressorSide::Sell),
+                    trade(2, 101.0, 50.0, AggressorSide::Sell),
+                    trade(3, 102.0, 200.0, AggressorSide::Sell),
+                ],
+            )
+            .unwrap();
+        chart.time_scale.set_width(800.0);
+        chart.fit_content();
+        let summaries = |chart: &mut ChartEngine| {
+            chart.build_frame().panes[0]
+                .main
+                .iter()
+                .filter(
+                    |primitive| matches!(primitive, Prim::Text { text, .. } if text.contains("Δ")),
+                )
+                .count()
+        };
+        // 9px type needs spacing >= 81; at 72 the summary would overprint neighbors.
+        chart.set_bar_spacing(100.0);
+        assert!(summaries(&mut chart) > 0);
+        chart.set_bar_spacing(72.0);
+        assert_eq!(summaries(&mut chart), 0);
+    }
+
+    #[test]
+    fn footprint_single_imbalance_highlights_without_stack() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let visual = FootprintVisualOptions {
+            font_size: 9.0,
+            ..FootprintVisualOptions::default()
+        };
+        let stacked_ask = visual.stacked_ask_color;
+        let single = Color::rgba(stacked_ask.r(), stacked_ask.g(), stacked_ask.b(), 215);
+        chart
+            .configure_footprint_series(
+                0,
+                FootprintSeriesOptions {
+                    aggregation: FootprintAggregationOptions {
+                        tick_size: 1.0,
+                        bars: FootprintBarAggregation::Time {
+                            interval_micros: 60_000_000,
+                            anchor_micros: 0,
+                        },
+                        imbalance: FootprintImbalanceOptions {
+                            ratio: 3.0,
+                            minimum_volume: 20.0,
+                            consecutive_levels: 3,
+                        },
+                    },
+                    visual,
+                },
+            )
+            .unwrap();
+        chart
+            .set_footprint_trades(
+                0,
+                vec![
+                    trade(1, 100.0, 30.0, AggressorSide::Sell),
+                    trade(2, 101.0, 100.0, AggressorSide::Buy),
+                    trade(3, 102.0, 5.0, AggressorSide::Buy),
+                ],
+            )
+            .unwrap();
+        chart.time_scale.set_width(800.0);
+        chart.fit_content();
+        chart.set_bar_spacing(100.0);
+        let frame = chart.build_frame();
+        let segment = chart
+            .frame_series_segments(0)
+            .iter()
+            .find(|segment| segment.series_id == Some(0))
+            .unwrap();
+        let prims = &frame.panes[0].main[segment.start..segment.end];
+        assert!(
+            prims
+                .iter()
+                .any(|primitive| matches!(primitive, Prim::Rect { color, .. } if *color == single)),
+            "a lone diagonal imbalance must still highlight its cell"
+        );
+        assert!(
+            !prims.iter().any(
+                |primitive| matches!(primitive, Prim::Rect { color, .. } if *color == stacked_ask)
+            ),
+            "a run shorter than the stacked threshold must not use the stacked treatment"
+        );
     }
 
     #[test]

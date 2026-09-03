@@ -70,10 +70,10 @@ test("feature lab launches a readable tick-driven footprint preview", async ({ p
   expect(state).toMatchObject({
     active: ["footprint"],
     visible: true,
-    bars: 8,
-    levels: 5,
+    bars: 12,
+    levels: 11,
     has_stacked: true,
-    spacing: 96,
+    spacing: 72,
     main_visible: false,
     footprint_scale_id: "footprint-dedicated",
     main_scale_id: "right",

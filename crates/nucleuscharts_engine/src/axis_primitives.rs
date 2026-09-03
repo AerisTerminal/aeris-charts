@@ -367,5 +367,20 @@ impl ChartEngine {
             }
             append_text(label, output);
         }
+        // Host-rasterized icons paint last: above label fills, below glyphs is
+        // unnecessary since icons carry their own pixels — top keeps them crisp
+        // over any box they share (e.g. the alert create chip's fill).
+        for icon in &axis_frame.images {
+            output.push(Prim::Image {
+                image: icon.image.clone(),
+                rect: [
+                    (icon.x * dpr) as f32,
+                    (icon.y * dpr) as f32,
+                    (icon.width * dpr) as f32,
+                    (icon.height * dpr) as f32,
+                ],
+                opacity: 1.0,
+            });
+        }
     }
 }

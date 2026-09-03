@@ -23,6 +23,11 @@ pub(crate) fn alert_color(status: AlertLineStatus) -> Color {
     }
 }
 
+/// Fraction of the create chip the host icon fills when one is installed.
+/// The TypeScript rasterizer sizes its pixels from
+/// `alert_create_icon_css_size`, so both sides agree without duplicating this.
+pub(crate) const CREATE_ICON_FRACTION: f64 = 0.8;
+
 impl ChartEngine {
     pub(crate) fn alert_create_chip(&self) -> Option<AlertCreateChip> {
         if !self.alert_state.create_button_visible
@@ -94,10 +99,11 @@ impl ChartEngine {
         true
     }
 
-    pub(super) fn append_alert_create_chip(&self, labels: &mut Vec<AxisLabel>) {
+    pub(super) fn append_alert_create_chip(&self, frame: &mut AxisFrame) {
         let Some(chip) = self.alert_create_chip() else {
             return;
         };
+        let labels = &mut frame.labels;
         let x = chip.x + self.pane_left;
         let background = css_color(
             &self
@@ -108,24 +114,37 @@ impl ChartEngine {
                 .label_background_color,
             CROSSHAIR_LABEL_BG,
         );
+        // Hover restyles only — the chip stays visible whenever the crosshair is.
+        // Pointer and hit rect share chart space (`alert_create_hit_at`), and every
+        // crosshair move already rebuilds the axis, so no extra invalidation is needed.
+        let hovered = self.crosshair.is_some_and(|(pointer_x, pointer_y)| {
+            pointer_x >= chip.x
+                && pointer_x <= chip.x + chip.size
+                && (pointer_y - chip.y).abs() <= chip.size / 2.0
+        });
+        // Neutral hover: the fill lifts a step; the icon stays fixed white —
+        // the chip fill is dark on both themes, so one color reads everywhere.
+        // Never a blue fill — the button stays chrome, not a call to action.
+        let fill = if hovered {
+            background.lighten(0.3)
+        } else {
+            background
+        };
+        let glyph = Color::rgb(0xff, 0xff, 0xff);
+        // The container is textless; the icon label below owns the "+" glyph so
+        // each label's text paints after its own boxes and nothing covers it.
         labels.push(AxisLabel {
-            text: "+".to_string(),
+            text: String::new(),
             x: x + chip.size / 2.0,
             y: chip.y,
-            color: self.axis_label_text_color(background),
+            color: glyph,
             align: AxisTextAlign::Center,
             midpoint: AxisTextMidpoint::Label,
-            font_scale: 1.15,
-            bold: true,
-            background: Some((
-                x,
-                chip.y - chip.size / 2.0,
-                chip.size,
-                chip.size,
-                background,
-            )),
-            // Keep the outer edge rounded and the edge adjoining the primary price chip square,
-            // so the pair reads as one attached crosshair control.
+            font_scale: 1.0,
+            bold: false,
+            background: Some((x, chip.y - chip.size / 2.0, chip.size, chip.size, fill)),
+            // Attached like before: rounded on the outer edge, square against
+            // the price tag — no radius on the tag side, no outer border.
             background_corners: match chip.price_scale {
                 AlertPriceScale::Left => AxisLabelCorners::RIGHT,
                 AlertPriceScale::Right | AlertPriceScale::Overlay => AxisLabelCorners::LEFT,
@@ -134,6 +153,71 @@ impl ChartEngine {
             attach_group: None,
             border: None,
         });
+        // Host icon wins when installed: the exact rasterized asset, drawn by
+        // every backend through the shared image primitive. Otherwise the
+        // prim-composed fallback below keeps headless/native hosts working.
+        if let Some(image) = self.alert_state.create_icon.clone() {
+            let side = chip.size * CREATE_ICON_FRACTION;
+            frame.images.push(AxisIcon {
+                x: x + (chip.size - side) / 2.0,
+                y: chip.y - side / 2.0,
+                width: side,
+                height: side,
+                image,
+            });
+            return;
+        }
+        // PlusSignSquare icon (HugeIcons free set, MIT — geometry replicated, not
+        // the asset file, which is SVG for the DOM and unloadable here): on its
+        // 24-grid the square spans 2.5→21.5 with ~1.4 radius and the plus spans
+        // 8→16 at 1.5 stroke with round caps. System fonts cannot be trusted
+        // with such a glyph (same reason the alert bell is prim-built), so the
+        // icon is a small rounded box carrying the plus bars, all painted from
+        // the same box machinery every backend already executes for axis
+        // labels. Interiors repaint the chip fill opaque: a transparent fill
+        // would be a no-op blend and leave a solid block of the stroke color.
+        let icon = chip.size * 0.62;
+        let icon_x = x + (chip.size - icon) / 2.0;
+        let icon_y = chip.y - icon / 2.0;
+        labels.push(AxisLabel {
+            text: String::new(),
+            x: x + chip.size / 2.0,
+            y: chip.y,
+            color: glyph,
+            align: AxisTextAlign::Center,
+            midpoint: AxisTextMidpoint::Label,
+            font_scale: 1.0,
+            bold: false,
+            background: Some((icon_x, icon_y, icon, icon, fill)),
+            background_corners: AxisLabelCorners::ALL,
+            measure_extra: 0.0,
+            attach_group: None,
+            border: Some((1.0, glyph)),
+        });
+        // Plus arms: 8 of the icon square's 19 inner units long, 1.5 thick.
+        let center_x = x + chip.size / 2.0;
+        let arm = icon * 8.0 / 19.0;
+        let stroke = (icon * 1.5 / 19.0).round().max(1.0);
+        for (bar_x, bar_y, bar_w, bar_h) in [
+            (center_x - arm / 2.0, chip.y - stroke / 2.0, arm, stroke),
+            (center_x - stroke / 2.0, chip.y - arm / 2.0, stroke, arm),
+        ] {
+            labels.push(AxisLabel {
+                text: String::new(),
+                x: center_x,
+                y: chip.y,
+                color: glyph,
+                align: AxisTextAlign::Center,
+                midpoint: AxisTextMidpoint::Label,
+                font_scale: 1.0,
+                bold: false,
+                background: Some((bar_x, bar_y, bar_w, bar_h, glyph)),
+                background_corners: AxisLabelCorners::NONE,
+                measure_extra: 0.0,
+                attach_group: None,
+                border: None,
+            });
+        }
     }
 
     pub(super) fn build_alert_lines_frame(

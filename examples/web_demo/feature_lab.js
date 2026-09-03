@@ -109,28 +109,28 @@ function stacked_series_data(bars, layer_count = 4) {
 
 function footprint_trades(bars) {
   const tick_size = 0.25;
-  const sample = bars.slice(-8);
+  const sample = bars.slice(-12);
   const trades = [];
   let trade_id = 1;
+  // Dense center-peaked synthetic flow: heavy middle, tapering edges, alternating
+  // dominant side per bar so delta, POC, and stacked imbalances all show up.
+  // Eleven levels per bar also keeps price rows compact like production flow.
+  const shape = [3, 6, 11, 17, 23, 28, 23, 17, 11, 6, 3];
+  const offsets = [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5];
   for (let bar_index = 0; bar_index < sample.length; bar_index += 1) {
     const bar = sample[bar_index];
     const start_seconds = Math.floor(bar.time / 3600) * 3600;
     const center_level = Math.round(bar.close / tick_size) + (bar_index % 3) - 1;
     const ask_dominant = bar_index % 2 === 0;
-    const levels = [-2, -1, 0, 1, 2].map((offset) => center_level + offset);
     const events = [];
-    for (let index = 0; index < levels.length; index += 1) {
-      const level = levels[index];
-      const edge = index === 0 || index === levels.length - 1;
-      const bid_volume = ask_dominant
-        ? 4 + index
-        : (index <= 2 ? 54 - index * 8 : 8 + index);
-      const ask_volume = ask_dominant
-        ? (index >= 2 ? 46 + (index - 2) * 9 : 6 + index)
-        : 5 + index;
+    for (let index = 0; index < offsets.length; index += 1) {
+      const level = center_level + offsets[index];
+      const peak = shape[index];
+      const bid_volume = ask_dominant ? Math.max(2, Math.round(peak * 0.2)) : peak;
+      const ask_volume = ask_dominant ? peak : Math.max(2, Math.round(peak * 0.2));
       events.push(
-        { level, volume: edge ? Math.max(2, bid_volume - 2) : bid_volume, aggressor: "sell" },
-        { level, volume: edge ? Math.max(2, ask_volume - 2) : ask_volume, aggressor: "buy" },
+        { level, volume: bid_volume, aggressor: "sell" },
+        { level, volume: ask_volume, aggressor: "buy" },
       );
     }
     // Reverse alternate bars so the running path visibly exercises both positive and negative
@@ -156,7 +156,7 @@ function footprint_trades(bars) {
 function use_footprint_spacing(chart) {
   const scale = chart.time_scale();
   const previous = scale.options();
-  scale.apply_options({ min_bar_spacing: 4, bar_spacing: 96, right_offset: 0 });
+  scale.apply_options({ min_bar_spacing: 4, bar_spacing: 72, right_offset: 0 });
   scale.scroll_to_real_time();
   return () => scale.apply_options({
     min_bar_spacing: previous.min_bar_spacing,
@@ -196,7 +196,19 @@ function series_features(bars) {
         footprint.set_trades(footprint_trades(bars));
         return footprint;
       },
-      compose: (chart) => use_footprint_spacing(chart),
+      compose: (chart) => {
+        const restore_spacing = use_footprint_spacing(chart);
+        // The main candles are hidden while the replacement is active; hide their
+        // now-empty right scale too so it does not render a second dead axis
+        // beside the dedicated footprint scale.
+        const right_scale = chart.price_scale("right");
+        const right_visible = right_scale.options().visible !== false;
+        right_scale.apply_options({ visible: false });
+        return () => {
+          restore_spacing?.();
+          right_scale.apply_options({ visible: right_visible });
+        };
+      },
     },
     {
       id: "brushable-area", label: "Brushable area", detail: "Drag to brush", icon: "chart", interactive: true,
