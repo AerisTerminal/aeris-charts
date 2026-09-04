@@ -596,13 +596,13 @@ impl ChartEngine {
         // Indicator chrome defaults: no candle-close countdown (theirs is a line value, not a
         // bar close), the auto-generated name chip shows (platforms override the name through
         // the series `title` option — custom-script indicators will set their own), and the
-        // line draws at 1px — every default is overridable through the ordinary series options.
+        // line draws at 2px — every default is overridable through the ordinary series options.
         for (output_index, &id) in ids.iter().enumerate() {
             if let Some(s) = self.series.iter_mut().find(|s| s.id == id) {
                 s.countdown_visible = false;
                 s.title_visible = true;
                 s.title = indicator_output_title(&kind, output_index);
-                s.line_width = Some(1.0);
+                s.line_width = Some(2.0);
                 if let Some(color) = indicator_output_color(&kind, output_index) {
                     s.line_color = Some(color.to_string());
                 }

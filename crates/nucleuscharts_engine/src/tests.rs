@@ -1842,7 +1842,7 @@ fn ten_thousand_add_remove_cycles_reuse_bounded_storage() {
 }
 
 #[test]
-fn indicator_outputs_drop_the_countdown_show_the_name_chip_and_default_to_1px() {
+fn indicator_outputs_drop_the_countdown_show_the_name_chip_and_default_to_2px() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     let values = [1.0, 2.0, 3.0, 4.0, 5.0];
     chart
@@ -1861,7 +1861,7 @@ fn indicator_outputs_drop_the_countdown_show_the_name_chip_and_default_to_1px() 
     assert!(!entry.countdown_visible);
     assert!(entry.title_visible);
     assert_eq!(entry.title, "RSI 2");
-    assert_eq!(entry.line_width, Some(1.0));
+    assert_eq!(entry.line_width, Some(2.0));
 
     // The whole native set auto-names itself for the platform's chips.
     let sma = chart.add_sma(0, 2).unwrap();
