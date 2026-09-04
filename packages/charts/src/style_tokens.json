@@ -28,7 +28,7 @@
     "muted_border": "#262626",
     "ring": "#353535",
     "crosshair_line": "#262626",
-    "crosshair_label": "#181818"
+    "crosshair_label": "#262626"
   },
   "market": {
     "up": "#089981",

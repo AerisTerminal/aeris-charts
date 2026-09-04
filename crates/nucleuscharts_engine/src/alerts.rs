@@ -751,6 +751,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(images.len(), 1);
         assert_eq!(*images[0].2, 1.0);
+        assert!(images[0].1.iter().all(|value| value.fract() == 0.0));
         // Clearing restores the prim fallback.
         assert!(chart.clear_alert_create_icon());
         assert!(!chart.clear_alert_create_icon());

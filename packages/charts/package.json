@@ -68,8 +68,8 @@
     "prepublishOnly": "npm run clean && npm run build && npm run check:api && npm run check:release-gates && npm run test:pack"
   },
   "devDependencies": {
-    "esbuild": "^0.24.0",
-    "oxlint": "^1.74.0",
+    "esbuild": "^0.28.2",
+    "oxlint": "^1.81.0",
     "typescript": "^7.0.2"
   }
 }

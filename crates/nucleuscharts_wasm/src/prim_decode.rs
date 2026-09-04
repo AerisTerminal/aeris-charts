@@ -65,7 +65,7 @@ fn style(value: &serde_json::Value) -> nucleuscharts_render::draw_list::LineStyl
 fn push_points(value: &serde_json::Value, pool: &mut Vec<[f32; 2]>) -> Option<(u32, u32)> {
     let flat = value.get("points")?.as_array()?;
     let first = pool.len();
-    for pair in flat.chunks_exact(2) {
+    for pair in flat.as_chunks::<2>().0 {
         let (Some(x), Some(y)) = (pair[0].as_f64(), pair[1].as_f64()) else {
             pool.truncate(first);
             return None;

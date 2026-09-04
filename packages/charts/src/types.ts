@@ -1719,31 +1719,26 @@ export interface alert_snapshot {
   lines?: alert_line[];
 }
 
-/** Exact chart location emitted when the crosshair's plus chip is clicked. */
-export interface alert_create_request {
+/** Exact chart location emitted when the crosshair's multipurpose action button is clicked. */
+export interface crosshair_action_request {
   sequence: number;
   pane_index: number;
-  price_scale: alert_price_scale;
+  price_scale_id: string;
   price: number;
-  condition: alert_condition;
-  frequency: alert_frequency;
 }
 
-export type alert_create_request_handler = (request: alert_create_request) => void;
+export type crosshair_action_request_handler = (request: crosshair_action_request) => void;
 
 /**
  * Alert presentation boundary. The host owns dialogs, persistence, condition evaluation,
- * expiration, notifications, and server/background delivery; Nucleus owns only the create chip
- * and backend-neutral line indicators.
+ * expiration, notifications, and server/background delivery; Nucleus owns the backend-neutral
+ * line indicators. The multipurpose crosshair action button belongs to {@link chart_api}.
  */
 export interface alert_api {
   apply_snapshot(snapshot: alert_snapshot): void;
   state(): Required<alert_snapshot>;
   update_line(line: alert_line): void;
   remove_line(id: string): boolean;
-  set_create_button_visible(visible: boolean): void;
-  subscribe_create_requests(handler: alert_create_request_handler): void;
-  unsubscribe_create_requests(handler: alert_create_request_handler): void;
 }
 
 export type position_side = "long" | "short";
@@ -1955,8 +1950,13 @@ export interface chart_api {
   frame_stats(): frame_stats;
   /** The chart-local first-party trading domain. Broker state remains host-authoritative. */
   trading(): trading_api;
-  /** Host-authoritative price-alert indicators and crosshair create requests. */
+  /** Host-authoritative price-alert indicators. */
   alerts(): alert_api;
+  /** Show or hide the neutral crosshair action button. */
+  set_crosshair_action_button_visible(visible: boolean): void;
+  /** Subscribe to requests for a host-owned action menu at the crosshair price. */
+  subscribe_crosshair_action(handler: crosshair_action_request_handler): void;
+  unsubscribe_crosshair_action(handler: crosshair_action_request_handler): void;
   /** The singleton accessibility controller installed for this chart. */
   accessibility(): accessibility_handle;
   /**

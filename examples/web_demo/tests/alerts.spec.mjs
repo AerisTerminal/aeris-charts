@@ -10,7 +10,7 @@ test("crosshair plus chip emits an exact host request and host alert lines stay 
   await open_alert_demo(page);
   const probe = await page.evaluate(() => {
     window.__alert_requests = [];
-    window.__chart.alerts().subscribe_create_requests((request) => window.__alert_requests.push(request));
+    window.__chart.subscribe_crosshair_action((request) => window.__alert_requests.push(request));
     const overlay = document.querySelector("#chart_container canvas:last-of-type").getBoundingClientRect();
     return {
       x: overlay.left + window.__chart.time_scale().width() - 11.5,
@@ -26,9 +26,7 @@ test("crosshair plus chip emits an exact host request and host alert lines stay 
   const request = await page.evaluate(() => window.__alert_requests[0]);
   expect(request).toMatchObject({
     pane_index: 0,
-    price_scale: "right",
-    condition: "crossing",
-    frequency: "only_once",
+    price_scale_id: "right",
   });
   expect(request.price).toBeCloseTo(104, 6);
 
@@ -62,4 +60,22 @@ test("crosshair plus chip emits an exact host request and host alert lines stay 
       label: "Breakout",
     }),
   ]));
+});
+
+test("crosshair plus icon raster follows browser zoom DPR", async ({ page }) => {
+  await open_alert_demo(page);
+
+  const sizes = await page.evaluate(() => {
+    const container = document.querySelector("#chart_container").getBoundingClientRect();
+    const chart = window.__chart;
+    chart.resize(container.width, container.height, 1);
+    const dpr1 = chart.alert_icon_size_for_test();
+    chart.resize(container.width, container.height, 2);
+    const dpr2 = chart.alert_icon_size_for_test();
+    return { dpr1, dpr2 };
+  });
+
+  // Default font 12 => 17px chip => 13.6px icon. Its intrinsic bitmap must
+  // match that destination at each DPR instead of remaining a fixed 3x raster.
+  expect(sizes).toEqual({ dpr1: 14, dpr2: 27 });
 });

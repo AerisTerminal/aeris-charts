@@ -23,7 +23,7 @@ mod tests {
         assert_eq!(DARK_MUTED_FOREGROUND_CSS, "#b7b7b7");
         assert_eq!(DARK_BORDER_CSS, "#262626");
         assert_eq!(DARK_CROSSHAIR_CSS, DARK_BORDER_CSS);
-        assert_eq!(DARK_CROSSHAIR_LABEL_CSS, DARK_MUTED_CSS);
+        assert_eq!(DARK_CROSSHAIR_LABEL_CSS, DARK_BORDER_CSS);
         assert_eq!(LIGHT_CROSSHAIR_CSS, LIGHT_FOREGROUND_CSS);
         assert_eq!(LIGHT_CROSSHAIR_LABEL_CSS, LIGHT_FOREGROUND_CSS);
         assert_eq!(DARK_SEPARATOR_HOVER_CSS, DARK_ACCENT_CSS);

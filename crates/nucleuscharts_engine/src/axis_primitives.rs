@@ -371,13 +371,17 @@ impl ChartEngine {
         // unnecessary since icons carry their own pixels — top keeps them crisp
         // over any box they share (e.g. the alert create chip's fill).
         for icon in &axis_frame.images {
+            // Axis icons are already rasterized for their settled device-pixel
+            // footprint. Keep both the origin and extent on the device grid;
+            // fractional texture coordinates make every texel interpolate and
+            // blur the whole control even when the source bitmap is sharp.
             output.push(Prim::Image {
                 image: icon.image.clone(),
                 rect: [
-                    (icon.x * dpr) as f32,
-                    (icon.y * dpr) as f32,
-                    (icon.width * dpr) as f32,
-                    (icon.height * dpr) as f32,
+                    (icon.x * dpr).round() as f32,
+                    (icon.y * dpr).round() as f32,
+                    (icon.width * dpr).round().max(1.0) as f32,
+                    (icon.height * dpr).round().max(1.0) as f32,
                 ],
                 opacity: 1.0,
             });

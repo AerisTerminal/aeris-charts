@@ -353,15 +353,15 @@ function trading_features(chart, bars) {
         alerts.update_line({
           id,
           pane_index: request.pane_index,
-          price_scale: request.price_scale,
+          price_scale: request.price_scale_id === "" ? "overlay" : request.price_scale_id,
           price: request.price,
-          condition: request.condition,
-          frequency: request.frequency,
+          condition: "crossing",
+          frequency: "only_once",
           status: "active",
           label: "Demo alert",
         });
       };
-      alerts.subscribe_create_requests(create_demo_alert);
+      chart.subscribe_crosshair_action(create_demo_alert);
       trading.apply_snapshot({
         instrument: {
           tick_size: 0.01,
@@ -424,7 +424,7 @@ function trading_features(chart, bars) {
         }],
       });
       return () => {
-        alerts.unsubscribe_create_requests(create_demo_alert);
+        chart.unsubscribe_crosshair_action(create_demo_alert);
         for (const id of demo_alert_ids) alerts.remove_line(id);
         trading.apply_snapshot({});
       };

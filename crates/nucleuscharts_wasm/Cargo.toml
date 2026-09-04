@@ -44,7 +44,7 @@ web-sys = { version = "0.3", features = [
     "ResizeObserverBoxOptions",
     "console",
 ] }
-wgpu = { version = "27", default-features = false, features = ["webgpu", "wgsl"] }
+wgpu = { version = "30", default-features = false, features = ["webgpu", "wgsl"] }
 console_error_panic_hook = "0.1"
 
 [lints]

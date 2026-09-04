@@ -1536,7 +1536,9 @@ mod tests {
         assert_eq!(cells.len(), 12);
         assert!(cells.iter().all(|cell| cell.w > 1 && cell.h > 1));
         let time_columns = cells
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|group| group[0].x)
             .collect::<Vec<_>>();
         assert_eq!(time_columns.len(), 4);

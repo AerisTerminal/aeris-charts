@@ -64,7 +64,9 @@ fn real_engine_frame_paints_chart_geometry() {
     let painted = canvas
         .pixmap()
         .data()
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|px| px[0..3] != surface[0..3])
         .count();
     assert!(

@@ -7,9 +7,9 @@
     "test:gpui-webgpu": "npm run build && node run_gpui_webgpu_matrix.mjs"
   },
   "devDependencies": {
-    "@hugeicons/core-free-icons": "^4.2.3",
-    "@playwright/test": "1.61.1",
-    "lightweight-charts": "5.2.0",
+    "@hugeicons/core-free-icons": "^4.3.0",
+    "@playwright/test": "1.62.1",
+    "lightweight-charts": "5.2.1",
     "pixelmatch": "7.2.0",
     "pngjs": "7.0.0"
   }

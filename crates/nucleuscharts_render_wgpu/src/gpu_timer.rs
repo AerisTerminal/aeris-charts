@@ -91,9 +91,14 @@ impl GpuTimer {
                 // A wrapped/decreasing pair (driver quirk, or a pass that never ran) is dropped
                 // rather than reported as a bogus duration.
                 let ticks = {
-                    let view = self.readback.slice(..).get_mapped_range();
-                    let stamps: &[u64] = bytemuck::cast_slice(&view);
-                    stamps[1].checked_sub(stamps[0])
+                    self.readback
+                        .slice(..)
+                        .get_mapped_range()
+                        .ok()
+                        .and_then(|view| {
+                            let stamps: &[u64] = bytemuck::cast_slice(&view);
+                            stamps.get(1)?.checked_sub(*stamps.first()?)
+                        })
                 };
                 self.readback.unmap();
                 if let Some(ticks) = ticks {

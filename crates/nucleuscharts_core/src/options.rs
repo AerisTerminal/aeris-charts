@@ -606,9 +606,14 @@ mod tests {
         assert_eq!(dark.layout.muted_text_color, DARK_MUTED_FOREGROUND_CSS);
         assert_eq!(dark.grid.vert_lines.color, DARK_BORDER_CSS);
         assert_eq!(dark.crosshair.vert_line.color, DARK_CROSSHAIR_LINE_CSS);
+        assert_eq!(dark.crosshair.vert_line.color, DARK_BORDER_CSS);
         assert_eq!(
             dark.crosshair.vert_line.label_background_color,
             DARK_CROSSHAIR_LABEL_CSS
+        );
+        assert_eq!(
+            dark.crosshair.vert_line.label_background_color,
+            DARK_BORDER_CSS
         );
         assert_eq!(dark.right_price_scale.border_color, DARK_BORDER_CSS);
         assert_eq!(

@@ -363,25 +363,27 @@ impl ChartInner {
                 );
 
                 let acquired = match gfx.surface.get_current_texture() {
-                    Ok(frame) => Ok(Some(frame)),
-                    Err(error) => match surface_error_action(&error) {
+                    wgpu::CurrentSurfaceTexture::Success(frame)
+                    | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => Ok(Some(frame)),
+                    error => match surface_error_action(&error) {
                         SurfaceErrorAction::Reconfigure => {
                             // Resize and suspend/resume can invalidate only the swapchain. Reconfigure
                             // and retry once; if that fails, the warm Canvas2D pane takes over.
                             gfx.surface.configure(&shared.device, &gfx.config);
                             match gfx.surface.get_current_texture() {
-                                Ok(frame) => Ok(Some(frame)),
-                                Err(retry_error)
+                                wgpu::CurrentSurfaceTexture::Success(frame)
+                                | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => Ok(Some(frame)),
+                                retry_error
                                     if surface_error_action(&retry_error)
                                         == SurfaceErrorAction::SkipFrame =>
                                 {
                                     Ok(None)
                                 }
-                                Err(retry_error) => Err(retry_error),
+                                _ => Err("surface remained unavailable after reconfiguration"),
                             }
                         }
                         SurfaceErrorAction::SkipFrame => Ok(None),
-                        SurfaceErrorAction::Fallback => Err(error),
+                        SurfaceErrorAction::Fallback => Err("surface validation failed"),
                     },
                 };
 
@@ -420,7 +422,7 @@ impl ChartInner {
                             resources_after.uploaded_bytes - resources_before.uploaded_bytes,
                         );
                         self.telemetry.set_draw_calls(draw_calls);
-                        frame.present();
+                        shared.queue.present(frame);
                         PaneRenderOutcome::Presented
                     }
                     Ok(None) => PaneRenderOutcome::Timeout,

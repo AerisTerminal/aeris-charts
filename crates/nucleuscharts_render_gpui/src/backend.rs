@@ -327,7 +327,8 @@ impl RasterImageCache {
             return Some(Arc::clone(image));
         }
         let mut pixels = source.pixels.to_vec();
-        for rgba in pixels.chunks_exact_mut(4) {
+        let (rgba_pixels, _) = pixels.as_chunks_mut::<4>();
+        for rgba in rgba_pixels {
             rgba[3] = (f32::from(rgba[3]) * opacity.clamp(0.0, 1.0)).round() as u8;
         }
         let buffer = RgbaImage::from_raw(source.width, source.height, pixels)?;
@@ -734,7 +735,7 @@ fn build_path(
     let st = |v: &crate::scene::MeshVertex| point(v.st[0], v.st[1]);
     let first = transform.point(verts[0].x, verts[0].y);
     let mut path = Path::new(first);
-    for tri in verts.chunks_exact(3) {
+    for tri in verts.as_chunks::<3>().0 {
         path.push_triangle(
             (
                 transform.point(tri[0].x, tri[0].y),

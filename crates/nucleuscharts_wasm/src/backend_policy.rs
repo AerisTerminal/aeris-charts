@@ -133,11 +133,18 @@ pub(crate) enum SurfaceErrorAction {
     Fallback,
 }
 
-pub(crate) fn surface_error_action(error: &wgpu::SurfaceError) -> SurfaceErrorAction {
+pub(crate) fn surface_error_action(error: &wgpu::CurrentSurfaceTexture) -> SurfaceErrorAction {
     match error {
-        wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated => SurfaceErrorAction::Reconfigure,
-        wgpu::SurfaceError::Timeout => SurfaceErrorAction::SkipFrame,
-        wgpu::SurfaceError::OutOfMemory | wgpu::SurfaceError::Other => SurfaceErrorAction::Fallback,
+        wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
+            SurfaceErrorAction::Reconfigure
+        }
+        wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+            SurfaceErrorAction::SkipFrame
+        }
+        wgpu::CurrentSurfaceTexture::Validation => SurfaceErrorAction::Fallback,
+        wgpu::CurrentSurfaceTexture::Success(_) | wgpu::CurrentSurfaceTexture::Suboptimal(_) => {
+            unreachable!("successful acquisitions are handled before error classification")
+        }
     }
 }
 
@@ -178,11 +185,11 @@ mod tests {
     #[test]
     fn recoverable_surface_errors_reconfigure_once() {
         assert_eq!(
-            surface_error_action(&wgpu::SurfaceError::Lost),
+            surface_error_action(&wgpu::CurrentSurfaceTexture::Lost),
             SurfaceErrorAction::Reconfigure
         );
         assert_eq!(
-            surface_error_action(&wgpu::SurfaceError::Outdated),
+            surface_error_action(&wgpu::CurrentSurfaceTexture::Outdated),
             SurfaceErrorAction::Reconfigure
         );
     }
@@ -190,19 +197,19 @@ mod tests {
     #[test]
     fn timeout_skips_only_the_current_frame() {
         assert_eq!(
-            surface_error_action(&wgpu::SurfaceError::Timeout),
+            surface_error_action(&wgpu::CurrentSurfaceTexture::Timeout),
             SurfaceErrorAction::SkipFrame
         );
     }
 
     #[test]
-    fn terminal_surface_errors_fall_back() {
+    fn occlusion_skips_and_validation_falls_back() {
         assert_eq!(
-            surface_error_action(&wgpu::SurfaceError::OutOfMemory),
-            SurfaceErrorAction::Fallback
+            surface_error_action(&wgpu::CurrentSurfaceTexture::Occluded),
+            SurfaceErrorAction::SkipFrame
         );
         assert_eq!(
-            surface_error_action(&wgpu::SurfaceError::Other),
+            surface_error_action(&wgpu::CurrentSurfaceTexture::Validation),
             SurfaceErrorAction::Fallback
         );
     }

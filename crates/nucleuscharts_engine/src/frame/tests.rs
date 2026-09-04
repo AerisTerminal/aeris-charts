@@ -873,7 +873,7 @@ fn crosshair_labels_cover_every_visible_populated_price_scale() {
         .labels
         .iter()
         .filter(|label| {
-            label.text != "+"
+            !label.text.is_empty()
                 && matches!(label.background, Some((.., color)) if color == magenta)
                 && label.midpoint == AxisTextMidpoint::Label
         })
@@ -896,7 +896,7 @@ fn crosshair_labels_cover_every_visible_populated_price_scale() {
             .labels
             .iter()
             .filter(|label| {
-                label.text != "+"
+                !label.text.is_empty()
                     && matches!(label.background, Some((.., color)) if color == magenta)
             })
             .count(),
@@ -916,7 +916,7 @@ fn crosshair_labels_cover_every_visible_populated_price_scale() {
             .labels
             .iter()
             .filter(|label| {
-                label.text != "+"
+                !label.text.is_empty()
                     && matches!(label.background, Some((.., color)) if color == magenta)
             })
             .count(),
@@ -992,7 +992,7 @@ fn crosshair_labels_share_y_across_crosshair_and_scale_modes() {
                 .labels
                 .iter()
                 .filter(|label| {
-                    label.text != "+"
+                    !label.text.is_empty()
                         && matches!(label.background, Some((.., color)) if color == magenta)
                 })
                 .collect();

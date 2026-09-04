@@ -974,12 +974,7 @@ impl NucleusChart {
     /// rasterizes the button glyph from vector paths at DPR-aware resolution;
     /// the engine retains these pixels like a watermark and paints them on the
     /// axis through the shared image primitive on every backend.
-    pub fn set_alert_create_icon(
-        &mut self,
-        pixels: Vec<u8>,
-        width: u32,
-        height: u32,
-    ) -> bool {
+    pub fn set_alert_create_icon(&mut self, pixels: Vec<u8>, width: u32, height: u32) -> bool {
         self.inner
             .borrow_mut()
             .engine
@@ -3651,15 +3646,15 @@ async fn shared_gpu(force_fallback_adapter: bool) -> Result<Rc<SharedGpu>, Backe
 async fn create_shared_gpu(
     force_fallback_adapter: bool,
 ) -> Result<Rc<SharedGpu>, BackendStartupFailure> {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::BROWSER_WEBGPU,
-        ..Default::default()
-    });
+    let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    instance_descriptor.backends = wgpu::Backends::BROWSER_WEBGPU;
+    let instance = wgpu::Instance::new(instance_descriptor);
     let adapter = match instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter,
+            apply_limit_buckets: false,
         })
         .await
     {
@@ -3669,6 +3664,7 @@ async fn create_shared_gpu(
                 power_preference: wgpu::PowerPreference::default(),
                 compatible_surface: None,
                 force_fallback_adapter,
+                apply_limit_buckets: false,
             })
             .await
             .map_err(|default_error| {

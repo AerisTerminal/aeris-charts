@@ -9,7 +9,7 @@ description = "WebGPU backend for nucleuscharts_render draw lists (pipelines, gl
 
 [dependencies]
 nucleuscharts_render = { path = "../nucleuscharts_render" }
-wgpu = { version = "27", default-features = false, features = ["webgpu", "wgsl"] }
+wgpu = { version = "30", default-features = false, features = ["webgpu", "wgsl"] }
 bytemuck = { version = "1", features = ["derive"] }
 
 [dev-dependencies]

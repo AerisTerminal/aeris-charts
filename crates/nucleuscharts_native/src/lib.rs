@@ -374,7 +374,8 @@ impl Canvas2d for TinySkiaCanvas {
             return;
         };
         let mut pixels = image.pixels.to_vec();
-        for rgba in pixels.chunks_exact_mut(4) {
+        let (rgba_pixels, _) = pixels.as_chunks_mut::<4>();
+        for rgba in rgba_pixels {
             let alpha = u16::from(rgba[3]);
             for channel in &mut rgba[..3] {
                 *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
@@ -715,7 +716,9 @@ mod tests {
         let non_background = canvas
             .pixmap()
             .data()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|px| px[0..3] != [0xff, 0xff, 0xff])
             .count();
         assert!(non_background > 0);

@@ -400,6 +400,7 @@ pub fn render_frame(
             depth_stencil_attachment: None,
             timestamp_writes: timestamps.pass_writes(),
             occlusion_query_set: None,
+            multiview_mask: None,
         });
 
         for (group, bufs) in groups.iter().zip(&resources.groups) {

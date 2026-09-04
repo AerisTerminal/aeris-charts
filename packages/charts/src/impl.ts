@@ -19,7 +19,8 @@ import {
 import { nucleuscharts_error } from "./errors.js";
 import type { nucleuscharts_error_code } from "./errors.js";
 import type {
-  alert_api, alert_create_request, alert_create_request_handler, alert_line, alert_snapshot,
+  alert_api, alert_condition, alert_frequency, alert_line, alert_price_scale, alert_snapshot,
+  crosshair_action_request, crosshair_action_request_handler,
   any_series_options, backend_status, bars_info, chart_api, chart_context_handler, chart_context_params, chart_options, chart_state_v1, chart_value_snapshot, data_changed_handler, dbl_click_handler,
   deep_partial, drawing_api, drawing_created_handler, drawing_info, drawing_kind, drawing_options,
   drawing_point, drawing_tool_change_handler,
@@ -2401,17 +2402,36 @@ const ALERT_CREATE_ICON_SQUARE_D =
 const ALERT_CREATE_ICON_PLUS_D = "M12 8V16M16 12H8";
 /** Fixed white: the chip fill is dark on both themes. */
 const ALERT_CREATE_ICON_COLOR = "#ffffff";
-/** Raster supersample of the CSS draw size; crisp past DPR 3, tiny either way. */
-const ALERT_CREATE_ICON_SCALE = 3;
 /** Absolute pixel cap matching the engine's `MAX_ALERT_ICON_PX`. */
 const ALERT_CREATE_ICON_MAX_PX = 96;
 
-function rasterize_alert_create_icon(css_size: number): { pixels: Uint8Array; size: number } | null {
+type engine_alert_create_request = {
+  sequence: number;
+  pane_index: number;
+  price_scale: alert_price_scale;
+  price: number;
+  condition: alert_condition;
+  frequency: alert_frequency;
+};
+
+function alert_create_icon_pixel_size(css_size: number, dpr: number): number {
+  return Math.min(
+    ALERT_CREATE_ICON_MAX_PX,
+    Math.max(1, Math.round(css_size * Math.max(dpr, Number.EPSILON))),
+  );
+}
+
+function rasterize_alert_create_icon(
+  css_size: number,
+  dpr: number,
+): { pixels: Uint8Array; size: number } | null {
   try {
-    const size = Math.min(
-      ALERT_CREATE_ICON_MAX_PX,
-      Math.max(1, Math.ceil(css_size * ALERT_CREATE_ICON_SCALE)),
-    );
+    // Match the bitmap to the icon's settled device-pixel footprint. A fixed
+    // supersample is rescaled by a different amount at every browser zoom and,
+    // with the GPU image sampler, makes the 1.5-unit strokes alternate between
+    // visibly light and heavy. One source pixel per destination pixel keeps the
+    // rasterizer's antialiasing and stroke coverage stable across DPR changes.
+    const size = alert_create_icon_pixel_size(css_size, dpr);
     const canvas = document.createElement("canvas");
     canvas.width = size;
     canvas.height = size;
@@ -2437,7 +2457,6 @@ function rasterize_alert_create_icon(css_size: number): { pixels: Uint8Array; si
 }
 
 class alert_impl implements alert_api {
-  private readonly create_request_handlers = new Set<alert_create_request_handler>();
   constructor(private readonly chart: chart_impl) {}
 
   apply_snapshot(snapshot: alert_snapshot): void {
@@ -2460,26 +2479,6 @@ class alert_impl implements alert_api {
     return changed;
   }
 
-  set_create_button_visible(visible: boolean): void {
-    if (this.chart.wasm.set_alert_create_button_visible(visible)) this.chart.repaint();
-  }
-
-  subscribe_create_requests(handler: alert_create_request_handler): void {
-    this.create_request_handlers.add(handler);
-  }
-
-  unsubscribe_create_requests(handler: alert_create_request_handler): void {
-    this.create_request_handlers.delete(handler);
-  }
-
-  dispatch_pending_create_requests(): void {
-    const requests = JSON.parse(
-      this.chart.wasm.take_alert_create_requests_json(),
-    ) as alert_create_request[];
-    for (const request of requests) {
-      for (const handler of this.create_request_handlers) handler(request);
-    }
-  }
 }
 
 export class chart_impl implements chart_api {
@@ -2505,9 +2504,12 @@ export class chart_impl implements chart_api {
   private accessibility_handle: accessibility_handle | null = null;
   /** Raster pixel size of the uploaded alert-create icon; `null` until first upload. */
   private alert_icon_size: number | null = null;
+  /** DPR used by the engine/canvas, including an explicit manual-resize override. */
+  private pixel_ratio = window.devicePixelRatio || 1;
   private readonly ts = new time_scale_impl(this);
   private readonly trading_handle = new trading_impl(this);
   private readonly alert_handle = new alert_impl(this);
+  private readonly crosshair_action_handlers = new Set<crosshair_action_request_handler>();
   private observer: ResizeObserver | null = null;
   private detach_gestures: (() => void) | null = null;
   private removed = false;
@@ -2597,6 +2599,18 @@ export class chart_impl implements chart_api {
     return this.alert_handle;
   }
 
+  set_crosshair_action_button_visible(visible: boolean): void {
+    if (this.wasm.set_alert_create_button_visible(visible)) this.repaint();
+  }
+
+  subscribe_crosshair_action(handler: crosshair_action_request_handler): void {
+    this.crosshair_action_handlers.add(handler);
+  }
+
+  unsubscribe_crosshair_action(handler: crosshair_action_request_handler): void {
+    this.crosshair_action_handlers.delete(handler);
+  }
+
   accessibility(): accessibility_handle {
     if (this.accessibility_handle === null) {
       throw new nucleuscharts_error("unsupported_operation", "accessibility is disabled for this chart");
@@ -2633,7 +2647,16 @@ export class chart_impl implements chart_api {
 
   activate_alert_create_at(x: number, y: number): boolean {
     const activated = this.wasm.activate_alert_create_at(x, y);
-    this.alert_handle.dispatch_pending_create_requests();
+    const requests = JSON.parse(this.wasm.take_alert_create_requests_json()) as engine_alert_create_request[];
+    for (const request of requests) {
+      const action: crosshair_action_request = {
+        sequence: request.sequence,
+        pane_index: request.pane_index,
+        price_scale_id: request.price_scale === "overlay" ? "" : request.price_scale,
+        price: request.price,
+      };
+      for (const handler of this.crosshair_action_handlers) handler(action);
+    }
     return activated;
   }
 
@@ -2838,6 +2861,11 @@ export class chart_impl implements chart_api {
     return this.backend_loss_count;
   }
 
+  /** Deterministic browser-test hook; confirms the create glyph follows the render DPR. */
+  alert_icon_size_for_test(): number | null {
+    return this.alert_icon_size;
+  }
+
   /**
    * Coalesce renders onto the next animation frame. The streaming hot path
    * (series `update` on built-in series) must not pay a full render per tick: N calls
@@ -2914,20 +2942,17 @@ export class chart_impl implements chart_api {
 
   /**
    * Keep the engine's create-chip icon fed with the rasterized glyph. Runs
-   * before every render but only rasterizes when the target size changed
-   * (font option) — a few compares on steady frames. Failures keep the
+   * before every render but only rasterizes when the target device-pixel size
+   * changed (font option or DPR/browser zoom) — a few compares on steady frames. Failures keep the
    * engine's prim-composed fallback, so headless and restricted hosts (and
    * offscreen workers, which never call this) keep working.
    */
   private ensure_alert_create_icon(): void {
     const css = this.wasm.alert_create_icon_css_size();
     if (!(css > 0)) return;
-    const size = Math.min(
-      ALERT_CREATE_ICON_MAX_PX,
-      Math.max(1, Math.ceil(css * ALERT_CREATE_ICON_SCALE)),
-    );
+    const size = alert_create_icon_pixel_size(css, this.pixel_ratio);
     if (size === this.alert_icon_size) return;
-    const raster = rasterize_alert_create_icon(css);
+    const raster = rasterize_alert_create_icon(css, this.pixel_ratio);
     if (raster === null) return;
     if (!this.wasm.set_alert_create_icon(raster.pixels, raster.size, raster.size)) return;
     this.alert_icon_size = raster.size;
@@ -4463,15 +4488,16 @@ export class chart_impl implements chart_api {
 
   resize(width: number, height: number, dpr?: number): void {
     const ratio = dpr ?? window.devicePixelRatio ?? 1;
-    const bitmap_width = Math.max(1, Math.round(width * ratio));
-    const bitmap_height = Math.max(1, Math.round(height * ratio));
+    this.pixel_ratio = Math.max(ratio, Number.EPSILON);
+    const bitmap_width = Math.max(1, Math.round(width * this.pixel_ratio));
+    const bitmap_height = Math.max(1, Math.round(height * this.pixel_ratio));
     for (const canvas of [this.gpu_pane, this.fallback_pane, this.plugin_canvas, this.overlay]) {
       canvas.width = bitmap_width;
       canvas.height = bitmap_height;
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
     }
-    this.wasm.resize(width, height, ratio);
+    this.wasm.resize(width, height, this.pixel_ratio);
     this.repaint();
   }
 

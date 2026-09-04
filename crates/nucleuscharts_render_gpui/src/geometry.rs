@@ -680,7 +680,9 @@ mod tests {
     /// Point-in-mesh test over the triangle coverage (ignoring `st`), for coverage-gap checks.
     fn covered(pool: &[MeshVertex], first: u32, count: u32, qx: f32, qy: f32) -> bool {
         pool[first as usize..(first + count) as usize]
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .any(|tri| {
                 let (a, b, c) = (&tri[0], &tri[1], &tri[2]);
                 let d1 = (qx - b.x) * (a.y - b.y) - (a.x - b.x) * (qy - b.y);
