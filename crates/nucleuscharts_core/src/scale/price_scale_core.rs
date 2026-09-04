@@ -90,7 +90,7 @@ pub struct PriceScaleCore {
     /// Extra px margins requested by autoscale info providers.
     margin_above: f64,
     margin_below: f64,
-    /// Origin of the owning pane in chart-content space. The scale's geometry is entirely
+    /// Offset of the owning pane in chart-content space. The scale's geometry is entirely
     /// pane-local; this is the single explicit transform into the host's chart coordinates.
     pane_offset: f64,
     log_formula: LogFormula,
@@ -439,7 +439,7 @@ impl PriceScaleCore {
         self.logical_to_coordinate_local(logical) + self.pane_offset
     }
 
-    /// Pane-local coordinate (0 = the pane's top edge), before the pane-origin transform.
+    /// Pane-local coordinate (0 = the pane's top edge), before the pane-offset transform.
     fn logical_to_coordinate_local(&self, logical: f64) -> Coordinate {
         if self.is_empty() {
             return 0.0;

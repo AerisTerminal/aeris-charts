@@ -372,7 +372,7 @@ impl ChartEngine {
         // over any box they share (e.g. the alert create chip's fill).
         for icon in &axis_frame.images {
             // Axis icons are already rasterized for their settled device-pixel
-            // footprint. Keep both the origin and extent on the device grid;
+            // footprint. Keep both the position and extent on the device grid;
             // fractional texture coordinates make every texel interpolate and
             // blur the whole control even when the source bitmap is sharp.
             output.push(Prim::Image {

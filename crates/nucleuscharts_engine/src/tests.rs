@@ -5206,7 +5206,7 @@ fn chart_with_indicator_pane() -> ChartEngine {
     chart
 }
 
-/// Every scale a pane owns is laid out against that pane's own slot and carries the pane origin
+/// Every scale a pane owns is laid out against that pane's own slot and carries the pane offset
 /// as its only chart-space transform — no full-content-height internal-margin simulation.
 fn assert_scales_are_pane_local(chart: &ChartEngine) {
     for (pi, pane) in chart.panes.iter().enumerate() {
@@ -5217,7 +5217,7 @@ fn assert_scales_are_pane_local(chart: &ChartEngine) {
         ] {
             let scale = pane.scale(target).unwrap();
             assert_eq!(scale.height(), pane.height, "pane {pi} {target:?} height");
-            assert_eq!(scale.pane_offset(), pane.top, "pane {pi} {target:?} origin");
+            assert_eq!(scale.pane_offset(), pane.top, "pane {pi} {target:?} offset");
             // Fractional margins resolve against the pane slot alone.
             let margins = scale.options().scale_margins;
             let expected = pane.height * (1.0 - margins.top - margins.bottom);
@@ -5402,7 +5402,7 @@ fn two_indicator_panes_and_a_named_pane_scale_stay_independent() {
             assert_eq!(
                 entry.scale.pane_offset(),
                 pane.top,
-                "pane {pi} named origin"
+                "pane {pi} named offset"
             );
         }
     }

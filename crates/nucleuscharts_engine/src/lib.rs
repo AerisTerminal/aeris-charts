@@ -985,9 +985,9 @@ impl Pane {
     }
 
     /// Give every scale this pane owns its own axis geometry: the scale height is the pane's
-    /// slot height and its origin is the pane's top edge, so autoscale, margins, ticks, and
+    /// slot height and its offset is the pane's top edge, so autoscale, margins, ticks, and
     /// gestures resolve inside the pane alone. Panes share no axis coordinate space; only the
-    /// final pane-origin transform maps a scale coordinate into chart-content space.
+    /// final pane-offset transform maps a scale coordinate into chart-content space.
     pub fn layout(&mut self) {
         let (top, height) = (self.top, self.height);
         for scale in self.scales_mut() {
