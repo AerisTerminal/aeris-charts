@@ -209,14 +209,14 @@ test("rsi and macd stack their own panes with channel strip and four-state histo
   expect(macd_green, "macd histogram strong-state pixels").toBeGreaterThan(20);
 });
 
-test("indicator chips: auto-name on, no countdown, 1px default, style overrides", async ({ page }) => {
+test("indicator chips: auto-name on, no countdown, 2px default, style overrides", async ({ page }) => {
   await page.goto("/");
   await wait_grid(page);
   const out = await page.evaluate(() => {
     const rsi = window.__chart.add_rsi(window.__main, 14);
     const before = rsi.options();
-    // The platform surfaces its own chip: custom name, chip visible, dotted 2px line.
-    rsi.apply_options({ title: "RSI(14) 1h", title_visible: true, line_style: 1, line_width: 2 });
+    // The platform surfaces its own chip: custom name, chip visible, dotted 1px override.
+    rsi.apply_options({ title: "RSI(14) 1h", title_visible: true, line_style: 1, line_width: 1 });
     const after = rsi.options();
     return {
       before: {
@@ -233,8 +233,8 @@ test("indicator chips: auto-name on, no countdown, 1px default, style overrides"
       },
     };
   });
-  expect(out.before).toEqual({ title: "RSI 14", title_visible: true, countdown: false, width: 1 });
-  expect(out.after).toEqual({ title: "RSI(14) 1h", title_visible: true, line_style: 1, line_width: 2 });
+  expect(out.before).toEqual({ title: "RSI 14", title_visible: true, countdown: false, width: 2 });
+  expect(out.after).toEqual({ title: "RSI(14) 1h", title_visible: true, line_style: 1, line_width: 1 });
 });
 
 test("demo-created indicators and feature companions never enable candle countdowns", async ({ page }) => {
