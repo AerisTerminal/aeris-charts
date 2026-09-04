@@ -787,6 +787,7 @@ function set_custom_series(on) {
         },
         on_destroy: () => { custom_destroy_count += 1; },
       }),
+      { countdown_visible: false },
     );
     // The demo's candle data transformed into the plugin's OHLC item shape.
     custom_series.set_data(data.map((bar) => ({
