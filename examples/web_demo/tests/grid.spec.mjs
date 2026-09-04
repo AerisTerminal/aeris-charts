@@ -103,7 +103,7 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
     grid: "#262626",
     border_control: "#262626",
     crosshair_control: "#262626",
-    crosshair_label_control: "#181818",
+    crosshair_label_control: "#262626",
   });
 
   await page.selectOption("#theme_select", "light");

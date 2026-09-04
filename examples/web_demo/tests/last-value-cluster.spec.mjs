@@ -336,11 +336,15 @@ test("crosshair price and time glyphs stay centered in their label boxes", async
     pane_h: window.__chart.wasm.pane_height(0),
   }));
   const border_w = Math.max(1, Math.floor(geometry.dpr));
-  expect(price_label.left).toBe(Math.round(geometry.pane_w * geometry.dpr) + border_w);
+  const price_text_left = Math.round(geometry.pane_w * geometry.dpr) + border_w;
+  // The neutral crosshair action chip is attached to the chart-facing edge and deliberately
+  // shares the configured label fill. Isolate the price-text portion when checking centering.
+  expect(price_label.left).toBeLessThan(price_text_left);
+  const price_text_label = { ...price_label, left: price_text_left };
   expect(time_label.top).toBe(Math.round(geometry.pane_h * geometry.dpr) + border_w);
-  expect(near(px(shot, price_label.left - border_w, price_label.top + 3), BORDER)).toBe(true);
+  expect(near(px(shot, price_text_left - border_w, price_label.top + 3), BORDER)).toBe(true);
   expect(near(px(shot, Math.floor((time_label.left + time_label.right) / 2), time_label.top - border_w), BORDER)).toBe(true);
-  expect_white_ink_centered(shot, price_label, 2);
+  expect_white_ink_centered(shot, price_text_label, 2);
   // The reference time box includes border + 5px tick space above the text body. Its glyph is
   // therefore deliberately below the full box center rather than incorrectly centered in it.
   const time_box_center = (time_label.top + time_label.bottom - 1) / 2;

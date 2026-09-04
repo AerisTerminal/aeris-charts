@@ -559,6 +559,10 @@ if (last_bar !== undefined) {
 // the empty title so their pixel baselines stay untouched.
 const pristine_demo = query.toString() === "";
 const main = chart.add_series("candlestick", {
+  // Keep the shared demo fixture deterministic. The toolbar enables the live countdown
+  // explicitly; leaving its one-second timer active by default makes unrelated pixel-parity
+  // checks depend on how quickly their two captures run.
+  countdown_visible: false,
   ...(requested_left_scale ? { priceScaleId: "left" } : {}),
   ...(parity_fixture !== null ? {
     up_color: "#089981",
