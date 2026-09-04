@@ -299,7 +299,18 @@ fn sha256_file(path: &std::path::Path) -> String {
     let Ok(bytes) = std::fs::read(path) else {
         return String::new();
     };
-    format!("{:x}", Sha256::digest(bytes))
+    sha256_hex(&bytes)
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let digest = Sha256::digest(bytes);
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
 }
 
 /// Hash the decoded premultiplied RGBA bytes used by `diff_pixmaps`.
@@ -310,7 +321,7 @@ fn rgba_sha256_file(path: &std::path::Path) -> String {
     let Ok(pixmap) = nucleuscharts_native::load_png(path.to_str().unwrap_or_default()) else {
         return String::new();
     };
-    format!("{:x}", Sha256::digest(pixmap.data()))
+    sha256_hex(pixmap.data())
 }
 
 fn write_results_json(dir: &std::path::Path, rows: &[Row]) {
