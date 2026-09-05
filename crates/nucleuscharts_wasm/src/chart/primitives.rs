@@ -663,8 +663,7 @@ impl ChartInner {
                     .filter(|s| !s.is_empty())
             };
             // An explicit `font` shorthand wins; otherwise compose from size/family/bold with
-            // the layout font as the default — the same string the engine's own axis labels
-            // paint with (inner_render.rs `draw_axis_label_texts`).
+            // the layout font as the default, matching the engine's own axis labels.
             let font = non_empty_string("font").unwrap_or_else(|| {
                 let size = finite("size")
                     .filter(|s| *s > 0.0)

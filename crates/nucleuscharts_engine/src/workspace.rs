@@ -74,7 +74,7 @@ pub enum WorkspaceError {
     NotFound,
     /// The last remaining cell cannot be removed.
     LastCell,
-    /// Malformed, duplicate, out-of-range, or unreasonably deep persisted layout.
+    /// Malformed layout, non-finite resize, or exhausted browser-compatible cell identities.
     InvalidLayout,
 }
 
@@ -131,6 +131,11 @@ impl Workspace {
     /// cell (returned id) fills the second. `NotFound` for an unknown cell.
     pub fn split(&mut self, id: u64, direction: SplitDirection) -> Result<u64, WorkspaceError> {
         let new_id = self.next_id;
+        // Browser mutations accept u32 identities, as does persisted-layout validation.
+        // Reject before changing the tree so every returned cell remains addressable.
+        if new_id > u64::from(u32::MAX) {
+            return Err(WorkspaceError::InvalidLayout);
+        }
         if !split_node(&mut self.root, id, direction, new_id) {
             return Err(WorkspaceError::NotFound);
         }
@@ -163,6 +168,9 @@ impl Workspace {
         right_id: u64,
         delta_ratio: f64,
     ) -> Result<(), WorkspaceError> {
+        if !delta_ratio.is_finite() {
+            return Err(WorkspaceError::InvalidLayout);
+        }
         if resize_between_node(&mut self.root, left_id, right_id, delta_ratio) {
             Ok(())
         } else {
@@ -273,6 +281,37 @@ fn remove_node(node: &mut WorkspaceLayout, id: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn non_finite_resize_preserves_a_restorable_layout() {
+        let mut ws = Workspace::new();
+        ws.split(1, SplitDirection::Horizontal).unwrap();
+        let before = ws.layout_json();
+        for delta in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(
+                ws.resize_between(1, 2, delta),
+                Err(WorkspaceError::InvalidLayout)
+            );
+            assert_eq!(ws.layout_json(), before);
+            assert!(Workspace::from_layout_json(&ws.layout_json()).is_ok());
+        }
+    }
+
+    #[test]
+    fn exhausted_browser_cell_ids_reject_split_atomically() {
+        let mut ws = Workspace::from_layout_json(r#"{"kind":"cell","id":4294967294}"#).unwrap();
+        assert_eq!(
+            ws.split(4294967294, SplitDirection::Horizontal),
+            Ok(u64::from(u32::MAX))
+        );
+        let before = ws.layout_json();
+        assert_eq!(
+            ws.split(4294967294, SplitDirection::Vertical),
+            Err(WorkspaceError::InvalidLayout)
+        );
+        assert_eq!(ws.layout_json(), before);
+        assert!(Workspace::from_layout_json(&ws.layout_json()).is_ok());
+    }
 
     #[test]
     fn split_grows_the_tree_in_layout_order() {

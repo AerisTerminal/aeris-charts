@@ -50,7 +50,7 @@ use crate::telemetry::{FrameTelemetry, FRAME_STATS_LEN};
 use nucleuscharts_core::model::data_layer::SeriesId;
 use nucleuscharts_core::model::data_validation::sanitize_ohlc;
 use nucleuscharts_core::model::plot_list::MismatchDirection;
-use nucleuscharts_core::options::{ChartOptions, WatermarkOptions};
+use nucleuscharts_core::options::ChartOptions;
 use nucleuscharts_core::scale::price_scale_core::PriceScaleMode;
 use nucleuscharts_engine::{
     crosshair_mode_from_u8, line_style_from_u8, marker_pos, marker_shape, AlertId, AlertLine,
@@ -351,9 +351,6 @@ fn mismatch_direction_from_i8(direction: i8) -> MismatchDirection {
         _ => MismatchDirection::None,
     }
 }
-
-/// Height (css px) of the separator between stacked panes.
-const PANE_SEPARATOR: f64 = 1.0;
 
 /// Renderers shared across charts for one surface format. Pipelines and shader modules are
 /// the expensive part of device setup; they depend only on the (shared) device and format.

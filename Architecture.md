@@ -290,6 +290,8 @@ The generic `Workspace` engine type owns only split-tree topology, stable cell i
 and bounded validation of a restored layout. Subscription caps, billing-tier vetoes, cumulative
 split usage, storage, provider identity, and cell-age metering live in the browser grid host; the
 shared engine has no commercial-policy or account knowledge.
+Workspace divider mutations reject non-finite deltas without changing the layout, and splits
+reject exhausted `u32` cell identities before mutation so browser handles remain addressable.
 
 Changes to geometry, snapping, scales, interactions, or execution require the narrowest relevant combination of unit tests, frame-contract tests, golden images, draw-stream parity, replay stability, browser tests, and release performance evidence. A backend-specific screenshot alone is not proof of shared-engine correctness.
 

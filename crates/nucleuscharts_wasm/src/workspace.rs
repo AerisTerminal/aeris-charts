@@ -2,7 +2,7 @@
 //! MODEL). The browser side keeps DOM placement, commercial limits, usage metering, and one chart
 //! instance per cell. The shared engine owns generic topology only.
 
-use nucleuscharts_engine::{SplitDirection, Workspace, WorkspaceError};
+use nucleuscharts_engine::{SplitDirection, Workspace};
 use wasm_bindgen::prelude::*;
 
 /// Host-facing workspace handle. Clock is host-injected seconds (Date.now()/1000).
@@ -67,15 +67,5 @@ impl NucleusWorkspace {
     /// Atomically restore a validated split layout with its stable cell ids and ratios.
     pub fn restore_layout_json(&mut self, json: &str) -> bool {
         self.workspace.restore_layout_json(json).is_ok()
-    }
-}
-
-/// Maps engine rejections to the host convention (-1 / false); kept for future richer errors.
-#[allow(dead_code)]
-fn _err_code(err: WorkspaceError) -> i64 {
-    match err {
-        WorkspaceError::NotFound => -2,
-        WorkspaceError::LastCell => -3,
-        WorkspaceError::InvalidLayout => -4,
     }
 }
