@@ -624,7 +624,11 @@ fn public_price_scale_state_is_headless_and_manual_ranges_survive_rendering() {
     assert_eq!(chart.price_scale_auto_scale(0, false), Some(true));
     let coordinate = chart.series_price_to_coordinate(0, 101.5).unwrap();
     assert!((chart.series_coordinate_to_price(0, coordinate).unwrap() - 101.5).abs() < 1e-9);
-    let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let axis = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     assert!(axis.labels.iter().any(|label| label.text.ends_with('%')));
 
     chart.set_price_scale_mode(0, false, PriceScaleMode::Logarithmic);
@@ -824,7 +828,11 @@ fn left_price_scale_owns_range_axis_labels_and_pane_offset() {
         nucleuscharts_render::draw_list::Prim::Rect { rect, .. } if rect.x >= 58
     )));
 
-    let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let axis = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     assert!(axis
         .labels
         .iter()
@@ -1604,7 +1612,11 @@ fn host_formatters_override_builtin_labels() {
     chart.set_tick_mark_formatter(Some(Box::new(|_ts, kind| Some(format!("T{kind}")))));
     chart.set_time_formatter(Some(Box::new(|_ts| Some("XHAIR".to_string()))));
 
-    let axis = chart.build_axis_frame(80.0, |t| t.len() as f64 * 7.0);
+    let axis = chart.build_axis_frame(
+        80.0,
+        |t, _bold| t.len() as f64 * 7.0,
+        |t, _bold| t.len() as f64 * 6.0,
+    );
     assert!(axis.labels.iter().any(|l| l.text.starts_with('$')));
     let time_ticks: Vec<_> = axis
         .labels
@@ -1623,7 +1635,11 @@ fn host_formatters_override_builtin_labels() {
 
     // Clearing a formatter restores the built-in output.
     chart.set_price_formatter(None);
-    let axis = chart.build_axis_frame(80.0, |t| t.len() as f64 * 7.0);
+    let axis = chart.build_axis_frame(
+        80.0,
+        |t, _bold| t.len() as f64 * 7.0,
+        |t, _bold| t.len() as f64 * 6.0,
+    );
     assert!(!axis.labels.iter().any(|l| l.text.starts_with('$')));
 }
 
@@ -2486,7 +2502,11 @@ fn axis_frame_owns_label_content_and_positions() {
         .unwrap();
     chart.time_scale.set_width(760.0);
     chart.fit_content();
-    let axes = chart.build_axis_frame(80.0, |text| text.len() as f64);
+    let axes = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64,
+        |text, _bold| text.len() as f64,
+    );
     assert!(!axes.labels.is_empty());
     assert!(axes.labels.iter().any(|label| label.text.contains("11")));
 }
@@ -2652,7 +2672,11 @@ fn crosshair_label_visibility_and_background_flow_from_options() {
     chart.fit_content();
     chart.crosshair = Some((200.0, 120.0));
 
-    let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let axis = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     let label_background = nucleuscharts_core::style::DEFAULT_CROSSHAIR_LABEL_RGB;
     let label_background = Color::rgb(label_background.0, label_background.1, label_background.2);
     let foreground = label_background.contrast_text();
@@ -2680,7 +2704,11 @@ fn crosshair_label_visibility_and_background_flow_from_options() {
             }}"##,
         )
         .unwrap();
-    let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let axis = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     let price_bg = Color::rgb(0x01, 0x02, 0x03);
     let time_bg = Color::rgb(0x04, 0x05, 0x06);
     assert!(axis
@@ -2703,7 +2731,11 @@ fn crosshair_label_visibility_and_background_flow_from_options() {
             }}"##,
         )
         .unwrap();
-    let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let axis = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     assert!(!axis
         .labels
         .iter()
@@ -2738,15 +2770,16 @@ fn layout_font_size_scales_axis_label_box_heights() {
             .filter_map(|l| l.background.map(|b| b.3))
             .fold(0.0_f64, f64::max)
     };
-    let axis = chart.build_axis_frame(80.0, |t| t.len() as f64);
-    assert_eq!(tallest_box(&axis), 12.0 + 2.5 * 2.0);
+    let axis = chart.build_axis_frame(80.0, |t, _bold| t.len() as f64, |t, _bold| t.len() as f64);
+    // Price tags resolve at 11/12 of layout.fontSize plus 2px padding each side.
+    assert_eq!(tallest_box(&axis), 12.0 * 11.0 / 12.0 + 2.0 * 2.0);
 
     chart
         .options
         .apply_str(r#"{"layout": {"fontSize": 20}}"#)
         .unwrap();
-    let axis = chart.build_axis_frame(80.0, |t| t.len() as f64);
-    assert_eq!(tallest_box(&axis), 20.0 + 2.5 * 2.0);
+    let axis = chart.build_axis_frame(80.0, |t, _bold| t.len() as f64, |t, _bold| t.len() as f64);
+    assert_eq!(tallest_box(&axis), 20.0 * 11.0 / 12.0 + 2.0 * 2.0);
 }
 
 #[test]
@@ -2828,7 +2861,11 @@ fn price_line_extras_drive_line_and_axis_label_rendering() {
     };
     let find_label = |chart: &mut ChartEngine| {
         chart
-            .build_axis_frame(80.0, |t| t.len() as f64 * 7.0)
+            .build_axis_frame(
+                80.0,
+                |t, _bold| t.len() as f64 * 7.0,
+                |t, _bold| t.len() as f64 * 6.0,
+            )
             .labels
             .into_iter()
             .find(|l| l.text == "target")
@@ -3581,7 +3618,11 @@ fn price_format_drives_last_value_label_and_ticks() {
 
     let label_texts = |chart: &mut ChartEngine| {
         chart
-            .build_axis_frame(80.0, |t| t.len() as f64 * 7.0)
+            .build_axis_frame(
+                80.0,
+                |t, _bold| t.len() as f64 * 7.0,
+                |t, _bold| t.len() as f64 * 6.0,
+            )
             .labels
             .into_iter()
             .map(|l| l.text)
@@ -3628,7 +3669,11 @@ fn price_format_custom_fn_invocation_and_clearing() {
 
     let label_texts = |chart: &mut ChartEngine| {
         chart
-            .build_axis_frame(80.0, |t| t.len() as f64 * 7.0)
+            .build_axis_frame(
+                80.0,
+                |t, _bold| t.len() as f64 * 7.0,
+                |t, _bold| t.len() as f64 * 6.0,
+            )
             .labels
             .into_iter()
             .map(|l| l.text)
@@ -3696,7 +3741,11 @@ fn price_format_labels_follow_their_owning_series() {
         "",
     );
     assert!(line_id > 0);
-    let axis = chart.build_axis_frame(80.0, |t| t.len() as f64 * 7.0);
+    let axis = chart.build_axis_frame(
+        80.0,
+        |t, _bold| t.len() as f64 * 7.0,
+        |t, _bold| t.len() as f64 * 6.0,
+    );
     let boxed: Vec<_> = axis
         .labels
         .iter()
@@ -3731,7 +3780,11 @@ fn price_format_labels_follow_their_owning_series() {
     let y11 = chart.series_price_to_coordinate(0, 11.0).unwrap();
     let x1 = chart.time_to_coordinate(2.0).unwrap();
     chart.crosshair = Some((x1, y11));
-    let axis = chart.build_axis_frame(80.0, |t| t.len() as f64 * 7.0);
+    let axis = chart.build_axis_frame(
+        80.0,
+        |t, _bold| t.len() as f64 * 7.0,
+        |t, _bold| t.len() as f64 * 6.0,
+    );
     assert!(
         axis.labels
             .iter()
@@ -3910,7 +3963,11 @@ fn whitespace_update_replaces_the_bar_and_skips_last_value() {
     assert_eq!(data.len(), 3);
     assert!(data[2].close.is_nan());
     // last-value label tracks the last real bar (close of bar 2 = 101)
-    let axis = chart.build_axis_frame(80.0, |t| t.len() as f64 * 7.0);
+    let axis = chart.build_axis_frame(
+        80.0,
+        |t, _bold| t.len() as f64 * 7.0,
+        |t, _bold| t.len() as f64 * 6.0,
+    );
     let texts: Vec<String> = axis.labels.iter().map(|l| l.text.clone()).collect();
     assert!(
         texts.iter().any(|t| t == "101.00"),
@@ -4124,7 +4181,11 @@ fn crosshair_time_label(chart: &mut ChartEngine, time: f64) -> Option<String> {
     let x = chart.time_to_coordinate(time)?;
     chart.crosshair = Some((x, 10.0));
     chart
-        .build_axis_frame(80.0, |t| t.len() as f64 * 7.0)
+        .build_axis_frame(
+            80.0,
+            |t, _bold| t.len() as f64 * 7.0,
+            |t, _bold| t.len() as f64 * 6.0,
+        )
         .labels
         .into_iter()
         .find(|l| l.background.is_some() && l.midpoint == AxisTextMidpoint::StableTime)
@@ -4240,7 +4301,11 @@ fn removing_series_zero_falls_back_to_the_first_live_series() {
         "pulse falls back to the first visible non-removed series"
     );
     // ...and last-value labels come from the remaining series (close 7).
-    let axis = chart.build_axis_frame(80.0, |t| t.len() as f64 * 7.0);
+    let axis = chart.build_axis_frame(
+        80.0,
+        |t, _bold| t.len() as f64 * 7.0,
+        |t, _bold| t.len() as f64 * 6.0,
+    );
     assert!(axis
         .labels
         .iter()
@@ -4879,15 +4944,16 @@ fn time_axis_options_height_floor_visibility_collapse_and_char_length() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     install_bars(&mut chart, 200);
 
-    // reference chart-widget.ts `Math.max(optimalHeight(), minimumHeight)`: the auto 28px
-    // strip is floored at `minimumHeight`; `visible:false` collapses it to zero.
-    assert_eq!(chart.time_axis_height(), 28.0);
+    // reference chart-widget.ts `Math.max(optimalHeight(), minimumHeight)`: the auto 22px
+    // strip (axis 11 + 1 border + 3 tick + 3 + 3 padding, even-snapped) is floored at
+    // `minimumHeight`; `visible:false` collapses it to zero.
+    assert_eq!(chart.time_axis_height(), 22.0);
     chart.set_time_axis_minimum_height(40.0);
     assert_eq!(chart.time_axis_height(), 40.0);
     chart.set_time_axis_minimum_height(10.0);
     assert_eq!(
         chart.time_axis_height(),
-        28.0,
+        22.0,
         "floor never shrinks the auto height"
     );
     chart.set_time_axis_visible(false);
@@ -4897,21 +4963,22 @@ fn time_axis_options_height_floor_visibility_collapse_and_char_length() {
         "hidden strip reserves nothing"
     );
     chart.set_time_axis_visible(true);
-    assert_eq!(chart.time_axis_height(), 28.0);
+    assert_eq!(chart.time_axis_height(), 22.0);
     // Invalid heights are ignored (NaN / negative keep the current value).
     chart.set_time_axis_minimum_height(f64::NAN);
     chart.set_time_axis_minimum_height(-5.0);
-    assert_eq!(chart.time_axis_height(), 28.0);
+    assert_eq!(chart.time_axis_height(), 22.0);
 
     // `timeVisible` stays label semantics only: it never reserves the strip.
     chart.set_time_visible(false);
-    assert_eq!(chart.time_axis_height(), 28.0);
+    assert_eq!(chart.time_axis_height(), 22.0);
     chart.set_time_visible(true);
 
     // tickMarkMaxCharacterLength widens/narrows the mark spacing; 0 restores the
     // default 8 (reference time-scale.ts `|| defaultTickMarkMaxCharacterLength`).
     let marks = |chart: &mut ChartEngine| {
-        let width = (12.0 + 4.0) * 5.0 / 8.0 * f64::from(chart.tick_mark_max_character_length);
+        let width = (chart.axis_font_size() + 4.0) * 5.0 / 8.0
+            * f64::from(chart.tick_mark_max_character_length);
         chart.time_marks(width).len()
     };
     let default_count = marks(&mut chart);
@@ -4951,13 +5018,21 @@ fn time_axis_options_height_floor_visibility_collapse_and_char_length() {
     // Tick stubs reach the axis frame only while the strip is visible and ticks on.
     chart.layout_panes(chart.css_height - chart.time_axis_height());
     chart.time_scale.set_width(800.0);
-    let frame = chart.build_axis_frame(80.0, |text| text.len() as f64 * 6.0);
+    let frame = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 6.0,
+        |text, _bold| text.len() as f64 * 5.0,
+    );
     assert!(
         frame.time_ticks.is_empty(),
         "hidden strip paints no tick stubs"
     );
     chart.set_time_axis_visible(true);
-    let frame = chart.build_axis_frame(80.0, |text| text.len() as f64 * 6.0);
+    let frame = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 6.0,
+        |text, _bold| text.len() as f64 * 5.0,
+    );
     assert!(!frame.time_ticks.is_empty(), "ticksVisible paints stubs");
 }
 
@@ -5026,14 +5101,26 @@ fn separator_hover_mirrors_into_the_axis_frame() {
     chart.time_scale.set_width(800.0);
 
     // No hover by default; the hovered separator indexes into the frame's separators.
-    let frame = chart.build_axis_frame(80.0, |text| text.len() as f64 * 6.0);
+    let frame = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 6.0,
+        |text, _bold| text.len() as f64 * 5.0,
+    );
     assert_eq!(frame.separator_hover, None);
     assert_eq!(frame.separators.len(), 1);
     chart.set_separator_hover(Some(0));
-    let frame = chart.build_axis_frame(80.0, |text| text.len() as f64 * 6.0);
+    let frame = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 6.0,
+        |text, _bold| text.len() as f64 * 5.0,
+    );
     assert_eq!(frame.separator_hover, Some(0));
     chart.set_separator_hover(None);
-    let frame = chart.build_axis_frame(80.0, |text| text.len() as f64 * 6.0);
+    let frame = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 6.0,
+        |text, _bold| text.len() as f64 * 5.0,
+    );
     assert_eq!(frame.separator_hover, None);
 }
 
@@ -5201,7 +5288,11 @@ fn chart_with_indicator_pane() -> ChartEngine {
     chart.add_rsi(0, 14).expect("valid rsi");
     chart.time_scale.set_width(800.0);
     chart.fit_content();
-    chart.recompute_layout_with_measure(true, |text| text.len() as f64 * 6.0);
+    chart.recompute_layout_with_measure(
+        true,
+        |text, _bold| text.len() as f64 * 6.0,
+        |text, _bold| text.len() as f64 * 5.0,
+    );
     chart.build_frame();
     chart
 }
@@ -5287,7 +5378,11 @@ fn repeated_divider_resizes_keep_every_pane_scale_local() {
     for delta in [60.0, -35.0, 120.0, -200.0, 15.0] {
         chart.drag_pane_separator(0, delta);
         chart.build_frame();
-        let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 6.0);
+        let axis = chart.build_axis_frame(
+            80.0,
+            |text, _bold| text.len() as f64 * 6.0,
+            |text, _bold| text.len() as f64 * 5.0,
+        );
         assert_scales_are_pane_local(&chart);
 
         let total: f64 = chart.panes.iter().map(|p| p.height).sum();
@@ -5391,7 +5486,11 @@ fn two_indicator_panes_and_a_named_pane_scale_stay_independent() {
         )
         .unwrap();
     chart.set_series_price_scale(named_series, named);
-    chart.recompute_layout_with_measure(true, |text| text.len() as f64 * 6.0);
+    chart.recompute_layout_with_measure(
+        true,
+        |text, _bold| text.len() as f64 * 6.0,
+        |text, _bold| text.len() as f64 * 5.0,
+    );
     chart.build_frame();
 
     assert_eq!(chart.panes.len(), 3);
@@ -5436,13 +5535,21 @@ fn pane_separators_span_the_full_chart_width_at_rest_and_on_hover() {
     chart
         .apply_options(r##"{"leftPriceScale":{"visible":true}}"##)
         .unwrap();
-    chart.recompute_layout_with_measure(true, |text| text.len() as f64 * 6.0);
+    chart.recompute_layout_with_measure(
+        true,
+        |text, _bold| text.len() as f64 * 6.0,
+        |text, _bold| text.len() as f64 * 5.0,
+    );
     chart.build_frame();
     assert!(chart.left_axis_w > 0.0, "the left axis strip is visible");
     assert!(chart.axis_w > 0.0, "the right axis strip is visible");
 
     let bitmap_w = (chart.css_width * chart.dpr).round().max(1.0) as i32;
-    let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 6.0);
+    let axis = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 6.0,
+        |text, _bold| text.len() as f64 * 5.0,
+    );
     assert_eq!(axis.separators.len(), 1);
     let separator_y = (axis.separators[0] * chart.dpr).round() as i32;
 
@@ -5466,7 +5573,11 @@ fn pane_separators_span_the_full_chart_width_at_rest_and_on_hover() {
     );
 
     chart.set_separator_hover(Some(0));
-    let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 6.0);
+    let axis = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 6.0,
+        |text, _bold| text.len() as f64 * 5.0,
+    );
     chart.build_axis_primitives_into(&axis, &mut prims, |_| 0.0);
     let hover = prims
         .iter()
@@ -5503,7 +5614,11 @@ fn hollow_candles_keep_their_direction_color_on_the_live_price_chip() {
     let wick_up = Color::rgb(0xff, 0x00, 0xff);
     let chip_color = |chart: &mut ChartEngine| {
         chart
-            .build_axis_frame(80.0, |t| t.len() as f64 * 7.0)
+            .build_axis_frame(
+                80.0,
+                |t, _bold| t.len() as f64 * 7.0,
+                |t, _bold| t.len() as f64 * 6.0,
+            )
             .labels
             .into_iter()
             .find_map(|label| match label.background {

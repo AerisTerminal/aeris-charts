@@ -767,8 +767,11 @@ impl ChartInner {
             .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2));
         let font_family = options.layout.font_family;
         let dpr = self.dpr;
-        let measure =
-            |text: &str| measure_text_ctx(&self.axis_ctx, dpr, &font_family, font_size, text);
+        // Experimental host-owned chrome keeps its own layout-size metrics; only the shared
+        // engine axis labels compact. Plugin labels never render bold.
+        let measure = |text: &str| {
+            measure_text_ctx(&self.axis_ctx, dpr, &font_family, font_size, false, text)
+        };
         let Some(pane_state) = self.panes.get(pane) else {
             return;
         };
@@ -865,8 +868,10 @@ impl ChartInner {
             .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2));
         let font_family = options.layout.font_family;
         let dpr = self.dpr;
-        let measure =
-            |text: &str| measure_text_ctx(&self.axis_ctx, dpr, &font_family, font_size, text);
+        // Same experimental-chrome boundary as the price-axis views above.
+        let measure = |text: &str| {
+            measure_text_ctx(&self.axis_ctx, dpr, &font_family, font_size, false, text)
+        };
         for label in labels.iter() {
             let Some(text) = js_sys::Reflect::get(&label, &"text".into())
                 .ok()

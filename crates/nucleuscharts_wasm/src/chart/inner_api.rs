@@ -1640,12 +1640,14 @@ impl ChartInner {
         let axis_ctx = self.axis_ctx.clone();
         let dpr = self.dpr;
         let layout = self.opts().layout;
-        let font_size = layout.font_size;
         let font_family = layout.font_family;
-        self.engine
-            .recompute_layout_with_measure(allow_axis_shrink, |text| {
-                measure_text_ctx(&axis_ctx, dpr, &font_family, font_size, text)
-            });
+        let axis_size = self.engine.axis_font_size();
+        let countdown_size = self.engine.countdown_font_size();
+        self.engine.recompute_layout_with_measure(
+            allow_axis_shrink,
+            |text, bold| measure_text_ctx(&axis_ctx, dpr, &font_family, axis_size, bold, text),
+            |text, bold| measure_text_ctx(&axis_ctx, dpr, &font_family, countdown_size, bold, text),
+        );
     }
 
     // --- gestures ---

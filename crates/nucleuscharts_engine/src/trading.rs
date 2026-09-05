@@ -2108,7 +2108,11 @@ mod tests {
             .iter()
             .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "B")));
 
-        let axis = chart.build_axis_frame(100.0, |text| text.len() as f64 * 7.0);
+        let axis = chart.build_axis_frame(
+            100.0,
+            |text, _bold| text.len() as f64 * 7.0,
+            |text, _bold| text.len() as f64 * 6.0,
+        );
         for price in ["99.00", "103.00"] {
             let color = chart.trading_style().working_order;
             assert!(axis
@@ -2241,7 +2245,11 @@ mod tests {
             .unwrap();
 
         chart.build_frame();
-        let axis = chart.build_axis_frame(100.0, |text| text.len() as f64 * 7.0);
+        let axis = chart.build_axis_frame(
+            100.0,
+            |text, _bold| text.len() as f64 * 7.0,
+            |text, _bold| text.len() as f64 * 6.0,
+        );
         let color = chart.trading_position_color(PositionSide::Long);
         let trading_index = axis
             .labels
@@ -2271,7 +2279,11 @@ mod tests {
                 ..TradingSnapshot::default()
             })
             .unwrap();
-        let axis = chart.build_axis_frame(100.0, |text| text.len() as f64 * 7.0);
+        let axis = chart.build_axis_frame(
+            100.0,
+            |text, _bold| text.len() as f64 * 7.0,
+            |text, _bold| text.len() as f64 * 6.0,
+        );
         let separated = axis
             .labels
             .iter()
@@ -3000,7 +3012,11 @@ mod tests {
         }
 
         // The price tag is solid only once the order is actually filled.
-        let axis = chart.build_axis_frame(100.0, |text| text.len() as f64 * 7.0);
+        let axis = chart.build_axis_frame(
+            100.0,
+            |text, _bold| text.len() as f64 * 7.0,
+            |text, _bold| text.len() as f64 * 6.0,
+        );
         for (price, filled) in [("103.00", false), ("100.50", false), ("99.00", true)] {
             // Plain scale ticks carry the same text; the action tag is the one with a chip.
             let label = axis

@@ -1,5 +1,5 @@
 use super::*;
-use crate::{AlertLineStatus, AlertPriceScale, PriceScaleSide};
+use crate::{axis_metrics::AXIS_FONT_SCALE, AlertLineStatus, AlertPriceScale, PriceScaleSide};
 
 const ALERT_ACTIVE: Color = PRIMARY;
 const ALERT_TRIGGERED: Color = Color::rgb(0xf5, 0xa6, 0x23);
@@ -56,7 +56,7 @@ impl ChartEngine {
         } else {
             raw_price
         };
-        let size = self.options.get().layout.font_size + 5.0;
+        let size = self.axis_metrics().price_tag_height();
         let full_x = if side == PriceScaleSide::Right {
             strip_x - size
         } else {
@@ -140,7 +140,7 @@ impl ChartEngine {
             color: glyph,
             align: AxisTextAlign::Center,
             midpoint: AxisTextMidpoint::Label,
-            font_scale: 1.0,
+            font_scale: AXIS_FONT_SCALE,
             bold: false,
             background: Some((x, chip.y - chip.size / 2.0, chip.size, chip.size, fill)),
             // Attached like before: rounded on the outer edge, square against
@@ -186,7 +186,7 @@ impl ChartEngine {
             color: glyph,
             align: AxisTextAlign::Center,
             midpoint: AxisTextMidpoint::Label,
-            font_scale: 1.0,
+            font_scale: AXIS_FONT_SCALE,
             bold: false,
             background: Some((icon_x, icon_y, icon, icon, fill)),
             background_corners: AxisLabelCorners::ALL,
@@ -209,7 +209,7 @@ impl ChartEngine {
                 color: glyph,
                 align: AxisTextAlign::Center,
                 midpoint: AxisTextMidpoint::Label,
-                font_scale: 1.0,
+                font_scale: AXIS_FONT_SCALE,
                 bold: false,
                 background: Some((bar_x, bar_y, bar_w, bar_h, glyph)),
                 background_corners: AxisLabelCorners::NONE,
@@ -258,7 +258,8 @@ impl ChartEngine {
     /// its outer edge, square against the price tag — so the pair reads as one attached control
     /// and the price tag itself is free to show nothing but the price, like every other tag.
     fn push_alert_badge(&self, out: &mut Vec<Prim>, y: f64, color: Color, hpr: f64, vpr: f64) {
-        let size = self.options.get().layout.font_size + 5.0;
+        // The badge shares the price tag's height so the pair reads as one attached control.
+        let size = self.axis_metrics().price_tag_height();
         let left = (self.pane_w - size).max(0.0);
         let radius = 2.0 * vpr as f32;
         out.push(Prim::RoundRect {

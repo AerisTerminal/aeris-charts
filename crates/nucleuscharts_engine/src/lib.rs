@@ -6,6 +6,7 @@
 //! migrated here incrementally from `nucleuscharts_wasm`.
 
 mod alerts;
+mod axis_metrics;
 mod axis_primitives;
 mod drawings;
 mod feature_series;
@@ -211,9 +212,6 @@ impl SeriesPriceFormat {
 /// the reference's shared line-family default color (line/area/baseline `lineColor`, histogram `color`,
 /// and the custom-series `color` — custom-series.ts `customStyleDefaults`).
 pub const DEFAULT_LINE_COLOR: Color = Color::rgb(0x21, 0x96, 0xf3);
-/// Default media-coordinate height of the horizontal axis. Hosts use this value during layout;
-/// it is engine policy rather than a browser/demo constant.
-pub const TIME_AXIS_HEIGHT: f64 = 28.0;
 
 /// Hysteresis for `max_points` eviction: a series over its ceiling is trimmed back to
 /// `max_points - max_points / CAP_TRIM_MARGIN_DIVISOR`, so the O(total) trim runs once per that
@@ -1245,7 +1243,7 @@ pub struct ChartEngine {
     pub time_axis_visible: bool,
     /// reference `timeScale.ticksVisible` (default false): tick marks on the time axis.
     pub time_ticks_visible: bool,
-    /// reference `timeScale.minimumHeight` (default 0 = the [`TIME_AXIS_HEIGHT`] auto height): floor
+    /// reference `timeScale.minimumHeight` (default 0 = the metrics-derived auto height): floor
     /// for the time-axis strip height.
     pub time_axis_minimum_height: f64,
     /// reference `timeScale.tickMarkMaxCharacterLength` (default 8): tick-label width cap in
@@ -1523,10 +1521,12 @@ impl ChartEngine {
 
     /// Install (or clear) the host time-axis tick formatter (reference `timeScale.tickMarkFormatter`).
     /// The callback receives the UTC-second timestamp and the tick-mark type (0 Year, 1 Month,
-    /// 2 DayOfMonth, 3 Time, 4 TimeWithSeconds).
+    /// 2 DayOfMonth, 3 Time, 4 TimeWithSeconds). Replacement text can change strip widths, so
+    /// this invalidates layout as well as the scene.
     pub fn set_tick_mark_formatter(&mut self, f: Option<TickMarkFormatterFn>) {
         self.tick_mark_formatter_fn = f;
         self.invalidate_frame_scene();
+        self.invalidate_frame_layout_and_axis();
     }
 
     /// Pin the engine clock (UTC seconds) used by the candle-close countdown rows of the
@@ -2715,12 +2715,16 @@ impl ChartEngine {
     }
 
     /// The reserved time-axis strip height in media px (reference chart-widget.ts
-    /// `_adjustSizeImpl`): zero when the strip is hidden, else the auto height floored at
-    /// `timeScale.minimumHeight`. Hosts subtract this from the chart height for the pane
-    /// content area and report it from their `time_scale_height()` gestures getter.
+    /// `_adjustSizeImpl`): zero when the strip is hidden, else the shared-metrics auto height
+    /// (axis text plus border, tick allowance, and vertical padding, even-snapped — 22 CSS px
+    /// at the default font) floored at `timeScale.minimumHeight`. Hosts subtract this from the
+    /// chart height for the pane content area and report it from their `time_scale_height()`
+    /// gestures getter.
     pub fn time_axis_height(&self) -> f64 {
         if self.time_axis_visible {
-            TIME_AXIS_HEIGHT.max(self.time_axis_minimum_height)
+            self.axis_metrics()
+                .time_strip_height()
+                .max(self.time_axis_minimum_height)
         } else {
             0.0
         }
@@ -2747,13 +2751,21 @@ impl ChartEngine {
         let top = self.panes[index].height;
         let bottom = self.panes[index + 1].height;
         let combined = top + bottom;
-        let new_top = (top + delta_css).clamp(
+        let mut new_top = (top + delta_css).clamp(
             MIN_PANE_HEIGHT,
             (combined - MIN_PANE_HEIGHT).max(MIN_PANE_HEIGHT),
         );
-        let applied = new_top - top;
+        let mut new_bottom = combined - new_top;
+        // The top clamp alone can leave the bottom a float-dust epsilon below the minimum
+        // (`combined - new_top`), violating the invariant the overlap and tiling asserts rely
+        // on. Pin sub-epsilon violations back to the bound; anything larger keeps the
+        // reference behavior (in particular the tiny-content path where the top wins).
+        if new_bottom < MIN_PANE_HEIGHT && new_bottom > MIN_PANE_HEIGHT - 1e-9 {
+            new_bottom = MIN_PANE_HEIGHT;
+            new_top = combined - new_bottom;
+        }
         self.panes[index].stretch_factor = new_top;
-        self.panes[index + 1].stretch_factor = bottom - applied;
+        self.panes[index + 1].stretch_factor = new_bottom;
         self.invalidate_frame_all();
     }
 

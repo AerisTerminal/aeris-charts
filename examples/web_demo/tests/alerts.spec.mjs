@@ -75,7 +75,8 @@ test("crosshair plus icon raster follows browser zoom DPR", async ({ page }) => 
     return { dpr1, dpr2 };
   });
 
-  // Default font 12 => 17px chip => 13.6px icon. Its intrinsic bitmap must
-  // match that destination at each DPR instead of remaining a fixed 3x raster.
-  expect(sizes).toEqual({ dpr1: 14, dpr2: 27 });
+  // Compact axes: default font 12 => 11px axis text => 15px chip => 12px icon.
+  // Its intrinsic bitmap must match that destination at each DPR instead of
+  // remaining a fixed 3x raster.
+  expect(sizes).toEqual({ dpr1: 12, dpr2: 24 });
 });

@@ -68,21 +68,27 @@ impl ChartInner {
         self.telemetry.set_rebuilds(self.engine.frame_build_stats());
 
         // Build the retained axis labels only when an axis input changed.
-        // Font comes from `layout` (reference `fontSize`/`fontFamily`): it drives the tick-density
-        // estimate, host text measurement, and glyph drawing so all three agree. The label
+        // Sizes resolve in the engine (`axis_font_size`/`countdown_font_size` from
+        // `layout.fontSize`/`fontFamily`): they drive the tick-density estimate, host text
+        // measurement (with matching weight), and glyph drawing so all three agree. The label
         // width cap is reference `timeScale.tickMarkMaxCharacterLength` (default 8).
         let layout = self.opts().layout;
-        let font_size = layout.font_size;
         let font_family = layout.font_family;
-        let pixels_per_character = (font_size + 4.0) * 5.0 / 8.0;
+        let axis_size = self.engine.axis_font_size();
+        let countdown_size = self.engine.countdown_font_size();
+        let pixels_per_character = (axis_size + 4.0) * 5.0 / 8.0;
         let max_label_width =
             pixels_per_character * f64::from(self.engine.tick_mark_max_character_length);
         let axis_ctx = &self.axis_ctx;
         let dpr = self.dpr;
         if self.engine.frame_requires_axis() {
-            let next_axis_frame = self.engine.build_axis_frame(max_label_width, |text| {
-                measure_text_ctx(axis_ctx, dpr, &font_family, font_size, text)
-            });
+            let next_axis_frame = self.engine.build_axis_frame(
+                max_label_width,
+                |text, bold| measure_text_ctx(axis_ctx, dpr, &font_family, axis_size, bold, text),
+                |text, bold| {
+                    measure_text_ctx(axis_ctx, dpr, &font_family, countdown_size, bold, text)
+                },
+            );
             if next_axis_frame != self.axis_frame {
                 self.axis_frame = next_axis_frame;
             }
@@ -678,8 +684,10 @@ pub(super) fn measure_text_ctx(
     dpr: f64,
     font_family: &str,
     font_size: f64,
+    bold: bool,
     text: &str,
 ) -> f64 {
-    ctx.set_font(&format!("{}px {font_family}", font_size * dpr));
+    let weight = if bold { 700 } else { 400 };
+    ctx.set_font(&format!("{weight} {}px {font_family}", font_size * dpr));
     ctx.measure_text(text).map(|m| m.width()).unwrap_or(0.0) / dpr
 }

@@ -1150,6 +1150,11 @@ impl ChartEngine {
     }
 
     fn sync_frame_input_invalidation(&mut self) {
+        // Layout font owns price-tick density: keep every owned scale's internal tick sizing
+        // on the resolved axis metrics before any tick build or revision comparison below.
+        // The write is a no-op once synced; a real change advances scale revisions exactly
+        // like any other scale mutation.
+        self.sync_axis_tick_fonts();
         let layout_key = [
             self.css_width.to_bits(),
             self.css_height.to_bits(),

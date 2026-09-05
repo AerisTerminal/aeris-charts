@@ -19,11 +19,19 @@ impl ChartEngine {
     /// The operation is idempotent and performs the same two-pass refinement used by the browser
     /// host. `allow_axis_shrink` should be true for a full resize/layout and false for ordinary
     /// repaints, where axes grow immediately but do not visually breathe smaller.
-    pub fn recompute_layout_with_measure<F>(&mut self, allow_axis_shrink: bool, measure: F)
-    where
-        F: Fn(&str) -> f64,
+    pub fn recompute_layout_with_measure<F, G>(
+        &mut self,
+        allow_axis_shrink: bool,
+        measure: F,
+        countdown_measure: G,
+    ) where
+        F: Fn(&str, bool) -> f64,
+        G: Fn(&str, bool) -> f64,
     {
         self.frame_build_stats.layout_rebuilds += 1;
+        // Tick density derives from the resolved axis metrics: sync before negotiating so the
+        // measured tick sets match what the frame will build.
+        self.sync_axis_tick_fonts();
         let content_h = (self.css_height - self.time_axis_height()).max(1.0);
         self.layout_panes(content_h);
         let right_visible = self.options.get().right_price_scale.visible;
@@ -47,13 +55,17 @@ impl ChartEngine {
                             engine.optimal_exact_price_axis_width_for(
                                 pane,
                                 PriceScaleTarget::Right,
-                                |text| measure(text),
+                                |text, bold| measure(text, bold),
+                                |text, bold| countdown_measure(text, bold),
                             )
                         })
                         .fold(0.0_f64, f64::max)
                 } else {
-                    engine
-                        .optimal_price_axis_width_for(PriceScaleTarget::Right, |text| measure(text))
+                    engine.optimal_price_axis_width_for(
+                        PriceScaleTarget::Right,
+                        |text, bold| measure(text, bold),
+                        |text, bold| countdown_measure(text, bold),
+                    )
                 }
             } else {
                 0.0
@@ -65,13 +77,17 @@ impl ChartEngine {
                             engine.optimal_exact_price_axis_width_for(
                                 pane,
                                 PriceScaleTarget::Left,
-                                |text| measure(text),
+                                |text, bold| measure(text, bold),
+                                |text, bold| countdown_measure(text, bold),
                             )
                         })
                         .fold(0.0_f64, f64::max)
                 } else {
-                    engine
-                        .optimal_price_axis_width_for(PriceScaleTarget::Left, |text| measure(text))
+                    engine.optimal_price_axis_width_for(
+                        PriceScaleTarget::Left,
+                        |text, bold| measure(text, bold),
+                        |text, bold| countdown_measure(text, bold),
+                    )
                 }
             } else {
                 0.0
@@ -108,8 +124,12 @@ impl ChartEngine {
                 .collect();
             for (pane, id, current) in targets {
                 let target = PriceScaleTarget::Named(id);
-                let measured =
-                    engine.optimal_exact_price_axis_width_for(pane, target, |text| measure(text));
+                let measured = engine.optimal_exact_price_axis_width_for(
+                    pane,
+                    target,
+                    |text, bold| measure(text, bold),
+                    |text, bold| countdown_measure(text, bold),
+                );
                 if let Some(entry) = engine.panes[pane].named_scale_mut(id) {
                     entry.width = negotiated_axis_width(current, measured, allow_axis_shrink);
                 }
@@ -193,7 +213,11 @@ mod tests {
             .add_price_scale(0, "large-values", PriceScaleSide::Right, None, true)
             .unwrap();
         chart.fit_content();
-        chart.recompute_layout_with_measure(true, |text| text.len() as f64 * 7.0);
+        chart.recompute_layout_with_measure(
+            true,
+            |text, _bold| text.len() as f64 * 7.0,
+            |text, _bold| text.len() as f64 * 6.0,
+        );
         let builtin_width = chart.right_builtin_axis_w;
 
         let comparison = chart.add_series(SeriesKind::Line);
@@ -212,7 +236,11 @@ mod tests {
             r#"{"type":"price","precision":4,"min_move":0.0001}"#
         ));
         chart.set_series_price_scale(comparison, named);
-        chart.recompute_layout_with_measure(true, |text| text.len() as f64 * 7.0);
+        chart.recompute_layout_with_measure(
+            true,
+            |text, _bold| text.len() as f64 * 7.0,
+            |text, _bold| text.len() as f64 * 6.0,
+        );
 
         assert_eq!(chart.right_builtin_axis_w, builtin_width);
         assert!(chart.price_scale_axis_width(0, named).unwrap() > builtin_width);

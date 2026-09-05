@@ -29,7 +29,9 @@ pub struct PriceScaleCoreOptions {
     pub scale_margins: PriceScaleMargins,
     /// Tick mark label density (default 2.5); higher = fewer marks.
     pub tick_mark_density: f64,
-    /// Layout font size in px (used for tick mark height).
+    /// Axis tick label size in px (used for tick mark height). Engine-synced from the
+    /// resolved axis metrics whenever layout font settings change; not host-configurable
+    /// (no patch key, not serialized).
     pub font_size: f64,
     /// reference `alignLabels` (default true): push the axis' boxed labels apart so they cannot
     /// overlap each other or leave the pane edge.
@@ -212,6 +214,16 @@ impl PriceScaleCore {
     pub fn set_entire_text_only(&mut self, entire: bool) {
         if self.options.entire_text_only != entire {
             self.options.entire_text_only = entire;
+            self.changed();
+        }
+    }
+
+    /// Engine-synced axis tick label size in px (finite, positive). Drives tick mark
+    /// height together with `tick_mark_density`; the engine owns this value (see
+    /// `ChartEngine::sync_axis_tick_fonts`) and invalidates on every sync path.
+    pub fn set_tick_font_size(&mut self, size: f64) {
+        if size.is_finite() && size > 0.0 && self.options.font_size != size {
+            self.options.font_size = size;
             self.changed();
         }
     }

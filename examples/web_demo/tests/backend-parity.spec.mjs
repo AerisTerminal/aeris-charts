@@ -25,6 +25,17 @@ async function wait_for_chart(page) {
   }));
 }
 
+// Determinism hardening for pixel comparisons: resolve pending font loads, then run one
+// full paint through the real render path and discard it. First-use shaping, atlas upload,
+// and backend warmup otherwise leak into the measured capture depending on process history.
+async function settle_page(page) {
+  await page.evaluate(() => document.fonts.ready);
+  await page.screenshot({ animations: "disabled", fullPage: false });
+  await page.evaluate(() => new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  }));
+}
+
 async function capture_presented_frame(page, backend, extra_query = "") {
   await page.goto(`/?runtimeTest=presentedFrame&backend=${backend}&forceFallbackAdapter=1${extra_query}`);
   await wait_for_chart(page);
@@ -110,21 +121,58 @@ function changed_footprint(base, feature) {
   return { pixels, bounds: pixels === 0 ? null : { min_x, min_y, max_x, max_y } };
 }
 
-function regional_fidelity_report(nucleus, reference, pixel_ratio, price_axis_width = fixture.price_axis_width) {
+function css_to_device(css, pixel_ratio) {
+  return Math.round(css * pixel_ratio);
+}
+
+// Regional comparison with per-image axis geometry. Nucleus negotiates compact strips while
+// the pinned reference keeps its own sizes, so each image is cropped with its own geometry
+// ({ price_axis_width, time_axis_height } in CSS px). Windows anchor on shared edges — panes
+// and price strips on the top-right (same spacing, same right-anchored last bar, same top
+// edge), time strips on the bottom-right (same bottom edge) — so equal content coincides and
+// only genuine rendering differences (sizes, glyphs, density) remain in the diff.
+function regional_fidelity_report(nucleus, reference, pixel_ratio, nucleus_geom, reference_geom) {
   expect([nucleus.width, nucleus.height]).toEqual([reference.width, reference.height]);
-  const pane_width = Math.round((fixture.css_width - price_axis_width) * pixel_ratio);
-  const pane_height = Math.round((fixture.css_height - fixture.time_axis_height) * pixel_ratio);
+  const layout = (image, geom) => ({
+    pane_w: css_to_device(fixture.css_width - geom.price_axis_width, pixel_ratio),
+    pane_h: css_to_device(fixture.css_height - geom.time_axis_height, pixel_ratio),
+    full_w: image.width,
+    full_h: image.height,
+  });
+  const n = layout(nucleus, nucleus_geom);
+  const r = layout(reference, reference_geom);
+  // Intersect two windows anchored on shared edges: panes and price strips anchor
+  // top-right (common top edge; bars coincide because spacing and the right-anchored last
+  // bar match), time strips anchor bottom-right (common bottom edge).
+  const pairTopRight = (n_right, n_w, n_h, r_right, r_w, r_h) => {
+    const w = Math.min(n_w, r_w);
+    const h = Math.min(n_h, r_h);
+    return [
+      crop_png(nucleus, n_right - w, 0, w, h),
+      crop_png(reference, r_right - w, 0, w, h),
+    ];
+  };
+  const pairBottomRight = (n_right, n_w, n_h, r_right, r_w, r_h) => {
+    const w = Math.min(n_w, r_w);
+    const h = Math.min(n_h, r_h);
+    const H = nucleus.height;
+    return [
+      crop_png(nucleus, n_right - w, H - h, w, h),
+      crop_png(reference, r_right - w, H - h, w, h),
+    ];
+  };
+  const W = nucleus.width;
   const regions = {
     full: [nucleus, reference],
-    pane: [crop_png(nucleus, 0, 0, pane_width, pane_height), crop_png(reference, 0, 0, pane_width, pane_height)],
-    price_axis: [
-      crop_png(nucleus, pane_width, 0, nucleus.width - pane_width, pane_height),
-      crop_png(reference, pane_width, 0, reference.width - pane_width, pane_height),
-    ],
-    time_axis: [
-      crop_png(nucleus, 0, pane_height, pane_width, nucleus.height - pane_height),
-      crop_png(reference, 0, pane_height, pane_width, reference.height - pane_height),
-    ],
+    pane: pairTopRight(n.pane_w, n.pane_w, n.pane_h, r.pane_w, r.pane_w, r.pane_h),
+    price_axis: pairTopRight(
+      W, W - n.pane_w, n.pane_h,
+      W, W - r.pane_w, r.pane_h,
+    ),
+    time_axis: pairBottomRight(
+      n.pane_w, n.pane_w, nucleus.height - n.pane_h,
+      r.pane_w, r.pane_w, reference.height - r.pane_h,
+    ),
   };
   const report = {};
   const visuals = {};
@@ -338,7 +386,15 @@ test("public time and price scale handles are engine-owned and reference-compati
     price.set_auto_scale(true);
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     const auto_range = price.get_visible_range();
+    // Compact strips widen the pane, so the same spacing/offset shows more bars than the
+    // reference. Pin both charts to one explicit logical range right before each scale-mode
+    // measurement (an interior bar boundary both libraries hold exactly), keeping the
+    // percentage base and log/indexed ranges identical by construction. Pinning re-fits bar
+    // spacing to the range on both sides, so every assertion below stays spacing-agnostic
+    // (roundtrips, value ranges, strip widths) by design.
     price.apply_options({ mode: 2 });
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    time.set_visible_logical_range({ from: 801, to: 950 });
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     const percentage_options = price.options();
     const source_price = data[900].close;
@@ -351,10 +407,14 @@ test("public time and price scale handles are engine-owned and reference-compati
     const percentage_logical_range = time.get_visible_logical_range();
     price.apply_options({ mode: 1 });
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    time.set_visible_logical_range({ from: 801, to: 950 });
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     const log_coordinate = main.price_to_coordinate(source_price);
     const log_roundtrip = log_coordinate === null ? null : main.coordinate_to_price(log_coordinate);
     const log_range = price.get_visible_range();
     price.apply_options({ mode: 3 });
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    time.set_visible_logical_range({ from: 801, to: 950 });
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     const indexed_coordinate = main.price_to_coordinate(source_price);
     const indexed_roundtrip = indexed_coordinate === null
@@ -457,19 +517,27 @@ test("public time and price scale handles are engine-owned and reference-compati
       scaleMargins: { top: 0.25, bottom: 0.15 },
     });
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    chart.timeScale().setVisibleLogicalRange({ from: 801, to: 950 });
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     const percentage = {
       range: scale.getVisibleRange(),
       coordinate: series.priceToCoordinate(source_price),
+      roundtrip: series.coordinateToPrice(series.priceToCoordinate(source_price)),
       width: scale.width(),
       logical_range: chart.timeScale().getVisibleLogicalRange(),
     };
     scale.applyOptions({ mode: 1 });
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    chart.timeScale().setVisibleLogicalRange({ from: 801, to: 950 });
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     const log = {
       range: scale.getVisibleRange(),
       coordinate: series.priceToCoordinate(source_price),
+      roundtrip: series.coordinateToPrice(series.priceToCoordinate(source_price)),
     };
     scale.applyOptions({ mode: 3 });
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    chart.timeScale().setVisibleLogicalRange({ from: 801, to: 950 });
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     return {
       percentage,
@@ -477,6 +545,7 @@ test("public time and price scale handles are engine-owned and reference-compati
       indexed: {
         range: scale.getVisibleRange(),
         coordinate: series.priceToCoordinate(source_price),
+        roundtrip: series.coordinateToPrice(series.priceToCoordinate(source_price)),
         width: scale.width(),
         logical_range: chart.timeScale().getVisibleLogicalRange(),
       },
@@ -511,29 +580,44 @@ test("public time and price scale handles are engine-owned and reference-compati
   expect(result.series_queries.type).toBe(reference_series_queries.type);
   expect(result.percentage_range.from).toBeCloseTo(reference_modes.percentage.range.from, 9);
   expect(result.percentage_range.to).toBeCloseTo(reference_modes.percentage.range.to, 9);
-  expect(result.percentage_coordinate).toBeCloseTo(reference_modes.percentage.coordinate, 7);
-  expect(result.percentage_width).toBe(reference_modes.percentage.width);
-  expect(result.percentage_logical_range).toEqual(reference_modes.percentage.logical_range);
-  expect(result.log_coordinate).toBeCloseTo(reference_modes.log.coordinate, 7);
+  // Pane heights differ by design (compact 22px time strip vs the reference's), so media
+  // coordinates cannot match across libraries; per-side roundtrips prove each mode's math
+  // instead (nucleus roundtrips are asserted with the nucleus result above).
+  expect(reference_modes.percentage.roundtrip).toBeCloseTo(result.source_price, 9);
+  // Compact strips are narrower than the reference's by design; ranges and logical ranges
+  // above still match exactly.
+  expect(result.percentage_width).toBeLessThan(reference_modes.percentage.width);
+  // Both charts pin the requested range with slightly different edge semantics (sub-bar
+  // pinning differs); the right edge anchors identically and mode math above matches at
+  // 1e-9, so the left edge need only agree within one bar.
+  expect(result.percentage_logical_range.to).toBe(reference_modes.percentage.logical_range.to);
+  expect(
+    Math.abs(result.percentage_logical_range.from - reference_modes.percentage.logical_range.from)
+  ).toBeLessThanOrEqual(1);
+  expect(reference_modes.log.roundtrip).toBeCloseTo(result.source_price, 9);
   expect(result.log_range).toEqual(reference_modes.log.range);
   expect(result.indexed_range.from).toBeCloseTo(reference_modes.indexed.range.from, 9);
   expect(result.indexed_range.to).toBeCloseTo(reference_modes.indexed.range.to, 9);
-  expect(result.indexed_coordinate).toBeCloseTo(reference_modes.indexed.coordinate, 7);
-  expect(result.price_width).toBe(reference_modes.indexed.width);
-  expect(result.indexed_logical_range).toEqual(reference_modes.indexed.logical_range);
+  expect(reference_modes.indexed.roundtrip).toBeCloseTo(result.source_price, 9);
+  expect(result.price_width).toBeLessThan(reference_modes.indexed.width);
+  expect(result.indexed_logical_range.to).toBe(reference_modes.indexed.logical_range.to);
+  expect(
+    Math.abs(result.indexed_logical_range.from - reference_modes.indexed.logical_range.from)
+  ).toBeLessThanOrEqual(1);
 
   await page.goto("/?runtimeTest=presentedFrame&backend=canvas2d&leftScale=1&dpr=1");
   await wait_for_chart(page);
-  const nucleus_left = await page.evaluate(() => {
+  const nucleus_left = await page.evaluate(async () => {
     const chart = window.__chart;
     const series = window.__main;
     const source_price = window.__data[900].close;
+    chart.time_scale().set_visible_logical_range({ from: 801, to: 950 });
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     return {
       left_width: chart.price_scale("left").width(),
       right_width: chart.price_scale("right").width(),
       pane_width: chart.time_scale().width(),
       range: chart.price_scale("left").get_visible_range(),
-      coordinate: series.price_to_coordinate(source_price),
       roundtrip: series.coordinate_to_price(series.price_to_coordinate(source_price)),
       logical_range: chart.time_scale().get_visible_logical_range(),
       source_price,
@@ -546,33 +630,45 @@ test("public time and price scale handles are engine-owned and reference-compati
 
   await page.goto("/reference.html?leftScale=1");
   await page.waitForFunction(() => document.documentElement.dataset.ready === "true");
-  const reference_left = await page.evaluate((source_price) => {
+  const reference_left = await page.evaluate(async (source_price) => {
     const { chart, series } = window.__reference;
+    chart.timeScale().setVisibleLogicalRange({ from: 801, to: 950 });
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     return {
       left_width: chart.priceScale("left").width(),
       right_width: chart.priceScale("right").width(),
       pane_width: chart.timeScale().width(),
       range: chart.priceScale("left").getVisibleRange(),
-      coordinate: series.priceToCoordinate(source_price),
+      roundtrip: series.coordinateToPrice(series.priceToCoordinate(source_price)),
       logical_range: chart.timeScale().getVisibleLogicalRange(),
     };
   }, nucleus_left.source_price);
-  expect(nucleus_left.left_width).toBe(reference_left.left_width);
+  expect(nucleus_left.left_width).toBeLessThan(reference_left.left_width);
   expect(nucleus_left.right_width).toBe(reference_left.right_width);
-  expect(nucleus_left.pane_width).toBe(reference_left.pane_width);
+  expect(nucleus_left.pane_width).toBeGreaterThan(reference_left.pane_width);
   expect(nucleus_left.range).toEqual(reference_left.range);
-  expect(nucleus_left.coordinate).toBeCloseTo(reference_left.coordinate, 7);
-  expect(nucleus_left.logical_range).toEqual(reference_left.logical_range);
+  // Media coordinates couple to pane height (compact 22px time strip vs the reference's),
+  // so each side proves its own mapping with a roundtrip instead.
+  expect(reference_left.roundtrip).toBeCloseTo(nucleus_left.source_price, 9);
+  expect(nucleus_left.logical_range.to).toBe(reference_left.logical_range.to);
+  expect(
+    Math.abs(nucleus_left.logical_range.from - reference_left.logical_range.from)
+  ).toBeLessThanOrEqual(1);
 });
 
 test("reference 5.2 reference is deterministic and reports Nucleus fidelity", async ({ page }, test_info) => {
-  await page.goto("/?runtimeTest=presentedFrame&backend=canvas2d");
+  // Pin bar spacing like the matrix cases: compact strips change default-fit spacing, so only
+  // equal spacing keeps bars pixel-aligned for the comparison.
+  await page.goto("/?runtimeTest=presentedFrame&backend=canvas2d&spacing=6");
   await wait_for_chart(page);
+  await settle_page(page);
   const nucleus = PNG.sync.read(await page.screenshot({ animations: "disabled", fullPage: false }));
+  const nucleus_axis_width = Number(await page.getAttribute("html", "data-price-axis-width"));
 
-  await page.goto("/reference.html");
+  await page.goto("/reference.html?spacing=6");
   await page.waitForFunction(() => document.documentElement.dataset.ready === "true");
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await settle_page(page);
   const capture_reference = async () => page.screenshot({ animations: "disabled", fullPage: false });
   const reference_first = await capture_reference();
   const reference_second = await capture_reference();
@@ -588,7 +684,19 @@ test("reference 5.2 reference is deterministic and reports Nucleus fidelity", as
   expect([nucleus.width, nucleus.height]).toEqual(expected_size);
   expect([reference.width, reference.height]).toEqual(expected_size);
 
-  const { report, visuals } = regional_fidelity_report(nucleus, reference, fixture.pixel_ratio);
+  const reference_axis_width = Number(await page.getAttribute("html", "data-price-axis-width"));
+  const reference_pane_height = await page.evaluate(() => window.__reference.chart.panes()[0].getHeight());
+
+  const { report, visuals } = regional_fidelity_report(
+    nucleus,
+    reference,
+    fixture.pixel_ratio,
+    { price_axis_width: nucleus_axis_width, time_axis_height: fixture.time_axis_height },
+    {
+      price_axis_width: reference_axis_width,
+      time_axis_height: fixture.css_height - reference_pane_height,
+    },
+  );
   await test_info.attach("nucleus.png", { body: PNG.sync.write(nucleus), contentType: "image/png" });
   await test_info.attach("reference-5.2.0.png", { body: PNG.sync.write(reference), contentType: "image/png" });
   await test_info.attach("nucleuscharts-reference-diff.png", { body: PNG.sync.write(visuals.full), contentType: "image/png" });
@@ -601,6 +709,8 @@ test("reference 5.2 reference is deterministic and reports Nucleus fidelity", as
   // This gate currently establishes a reproducible upstream reference and makes divergence
   // visible. The explicit ceilings prevent fidelity regressions and are lowered region-by-region
   // as Nucleus closes each measured gap; they are intentionally not represented as pixel parity.
+  // Compact axes (9/2026) intentionally diverge in both axis regions; the pane ceiling still
+  // guards chart-content fidelity at its historical level.
   expect(reference_baseline.fixture).toBe(fixture.name);
   expect(reference_baseline.ref_version).toBe("5.2.0");
   for (const [name, ceiling] of Object.entries(reference_baseline.maximum_perceptual_difference)) {
@@ -629,6 +739,7 @@ test("reference spacing, DPR, and theme matrix reports regional fidelity", async
     });
     await matrix_page.goto(`${test_base_url}/?${query}`);
     await wait_for_chart(matrix_page);
+    await settle_page(matrix_page);
     const nucleus_spacing = Number(await matrix_page.getAttribute("html", "data-bar-spacing"));
     expect(nucleus_spacing).toBeCloseTo(entry.spacing, 9);
     const nucleus_range = JSON.parse(await matrix_page.getAttribute("html", "data-visible-logical-range"));
@@ -642,11 +753,15 @@ test("reference spacing, DPR, and theme matrix reports regional fidelity", async
     await matrix_page.goto(`${test_base_url}/reference.html?${query}`);
     await matrix_page.waitForFunction(() => document.documentElement.dataset.ready === "true");
     await matrix_page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await settle_page(matrix_page);
     const reference_spacing = Number(await matrix_page.getAttribute("html", "data-bar-spacing"));
     expect(reference_spacing).toBeCloseTo(entry.spacing, 9);
     const reference_range = JSON.parse(await matrix_page.getAttribute("html", "data-visible-logical-range"));
     const reference_axis_width = Number(await matrix_page.getAttribute("html", "data-price-axis-width"));
-    expect(nucleus_axis_width).toBe(reference_axis_width);
+    const reference_pane_height = await matrix_page.evaluate(() => window.__reference.chart.panes()[0].getHeight());
+    // Compact axes are intentionally narrower than the reference's strips; the shared
+    // content contract is equal ranges, spacing, and price extents (asserted below).
+    expect(nucleus_axis_width).toBeLessThan(reference_axis_width);
     const reference_price_extent = await matrix_page.evaluate(() => [
       window.__reference.series.coordinateToPrice(0),
       window.__reference.series.coordinateToPrice(window.__reference.chart.panes()[0].getHeight() - 1),
@@ -656,7 +771,16 @@ test("reference spacing, DPR, and theme matrix reports regional fidelity", async
       Math.round(fixture.css_width * entry.dpr),
       Math.round(fixture.css_height * entry.dpr),
     ]);
-    const { report, visuals } = regional_fidelity_report(nucleus, reference, entry.dpr, nucleus_axis_width);
+    const { report, visuals } = regional_fidelity_report(
+      nucleus,
+      reference,
+      entry.dpr,
+      { price_axis_width: nucleus_axis_width, time_axis_height: fixture.time_axis_height },
+      {
+        price_axis_width: reference_axis_width,
+        time_axis_height: fixture.css_height - reference_pane_height,
+      },
+    );
     matrix[entry.name] = report;
     console.log(`${entry.name}: axis ${nucleus_axis_width}px, ranges Nucleus ${JSON.stringify(nucleus_range)} reference ${JSON.stringify(reference_range)}, price extents Nucleus ${JSON.stringify(nucleus_price_extent)} reference ${JSON.stringify(reference_price_extent)}; ${JSON.stringify(report)}`);
     if (entry.spacing === 50) {
@@ -700,6 +824,7 @@ test("reference marker and overlay-volume fixtures report regional fidelity", as
     });
     await feature_page.goto(`${test_base_url}/?${query}`);
     await wait_for_chart(feature_page);
+    await settle_page(feature_page);
     const axis_width = Number(await feature_page.getAttribute("html", "data-price-axis-width"));
     const nucleus_range = JSON.parse(await feature_page.getAttribute("html", "data-visible-logical-range"));
     const nucleus_price_extent = await feature_page.evaluate(() => [
@@ -710,18 +835,42 @@ test("reference marker and overlay-volume fixtures report regional fidelity", as
 
     await feature_page.goto(`${test_base_url}/reference.html?${query}`);
     await feature_page.waitForFunction(() => document.documentElement.dataset.ready === "true");
+    await feature_page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await settle_page(feature_page);
     const reference_axis_width = Number(await feature_page.getAttribute("html", "data-price-axis-width"));
     const reference_range = JSON.parse(await feature_page.getAttribute("html", "data-visible-logical-range"));
     const reference_price_extent = await feature_page.evaluate(() => [
       window.__reference.series.coordinateToPrice(0),
       window.__reference.series.coordinateToPrice(window.__reference.chart.panes()[0].getHeight() - 1),
     ]);
-    expect(axis_width).toBe(reference_axis_width);
-    expect(nucleus_range).toEqual(reference_range);
-    expect(nucleus_price_extent[0]).toBeCloseTo(reference_price_extent[0], 9);
-    expect(nucleus_price_extent[1]).toBeCloseTo(reference_price_extent[1], 9);
+    const reference_pane_height = await feature_page.evaluate(() => window.__reference.chart.panes()[0].getHeight());
+    // Compact axes are intentionally narrower than the reference's strips; the shared
+    // content contract is equal ranges and price extents (asserted below).
+    expect(axis_width).toBeLessThan(reference_axis_width);
+    // Same right-anchored last bar on both sides; the wider Nucleus pane shows more bars to
+    // the left (pinning a range here would refit bar spacing and break pixel alignment, so
+    // the ranges agree on the anchor and order on the edge instead). Edge prices agree
+    // relatively: the extra visible bars can nudge autoscale extrema, so this proves mapping
+    // sanity (1e-3) rather than bit-exact autoscale inputs.
+    expect(nucleus_range.to).toBe(reference_range.to);
+    expect(nucleus_range.from).toBeLessThan(reference_range.from);
+    for (const [got, want] of [
+      [nucleus_price_extent[0], reference_price_extent[0]],
+      [nucleus_price_extent[1], reference_price_extent[1]],
+    ]) {
+      expect(Math.abs(got - want) / Math.abs(want)).toBeLessThan(1e-3);
+    }
     const reference = PNG.sync.read(await feature_page.screenshot({ animations: "disabled", fullPage: false }));
-    const { report, visuals } = regional_fidelity_report(nucleus, reference, fixture.pixel_ratio, axis_width);
+    const { report, visuals } = regional_fidelity_report(
+      nucleus,
+      reference,
+      fixture.pixel_ratio,
+      { price_axis_width: axis_width, time_axis_height: fixture.time_axis_height },
+      {
+        price_axis_width: reference_axis_width,
+        time_axis_height: fixture.css_height - reference_pane_height,
+      },
+    );
     captures[feature] = { nucleus, reference };
     console.log(`${feature} ranges: Nucleus ${JSON.stringify(nucleus_range)} reference ${JSON.stringify(reference_range)}, price extents Nucleus ${JSON.stringify(nucleus_price_extent)} reference ${JSON.stringify(reference_price_extent)}`);
     feature_reports[feature] = report;

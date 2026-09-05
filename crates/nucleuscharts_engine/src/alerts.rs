@@ -334,7 +334,7 @@ impl ChartEngine {
     /// both sides agree through this one value.
     pub fn alert_create_icon_css_size(&self) -> f64 {
         use crate::frame::alert_geometry::CREATE_ICON_FRACTION;
-        (self.options.get().layout.font_size + 5.0) * CREATE_ICON_FRACTION
+        self.axis_metrics().price_tag_height() * CREATE_ICON_FRACTION
     }
 
     pub fn take_alert_create_requests(&mut self) -> Vec<AlertCreateRequest> {
@@ -484,7 +484,11 @@ mod tests {
         assert!(actionable
             .iter()
             .all(|primitive| !matches!(primitive, Prim::Text { text, .. } if text == "A")));
-        let axis = chart.build_axis_frame(100.0, |text| text.len() as f64 * 7.0);
+        let axis = chart.build_axis_frame(
+            100.0,
+            |text, _bold| text.len() as f64 * 7.0,
+            |text, _bold| text.len() as f64 * 6.0,
+        );
         assert!(axis.labels.iter().any(|label| label.text == "102.00"));
     }
 
@@ -527,7 +531,11 @@ mod tests {
             })
             .unwrap();
 
-        let axis = chart.build_axis_frame(100.0, |text| text.len() as f64 * 7.0);
+        let axis = chart.build_axis_frame(
+            100.0,
+            |text, _bold| text.len() as f64 * 7.0,
+            |text, _bold| text.len() as f64 * 6.0,
+        );
         let alert = axis
             .labels
             .iter()
@@ -553,7 +561,11 @@ mod tests {
         let chip = chart
             .alert_create_chip()
             .expect("visible crosshair alert chip");
-        let axis = chart.build_axis_frame(100.0, |text| text.len() as f64 * 7.0);
+        let axis = chart.build_axis_frame(
+            100.0,
+            |text, _bold| text.len() as f64 * 7.0,
+            |text, _bold| text.len() as f64 * 6.0,
+        );
         // The container is textless; the "+" label owns the icon-hugging ring so
         // its glyph paints after its own boxes.
         let container = axis
@@ -616,7 +628,11 @@ mod tests {
         // Parking it on the chip lifts the fill a step with no blue anywhere,
         // and the button keeps its geometry and hit rect.
         chart.crosshair = Some((chip.x + chip.size / 2.0, chip.y));
-        let hovered_axis = chart.build_axis_frame(100.0, |text| text.len() as f64 * 7.0);
+        let hovered_axis = chart.build_axis_frame(
+            100.0,
+            |text, _bold| text.len() as f64 * 7.0,
+            |text, _bold| text.len() as f64 * 6.0,
+        );
         let lifted = Color::rgb(0x12, 0x34, 0x56).lighten(0.3);
         // Hover lifts the fills; the icon keeps the theme foreground.
         let lifted_glyph = glyph;
@@ -705,7 +721,11 @@ mod tests {
         let chip = chart
             .alert_create_chip()
             .expect("visible crosshair alert chip");
-        let axis = chart.build_axis_frame(100.0, |text| text.len() as f64 * 7.0);
+        let axis = chart.build_axis_frame(
+            100.0,
+            |text, _bold| text.len() as f64 * 7.0,
+            |text, _bold| text.len() as f64 * 6.0,
+        );
         assert!(!chart.frame_requires_axis());
         assert_eq!(axis.images.len(), 1);
         let icon = &axis.images[0];
@@ -755,7 +775,11 @@ mod tests {
         // Clearing restores the prim fallback.
         assert!(chart.clear_alert_create_icon());
         assert!(!chart.clear_alert_create_icon());
-        let axis = chart.build_axis_frame(100.0, |text| text.len() as f64 * 7.0);
+        let axis = chart.build_axis_frame(
+            100.0,
+            |text, _bold| text.len() as f64 * 7.0,
+            |text, _bold| text.len() as f64 * 6.0,
+        );
         assert!(axis.images.is_empty());
         assert!(
             axis.labels.iter().any(|label| {

@@ -664,7 +664,11 @@ fn crosshair_draws_without_a_primary_series() {
 
     // The time label needs only the time scale; the price label comes off the containing pane's
     // default scale (the secondary series' right scale here).
-    let axis = chart.build_axis_frame(80.0, |t| t.len() as f64 * 7.0);
+    let axis = chart.build_axis_frame(
+        80.0,
+        |t, _bold| t.len() as f64 * 7.0,
+        |t, _bold| t.len() as f64 * 6.0,
+    );
     assert!(axis
         .labels
         .iter()
@@ -867,7 +871,11 @@ fn crosshair_labels_cover_every_visible_populated_price_scale() {
     chart.build_frame();
     chart.crosshair = Some((chart.time_scale.index_to_coordinate(1), 220.0));
 
-    let labels = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let labels = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     let magenta = Color::rgb(0xff, 0x00, 0xff);
     let mut crosshair: Vec<&AxisLabel> = labels
         .labels
@@ -890,7 +898,11 @@ fn crosshair_labels_cover_every_visible_populated_price_scale() {
     chart
         .apply_options(r#"{"leftPriceScale":{"visible":false}}"#)
         .unwrap();
-    let labels = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let labels = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     assert_eq!(
         labels
             .labels
@@ -910,7 +922,11 @@ fn crosshair_labels_cover_every_visible_populated_price_scale() {
         .set_series_data(left, &[], &[], &[], &[], &[])
         .unwrap();
     chart.build_frame();
-    let labels = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let labels = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     assert_eq!(
         labels
             .labels
@@ -986,7 +1002,11 @@ fn crosshair_labels_share_y_across_crosshair_and_scale_modes() {
             let (from, to) = chart.visible_range_for_frame().unwrap();
             let expected_snap_y = chart.crosshair_snap(0, x, snap_y + 1.0, from, to).1;
 
-            let labels = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+            let labels = chart.build_axis_frame(
+                80.0,
+                |text, _bold| text.len() as f64 * 7.0,
+                |text, _bold| text.len() as f64 * 6.0,
+            );
             let magenta = Color::rgb(0xff, 0x00, 0xff);
             let crosshair: Vec<&AxisLabel> = labels
                 .labels
@@ -1072,11 +1092,19 @@ fn named_scale_crosshair_labels_use_exact_strips_ranges_and_formatters() {
         .apply_options(r##"{"crosshair":{"horzLine":{"labelBackgroundColor":"#00ffff"}}}"##)
         .unwrap();
     chart.fit_content();
-    chart.recompute_layout_with_measure(true, |text| text.len() as f64 * 7.0);
+    chart.recompute_layout_with_measure(
+        true,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     chart.build_frame();
     chart.crosshair = Some((chart.time_scale.index_to_coordinate(1), 210.0));
 
-    let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let axis = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     let cyan = Color::rgb(0x00, 0xff, 0xff);
     let crosshair: Vec<_> = axis
         .labels
@@ -1115,7 +1143,11 @@ fn named_scale_crosshair_labels_use_exact_strips_ranges_and_formatters() {
     }
 
     chart.set_price_scale_visible_for(0, left, false);
-    let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let axis = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     assert_eq!(
         axis.labels
             .iter()
@@ -1129,7 +1161,11 @@ fn named_scale_crosshair_labels_use_exact_strips_ranges_and_formatters() {
         .set_series_data(outer_series, &[], &[], &[], &[], &[])
         .unwrap();
     chart.build_frame();
-    let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let axis = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     assert_eq!(
         axis.labels
             .iter()
@@ -1264,7 +1300,11 @@ fn last_value_labels_cover_every_visible_series_and_resolve_overlap() {
     let mut chart = two_identical_line_series();
     let boxed = |chart: &mut ChartEngine| {
         chart
-            .build_axis_frame(80.0, |t| t.len() as f64 * 7.0)
+            .build_axis_frame(
+                80.0,
+                |t, _bold| t.len() as f64 * 7.0,
+                |t, _bold| t.len() as f64 * 6.0,
+            )
             .labels
             .into_iter()
             .filter(|l| l.background.is_some())
@@ -1280,8 +1320,9 @@ fn last_value_labels_cover_every_visible_series_and_resolve_overlap() {
         labels.iter().all(|label| label.border.is_none()),
         "overlapping chips stay filled — collision is resolved by spacing, not by hollowing"
     );
-    // reference `_fixLabelOverlap`: colliding labels are pushed apart by their box height.
-    let height = 12.0 + 2.5 * 2.0;
+    // reference `_fixLabelOverlap`: colliding labels are pushed apart by their box height
+    // (shared 15px price row).
+    let height = 11.0 + 2.0 * 2.0;
     let gap = (labels[0].y - labels[1].y).abs();
     assert!(
         (gap - height).abs() < 1e-9,
@@ -1321,7 +1362,11 @@ fn last_value_chips_hollow_only_once_the_final_bar_leaves_the_view() {
     let mut chart = two_identical_line_series();
     let boxed = |chart: &mut ChartEngine| {
         chart
-            .build_axis_frame(80.0, |t| t.len() as f64 * 7.0)
+            .build_axis_frame(
+                80.0,
+                |t, _bold| t.len() as f64 * 7.0,
+                |t, _bold| t.len() as f64 * 6.0,
+            )
             .labels
             .into_iter()
             .filter(|l| l.background.is_some())
@@ -1373,7 +1418,11 @@ fn last_value_label_tracks_the_last_visible_bar() {
     // series.ts lastValueData(false)), not the series' final bar.
     chart.set_right_offset(-1.0);
     let labels = chart
-        .build_axis_frame(80.0, |t| t.len() as f64 * 7.0)
+        .build_axis_frame(
+            80.0,
+            |t, _bold| t.len() as f64 * 7.0,
+            |t, _bold| t.len() as f64 * 6.0,
+        )
         .labels;
     let label = labels
         .iter()
@@ -1808,7 +1857,11 @@ fn runtime_price_format_rebuilds_scale_ticks_layout_and_autoscale() {
             range.1 - range.0 < 100.0,
             "unexpected autoscale range {range:?}"
         );
-        let labels = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+        let labels = chart.build_axis_frame(
+            80.0,
+            |text, _bold| text.len() as f64 * 7.0,
+            |text, _bold| text.len() as f64 * 6.0,
+        );
         let tick_labels: Vec<&str> = labels
             .labels
             .iter()
@@ -1879,7 +1932,8 @@ fn scale_formatter_source_tracks_attached_z_order() {
 
 #[test]
 fn hiding_sole_indicator_preserves_scale_format_and_layout() {
-    let measure = |text: &str| text.len() as f64 * 7.0;
+    let measure = |text: &str, _bold: bool| text.len() as f64 * 7.0;
+    let countdown_measure = |text: &str, _bold: bool| text.len() as f64 * 6.0;
     let mut chart = ChartEngine::new(900.0, 500.0, 1.0);
     chart
         .set_series_data(
@@ -1901,9 +1955,9 @@ fn hiding_sole_indicator_preserves_scale_format_and_layout() {
     chart.set_series_price_scale(0, PriceScaleTarget::Overlay);
     chart.set_series_price_scale(sma, indicator_scale);
     chart.fit_content();
-    chart.recompute_layout_with_measure(true, measure);
+    chart.recompute_layout_with_measure(true, measure, countdown_measure);
     chart.build_frame();
-    let initial_axis = chart.build_axis_frame(80.0, measure);
+    let initial_axis = chart.build_axis_frame(80.0, measure, countdown_measure);
     let initial_ticks: Vec<_> = initial_axis
         .labels
         .iter()
@@ -1921,9 +1975,9 @@ fn hiding_sole_indicator_preserves_scale_format_and_layout() {
 
     chart.set_series_visible(sma, false);
     assert!(chart.frame_requires_layout());
-    chart.recompute_layout_with_measure(false, measure);
+    chart.recompute_layout_with_measure(false, measure, countdown_measure);
     chart.build_frame();
-    let hidden_axis = chart.build_axis_frame(80.0, measure);
+    let hidden_axis = chart.build_axis_frame(80.0, measure, countdown_measure);
     let hidden_ticks: Vec<_> = hidden_axis
         .labels
         .iter()
@@ -1944,9 +1998,9 @@ fn hiding_sole_indicator_preserves_scale_format_and_layout() {
 
     chart.set_series_visible(sma, true);
     assert!(chart.frame_requires_layout());
-    chart.recompute_layout_with_measure(false, measure);
+    chart.recompute_layout_with_measure(false, measure, countdown_measure);
     chart.build_frame();
-    let shown_axis = chart.build_axis_frame(80.0, measure);
+    let shown_axis = chart.build_axis_frame(80.0, measure, countdown_measure);
     let shown_ticks: Vec<_> = shown_axis
         .labels
         .iter()
@@ -2000,7 +2054,11 @@ fn last_value_clusters_attach_only_within_their_own_series() {
         .unwrap();
 
     let labels = chart
-        .build_axis_frame(80.0, |t| t.len() as f64 * 7.0)
+        .build_axis_frame(
+            80.0,
+            |t, _bold| t.len() as f64 * 7.0,
+            |t, _bold| t.len() as f64 * 6.0,
+        )
         .labels;
     let groups: Vec<u32> = labels.iter().filter_map(|l| l.attach_group).collect();
     // The main cluster's chips share one group (the main series' id 0)…
@@ -2034,7 +2092,11 @@ fn horizontal_line_drawings_label_the_axis_in_the_line_color() {
         .unwrap();
     let label_at = |chart: &mut ChartEngine| {
         chart
-            .build_axis_frame(80.0, |t| t.len() as f64 * 7.0)
+            .build_axis_frame(
+                80.0,
+                |t, _bold| t.len() as f64 * 7.0,
+                |t, _bold| t.len() as f64 * 6.0,
+            )
             .labels
             .into_iter()
             .find(|l| l.text == "12.00" && l.background.is_some())
@@ -2520,7 +2582,11 @@ fn canonical_style_reaches_the_backend_neutral_frame() {
         Prim::HLine { color, .. } | Prim::VLine { color, .. } if *color == CROSSHAIR_COLOR
     )));
 
-    let axis_frame = chart.build_axis_frame(40.0, |text| text.len() as f64 * 7.0);
+    let axis_frame = chart.build_axis_frame(
+        40.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     let mut axis_prims = Vec::new();
     chart.build_axis_primitives_into(&axis_frame, &mut axis_prims, |_| 0.0);
     let border = Color::rgb(
@@ -2566,7 +2632,11 @@ fn malformed_grid_and_axis_css_fall_back_to_canonical_style() {
         nucleuscharts_core::style::DEFAULT_AXIS_TEXT_RGB.1,
         nucleuscharts_core::style::DEFAULT_AXIS_TEXT_RGB.2,
     );
-    let axis_frame = chart.build_axis_frame(40.0, |text| text.len() as f64 * 7.0);
+    let axis_frame = chart.build_axis_frame(
+        40.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     let mut axis_prims = Vec::new();
     chart.build_axis_primitives_into(&axis_frame, &mut axis_prims, |_| 0.0);
     assert!(axis_prims
@@ -2748,7 +2818,11 @@ fn last_value_label_background_honors_the_per_point_color() {
     // The final bar carries a custom body color: the last-value label (and the built-in
     // last-price line) follow it (reference series-bar-colorer.ts).
     assert!(chart.set_series_point_colors(0, Some(vec![0, 0, POINT_RED]), None, None));
-    let axis = chart.build_axis_frame(80.0, |t| t.len() as f64 * 7.0);
+    let axis = chart.build_axis_frame(
+        80.0,
+        |t, _bold| t.len() as f64 * 7.0,
+        |t, _bold| t.len() as f64 * 6.0,
+    );
     assert!(axis
         .labels
         .iter()
@@ -2829,7 +2903,11 @@ fn custom_series_last_value_line_and_label_follow_the_frame_values() {
         Prim::HLine { color, style: LineStyle::Dotted, .. } if *color == visible.color
     )));
     // The last-value axis label always tracks the visible record (reference lastValueData(false)).
-    let axis = chart.build_axis_frame(80.0, |t| t.len() as f64 * 7.0);
+    let axis = chart.build_axis_frame(
+        80.0,
+        |t, _bold| t.len() as f64 * 7.0,
+        |t, _bold| t.len() as f64 * 6.0,
+    );
     assert!(axis.labels.iter().any(
         |l| matches!(l.background, Some((.., c)) if c == visible.color) && l.text == "104.00"
     ));
@@ -2843,7 +2921,11 @@ fn custom_series_last_value_line_and_label_follow_the_frame_values() {
         p,
         Prim::HLine { color, style: LineStyle::Dotted, .. } if *color == live
     )));
-    let axis = chart.build_axis_frame(80.0, |t| t.len() as f64 * 7.0);
+    let axis = chart.build_axis_frame(
+        80.0,
+        |t, _bold| t.len() as f64 * 7.0,
+        |t, _bold| t.len() as f64 * 6.0,
+    );
     assert!(axis.labels.iter().any(|label| {
         label.text == "104.00"
             && label.color == Color::rgb(0, 0, 0)
@@ -2978,7 +3060,11 @@ fn crosshair_follows_the_cursor_into_the_empty_area() {
             .any(|p| matches!(p, Prim::VLine { x, .. } if *x == empty_slot_x)),
         "vertical line must follow the cursor into the empty area"
     );
-    let axis = chart.build_axis_frame(80.0, |t| t.len() as f64 * 7.0);
+    let axis = chart.build_axis_frame(
+        80.0,
+        |t, _bold| t.len() as f64 * 7.0,
+        |t, _bold| t.len() as f64 * 6.0,
+    );
     assert!(
         !axis
             .labels
@@ -2989,7 +3075,11 @@ fn crosshair_follows_the_cursor_into_the_empty_area() {
 
     // Control: hovering a real bar still shows the time label.
     chart.crosshair = Some((chart.time_scale.index_to_coordinate(2), 120.0));
-    let axis = chart.build_axis_frame(80.0, |t| t.len() as f64 * 7.0);
+    let axis = chart.build_axis_frame(
+        80.0,
+        |t, _bold| t.len() as f64 * 7.0,
+        |t, _bold| t.len() as f64 * 6.0,
+    );
     assert!(
         axis.labels
             .iter()
@@ -3038,7 +3128,11 @@ fn bold_round_labels_decile_rule() {
 #[test]
 fn axis_primitives_keep_normal_and_round_tick_weights_distinct() {
     let mut chart = crosshair_chart();
-    let mut axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let mut axis = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     let mut normal = axis
         .labels
         .iter()
@@ -3066,7 +3160,11 @@ fn axis_primitives_keep_normal_and_round_tick_weights_distinct() {
 fn allow_bold_labels_gates_major_time_ticks() {
     let mut chart = crosshair_chart();
     chart.time_scale.set_width(300.0);
-    let frame = chart.build_axis_frame(80.0, |t| t.len() as f64 * 7.0);
+    let frame = chart.build_axis_frame(
+        80.0,
+        |t, _bold| t.len() as f64 * 7.0,
+        |t, _bold| t.len() as f64 * 6.0,
+    );
     let time_labels: Vec<_> = frame
         .labels
         .iter()
@@ -3077,7 +3175,11 @@ fn allow_bold_labels_gates_major_time_ticks() {
         "major labels bold by default"
     );
     chart.time_scale.set_allow_bold_labels(false);
-    let frame = chart.build_axis_frame(80.0, |t| t.len() as f64 * 7.0);
+    let frame = chart.build_axis_frame(
+        80.0,
+        |t, _bold| t.len() as f64 * 7.0,
+        |t, _bold| t.len() as f64 * 6.0,
+    );
     assert!(
         frame
             .labels
@@ -3145,7 +3247,11 @@ fn countdown_chart() -> ChartEngine {
 
 fn boxed_labels(chart: &mut ChartEngine) -> Vec<AxisLabel> {
     chart
-        .build_axis_frame(80.0, |t| t.len() as f64 * 7.0)
+        .build_axis_frame(
+            80.0,
+            |t, _bold| t.len() as f64 * 7.0,
+            |t, _bold| t.len() as f64 * 6.0,
+        )
         .labels
         .into_iter()
         .filter(|l| l.background.is_some())
@@ -3253,12 +3359,12 @@ fn last_value_cluster_rows_toggle_independently() {
     assert!((cd_x - price_x).abs() < 1e-9, "same left edge");
     assert!((cd_w - price_w).abs() < 1e-9, "same width");
     assert_eq!(chip_h, price_h);
-    // TradingView-style countdown row: 11px text and tighter vertical padding (1.5px vs the
-    // price row's 12px text and 2.5px padding), so it reads as secondary information.
-    assert_eq!(price_h, 12.0 + 2.5 * 2.0);
-    assert_eq!(cd_h, 11.0 + 1.5 * 2.0);
-    assert_eq!(price.font_scale, 1.0);
-    assert_eq!(countdown.font_scale, 11.0 / 12.0);
+    // Shared metrics: 11px price text with 2px padding per side; 10px countdown text with
+    // 2px padding per side, so the countdown reads as secondary information.
+    assert_eq!(price_h, 11.0 + 2.0 * 2.0);
+    assert_eq!(cd_h, 10.0 + 2.0 * 2.0);
+    assert_eq!(price.font_scale, 11.0 / 12.0);
+    assert_eq!(countdown.font_scale, 10.0 / 12.0);
     // This dark live background selects white; countdown uses the same RGB at reduced opacity.
     assert_eq!(chip.color, LIVE_TEXT);
     assert_eq!(price.color, LIVE_TEXT);
@@ -3384,8 +3490,9 @@ fn boxed_axis_labels_select_the_axis_facing_corners() {
     assert_eq!(time.color, Color::rgb(0, 0, 0));
     let (_, time_y, _, time_h, _) = time.background.expect("boxed time label");
     assert_eq!(time_y, chart.pane_h);
-    assert_eq!(time_h, 1.0 + 5.0 + 3.0 + 12.0 + 3.0);
-    assert_eq!(time.y, chart.pane_h + 1.0 + 5.0 + 3.0 + 12.0 / 2.0);
+    // Shared time strip: axis 11 + 1 border + 3 tick + 3 + 3 padding = 21, even-snapped 22.
+    assert_eq!(time_h, 22.0);
+    assert_eq!(time.y, chart.pane_h + 1.0 + 3.0 + 3.0 + 11.0 / 2.0);
     chart.crosshair = None;
 
     // Cluster: only the outer axis-facing corners round; internal boundaries stay sharp.
@@ -3487,7 +3594,11 @@ fn boxed_labels_begin_beyond_the_axis_border_at_every_dpr() {
         chart.series[0].title = "NDQ".to_string();
         chart.series[0].countdown_visible = false;
         chart.crosshair = Some((400.0, 250.0));
-        let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+        let axis = chart.build_axis_frame(
+            80.0,
+            |text, _bold| text.len() as f64 * 7.0,
+            |text, _bold| text.len() as f64 * 6.0,
+        );
         let mut primitives = Vec::new();
         chart.build_axis_primitives_into(&axis, &mut primitives, |_| 0.0);
 
@@ -3528,37 +3639,48 @@ fn boxed_labels_begin_beyond_the_axis_border_at_every_dpr() {
 
 #[test]
 fn axis_width_negotiation_includes_the_secondary_countdown_row() {
-    let measure = |t: &str| t.len() as f64 * 7.0;
+    let measure = |t: &str, _bold: bool| t.len() as f64 * 7.0;
+    let countdown_measure = |t: &str, _bold: bool| t.len() as f64 * 6.0;
     let mut chart = countdown_chart();
-    let plain = chart.optimal_price_axis_width_for(PriceScaleTarget::Right, measure);
+    let plain =
+        chart.optimal_price_axis_width_for(PriceScaleTarget::Right, measure, countdown_measure);
     // Tick + price texts are 5 chars here; the reference's worst-case crosshair sample
     // ("9.11"/"12.89") is also 5 chars or less, so the plain strip covers the widest label
-    // (exact reference structural: 1 border + 5 tick + 5 inner + 5 outer + 5 offset).
-    assert_eq!(plain, 56.0);
+    // (shared chrome: 1 border + 3 tick + 4 + 4 padding + 5 chars at 7px = 47, even 48).
+    assert_eq!(plain, 48.0);
 
     // The eight-character countdown is wider than the primary price and must widen the strip.
     chart.series[0].countdown_visible = true;
     chart.now_override = Some(300.0 - 86399.0);
-    let with_countdown = chart.optimal_price_axis_width_for(PriceScaleTarget::Right, measure);
-    assert_eq!(with_countdown, 74.0);
+    let with_countdown =
+        chart.optimal_price_axis_width_for(PriceScaleTarget::Right, measure, countdown_measure);
+    assert_eq!(with_countdown, 60.0);
 
     // The title chip lives OUTSIDE the strip (pane side), so it never widens the axis.
     chart.now_override = Some(250.0); // "00:50" — same 5 chars as the price
     chart.series[0].title = "NDQ".to_string();
-    let with_cluster = chart.optimal_price_axis_width_for(PriceScaleTarget::Right, measure);
-    assert_eq!(with_cluster, 56.0, "outside chip must not widen the strip");
+    let with_cluster =
+        chart.optimal_price_axis_width_for(PriceScaleTarget::Right, measure, countdown_measure);
+    assert_eq!(with_cluster, 48.0, "outside chip must not widen the strip");
 }
 
 #[test]
 fn exact_axis_width_negotiation_includes_the_countdown_row() {
-    let measure = |text: &str| text.len() as f64 * 7.0;
+    let measure = |text: &str, _bold: bool| text.len() as f64 * 7.0;
+    let countdown_measure = |text: &str, _bold: bool| text.len() as f64 * 6.0;
     let mut chart = countdown_chart();
     chart.series[0].countdown_visible = true;
     chart.now_override = Some(300.0 - 86399.0);
 
+    // Eight-char countdown at 6px plus shared 12px chrome: 60 even.
     assert_eq!(
-        chart.optimal_exact_price_axis_width_for(0, PriceScaleTarget::Right, measure),
-        68.0
+        chart.optimal_exact_price_axis_width_for(
+            0,
+            PriceScaleTarget::Right,
+            measure,
+            countdown_measure
+        ),
+        60.0
     );
 }
 
@@ -3566,7 +3688,11 @@ fn exact_axis_width_negotiation_includes_the_countdown_row() {
 fn countdown_clock_requests_layout_without_invalidating_coordinates() {
     let mut chart = countdown_chart();
     chart.series[0].countdown_visible = true;
-    chart.recompute_layout_with_measure(true, |text| text.len() as f64 * 7.0);
+    chart.recompute_layout_with_measure(
+        true,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     chart.build_frame();
     assert!(!chart.frame_requires_layout());
     let coordinate_revision = chart.frame_coordinate_revision();
@@ -3576,8 +3702,16 @@ fn countdown_clock_requests_layout_without_invalidating_coordinates() {
     assert!(chart.frame_requires_layout());
     assert_eq!(chart.frame_coordinate_revision(), coordinate_revision);
 
-    chart.recompute_layout_with_measure(false, |text| text.len() as f64 * 7.0);
-    chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    chart.recompute_layout_with_measure(
+        false,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
+    chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     chart.set_now_seconds(300.0 - 86398.0);
     assert!(!chart.frame_requires_layout());
     assert!(chart.frame_requires_axis());
@@ -3590,8 +3724,16 @@ fn countdown_clock_does_not_invalidate_a_series_without_an_interval() {
         .set_series_data(0, &[240.0], &[12.0], &[12.0], &[12.0], &[12.0])
         .unwrap();
     chart.series[0].countdown_visible = true;
-    chart.recompute_layout_with_measure(true, |text| text.len() as f64 * 7.0);
-    chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    chart.recompute_layout_with_measure(
+        true,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
+    chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
 
     chart.set_now_seconds(250.0);
 
@@ -3603,7 +3745,11 @@ fn countdown_clock_does_not_invalidate_a_series_without_an_interval() {
 fn long_title_chip_is_fitted_inside_the_pane() {
     let mut chart = countdown_chart();
     chart.series[0].title = "A".repeat(500);
-    chart.recompute_layout_with_measure(true, |text| text.len() as f64 * 7.0);
+    chart.recompute_layout_with_measure(
+        true,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     let labels = boxed_labels(&mut chart);
     let title = labels
         .iter()
@@ -3625,19 +3771,35 @@ fn built_in_year_labels_honor_the_character_limit_without_truncation() {
     chart.time_scale.set_width(800.0);
     chart.fit_content();
 
-    let labels = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let labels = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     assert!(labels.labels.iter().any(|label| label.text == "1970"));
 
     chart.set_tick_mark_max_character_length(2);
-    let labels = chart.build_axis_frame(20.0, |text| text.len() as f64 * 7.0);
+    let labels = chart.build_axis_frame(
+        20.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     assert!(!labels.labels.iter().any(|label| label.text == "1970"));
 
     chart.set_tick_mark_formatter(Some(Box::new(|_, _| None)));
-    let labels = chart.build_axis_frame(20.0, |text| text.len() as f64 * 7.0);
+    let labels = chart.build_axis_frame(
+        20.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     assert!(!labels.labels.iter().any(|label| label.text == "1970"));
 
     chart.set_tick_mark_formatter(Some(Box::new(|_, _| Some("custom-year".to_string()))));
-    let labels = chart.build_axis_frame(20.0, |text| text.len() as f64 * 7.0);
+    let labels = chart.build_axis_frame(
+        20.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     assert!(labels
         .labels
         .iter()
@@ -3646,19 +3808,161 @@ fn built_in_year_labels_honor_the_character_limit_without_truncation() {
 
 #[test]
 fn axis_width_negotiation_ignores_the_transient_crosshair_label() {
-    let measure = |t: &str| t.len() as f64 * 7.0;
+    let measure = |t: &str, _bold: bool| t.len() as f64 * 7.0;
+    let countdown_measure = |t: &str, _bold: bool| t.len() as f64 * 6.0;
     let mut chart = countdown_chart();
-    let base = chart.optimal_price_axis_width_for(PriceScaleTarget::Right, measure);
+    let base =
+        chart.optimal_price_axis_width_for(PriceScaleTarget::Right, measure, countdown_measure);
     // A crosshair at a wide price (its label is much longer than any tick) must NOT widen the
     // strip: it is transient chrome, and the grow-fast/shrink-lazy policy would pin the
     // inflated width forever, leaving a permanent dead zone beside the last-value chips.
     chart.crosshair = Some((400.0, 250.0));
-    let with_crosshair = chart.optimal_price_axis_width_for(PriceScaleTarget::Right, measure);
+    let with_crosshair =
+        chart.optimal_price_axis_width_for(PriceScaleTarget::Right, measure, countdown_measure);
     assert_eq!(
         with_crosshair, base,
         "crosshair label must not inflate the strip"
     );
     chart.crosshair = None;
+}
+
+/// Axis clean-rebuild equality: an incremental axis frame must equal a forced full rebuild.
+fn assert_axis_frame_matches_clean_rebuild(chart: &mut ChartEngine) {
+    let measure = |t: &str, _bold: bool| t.len() as f64 * 7.0;
+    let countdown_measure = |t: &str, _bold: bool| t.len() as f64 * 6.0;
+    let incremental = chart.build_axis_frame(80.0, measure, countdown_measure);
+    chart.retained_frame = RetainedFrame::default();
+    chart.frame_invalidation.all();
+    let rebuilt = chart.build_axis_frame(80.0, measure, countdown_measure);
+    assert_eq!(incremental, rebuilt);
+}
+
+#[test]
+fn compact_axis_fixture_strips_and_tags_share_metrics_across_dpr() {
+    // One deterministic viewport/data/font fixture covering every compact label family: tick
+    // labels, live-price + title + countdown cluster, and crosshair price + time tags.
+    let build_labels = |dpr: f64| {
+        let mut chart = countdown_chart();
+        chart.dpr = dpr;
+        chart.series[0].title = "NDQ".to_string();
+        chart.series[0].countdown_visible = true;
+        chart.now_override = Some(250.0); // "00:50"
+                                          // Mid-pane crosshair so both crosshair tags render alongside live-price titles.
+        let mid_x = chart.logical_to_coordinate(2.0).unwrap_or(400.0);
+        chart.crosshair = Some((mid_x, 250.0));
+        chart.recompute_layout_with_measure(
+            true,
+            |t, _bold| t.len() as f64 * 7.0,
+            |t, _bold| t.len() as f64 * 6.0,
+        );
+        chart.build_frame();
+        assert_eq!(chart.time_axis_height(), 22.0);
+        assert_eq!(chart.axis_w % 2.0, 0.0, "price strip stays even-snapped");
+        let labels = chart
+            .build_axis_frame(
+                80.0,
+                |t, _bold| t.len() as f64 * 7.0,
+                |t, _bold| t.len() as f64 * 6.0,
+            )
+            .labels;
+        assert_axis_frame_matches_clean_rebuild(&mut chart);
+        assert_retained_frame_matches_clean_rebuild(&mut chart);
+        (chart, labels)
+    };
+    let (chart_dpr1, labels_dpr1) = build_labels(1.0);
+    let (_, labels_dpr2) = build_labels(2.0);
+    assert_eq!(
+        labels_dpr1, labels_dpr2,
+        "axis label geometry is CSS-px: DPR must not move it"
+    );
+
+    // Every axis-attached glyph runs at 11/12 of layout.fontSize; countdown at 10/12.
+    for label in &labels_dpr1 {
+        let expected = if label.text == "00:50" {
+            10.0 / 12.0
+        } else {
+            11.0 / 12.0
+        };
+        assert_eq!(label.font_scale, expected, "scale for {:?}", label.text);
+    }
+    // Boxed price-side tags share one chrome: 12px around the measured advance.
+    for label in labels_dpr1.iter().filter(|l| {
+        l.background.is_some()
+            && l.midpoint == AxisTextMidpoint::Label
+            && !l.text.is_empty()
+            && l.align != AxisTextAlign::Center
+            && l.text != "00:50"
+    }) {
+        let (_, _, w, h, _) = label.background.expect("boxed");
+        assert_eq!(w, 12.0 + label.text.len() as f64 * 7.0);
+        assert_eq!(h, 15.0);
+    }
+    // Countdown rows share the price width at 14px height.
+    let countdown = labels_dpr1
+        .iter()
+        .find(|l| l.text == "00:50")
+        .expect("countdown tag");
+    let (_, _, _, countdown_h, _) = countdown.background.expect("boxed countdown");
+    assert_eq!(countdown_h, 14.0);
+    // Time-side tags fit the 22px strip with 6px padding per side.
+    for label in labels_dpr1.iter().filter(|l| {
+        l.background.is_some()
+            && (l.midpoint == AxisTextMidpoint::StableTime || l.midpoint == AxisTextMidpoint::None)
+    }) {
+        let (_, y, w, h, _) = label.background.expect("boxed time tag");
+        assert_eq!(y, chart_dpr1.pane_h);
+        assert_eq!(h, 22.0);
+        assert_eq!(w, label.text.len() as f64 * 7.0 + 12.0);
+    }
+    // Crosshair price + time tags render together with live-price and countdown.
+    assert!(labels_dpr1.iter().any(|l| l.text == "12.50"));
+    assert!(labels_dpr1.iter().any(|l| l.text == "00:50"));
+    assert!(
+        labels_dpr1
+            .iter()
+            .any(|l| { l.background.is_some() && l.midpoint == AxisTextMidpoint::StableTime }),
+        "crosshair time tag must render"
+    );
+}
+
+#[test]
+fn streaming_digit_growth_widens_the_strip_without_shrink_on_repaint() {
+    let axis7 = |t: &str, _bold: bool| t.len() as f64 * 7.0;
+    let countdown6 = |t: &str, _bold: bool| t.len() as f64 * 6.0;
+    let mut chart = countdown_chart();
+    chart.recompute_layout_with_measure(true, axis7, countdown6);
+    chart.build_frame();
+    let narrow = chart.axis_w;
+
+    // A streaming wide bar (digit-width growth) flags layout; repaint negotiation grows.
+    assert!(chart.update_series_bar(0, 300.0, [1_234.0, 1_240.0, 1_230.0, 1_235.0]));
+    assert!(chart.frame_requires_layout());
+    chart.recompute_layout_with_measure(false, axis7, countdown6);
+    chart.build_frame();
+    assert!(
+        chart.axis_w > narrow,
+        "wider labels must grow the strip: {narrow} -> {}",
+        chart.axis_w
+    );
+    let grown = chart.axis_w;
+
+    // Narrow data again: repaints never breathe the strip smaller, full layouts do.
+    chart
+        .set_series_data(
+            0,
+            &[0.0, 60.0, 120.0, 180.0, 240.0],
+            &[10.0, 11.0, 12.0, 11.5, 12.5],
+            &[10.0, 11.0, 12.0, 11.5, 12.5],
+            &[10.0, 11.0, 12.0, 11.5, 12.5],
+            &[10.0, 11.0, 12.0, 11.5, 12.5],
+        )
+        .unwrap();
+    chart.recompute_layout_with_measure(false, axis7, countdown6);
+    chart.build_frame();
+    assert_eq!(chart.axis_w, grown, "repaints must not shrink the strip");
+    chart.recompute_layout_with_measure(true, axis7, countdown6);
+    chart.build_frame();
+    assert_eq!(chart.axis_w, narrow, "full layout releases the width");
 }
 
 #[test]
@@ -3690,11 +3994,15 @@ fn last_value_cluster_overlap_resolution_uses_the_total_height() {
     chart.series[0].countdown_visible = true;
     chart.series[1].countdown_visible = true;
     let labels = chart
-        .build_axis_frame(80.0, |t| t.len() as f64 * 7.0)
+        .build_axis_frame(
+            80.0,
+            |t, _bold| t.len() as f64 * 7.0,
+            |t, _bold| t.len() as f64 * 6.0,
+        )
         .labels;
     // Two colliding two-row clusters: the overlap pass pushes them apart by each cluster's
-    // total height (price row + the tighter countdown row), measured between the price rows.
-    let cluster_height = (12.0 + 2.5 * 2.0) + (11.0 + 1.5 * 2.0);
+    // total height (15px price row + 14px countdown row), measured between the price rows.
+    let cluster_height = (11.0 + 2.0 * 2.0) + (10.0 + 2.0 * 2.0);
     let mut price_ys: Vec<f64> = labels
         .iter()
         .filter(|l| l.background.is_some() && l.text == "12.50")
@@ -4594,24 +4902,44 @@ fn stable_frame_reuses_every_semantic_layer() {
 #[test]
 fn stable_axis_frame_is_not_rebuilt_until_an_axis_input_changes() {
     let mut chart = retained_two_series_chart();
-    chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     assert!(!chart.frame_requires_axis());
     chart.set_crosshair_at(300.0, 200.0);
     assert!(chart.frame_requires_axis());
-    chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     assert!(!chart.frame_requires_axis());
 }
 
 #[test]
 fn countdown_tick_renegotiates_layout_without_rebuilding_unchanged_pane_layers() {
     let mut chart = retained_two_series_chart();
-    chart.recompute_layout_with_measure(true, |text| text.len() as f64 * 7.0);
+    chart.recompute_layout_with_measure(
+        true,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     chart.build_frame();
-    chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     chart.set_now_seconds(1_700_000_000.0);
     assert!(chart.frame_requires_axis());
     assert!(chart.frame_requires_layout());
-    chart.recompute_layout_with_measure(false, |text| text.len() as f64 * 7.0);
+    chart.recompute_layout_with_measure(
+        false,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     chart.build_frame();
     assert_eq!(chart.frame_build_stats(), FrameBuildStats::default());
 }
@@ -4693,7 +5021,11 @@ fn direct_host_series_mutation_advances_canonical_revision_without_hashing_state
 #[test]
 fn direct_host_series_visibility_mutation_requests_layout() {
     let mut chart = retained_two_series_chart();
-    chart.recompute_layout_with_measure(true, |text| text.len() as f64 * 7.0);
+    chart.recompute_layout_with_measure(
+        true,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     chart.build_frame();
     assert!(!chart.frame_requires_layout());
 
@@ -5016,7 +5348,11 @@ fn selecting_a_series_accents_its_last_value_chip() {
     let mut chart = two_identical_line_series();
     let accents = |chart: &mut ChartEngine| {
         chart
-            .build_axis_frame(80.0, |t| t.len() as f64 * 7.0)
+            .build_axis_frame(
+                80.0,
+                |t, _bold| t.len() as f64 * 7.0,
+                |t, _bold| t.len() as f64 * 6.0,
+            )
             .labels
             .into_iter()
             .filter(|l| l.text.is_empty() && l.background.is_some())
@@ -5043,7 +5379,11 @@ fn selecting_a_series_accents_its_last_value_chip() {
     // Pinned to the axis-facing (right) edge of the right-strip chip, spanning the cluster.
     // Flush with the axis-facing (right) edge of a real price chip, spanning its full height.
     let chip = chart
-        .build_axis_frame(80.0, |t| t.len() as f64 * 7.0)
+        .build_axis_frame(
+            80.0,
+            |t, _bold| t.len() as f64 * 7.0,
+            |t, _bold| t.len() as f64 * 6.0,
+        )
         .labels
         .into_iter()
         .filter_map(|l| (!l.text.is_empty()).then_some(l.background).flatten())

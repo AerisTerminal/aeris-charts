@@ -1,8 +1,13 @@
 //! Axis frame production: price/time labels, widths, marker/price-line/crosshair labels.
+//!
+//! All sizes come from the shared [`AxisMetrics`](crate::axis_metrics::AxisMetrics): axis text
+//! at 11/12 of `layout.fontSize`, countdown text at 10/12, price chrome of 12 CSS px around
+//! measured text, and an even-snapped time strip. Hosts measure axis strings at the axis size
+//! (`measure`) and countdown strings at the countdown size (`countdown_measure`), each with
+//! matching weight — advances are never derived by shrinking another size's measurement.
 
 use super::*;
-
-const COUNTDOWN_FONT_SCALE: f64 = 11.0 / 12.0;
+use crate::axis_metrics::{AxisMetrics, AXIS_FONT_SCALE, COUNTDOWN_FONT_SCALE};
 
 /// A last-value label candidate before axis overlap resolution (reference IPriceAxisView state:
 /// the source `coordinate` plus the render coordinate the overlap pass adjusts). `align`
@@ -75,7 +80,7 @@ fn selected_chip_accent(
         color,
         align,
         midpoint: AxisTextMidpoint::Label,
-        font_scale: 1.0,
+        font_scale: AXIS_FONT_SCALE,
         bold: false,
         background: Some((x, chip_y, ACCENT_W, chip_h, color.lighten(0.45))),
         background_corners: AxisLabelCorners::NONE,
@@ -153,11 +158,14 @@ fn countdown_layout_key(remaining: f64) -> usize {
     }
 }
 
-fn countdown_text_width<F>(text: &str, measure: &F) -> f64
+/// Digit-stable countdown advance measured AT the countdown size (never an axis-size
+/// measurement shrunk to fit): every ASCII digit is substituted so ticking digits cannot
+/// outgrow the reservation. Countdown labels never render bold.
+fn countdown_text_width<F>(text: &str, countdown_measure: &F) -> f64
 where
-    F: Fn(&str) -> f64,
+    F: Fn(&str, bool) -> f64,
 {
-    let mut width = measure(text);
+    let mut width = countdown_measure(text, false);
     for digit in '0'..='9' {
         let candidate: String = text
             .chars()
@@ -169,23 +177,23 @@ where
                 }
             })
             .collect();
-        width = width.max(measure(&candidate));
+        width = width.max(countdown_measure(&candidate, false));
     }
     width
 }
 
 fn fit_axis_text<F>(text: &str, max_width: f64, measure: &F) -> Option<String>
 where
-    F: Fn(&str) -> f64,
+    F: Fn(&str, bool) -> f64,
 {
     if max_width <= 0.0 {
         return None;
     }
-    if measure(text) <= max_width {
+    if measure(text, false) <= max_width {
         return Some(text.to_string());
     }
     const ELLIPSIS: &str = "...";
-    if measure(ELLIPSIS) > max_width {
+    if measure(ELLIPSIS, false) > max_width {
         return None;
     }
 
@@ -196,7 +204,7 @@ where
         let middle = (low + high).div_ceil(2);
         let end = boundaries.get(middle).copied().unwrap_or(text.len());
         let candidate = format!("{}{}", &text[..end], ELLIPSIS);
-        if measure(&candidate) <= max_width {
+        if measure(&candidate, false) <= max_width {
             low = middle;
         } else {
             high = middle - 1;
@@ -524,15 +532,23 @@ impl ChartEngine {
             .collect()
     }
 
-    /// Build backend-neutral axis label decisions. The host supplies only font measurement; all
-    /// visible ranges, scale choices, snapping, formatting, and label positions come from the
-    /// engine so Canvas2D, WebGPU text, and native glyph backends share one layout result.
-    pub fn build_axis_frame<F>(&mut self, max_label_width: f64, measure: F) -> AxisFrame
+    /// Build backend-neutral axis label decisions. The host supplies only font measurement —
+    /// axis strings at the resolved axis size (`measure`) and countdown strings at the
+    /// countdown size (`countdown_measure`), each with matching weight; all visible ranges,
+    /// scale choices, snapping, formatting, and label positions come from the engine so
+    /// Canvas2D, WebGPU text, and native glyph backends share one layout result.
+    pub fn build_axis_frame<F, G>(
+        &mut self,
+        max_label_width: f64,
+        measure: F,
+        countdown_measure: G,
+    ) -> AxisFrame
     where
-        F: Fn(&str) -> f64,
+        F: Fn(&str, bool) -> f64,
+        G: Fn(&str, bool) -> f64,
     {
         self.sync_frame_input_invalidation();
-        let frame = self.build_axis_frame_impl(max_label_width, measure, true);
+        let frame = self.build_axis_frame_impl(max_label_width, measure, countdown_measure, true);
         self.retained_frame.axis_generation = self.frame_invalidation.axis;
         frame
     }
@@ -540,14 +556,16 @@ impl ChartEngine {
     /// `include_transient` gates the crosshair labels: they paint per frame, but the axis-width
     /// negotiation must never see them — a wide hovered price would inflate the strip and the
     /// grow-fast/shrink-lazy policy would pin that width forever.
-    fn build_axis_frame_impl<F>(
+    fn build_axis_frame_impl<F, G>(
         &mut self,
         max_label_width: f64,
         measure: F,
+        countdown_measure: G,
         include_transient: bool,
     ) -> AxisFrame
     where
-        F: Fn(&str) -> f64,
+        F: Fn(&str, bool) -> f64,
+        G: Fn(&str, bool) -> f64,
     {
         let uninitialized = !self.retained_frame.initialized;
         if uninitialized || self.retained_frame.layout_generation != self.frame_invalidation.layout
@@ -578,7 +596,7 @@ impl ChartEngine {
                 .and_then(Color::parse_css)
                 .unwrap_or(layout_text_color)
         };
-        let font_size = self.options.get().layout.font_size;
+        let metrics = self.axis_metrics();
         for (pi, pane) in self.panes.iter().enumerate() {
             for target in pane.scale_targets() {
                 let Some((side, strip_x, strip_width)) = self.price_scale_axis_geometry(pi, target)
@@ -589,7 +607,8 @@ impl ChartEngine {
                     continue;
                 };
                 // reference `entireTextOnly`: corner marks shift in by half the font height so no
-                // label text is clipped (price-tick-mark-builder.ts:71).
+                // label text is clipped (price-tick-mark-builder.ts:71). The scale's tick font
+                // is engine-synced to the resolved axis size, so this margin tracks it.
                 let entire_margin = if scale.options().entire_text_only {
                     scale.options().font_size / 2.0
                 } else {
@@ -610,7 +629,7 @@ impl ChartEngine {
                             out.price_ticks.push(PriceAxisTick {
                                 y,
                                 x: if left {
-                                    strip_x + strip_width - 5.0
+                                    strip_x + strip_width - AxisMetrics::TICK_LENGTH
                                 } else {
                                     strip_x
                                 },
@@ -620,9 +639,9 @@ impl ChartEngine {
                         out.labels.push(AxisLabel {
                             text: self.format_tick_value(pi, target, scale, mark.logical),
                             x: if side == PriceScaleSide::Left {
-                                (strip_x + strip_width - 10.0).max(0.0)
+                                (strip_x + strip_width - AxisMetrics::PRICE_TEXT_INSET).max(0.0)
                             } else {
-                                strip_x + 10.0
+                                strip_x + AxisMetrics::PRICE_TEXT_INSET
                             },
                             y,
                             color: text_color,
@@ -632,7 +651,7 @@ impl ChartEngine {
                                 AxisTextAlign::Left
                             },
                             midpoint: AxisTextMidpoint::Label,
-                            font_scale: 1.0,
+                            font_scale: AXIS_FONT_SCALE,
                             bold,
                             background: None,
                             background_corners: AxisLabelCorners::NONE,
@@ -703,11 +722,11 @@ impl ChartEngine {
                 out.labels.push(AxisLabel {
                     text,
                     x,
-                    y: self.pane_h + 1.0 + 5.0 + 3.0 + font_size / 2.0,
+                    y: self.pane_h + metrics.time_text_dy(),
                     color: layout_text_color,
                     align: AxisTextAlign::Center,
                     midpoint: AxisTextMidpoint::None,
-                    font_scale: 1.0,
+                    font_scale: AXIS_FONT_SCALE,
                     // reference `timeScale.allowBoldLabels` (default true): bold major labels.
                     bold: self.time_scale.options().allow_bold_labels && weight >= maximum_weight,
                     background: None,
@@ -723,7 +742,8 @@ impl ChartEngine {
         self.append_price_line_labels(&mut out.labels, &measure);
         self.append_drawing_line_labels(&mut out.labels, &measure);
         let last_value_start = out.labels.len();
-        let live_price_regions = self.append_last_value_label(&mut out.labels, &measure);
+        let live_price_regions =
+            self.append_last_value_label(&mut out.labels, &measure, &countdown_measure);
         let mut action_labels = Vec::new();
         self.append_action_axis_labels(&mut action_labels, &live_price_regions, &measure);
         out.labels
@@ -743,7 +763,7 @@ impl ChartEngine {
 
     fn append_rectangle_drawing_axis_views<F>(&self, out: &mut AxisFrame, measure: &F)
     where
-        F: Fn(&str) -> f64,
+        F: Fn(&str, bool) -> f64,
     {
         for drawing in &self.drawings {
             if drawing.kind == DrawingKind::Rectangle && drawing.points.len() == 2 {
@@ -783,7 +803,7 @@ impl ChartEngine {
         out: &mut AxisFrame,
         measure: &F,
     ) where
-        F: Fn(&str) -> f64,
+        F: Fn(&str, bool) -> f64,
     {
         let Some(pane) = self.panes.get(drawing.pane_index) else {
             return;
@@ -891,7 +911,7 @@ impl ChartEngine {
         } else {
             (drawing_label_background, drawing_label_text)
         };
-        let font_size = self.options.get().layout.font_size;
+        let metrics = self.axis_metrics();
         for left_side in [true, false] {
             let visible = if left_side {
                 self.options.get().left_price_scale.visible
@@ -914,17 +934,17 @@ impl ChartEngine {
                     continue;
                 }
                 let text = format!("{:.2}", point.price);
-                let width = 1.0 + 5.0 + 5.0 + 5.0 + measure(&text);
-                let height = font_size + 5.0;
+                let width = AxisMetrics::price_tag_width(measure(&text, false));
+                let height = metrics.price_tag_height();
                 let (x, align, background_x) = if left_side {
                     (
-                        self.pane_left - 10.0,
+                        self.pane_left - AxisMetrics::PRICE_TEXT_INSET,
                         AxisTextAlign::Right,
                         self.pane_left - width,
                     )
                 } else {
                     (
-                        self.pane_left + self.pane_w + 10.0,
+                        self.pane_left + self.pane_w + AxisMetrics::PRICE_TEXT_INSET,
                         AxisTextAlign::Left,
                         self.pane_left + self.pane_w,
                     )
@@ -936,7 +956,7 @@ impl ChartEngine {
                     color: price_label_text,
                     align,
                     midpoint: AxisTextMidpoint::Label,
-                    font_scale: 1.0,
+                    font_scale: AXIS_FONT_SCALE,
                     bold: false,
                     background: Some((
                         background_x,
@@ -953,9 +973,6 @@ impl ChartEngine {
             }
         }
         if drawing.show_labels && self.time_axis_visible {
-            const BORDER: f64 = 1.0;
-            const TICK: f64 = 5.0;
-            const PADDING: f64 = 3.0;
             for (point, (x, _)) in points.iter().zip([first, second]) {
                 if x < 0.0 || x > self.pane_w {
                     continue;
@@ -968,8 +985,8 @@ impl ChartEngine {
                     continue;
                 };
                 let text = format_date_pattern(time, "M/d/yyyy", &self.month_names);
-                let width = measure(&text) + 18.0;
-                let height = BORDER + TICK + PADDING + font_size + PADDING;
+                let width = AxisMetrics::time_tag_width(measure(&text, false));
+                let height = metrics.time_strip_height();
                 let chart_x = self.pane_left + x;
                 let box_x = (chart_x - width / 2.0).clamp(
                     self.pane_left,
@@ -978,11 +995,11 @@ impl ChartEngine {
                 out.labels.push(AxisLabel {
                     text,
                     x: box_x + width / 2.0,
-                    y: self.pane_h + BORDER + TICK + PADDING + font_size / 2.0,
+                    y: self.pane_h + metrics.time_text_dy(),
                     color: drawing_label_text,
                     align: AxisTextAlign::Center,
                     midpoint: AxisTextMidpoint::None,
-                    font_scale: 1.0,
+                    font_scale: AXIS_FONT_SCALE,
                     bold: false,
                     background: Some((box_x, self.pane_h, width, height, drawing_label_background)),
                     background_corners: AxisLabelCorners::BOTTOM,
@@ -996,15 +1013,12 @@ impl ChartEngine {
 
     fn append_native_vertical_line_labels<F>(&self, labels: &mut Vec<AxisLabel>, measure: &F)
     where
-        F: Fn(&str) -> f64,
+        F: Fn(&str, bool) -> f64,
     {
         if !self.time_axis_visible {
             return;
         }
-        let font_size = self.options.get().layout.font_size;
-        const BORDER: f64 = 1.0;
-        const TICK: f64 = 5.0;
-        const PADDING: f64 = 3.0;
+        let metrics = self.axis_metrics();
         for series in &self.series {
             if !series.visible || series.removed {
                 continue;
@@ -1026,8 +1040,8 @@ impl ChartEngine {
                 if x < 0.0 || x > self.pane_w {
                     continue;
                 }
-                let width = measure(&options.label_text) + 9.0 * 2.0;
-                let height = BORDER + TICK + PADDING + font_size + PADDING;
+                let width = AxisMetrics::time_tag_width(measure(&options.label_text, false));
+                let height = metrics.time_strip_height();
                 let x = self.pane_left + x;
                 let box_x = (x - width / 2.0).clamp(
                     self.pane_left,
@@ -1036,13 +1050,13 @@ impl ChartEngine {
                 labels.push(AxisLabel {
                     text: options.label_text.clone(),
                     x: box_x + width / 2.0,
-                    y: self.pane_h + BORDER + TICK + PADDING + font_size / 2.0,
+                    y: self.pane_h + metrics.time_text_dy(),
                     color: options.label_text_color.unwrap_or_else(|| {
                         self.axis_label_text_color(options.label_background_color)
                     }),
                     align: AxisTextAlign::Center,
                     midpoint: AxisTextMidpoint::None,
-                    font_scale: 1.0,
+                    font_scale: AXIS_FONT_SCALE,
                     bold: false,
                     background: Some((
                         box_x,
@@ -1061,30 +1075,31 @@ impl ChartEngine {
     }
 
     /// reference-compatible right-axis width negotiated from engine-formatted labels and host glyph
-    /// measurement. The host contributes font metrics only; label selection and formatting stay
-    /// headless. The result is snapped to an even media-pixel width.
-    pub fn optimal_price_axis_width<F>(&mut self, measure: F) -> f64
+    /// measurement. The host contributes font metrics only, measured at the resolved axis and
+    /// countdown sizes; label selection and formatting stay headless. The result is snapped to
+    /// an even media-pixel width.
+    pub fn optimal_price_axis_width<F, G>(&mut self, measure: F, countdown_measure: G) -> f64
     where
-        F: Fn(&str) -> f64,
+        F: Fn(&str, bool) -> f64,
+        G: Fn(&str, bool) -> f64,
     {
-        self.optimal_price_axis_width_for(PriceScaleTarget::Right, measure)
+        self.optimal_price_axis_width_for(PriceScaleTarget::Right, measure, countdown_measure)
     }
 
     /// Measure one visible side independently. Overlay scales deliberately share no axis strip.
-    pub fn optimal_price_axis_width_for<F>(&mut self, target: PriceScaleTarget, measure: F) -> f64
+    /// Chrome follows the shared metrics (1 px border, 3 px tick allowance, 4 px padding per
+    /// side) instead of the reference's wider `optimalWidth` paddings.
+    pub fn optimal_price_axis_width_for<F, G>(
+        &mut self,
+        target: PriceScaleTarget,
+        measure: F,
+        countdown_measure: G,
+    ) -> f64
     where
-        F: Fn(&str) -> f64,
+        F: Fn(&str, bool) -> f64,
+        G: Fn(&str, bool) -> f64,
     {
-        const AXIS_BORDER_SIZE: f64 = 1.0;
-        const AXIS_TICK_LENGTH: f64 = 5.0;
-        const PRICE_PADDING_INNER: f64 = 5.0;
-        // Exact reference constants (price-axis-widget.ts `optimalWidth`):
-        // borderSize + tickLength + paddingInner + paddingOuter + LabelOffset + maxTextWidth.
-        const PRICE_PADDING_OUTER: f64 = 5.0;
-        const PRICE_LABEL_OFFSET: f64 = 5.0;
-        const PRICE_DEFAULT_TEXT_WIDTH: f64 = 34.0;
-
-        let frame = self.build_axis_frame_impl(80.0, &measure, false);
+        let frame = self.build_axis_frame_impl(80.0, &measure, &countdown_measure, false);
         let target_side = self
             .panes
             .iter()
@@ -1100,12 +1115,14 @@ impl ChartEngine {
             .iter()
             .filter(|label| label.align == wanted_align)
             .map(|label| {
-                let text_width = if label.font_scale == COUNTDOWN_FONT_SCALE {
-                    countdown_text_width(&label.text, &measure)
+                // Advances are true host measurements at the rendered size: axis strings at
+                // the axis size (with matching weight), countdown strings at the countdown
+                // size. No shrink factors.
+                if label.font_scale == COUNTDOWN_FONT_SCALE {
+                    countdown_text_width(&label.text, &countdown_measure) + label.measure_extra
                 } else {
-                    measure(&label.text)
-                };
-                text_width * label.font_scale + label.measure_extra
+                    measure(&label.text, label.bold) + label.measure_extra
+                }
             })
             .fold(0.0_f64, f64::max);
         // reference optimalWidth reserves room for the crosshair label via a STATIC worst-case
@@ -1148,14 +1165,14 @@ impl ChartEngine {
                             scale.price_to_logical_value(sample, base_value),
                         ),
                     };
-                    max_text_width = max_text_width.max(measure(&text));
+                    max_text_width = max_text_width.max(measure(&text, false));
                 }
             }
         }
         let text_width = if max_text_width > 0.0 {
             max_text_width
         } else {
-            PRICE_DEFAULT_TEXT_WIDTH
+            AxisMetrics::DEFAULT_TEXT_WIDTH
         };
         // reference `minimumWidth` floors the negotiated strip width (chart-widget.ts
         // `_adjustSizeImpl`: `Math.max(optimalWidth(), minimumWidth)` across the pane's
@@ -1169,28 +1186,25 @@ impl ChartEngine {
                 .map(|scale| scale.options().minimum_width)
                 .fold(0.0_f64, f64::max)
         };
-        let width = (AXIS_BORDER_SIZE
-            + AXIS_TICK_LENGTH
-            + PRICE_PADDING_INNER
-            + PRICE_PADDING_OUTER
-            + PRICE_LABEL_OFFSET
-            + text_width)
-            .ceil()
-            .max(minimum_width);
-        width + (width as i64 % 2) as f64
+        AxisMetrics::price_strip_width(text_width, minimum_width)
     }
 
-    pub(crate) fn optimal_exact_price_axis_width_for<F>(
-        &self,
+    pub(crate) fn optimal_exact_price_axis_width_for<F, G>(
+        &mut self,
         pane_index: usize,
         target: PriceScaleTarget,
         measure: F,
+        countdown_measure: G,
     ) -> f64
     where
-        F: Fn(&str) -> f64,
+        F: Fn(&str, bool) -> f64,
+        G: Fn(&str, bool) -> f64,
     {
-        const FIXED_CHROME: f64 = 1.0 + 5.0 + 5.0 + 5.0;
-        const DEFAULT_TEXT_WIDTH: f64 = 34.0;
+        // Sync tick sizing first: this path also runs standalone (tests, direct negotiation),
+        // and its tick sets must match what the frame will build.
+        self.sync_axis_tick_fonts();
+        // Tick sizing follows the resolved axis metrics through the synced scale font, so the
+        // exact path shares Path A's chrome instead of its own narrower constant.
         let Some(pane) = self.panes.get(pane_index) else {
             return 0.0;
         };
@@ -1198,9 +1212,19 @@ impl ChartEngine {
             return 0.0;
         };
         let marks = scale.build_tick_marks(self.scale_tick_base(pane_index, target), 0.0);
+        let bold_round = Self::bold_round_decisions(
+            &marks.iter().map(|m| m.logical).collect::<Vec<_>>(),
+            scale.options().bold_round_labels,
+        );
         let mut text_width = marks
             .iter()
-            .map(|mark| measure(&self.format_tick_value(pane_index, target, scale, mark.logical)))
+            .zip(bold_round)
+            .map(|(mark, bold)| {
+                measure(
+                    &self.format_tick_value(pane_index, target, scale, mark.logical),
+                    bold,
+                )
+            })
             .fold(0.0_f64, f64::max);
         if let Some((from, to)) = self.visible_range_for_frame() {
             for series in self.series.iter().filter(|series| {
@@ -1226,16 +1250,19 @@ impl ChartEngine {
                 };
                 if let (Some(value), Some(base)) = (value, self.series_base_value(series.id, from))
                 {
-                    text_width = text_width.max(measure(&self.format_series_value(
-                        series,
-                        conversion_scale,
-                        conversion_scale.price_to_logical_value(value, base),
-                    )));
+                    text_width = text_width.max(measure(
+                        &self.format_series_value(
+                            series,
+                            conversion_scale,
+                            conversion_scale.price_to_logical_value(value, base),
+                        ),
+                        false,
+                    ));
                 }
                 if series.countdown_visible {
                     if let Some(countdown) = self.series_countdown_text(series.id) {
-                        text_width = text_width
-                            .max(countdown_text_width(&countdown, &measure) * COUNTDOWN_FONT_SCALE);
+                        text_width =
+                            text_width.max(countdown_text_width(&countdown, &countdown_measure));
                     }
                 }
                 for line in &series.price_lines {
@@ -1254,7 +1281,7 @@ impl ChartEngine {
                     } else {
                         line.title.clone()
                     };
-                    text_width = text_width.max(measure(&text));
+                    text_width = text_width.max(measure(&text, false));
                 }
             }
             if self.crosshair_mode != CrosshairMode::Hidden
@@ -1273,27 +1300,30 @@ impl ChartEngine {
                             top.min(bottom).floor() + 0.111_111_111_111_11,
                             top.max(bottom).ceil() - 0.111_111_111_111_11,
                         ] {
-                            text_width = text_width.max(measure(&self.format_series_value(
-                                series,
-                                scale,
-                                scale.price_to_logical_value(sample, base),
-                            )));
+                            text_width = text_width.max(measure(
+                                &self.format_series_value(
+                                    series,
+                                    scale,
+                                    scale.price_to_logical_value(sample, base),
+                                ),
+                                false,
+                            ));
                         }
                     }
                 }
             }
         }
-        let width = (FIXED_CHROME + text_width.max(DEFAULT_TEXT_WIDTH))
-            .ceil()
-            .max(scale.options().minimum_width);
-        width + (width as i64 % 2) as f64
+        AxisMetrics::price_strip_width(
+            text_width.max(AxisMetrics::DEFAULT_TEXT_WIDTH),
+            scale.options().minimum_width,
+        )
     }
 
     pub(super) fn append_price_line_labels<F>(&self, labels: &mut Vec<AxisLabel>, measure: &F)
     where
-        F: Fn(&str) -> f64,
+        F: Fn(&str, bool) -> f64,
     {
-        let font_size = self.options.get().layout.font_size;
+        let metrics = self.axis_metrics();
         for (pi, pane) in self.panes.iter().enumerate() {
             for s in &self.series {
                 if s.pane_index != pi {
@@ -1337,16 +1367,20 @@ impl ChartEngine {
                     } else {
                         line.title.clone()
                     };
-                    let width = 1.0 + 5.0 + 5.0 + 5.0 + measure(&text);
-                    let height = font_size + 2.5 * 2.0;
+                    let width = AxisMetrics::price_tag_width(measure(&text, false));
+                    let height = metrics.price_tag_height();
                     let (x, align, background_x) = if side == PriceScaleSide::Left {
                         (
-                            strip_x + strip_width - 10.0,
+                            strip_x + strip_width - AxisMetrics::PRICE_TEXT_INSET,
                             AxisTextAlign::Right,
                             strip_x + strip_width - width,
                         )
                     } else {
-                        (strip_x + 10.0, AxisTextAlign::Left, strip_x)
+                        (
+                            strip_x + AxisMetrics::PRICE_TEXT_INSET,
+                            AxisTextAlign::Left,
+                            strip_x,
+                        )
                     };
                     // The label background follows the line color; omitted text automatically
                     // contrasts with that effective background.
@@ -1367,7 +1401,7 @@ impl ChartEngine {
                         color: text_color,
                         align,
                         midpoint: AxisTextMidpoint::Label,
-                        font_scale: 1.0,
+                        font_scale: AXIS_FONT_SCALE,
                         bold: false,
                         background: Some((
                             background_x,
@@ -1392,9 +1426,9 @@ impl ChartEngine {
         live_price_regions: &[LivePriceRegion],
         measure: &F,
     ) where
-        F: Fn(&str) -> f64,
+        F: Fn(&str, bool) -> f64,
     {
-        let font_size = self.options.get().layout.font_size;
+        let metrics = self.axis_metrics();
         let fallback = nucleuscharts_core::style::DEFAULT_SURFACE_RGB;
         let chip_fill = Color::parse_css(&self.options.get().layout.background.color)
             .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2))
@@ -1419,8 +1453,8 @@ impl ChartEngine {
             if target == PriceScaleTarget::Overlay {
                 return;
             }
-            let width = 1.0 + 5.0 + 5.0 + 5.0 + measure(&text);
-            let height = font_size + 5.0;
+            let width = AxisMetrics::price_tag_width(measure(&text, false));
+            let height = metrics.price_tag_height();
             let meets_live_price = live_price_regions.iter().any(|primary| {
                 primary.primary && primary.pane_index == pane_index && primary.target == target && {
                     y + height / 2.0 > primary.top && y - height / 2.0 < primary.bottom
@@ -1429,13 +1463,13 @@ impl ChartEngine {
             let solid = solid && !(hollow_at_live_price && meets_live_price);
             let (x, align, background_x) = if target == PriceScaleTarget::Left {
                 (
-                    self.pane_left - 10.0,
+                    self.pane_left - AxisMetrics::PRICE_TEXT_INSET,
                     AxisTextAlign::Right,
                     self.pane_left - width,
                 )
             } else {
                 (
-                    self.pane_left + self.pane_w + 10.0,
+                    self.pane_left + self.pane_w + AxisMetrics::PRICE_TEXT_INSET,
                     AxisTextAlign::Left,
                     self.pane_left + self.pane_w,
                 )
@@ -1447,7 +1481,7 @@ impl ChartEngine {
                 color: if solid { color.contrast_text() } else { color },
                 align,
                 midpoint: AxisTextMidpoint::Label,
-                font_scale: 1.0,
+                font_scale: AXIS_FONT_SCALE,
                 bold,
                 background: Some((
                     background_x,
@@ -1544,9 +1578,9 @@ impl ChartEngine {
     /// with the pane's primary series' price format, like the price-line labels.
     pub(super) fn append_drawing_line_labels<F>(&self, labels: &mut Vec<AxisLabel>, measure: &F)
     where
-        F: Fn(&str) -> f64,
+        F: Fn(&str, bool) -> f64,
     {
-        let font_size = self.options.get().layout.font_size;
+        let metrics = self.axis_metrics();
         for (pi, pane) in self.panes.iter().enumerate() {
             let Some(scale) = self.drawing_scale(pi) else {
                 continue;
@@ -1587,16 +1621,16 @@ impl ChartEngine {
                     .as_deref()
                     .and_then(Color::parse_css)
                     .unwrap_or_else(|| self.axis_label_text_color(background));
-                let width = 1.0 + 5.0 + 5.0 + 5.0 + measure(&text);
-                let height = font_size + 2.5 * 2.0;
+                let width = AxisMetrics::price_tag_width(measure(&text, false));
+                let height = metrics.price_tag_height();
                 labels.push(AxisLabel {
                     text,
-                    x: self.pane_left + self.pane_w + 10.0,
+                    x: self.pane_left + self.pane_w + AxisMetrics::PRICE_TEXT_INSET,
                     y,
                     color: text_color,
                     align: AxisTextAlign::Left,
                     midpoint: AxisTextMidpoint::Label,
-                    font_scale: 1.0,
+                    font_scale: AXIS_FONT_SCALE,
                     bold: false,
                     background: Some((
                         self.pane_left + self.pane_w,
@@ -1627,22 +1661,24 @@ impl ChartEngine {
     /// ANY part is enabled (e.g. `lastValueVisible: false` still leaves title chip + countdown).
     /// The overlap pass runs on the cluster's total height, and the axis-facing corners of the
     /// cluster's outer edges are rounded (internal boundaries stay sharp).
-    fn append_last_value_label<F>(
+    fn append_last_value_label<F, G>(
         &self,
         labels: &mut Vec<AxisLabel>,
         measure: &F,
+        countdown_measure: &G,
     ) -> Vec<LivePriceRegion>
     where
-        F: Fn(&str) -> f64,
+        F: Fn(&str, bool) -> f64,
+        G: Fn(&str, bool) -> f64,
     {
         let Some((from, to)) = self.visible_range_for_frame() else {
             return Vec::new();
         };
-        let row_height = self.options.get().layout.font_size + 2.5 * 2.0;
-        // TradingView-style countdown row: 11px secondary text and tighter vertical padding than
-        // the 12px price row, keeping the cluster compact without competing with the price.
-        let countdown_row_height =
-            self.options.get().layout.font_size * COUNTDOWN_FONT_SCALE + 1.5 * 2.0;
+        let metrics = self.axis_metrics();
+        let row_height = metrics.price_tag_height();
+        // Countdown row: 10px secondary text with the shared 2px vertical padding, keeping the
+        // cluster compact without competing with the price.
+        let countdown_row_height = metrics.countdown_row_height();
         let mut groups: Vec<(usize, PriceScaleTarget, Vec<LastValueLabel>)> = Vec::new();
         for (pi, pane) in self.panes.iter().enumerate() {
             for series in &self.series {
@@ -1878,15 +1914,19 @@ impl ChartEngine {
                     let Some(text) = label.price_text else {
                         continue;
                     };
-                    let width = 1.0 + 5.0 + 5.0 + 5.0 + measure(&text);
+                    let width = AxisMetrics::price_tag_width(measure(&text, false));
                     let (x, align, background_x) = if side == PriceScaleSide::Left {
                         (
-                            strip_x + strip_width - 10.0,
+                            strip_x + strip_width - AxisMetrics::PRICE_TEXT_INSET,
                             AxisTextAlign::Right,
                             strip_x + strip_width - width,
                         )
                     } else {
-                        (strip_x + 10.0, AxisTextAlign::Left, strip_x)
+                        (
+                            strip_x + AxisMetrics::PRICE_TEXT_INSET,
+                            AxisTextAlign::Left,
+                            strip_x,
+                        )
                     };
                     labels.push(AxisLabel {
                         text,
@@ -1899,7 +1939,7 @@ impl ChartEngine {
                         },
                         align,
                         midpoint: AxisTextMidpoint::Label,
-                        font_scale: 1.0,
+                        font_scale: AXIS_FONT_SCALE,
                         bold: false,
                         background: Some((
                             background_x,
@@ -1930,7 +1970,14 @@ impl ChartEngine {
                     }
                     continue;
                 }
-                self.append_last_value_cluster(labels, &label, pane_index, target, measure);
+                self.append_last_value_cluster(
+                    labels,
+                    &label,
+                    pane_index,
+                    target,
+                    measure,
+                    countdown_measure,
+                );
             }
         }
         live_price_regions
@@ -1943,15 +1990,17 @@ impl ChartEngine {
     /// corners on the right strip, left corners on the left strip); internal boundaries and the
     /// chart-facing side stay sharp. On the left strip the chip is the leftmost (axis-facing)
     /// top-row box, so it carries that side's rounded corners instead of the price area.
-    fn append_last_value_cluster<F>(
+    fn append_last_value_cluster<F, G>(
         &self,
         labels: &mut Vec<AxisLabel>,
         label: &LastValueLabel,
         pane_index: usize,
         target: PriceScaleTarget,
         measure: &F,
+        countdown_measure: &G,
     ) where
-        F: Fn(&str) -> f64,
+        F: Fn(&str, bool) -> f64,
+        G: Fn(&str, bool) -> f64,
     {
         let Some((side, strip_x, strip_width)) = self.price_scale_axis_geometry(pane_index, target)
         else {
@@ -1978,24 +2027,29 @@ impl ChartEngine {
             .title
             .as_deref()
             .and_then(|title| fit_axis_text(title, (self.pane_w - 10.0).max(0.0), measure));
-        let title_w = fitted_title.as_deref().map(measure);
+        let title_w = fitted_title.as_deref().map(|text| measure(text, false));
         let chip_w = title_w.map(|w| w + 10.0).unwrap_or(0.0);
-        let price_w = label.price_text.as_deref().map(measure).unwrap_or(0.0);
+        let price_w = label
+            .price_text
+            .as_deref()
+            .map(|text| measure(text, false))
+            .unwrap_or(0.0);
         let countdown_w = label
             .countdown
             .as_deref()
-            .map(|text| measure(text) * COUNTDOWN_FONT_SCALE)
+            .map(|text| countdown_text_width(text, countdown_measure))
             .unwrap_or(0.0);
         // TradingView geometry: the title chip sits outside the strip and the price/countdown
         // box sits inside it. Their logical bounds meet at the border; the primitive encoder
         // excludes the border's exact device pixels from both axis-side boxes.
         // Inside rows share one width, stack flush, and start text at the tick-label inset from
-        // the border; the box retains the reference's full outer padding.
-        const TEXT_INSET: f64 = 5.0 + 5.0;
-        const RIGHT_PAD: f64 = 5.0;
+        // the border; the box retains the shared strip padding.
+        const TEXT_INSET: f64 = AxisMetrics::PRICE_TEXT_INSET;
+        const RIGHT_PAD: f64 = AxisMetrics::PRICE_PAD_OUTER;
         let inner_text_w = price_w.max(countdown_w);
-        // Reference box: borderSize + paddingInner + paddingOuter + tickLength + text.
-        let inner_w = 1.0 + TEXT_INSET + inner_text_w + RIGHT_PAD;
+        // Shared box: border + gap + text + outer padding, matching the tag chrome (the inset
+        // already contains the border, so it must not be added twice).
+        let inner_w = 1.0 + AxisMetrics::PRICE_TEXT_GAP + inner_text_w + RIGHT_PAD;
         let border_x = if right_strip {
             strip_x
         } else {
@@ -2059,7 +2113,7 @@ impl ChartEngine {
                 color: text_color,
                 align: AxisTextAlign::Center,
                 midpoint: AxisTextMidpoint::Label,
-                font_scale: 1.0,
+                font_scale: AXIS_FONT_SCALE,
                 bold: false,
                 background: Some((chip_x, top_y, chip_w, chip_row_h, chip_color)),
                 // The outside chip rounds only its OUTER (chart-facing) side — sharp on the
@@ -2084,7 +2138,7 @@ impl ChartEngine {
                 color: text_color,
                 align: text_align,
                 midpoint: AxisTextMidpoint::Label,
-                font_scale: 1.0,
+                font_scale: AXIS_FONT_SCALE,
                 bold: false,
                 background: Some((inner_x, top_y, inner_w, label.top_height, fill)),
                 background_corners: axis_corners_top,
@@ -2196,7 +2250,7 @@ impl ChartEngine {
 
     pub(super) fn append_crosshair_labels<F>(&self, labels: &mut Vec<AxisLabel>, measure: &F)
     where
-        F: Fn(&str) -> f64,
+        F: Fn(&str, bool) -> f64,
     {
         let Some((x_css, y_css)) = self.clamped_crosshair() else {
             return;
@@ -2211,7 +2265,7 @@ impl ChartEngine {
         // vertical line (reference `vertLine`). Each carries its own `labelVisible`/`labelBackgroundColor`,
         // and text automatically contrasts with each configured background.
         let options = self.options.get();
-        let font_size = options.layout.font_size;
+        let metrics = self.axis_metrics();
         let ch = &options.crosshair;
         if ch.horz_line.label_visible {
             if let Some(pi) = self
@@ -2244,16 +2298,20 @@ impl ChartEngine {
                         scale,
                         scale.price_to_logical_value(price, base_value),
                     );
-                    let width = 1.0 + 5.0 + 5.0 + 5.0 + measure(&text);
-                    let height = font_size + 2.5 * 2.0;
+                    let width = AxisMetrics::price_tag_width(measure(&text, false));
+                    let height = metrics.price_tag_height();
                     let (label_x, align, background_x) = if side == PriceScaleSide::Left {
                         (
-                            strip_x + strip_width - 10.0,
+                            strip_x + strip_width - AxisMetrics::PRICE_TEXT_INSET,
                             AxisTextAlign::Right,
                             strip_x + strip_width - width,
                         )
                     } else {
-                        (strip_x + 10.0, AxisTextAlign::Left, strip_x)
+                        (
+                            strip_x + AxisMetrics::PRICE_TEXT_INSET,
+                            AxisTextAlign::Left,
+                            strip_x,
+                        )
                     };
                     let label_bg =
                         css_color(&ch.horz_line.label_background_color, CROSSHAIR_LABEL_BG);
@@ -2264,7 +2322,7 @@ impl ChartEngine {
                         color: self.axis_label_text_color(label_bg),
                         align,
                         midpoint: AxisTextMidpoint::Label,
-                        font_scale: 1.0,
+                        font_scale: AXIS_FONT_SCALE,
                         bold: false,
                         background: Some((
                             background_x,
@@ -2287,11 +2345,8 @@ impl ChartEngine {
             // when the snapped index has no bar (past either data edge).
             if index >= 0 && (index as usize) < self.data.merged_times().len() {
                 let text = self.format_crosshair_ts(self.data.merged_times()[index as usize]);
-                const BORDER: f64 = 1.0;
-                const TICK: f64 = 5.0;
-                const PADDING: f64 = 3.0;
-                let width = measure(&text) + 9.0 * 2.0;
-                let height = BORDER + TICK + PADDING + font_size + PADDING;
+                let width = AxisMetrics::time_tag_width(measure(&text, false));
+                let height = metrics.time_strip_height();
                 let x = self.pane_left + self.time_scale.index_to_coordinate(index);
                 let box_x = (x - width / 2.0).clamp(
                     self.pane_left,
@@ -2301,11 +2356,11 @@ impl ChartEngine {
                 labels.push(AxisLabel {
                     text,
                     x: box_x + width / 2.0,
-                    y: self.pane_h + BORDER + TICK + PADDING + font_size / 2.0,
+                    y: self.pane_h + metrics.time_text_dy(),
                     color: self.axis_label_text_color(label_bg),
                     align: AxisTextAlign::Center,
                     midpoint: AxisTextMidpoint::StableTime,
-                    font_scale: 1.0,
+                    font_scale: AXIS_FONT_SCALE,
                     bold: false,
                     background: Some((box_x, self.pane_h, width, height, label_bg)),
                     background_corners: AxisLabelCorners::BOTTOM,

@@ -282,7 +282,9 @@ test("path clicks add vertices, Backspace pops, and Enter or double-click finish
     expect(await page.evaluate(() => window.__chart.active_drawing_tool())).toBeNull();
 
     // Probe one open chevron wing. This verifies that each real executor paints the arrowhead and
-    // that the same visible geometry is a body-movement target.
+    // that the same visible geometry is a body-movement target. Click-to-logical rounding
+    // can shift the committed tip ~1 CSS px from the click spot, so the probe searches a
+    // small device-px neighborhood instead of a single pixel.
     const dx = replacement.x - second.x;
     const dy = replacement.y - second.y;
     const distance = Math.hypot(dx, dy);
@@ -298,10 +300,28 @@ test("path clicks add vertices, Backspace pops, and Enter or double-click finish
       y: (replacement.y + wing_end.y) / 2,
     };
     const painted = await capture(page);
-    const offset = (Math.round(arrow_wing.y * PR) * painted.width + Math.round(arrow_wing.x * PR)) * 4;
-    const arrow_pixel = [painted.data[offset], painted.data[offset + 1], painted.data[offset + 2]];
+    const dist_to_blue = (css_x, css_y) => {
+      const cx = Math.round(css_x * PR);
+      const cy = Math.round(css_y * PR);
+      let best = Infinity;
+      for (let oy = -6; oy <= 6; oy++) {
+        for (let ox = -6; ox <= 6; ox++) {
+          const x = cx + ox;
+          const y = cy + oy;
+          if (x < 0 || y < 0 || x >= painted.width || y >= painted.height) continue;
+          const o = (y * painted.width + x) * 4;
+          const d = Math.max(
+            Math.abs(painted.data[o] - 41),
+            Math.abs(painted.data[o + 1] - 98),
+            Math.abs(painted.data[o + 2] - 255),
+          );
+          if (d < best) best = d;
+        }
+      }
+      return best;
+    };
     expect(
-      Math.max(...arrow_pixel.map((channel, index) => Math.abs(channel - [41, 98, 255][index]))),
+      dist_to_blue(arrow_wing.x, arrow_wing.y),
       `${backend} paints the path arrowhead`,
     ).toBeLessThanOrEqual(64);
     const open_gap = {
@@ -802,6 +822,12 @@ test("the demo toolbar arms tools, creates, and clears all", async ({ page }) =>
 
 test("Ctrl magnet snaps placement to the nearest bar's OHLC", async ({ page }) => {
   await goto_fixture(page);
+  // Widen bars so the 70%-vs-50% slot distinction is several device px, not sub-pixel:
+  // the default 1000-bar fit leaves ~1.2px spacing where any click rounds to both bars.
+  await page.evaluate(() => {
+    window.__chart.time_scale().set_visible_logical_range({ from: 350, to: 400 });
+  });
+  await settle_frames(page);
   await page.evaluate(() => window.__chart.set_drawing_tool("trend_line"));
   // Click between two bars, nearer to one bar's close, with Ctrl held: the anchor snaps to
   // that bar's center and to the closest of its open/high/low/close.
@@ -843,13 +869,18 @@ test("Ctrl magnet snaps placement to the nearest bar's OHLC", async ({ page }) =
 
 test("Ctrl magnet ignores hidden OHLC fields after switching to an area series", async ({ page }) => {
   await goto_fixture(page);
+  await page.evaluate(() => {
+    window.__main.set_type("area");
+    window.__chart.time_scale().fit_content();
+    // Widen bars for the same sub-pixel reason as the placement test above.
+    window.__chart.time_scale().set_visible_logical_range({ from: 350, to: 400 });
+    window.__chart.set_drawing_tool("horizontal_line");
+  });
+  await settle_frames(page);
   const probe = await page.evaluate(() => {
     const range = window.__chart.time_scale().get_visible_logical_range();
     const index = Math.floor(range.from + (range.to - range.from) * 0.45);
     const bar = window.__data[index];
-    window.__main.set_type("area");
-    window.__chart.time_scale().fit_content();
-    window.__chart.set_drawing_tool("horizontal_line");
     return {
       index,
       close: bar.close,

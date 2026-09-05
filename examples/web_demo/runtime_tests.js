@@ -115,6 +115,9 @@ export async function run_backend_parity({ create_chart, chart, container, data,
     wick_down_color: "#f7525f",
     border_up_color: "#089981",
     border_down_color: "#f7525f",
+    // Match the demo bootstrap: the live countdown timer would otherwise paint a row the
+    // original never shows, failing the exact gate for wall-clock reasons.
+    countdown_visible: false,
   });
   fallback_main.set_data(data);
   fallback_chart.add_sma(fallback_main, 20, { color: "#ff9800", line_width: 2, visible: false });

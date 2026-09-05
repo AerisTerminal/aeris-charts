@@ -1468,7 +1468,11 @@ fn official_rectangle_preview_commit_and_axis_views_are_engine_owned() {
         matches!(primitive, Prim::RectFrame { color, .. }
             if *color == Color::rgb(200, 50, 100))
     }));
-    let preview_axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let preview_axis = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     assert_eq!(preview_axis.bands.len(), 2);
     assert!(preview_axis.bands.iter().any(|band| band.y < chart.pane_h
         && band.color == Color::rgba(primary.r(), primary.g(), primary.b(), 64)));
@@ -1513,7 +1517,11 @@ fn official_rectangle_preview_commit_and_axis_views_are_engine_owned() {
             if *color == Color::rgba(200, 50, 100, 191))
     }));
     chart.set_selected_drawing(None);
-    let committed_axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let committed_axis = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     assert_eq!(committed_axis.bands.len(), 2);
     assert!(committed_axis
         .bands
@@ -1570,14 +1578,22 @@ fn selected_rectangle_owns_live_price_scale_territory_by_default() {
         .unwrap();
     chart.set_selected_drawing(None);
 
-    let unselected = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let unselected = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     assert!(unselected.bands.is_empty());
     assert!(!unselected.labels.iter().any(|label| {
         label.background.is_some() && matches!(label.text.as_str(), "10.25" | "12.25")
     }));
 
     chart.set_selected_drawing(Some(id));
-    let selected = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let selected = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     let primary = Color::rgb(
         DEFAULT_PRIMARY_RGB.0,
         DEFAULT_PRIMARY_RGB.1,
@@ -1623,7 +1639,11 @@ fn selected_rectangle_owns_live_price_scale_territory_by_default() {
     let first = chart.drawing_point_to_coordinate(id, 0).unwrap();
     assert!(chart.drawing_drag_start_at(first.0, first.1));
     chart.drawing_drag_to(first.0, first.1 + 20.0, DrawingModifiers::default());
-    let dragging = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let dragging = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     let dragged_price_band = dragging
         .bands
         .iter()
@@ -1634,7 +1654,11 @@ fn selected_rectangle_owns_live_price_scale_territory_by_default() {
 
     chart.drawing_drag_end();
     chart.set_selected_drawing(None);
-    let deselected = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let deselected = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     assert!(deselected.bands.is_empty());
 
     chart.left_axis_w = 80.0;
@@ -1644,7 +1668,11 @@ fn selected_rectangle_owns_live_price_scale_territory_by_default() {
     chart.set_series_price_scale(0, crate::PriceScaleTarget::Overlay);
     assert!(chart.drawing_apply_options(id, r#"{"price_scale_id":"overlay"}"#));
     chart.set_selected_drawing(Some(id));
-    let overlay = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let overlay = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     assert_eq!(
         overlay.bands.len(),
         1,
@@ -1697,7 +1725,11 @@ fn official_rectangle_uses_its_attached_left_scale_for_geometry_interaction_and_
     chart.drawing_drag_end();
     assert_ne!(chart.drawing(id).unwrap().points[0].price, 10.25);
 
-    let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+    let axis = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
     let price_band = axis
         .bands
         .iter()

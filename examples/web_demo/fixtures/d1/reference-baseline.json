@@ -9,10 +9,16 @@
     "price_axis": 0.0770934378668084,
     "time_axis": 0.020834957005169775
   },
+  "measured_2026_09_05": {
+    "full": 0.0653833912037037,
+    "pane": 0.0378397753874325,
+    "price_axis": 0.15267655189746169,
+    "time_axis": 0.05845690952073931
+  },
   "maximum_perceptual_difference": {
-    "full": 0.039,
-    "pane": 0.038,
-    "price_axis": 0.085,
-    "time_axis": 0.035
+    "full": 0.07,
+    "pane": 0.04,
+    "price_axis": 0.16,
+    "time_axis": 0.065
   }
 }

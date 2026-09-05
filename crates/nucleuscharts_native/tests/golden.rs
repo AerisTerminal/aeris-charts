@@ -79,8 +79,9 @@ fn real_engine_frame_paints_chart_geometry() {
 fn shared_browser_native_fixture_has_expected_pane_bitmap() {
     let mut chart = parity_engine();
     let canvas = render_engine(&mut chart);
+    // Fixture geometry is the compact default: (1280 - 46) x (720 - 22) CSS at 1.5 DPR.
     assert_eq!(
         (canvas.pixmap().width(), canvas.pixmap().height()),
-        (1833, 1038)
+        (1851, 1047)
     );
 }

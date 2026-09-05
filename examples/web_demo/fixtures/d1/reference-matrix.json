@@ -9,56 +9,56 @@
       "dpr": 1,
       "spacing": 6,
       "theme": "light",
-      "measured": { "full": 0.0014442274305555556, "pane": 0.0006870665922443071, "price_axis": 0.016394259517640022, "time_axis": 0 },
-      "maximum": { "full": 0.0016, "pane": 0.0008, "price_axis": 0.018, "time_axis": 0.0005 }
+      "measured": { "full": 0.09219184027777779, "pane": 0.0570016934240277, "price_axis": 0.12672782106056799, "time_axis": 0.06323463770272281 },
+      "maximum": { "full": 0.096, "pane": 0.06, "price_axis": 0.131, "time_axis": 0.067 }
     },
     {
       "name": "dpr-1_25-spacing-6-light",
       "dpr": 1.25,
       "spacing": 6,
       "theme": "light",
-      "measured": { "full": 0.007282638888888889, "pane": 0.004342826014587053, "price_axis": 0.0783718689788054, "time_axis": 0.01131264023934181 },
-      "maximum": { "full": 0.009, "pane": 0.006, "price_axis": 0.08, "time_axis": 0.017 }
+      "measured": { "full": 0.05820833333333334, "pane": 0.034896195865992796, "price_axis": 0.14584727715241863, "time_axis": 0.06285146402947451 },
+      "maximum": { "full": 0.062, "pane": 0.038, "price_axis": 0.15, "time_axis": 0.066 }
     },
     {
       "name": "dpr-2-spacing-6-light",
       "dpr": 2,
       "spacing": 6,
       "theme": "light",
-      "measured": { "full": 0.02895968967013889, "pane": 0.02541111652460195, "price_axis": 0.08911575642814432, "time_axis": 0.017542962356792143 },
-      "maximum": { "full": 0.035, "pane": 0.03, "price_axis": 0.09, "time_axis": 0.025 }
+      "measured": { "full": 0.0832052951388889, "pane": 0.05474744094301959, "price_axis": 0.1614648781100779, "time_axis": 0.07392873084362446 },
+      "maximum": { "full": 0.087, "pane": 0.058, "price_axis": 0.166, "time_axis": 0.077 }
     },
     {
       "name": "dpr-3-spacing-6-light",
       "dpr": 3,
       "spacing": 6,
       "theme": "light",
-      "measured": { "full": 0.012931134259259258, "pane": 0.009153135567475746, "price_axis": 0.08809215334529268, "time_axis": 0.016366612111292964 },
-      "maximum": { "full": 0.018, "pane": 0.015, "price_axis": 0.09, "time_axis": 0.025 }
+      "measured": { "full": 0.06864812403549382, "pane": 0.0383649628361226, "price_axis": 0.15520719890536427, "time_axis": 0.07280249301525897 },
+      "maximum": { "full": 0.072, "pane": 0.042, "price_axis": 0.16, "time_axis": 0.076 }
     },
     {
       "name": "dpr-1_5-spacing-0_5-light",
       "dpr": 1.5,
       "spacing": 0.5,
       "theme": "light",
-      "measured": { "full": 0.02620997299382716, "pane": 0.02429763898217963, "price_axis": 0.08002790512258322, "time_axis": 0.009365339152573195 },
-      "maximum": { "full": 0.032, "pane": 0.03, "price_axis": 0.081, "time_axis": 0.015 }
+      "measured": { "full": 0.07303433641975309, "pane": 0.050892595290578315, "price_axis": 0.16016028594565913, "time_axis": 0.04794260113340905 },
+      "maximum": { "full": 0.077, "pane": 0.054, "price_axis": 0.164, "time_axis": 0.051 }
     },
     {
       "name": "dpr-1_5-spacing-50-light",
       "dpr": 1.5,
       "spacing": 50,
       "theme": "light",
-      "measured": { "full": 0.011821952160493828, "pane": 0.008814004017546017, "price_axis": 0.06351737426084646, "time_axis": 0.025004546281142024 },
-      "maximum": { "full": 0.018, "pane": 0.015, "price_axis": 0.065, "time_axis": 0.035 }
+      "measured": { "full": 0.072578125, "pane": 0.03281363821272812, "price_axis": 0.12045181648096953, "time_axis": 0.06449106449106449 },
+      "maximum": { "full": 0.076, "pane": 0.036, "price_axis": 0.124, "time_axis": 0.068 }
     },
     {
       "name": "dpr-1_5-spacing-6-dark",
       "dpr": 1.5,
       "spacing": 6,
       "theme": "dark",
-      "measured": { "full": 0.0044053819444444445, "pane": 0.0008172794422948156, "price_axis": 0.07047150798396563, "time_axis": 0.015041695892759723 },
-      "maximum": { "full": 0.008, "pane": 0.005, "price_axis": 0.072, "time_axis": 0.022 }
+      "measured": { "full": 0.025616801697530867, "pane": 0.0047838440410079813, "price_axis": 0.14737091954985898, "time_axis": 0.02941030600605069 },
+      "maximum": { "full": 0.029, "pane": 0.008, "price_axis": 0.151, "time_axis": 0.033 }
     }
   ]
 }

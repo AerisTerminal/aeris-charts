@@ -1973,7 +1973,7 @@ mod tests {
         assert_eq!(guide_xs(&mut chart), expected_xs(&chart));
 
         chart.css_width = 1_200.0;
-        chart.recompute_layout_with_measure(true, |_| 0.0);
+        chart.recompute_layout_with_measure(true, |_, _| 0.0, |_, _| 0.0);
         assert_eq!(guide_xs(&mut chart), expected_xs(&chart));
         assert!(chart.delta_tooltip_active_range(primitive).is_some());
     }
@@ -2368,7 +2368,11 @@ mod tests {
             matches!(primitive, Prim::Rect { rect, color: actual }
                 if *actual == color && rect.h == 500 && rect.w == 3)
         }));
-        let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+        let axis = chart.build_axis_frame(
+            80.0,
+            |text, _bold| text.len() as f64 * 7.0,
+            |text, _bold| text.len() as f64 * 6.0,
+        );
         let label = axis
             .labels
             .iter()

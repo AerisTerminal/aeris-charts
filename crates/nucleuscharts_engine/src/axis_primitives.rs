@@ -9,7 +9,10 @@
 use nucleuscharts_render::color::Color;
 use nucleuscharts_render::draw_list::{IRect, Prim, TextAlign};
 
-use crate::{AxisFrame, AxisLabel, AxisTextAlign, AxisTextMidpoint, ChartEngine, PANE_SEPARATOR};
+use crate::{
+    axis_metrics::AxisMetrics, AxisFrame, AxisLabel, AxisTextAlign, AxisTextMidpoint, ChartEngine,
+    PANE_SEPARATOR,
+};
 
 impl ChartEngine {
     /// Build the final unscissored axis/top primitive layer into `output`, retaining its capacity.
@@ -137,7 +140,7 @@ impl ChartEngine {
                 );
             }
 
-            let tick_len = (5.0 * dpr).round();
+            let tick_len = (AxisMetrics::TICK_LENGTH * dpr).round();
             let tick_off = (dpr * 0.5).floor();
             for tick in &axis_frame.price_ticks {
                 let (enabled, color) = if tick.left {

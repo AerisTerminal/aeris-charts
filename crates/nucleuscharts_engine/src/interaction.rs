@@ -1271,7 +1271,11 @@ mod tests {
         chart.set_series_price_scale(comparison_series, comparison);
         chart.set_price_scale_visible_range_for(0, PriceScaleTarget::Right, 5.0, 25.0);
         chart.set_price_scale_visible_range_for(0, comparison, 990.0, 1_040.0);
-        chart.recompute_layout_with_measure(true, |text| text.len() as f64 * 7.0);
+        chart.recompute_layout_with_measure(
+            true,
+            |text, _bold| text.len() as f64 * 7.0,
+            |text, _bold| text.len() as f64 * 6.0,
+        );
 
         let (_, comparison_x, comparison_width) = chart
             .price_scale_axis_geometry(0, comparison)
@@ -1317,7 +1321,11 @@ mod tests {
         );
 
         chart.set_price_scale_visible_for(0, comparison, false);
-        chart.recompute_layout_with_measure(true, |text| text.len() as f64 * 7.0);
+        chart.recompute_layout_with_measure(
+            true,
+            |text, _bold| text.len() as f64 * 7.0,
+            |text, _bold| text.len() as f64 * 6.0,
+        );
         assert!(chart.price_scale_axis_geometry(0, comparison).is_none());
         assert!(chart.price_scale_visible_range_for(0, comparison).is_some());
         let (_, moved_right_x, _) = chart

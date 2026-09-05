@@ -160,7 +160,8 @@ async function shot(page) {
 }
 
 test("bollinger bands paint their background fill between upper and lower", async ({ page }) => {
-  await page.goto("/");
+  // Pin the light theme: the expected fill is #2196f3 at 0.2 alpha over white.
+  await page.goto("/?theme=light");
   await wait_grid(page);
   await page.evaluate(() => {
     window.__bands = window.__chart.add_bollinger(window.__main, 20, 2);

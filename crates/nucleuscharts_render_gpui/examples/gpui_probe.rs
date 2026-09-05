@@ -985,11 +985,19 @@ impl Probe {
         }
     }
 
-    /// Rebuild the complete frame for `(width, height)` logical px at `scale_factor` using a
-    /// host-native text width callback.
-    fn rebuild_with_measure<F>(&mut self, width: f32, height: f32, scale_factor: f32, measure: F)
-    where
-        F: Fn(&str) -> f64,
+    /// Rebuild the complete frame for `(width, height)` logical px at `scale_factor` using
+    /// host-native text width callbacks at the resolved axis (`measure`) and countdown
+    /// (`countdown_measure`) sizes, each with matching weight.
+    fn rebuild_with_measure<F, G>(
+        &mut self,
+        width: f32,
+        height: f32,
+        scale_factor: f32,
+        measure: F,
+        countdown_measure: G,
+    ) where
+        F: Fn(&str, bool) -> f64,
+        G: Fn(&str, bool) -> f64,
     {
         if !self.seen_scales.contains(&scale_factor) {
             self.seen_scales.push(scale_factor);
@@ -1041,20 +1049,28 @@ impl Probe {
                     max,
                 });
         }
-        self.engine
-            .recompute_layout_with_measure(resized, |text| measure(text));
+        self.engine.recompute_layout_with_measure(
+            resized,
+            |text, bold| measure(text, bold),
+            |text, bold| countdown_measure(text, bold),
+        );
         if !self.fitted {
             self.engine.fit_content();
             self.fitted = true;
-            self.engine
-                .recompute_layout_with_measure(true, |text| measure(text));
+            self.engine.recompute_layout_with_measure(
+                true,
+                |text, bold| measure(text, bold),
+                |text, bold| countdown_measure(text, bold),
+            );
         }
         let layout = self.engine.options.get().layout.clone();
-        let max_label_width = (layout.font_size + 4.0) * 5.0 / 8.0
+        let max_label_width = (self.engine.axis_font_size() + 4.0) * 5.0 / 8.0
             * f64::from(self.engine.tick_mark_max_character_length.max(1));
-        let axis_frame = self
-            .engine
-            .build_axis_frame(max_label_width, |text| measure(text));
+        let axis_frame = self.engine.build_axis_frame(
+            max_label_width,
+            |text, bold| measure(text, bold),
+            |text, bold| countdown_measure(text, bold),
+        );
         self.engine.build_frame_into(&mut self.frame);
         self.inject_native_equivalents();
         // GPUI's Prim text executor already converts a vertical center into a baseline from native
@@ -1158,19 +1174,39 @@ impl Probe {
                     .copied()
                     .unwrap_or_else(|| text.chars().count() as f64 * size * 0.6)
             })));
-        self.rebuild_with_measure(width, height, scale_factor, |text| {
-            f64::from(
-                measure_text(
-                    window,
-                    text,
-                    &layout.font_family,
-                    layout.font_size as f32,
-                    400,
-                    false,
+        let axis_size = self.engine.axis_font_size();
+        let countdown_size = self.engine.countdown_font_size();
+        self.rebuild_with_measure(
+            width,
+            height,
+            scale_factor,
+            |text, bold| {
+                f64::from(
+                    measure_text(
+                        window,
+                        text,
+                        &layout.font_family,
+                        axis_size as f32,
+                        if bold { 700 } else { 400 },
+                        false,
+                    )
+                    .width,
                 )
-                .width,
-            )
-        });
+            },
+            |text, bold| {
+                f64::from(
+                    measure_text(
+                        window,
+                        text,
+                        &layout.font_family,
+                        countdown_size as f32,
+                        if bold { 700 } else { 400 },
+                        false,
+                    )
+                    .width,
+                )
+            },
+        );
     }
 
     /// Append one live bar, forcing a rebuild on the next prepaint.
@@ -3601,8 +3637,9 @@ mod tests {
     #[test]
     fn brush_capture_coalesces_pointer_samples_to_one_knot_per_frame() {
         let mut probe = Probe::new(32, Some(1));
-        let measure = |text: &str| text.chars().count() as f64 * 7.0;
-        probe.rebuild_with_measure(1024.0, 640.0, 1.0, measure);
+        let measure = |text: &str, _bold: bool| text.chars().count() as f64 * 7.0;
+        let countdown_measure = |text: &str, _bold: bool| text.chars().count() as f64 * 6.0;
+        probe.rebuild_with_measure(1024.0, 640.0, 1.0, measure, countdown_measure);
         assert!(probe.engine.brush_create_start(None, 100.0, 100.0));
 
         // A diagonal drag as Wayland reports it: one axis per event, far above frame cadence.
@@ -3666,11 +3703,12 @@ mod tests {
     #[test]
     fn resize_replaces_negotiated_pane_dimensions_at_fractional_dpr() {
         let mut probe = Probe::new(32, Some(1));
-        let measure = |text: &str| text.chars().count() as f64 * 7.0;
-        probe.rebuild_with_measure(1024.0, 640.0, 1.5, measure);
+        let measure = |text: &str, _bold: bool| text.chars().count() as f64 * 7.0;
+        let countdown_measure = |text: &str, _bold: bool| text.chars().count() as f64 * 6.0;
+        probe.rebuild_with_measure(1024.0, 640.0, 1.5, measure, countdown_measure);
         let old_scissor = probe.frame.panes[0].scissor;
 
-        probe.rebuild_with_measure(1536.0, 864.0, 1.5, measure);
+        probe.rebuild_with_measure(1536.0, 864.0, 1.5, measure, countdown_measure);
 
         let content_h = 864.0 - probe.engine.time_axis_height();
         let pane_w = 1536.0 - probe.engine.left_axis_w - probe.engine.axis_w;
@@ -3716,7 +3754,13 @@ mod tests {
     #[test]
     fn click_after_pan_preserves_position_and_next_pan_uses_current_snapshot() {
         let mut probe = Probe::new(64, Some(1));
-        probe.rebuild_with_measure(1024.0, 640.0, 1.0, |text| text.chars().count() as f64 * 7.0);
+        probe.rebuild_with_measure(
+            1024.0,
+            640.0,
+            1.0,
+            |text, _bold| text.chars().count() as f64 * 7.0,
+            |text, _bold| text.chars().count() as f64 * 6.0,
+        );
         probe.engine.scroll_to_position(0.0);
         let initial = probe.engine.scroll_position();
 
@@ -3805,7 +3849,13 @@ mod tests {
     #[test]
     fn drawing_template_controls_compose_without_restarting_creation() {
         let mut probe = Probe::new(64, Some(1));
-        probe.rebuild_with_measure(1024.0, 640.0, 1.0, |text| text.chars().count() as f64 * 7.0);
+        probe.rebuild_with_measure(
+            1024.0,
+            640.0,
+            1.0,
+            |text, _bold| text.chars().count() as f64 * 7.0,
+            |text, _bold| text.chars().count() as f64 * 6.0,
+        );
         probe.engine.clear_drawings();
         probe.arm_drawing(DrawingKind::TrendLine);
         assert_eq!(
@@ -3828,7 +3878,13 @@ mod tests {
     #[test]
     fn interactive_drawing_creation_commits_and_selects() {
         let mut probe = Probe::new(64, Some(1));
-        probe.rebuild_with_measure(1024.0, 640.0, 1.0, |text| text.chars().count() as f64 * 7.0);
+        probe.rebuild_with_measure(
+            1024.0,
+            640.0,
+            1.0,
+            |text, _bold| text.chars().count() as f64 * 7.0,
+            |text, _bold| text.chars().count() as f64 * 6.0,
+        );
         probe.engine.clear_drawings();
         probe.arm_drawing(DrawingKind::TrendLine);
         assert!(!probe.engine.drawing_create_active());
@@ -3845,7 +3901,13 @@ mod tests {
     #[test]
     fn native_path_creation_pops_and_finishes_as_one_drawing() {
         let mut probe = Probe::new(64, Some(1));
-        probe.rebuild_with_measure(1024.0, 640.0, 1.0, |text| text.chars().count() as f64 * 7.0);
+        probe.rebuild_with_measure(
+            1024.0,
+            640.0,
+            1.0,
+            |text, _bold| text.chars().count() as f64 * 7.0,
+            |text, _bold| text.chars().count() as f64 * 6.0,
+        );
         probe.engine.clear_drawings();
         probe.arm_drawing(DrawingKind::Path);
         for (x, y) in [(200.0, 180.0), (350.0, 260.0), (500.0, 200.0)] {
@@ -3865,7 +3927,13 @@ mod tests {
     #[test]
     fn armed_ctrl_magnet_snaps_the_crosshair_without_a_preview_dot() {
         let mut probe = Probe::new(64, Some(1));
-        probe.rebuild_with_measure(1024.0, 640.0, 1.0, |text| text.chars().count() as f64 * 7.0);
+        probe.rebuild_with_measure(
+            1024.0,
+            640.0,
+            1.0,
+            |text, _bold| text.chars().count() as f64 * 7.0,
+            |text, _bold| text.chars().count() as f64 * 6.0,
+        );
         probe.engine.clear_drawings();
         probe.arm_drawing(DrawingKind::TrendLine);
         assert!(!probe.engine.drawing_create_active());
@@ -3906,7 +3974,13 @@ mod semantic_regressions {
     #[test]
     fn pending_template_patch_reaches_committed_drawing() {
         let mut probe = Probe::new(64, Some(1));
-        probe.rebuild_with_measure(1024.0, 640.0, 1.0, |text| text.chars().count() as f64 * 7.0);
+        probe.rebuild_with_measure(
+            1024.0,
+            640.0,
+            1.0,
+            |text, _bold| text.chars().count() as f64 * 7.0,
+            |text, _bold| text.chars().count() as f64 * 6.0,
+        );
         probe.engine.clear_drawings();
         probe.arm_drawing(DrawingKind::TrendLine);
         assert_eq!(

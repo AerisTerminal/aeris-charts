@@ -67,6 +67,18 @@ the strip. The horizontal grid uses only the innermost visible populated scale, 
 side when equal orders meet. Hidden and empty named scales retain state without consuming layout or
 receiving labels and input.
 
+Axis chrome is engine-owned and compact: axis-attached text resolves to 11/12 of `layout.fontSize`
+(11 CSS px at the 12 px default) with the configured family, countdown text to 10/12 of layout
+(10 px), scaling proportionally with larger fonts. The price strip is the widest required text plus
+1 px border, 3 px tick, and 4 px padding on each side; the time strip is the axis text plus border,
+tick, and vertical padding, snapped to an even CSS-pixel height (22 px by default). Price tags are
+axis text plus 2 px padding above and below (15 px), countdown rows are countdown text plus the same
+padding (14 px), and time tags fit the strip height with 6 px horizontal padding per side. Tick
+density, collision spacing, drag bounds, and crosshair placement derive from the same metrics, and
+hosts measure axis strings at the axis size and countdown strings at the countdown size with matching
+weight. Font, DPR, formatter, and minimum-dimension changes invalidate measurements, retained labels,
+and layout together.
+
 Pane scale geometry is pane-local. Every scale a pane owns is laid out against that pane's own slot
 height and carries the pane's top edge as its single explicit transform into chart-content space, so
 autoscale, margins, internal height, tick marks, hit testing, and axis gestures resolve inside the

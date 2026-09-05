@@ -1186,7 +1186,11 @@ mod tests {
             "primitives: {:?}",
             frame.panes[0].main
         );
-        let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+        let axis = chart.build_axis_frame(
+            80.0,
+            |text, _bold| text.len() as f64 * 7.0,
+            |text, _bold| text.len() as f64 * 6.0,
+        );
         assert!(axis
             .labels
             .iter()
@@ -1232,7 +1236,11 @@ mod tests {
             nucleuscharts_render::draw_list::Prim::HLine { color, .. }
                 if *color == shader_color
         )));
-        let axis = chart.build_axis_frame(80.0, |text| text.len() as f64 * 7.0);
+        let axis = chart.build_axis_frame(
+            80.0,
+            |text, _bold| text.len() as f64 * 7.0,
+            |text, _bold| text.len() as f64 * 6.0,
+        );
         assert!(axis
             .labels
             .iter()
