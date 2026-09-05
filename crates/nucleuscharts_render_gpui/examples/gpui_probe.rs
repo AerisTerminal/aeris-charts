@@ -1379,14 +1379,34 @@ impl Probe {
         }
     }
 
+    /// Browser-host parity (`clear_hover`): release every hover promotion together so the
+    /// series bump, drawing promotion, and text hover ring can never desync across hosts.
+    fn clear_hover(&mut self) {
+        self.engine.set_hovered_series(None);
+        self.engine.set_hovered_text(None);
+        self.engine.set_hovered_drawing(None);
+    }
+
     fn update_crosshair(&mut self, pane_x: f64, y: f64) {
         if pane_x >= 0.0 && pane_x <= self.engine.pane_w && y >= 0.0 && y <= self.engine.pane_h {
             self.engine.crosshair = Some((pane_x, y));
-            let hovered = self.engine.hit_test_series(pane_x, y);
-            self.engine.set_hovered_series(hovered);
+            // Browser-host parity (wasm `hover_at`): a drawing hit wins over series hits so
+            // overlaps stay selectable, clears the series bump, and drives generic hover
+            // promotion plus the text-only hover ring. Hit testing stays on stable order so
+            // promotion cannot oscillate hover.
+            if let Some(drawing) = self.engine.hit_test_drawing(pane_x, y) {
+                self.engine.set_hovered_series(None);
+                self.engine.set_hovered_text(Some(drawing.id));
+                self.engine.set_hovered_drawing(Some(drawing.id));
+            } else {
+                self.engine.set_hovered_text(None);
+                self.engine.set_hovered_drawing(None);
+                let hovered = self.engine.hit_test_series(pane_x, y);
+                self.engine.set_hovered_series(hovered);
+            }
         } else {
             self.engine.crosshair = None;
-            self.engine.set_hovered_series(None);
+            self.clear_hover();
         }
         self.dirty = true;
     }
@@ -1395,7 +1415,7 @@ impl Probe {
         let over_separator = self.gesture_config.panes_resize && self.separator_at(y).is_some();
         if matches!(self.drag, Some(DragMode::PaneSeparator { .. })) || over_separator {
             self.engine.crosshair = None;
-            self.engine.set_hovered_series(None);
+            self.clear_hover();
             self.dirty = true;
         } else {
             // Match the browser host: refresh the hit-test first, then derive the cursor from the
@@ -1438,7 +1458,7 @@ impl Probe {
         self.press_moved = false;
         self.engine.crosshair_ohlc_magnet = false;
         self.engine.crosshair = None;
-        self.engine.set_hovered_series(None);
+        self.clear_hover();
         self.engine.set_separator_hover(None);
         self.legend = "O —  H —  L —  C —".to_string();
         self.cursor_style = CursorStyle::Crosshair;
@@ -1586,7 +1606,7 @@ impl Probe {
         };
         if matches!(self.drag, Some(DragMode::PaneSeparator { .. })) {
             self.engine.crosshair = None;
-            self.engine.set_hovered_series(None);
+            self.clear_hover();
             self.dirty = true;
         } else {
             self.update_crosshair(pane_x, y);
@@ -1885,7 +1905,7 @@ impl Probe {
                 self.armed_tool = None;
                 self.engine.set_selected_drawing(None);
                 self.engine.crosshair = None;
-                self.engine.set_hovered_series(None);
+                self.clear_hover();
                 true
             }
             _ => false,

@@ -197,45 +197,62 @@ impl ChartEngine {
 
     fn effective_series_order_explicit(&self) -> Vec<SeriesId> {
         use std::collections::HashMap;
-        // Idle stays verbatim in explicit order; active groups gather indicator outputs.
-        type ActiveGroup = (Vec<(usize, SeriesId)>, u8, usize);
-        let mut active_groups: HashMap<SeriesId, ActiveGroup> = HashMap::new();
-        let mut active_keys: Vec<SeriesId> = Vec::new();
-        let mut idle: Vec<SeriesId> = Vec::with_capacity(self.series_order.len());
+        // Group-aware like the default path: a binding's priority is its members' max, so
+        // hovering/selecting any output promotes the complete indicator with internal explicit
+        // order preserved. Only idle grouping is overridden — idle paints verbatim in explicit
+        // order minus active-group members (which leave together, never splitting [1, 2, 3]
+        // into [1, 3, 2]).
+        struct Group {
+            ids: Vec<(usize, SeriesId)>,
+            priority: u8,
+            first_pos: usize,
+        }
+        let mut groups: HashMap<SeriesId, Group> = HashMap::new();
+        let mut order_keys: Vec<SeriesId> = Vec::new();
         for (pos, &id) in self.series_order.iter().enumerate() {
             let priority = self.series_active_priority(id);
-            if priority == PRIORITY_IDLE {
-                idle.push(id);
-                continue;
-            }
             let key = self.indicator_binding_id(id).unwrap_or(id);
-            if let Some(entry) = active_groups.get_mut(&key) {
-                entry.0.push((pos, id));
-                entry.1 = entry.1.max(priority);
-                entry.2 = entry.2.min(pos);
+            if let Some(group) = groups.get_mut(&key) {
+                group.ids.push((pos, id));
+                group.priority = group.priority.max(priority);
+                group.first_pos = group.first_pos.min(pos);
             } else {
-                active_groups.insert(key, (vec![(pos, id)], priority, pos));
-                active_keys.push(key);
+                groups.insert(
+                    key,
+                    Group {
+                        ids: vec![(pos, id)],
+                        priority,
+                        first_pos: pos,
+                    },
+                );
+                order_keys.push(key);
             }
         }
-        // Active ordered by priority then first explicit position; internal explicit order kept.
+        let mut idle: Vec<(usize, SeriesId)> = Vec::new();
         let mut active: Vec<(u8, usize, Vec<SeriesId>)> = Vec::new();
-        for key in active_keys {
-            let Some((mut paired, priority, first)) = active_groups.remove(&key) else {
+        for key in order_keys {
+            let Some(mut group) = groups.remove(&key) else {
                 continue;
             };
-            paired.sort_by_key(|&(p, _)| p);
-            active.push((
-                priority,
-                first,
-                paired.into_iter().map(|(_, id)| id).collect(),
-            ));
+            group.ids.sort_by_key(|&(p, _)| p);
+            if group.priority == PRIORITY_IDLE {
+                idle.append(&mut group.ids);
+            } else {
+                active.push((
+                    group.priority,
+                    group.first_pos,
+                    group.ids.into_iter().map(|(_, id)| id).collect(),
+                ));
+            }
         }
+        // Idle verbatim in explicit order; active ordered by priority then first position.
+        idle.sort_by_key(|&(p, _)| p);
+        let mut out: Vec<SeriesId> = idle.into_iter().map(|(_, id)| id).collect();
         active.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
         for (_, _, mut ids) in active {
-            idle.append(&mut ids);
+            out.append(&mut ids);
         }
-        idle
+        out
     }
 
     /// Active priority for one drawing: dragging/editing (3) → hovered (2) → selected (1).
@@ -373,6 +390,19 @@ mod tests {
             0, ribbon[0], ribbon[1], ribbon[2], ribbon[3], ribbon[4]
         ]));
         assert!(chart.series_order_is_explicit());
+        assert_eq!(
+            chart.effective_series_order(),
+            vec![0, ribbon[0], ribbon[1], ribbon[2], ribbon[3], ribbon[4]]
+        );
+        // Hovering a middle output under explicit order still promotes the whole group
+        // intact — never [ribbon[0], ribbon[2], ribbon[1]]-style splits.
+        chart.set_hovered_series(Some(ribbon[1]));
+        assert_eq!(
+            chart.effective_series_order(),
+            vec![0, ribbon[0], ribbon[1], ribbon[2], ribbon[3], ribbon[4]],
+            "explicit hover keeps internal group order"
+        );
+        chart.set_hovered_series(None);
         assert_eq!(
             chart.effective_series_order(),
             vec![0, ribbon[0], ribbon[1], ribbon[2], ribbon[3], ribbon[4]]

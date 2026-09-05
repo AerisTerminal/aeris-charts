@@ -4366,6 +4366,50 @@ fn explicit_series_order_overrides_default_indicator_grouping() {
 }
 
 #[test]
+fn explicit_order_hovering_middle_band_keeps_internal_group_order() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let n = 30;
+    let times: Vec<f64> = (0..n).map(|i| (i * 3600) as f64).collect();
+    let values: Vec<f64> = (0..n).map(|i| 100.0 + i as f64 * 0.1).collect();
+    chart
+        .set_series_data(0, &times, &values, &values, &values, &values)
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    let bb = chart.add_bollinger(0, 5, 2.0);
+    for (i, &id) in bb.iter().enumerate() {
+        let color = ["#ff0000", "#00ff00", "#0000ff"][i];
+        chart.series_entry_mut(id).unwrap().line_color = Some(color.to_string());
+    }
+    // Manual ordering with the indicator on top: internal ids read [1, 2, 3]-style in order.
+    assert!(chart.set_series_order(vec![0, bb[0], bb[1], bb[2]]));
+    let stroke_colors = |chart: &mut ChartEngine| {
+        chart.build_frame().panes[0]
+            .main
+            .iter()
+            .filter_map(|prim| match prim {
+                Prim::Polyline { color, .. } => Some(format!(
+                    "#{:02x}{:02x}{:02x}",
+                    color.r(),
+                    color.g(),
+                    color.b()
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(stroke_colors(&mut chart), ["#ff0000", "#00ff00", "#0000ff"]);
+    // Hovering the middle output must promote the complete group intact, never [1, 3, 2].
+    chart.set_hovered_series(Some(bb[1]));
+    assert_eq!(chart.effective_series_order(), vec![0, bb[0], bb[1], bb[2]]);
+    assert_eq!(stroke_colors(&mut chart), ["#ff0000", "#00ff00", "#0000ff"]);
+    assert_eq!(chart.series_order(), &[0, bb[0], bb[1], bb[2]]);
+    chart.set_hovered_series(None);
+    assert_eq!(stroke_colors(&mut chart), ["#ff0000", "#00ff00", "#0000ff"]);
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+}
+
+#[test]
 fn idle_drawings_sit_below_price_and_active_drawings_promote() {
     use crate::{DrawingKind, DrawingPoint};
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
