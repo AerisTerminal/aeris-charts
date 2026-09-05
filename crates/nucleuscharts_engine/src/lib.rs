@@ -16,6 +16,7 @@ mod host_layout;
 mod indicators;
 mod interaction;
 mod native_primitives;
+mod ordering;
 mod persistence;
 mod price_line_api;
 mod price_scale_api;
@@ -52,7 +53,7 @@ pub use footprint::{
 };
 pub use frame::{
     AxisBand, AxisFrame, AxisLabel, AxisLabelCorners, AxisTextAlign, AxisTextMidpoint, ChartFrame,
-    FrameBuildStats, FramePane, FramePaneSegments, FrameSeriesSegment,
+    FrameBuildStats, FrameDrawingSegment, FramePane, FramePaneSegments, FrameSeriesSegment,
 };
 pub use hit_test::{SeriesHit, SeriesHitKind};
 pub(crate) use indicators::{IndicatorBinding, IndicatorChange};
@@ -1285,9 +1286,17 @@ pub struct ChartEngine {
     /// `MMM`/`MMMM` tokens and the month tick labels. Hosts inject locale-derived names (the
     /// wasm host builds them from `Intl.DateTimeFormat`); the headless default is English.
     pub month_names: MonthNames,
-    /// Series ids in render order, bottom to top (topmost LAST — the reference's z-order, pane.ts
+    /// Series ids in stable order, bottom to top (topmost LAST — the reference's z-order, pane.ts
     /// `orderedSources`/`setSeriesOrder`). Live series only: removed slots leave the list.
+    /// This is the saved ordering: insertion order until an explicit `set_series_order`
+    /// override. Frame assembly derives the pane-local paint order from it (default idle
+    /// indicators below idle drawings below ordinary series, active objects on top) without
+    /// rewriting it; hit testing tie-breaks on it so promotion cannot oscillate hover.
     series_order: Vec<SeriesId>,
+    /// Whether `set_series_order` has overridden the default series grouping. Idle explicit
+    /// order paints verbatim (drawings still below price series); active indicator groups
+    /// still promote together. Never reset except by constructing a new chart.
+    series_order_explicit: bool,
     /// The series under the cursor (reference `ChartModel._hoveredSource`), refreshed by hosts
     /// from their hover pipeline. When `hoveredSeriesOnTop` holds, the frame build paints
     /// this series topmost (reference `hoveredSourceOnTopOrder`) without touching `series_order`.
@@ -1333,6 +1342,11 @@ pub struct ChartEngine {
     /// focus border at hover opacity (TradingView's hover ring). Only the text tool has hover
     /// chrome — other kinds show nothing until selected.
     hovered_text: Option<DrawingId>,
+    /// The drawing of any kind under the host's pointer (ordering seam): drives temporary
+    /// hover promotion in frame assembly alongside `hovered_series`. `hovered_text` remains
+    /// the text-only ring state; this tracks every kind so overlaps stay selectable and
+    /// return to stable order on hover leave. Never persisted; cleared like other hover.
+    hovered_drawing: Option<DrawingId>,
     /// Optional host text-measure callback for drawing-label hit boxes (drawings.rs
     /// [`TextMeasureFn`]); without one the engine estimates widths by character count.
     text_measure_fn: Option<TextMeasureFn>,
@@ -1407,6 +1421,7 @@ impl ChartEngine {
             date_format: DEFAULT_DATE_FORMAT.to_string(),
             month_names: MonthNames::default(),
             series_order: vec![main],
+            series_order_explicit: false,
             hovered_series: None,
             selection: None,
             primitive_autoscale: Vec::new(),
@@ -1421,6 +1436,7 @@ impl ChartEngine {
             brush_capture: None,
             editing_drawing: None,
             hovered_text: None,
+            hovered_drawing: None,
             text_measure_fn: None,
             kinetic: None,
             scroll_animation: None,
@@ -2117,20 +2133,27 @@ impl ChartEngine {
         self.series.iter().find(|s| !s.removed && s.visible)
     }
 
-    /// Series ids in current render order (bottom to top; topmost LAST), live series only.
+    /// Series ids in stable saved order (bottom to top; topmost LAST), live series only.
+    /// This is the underlying order frame assembly derives the pane-local paint order from:
+    /// default idle indicators (stable) below idle drawings below ordinary series with active
+    /// objects promoted on top; an explicit `set_series_order` override paints idle series
+    /// verbatim. Hit-test ties break on this stable order so promotion cannot oscillate hover.
     pub fn series_order(&self) -> &[SeriesId] {
         &self.series_order
     }
 
-    /// The render order as a JSON array of series ids (the reference's z-order; the last id paints on
-    /// top). Backs the TS `chart.seriesOrder()`.
+    /// The stable saved order as a JSON array of series ids (the reference's z-order; the last
+    /// id is topmost in the saved order — the frame may temporarily promote hovered/selected
+    /// objects above it without rewriting it). Backs the TS `chart.seriesOrder()`.
     pub fn series_order_json(&self) -> String {
         serde_json::to_string(&self.series_order).unwrap_or_else(|_| "[]".to_string())
     }
 
-    /// reference `chart.setSeriesOrder`: reorder which series paints on top. The patch must name
-    /// every live series id exactly once (a bad permutation — wrong length, duplicates,
-    /// unknown or missing ids — is rejected with false and no state change).
+    /// reference `chart.setSeriesOrder`: override the default series ordering with an explicit
+    /// paint order for idle series (bottom to top). The patch must name every live series id
+    /// exactly once (a bad permutation — wrong length, duplicates, unknown or missing ids —
+    /// is rejected with false and no state change). Active hover/selection promotion still
+    /// applies above the explicit idle order, and idle drawings remain below price series.
     pub fn set_series_order(&mut self, ids: Vec<SeriesId>) -> bool {
         self.invalidate_frame_scene();
         if ids.len() != self.series_order.len() {
@@ -2144,6 +2167,7 @@ impl ChartEngine {
             return false;
         }
         self.series_order = ids;
+        self.series_order_explicit = true;
         true
     }
 

@@ -145,7 +145,10 @@ impl ChartInner {
                 pane_count
             } else {
                 (0..pane_count)
-                    .map(|pane| 6 + self.engine.frame_series_segments(pane).len())
+                    .map(|pane| {
+                        6 + self.engine.frame_series_segments(pane).len()
+                            + self.engine.frame_drawing_segments(pane).len()
+                    })
                     .sum()
             };
             self.gpu_groups
@@ -256,20 +259,59 @@ impl ChartInner {
                         &pane_frame.points,
                     );
                     group_index += 1;
-                    for series in self.engine.frame_series_segments(pane) {
-                        let key = match series.series_id {
-                            Some(id) => 0x3000_0000 | (pane as u64) << 32 | u64::from(id),
-                            None => 0x4000_0000 | pane as u64,
-                        };
-                        build_group(
-                            &mut self.gpu_groups[group_index],
-                            key,
-                            series.revision,
-                            Some(pane_frame.scissor),
-                            &main[series.start.min(main.len())..series.end.min(main.len())],
-                            &pane_frame.points,
-                        );
-                        group_index += 1;
+                    // Chart content merged in paint order (ordering.rs): idle indicators, idle
+                    // drawings, ordinary series, active series/drawings/previews, chrome.
+                    // Series and drawing segments both carry out.main ranges; merging by start
+                    // preserves pane-local order so WebGPU blends like Canvas2D. Ordering-only
+                    // promotion swaps group order (key mismatch re-uploads moved groups) without
+                    // rebuilding retained geometry.
+                    {
+                        let series_segs = self.engine.frame_series_segments(pane);
+                        let drawing_segs = self.engine.frame_drawing_segments(pane);
+                        let mut si = 0usize;
+                        let mut di = 0usize;
+                        while si < series_segs.len() || di < drawing_segs.len() {
+                            let take_series = match (series_segs.get(si), drawing_segs.get(di)) {
+                                (Some(s), Some(d)) => s.start <= d.start,
+                                (Some(_), None) => true,
+                                (None, Some(_)) => false,
+                                (None, None) => break,
+                            };
+                            if take_series {
+                                let series = &series_segs[si];
+                                si += 1;
+                                let key = match series.series_id {
+                                    Some(id) => 0x3000_0000 | (pane as u64) << 32 | u64::from(id),
+                                    None => 0x4000_0000 | pane as u64,
+                                };
+                                build_group(
+                                    &mut self.gpu_groups[group_index],
+                                    key,
+                                    series.revision,
+                                    Some(pane_frame.scissor),
+                                    &main[series.start.min(main.len())..series.end.min(main.len())],
+                                    &pane_frame.points,
+                                );
+                                group_index += 1;
+                            } else {
+                                let drawing = &drawing_segs[di];
+                                di += 1;
+                                let key = match drawing.drawing_id {
+                                    Some(id) => 0x5000_0000 | (pane as u64) << 32 | u64::from(id),
+                                    None => 0x6000_0000 | pane as u64,
+                                };
+                                build_group(
+                                    &mut self.gpu_groups[group_index],
+                                    key,
+                                    drawing.revision,
+                                    Some(pane_frame.scissor),
+                                    &main[drawing.start.min(main.len())
+                                        ..drawing.end.min(main.len())],
+                                    &pane_frame.points,
+                                );
+                                group_index += 1;
+                            }
+                        }
                     }
                     build_group(
                         &mut self.gpu_groups[group_index],

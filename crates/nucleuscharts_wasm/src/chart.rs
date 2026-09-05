@@ -3081,12 +3081,14 @@ impl NucleusChart {
     pub fn hover_at(&mut self, x_css: f64, y_css: f64) -> String {
         self.inner.borrow_mut().hover_at(x_css, y_css)
     }
-    /// Release the hovered series (cursor left the chart): the `hoveredSeriesOnTop` z-bump
-    /// lets go on the next `render()`. The text drawings' hover ring releases too.
+    /// Release hover promotion (cursor left the chart): the `hoveredSeriesOnTop` promotion
+    /// lets go on the next `render()` and active drawings return to stable order. The text
+    /// drawings' hover ring releases too.
     pub fn clear_hover(&mut self) {
         let mut inner = self.inner.borrow_mut();
         inner.engine.set_hovered_series(None);
         inner.engine.set_hovered_text(None);
+        inner.engine.set_hovered_drawing(None);
     }
     /// TradingView-style click-to-select: the host's click pipeline sets the series under the
     /// click (`None` on empty pane space); the engine snapshots sparse canonical anchor identities

@@ -815,6 +815,14 @@ export interface chart_options {
   };
   /** Install a ResizeObserver so the chart tracks its container's size. Default `false` (reference parity). */
   autoSize: boolean;
+  /**
+   * Temporarily promote hovered chart content above idle (default `true`). When on, hovering a
+   * series promotes its whole indicator group (all Bollinger/ribbon outputs together, internal
+   * order kept) and hovering a drawing promotes it above ordinary price; dragging/editing tops
+   * hovered tops selected. Idle default paints indicators below idle drawings below ordinary
+   * price; explicit `set_series_order` overrides idle series grouping. Stable saved order and
+   * hit-test ties never change, so promotion cannot oscillate hover.
+   */
   hoveredSeriesOnTop: boolean;
   /** Custom label formatters (reference `localization`). Package-level; carries JS callbacks. */
   localization: localization_options;
@@ -1988,14 +1996,20 @@ export interface chart_api {
    */
   remove_series(series: series_api): void;
   /**
-   * The chart's series in their engine (z-)order, as live handles. A series whose handle the
-   * package no longer tracks is omitted. Cf. the reference's per-series `ISeriesApi.seriesOrder`.
+   * The chart's series in stable saved (z-)order (bottom first), as live handles. A series
+   * whose handle the package no longer tracks is omitted. Cf. the reference's per-series
+   * `ISeriesApi.seriesOrder`. The frame derives pane-local paint from it — default idle
+   * indicators below idle drawings below ordinary price with active hover/selection/drag
+   * promoted on top (indicator outputs move as one group) — without rewriting it; hit-test
+   * ties break on it so promotion cannot oscillate hover.
    */
   series_order(): series_api[];
   /**
-   * Reorder the chart's series to match `ordered` (cf. the reference's per-series
-   * `ISeriesApi.setSeriesOrder`, elevated here to a whole-chart call). Returns `false` without
-   * changing anything when the engine rejects the order.
+   * Override default series grouping with an explicit idle order (bottom first; cf. the
+   * reference's per-series `ISeriesApi.setSeriesOrder`, elevated here to a whole-chart call).
+   * Idle drawings stay below price series; active hover/selection/drag promotion still applies
+   * above the explicit idle order with indicator groups moving together. Returns `false`
+   * without changing anything when the engine rejects the order.
    */
   set_series_order(ordered: series_api[]): boolean;
   /** Add a Rust-native simple moving-average line derived from an existing series. */

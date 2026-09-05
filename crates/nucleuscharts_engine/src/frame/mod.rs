@@ -241,6 +241,20 @@ pub struct FrameSeriesSegment {
     pub coordinate_revision: u64,
 }
 
+/// One drawing's `out.main` range for the current frame (ordering.rs assembly order:
+/// idle drawings below price series, active drawings above ordinary series with the active
+/// series, previews trailing as `None`). Backends retain per-drawing groups like series
+/// segments; ordering changes swap group order (key mismatch re-uploads moved drawings)
+/// without rebuilding retained geometry.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FrameDrawingSegment {
+    pub drawing_id: Option<crate::drawings::DrawingId>,
+    pub start: usize,
+    pub end: usize,
+    pub revision: u64,
+    pub coordinate_revision: u64,
+}
+
 #[derive(Default)]
 pub(crate) struct FrameInvalidation {
     clock: u64,
@@ -372,9 +386,25 @@ struct RetainedPane {
     chrome: RetainedLayer,
     trading_regions: RetainedLayer,
     drawings: RetainedLayer,
+    /// Per-drawing prim/point ranges inside `drawings` for committed drawings, in stable
+    /// z-order as built (ordering.rs reassembly copies them idle-below / active-above without
+    /// rebuilding geometry). Preview brush/pending trailing block starts at
+    /// `drawing_preview_start` (prim, point) to the end of `drawings`.
+    drawing_parts: Vec<RetainedDrawingPart>,
+    drawing_preview_prim_start: usize,
+    drawing_preview_point_start: usize,
     trading: RetainedLayer,
     overlay: RetainedLayer,
     top_layer: RetainedLayer,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct RetainedDrawingPart {
+    pub(crate) id: crate::drawings::DrawingId,
+    pub(crate) prim_start: usize,
+    pub(crate) prim_end: usize,
+    pub(crate) point_start: usize,
+    pub(crate) point_end: usize,
 }
 
 #[derive(Clone, Default)]
@@ -391,6 +421,7 @@ pub(crate) struct RetainedFrame {
     panes: Vec<RetainedPane>,
     segments: Vec<FramePaneSegments>,
     series_segments: Vec<Vec<FrameSeriesSegment>>,
+    drawing_segments: Vec<Vec<FrameDrawingSegment>>,
     layout_generation: u64,
     scene_generation: u64,
     chrome_generation: u64,
@@ -432,6 +463,7 @@ impl RetainedFrame {
                         .iter()
                         .map(|series| layer_bytes(&series.layer))
                         .sum::<usize>()
+                    + pane.drawing_parts.capacity() * std::mem::size_of::<RetainedDrawingPart>()
             })
             .sum::<usize>()
             + self.panes.capacity() * std::mem::size_of::<RetainedPane>()
@@ -441,6 +473,12 @@ impl RetainedFrame {
                 .series_segments
                 .iter()
                 .map(|segments| segments.capacity() * std::mem::size_of::<FrameSeriesSegment>())
+                .sum::<usize>()
+            + self.drawing_segments.capacity() * std::mem::size_of::<Vec<FrameDrawingSegment>>()
+            + self
+                .drawing_segments
+                .iter()
+                .map(|segments| segments.capacity() * std::mem::size_of::<FrameDrawingSegment>())
                 .sum::<usize>()
             + self.last_price_scale_revisions.capacity() * std::mem::size_of::<Vec<u64>>()
             + self
@@ -894,6 +932,53 @@ fn translate_prims_x(prims: &mut [Prim], dx: i32) {
     }
 }
 
+/// Copy one retained drawing part (committed drawing or preview trailing block) into the
+/// frame, remapping its point indices from retained space to the frame's point pool.
+/// Reuses retained geometry; ordering changes reassemble without rebuilding.
+#[allow(clippy::too_many_arguments)]
+fn append_drawing_part(
+    retained_prims: &[Prim],
+    retained_points: &[[f32; 2]],
+    prim_start: usize,
+    prim_end: usize,
+    point_start: usize,
+    point_end: usize,
+    prims: &mut Vec<Prim>,
+    points: &mut Vec<[f32; 2]>,
+) {
+    let prim_start = prim_start.min(retained_prims.len());
+    let prim_end = prim_end.min(retained_prims.len()).max(prim_start);
+    let point_start = point_start.min(retained_points.len());
+    let point_end = point_end.min(retained_points.len()).max(point_start);
+    if prim_start == prim_end {
+        return;
+    }
+    let out_base = points.len() as u32;
+    // Retained point indices in this part run `point_start..point_end`; they land at
+    // `out_base..out_base + (point_end - point_start)`.
+    let adjust = out_base.wrapping_sub(point_start as u32);
+    points.extend_from_slice(&retained_points[point_start..point_end]);
+    prims.reserve(prim_end - prim_start);
+    for prim in &retained_prims[prim_start..prim_end] {
+        let mut prim = prim.clone();
+        match &mut prim {
+            Prim::Polyline { first_point, .. } | Prim::AreaFill { first_point, .. } => {
+                *first_point = first_point.wrapping_add(adjust);
+            }
+            Prim::BandFill {
+                upper_first,
+                lower_first,
+                ..
+            } => {
+                *upper_first = upper_first.wrapping_add(adjust);
+                *lower_first = lower_first.wrapping_add(adjust);
+            }
+            _ => {}
+        }
+        prims.push(prim);
+    }
+}
+
 fn append_retained_layer(layer: &RetainedLayer, prims: &mut Vec<Prim>, points: &mut Vec<[f32; 2]>) {
     let point_base = points.len() as u32;
     points.extend_from_slice(&layer.points);
@@ -962,6 +1047,14 @@ impl ChartEngine {
     pub fn frame_series_segments(&self, pane: usize) -> &[FrameSeriesSegment] {
         self.retained_frame
             .series_segments
+            .get(pane)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    pub fn frame_drawing_segments(&self, pane: usize) -> &[FrameDrawingSegment] {
+        self.retained_frame
+            .drawing_segments
             .get(pane)
             .map(Vec::as_slice)
             .unwrap_or(&[])
@@ -1152,31 +1245,14 @@ impl ChartEngine {
         let pane_w_px = (self.pane_w * hpr).round().max(1.0) as u32;
         let pane_left_px = (self.pane_left * nominal_dpr).round().max(0.0) as u32;
         let mut resolved = Vec::with_capacity(self.series.len());
-        // Paint in the chart's series order (reference z-order, pane.ts orderedSources): ids run
-        // bottom to top so a later entry overpaints the earlier ones within its pane. With
-        // `hoveredSeriesOnTop` the hovered series repaints topmost for the frame (reference
-        // `hoveredSourceOnTopOrder` — render order only; the stable `series_order` and hit
-        // arbitration are untouched). The bump is global across panes, which only reorders
-        // within the hovered series' own pane since each pane paints its own series.
-        let order = match self
-            .hovered_series
-            .filter(|_| self.options.get().hovered_series_on_top)
-        {
-            Some(hovered)
-                if self.series_order.contains(&hovered)
-                    && self.series_order.last() != Some(&hovered) =>
-            {
-                let mut bumped: Vec<SeriesId> = self
-                    .series_order
-                    .iter()
-                    .copied()
-                    .filter(|&id| id != hovered)
-                    .collect();
-                bumped.push(hovered);
-                bumped
-            }
-            _ => self.series_order.clone(),
-        };
+        // Centralized pane-local paint order (ordering.rs): grid/background → idle indicators
+        // → idle drawings → ordinary price series → active objects (dragging/editing →
+        // hovered → selected → idle). Indicator outputs move as one visual group with internal
+        // ordering preserved; explicit `set_series_order` overrides default idle grouping while
+        // idle drawings stay below price series. The stable `series_order` and hit-test
+        // arbitration are untouched so promotion cannot oscillate hover. The bump is global
+        // across panes (filtering per pane preserves each pane's relative order).
+        let order = self.effective_series_order();
         for &id in &order {
             let Some(s) = self.series_entry(id) else {
                 continue;
@@ -1276,6 +1352,8 @@ impl ChartEngine {
         retained.segments.truncate(pane_count);
         retained.series_segments.resize_with(pane_count, Vec::new);
         retained.series_segments.truncate(pane_count);
+        retained.drawing_segments.resize_with(pane_count, Vec::new);
+        retained.drawing_segments.truncate(pane_count);
         let initial_build = !retained.initialized;
         for (pi, pane) in self.panes.iter().enumerate() {
             let top_px = (pane.top * vpr).round().max(0.0) as u32;
@@ -1603,14 +1681,20 @@ impl ChartEngine {
             if drawings_dirty {
                 cache.drawings.prims.clear();
                 cache.drawings.points.clear();
-                self.build_drawings_frame(
+                cache.drawing_parts.clear();
+                let mut preview_start = (0usize, 0usize);
+                self.build_drawings_frame_segmented(
                     pi,
                     pane_w_px as i32,
                     hpr,
                     vpr,
                     &mut cache.drawings.prims,
                     &mut cache.drawings.points,
+                    &mut cache.drawing_parts,
+                    &mut preview_start,
                 );
+                cache.drawing_preview_prim_start = preview_start.0;
+                cache.drawing_preview_point_start = preview_start.1;
                 cache.drawings.revision = self.frame_invalidation.drawings;
                 cache.drawings.coordinate_revision = self.frame_invalidation.coordinate;
                 self.frame_build_stats.drawing_rebuilds += 1;
@@ -1782,22 +1866,194 @@ impl ChartEngine {
             append_retained_layer(&cache.under, &mut out.under, &mut out.points);
             append_retained_layer(&cache.cursor_under, &mut out.under, &mut out.points);
             retained.series_segments[pi].clear();
-            for rs in &resolved {
+            retained.drawing_segments[pi].clear();
+            // Pane-local tiers from centralized ordering (ordering.rs). `resolved` is the global
+            // effective series order (bottom→top); filtering preserves each pane's grouping.
+            let explicit = self.series_order_is_explicit();
+            let mut idle_indicators: Vec<usize> = Vec::new();
+            let mut ordinary_idle: Vec<usize> = Vec::new();
+            let mut idle_series: Vec<usize> = Vec::new();
+            let mut active_series_idx: Vec<usize> = Vec::new();
+            for (ri, rs) in resolved.iter().enumerate() {
                 if rs.pane != Some(pi) || !rs.visible {
                     continue;
                 }
-                let start = out.main.len();
-                if let Some(layer) = cache.series_layers.iter().find(|layer| layer.id == rs.id) {
-                    append_retained_layer(&layer.layer, &mut out.main, &mut out.points);
-                    retained.series_segments[pi].push(FrameSeriesSegment {
-                        series_id: Some(rs.id),
+                // Group promotion: hovering/selecting any output promotes the whole indicator
+                // (ordering.rs); use the binding-global max so idle mates move with the active
+                // member instead of splitting the group across tiers.
+                let (group_priority, is_indicator) =
+                    if let Some(binding) = self.indicator_binding_id(rs.id) {
+                        let outputs = self.indicator_group_outputs(binding);
+                        (self.series_group_priority(&outputs), true)
+                    } else {
+                        (self.series_active_priority(rs.id), false)
+                    };
+                if group_priority != crate::ordering::PRIORITY_IDLE {
+                    active_series_idx.push(ri);
+                    continue;
+                }
+                if explicit {
+                    idle_series.push(ri);
+                } else if is_indicator {
+                    idle_indicators.push(ri);
+                } else {
+                    ordinary_idle.push(ri);
+                }
+            }
+            let (idle_drawings, active_drawings) = self.pane_drawing_tiers(pi);
+            // Emit one series (retained geometry) and record its segment + paint mark.
+            // Note: `resolved`, `retained.series_segments`, and `out` borrow disjointly via
+            // indices; the closure form avoids holding `cache` across `self` calls above.
+            let emit_series =
+                |ri: usize,
+                 resolved: &[ResolvedSeries],
+                 cache: &RetainedPane,
+                 out: &mut FramePane,
+                 segments: &mut Vec<FrameSeriesSegment>| {
+                    let rs = &resolved[ri];
+                    let start = out.main.len();
+                    if let Some(layer) = cache.series_layers.iter().find(|layer| layer.id == rs.id)
+                    {
+                        append_retained_layer(&layer.layer, &mut out.main, &mut out.points);
+                        segments.push(FrameSeriesSegment {
+                            series_id: Some(rs.id),
+                            start,
+                            end: out.main.len(),
+                            revision: layer.layer.revision,
+                            coordinate_revision: layer.layer.coordinate_revision,
+                        });
+                    }
+                    out.series_paint_marks.push((rs.id, out.main.len()));
+                };
+            // Emit one drawing part by id (retained geometry reuse, no rebuild on reorder).
+            let emit_drawing =
+                |id: crate::drawings::DrawingId,
+                 cache: &RetainedPane,
+                 out: &mut FramePane,
+                 segments: &mut Vec<FrameDrawingSegment>| {
+                    let Some(part) = cache.drawing_parts.iter().find(|part| part.id == id) else {
+                        return;
+                    };
+                    let start = out.main.len();
+                    append_drawing_part(
+                        &cache.drawings.prims,
+                        &cache.drawings.points,
+                        part.prim_start,
+                        part.prim_end,
+                        part.point_start,
+                        part.point_end,
+                        &mut out.main,
+                        &mut out.points,
+                    );
+                    // Empty drawings (e.g. empty text) emit no prims — no segment needed.
+                    if out.main.len() != start {
+                        segments.push(FrameDrawingSegment {
+                            drawing_id: Some(id),
+                            start,
+                            end: out.main.len(),
+                            revision: cache.drawings.revision,
+                            coordinate_revision: cache.drawings.coordinate_revision,
+                        });
+                    }
+                };
+            if explicit {
+                for id in &idle_drawings {
+                    emit_drawing(*id, cache, out, &mut retained.drawing_segments[pi]);
+                }
+                for ri in idle_series {
+                    emit_series(ri, &resolved, cache, out, &mut retained.series_segments[pi]);
+                }
+            } else {
+                for ri in &idle_indicators {
+                    emit_series(
+                        *ri,
+                        &resolved,
+                        cache,
+                        out,
+                        &mut retained.series_segments[pi],
+                    );
+                }
+                for id in &idle_drawings {
+                    emit_drawing(*id, cache, out, &mut retained.drawing_segments[pi]);
+                }
+                for ri in ordinary_idle {
+                    emit_series(ri, &resolved, cache, out, &mut retained.series_segments[pi]);
+                }
+            }
+            // Active interleaved by priority (selected below hovered below drag/edit), series
+            // before drawings within a tier so annotations stay above promoted series.
+            // `active_series_idx` is already priority-ascending (effective order); split tiers.
+            let mut active_p1_series: Vec<usize> = Vec::new();
+            let mut active_p2_series: Vec<usize> = Vec::new();
+            for ri in active_series_idx {
+                let id = resolved[ri].id;
+                // Group priority (indicator groups move together) decides the tier.
+                let group_priority = if let Some(binding) = self.indicator_binding_id(id) {
+                    let outputs = self.indicator_group_outputs(binding);
+                    self.series_group_priority(&outputs)
+                } else {
+                    self.series_active_priority(id)
+                };
+                if group_priority <= crate::ordering::PRIORITY_SELECTED {
+                    active_p1_series.push(ri);
+                } else {
+                    active_p2_series.push(ri);
+                }
+            }
+            let mut active_p1_drawings: Vec<crate::drawings::DrawingId> = Vec::new();
+            let mut active_p2_drawings: Vec<crate::drawings::DrawingId> = Vec::new();
+            let mut active_p3_drawings: Vec<crate::drawings::DrawingId> = Vec::new();
+            for id in active_drawings {
+                match self.drawing_active_priority(id) {
+                    crate::ordering::PRIORITY_SELECTED => active_p1_drawings.push(id),
+                    crate::ordering::PRIORITY_HOVERED => active_p2_drawings.push(id),
+                    _ => active_p3_drawings.push(id),
+                }
+            }
+            for ri in active_p1_series {
+                emit_series(ri, &resolved, cache, out, &mut retained.series_segments[pi]);
+            }
+            for id in active_p1_drawings {
+                emit_drawing(id, cache, out, &mut retained.drawing_segments[pi]);
+            }
+            for ri in active_p2_series {
+                emit_series(ri, &resolved, cache, out, &mut retained.series_segments[pi]);
+            }
+            for id in active_p2_drawings {
+                emit_drawing(id, cache, out, &mut retained.drawing_segments[pi]);
+            }
+            for id in active_p3_drawings {
+                emit_drawing(id, cache, out, &mut retained.drawing_segments[pi]);
+            }
+            // Trailing creation previews (brush + pending) from retained, topmost among chart
+            // content but still below chrome/trading (protected layers) and clipped to the pane.
+            {
+                let prim_start = cache
+                    .drawing_preview_prim_start
+                    .min(cache.drawings.prims.len());
+                let point_start = cache
+                    .drawing_preview_point_start
+                    .min(cache.drawings.points.len());
+                if prim_start < cache.drawings.prims.len() {
+                    let start = out.main.len();
+                    append_drawing_part(
+                        &cache.drawings.prims,
+                        &cache.drawings.points,
+                        prim_start,
+                        cache.drawings.prims.len(),
+                        point_start,
+                        cache.drawings.points.len(),
+                        &mut out.main,
+                        &mut out.points,
+                    );
+                    retained.drawing_segments[pi].push(FrameDrawingSegment {
+                        drawing_id: None,
                         start,
                         end: out.main.len(),
-                        revision: layer.layer.revision,
-                        coordinate_revision: layer.layer.coordinate_revision,
+                        revision: cache.drawings.revision,
+                        coordinate_revision: cache.drawings.coordinate_revision,
                     });
                 }
-                out.series_paint_marks.push((rs.id, out.main.len()));
             }
             let chrome_start = out.main.len();
             append_retained_layer(&cache.chrome, &mut out.main, &mut out.points);
@@ -1811,7 +2067,10 @@ impl ChartEngine {
             let series_end = out.main.len();
             append_retained_layer(&cache.trading_regions, &mut out.main, &mut out.points);
             let trading_regions_end = out.main.len();
-            append_retained_layer(&cache.drawings, &mut out.main, &mut out.points);
+            // Legacy drawings slot kept empty (early drawings already emitted above in pane-local
+            // order); `drawings_end == trading_regions_end` preserves the trading slice
+            // `drawings_end..trading_end` for existing consumers while new per-drawing segments
+            // carry the retained groups.
             let drawings_end = out.main.len();
             append_retained_layer(&cache.trading, &mut out.main, &mut out.points);
             let trading_end = out.main.len();

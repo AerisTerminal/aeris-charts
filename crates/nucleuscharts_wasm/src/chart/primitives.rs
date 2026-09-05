@@ -257,6 +257,7 @@ impl ChartInner {
         let Some(pane) = self.engine.pane_at_y(y_css) else {
             self.engine.set_hovered_series(None);
             self.engine.set_hovered_text(None);
+            self.engine.set_hovered_drawing(None);
             return result(None, None, None);
         };
         // Absolute bitmap px of the whole chart, exactly like the draw context (module
@@ -309,18 +310,23 @@ impl ChartInner {
             if hit.z_rank() == 2 {
                 self.engine.set_hovered_series(hit.series);
                 self.engine.set_hovered_text(None);
+                self.engine.set_hovered_drawing(None);
                 return result(hit.series, hit.external_id.clone(), hit.cursor.clone());
             }
         }
-        // Engine-owned drawing tools (drawings.rs): they paint in the pane's main layer above
-        // the series and the normal/bottom primitives, so their hit wins over everything
-        // except a `top`-layer primitive (handled above). A drawing hit reports no series and
-        // releases the hovered-series z-bump, and carries the part cursor (`move` on a body,
-        // `pointer` on a selected drawing's anchor handle). A TEXT drawing additionally gets
-        // the hover ring (the engine kind-filters; other kinds have no hover chrome).
+        // Engine-owned drawing tools (drawings.rs): their hit wins over series and
+        // normal/bottom primitives (overlaps stay selectable) except a `top`-layer primitive
+        // (handled above), independent of the pane-local paint order (idle drawings below
+        // price series, active above). A drawing hit reports no series and releases the
+        // hovered-series promotion, and carries the part cursor (`move` on a body, `pointer`
+        // on a selected drawing's anchor handle). Every kind sets generic hover promotion;
+        // a TEXT drawing additionally gets the hover ring (the engine kind-filters; other
+        // kinds have no hover chrome). Hit testing stays on stable z-order so promotion
+        // cannot oscillate hover.
         if let Some(drawing) = self.engine.hit_test_drawing(x_css, y_css) {
             self.engine.set_hovered_series(None);
             self.engine.set_hovered_text(Some(drawing.id));
+            self.engine.set_hovered_drawing(Some(drawing.id));
             return result(
                 None,
                 Some(format!("drawing:{}", drawing.id)),
@@ -328,6 +334,7 @@ impl ChartInner {
             );
         }
         self.engine.set_hovered_text(None);
+        self.engine.set_hovered_drawing(None);
         // Walk the sources topmost-first, accumulating the best series hit (the reference's
         // `isBetterHit` arbitration); reaching the best primitive hit's owning series
         // returns whatever accumulated above it, else the primitive hit.

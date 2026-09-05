@@ -1151,6 +1151,9 @@ impl ChartEngine {
         if self.hovered_text == Some(id) {
             self.hovered_text = None;
         }
+        if self.hovered_drawing == Some(id) {
+            self.hovered_drawing = None;
+        }
         Some((drawing, index))
     }
 
@@ -1199,6 +1202,8 @@ impl ChartEngine {
                 self.selected_drawing = None;
                 self.drawing_drag = None;
                 self.editing_drawing = None;
+                self.hovered_drawing = None;
+                self.hovered_text = None;
             }
         }
     }
@@ -2063,6 +2068,9 @@ impl ChartEngine {
         self.drawing_runtime.borrow_mut().clear();
         self.selected_drawing = None;
         self.drawing_drag = None;
+        self.hovered_drawing = None;
+        self.hovered_text = None;
+        self.editing_drawing = None;
         self.record_drawing_command(DrawingCommand::Clear { drawings });
     }
 
@@ -2158,6 +2166,27 @@ impl ChartEngine {
 
     pub fn hovered_text(&self) -> Option<DrawingId> {
         self.hovered_text
+    }
+
+    /// Mark the drawing of any kind under the host's pointer for temporary hover promotion
+    /// (ordering seam; no hover chrome except the text ring via `hovered_text`). An unknown
+    /// id never sticks. Ordering-only: frame assembly reassembles retained geometry in the
+    /// new order without rebuilding it, and hit testing keeps the stable z-order so
+    /// promotion cannot oscillate hover. Cleared on hover leave, deselection-safe (selection
+    /// is separate), cancellation, removal, and `clear_hover`.
+    pub fn set_hovered_drawing(&mut self, id: Option<DrawingId>) {
+        let valid = id.filter(|&hid| self.drawings.iter().any(|d| d.id == hid));
+        if valid != self.hovered_drawing {
+            // Ordering-only change: retained drawing geometry is reassembled, not rebuilt.
+            // Overlay invalidation covers the text ring transition when the hovered drawing
+            // is text; non-text hover has no chrome but still needs a repaint for promotion.
+            self.invalidate_frame_overlay();
+            self.hovered_drawing = valid;
+        }
+    }
+
+    pub fn hovered_drawing(&self) -> Option<DrawingId> {
+        self.hovered_drawing
     }
 
     /// Select the drawing under pane-relative media px `(x, y)` (the host click pipeline):

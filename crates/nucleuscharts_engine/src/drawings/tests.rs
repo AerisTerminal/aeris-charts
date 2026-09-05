@@ -2677,16 +2677,22 @@ fn text_tool_container_draws_a_crisp_box_behind_the_run() {
             Some(r##"{"text":"boxed","box_color":"rgba(255, 0, 0, 0.5)","box_border_color":"#0000ff","box_border_width":2}"##),
         )
         .unwrap();
-    let (texts, boxes) = text_prims(&mut chart);
+    let (texts, _) = text_prims(&mut chart);
     assert!(texts.iter().any(|(t, _)| t == "boxed"));
-    // Exactly one container fill (candle rects carry their own colors).
-    let container: Vec<_> = boxes
+    // Exactly one container fill (candle rects carry their own colors). Idle drawings paint
+    // below price series (ordering.rs), so the container border is no longer the frame's last
+    // RectFrame — search for it explicitly rather than relying on trailing order.
+    let frame = chart.build_frame();
+    let fills = frame.panes[0]
+        .main
         .iter()
-        .filter(|(fill, _)| *fill == Color::rgba(0xff, 0, 0, 0x80))
-        .collect();
-    assert_eq!(container.len(), 1);
-    let (_, border) = container[0];
-    assert_eq!(*border, Some((2, Color::rgb(0, 0, 0xff))));
+        .filter(|prim| matches!(prim, Prim::Rect { color, .. } if *color == Color::rgba(0xff, 0, 0, 0x80)))
+        .count();
+    assert_eq!(fills, 1);
+    assert!(frame.panes[0].main.iter().any(|prim| matches!(
+        prim,
+        Prim::RectFrame { border, color, .. } if *border == 2 && *color == Color::rgb(0, 0, 0xff)
+    )));
     // Options round-trip the container settings.
     let options: serde_json::Value =
         serde_json::from_str(&chart.drawing_options_json(id).unwrap()).unwrap();
@@ -2985,13 +2991,17 @@ fn candidate_frame_matches_full_reference_across_viewports_and_mutations() {
     let assert_parity = |chart: &ChartEngine| {
         let mut optimized_prims = Vec::new();
         let mut optimized_points = Vec::new();
-        chart.build_drawings_frame(
+        let mut discard_parts = Vec::new();
+        let mut discard_preview = (0usize, 0usize);
+        chart.build_drawings_frame_segmented(
             0,
             chart.pane_w.round() as i32,
             1.0,
             1.0,
             &mut optimized_prims,
             &mut optimized_points,
+            &mut discard_parts,
+            &mut discard_preview,
         );
         let mut reference_prims = Vec::new();
         let mut reference_points = Vec::new();

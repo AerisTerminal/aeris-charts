@@ -4205,6 +4205,323 @@ fn hover_reorders_retained_series_without_rebuilding_geometry() {
 }
 
 #[test]
+fn idle_bollinger_paints_below_candles_and_hover_promotes_the_group() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let n = 30;
+    let times: Vec<f64> = (0..n).map(|i| (i * 3600) as f64).collect();
+    let values: Vec<f64> = (0..n).map(|i| 100.0 + (i as f64).sin() * 5.0).collect();
+    chart
+        .set_series_data(0, &times, &values, &values, &values, &values)
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    // Later-added BB must not cover the primary candles by default.
+    let bb = chart.add_bollinger(0, 5, 2.0);
+    for (i, &id) in bb.iter().enumerate() {
+        let color = ["#ff0000", "#00ff00", "#0000ff"][i];
+        chart.series_entry_mut(id).unwrap().line_color = Some(color.to_string());
+    }
+    chart.build_frame();
+    let main = &chart.build_frame().panes[0].main;
+    let poly_colors: Vec<String> = main
+        .iter()
+        .filter_map(|prim| match prim {
+            Prim::Polyline { color, .. } => Some(format!(
+                "#{:02x}{:02x}{:02x}",
+                color.r(),
+                color.g(),
+                color.b()
+            )),
+            _ => None,
+        })
+        .collect();
+    // Idle BB group (upper, middle, lower in binding order) paints first (below price).
+    assert!(poly_colors
+        .windows(3)
+        .any(|w| w == ["#ff0000", "#00ff00", "#0000ff"]));
+    // Candles are Rect bodies; idle BB polylines all precede the first candle body.
+    let first_rect = main
+        .iter()
+        .position(|prim| matches!(prim, Prim::Rect { .. }))
+        .unwrap();
+    let last_bb = poly_colors.iter().rposition(|c| c == "#0000ff").unwrap();
+    // Map polyline order back to main indices: all three BB strokes precede candle bodies.
+    let mut poly_main_idx = Vec::new();
+    for (idx, prim) in main.iter().enumerate() {
+        if matches!(prim, Prim::Polyline { .. }) {
+            poly_main_idx.push(idx);
+        }
+    }
+    assert!(poly_main_idx[last_bb] < first_rect);
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+    // Hovering any band promotes the complete indicator above price, internal order kept.
+    chart.set_hovered_series(Some(bb[1]));
+    let hovered = chart.build_frame();
+    let main = &hovered.panes[0].main;
+    let poly_colors: Vec<String> = main
+        .iter()
+        .filter_map(|prim| match prim {
+            Prim::Polyline { color, .. } => Some(format!(
+                "#{:02x}{:02x}{:02x}",
+                color.r(),
+                color.g(),
+                color.b()
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        poly_colors[poly_colors.len() - 3..],
+        ["#ff0000", "#00ff00", "#0000ff"]
+    );
+    let first_rect = main
+        .iter()
+        .position(|prim| matches!(prim, Prim::Rect { .. }))
+        .unwrap();
+    let mut poly_main_idx = Vec::new();
+    for (idx, prim) in main.iter().enumerate() {
+        if matches!(prim, Prim::Polyline { .. }) {
+            poly_main_idx.push(idx);
+        }
+    }
+    assert!(poly_main_idx[0] > first_rect, "active BB above candles");
+    // Hover reorder reuses retained geometry (no series rebuild, like the two-series case).
+    chart.build_frame();
+    chart.set_hovered_series(Some(bb[1]));
+    chart.build_frame();
+    assert_eq!(chart.frame_build_stats(), FrameBuildStats::default());
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+    chart.set_hovered_series(None);
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+}
+
+#[test]
+fn line_area_sma_and_ribbon_follow_group_order_across_creation_orders_and_streaming() {
+    for source_kind in [
+        crate::SeriesKind::Line,
+        crate::SeriesKind::Area,
+        crate::SeriesKind::Candlestick,
+    ] {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let n = 60;
+        let times: Vec<f64> = (0..n).map(|i| (i * 3600) as f64).collect();
+        let values: Vec<f64> = (0..n)
+            .map(|i| 100.0 + (i as f64 * 0.3).sin() * 4.0)
+            .collect();
+        chart.series[0].kind = source_kind;
+        chart
+            .set_series_data(0, &times, &values, &values, &values, &values)
+            .unwrap();
+        chart.time_scale.set_width(800.0);
+        chart.fit_content();
+        // Different creation orders: ribbon first, then SMA, vs SMA first — idle tier is
+        // stable within the indicator group (insertion), always below ordinary price.
+        let ribbon = chart.add_ema_ribbon(0, [2, 3, 4, 5, 6]);
+        let sma = chart.add_sma(0, 5).unwrap();
+        let order = chart.effective_series_order();
+        // Idle indicators (ribbon 5 + sma) precede ordinary source 0.
+        assert_eq!(
+            &order[..6],
+            &[ribbon[0], ribbon[1], ribbon[2], ribbon[3], ribbon[4], sma][..]
+        );
+        assert_eq!(order[6], 0);
+        assert_retained_frame_matches_clean_rebuild(&mut chart);
+        // Streaming a new bar preserves the tiering (value-only tail append stays on source).
+        assert!(chart.update_series_bar(0, (n as f64) * 3600.0, [101.0, 102.0, 100.0, 101.5]));
+        assert_eq!(chart.effective_series_order()[6], 0);
+        assert_retained_frame_matches_clean_rebuild(&mut chart);
+    }
+}
+
+#[test]
+fn explicit_series_order_overrides_default_indicator_grouping() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let n = 30;
+    let times: Vec<f64> = (0..n).map(|i| (i * 3600) as f64).collect();
+    let values: Vec<f64> = (0..n).map(|i| 100.0 + i as f64 * 0.1).collect();
+    chart
+        .set_series_data(0, &times, &values, &values, &values, &values)
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    let bb = chart.add_bollinger(0, 5, 2.0);
+    // Default: BB below candles.
+    assert_eq!(chart.effective_series_order(), vec![bb[0], bb[1], bb[2], 0]);
+    // Explicit: BB on top when the host asks (idle paints verbatim).
+    assert!(chart.set_series_order(vec![0, bb[0], bb[1], bb[2]]));
+    assert_eq!(chart.effective_series_order(), vec![0, bb[0], bb[1], bb[2]]);
+    let frame = chart.build_frame();
+    let first_rect = frame.panes[0]
+        .main
+        .iter()
+        .position(|prim| matches!(prim, Prim::Rect { .. }))
+        .unwrap();
+    let last_poly = frame.panes[0]
+        .main
+        .iter()
+        .rposition(|prim| matches!(prim, Prim::Polyline { .. }))
+        .unwrap();
+    assert!(last_poly > first_rect, "explicit BB covers candles");
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+}
+
+#[test]
+fn idle_drawings_sit_below_price_and_active_drawings_promote() {
+    use crate::{DrawingKind, DrawingPoint};
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let n = 10;
+    let times: Vec<f64> = (0..n).map(|i| (i * 3600) as f64).collect();
+    let values = [11.0, 12.0, 11.0, 10.0, 11.0, 12.0, 13.0, 12.0, 11.0, 10.0];
+    chart
+        .set_series_data(0, &times, &values, &values, &values, &values)
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    let id = chart
+        .add_drawing(
+            DrawingKind::TrendLine,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 1.0,
+                    price: 10.0,
+                },
+                DrawingPoint {
+                    logical: 8.0,
+                    price: 13.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    // Idle drawing below candles: its polyline precedes the first candle body.
+    let frame = chart.build_frame();
+    let main = &frame.panes[0].main;
+    let first_poly = main
+        .iter()
+        .position(|prim| matches!(prim, Prim::Polyline { .. }))
+        .unwrap();
+    let first_rect = main
+        .iter()
+        .position(|prim| matches!(prim, Prim::Rect { .. }))
+        .unwrap();
+    assert!(first_poly < first_rect);
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+    // Selection promotes above ordinary price; deselection restores below.
+    chart.set_selected_drawing(Some(id));
+    let frame = chart.build_frame();
+    let main = &frame.panes[0].main;
+    let last_poly = main
+        .iter()
+        .rposition(|prim| matches!(prim, Prim::Polyline { .. }))
+        .unwrap();
+    let last_rect = main
+        .iter()
+        .rposition(|prim| matches!(prim, Prim::Rect { .. }))
+        .unwrap();
+    assert!(last_poly > last_rect);
+    // Selection-only change reuses drawing geometry (overlay for handles only, no drawing
+    // or series rebuilds — ordering reassembles retained segments).
+    chart.build_frame();
+    chart.set_selected_drawing(Some(id));
+    chart.build_frame();
+    assert_eq!(
+        chart.frame_build_stats(),
+        FrameBuildStats {
+            overlay_rebuilds: 1,
+            ..FrameBuildStats::default()
+        }
+    );
+    chart.set_selected_drawing(None);
+    let frame = chart.build_frame();
+    let main = &frame.panes[0].main;
+    let first_poly = main
+        .iter()
+        .position(|prim| matches!(prim, Prim::Polyline { .. }))
+        .unwrap();
+    let first_rect = main
+        .iter()
+        .position(|prim| matches!(prim, Prim::Rect { .. }))
+        .unwrap();
+    assert!(first_poly < first_rect);
+    // Hover promotes too; hover leave restores. Overlaps stay selectable via stable hit.
+    chart.set_hovered_drawing(Some(id));
+    let frame = chart.build_frame();
+    assert!(
+        frame.panes[0]
+            .main
+            .iter()
+            .rposition(|prim| matches!(prim, Prim::Polyline { .. }))
+            .unwrap()
+            > frame.panes[0]
+                .main
+                .iter()
+                .rposition(|prim| matches!(prim, Prim::Rect { .. }))
+                .unwrap()
+    );
+    // Probe the trend body exactly (logical 4.0 lies 3/7 along 1.0→8.0, 10.0→13.0).
+    let x = chart.logical_to_coordinate(4.0).unwrap();
+    let price = 10.0 + 3.0 / 7.0 * 3.0;
+    let y = chart.series_price_to_coordinate(0, price).unwrap();
+    assert!(chart.hit_test_drawing(x, y).is_some_and(|hit| hit.id == id));
+    chart.set_hovered_drawing(None);
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+}
+
+#[test]
+fn separate_panes_hidden_removed_and_incremental_equality_hold() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let n = 30;
+    let times: Vec<f64> = (0..n).map(|i| (i * 3600) as f64).collect();
+    let values: Vec<f64> = (0..n).map(|i| 100.0 + (i as f64).sin()).collect();
+    chart
+        .set_series_data(0, &times, &values, &values, &values, &values)
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    let rsi = chart.add_rsi(0, 5).expect("rsi");
+    assert_eq!(chart.panes.len(), 2);
+    // Separate panes: price pane holds candles only; oscillator holds the indicator.
+    let price_frame = chart.build_frame();
+    assert!(price_frame.panes[0]
+        .main
+        .iter()
+        .any(|prim| matches!(prim, Prim::Rect { .. })));
+    assert!(price_frame.panes[1]
+        .main
+        .iter()
+        .any(|prim| matches!(prim, Prim::Polyline { .. })));
+    // Indicator-only pane retains stable internal ordering (single RSI, trivially stable).
+    assert_eq!(
+        chart.effective_series_order().last(),
+        Some(&0).or(Some(&rsi))
+    );
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+    // Hidden objects paint nowhere but keep saved order; removal prunes and stays equal.
+    chart.set_series_visible(rsi, false);
+    let frame = chart.build_frame();
+    assert!(
+        frame.panes[1].main.is_empty()
+            || !frame.panes[1]
+                .main
+                .iter()
+                .any(|prim| matches!(prim, Prim::Polyline { .. }))
+    );
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+    chart.set_series_visible(rsi, true);
+    assert!(chart.remove_series(rsi));
+    assert!(!chart.series_order().contains(&rsi));
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+    // Second ordinary series in the price pane follows stable ordinary order.
+    let other = chart.add_series(crate::SeriesKind::Line);
+    chart
+        .set_series_data(other, &times, &values, &values, &values, &values)
+        .unwrap();
+    assert_eq!(chart.series_order(), &[0, other]);
+    assert_retained_frame_matches_clean_rebuild(&mut chart);
+}
+
+#[test]
 fn current_bar_rebuilds_only_its_series_when_the_scale_range_is_unchanged() {
     let mut chart = retained_two_series_chart();
     chart.build_frame();

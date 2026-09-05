@@ -612,6 +612,8 @@ impl ChartEngine {
         self.pending_drawing = None;
         self.brush_capture = None;
         self.editing_drawing = None;
+        self.hovered_drawing = None;
+        self.hovered_text = None;
         #[cfg(not(target_arch = "wasm32"))]
         if let (Some(profile), Some(started)) = (profile.as_deref_mut(), semantic_started) {
             profile.semantic_install_ns =

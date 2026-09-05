@@ -59,9 +59,14 @@ impl ChartEngine {
         }
     }
 
-    /// Emit the viewport candidates bound to `pane_index` in canonical z-order plus the
-    /// in-progress creation preview. Drawings on stale panes draw nowhere.
-    pub(crate) fn build_drawings_frame(
+    /// Segmented committed build for retained reassembly: stable z-order committed drawings,
+    /// recording each emitted drawing's prim/point range in `parts` (stable z-order) and the
+    /// trailing preview (brush + pending) start in `preview_start` (prim, point). Previews
+    /// always trail committed so assembly can place them topmost among chart content.
+    /// Ordering.rs reassembles these parts idle-below / active-above without rebuilding
+    /// geometry on hover/selection. Drawings on stale panes draw nowhere.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn build_drawings_frame_segmented(
         &self,
         pane_index: usize,
         pane_w_px: i32,
@@ -69,7 +74,10 @@ impl ChartEngine {
         vpr: f64,
         out: &mut Vec<Prim>,
         points: &mut Vec<[f32; 2]>,
+        parts: &mut Vec<super::RetainedDrawingPart>,
+        preview_start: &mut (usize, usize),
     ) {
+        parts.clear();
         if self.drawing_runtime.borrow().pane_count(pane_index) <= 20 {
             for drawing in &self.drawings {
                 if drawing.pane_index != pane_index {
@@ -82,8 +90,17 @@ impl ChartEngine {
                     .into_iter()
                     .map(|(x, y)| (x * hpr, y * vpr))
                     .collect::<Vec<_>>();
+                let prim_start = out.len();
+                let point_start = points.len();
                 self.build_drawing_prims(drawing, &px, pane_w_px, vpr, out, points);
                 self.build_drawing_text(drawing, &px, pane_w_px, vpr, out);
+                parts.push(super::RetainedDrawingPart {
+                    id: drawing.id,
+                    prim_start,
+                    prim_end: out.len(),
+                    point_start,
+                    point_end: points.len(),
+                });
             }
         } else {
             let candidates = self.take_drawing_candidates(pane_index, None);
@@ -105,13 +122,23 @@ impl ChartEngine {
                     .iter()
                     .map(|&(x, y)| (x * hpr, y * vpr))
                     .collect::<Vec<_>>();
+                let prim_start = out.len();
+                let point_start = points.len();
                 self.build_drawing_prims(drawing, &px, pane_w_px, vpr, out, points);
                 self.build_drawing_text(drawing, &px, pane_w_px, vpr, out);
+                parts.push(super::RetainedDrawingPart {
+                    id: drawing.id,
+                    prim_start,
+                    prim_end: out.len(),
+                    point_start,
+                    point_end: points.len(),
+                });
                 runtime.record_visible();
             }
             drop(runtime);
             self.recycle_drawing_candidates(candidates);
         }
+        *preview_start = (out.len(), points.len());
         // Live brush stroke: the decimated points so far paint as the same smooth curve the
         // commit will store, so what the user sees while dragging is what they get.
         if let Some(capture) = self.brush_capture() {
