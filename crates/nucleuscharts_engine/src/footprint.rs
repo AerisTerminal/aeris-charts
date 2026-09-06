@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use nucleuscharts_core::model::data_layer::{SeriesId, SeriesIdError};
 use nucleuscharts_core::model::data_validation::{MAX_SAFE_VALUE, MIN_SAFE_VALUE};
+use nucleuscharts_core::style::MARKET_UP_RGB;
 use nucleuscharts_render::color::Color;
 
 use crate::{ChartEngine, PriceFormatKind, SeriesKind, SeriesPriceFormat};
@@ -130,13 +131,18 @@ impl Default for FootprintVisualOptions {
             cell_mode: FootprintCellMode::BidAsk,
             font_size: 11.0,
             bid_color: Color::rgba(239, 83, 80, 70),
-            ask_color: Color::rgba(38, 166, 154, 70),
-            positive_delta_color: Color::rgba(38, 166, 154, 110),
+            ask_color: Color::rgba(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2, 70),
+            positive_delta_color: Color::rgba(
+                MARKET_UP_RGB.0,
+                MARKET_UP_RGB.1,
+                MARKET_UP_RGB.2,
+                110,
+            ),
             negative_delta_color: Color::rgba(239, 83, 80, 110),
             text_color: None,
             poc_color: Color::rgb(255, 193, 7),
             stacked_bid_color: Color::rgb(255, 82, 82),
-            stacked_ask_color: Color::rgb(0, 230, 118),
+            stacked_ask_color: Color::rgb(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2),
             show_bar_summary: true,
         }
     }
@@ -1246,6 +1252,22 @@ mod tests {
             conditions: 0,
             session_id: Some(1),
         }
+    }
+
+    #[test]
+    fn default_positive_footprint_roles_share_the_market_up_hue() {
+        let visual = FootprintVisualOptions::default();
+        let market_up = (MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2);
+        for color in [
+            visual.ask_color,
+            visual.positive_delta_color,
+            visual.stacked_ask_color,
+        ] {
+            assert_eq!((color.r(), color.g(), color.b()), market_up);
+        }
+        assert_eq!(visual.ask_color.a(), 70);
+        assert_eq!(visual.positive_delta_color.a(), 110);
+        assert_eq!(visual.stacked_ask_color.a(), 255);
     }
 
     #[test]

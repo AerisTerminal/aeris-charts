@@ -60,6 +60,7 @@ test("tick-driven footprint API preserves delta path, POC, and stacked imbalance
     const final = footprint.footprint_bar(0);
     return {
       type: footprint.series_type(),
+      options: footprint.options(),
       first,
       final,
       bars: footprint.footprint_bars().length,
@@ -70,6 +71,9 @@ test("tick-driven footprint API preserves delta path, POC, and stacked imbalance
   });
 
   expect(result.type).toBe("footprint");
+  expect(result.options.ask_color).toMatch(/^rgba\(8,153,129,/);
+  expect(result.options.positive_delta_color).toMatch(/^rgba\(8,153,129,/);
+  expect(result.options.stacked_ask_color).toBe("#089981");
   expect(result.bars).toBe(1);
   expect(result.first).toMatchObject({
     bid_volume: 100,

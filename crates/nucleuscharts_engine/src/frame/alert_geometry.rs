@@ -23,10 +23,12 @@ pub(crate) fn alert_color(status: AlertLineStatus) -> Color {
     }
 }
 
-/// Fraction of the create chip the host icon fills when one is installed.
+/// Fraction of the create chip occupied by the host icon's SVG viewport.
+/// The asset already carries its own optical padding inside that viewport, so
+/// shrinking it again would push its stroke below one CSS pixel at 1x DPR.
 /// The TypeScript rasterizer sizes its pixels from
 /// `alert_create_icon_css_size`, so both sides agree without duplicating this.
-pub(crate) const CREATE_ICON_FRACTION: f64 = 0.8;
+pub(crate) const CREATE_ICON_FRACTION: f64 = 1.0;
 
 impl ChartEngine {
     pub(crate) fn alert_create_chip(&self) -> Option<AlertCreateChip> {

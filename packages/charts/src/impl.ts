@@ -2437,6 +2437,18 @@ function parse_alert_create_icon(): alert_create_icon_geometry | null {
     const paths = Array.from(svg.querySelectorAll("path[d]"), (path) =>
       new Path2D(path.getAttribute("d") ?? ""),
     );
+    for (const circle of svg.querySelectorAll("circle[cx][cy][r]")) {
+      const cx = Number(circle.getAttribute("cx"));
+      const cy = Number(circle.getAttribute("cy"));
+      const radius = Number(circle.getAttribute("r"));
+      if (![cx, cy, radius].every(Number.isFinite) || radius <= 0) {
+        cached_alert_create_icon_geometry = null;
+        return null;
+      }
+      const path = new Path2D();
+      path.arc(cx, cy, radius, 0, Math.PI * 2);
+      paths.push(path);
+    }
     const stroke_width = Number(svg.getAttribute("stroke-width"));
     if (paths.length === 0 || !Number.isFinite(stroke_width) || stroke_width <= 0) {
       cached_alert_create_icon_geometry = null;

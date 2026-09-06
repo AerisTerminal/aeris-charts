@@ -729,9 +729,9 @@ mod tests {
         assert!(!chart.frame_requires_axis());
         assert_eq!(axis.images.len(), 1);
         let icon = &axis.images[0];
-        let side = chip.size * 0.8;
-        assert!((icon.x - (chip.x + chart.pane_left + chip.size * 0.1)).abs() < 1e-9);
-        assert!((icon.y - (chip.y - chip.size * 0.4)).abs() < 1e-9);
+        let side = chip.size;
+        assert!((icon.x - (chip.x + chart.pane_left)).abs() < 1e-9);
+        assert!((icon.y - (chip.y - chip.size / 2.0)).abs() < 1e-9);
         assert!((icon.width - side).abs() < 1e-9);
         assert!((icon.height - side).abs() < 1e-9);
         assert_eq!((icon.image.width, icon.image.height), (2, 2));
