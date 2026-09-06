@@ -3480,8 +3480,9 @@ fn boxed_axis_labels_select_the_axis_facing_corners() {
         .expect("crosshair price label");
     assert_eq!(price.background_corners, AxisLabelCorners::RIGHT);
     assert_eq!(price.color, Color::rgb(0, 0, 0));
-    let (price_x, ..) = price.background.expect("boxed crosshair price label");
+    let (price_x, _, _, price_h, _) = price.background.expect("boxed crosshair price label");
     assert_eq!(price_x, chart.pane_left + chart.pane_w);
+    assert_eq!(price_h, 19.0);
     let time = labels
         .iter()
         .find(|l| l.midpoint == AxisTextMidpoint::StableTime)
@@ -3605,17 +3606,24 @@ fn boxed_labels_begin_beyond_the_axis_border_at_every_dpr() {
         let border_w = 1f64.max(dpr.floor()) as i32;
         let price_border = ((chart.pane_left + chart.pane_w) * dpr).round() as i32;
         let title_box = primitives.iter().find_map(|primitive| match primitive {
-            Prim::RoundRect { x, w, fill, .. } if *x < price_border as f32 && *fill == LINE => {
-                Some((*x, *w))
-            }
+            Prim::RoundRect {
+                x, w, radii, fill, ..
+            } if *x < price_border as f32 && *fill == LINE => Some((*x, *w, *radii)),
             _ => None,
         });
-        let (title_x, title_w) = title_box.expect("title chip primitive");
+        let (title_x, title_w, title_radii) = title_box.expect("title chip primitive");
         assert_eq!(
             title_x + title_w,
             price_border as f32,
             "title chip must end at the border with no overlap or surface gap at dpr {dpr}"
         );
+        assert!(title_radii
+            .into_iter()
+            .filter(|radius| *radius > 0.0)
+            .all(|radius| {
+                (radius - crate::axis_metrics::AxisMetrics::TAG_RADIUS as f32 * dpr as f32).abs()
+                    < 1e-4
+            }));
         assert!(
             primitives.iter().any(|primitive| matches!(
                 primitive,
@@ -3885,7 +3893,8 @@ fn compact_axis_fixture_strips_and_tags_share_metrics_across_dpr() {
         };
         assert_eq!(label.font_scale, expected, "scale for {:?}", label.text);
     }
-    // Boxed price-side tags share one chrome: 12px around the measured advance.
+    // Boxed price-side tags share one horizontal chrome: 12px around the measured advance.
+    // Ordinary tags remain 15px high; only the transient crosshair Y tag is 19px.
     for label in labels_dpr1.iter().filter(|l| {
         l.background.is_some()
             && l.midpoint == AxisTextMidpoint::Label
@@ -3893,9 +3902,16 @@ fn compact_axis_fixture_strips_and_tags_share_metrics_across_dpr() {
             && l.align != AxisTextAlign::Center
             && l.text != "00:50"
     }) {
-        let (_, _, w, h, _) = label.background.expect("boxed");
+        let (_, _, w, h, background) = label.background.expect("boxed");
         assert_eq!(w, 12.0 + label.text.len() as f64 * 7.0);
-        assert_eq!(h, 15.0);
+        assert_eq!(
+            h,
+            if background == CROSSHAIR_LABEL_BG {
+                19.0
+            } else {
+                15.0
+            }
+        );
     }
     // Countdown rows share the price width at 14px height.
     let countdown = labels_dpr1

@@ -2299,7 +2299,7 @@ impl ChartEngine {
                         scale.price_to_logical_value(price, base_value),
                     );
                     let width = AxisMetrics::price_tag_width(measure(&text, false));
-                    let height = metrics.price_tag_height();
+                    let height = metrics.crosshair_price_tag_height();
                     let (label_x, align, background_x) = if side == PriceScaleSide::Left {
                         (
                             strip_x + strip_width - AxisMetrics::PRICE_TEXT_INSET,

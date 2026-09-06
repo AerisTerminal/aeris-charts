@@ -72,8 +72,10 @@ Axis chrome is engine-owned and compact: axis-attached text resolves to 11/12 of
 (10 px), scaling proportionally with larger fonts. The price strip is the widest required text plus
 1 px border, 3 px tick, and 4 px padding on each side; the time strip is the axis text plus border,
 tick, and vertical padding, snapped to an even CSS-pixel height (22 px by default). Price tags are
-axis text plus 2 px padding above and below (15 px), countdown rows are countdown text plus the same
-padding (14 px), and time tags fit the strip height with 6 px horizontal padding per side. Tick
+axis text plus 2 px padding above and below (15 px), while the crosshair Y-axis tag alone adds 2 px
+per side (19 px); countdown rows are countdown text plus 2 px padding per side (14 px), and time tags
+fit the strip height with 6 px horizontal padding per side. Axis-attached price, time, drawing,
+alert, and live-value chips share a 1.5 CSS-pixel corner radius. Tick
 density, collision spacing, drag bounds, and crosshair placement derive from the same metrics, and
 hosts measure axis strings at the axis size and countdown strings at the countdown size with matching
 weight. Font, DPR, formatter, and minimum-dimension changes invalidate measurements, retained labels,

@@ -62,6 +62,13 @@ impl AxisMetrics {
         self.axis + 2.0 * 2.0
     }
 
+    /// Crosshair price-tag height: the ordinary price tag plus 2 px of additional padding on
+    /// both sides (19 CSS px by default), matching its distinct reference treatment without
+    /// changing any other price-attached chip.
+    pub fn crosshair_price_tag_height(&self) -> f64 {
+        self.price_tag_height() + 4.0
+    }
+
     /// Countdown row height: countdown text plus 2 px padding above and below (14 CSS px by
     /// default).
     pub fn countdown_row_height(&self) -> f64 {
@@ -82,6 +89,9 @@ impl AxisMetrics {
 
     /// Time-tag horizontal padding per side; tags fit the resolved time-strip height.
     pub const TIME_TAG_PAD_X: f64 = 6.0;
+
+    /// Shared corner radius for axis-attached price, time, drawing, alert, and live-value chips.
+    pub const TAG_RADIUS: f64 = 1.5;
 
     /// Tick stub length painted at the strip edge.
     pub const TICK_LENGTH: f64 = 3.0;
@@ -160,8 +170,10 @@ mod tests {
         // Price strip chrome: 1 border + 3 tick + 4 + 4 padding.
         assert_eq!(AxisMetrics::PRICE_CHROME, 12.0);
         assert_eq!(AxisMetrics::PRICE_TEXT_INSET, 8.0);
-        // Price tags: 11 + 2 + 2. Countdown rows: 10 + 2 + 2.
+        // Price tags: 11 + 2 + 2. Crosshair price tags add 2 px per side.
+        // Countdown rows: 10 + 2 + 2.
         assert_eq!(metrics.price_tag_height(), 15.0);
+        assert_eq!(metrics.crosshair_price_tag_height(), 19.0);
         assert_eq!(metrics.countdown_row_height(), 14.0);
         // Time strip: 11 + 1 + 3 + 3 + 3 = 21, even-snapped to 22.
         assert_eq!(metrics.time_strip_height(), 22.0);
@@ -171,6 +183,7 @@ mod tests {
         assert_eq!(AxisMetrics::price_strip_width(0.0, 64.0), 64.0);
         assert_eq!(AxisMetrics::price_tag_width(35.0), 47.0);
         assert_eq!(AxisMetrics::time_tag_width(40.0), 52.0);
+        assert_eq!(AxisMetrics::TAG_RADIUS, 1.5);
         assert_eq!(AxisMetrics::TICK_LENGTH, 3.0);
     }
 
@@ -180,6 +193,10 @@ mod tests {
         assert_eq!(metrics.axis, 20.0 * 11.0 / 12.0);
         assert_eq!(metrics.countdown, 20.0 * 10.0 / 12.0);
         assert_eq!(metrics.price_tag_height(), 20.0 * 11.0 / 12.0 + 4.0);
+        assert_eq!(
+            metrics.crosshair_price_tag_height(),
+            20.0 * 11.0 / 12.0 + 8.0
+        );
         assert_eq!(metrics.countdown_row_height(), 20.0 * 10.0 / 12.0 + 4.0);
         let height = metrics.time_strip_height();
         assert_eq!(height % 2.0, 0.0, "time strip stays even-snapped");

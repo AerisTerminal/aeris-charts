@@ -1,5 +1,8 @@
 use super::*;
-use crate::{axis_metrics::AXIS_FONT_SCALE, AlertLineStatus, AlertPriceScale, PriceScaleSide};
+use crate::{
+    axis_metrics::{AxisMetrics, AXIS_FONT_SCALE},
+    AlertLineStatus, AlertPriceScale, PriceScaleSide,
+};
 
 const ALERT_ACTIVE: Color = PRIMARY;
 const ALERT_TRIGGERED: Color = Color::rgb(0xf5, 0xa6, 0x23);
@@ -58,7 +61,7 @@ impl ChartEngine {
         } else {
             raw_price
         };
-        let size = self.axis_metrics().price_tag_height();
+        let size = self.axis_metrics().crosshair_price_tag_height();
         let full_x = if side == PriceScaleSide::Right {
             strip_x - size
         } else {
@@ -263,7 +266,7 @@ impl ChartEngine {
         // The badge shares the price tag's height so the pair reads as one attached control.
         let size = self.axis_metrics().price_tag_height();
         let left = (self.pane_w - size).max(0.0);
-        let radius = 2.0 * vpr as f32;
+        let radius = AxisMetrics::TAG_RADIUS as f32 * vpr as f32;
         out.push(Prim::RoundRect {
             x: (left * hpr) as f32,
             y: ((y - size / 2.0) * vpr) as f32,

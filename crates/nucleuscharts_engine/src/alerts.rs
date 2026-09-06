@@ -334,7 +334,7 @@ impl ChartEngine {
     /// both sides agree through this one value.
     pub fn alert_create_icon_css_size(&self) -> f64 {
         use crate::frame::alert_geometry::CREATE_ICON_FRACTION;
-        self.axis_metrics().price_tag_height() * CREATE_ICON_FRACTION
+        self.axis_metrics().crosshair_price_tag_height() * CREATE_ICON_FRACTION
     }
 
     pub fn take_alert_create_requests(&mut self) -> Vec<AlertCreateRequest> {

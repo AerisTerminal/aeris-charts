@@ -75,10 +75,10 @@ test("crosshair plus icon raster follows browser zoom DPR", async ({ page }) => 
     return { dpr1, dpr2 };
   });
 
-  // Compact axes: default font 12 => 11px axis text => 15px chip. The SVG
+  // Compact axes: default font 12 => 11px axis text => 19px crosshair chip. The SVG
   // viewport fills that box because the supplied artwork already contains its
   // own optical padding; a second 0.8 shrink makes its stroke subpixel at 1x.
   // Its intrinsic bitmap must match that destination at each DPR instead of
   // remaining a fixed 3x raster.
-  expect(sizes).toEqual({ dpr1: 15, dpr2: 30 });
+  expect(sizes).toEqual({ dpr1: 19, dpr2: 38 });
 });

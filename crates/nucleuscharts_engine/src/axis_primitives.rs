@@ -295,7 +295,7 @@ impl ChartEngine {
                         });
                     } else {
                         let corners = label.background_corners;
-                        let radius = (2.0 * dpr) as f32;
+                        let radius = (AxisMetrics::TAG_RADIUS * dpr) as f32;
                         output.push(Prim::RoundRect {
                             x: bx as f32,
                             y: by as f32,
@@ -348,7 +348,7 @@ impl ChartEngine {
                     });
                 } else {
                     let corners = label.background_corners;
-                    let radius = (2.0 * dpr) as f32;
+                    let radius = (AxisMetrics::TAG_RADIUS * dpr) as f32;
                     output.push(Prim::RoundRect {
                         x: bx as f32,
                         y: by as f32,
