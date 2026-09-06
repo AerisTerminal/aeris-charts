@@ -473,7 +473,7 @@ pub fn translucent_rects(dpr: f32) -> Fixture {
 /// **Opaque antialiased geometry.** The mirror of [`translucent_rects`]: isolates *antialiasing* from
 /// alpha compositing. Every prim is fully opaque, but all are non-axis-aligned shapes whose edges a
 /// coverage-based rasterizer antialiases. GPUI strokes/discs/rings carry their own 1 px Loop-Blinn
-/// coverage fringe (see `geometry::edge_st`), so both sides antialias; the residual difference is
+/// coverage transition (see `geometry::edge_st`), so both sides antialias; the residual difference is
 /// the two rasterizers' edge-coverage ramps, not a missing AA pass. Plain triangles stay
 /// hard-edged on both sides.
 pub fn opaque_aa(dpr: f32) -> Fixture {

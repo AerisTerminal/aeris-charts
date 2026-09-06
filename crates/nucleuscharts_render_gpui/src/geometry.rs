@@ -7,8 +7,8 @@
 //!   tessellation, and extrudes strokes/discs/rings itself with a per-vertex Loop-Blinn coverage
 //!   encoding ([`edge_st`]): GPUI's path pass cannot rely on MSAA (its sample count can fall back
 //!   to 1x on Linux), so the same geometry the WebGPU backend's 4x MSAA target smooths carries its
-//!   own 1 px coverage fade here. The fade is an *exterior* band — solid interior out to the
-//!   nominal edge, then a 1 px strip whose `st` ramp is exact by construction (see [`edge_st`]).
+//!   own coverage fade here. Polyline transitions straddle their nominal edges and keep integrated
+//!   width exact; shape edges retain their exterior encoding (see [`edge_st`]).
 //!
 //! Uses Nucleus's coordinate, bar-width, and snapping calculations.
 
@@ -185,6 +185,16 @@ const FADE_IN_ST: [f32; 2] = edge_st(0.0);
 /// `st` one device px outside a nominal exterior edge: coverage reaches zero exactly here.
 const FADE_OUT_ST: [f32; 2] = edge_st(FADE_PX);
 
+/// Polyline coverage is centered on the nominal stroke edge. Keeping `s` constant is required by
+/// GPUI's Windows path shader: that backend takes any triangle with a varying `s` derivative down
+/// its solid branch. With `s = 0` and `t = -distance`, `s² - t` is the signed device-pixel
+/// distance directly on every platform.
+const STROKE_AA_HALF_PX: f32 = 0.5;
+
+const fn stroke_distance_st(distance: f32) -> [f32; 2] {
+    [0.0, -distance]
+}
+
 /// Reusable tessellation buffers, owned by the renderer and cleared (never freed) per prim.
 ///
 /// Tessellation writes into caller-provided `Vec`s. Allocating those fresh per prim made scene
@@ -231,8 +241,8 @@ fn slice_into(out: &mut Vec<LinePoint>, points: &[[f32; 2]], first: u32, count: 
     }));
 }
 
-/// Tessellate a solid polyline stroke into `pool` with a 1 px coverage fringe on every exterior
-/// edge. Returns a zero-length range for a run with fewer than two points, which the caller
+/// Tessellate a solid polyline stroke into `pool` with a 1 px coverage transition centered on every
+/// nominal edge. Returns a zero-length range for a run with fewer than two points, which the caller
 /// reports as a dropped prim.
 pub(crate) fn polyline_mesh(
     scratch: &mut Scratch,
@@ -257,9 +267,9 @@ pub(crate) fn polyline_mesh(
     stroke_aa_into(pool, expanded, width)
 }
 
-/// Extrude a polyline stroke into anti-aliased triangles: every segment becomes a solid
-/// half-width core out to the nominal edge plus an exterior 1 px fade band whose coverage ramp is
-/// exact (see [`edge_st`]), interior vertices get a round join where the turn opens a visible
+/// Extrude a polyline stroke into anti-aliased triangles: every segment becomes a solid core ending
+/// half a device pixel inside the nominal edge plus a centered 1 px transition, interior vertices
+/// get a round join where the turn opens a visible
 /// wedge (same threshold as the shared tessellator), and both ends get a fading butt-cap strip.
 fn stroke_aa_into(pool: &mut Vec<MeshVertex>, pts: &[LinePoint], width: f32) -> (u32, u32) {
     let first = pool.len() as u32;
@@ -280,39 +290,52 @@ fn stroke_aa_into(pool: &mut Vec<MeshVertex>, pts: &[LinePoint], width: f32) -> 
         }
         let dir = [dx / len, dy / len];
         let n = [-dir[1], dir[0]];
+        let core_half = (half - STROKE_AA_HALF_PX).max(0.0);
+        let outer_half = half + STROKE_AA_HALF_PX;
+        let fade_in_st = stroke_distance_st(core_half - half);
+        let fade_out_st = stroke_distance_st(STROKE_AA_HALF_PX);
         // Butt-cap fade at the stroke's start, past the first endpoint.
         if prev_dir.is_none() {
             cap_strip(pool, a, [-dir[0], -dir[1]], n, half);
         }
-        // Solid core spanning the full width.
-        let la = [a[0] + n[0] * half, a[1] + n[1] * half];
-        let lb = [b[0] + n[0] * half, b[1] + n[1] * half];
-        let ra = [a[0] - n[0] * half, a[1] - n[1] * half];
-        let rb = [b[0] - n[0] * half, b[1] - n[1] * half];
-        push_tri_st(pool, la, SOLID_ST, lb, SOLID_ST, rb, SOLID_ST);
-        push_tri_st(pool, la, SOLID_ST, rb, SOLID_ST, ra, SOLID_ST);
-        // Exterior 1 px fade band on each side.
+        // The fully covered core stops half a device pixel inside the nominal edge. The one-pixel
+        // transition then straddles that edge, keeping integrated coverage equal to `width`.
+        if core_half > 0.0 {
+            let la = [a[0] + n[0] * core_half, a[1] + n[1] * core_half];
+            let lb = [b[0] + n[0] * core_half, b[1] + n[1] * core_half];
+            let ra = [a[0] - n[0] * core_half, a[1] - n[1] * core_half];
+            let rb = [b[0] - n[0] * core_half, b[1] - n[1] * core_half];
+            push_tri_st(pool, la, SOLID_ST, lb, SOLID_ST, rb, SOLID_ST);
+            push_tri_st(pool, la, SOLID_ST, rb, SOLID_ST, ra, SOLID_ST);
+        }
+        // Centered 1 px coverage transition on each side.
         for side in [1.0f32, -1.0] {
-            let in_a = [a[0] + n[0] * half * side, a[1] + n[1] * half * side];
-            let in_b = [b[0] + n[0] * half * side, b[1] + n[1] * half * side];
+            let in_a = [
+                a[0] + n[0] * core_half * side,
+                a[1] + n[1] * core_half * side,
+            ];
+            let in_b = [
+                b[0] + n[0] * core_half * side,
+                b[1] + n[1] * core_half * side,
+            ];
             let out_a = [
-                a[0] + n[0] * (half + FADE_PX) * side,
-                a[1] + n[1] * (half + FADE_PX) * side,
+                a[0] + n[0] * outer_half * side,
+                a[1] + n[1] * outer_half * side,
             ];
             let out_b = [
-                b[0] + n[0] * (half + FADE_PX) * side,
-                b[1] + n[1] * (half + FADE_PX) * side,
+                b[0] + n[0] * outer_half * side,
+                b[1] + n[1] * outer_half * side,
             ];
             push_tri_st(
                 pool,
                 out_a,
-                FADE_OUT_ST,
+                fade_out_st,
                 out_b,
-                FADE_OUT_ST,
+                fade_out_st,
                 in_b,
-                FADE_IN_ST,
+                fade_in_st,
             );
-            push_tri_st(pool, out_a, FADE_OUT_ST, in_b, FADE_IN_ST, in_a, FADE_IN_ST);
+            push_tri_st(pool, out_a, fade_out_st, in_b, fade_in_st, in_a, fade_in_st);
         }
         // Round join at the shared interior vertex where the turn is visible.
         if let Some(prev) = prev_dir {
@@ -333,50 +356,48 @@ fn stroke_aa_into(pool: &mut Vec<MeshVertex>, pts: &[LinePoint], width: f32) -> 
     (first, pool.len() as u32 - first)
 }
 
-/// The 1 px fade band across a butt cap: from the cap plane (the solid core's exact edge) to one
-/// pixel past it. The band reaches `half + FADE_PX` along the cap so it meets the side fades at
-/// the corners.
+/// The half-pixel exterior half of the centered coverage transition across a butt cap. It reaches
+/// the side transitions at the corners.
 fn cap_strip(pool: &mut Vec<MeshVertex>, at: [f32; 2], out: [f32; 2], n: [f32; 2], half: f32) {
-    let r = half + FADE_PX;
+    let r = half + STROKE_AA_HALF_PX;
+    let edge_st = stroke_distance_st(0.0);
+    let out_st = stroke_distance_st(STROKE_AA_HALF_PX);
     let in_l = [at[0] + n[0] * r, at[1] + n[1] * r];
     let in_r = [at[0] - n[0] * r, at[1] - n[1] * r];
     let out_l = [
-        at[0] + out[0] * FADE_PX + n[0] * r,
-        at[1] + out[1] * FADE_PX + n[1] * r,
+        at[0] + out[0] * STROKE_AA_HALF_PX + n[0] * r,
+        at[1] + out[1] * STROKE_AA_HALF_PX + n[1] * r,
     ];
     let out_r = [
-        at[0] + out[0] * FADE_PX - n[0] * r,
-        at[1] + out[1] * FADE_PX - n[1] * r,
+        at[0] + out[0] * STROKE_AA_HALF_PX - n[0] * r,
+        at[1] + out[1] * STROKE_AA_HALF_PX - n[1] * r,
     ];
-    push_tri_st(pool, in_l, FADE_IN_ST, in_r, FADE_IN_ST, out_r, FADE_OUT_ST);
-    push_tri_st(
-        pool,
-        in_l,
-        FADE_IN_ST,
-        out_r,
-        FADE_OUT_ST,
-        out_l,
-        FADE_OUT_ST,
-    );
+    push_tri_st(pool, in_l, edge_st, in_r, edge_st, out_r, out_st);
+    push_tri_st(pool, in_l, edge_st, out_r, out_st, out_l, out_st);
 }
 
-/// A coverage-exact round join: a solid fan out to the nominal radius, then a 1 px fade ring past
-/// it so the shader ramps coverage linearly across the outer pixel instead of hard-clipping.
+/// A coverage-exact round join: a solid fan stops half a device pixel inside the nominal radius,
+/// then a 1 px transition straddles it so the requested stroke width is preserved.
 fn join_fan_aa(pool: &mut Vec<MeshVertex>, center: [f32; 2], radius: f32) {
+    let core = (radius - STROKE_AA_HALF_PX).max(0.0);
     let segments = join_segments(radius);
-    let rim = radius + FADE_PX;
+    let rim = radius + STROKE_AA_HALF_PX;
+    let fade_in_st = stroke_distance_st(core - radius);
+    let fade_out_st = stroke_distance_st(STROKE_AA_HALF_PX);
     for i in 0..segments {
         let a0 = i as f32 / segments as f32 * std::f32::consts::TAU;
         let a1 = (i + 1) as f32 / segments as f32 * std::f32::consts::TAU;
         let (c0, s0) = (a0.cos(), a0.sin());
         let (c1, s1) = (a1.cos(), a1.sin());
-        let p0 = [center[0] + radius * c0, center[1] + radius * s0];
-        let p1 = [center[0] + radius * c1, center[1] + radius * s1];
-        push_tri_st(pool, center, SOLID_ST, p0, SOLID_ST, p1, SOLID_ST);
+        let p0 = [center[0] + core * c0, center[1] + core * s0];
+        let p1 = [center[0] + core * c1, center[1] + core * s1];
+        if core > 0.0 {
+            push_tri_st(pool, center, SOLID_ST, p0, SOLID_ST, p1, SOLID_ST);
+        }
         let o0 = [center[0] + rim * c0, center[1] + rim * s0];
         let o1 = [center[0] + rim * c1, center[1] + rim * s1];
-        push_tri_st(pool, p0, FADE_IN_ST, o0, FADE_OUT_ST, o1, FADE_OUT_ST);
-        push_tri_st(pool, p0, FADE_IN_ST, o1, FADE_OUT_ST, p1, FADE_IN_ST);
+        push_tri_st(pool, p0, fade_in_st, o0, fade_out_st, o1, fade_out_st);
+        push_tri_st(pool, p0, fade_in_st, o1, fade_out_st, p1, fade_in_st);
     }
 }
 
@@ -749,8 +770,8 @@ mod tests {
                     );
                     // Past the fade band: never covered.
                     let (ox, oy) = (
-                        px + nx * (half + FADE_PX + 0.25) * side,
-                        py + ny * (half + FADE_PX + 0.25) * side,
+                        px + nx * (half + STROKE_AA_HALF_PX + 0.25) * side,
+                        py + ny * (half + STROKE_AA_HALF_PX + 0.25) * side,
                     );
                     assert!(
                         !covered(&pool, first, count, ox, oy),
@@ -1006,9 +1027,10 @@ mod tests {
     }
 
     #[test]
-    fn stroke_mesh_fades_its_exterior_edges() {
+    fn stroke_mesh_centers_coverage_on_nominal_edges() {
         let mut pool = Vec::new();
-        // One horizontal 4 px segment at y = 10: nominal band [8, 12], fade one pixel outside it.
+        // One horizontal 4 px segment at y = 10: nominal band [8, 12], with a one-pixel
+        // coverage transition centered on each nominal edge.
         let pts = [[0.0f32, 10.0], [20.0, 10.0]];
         let (first, count) = polyline_mesh(
             &mut Scratch::default(),
@@ -1026,18 +1048,29 @@ mod tests {
         );
         let y0 = verts.iter().map(|v| v.y).fold(f32::INFINITY, f32::min);
         let y1 = verts.iter().map(|v| v.y).fold(f32::NEG_INFINITY, f32::max);
-        assert_eq!((y0, y1), (7.0, 13.0), "bounds grow by the 1 px fade band");
-        // The outermost rows sit at signed distance +1 (fully faded); the nominal edge rows carry
-        // the exact zero of the coverage field; the core is solid.
+        assert_eq!(
+            (y0, y1),
+            (7.5, 12.5),
+            "coverage extends half a pixel past each edge"
+        );
+        // Keeping `s` constant avoids GPUI Windows' solid-triangle branch. The transition runs
+        // from -0.5 to +0.5 signed pixels around the nominal edge and the inner core stays solid.
         assert!(verts
             .iter()
-            .any(|v| (v.y - 13.0).abs() < 1e-4 && v.st == FADE_OUT_ST));
+            .any(|v| (v.y - 12.5).abs() < 1e-4 && v.st == stroke_distance_st(STROKE_AA_HALF_PX)));
         assert!(verts
             .iter()
-            .any(|v| (v.y - 12.0).abs() < 1e-4 && v.st == FADE_IN_ST));
+            .any(|v| (v.y - 11.5).abs() < 1e-4 && v.st == stroke_distance_st(-STROKE_AA_HALF_PX)));
         assert!(verts
             .iter()
-            .any(|v| (v.y - 8.0).abs() < 1e-4 && v.st == SOLID_ST));
+            .any(|v| (v.y - 8.5).abs() < 1e-4 && v.st == SOLID_ST));
+        assert!(
+            verts
+                .iter()
+                .filter(|v| v.st != SOLID_ST)
+                .all(|v| v.st[0] == 0.0),
+            "coverage triangles keep s constant so Windows does not force them opaque"
+        );
     }
 
     #[test]

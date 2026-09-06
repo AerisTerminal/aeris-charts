@@ -1063,7 +1063,6 @@ impl Probe {
                 |text, bold| countdown_measure(text, bold),
             );
         }
-        let layout = self.engine.options.get().layout.clone();
         let max_label_width = (self.engine.axis_font_size() + 4.0) * 5.0 / 8.0
             * f64::from(self.engine.tick_mark_max_character_length.max(1));
         let axis_frame = self.engine.build_axis_frame(

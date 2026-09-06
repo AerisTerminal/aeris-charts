@@ -155,9 +155,9 @@ pub enum SceneOp {
 /// `st` feeds the coverage term of GPUI's path shader (`f = s² - t`, `alpha = saturate(0.5 -
 /// f / |∇f|)`). [`SOLID_ST`] marks a fully covered interior vertex (constant `s` → the shader's
 /// zero-gradient solid branch). Edge vertices produced by `geometry`'s anti-aliased tessellators
-/// instead carry a Loop-Blinn signed-distance encoding (`s = d`, `t = d² - d`), which the shader
-/// turns into a 1 px edge fade — the coverage WebGPU gets from its 4x MSAA target, which GPUI's
-/// path pass does not guarantee (its sample count can fall back to 1x on Linux).
+/// instead carry a Loop-Blinn signed-distance encoding, which the shader turns into a 1 px edge
+/// transition — the coverage WebGPU gets from its 4x MSAA target, which GPUI's path pass does not
+/// guarantee (its sample count can fall back to 1x on Linux).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MeshVertex {
     pub x: f32,

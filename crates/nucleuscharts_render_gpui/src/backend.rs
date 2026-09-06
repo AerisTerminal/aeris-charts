@@ -719,7 +719,7 @@ fn matching_pop(plan: &ScenePlan, start: usize, end: usize) -> usize {
 /// Each vertex carries its own `st`: solid interior vertices use `(0, 1)` (GPUI's "solid
 /// interior" convention — the path shader's zero-gradient branch gives full coverage), while
 /// edge vertices produced by [`crate::geometry`]'s anti-aliased tessellators carry a Loop-Blinn
-/// signed-distance encoding the shader turns into a 1 px coverage fade. That reproduces the edge
+/// signed-distance encoding the shader turns into a 1 px coverage transition. That reproduces the edge
 /// smoothing the WebGPU backend gets from its 4x MSAA target, which GPUI's path pass cannot rely
 /// on (its sample count is picked from the surface and can fall back to 1x on Linux).
 fn build_path(
