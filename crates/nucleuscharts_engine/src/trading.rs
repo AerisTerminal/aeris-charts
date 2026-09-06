@@ -720,6 +720,9 @@ impl ChartEngine {
                 continue;
             };
             let distance = (y_css - y).abs();
+            if distance > line_tolerance.max(self.trading_control_height() / 2.0) {
+                continue;
+            }
             let kind = self.trading_order_chip_hit(order, x_css);
             // The control cluster is a chip, not a hairline: over it the marker answers across the
             // chip's full height (and the device's control box, for touch), not the line tolerance.
@@ -753,7 +756,10 @@ impl ChartEngine {
                 continue;
             };
             let distance = (y_css - y).abs();
-            let kind = self.trading_position_chip_hit(x_css);
+            if distance > line_tolerance.max(self.trading_control_height() / 2.0) {
+                continue;
+            }
+            let kind = self.trading_position_chip_hit(position, x_css);
             let tolerance = if kind == TradingHitKind::CancelButton {
                 line_tolerance.max(self.trading_control_height() / 2.0)
             } else {
@@ -1919,7 +1925,7 @@ mod tests {
                     position.average_price,
                     position.price_scale,
                     position.pane_index,
-                    chart.trading_position_cluster_width(),
+                    chart.trading_position_cluster_width(position),
                 )
             }
             TradingObjectId::Order(id) => {
@@ -3144,6 +3150,68 @@ mod tests {
                 ))
                 .count(),
             4
+        );
+    }
+
+    #[test]
+    fn quantity_cell_and_close_hit_follow_the_formatted_text_width() {
+        let mut chart = chart_with_market();
+        chart.set_text_measure(Some(Box::new(|text, _size, _family, _weight, _italic| {
+            text.chars().count() as f64 * 6.0
+        })));
+
+        let quantity_fill_width = |chart: &mut ChartEngine| {
+            let frame = chart.build_frame();
+            let segments = chart.frame_pane_segments(0).unwrap();
+            frame.panes[0].main[segments.drawings_end..segments.trading_end]
+                .iter()
+                .find_map(|primitive| match primitive {
+                    Prim::RoundRect {
+                        x, w, border_width, ..
+                    } if *border_width == 0.0
+                        && (f64::from(*x) - chart.trading_marker_start()).abs() <= 0.5 =>
+                    {
+                        Some(*w)
+                    }
+                    _ => None,
+                })
+                .expect("solid quantity cell")
+        };
+
+        let short = position(PositionSide::Long);
+        chart
+            .set_trading_snapshot(TradingSnapshot {
+                positions: vec![short.clone()],
+                ..TradingSnapshot::default()
+            })
+            .unwrap();
+        let short_cluster = chart.trading_position_cluster_width(&short);
+        let short_fill = quantity_fill_width(&mut chart);
+        let old_close_center =
+            chart.trading_marker_start() + short_cluster - chart.trading_close_width() / 2.0;
+
+        let mut long = short;
+        long.quantity = 123_456.0;
+        chart
+            .set_trading_snapshot(TradingSnapshot {
+                positions: vec![long.clone()],
+                ..TradingSnapshot::default()
+            })
+            .unwrap();
+        let long_cluster = chart.trading_position_cluster_width(&long);
+        let long_fill = quantity_fill_width(&mut chart);
+        assert_eq!(long_fill - short_fill, 24.0);
+        assert_eq!(long_cluster - short_cluster, 24.0);
+        assert_eq!(
+            chart.trading_position_chip_hit(&long, old_close_center),
+            TradingHitKind::PositionLine,
+            "the former close location becomes part of the resized readout"
+        );
+        let new_close_center =
+            chart.trading_marker_start() + long_cluster - chart.trading_close_width() / 2.0;
+        assert_eq!(
+            chart.trading_position_chip_hit(&long, new_close_center),
+            TradingHitKind::CancelButton
         );
     }
 

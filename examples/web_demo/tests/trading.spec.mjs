@@ -88,6 +88,31 @@ test("first-party trading snapshot preserves identity and broker relationships",
   expect(invalid).toEqual({ threw: true, code: "invalid_data", unchanged: true });
 });
 
+test("quantity cells fit their formatted text and move the close hit with them", async ({ page }) => {
+  await open_trading_demo(page);
+  const widths = await page.evaluate(() => {
+    const trading = window.__chart.trading();
+    const snapshot = (quantity) => trading.apply_snapshot({
+      instrument: { quantity_precision: 0 },
+      positions: [{ id: "sized-position", side: "long", average_price: 100, quantity }],
+    });
+    const y = window.__main.price_to_coordinate(100);
+    snapshot(12);
+    const short = window.__close_x("sized-position", y);
+    snapshot(123456);
+    const long = window.__close_x("sized-position", y);
+    return {
+      short,
+      long,
+      long_hit: trading.hit_at(long, y),
+      old_hit: trading.hit_at(short, y),
+    };
+  });
+  expect(widths.long).toBeGreaterThan(widths.short + 20);
+  expect(widths.long_hit).toMatchObject({ id: "sized-position", kind: "cancel_button" });
+  expect(widths.old_hit).toMatchObject({ id: "sized-position", kind: "position_line" });
+});
+
 test("trading lines use dedicated hits and render semantic colors through the shared frame", async ({ page }) => {
   await open_trading_demo(page);
   const probe = await page.evaluate(() => {

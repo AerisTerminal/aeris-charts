@@ -79,7 +79,8 @@ impl<'a> TradingControlCluster<'a> {
     }
 }
 
-const QUANTITY_WIDTH: f64 = 44.0;
+const QUANTITY_PAD_X: f64 = 8.0;
+const MAX_QUANTITY_WIDTH: f64 = 120.0;
 const PNL_WIDTH: f64 = 96.0;
 const ORDER_TYPE_WIDTH: f64 = 92.0;
 /// Separation between the readout chip and the detached close chip.
@@ -256,6 +257,38 @@ impl ChartEngine {
         (self.trading_marker_end() - ORDER_MARKER_SPAN).max(6.0)
     }
 
+    /// Quantity cells fit their formatted text instead of reserving a fixed-width box. The upper
+    /// bound keeps extreme finite magnitudes from expanding a marker without limit.
+    fn trading_quantity_width(&self, text: &str) -> f64 {
+        let layout = &self.options.get().layout;
+        (self.measure_text_run(text, layout.font_size, &layout.font_family, 400, false)
+            + QUANTITY_PAD_X * 2.0)
+            .ceil()
+            .clamp(self.trading_control_height(), MAX_QUANTITY_WIDTH)
+    }
+
+    fn trading_order_quantity_text(&self, order: &crate::WorkingOrder) -> String {
+        let remaining = (order.quantity - order.filled_quantity).max(0.0);
+        if order.filled_quantity > 0.0 {
+            format!(
+                "{}/{}",
+                self.format_trading_quantity(remaining),
+                self.format_trading_quantity(order.quantity)
+            )
+        } else {
+            self.format_trading_quantity(remaining)
+        }
+    }
+
+    fn trading_position_quantity_text(&self, position: &crate::TradingPosition) -> String {
+        let signed_quantity = if position.side == PositionSide::Long {
+            position.quantity
+        } else {
+            -position.quantity
+        };
+        self.format_trading_quantity(signed_quantity)
+    }
+
     /// Width of the second cell: a working order names itself, a protection order reports the PnL
     /// it would realise.
     fn trading_order_detail_width(order: &crate::WorkingOrder) -> f64 {
@@ -267,14 +300,17 @@ impl ChartEngine {
     }
 
     pub(crate) fn trading_order_cluster_width(&self, order: &crate::WorkingOrder) -> f64 {
-        QUANTITY_WIDTH
+        self.trading_quantity_width(&self.trading_order_quantity_text(order))
             + Self::trading_order_detail_width(order)
             + CONTROL_GAP
             + self.trading_close_width()
     }
 
-    pub(crate) fn trading_position_cluster_width(&self) -> f64 {
-        QUANTITY_WIDTH + PNL_WIDTH + CONTROL_GAP + self.trading_close_width()
+    pub(crate) fn trading_position_cluster_width(&self, position: &crate::TradingPosition) -> f64 {
+        self.trading_quantity_width(&self.trading_position_quantity_text(position))
+            + PNL_WIDTH
+            + CONTROL_GAP
+            + self.trading_close_width()
     }
 
     fn trading_cluster_hit(
@@ -305,10 +341,14 @@ impl ChartEngine {
         )
     }
 
-    pub(crate) fn trading_position_chip_hit(&self, x: f64) -> crate::TradingHitKind {
+    pub(crate) fn trading_position_chip_hit(
+        &self,
+        position: &crate::TradingPosition,
+        x: f64,
+    ) -> crate::TradingHitKind {
         self.trading_cluster_hit(
             self.trading_marker_start(),
-            self.trading_position_cluster_width(),
+            self.trading_position_cluster_width(position),
             x,
             crate::TradingHitKind::PositionLine,
         )
@@ -700,12 +740,7 @@ impl ChartEngine {
             if hovered.is_some() {
                 self.push_trading_endpoint(lines, y, position_color, hpr, vpr);
             }
-            let signed_quantity = if position.side == PositionSide::Long {
-                position.quantity
-            } else {
-                -position.quantity
-            };
-            let quantity = self.format_trading_quantity(signed_quantity);
+            let quantity = self.trading_position_quantity_text(position);
             let pnl = position.display_pnl.map_or_else(
                 || "—".to_string(),
                 |value| self.trading_pnl_text(value, position.currency.as_deref()),
@@ -721,7 +756,7 @@ impl ChartEngine {
                 TradingControlSegment {
                     kind: TradingControlSegmentKind::Quantity,
                     text: quantity.as_str(),
-                    width: QUANTITY_WIDTH,
+                    width: self.trading_quantity_width(&quantity),
                     color: position_color,
                     filled: true,
                 },
@@ -832,15 +867,7 @@ impl ChartEngine {
                 self.push_trading_endpoint(lines, y, color, hpr, vpr);
             }
             let remaining = (order.quantity - order.filled_quantity).max(0.0);
-            let quantity = if order.filled_quantity > 0.0 {
-                format!(
-                    "{}/{}",
-                    self.format_trading_quantity(remaining),
-                    self.format_trading_quantity(order.quantity)
-                )
-            } else {
-                self.format_trading_quantity(remaining)
-            };
+            let quantity = self.trading_order_quantity_text(order);
             let kind = match order.kind {
                 crate::OrderKind::Limit => "Limit",
                 crate::OrderKind::Stop => "Stop",
@@ -905,7 +932,7 @@ impl ChartEngine {
                 TradingControlSegment {
                     kind: TradingControlSegmentKind::Quantity,
                     text: quantity.as_str(),
-                    width: QUANTITY_WIDTH,
+                    width: self.trading_quantity_width(&quantity),
                     color,
                     filled: true,
                 },
