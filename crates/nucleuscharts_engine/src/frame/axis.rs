@@ -912,6 +912,15 @@ impl ChartEngine {
             (drawing_label_background, drawing_label_text)
         };
         let metrics = self.axis_metrics();
+        let target = match drawing.price_scale {
+            crate::DrawingPriceScale::Right => PriceScaleTarget::Right,
+            crate::DrawingPriceScale::Left => PriceScaleTarget::Left,
+            crate::DrawingPriceScale::Overlay => PriceScaleTarget::Overlay,
+        };
+        let Some(scale) = self.price_scale_for(drawing.pane_index, target) else {
+            return;
+        };
+        let base = self.drawing_scale_base_for(drawing.pane_index, drawing.price_scale);
         for left_side in [true, false] {
             let visible = if left_side {
                 self.options.get().left_price_scale.visible
@@ -933,7 +942,8 @@ impl ChartEngine {
                 if y < pane.top || y > pane.top + pane.height {
                     continue;
                 }
-                let text = format!("{:.2}", point.price);
+                let logical_price = scale.price_to_logical_value(point.price, base);
+                let text = self.format_tick_value(drawing.pane_index, target, scale, logical_price);
                 let width = AxisMetrics::price_tag_width(measure(&text, false));
                 let height = metrics.price_tag_height();
                 let (x, align, background_x) = if left_side {

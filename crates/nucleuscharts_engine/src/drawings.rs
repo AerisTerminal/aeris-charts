@@ -1288,7 +1288,11 @@ impl ChartEngine {
         self.drawing_scale_base_for(pane_index, DrawingPriceScale::Right)
     }
 
-    fn drawing_scale_base_for(&self, pane_index: usize, target: DrawingPriceScale) -> f64 {
+    pub(crate) fn drawing_scale_base_for(
+        &self,
+        pane_index: usize,
+        target: DrawingPriceScale,
+    ) -> f64 {
         let target = match target {
             DrawingPriceScale::Right => crate::PriceScaleTarget::Right,
             DrawingPriceScale::Left => crate::PriceScaleTarget::Left,

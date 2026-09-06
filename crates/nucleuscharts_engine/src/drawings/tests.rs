@@ -1541,6 +1541,23 @@ fn official_rectangle_preview_commit_and_axis_views_are_engine_owned() {
         .labels
         .iter()
         .any(|label| label.text == "12.25"));
+
+    let applied = chart
+        .series_apply_price_format_json(0, r#"{"type":"price","precision":4,"min_move":0.0001}"#);
+    assert!(applied);
+    let reformatted_axis = chart.build_axis_frame(
+        80.0,
+        |text, _bold| text.len() as f64 * 7.0,
+        |text, _bold| text.len() as f64 * 6.0,
+    );
+    assert!(reformatted_axis
+        .labels
+        .iter()
+        .any(|label| label.text == "10.2500"));
+    assert!(reformatted_axis
+        .labels
+        .iter()
+        .any(|label| label.text == "12.2500"));
     assert_eq!(
         committed_axis
             .labels

@@ -226,6 +226,44 @@ test("all six tools create through the armed-tool click flow", async ({ page }) 
   }
 });
 
+test("rectangle price chips follow a runtime y-scale precision change", async ({ page }) => {
+  await goto_fixture(page);
+  const s = await anchor_spots(page);
+  await page.evaluate(({ l0, l1, p_lo, p_hi }) => {
+    const prototype = CanvasRenderingContext2D.prototype;
+    const original = prototype.fillText;
+    window.__drawing_axis_text = [];
+    prototype.fillText = function (text, ...args) {
+      window.__drawing_axis_text.push(String(text));
+      return original.call(this, text, ...args);
+    };
+    window.__restore_fill_text = () => {
+      prototype.fillText = original;
+    };
+    window.__chart.add_drawing("rectangle", [
+      { logical: l0, price: p_lo },
+      { logical: l1, price: p_hi },
+    ], { show_labels: true });
+  }, s);
+  await settle_frames(page);
+
+  await page.evaluate(() => {
+    window.__drawing_axis_text.length = 0;
+    window.__main.apply_options({
+      price_format: { type: "price", precision: 4, min_move: 0.0001 },
+    });
+  });
+  await settle_frames(page);
+
+  const text = await page.evaluate(() => {
+    const captured = [...window.__drawing_axis_text];
+    window.__restore_fill_text();
+    return captured;
+  });
+  expect(text).toContain(s.p_lo.toFixed(4));
+  expect(text).toContain(s.p_hi.toFixed(4));
+});
+
 test("two-anchor creation previews the pending drawing; Escape cancels it", async ({ page }) => {
   await goto_fixture(page);
   const s = await anchor_spots(page);
