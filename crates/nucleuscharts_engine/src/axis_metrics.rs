@@ -91,7 +91,7 @@ impl AxisMetrics {
     pub const TIME_TAG_PAD_X: f64 = 6.0;
 
     /// Shared corner radius for axis-attached price, time, drawing, alert, and live-value chips.
-    pub const TAG_RADIUS: f64 = 1.5;
+    pub const TAG_RADIUS: f64 = 1.0;
 
     /// Tick stub length painted at the strip edge.
     pub const TICK_LENGTH: f64 = 3.0;
@@ -183,7 +183,7 @@ mod tests {
         assert_eq!(AxisMetrics::price_strip_width(0.0, 64.0), 64.0);
         assert_eq!(AxisMetrics::price_tag_width(35.0), 47.0);
         assert_eq!(AxisMetrics::time_tag_width(40.0), 52.0);
-        assert_eq!(AxisMetrics::TAG_RADIUS, 1.5);
+        assert_eq!(AxisMetrics::TAG_RADIUS, 1.0);
         assert_eq!(AxisMetrics::TICK_LENGTH, 3.0);
     }
 

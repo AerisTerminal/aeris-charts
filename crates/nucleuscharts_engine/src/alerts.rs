@@ -729,9 +729,10 @@ mod tests {
         assert!(!chart.frame_requires_axis());
         assert_eq!(axis.images.len(), 1);
         let icon = &axis.images[0];
-        let side = chip.size;
-        assert!((icon.x - (chip.x + chart.pane_left)).abs() < 1e-9);
-        assert!((icon.y - (chip.y - chip.size / 2.0)).abs() < 1e-9);
+        let side = chip.size * crate::frame::alert_geometry::CREATE_ICON_FRACTION;
+        let inset = (chip.size - side) / 2.0;
+        assert!((icon.x - (chip.x + chart.pane_left + inset)).abs() < 1e-9);
+        assert!((icon.y - (chip.y - chip.size / 2.0 + inset)).abs() < 1e-9);
         assert!((icon.width - side).abs() < 1e-9);
         assert!((icon.height - side).abs() < 1e-9);
         assert_eq!((icon.image.width, icon.image.height), (2, 2));
