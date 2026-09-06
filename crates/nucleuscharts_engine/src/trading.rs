@@ -74,9 +74,17 @@ pub enum OrderSide {
     Sell,
 }
 
+fn opposite_order_side(side: OrderSide) -> OrderSide {
+    match side {
+        OrderSide::Buy => OrderSide::Sell,
+        OrderSide::Sell => OrderSide::Buy,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OrderKind {
+    Market,
     Limit,
     Stop,
     StopLimit,
@@ -372,6 +380,7 @@ pub(crate) enum TradingInteractionState {
 
 #[derive(Clone, Debug)]
 pub(crate) enum TradingRollback {
+    CreatedProtection,
     RemovedOrder {
         index: usize,
         order: Box<WorkingOrder>,
@@ -891,6 +900,108 @@ impl ChartEngine {
         (price / tick).round() * tick
     }
 
+    fn trading_protection_quantity(&self, order: &WorkingOrder) -> f64 {
+        order
+            .position_id
+            .as_ref()
+            .and_then(|id| {
+                self.trading_state
+                    .positions
+                    .iter()
+                    .find(|position| &position.id == id)
+                    .map(|position| position.quantity)
+            })
+            .unwrap_or_else(|| {
+                let remaining = (order.quantity - order.filled_quantity).max(0.0);
+                if remaining > 0.0 {
+                    remaining
+                } else {
+                    order.quantity
+                }
+            })
+    }
+
+    fn trading_order_drag_preview(&self, order: &WorkingOrder) -> Option<TradingPreview> {
+        let creating_protection = order.role == OrderRole::Working;
+        if !matches!(
+            order.status,
+            OrderStatus::Working | OrderStatus::PartiallyFilled
+        ) && !(creating_protection && order.status == OrderStatus::Filled)
+        {
+            return None;
+        }
+        Some(TradingPreview {
+            source: if creating_protection {
+                TradingPreviewSource::OrderStopLoss {
+                    order_id: order.id.clone(),
+                }
+            } else {
+                TradingPreviewSource::Order {
+                    order_id: order.id.clone(),
+                }
+            },
+            pane_index: order.pane_index,
+            price_scale: order.price_scale,
+            price: order.price,
+            quantity: if creating_protection {
+                self.trading_protection_quantity(order)
+            } else {
+                (order.quantity - order.filled_quantity).max(0.0)
+            },
+            side: if creating_protection {
+                opposite_order_side(order.side)
+            } else {
+                order.side
+            },
+            role: if creating_protection {
+                OrderRole::StopLoss
+            } else {
+                order.role
+            },
+            base_revision: order.revision,
+        })
+    }
+
+    /// A new attached protection drag changes role while it crosses the entry. Once the host
+    /// supplies that protection as an ordinary order, its `Order` preview no longer enters this
+    /// path and the role remains fixed wherever the user subsequently moves it.
+    fn reclassify_order_protection_preview(&mut self) {
+        let Some(preview) = self.trading_state.interaction.preview() else {
+            return;
+        };
+        let order_id = match &preview.source {
+            TradingPreviewSource::OrderStopLoss { order_id }
+            | TradingPreviewSource::OrderTakeProfit { order_id } => order_id.clone(),
+            _ => return,
+        };
+        let Some(order) = self
+            .trading_state
+            .orders
+            .iter()
+            .find(|order| order.id == order_id)
+        else {
+            return;
+        };
+        let role = match (order.side, preview.price.total_cmp(&order.price)) {
+            (_, std::cmp::Ordering::Equal) => return,
+            (OrderSide::Buy, std::cmp::Ordering::Less)
+            | (OrderSide::Sell, std::cmp::Ordering::Greater) => OrderRole::StopLoss,
+            (OrderSide::Buy, std::cmp::Ordering::Greater)
+            | (OrderSide::Sell, std::cmp::Ordering::Less) => OrderRole::TakeProfit,
+        };
+        let preview = self
+            .trading_state
+            .interaction
+            .dragging_preview_mut()
+            .expect("protection classification requires a live drag");
+        preview.role = role;
+        preview.source = if role == OrderRole::StopLoss {
+            TradingPreviewSource::OrderStopLoss { order_id }
+        } else {
+            TradingPreviewSource::OrderTakeProfit { order_id }
+        };
+    }
+
     pub(crate) fn trading_preview_relation(&self, preview: &TradingPreview) -> Option<(f64, bool)> {
         let position_relation = |order: &WorkingOrder| {
             let position = self
@@ -937,16 +1048,17 @@ impl ChartEngine {
     }
 
     fn trading_preview_price_valid(&self, preview: &TradingPreview) -> bool {
-        if preview.role == OrderRole::Working {
+        // A confirmed broker order keeps its semantic role when it crosses the entry. This is
+        // important for terminal-style editing: moving an SL above the entry does not silently
+        // turn it into a TP (and vice versa).
+        if matches!(preview.source, TradingPreviewSource::Order { .. }) {
             return true;
         }
         let Some((anchor, long)) = self.trading_preview_relation(preview) else {
-            // Existing broker-owned protection orders can be displayed without a local position
-            // or parent order (for example after restoring a broker snapshot incrementally). In
-            // that case the chart has no relationship from which to enforce a TP/SL side, but it
-            // must still allow the authoritative order to be modified. New protection previews
-            // always have a position or parent relation and continue to require the correct side.
-            return matches!(preview.source, TradingPreviewSource::Order { .. });
+            // Existing broker-owned protection orders returned above and remain freely movable.
+            // A new protection request must still have the entry relationship that defines its
+            // initial TP/SL classification.
+            return false;
         };
         match (long, preview.role) {
             (true, OrderRole::TakeProfit) => preview.price > anchor,
@@ -957,9 +1069,9 @@ impl ChartEngine {
         }
     }
 
-    /// Apply the dragged price to the order and emit the modify intent. The chart moves the line
-    /// straight away rather than parking it in a pending state — a host that gates modifications
-    /// runs its confirmation around the intent, and rejects it if the answer is no.
+    /// Commit a dragged protection line as a modification, or a dragged entry as a new protection
+    /// request. Existing lines move immediately with a rollback; creation remains host-owned
+    /// because the broker supplies the new order identity.
     fn commit_trading_preview(&mut self) -> Option<TradingIntent> {
         let preview = self.trading_state.interaction.preview()?.clone();
         if !matches!(
@@ -968,38 +1080,96 @@ impl ChartEngine {
         ) {
             return None;
         }
-        let TradingPreviewSource::Order { order_id } = &preview.source else {
-            return None;
-        };
-        let order = self
-            .trading_state
-            .orders
-            .iter_mut()
-            .find(|order| &order.id == order_id)?;
-        let rollback = TradingRollback::MovedOrder {
-            id: order.id.clone(),
-            price: order.price,
-        };
-        order.price = preview.price;
         let sequence = self.trading_state.next_sequence();
-        let order = self
-            .trading_state
-            .orders
-            .iter()
-            .find(|order| &order.id == order_id)?;
+        let (action, order_id, position_id, kind, rollback, bracket_id, oco_group_id, stop_price) =
+            match &preview.source {
+                TradingPreviewSource::Order { order_id } => {
+                    let order = self
+                        .trading_state
+                        .orders
+                        .iter_mut()
+                        .find(|order| &order.id == order_id)?;
+                    let rollback = TradingRollback::MovedOrder {
+                        id: order.id.clone(),
+                        price: order.price,
+                    };
+                    order.price = preview.price;
+                    (
+                        TradingIntentAction::ModifyOrder,
+                        Some(order.id.clone()),
+                        None,
+                        Some(order.kind),
+                        rollback,
+                        order.bracket_id.clone(),
+                        order.oco_group_id.clone(),
+                        order.stop_price,
+                    )
+                }
+                TradingPreviewSource::OrderStopLoss { order_id }
+                | TradingPreviewSource::OrderTakeProfit { order_id } => {
+                    let order = self
+                        .trading_state
+                        .orders
+                        .iter()
+                        .find(|order| &order.id == order_id)?;
+                    if self.trading_state.orders.iter().any(|child| {
+                        child.parent_order_id.as_ref() == Some(order_id)
+                            && child.role == preview.role
+                    }) {
+                        return None;
+                    }
+                    (
+                        if preview.role == OrderRole::StopLoss {
+                            TradingIntentAction::CreateStopLoss
+                        } else {
+                            TradingIntentAction::CreateTakeProfit
+                        },
+                        Some(order.id.clone()),
+                        None,
+                        Some(if preview.role == OrderRole::StopLoss {
+                            OrderKind::Stop
+                        } else {
+                            OrderKind::Limit
+                        }),
+                        TradingRollback::CreatedProtection,
+                        order.bracket_id.clone(),
+                        order.oco_group_id.clone(),
+                        None,
+                    )
+                }
+                TradingPreviewSource::StopLoss { position_id }
+                | TradingPreviewSource::TakeProfit { position_id } => (
+                    if preview.role == OrderRole::StopLoss {
+                        TradingIntentAction::CreateStopLoss
+                    } else {
+                        TradingIntentAction::CreateTakeProfit
+                    },
+                    None,
+                    Some(position_id.clone()),
+                    Some(if preview.role == OrderRole::StopLoss {
+                        OrderKind::Stop
+                    } else {
+                        OrderKind::Limit
+                    }),
+                    TradingRollback::CreatedProtection,
+                    None,
+                    None,
+                    None,
+                ),
+            };
         let intent = TradingIntent {
             sequence,
-            action: TradingIntentAction::ModifyOrder,
-            order_id: Some(order.id.clone()),
-            position_id: None,
+            action,
+            order_id,
+            position_id,
             side: Some(preview.side),
-            kind: Some(order.kind),
+            kind,
             role: Some(preview.role),
             price: Some(preview.price),
-            stop_price: order.stop_price,
+            stop_price,
             quantity: Some(preview.quantity),
-            bracket_id: order.bracket_id.clone(),
-            oco_group_id: order.oco_group_id.clone(),
+            bracket_id,
+            oco_group_id,
             base_revision: preview.base_revision,
         };
         // Moving a protection order asserts its bracket, so the connector chrome comes up with the
@@ -1033,23 +1203,8 @@ impl ChartEngine {
         else {
             return false;
         };
-        if !matches!(
-            order.status,
-            OrderStatus::Working | OrderStatus::PartiallyFilled
-        ) {
+        let Some(preview) = self.trading_order_drag_preview(order) else {
             return false;
-        }
-        let preview = TradingPreview {
-            source: TradingPreviewSource::Order {
-                order_id: id.clone(),
-            },
-            pane_index: order.pane_index,
-            price_scale: order.price_scale,
-            price: order.price,
-            quantity: (order.quantity - order.filled_quantity).max(0.0),
-            side: order.side,
-            role: order.role,
-            base_revision: order.revision,
         };
         self.trading_state.interaction = TradingInteractionState::DraggingOrder {
             authoritative_price: preview.price,
@@ -1073,6 +1228,7 @@ impl ChartEngine {
             return false;
         }
         preview.price = price;
+        self.reclassify_order_protection_preview();
         self.invalidate_frame_trading();
         true
     }
@@ -1107,23 +1263,8 @@ impl ChartEngine {
         else {
             return false;
         };
-        if !matches!(
-            order.status,
-            OrderStatus::Working | OrderStatus::PartiallyFilled
-        ) {
+        let Some(preview) = self.trading_order_drag_preview(order) else {
             return false;
-        }
-        let preview = TradingPreview {
-            source: TradingPreviewSource::Order {
-                order_id: id.clone(),
-            },
-            pane_index: order.pane_index,
-            price_scale: order.price_scale,
-            price: order.price,
-            quantity: (order.quantity - order.filled_quantity).max(0.0),
-            side: order.side,
-            role: order.role,
-            base_revision: order.revision,
         };
         self.trading_state.interaction = TradingInteractionState::DraggingOrder {
             authoritative_price: preview.price,
@@ -1160,6 +1301,7 @@ impl ChartEngine {
             .dragging_preview_mut()
             .expect("dragging interaction owns a preview")
             .price = price;
+        self.reclassify_order_protection_preview();
         self.invalidate_frame_trading();
         true
     }
@@ -1189,7 +1331,12 @@ impl ChartEngine {
             self.invalidate_frame_trading();
             return None;
         }
-        self.commit_trading_preview()
+        let intent = self.commit_trading_preview();
+        if intent.is_none() {
+            self.trading_state.interaction = TradingInteractionState::Idle;
+            self.invalidate_frame_trading();
+        }
+        intent
     }
 
     pub fn cancel_trading_drag(&mut self) -> bool {
@@ -1342,6 +1489,7 @@ impl ChartEngine {
                         order.price = price;
                     }
                 }
+                TradingRollback::CreatedProtection => {}
             }
             self.invalidate_frame_scene();
         }
@@ -2333,7 +2481,7 @@ mod tests {
     }
 
     #[test]
-    fn keyboard_order_adjustment_uses_tick_snapping_and_the_pointer_intent_path() {
+    fn keyboard_entry_adjustment_creates_tick_snapped_protection() {
         let mut chart = chart_with_market();
         chart
             .set_trading_snapshot(TradingSnapshot {
@@ -2351,10 +2499,11 @@ mod tests {
         let intent = chart
             .trading_drag_end()
             .expect("instant mode emits an intent");
-        assert_eq!(intent.action, TradingIntentAction::ModifyOrder);
+        assert_eq!(intent.action, TradingIntentAction::CreateStopLoss);
+        assert_eq!(intent.role, Some(OrderRole::StopLoss));
         assert_eq!(intent.price, Some(105.5));
-        // Keyboard commit applies the move the same way a pointer release does.
-        assert_eq!(chart.trading_snapshot().orders[0].price, 105.5);
+        // Creation leaves the host-owned entry exactly where it was.
+        assert_eq!(chart.trading_snapshot().orders[0].price, 103.0);
         assert!(chart.resolve_trading_intent(intent.sequence, false));
         assert_eq!(chart.trading_snapshot().orders[0].price, 103.0);
     }
@@ -2676,11 +2825,14 @@ mod tests {
     }
 
     #[test]
-    fn releasing_a_drag_emits_the_modify_intent_directly_with_no_confirmation_step() {
+    fn dragging_a_buy_entry_up_creates_take_profit_without_moving_the_entry() {
         let mut chart = chart_with_market();
         let mut working = order("working-1", OrderRole::Working, 102.0);
         working.position_id = None;
         working.side = OrderSide::Buy;
+        working.kind = OrderKind::Market;
+        working.status = OrderStatus::Filled;
+        working.filled_quantity = working.quantity;
         chart.update_working_order(working).unwrap();
         chart.build_frame();
         let start_y = chart
@@ -2689,16 +2841,32 @@ mod tests {
         let target_y = chart
             .trading_price_coordinate(0, TradingPriceScale::Right, 103.0)
             .unwrap();
+        assert!(chart.set_trading_hover(chart.trading_marker_start() + 20.0, start_y));
+        let hovered = chart.build_frame();
+        let segments = chart.frame_pane_segments(0).unwrap();
+        assert!(
+            hovered.panes[0].main[segments.drawings_end..segments.trading_end]
+                .iter()
+                .any(|primitive| matches!(
+                    primitive,
+                    Prim::HLine {
+                        y,
+                        style: nucleuscharts_render::draw_list::LineStyle::Dashed,
+                        ..
+                    } if *y == start_y.round() as i32
+                ))
+        );
         assert!(chart.trading_drag_start_at(chart.trading_marker_start() + 20.0, start_y));
         assert!(chart.trading_drag_to(target_y));
 
-        // The drag names its side and dots its line; it offers no Confirm/Discard surface.
+        // The entry becomes dashed and the TP preview is dotted; no Confirm/Discard surface is
+        // inserted into the engine-owned marker.
         let dragging = chart.build_frame();
         let segments = chart.frame_pane_segments(0).unwrap();
         let trading = &dragging.panes[0].main[segments.drawings_end..segments.trading_end];
         assert!(trading
             .iter()
-            .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "Buy")));
+            .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "TP")));
         assert!(trading.iter().all(|primitive| !matches!(
             primitive,
             Prim::Text { text, .. } if matches!(text.as_str(), "Confirm" | "Discard")
@@ -2711,17 +2879,17 @@ mod tests {
             }
         )));
 
-        // Release commits straight to an intent — hosts that want a confirmation run it around
-        // the intent, so the chart never parks the modification behind an inline second step.
+        // Release emits creation directly. The broker-owned entry never moves.
         let intent = chart
             .trading_drag_end()
-            .expect("release emits the modify intent");
-        assert_eq!(intent.action, TradingIntentAction::ModifyOrder);
+            .expect("release emits the take-profit intent");
+        assert_eq!(intent.action, TradingIntentAction::CreateTakeProfit);
+        assert_eq!(intent.role, Some(OrderRole::TakeProfit));
+        assert_eq!(intent.kind, Some(OrderKind::Limit));
+        assert_eq!(intent.order_id.as_ref().unwrap().as_str(), "working-1");
         assert_eq!(chart.take_trading_intents().len(), 1);
-        // The move is applied on release, so nothing is left dimmed or dotted behind a pending
-        // state — and the released line paints in its own color again.
         assert!(chart.trading_preview().is_none());
-        assert_eq!(chart.trading_snapshot().orders[0].price, 103.0);
+        assert_eq!(chart.trading_snapshot().orders[0].price, 102.0);
         let released = chart.build_frame();
         let segments = chart.frame_pane_segments(0).unwrap();
         let trading = &released.panes[0].main[segments.drawings_end..segments.trading_end];
@@ -2733,7 +2901,7 @@ mod tests {
                     || *color == pending
         )));
 
-        // A rejecting host puts the price back.
+        // Rejecting an unmaterialized protection request is a no-op on the entry.
         assert!(chart.resolve_trading_intent(intent.sequence, false));
         assert_eq!(chart.trading_snapshot().orders[0].price, 102.0);
     }
@@ -2742,7 +2910,8 @@ mod tests {
     fn protection_drags_release_the_same_way_as_working_orders() {
         for (order_id, role, price, target) in [
             ("tp-1", OrderRole::TakeProfit, 103.0, 103.5),
-            ("sl-1", OrderRole::StopLoss, 99.0, 98.5),
+            // Moving a confirmed SL above a long entry retains its SL identity.
+            ("sl-1", OrderRole::StopLoss, 99.0, 103.5),
         ] {
             let mut chart = chart_with_market();
             chart

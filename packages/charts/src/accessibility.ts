@@ -446,7 +446,8 @@ class PaneAccessibility {
       };
       if (event.key === "Enter" || event.key === " ") {
         if (this.targets.querySelector(`[data-a11y-target="order:${CSS.escape(id)}"]`)?.getAttribute("aria-pressed") === "true") {
-          // Commit emits the modify intent directly; the host owns any confirmation around it.
+          // Commit emits the canonical modify-or-protection intent directly; the host owns any
+          // confirmation around it.
           chart.trading_keyboard_commit();
           this.set_order_editing(id, false);
         } else if (chart.trading_keyboard_start_order(id)) {

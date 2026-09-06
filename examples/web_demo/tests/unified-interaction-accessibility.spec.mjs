@@ -185,7 +185,14 @@ test("semantic axis and trading targets route keyboard actions through canonical
       focused: document.activeElement.getAttribute("aria-label"),
     };
   });
-  expect(result.intent).toMatchObject({ action: "modify_order", order_id: "keyboard-order", price: 100.25 });
+  expect(result.intent).toMatchObject({
+    action: "create_take_profit",
+    order_id: "keyboard-order",
+    side: "sell",
+    kind: "limit",
+    role: "take_profit",
+    price: 100.25,
+  });
   expect(result.adjusted.to - result.adjusted.from).toBeCloseTo(19, 8);
   expect(result.autoScale).toBe(true);
   expect(result.focused).toContain("price axis");

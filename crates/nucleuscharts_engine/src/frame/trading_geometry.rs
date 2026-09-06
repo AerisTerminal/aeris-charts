@@ -89,7 +89,7 @@ const ORDER_MARKER_SPAN: f64 = 280.0;
 
 /// A resting limit order is an intention parked at a price, not a directional fill: it takes the
 /// neutral `working_order` accent for as long as it rests, and only reads by side once it fills.
-/// Every other live order — stop, stop-limit — is a directional trigger and reads by side already.
+/// Every other live order — market, stop, stop-limit — is directional and reads by side already.
 pub(crate) fn trading_order_color(
     style: &crate::TradingStyle,
     kind: crate::OrderKind,
@@ -108,7 +108,9 @@ pub(crate) fn trading_order_color(
         OrderStatus::Filled => by_side,
         OrderStatus::Working | OrderStatus::PartiallyFilled => match kind {
             crate::OrderKind::Limit => style.working_order,
-            crate::OrderKind::Stop | crate::OrderKind::StopLimit => by_side,
+            crate::OrderKind::Market | crate::OrderKind::Stop | crate::OrderKind::StopLimit => {
+                by_side
+            }
         },
     }
 }
@@ -822,6 +824,18 @@ impl ChartEngine {
                 continue;
             };
             let preview = self.trading_order_preview(order);
+            let creating_protection =
+                self.trading_state
+                    .interaction
+                    .preview()
+                    .is_some_and(|preview| {
+                        matches!(
+                            &preview.source,
+                            crate::TradingPreviewSource::OrderStopLoss { order_id }
+                                | crate::TradingPreviewSource::OrderTakeProfit { order_id }
+                                if order_id == &order.id
+                        )
+                    });
             let base_color = trading_order_color(
                 &self.trading_state.style,
                 order.kind,
@@ -850,13 +864,19 @@ impl ChartEngine {
                 } else {
                     min_line_width
                 },
-                style: if preview.is_some()
+                style: if creating_protection
+                    || (order.role == OrderRole::Working
+                        && hovered.is_some_and(|hit| hit.kind == crate::TradingHitKind::OrderLine))
+                {
+                    LineStyle::Dashed
+                } else if preview.is_some()
                     || matches!(
                         order.status,
                         OrderStatus::PendingSubmit
                             | OrderStatus::PendingModify
                             | OrderStatus::PendingCancel
-                    ) {
+                    )
+                {
                     LineStyle::Dotted
                 } else {
                     LineStyle::Solid
@@ -869,6 +889,7 @@ impl ChartEngine {
             let remaining = (order.quantity - order.filled_quantity).max(0.0);
             let quantity = self.trading_order_quantity_text(order);
             let kind = match order.kind {
+                crate::OrderKind::Market => "Market",
                 crate::OrderKind::Limit => "Limit",
                 crate::OrderKind::Stop => "Stop",
                 crate::OrderKind::StopLimit => "Stop Limit",
@@ -1027,6 +1048,62 @@ impl ChartEngine {
             if let Some(preview_y) =
                 self.trading_price_coordinate(pane_index, preview.price_scale, preview.price)
             {
+                let creating_protection =
+                    !matches!(preview.source, crate::TradingPreviewSource::Order { .. });
+                if creating_protection {
+                    let semantic = if preview.role == OrderRole::TakeProfit {
+                        self.trading_state.style.take_profit
+                    } else {
+                        self.trading_state.style.stop_loss
+                    };
+                    lines.push(Prim::HLine {
+                        y: (preview_y * vpr).round() as i32,
+                        x0: (self.trading_marker_start() * hpr).round() as i32,
+                        x1: (self.trading_marker_end() * hpr).round() as i32,
+                        width: min_line_width,
+                        style: LineStyle::Dotted,
+                        color: semantic,
+                    });
+                    let quantity = self.format_trading_quantity(preview.quantity);
+                    let role = if preview.role == OrderRole::TakeProfit {
+                        "TP"
+                    } else {
+                        "SL"
+                    };
+                    let segments = [
+                        TradingControlSegment {
+                            kind: TradingControlSegmentKind::Quantity,
+                            text: quantity.as_str(),
+                            width: self.trading_quantity_width(&quantity),
+                            color: semantic,
+                            filled: true,
+                        },
+                        TradingControlSegment {
+                            kind: TradingControlSegmentKind::OrderType,
+                            text: role,
+                            width: ORDER_TYPE_WIDTH,
+                            color: semantic,
+                            filled: false,
+                        },
+                    ];
+                    let cluster = TradingControlCluster {
+                        segments: &segments,
+                        left: self.trading_marker_start(),
+                        color: semantic,
+                    };
+                    self.push_trading_cluster(
+                        lines,
+                        &cluster,
+                        None,
+                        None,
+                        TradingChipLayout {
+                            x: cluster.start(),
+                            y: preview_y,
+                            hpr,
+                            vpr,
+                        },
+                    );
+                }
                 if let Some((anchor_price, long)) = self.trading_preview_relation(preview) {
                     if let Some(anchor_y) =
                         self.trading_price_coordinate(pane_index, preview.price_scale, anchor_price)

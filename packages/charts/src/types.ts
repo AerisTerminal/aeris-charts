@@ -1751,7 +1751,7 @@ export interface alert_api {
 
 export type position_side = "long" | "short";
 export type order_side = "buy" | "sell";
-export type order_kind = "limit" | "stop" | "stop_limit";
+export type order_kind = "market" | "limit" | "stop" | "stop_limit";
 export type order_role = "working" | "stop_loss" | "take_profit";
 export type order_status =
   | "pending_submit"

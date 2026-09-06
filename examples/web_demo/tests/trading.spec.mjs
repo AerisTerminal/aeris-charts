@@ -429,7 +429,7 @@ test("confirmed bracket connector deactivates on an empty-canvas click without r
   expect(connector_pixels(active.url)).toBeGreaterThan(connector_pixels(inactive.url) + 20);
 });
 
-test("working-order markers omit TP/SL controls and release straight into a modify intent", async ({ page }) => {
+test("entry-line drags create side-aware protection for limit and market orders", async ({ page }) => {
   await open_trading_demo(page);
   const probe = await page.evaluate(() => {
     const trading = window.__chart.trading();
@@ -437,7 +437,7 @@ test("working-order markers omit TP/SL controls and release straight into a modi
       instrument: { tick_size: 0.25, price_precision: 2 },
       orders: [
         { id: "buy-limit", side: "buy", kind: "limit", status: "working", price: 100, quantity: 1 },
-        { id: "sell-stop", side: "sell", kind: "stop", status: "working", price: 98, quantity: 1 },
+        { id: "sell-market", side: "sell", kind: "market", status: "filled", price: 98, quantity: 1, filled_quantity: 1 },
       ],
     });
     window.__manual_intents = [];
@@ -450,7 +450,7 @@ test("working-order markers omit TP/SL controls and release straight into a modi
       buy_y: window.__main.price_to_coordinate(100),
       target_y: window.__main.price_to_coordinate(101.25),
       sell_y: window.__main.price_to_coordinate(98),
-      sell_target_y: window.__main.price_to_coordinate(97.25),
+      sell_target_y: window.__main.price_to_coordinate(99.25),
       hits: {
         empty_left: trading.hit_at(40, window.__main.price_to_coordinate(100)),
         marker: trading.hit_at(width - 200, window.__main.price_to_coordinate(100)),
@@ -465,8 +465,7 @@ test("working-order markers omit TP/SL controls and release straight into a modi
   expect(probe.hits.marker).toMatchObject({ id: "buy-limit", kind: "order_line" });
   expect(probe.hits.cancel).toMatchObject({ id: "buy-limit", kind: "cancel_button" });
 
-  // Release emits the modify intent immediately — no inline Confirm/Discard step. A host that
-  // wants a confirmation runs it around the intent before answering resolve_intent.
+  // A buy entry dragged upward creates a take profit and leaves the entry untouched.
   await page.mouse.move(probe.overlay.left + probe.width - 200, probe.overlay.top + probe.buy_y);
   await page.mouse.down();
   await page.mouse.move(probe.overlay.left + 30, probe.overlay.top + probe.target_y, { steps: 5 });
@@ -477,13 +476,21 @@ test("working-order markers omit TP/SL controls and release straight into a modi
     order: window.__chart.trading().state().orders.find((order) => order.id === "buy-limit"),
   }))).toMatchObject({
     preview: null,
-    intents: [expect.objectContaining({ action: "modify_order", order_id: "buy-limit", price: 101.25 })],
-    // The move lands on release rather than waiting on the host.
-    order: { price: 101.25 },
+    intents: [expect.objectContaining({
+      action: "create_take_profit",
+      order_id: "buy-limit",
+      side: "sell",
+      kind: "limit",
+      role: "take_profit",
+      price: 101.25,
+    })],
+    order: { price: 100 },
   });
   await page.evaluate(() => window.__chart.trading().resolve_intent(window.__manual_intents[0].sequence, false));
   expect(await page.evaluate(() => window.__chart.trading().state().orders.find((order) => order.id === "buy-limit").price)).toBe(100);
 
+  // A filled sell-side market entry dragged upward creates a stop loss. Market entries use the
+  // same interaction even though their remaining quantity is zero.
   await page.mouse.move(probe.overlay.left + probe.width - 200, probe.overlay.top + probe.sell_y);
   await page.mouse.down();
   await page.mouse.move(probe.overlay.left + 30, probe.overlay.top + probe.sell_target_y, { steps: 5 });
@@ -494,7 +501,15 @@ test("working-order markers omit TP/SL controls and release straight into a modi
     intent_count: window.__manual_intents.length,
   }))).toMatchObject({
     preview: null,
-    intent: { action: "modify_order", order_id: "sell-stop", side: "sell" },
+    intent: {
+      action: "create_stop_loss",
+      order_id: "sell-market",
+      side: "buy",
+      kind: "stop",
+      role: "stop_loss",
+      quantity: 1,
+      price: 99.25,
+    },
     intent_count: 2,
   });
 });
@@ -508,13 +523,15 @@ test("existing TP and SL adjustments release into intents with no confirmation s
     const overlay = document.querySelector("#chart_container canvas:last-of-type").getBoundingClientRect();
     const target = trading.state().orders.find((order) => order.id === "demo-target");
     const stop = trading.state().orders.find((order) => order.id === "demo-stop");
+    const position = trading.state().positions.find((item) => item.id === "demo-position");
     return {
       overlay: { left: overlay.left, top: overlay.top },
       width: window.__chart.time_scale().width(),
       target_y: window.__main.price_to_coordinate(target.price),
       target_next_y: window.__main.price_to_coordinate(target.price + 0.75),
       stop_y: window.__main.price_to_coordinate(stop.price),
-      stop_next_y: window.__main.price_to_coordinate(stop.price - 0.75),
+      // Cross the long entry deliberately: a confirmed SL keeps its role after placement.
+      stop_next_y: window.__main.price_to_coordinate(position.average_price + 0.75),
     };
   });
 
