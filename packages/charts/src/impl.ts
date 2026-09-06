@@ -45,6 +45,7 @@ import {
   is_feature_series_kind, is_footprint_series_kind,
 } from "./types.js";
 import { default_theme_name, theme_palette } from "./theme.js";
+import alert_create_icon_svg from "./assets/icons/add.svg";
 
 // ---------------------------------------------------------------------------------------------
 // Implementation
@@ -2390,20 +2391,71 @@ class trading_impl implements trading_api {
 }
 
 /**
- * PlusSignSquare glyph for the crosshair alert-create chip (HugeIcons free
- * set, MIT — path data inlined, not the asset file): 24-grid stroked paths.
- * The engine cannot load SVG on any backend, so the package rasterizes these
- * exact paths to RGBA once per size and hands the pixels to the engine, which
- * retains and paints them like a watermark on every backend. Round caps and
- * joins come from the canvas rasterizer, which box-composed prims cannot do.
+ * The browser rasterizes the bundled SVG once per settled device-pixel size,
+ * then hands the RGBA pixels to the engine so every backend paints the same
+ * icon. The engine retains a primitive fallback for non-browser hosts.
  */
-const ALERT_CREATE_ICON_SQUARE_D =
-  "M2.5 12C2.5 7.52166 2.5 5.28249 3.89124 3.89124C5.28249 2.5 7.52166 2.5 12 2.5C16.4783 2.5 18.7175 2.5 20.1088 3.89124C21.5 5.28249 21.5 7.52166 21.5 12C21.5 16.4783 21.5 18.7175 20.1088 20.1088C18.7175 21.5 16.4783 21.5 12 21.5C7.52166 21.5 5.28249 21.5 3.89124 20.1088C2.5 18.7175 2.5 16.4783 2.5 12Z";
-const ALERT_CREATE_ICON_PLUS_D = "M12 8V16M16 12H8";
 /** Fixed white: the chip fill is dark on both themes. */
 const ALERT_CREATE_ICON_COLOR = "#ffffff";
 /** Absolute pixel cap matching the engine's `MAX_ALERT_ICON_PX`. */
 const ALERT_CREATE_ICON_MAX_PX = 96;
+
+type alert_create_icon_geometry = {
+  min_x: number;
+  min_y: number;
+  width: number;
+  height: number;
+  stroke_width: number;
+  paths: Path2D[];
+};
+
+let cached_alert_create_icon_geometry: alert_create_icon_geometry | null | undefined;
+
+function parse_alert_create_icon(): alert_create_icon_geometry | null {
+  if (cached_alert_create_icon_geometry !== undefined) {
+    return cached_alert_create_icon_geometry;
+  }
+  try {
+    const svg = new DOMParser().parseFromString(alert_create_icon_svg, "image/svg+xml").documentElement;
+    if (svg.localName !== "svg" || svg.querySelector("parsererror") !== null) {
+      cached_alert_create_icon_geometry = null;
+      return null;
+    }
+    const view_box = svg.getAttribute("viewBox")?.trim().split(/[\s,]+/).map(Number);
+    if (
+      view_box === undefined ||
+      view_box.length !== 4 ||
+      view_box.some((value) => !Number.isFinite(value)) ||
+      view_box[2] === undefined ||
+      view_box[2] <= 0 ||
+      view_box[3] === undefined ||
+      view_box[3] <= 0
+    ) {
+      cached_alert_create_icon_geometry = null;
+      return null;
+    }
+    const paths = Array.from(svg.querySelectorAll("path[d]"), (path) =>
+      new Path2D(path.getAttribute("d") ?? ""),
+    );
+    const stroke_width = Number(svg.getAttribute("stroke-width"));
+    if (paths.length === 0 || !Number.isFinite(stroke_width) || stroke_width <= 0) {
+      cached_alert_create_icon_geometry = null;
+      return null;
+    }
+    cached_alert_create_icon_geometry = {
+      min_x: view_box[0] ?? 0,
+      min_y: view_box[1] ?? 0,
+      width: view_box[2],
+      height: view_box[3],
+      stroke_width,
+      paths,
+    };
+    return cached_alert_create_icon_geometry;
+  } catch {
+    cached_alert_create_icon_geometry = null;
+    return null;
+  }
+}
 
 type engine_alert_create_request = {
   sequence: number;
@@ -2426,6 +2478,8 @@ function rasterize_alert_create_icon(
   dpr: number,
 ): { pixels: Uint8Array; size: number } | null {
   try {
+    const icon = parse_alert_create_icon();
+    if (icon === null) return null;
     // Match the bitmap to the icon's settled device-pixel footprint. A fixed
     // supersample is rescaled by a different amount at every browser zoom and,
     // with the GPU image sampler, makes the 1.5-unit strokes alternate between
@@ -2437,14 +2491,17 @@ function rasterize_alert_create_icon(
     canvas.height = size;
     const ctx = canvas.getContext("2d", { alpha: true });
     if (ctx === null) return null;
-    const unit = size / 24;
-    ctx.scale(unit, unit);
+    const scale = Math.min(size / icon.width, size / icon.height);
+    ctx.translate(
+      (size - icon.width * scale) / 2 - icon.min_x * scale,
+      (size - icon.height * scale) / 2 - icon.min_y * scale,
+    );
+    ctx.scale(scale, scale);
     ctx.strokeStyle = ALERT_CREATE_ICON_COLOR;
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = icon.stroke_width;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    ctx.stroke(new Path2D(ALERT_CREATE_ICON_SQUARE_D));
-    ctx.stroke(new Path2D(ALERT_CREATE_ICON_PLUS_D));
+    for (const path of icon.paths) ctx.stroke(path);
     const data = ctx.getImageData(0, 0, size, size).data;
     return {
       pixels: new Uint8Array(data.buffer, data.byteOffset, data.byteLength),

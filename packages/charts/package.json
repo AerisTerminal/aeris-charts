@@ -58,7 +58,7 @@
     "check:release-gates": "node scripts/release_gate_guard.mjs",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true});require('fs').rmSync('pkg',{recursive:true,force:true})\"",
     "build:wasm": "wasm-pack build ../../crates/nucleuscharts_wasm --target web --out-dir ../../packages/charts/pkg",
-    "build:js": "esbuild src/index.ts --bundle --format=esm --sourcemap --outfile=dist/index.js",
+    "build:js": "esbuild src/index.ts --bundle --format=esm --sourcemap --loader:.svg=text --outfile=dist/index.js",
     "build:types": "tsc --declaration --emitDeclarationOnly --outDir dist --noEmit false",
     "build:copy-wasm": "node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});fs.copyFileSync('pkg/nucleuscharts_wasm_bg.wasm','dist/nucleuscharts_wasm_bg.wasm')\"",
     "build:copy-design": "node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});fs.copyFileSync('src/nucleuscharts.css','dist/nucleuscharts.css')\"",
