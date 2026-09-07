@@ -30,6 +30,24 @@ fn required_u8(value: &Value, path: &[&str]) -> u8 {
         .unwrap_or_else(|_| panic!("style token `{}` must fit in one byte", path.join(".")))
 }
 
+fn required_f64(value: &Value, path: &[&str]) -> f64 {
+    let mut current = value;
+    for key in path {
+        current = current
+            .get(key)
+            .unwrap_or_else(|| panic!("missing style token `{}`", path.join(".")));
+    }
+    current
+        .as_f64()
+        .filter(|number| number.is_finite() && *number >= 0.0)
+        .unwrap_or_else(|| {
+            panic!(
+                "style token `{}` must be a finite non-negative number",
+                path.join(".")
+            )
+        })
+}
+
 fn rgb(css: &str, name: &str) -> (u8, u8, u8) {
     let hex = css
         .strip_prefix('#')
@@ -69,6 +87,14 @@ fn main() {
     output.push_str(&format!(
         "pub const DEFAULT_THEME_NAME: &str = \"{default_theme}\";\n"
     ));
+    for (field, suffix) in [
+        ("small", "SMALL"),
+        ("default", "DEFAULT"),
+        ("large", "LARGE"),
+    ] {
+        let radius = required_f64(&tokens, &["radius", field]);
+        output.push_str(&format!("pub const RADIUS_{suffix}: f64 = {radius:?};\n"));
+    }
     for theme in ["light", "dark"] {
         let prefix = theme.to_ascii_uppercase();
         for (field, suffix) in [

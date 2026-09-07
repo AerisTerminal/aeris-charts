@@ -1523,6 +1523,7 @@ impl ChartEngine {
                 &self.trading_state.style,
                 order.kind,
                 order.side,
+                order.role,
                 order.status,
             );
             append(

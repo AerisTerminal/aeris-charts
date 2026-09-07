@@ -10,9 +10,9 @@
  *
  * Radius has exactly three values: small (4px), default (6px), and large (999px).
  *
- * Translucent color-mix tokens stay in CSS for host chrome. Chart surfaces, axis
- * text, axis borders, and market colors have opaque sRGB equivalents in
- * style_tokens.json, composited over the theme surface so every backend matches.
+ * Translucent color-mix tokens stay in CSS for host chrome. Shared radii and the
+ * opaque sRGB equivalents of chart surfaces, axis text, axis borders, and market
+ * colors live in style_tokens.json so every backend matches.
  */
 
 :root,

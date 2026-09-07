@@ -3,6 +3,7 @@ use crate::trading::{
     ExecutionKind, OrderRole, OrderSide, OrderStatus, PositionSide, TradingGroupVisualState,
 };
 use crate::Pane;
+use nucleuscharts_core::style::RADIUS_DEFAULT;
 
 #[derive(Clone, Copy)]
 struct TradingChipLayout {
@@ -87,13 +88,14 @@ const ORDER_TYPE_WIDTH: f64 = 92.0;
 const CONTROL_GAP: f64 = 5.0;
 const ORDER_MARKER_SPAN: f64 = 280.0;
 
-/// A resting limit order is an intention parked at a price, not a directional fill: it takes the
-/// neutral `working_order` accent for as long as it rests, and only reads by side once it fills.
-/// Every other live order — market, stop, stop-limit — is directional and reads by side already.
+/// Protection semantics take precedence over their broker-side implementation: an SL remains
+/// warning yellow and a TP remains profit green. Ordinary sell orders read bearish red. The
+/// neutral working-order accent is reserved for resting buy limits.
 pub(crate) fn trading_order_color(
     style: &crate::TradingStyle,
     kind: crate::OrderKind,
     side: OrderSide,
+    role: OrderRole,
     status: OrderStatus,
 ) -> Color {
     let by_side = match side {
@@ -105,13 +107,16 @@ pub(crate) fn trading_order_color(
         OrderStatus::PendingSubmit | OrderStatus::PendingModify | OrderStatus::PendingCancel => {
             style.pending
         }
+        _ if role == OrderRole::TakeProfit => style.take_profit,
+        _ if role == OrderRole::StopLoss => style.stop_loss,
         OrderStatus::Filled => by_side,
-        OrderStatus::Working | OrderStatus::PartiallyFilled => match kind {
-            crate::OrderKind::Limit => style.working_order,
-            crate::OrderKind::Market | crate::OrderKind::Stop | crate::OrderKind::StopLimit => {
+        OrderStatus::Working | OrderStatus::PartiallyFilled => {
+            if kind == crate::OrderKind::Limit && side == OrderSide::Buy {
+                style.working_order
+            } else {
                 by_side
             }
-        },
+        }
     }
 }
 
@@ -246,7 +251,7 @@ impl ChartEngine {
         self.options.get().layout.font_size + 5.0
     }
 
-    /// The close chip is square, so the glyph sits on the marker's own vertical rhythm.
+    /// The close chip keeps equal width and height, so its glyph sits on the marker's rhythm.
     pub(crate) fn trading_close_width(&self) -> f64 {
         self.trading_control_height()
     }
@@ -377,6 +382,7 @@ impl ChartEngine {
         let by = ((y - height / 2.0) * vpr) as f32;
         let bw = (width * hpr) as f32;
         let bh = (height * vpr) as f32;
+        let radius = (RADIUS_DEFAULT * hpr.min(vpr)) as f32;
         let fill = match (filled, feedback) {
             (true, TradingControlFeedback::Idle) => color.solid(),
             (true, TradingControlFeedback::Hovered) => color.solid().lighten(0.16),
@@ -390,7 +396,7 @@ impl ChartEngine {
             y: by,
             w: bw,
             h: bh,
-            radii: [0.0; 4],
+            radii: [radius; 4],
             fill,
             border_width: vpr.max(1.0) as f32,
             border_color: color,
@@ -463,9 +469,10 @@ impl ChartEngine {
         let color = cluster.color;
         let left = cluster.start();
         let top = y - height / 2.0;
-        // Hairline outline on the chart's own device-pixel convention, and square corners: the
-        // marker chips are chart chrome, not pills.
+        // Hairline outline on the chart's own device-pixel convention. The default design-system
+        // radius keeps these compact controls rounded without turning them into pills.
         let border = vpr.floor().max(1.0) as f32;
+        let radius = (RADIUS_DEFAULT * hpr.min(vpr)) as f32;
         let body_width = cluster.body_width();
         let cell_feedback = |kind: TradingControlSegmentKind| {
             if pressed == Some(kind) {
@@ -484,13 +491,14 @@ impl ChartEngine {
             y: (top * vpr) as f32,
             w: (body_width * hpr) as f32,
             h: (height * vpr) as f32,
-            radii: [0.0; 4],
+            radii: [radius; 4],
             fill: self.trading_chip_background(),
             border_width: border,
             border_color: color,
         });
         let mut cursor = left;
-        for segment in cluster.body() {
+        let body = cluster.body();
+        for (index, segment) in body.iter().enumerate() {
             let feedback = cell_feedback(segment.kind);
             let fill = match (segment.filled, feedback) {
                 (true, TradingControlFeedback::Idle) => Some(color.solid()),
@@ -512,7 +520,12 @@ impl ChartEngine {
                     y: (top * vpr) as f32,
                     w: (segment.width * hpr) as f32,
                     h: (height * vpr) as f32,
-                    radii: [0.0; 4],
+                    radii: [
+                        if index == 0 { radius } else { 0.0 },
+                        if index + 1 == body.len() { radius } else { 0.0 },
+                        if index + 1 == body.len() { radius } else { 0.0 },
+                        if index == 0 { radius } else { 0.0 },
+                    ],
                     fill,
                     border_width: 0.0,
                     border_color: fill,
@@ -550,7 +563,7 @@ impl ChartEngine {
                 y: (top * vpr) as f32,
                 w: (close.width * hpr) as f32,
                 h: (height * vpr) as f32,
-                radii: [0.0; 4],
+                radii: [radius; 4],
                 fill,
                 border_width: border,
                 border_color: color,
@@ -644,6 +657,7 @@ impl ChartEngine {
         } = layout;
         let font_size = self.options.get().layout.font_size;
         let height = font_size + 7.0;
+        let radius = (RADIUS_DEFAULT * hpr.min(vpr)) as f32;
         let width = self.measure_text_run(
             text,
             font_size,
@@ -663,7 +677,7 @@ impl ChartEngine {
             y: (y * vpr) as f32,
             w: (width * hpr) as f32,
             h: (height * vpr) as f32,
-            radii: [0.0; 4],
+            radii: [radius; 4],
             fill: self.trading_chip_background(),
             border_width: vpr.floor().max(1.0) as f32,
             border_color: self.trading_chrome_border(),
@@ -840,6 +854,7 @@ impl ChartEngine {
                 &self.trading_state.style,
                 order.kind,
                 order.side,
+                order.role,
                 order.status,
             );
             // Only a live drag dims the line; a released change is already applied, so nothing

@@ -1,5 +1,10 @@
 {
   "default_theme": "dark",
+  "radius": {
+    "small": 4,
+    "default": 6,
+    "large": 999
+  },
   "light": {
     "surface": "#ffffff",
     "foreground": "#141414",

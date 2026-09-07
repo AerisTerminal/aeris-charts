@@ -9,6 +9,9 @@ mod tests {
     #[test]
     fn canonical_dark_and_market_tokens_are_exact() {
         assert_eq!(DEFAULT_THEME_NAME, "dark");
+        assert_eq!(RADIUS_SMALL, 4.0);
+        assert_eq!(RADIUS_DEFAULT, 6.0);
+        assert_eq!(RADIUS_LARGE, 999.0);
         assert_eq!(LIGHT_SURFACE_CSS, "#ffffff");
         assert_eq!(LIGHT_FOREGROUND_CSS, "#141414");
         assert_eq!(LIGHT_MUTED_CSS, "#fafafa");

@@ -9,7 +9,9 @@ use std::collections::{HashSet, VecDeque};
 use serde::{Deserialize, Serialize};
 
 use crate::{ChartEngine, ChartError, ErrorCode, HitProfile, PriceScaleTarget, PANELESS};
-use nucleuscharts_core::style::{DEFAULT_PRIMARY_RGB, MARKET_DOWN_RGB, MARKET_UP_RGB};
+use nucleuscharts_core::style::{
+    DEFAULT_PRIMARY_RGB, MARKET_DOWN_RGB, MARKET_UP_RGB, MARKET_WARNING_RGB,
+};
 use nucleuscharts_render::color::Color;
 
 pub const MAX_TRADING_OBJECTS: usize = 4_096;
@@ -258,6 +260,11 @@ impl Default for TradingStyle {
         );
         let market_up = Color::rgb(MARKET_UP_RGB.0, MARKET_UP_RGB.1, MARKET_UP_RGB.2);
         let sell = Color::rgb(MARKET_DOWN_RGB.0, MARKET_DOWN_RGB.1, MARKET_DOWN_RGB.2);
+        let warning = Color::rgb(
+            MARKET_WARNING_RGB.0,
+            MARKET_WARNING_RGB.1,
+            MARKET_WARNING_RGB.2,
+        );
         Self {
             position: primary,
             working_order: primary,
@@ -269,8 +276,8 @@ impl Default for TradingStyle {
             profit: market_up,
             risk: sell,
             take_profit: market_up,
-            stop_loss: Color::rgb(0xf5, 0xa6, 0x23),
-            pending: Color::rgb(0xf5, 0xa6, 0x23),
+            stop_loss: warning,
+            pending: warning,
             rejected: Color::rgb(0x78, 0x7b, 0x86),
             control: primary,
             label: Color::rgb(0xff, 0xff, 0xff),
@@ -2267,8 +2274,10 @@ mod tests {
             |text, _bold| text.len() as f64 * 7.0,
             |text, _bold| text.len() as f64 * 6.0,
         );
-        for price in ["99.00", "103.00"] {
-            let color = chart.trading_style().working_order;
+        for (price, color) in [
+            ("99.00", chart.trading_style().stop_loss),
+            ("103.00", chart.trading_style().take_profit),
+        ] {
             assert!(axis
                 .labels
                 .iter()
@@ -2276,8 +2285,10 @@ mod tests {
         }
         let mut axis_primitives = Vec::new();
         chart.build_axis_primitives_into(&axis, &mut axis_primitives, |_| 0.0);
-        for name in ["SL", "TP"] {
-            let color = chart.trading_style().working_order;
+        for (name, color) in [
+            ("SL", chart.trading_style().stop_loss),
+            ("TP", chart.trading_style().take_profit),
+        ] {
             assert!(
                 axis_primitives.iter().any(|primitive| matches!(
                     primitive,
@@ -2907,6 +2918,36 @@ mod tests {
     }
 
     #[test]
+    fn dragging_a_sell_entry_up_creates_a_stop_loss() {
+        let mut chart = chart_with_market();
+        let mut working = order("sell-entry", OrderRole::Working, 102.0);
+        working.position_id = None;
+        working.side = OrderSide::Sell;
+        working.kind = OrderKind::Limit;
+        chart.update_working_order(working).unwrap();
+        chart.build_frame();
+
+        let start_y = chart
+            .trading_price_coordinate(0, TradingPriceScale::Right, 102.0)
+            .unwrap();
+        let stop_y = chart
+            .trading_price_coordinate(0, TradingPriceScale::Right, 103.0)
+            .unwrap();
+        assert!(chart.trading_drag_start_at(chart.trading_marker_start() + 20.0, start_y));
+        assert!(chart.trading_drag_to(stop_y));
+
+        let preview = chart.trading_preview().expect("sell stop-loss preview");
+        assert_eq!(preview.role, OrderRole::StopLoss);
+        assert_eq!(preview.side, OrderSide::Buy);
+        let intent = chart.trading_drag_end().expect("stop-loss intent");
+        assert_eq!(intent.action, TradingIntentAction::CreateStopLoss);
+        assert_eq!(intent.role, Some(OrderRole::StopLoss));
+        assert_eq!(intent.kind, Some(OrderKind::Stop));
+        assert_eq!(intent.side, Some(OrderSide::Buy));
+        assert_eq!(intent.order_id.as_ref().unwrap().as_str(), "sell-entry");
+    }
+
+    #[test]
     fn protection_drags_release_the_same_way_as_working_orders() {
         for (order_id, role, price, target) in [
             ("tp-1", OrderRole::TakeProfit, 103.0, 103.5),
@@ -3134,17 +3175,14 @@ mod tests {
     }
 
     #[test]
-    fn resting_limits_read_neutral_while_stops_and_fills_read_by_side() {
+    fn order_colors_preserve_limit_side_and_protection_semantics() {
         let mut chart = chart_with_market();
-        // A resting limit is an intention parked at a price: neutral until it fills.
-        let mut sell_limit = order("sell-limit", OrderRole::TakeProfit, 103.0);
+        let mut sell_limit = order("sell-limit", OrderRole::Working, 103.0);
         sell_limit.side = OrderSide::Sell;
         sell_limit.kind = OrderKind::Limit;
-        // A stop is a directional trigger, so it reads by side even while it rests.
-        let mut sell_stop = order("sell-stop", OrderRole::StopLoss, 101.5);
+        let mut sell_stop = order("sell-stop", OrderRole::Working, 101.5);
         sell_stop.side = OrderSide::Sell;
         sell_stop.kind = OrderKind::Stop;
-        // Once a limit fills it is a directional fact, so it takes its side color.
         let mut filled_sell_limit = order("filled-sell-limit", OrderRole::Working, 99.0);
         filled_sell_limit.position_id = None;
         filled_sell_limit.side = OrderSide::Sell;
@@ -3155,9 +3193,22 @@ mod tests {
         buy_limit.position_id = None;
         buy_limit.side = OrderSide::Buy;
         buy_limit.kind = OrderKind::Limit;
+        let mut take_profit = order("take-profit", OrderRole::TakeProfit, 104.0);
+        take_profit.side = OrderSide::Sell;
+        take_profit.kind = OrderKind::Limit;
+        let mut stop_loss = order("stop-loss", OrderRole::StopLoss, 98.0);
+        stop_loss.side = OrderSide::Buy;
+        stop_loss.kind = OrderKind::Stop;
         chart
             .set_trading_snapshot(TradingSnapshot {
-                orders: vec![sell_limit, sell_stop, filled_sell_limit, buy_limit],
+                orders: vec![
+                    sell_limit,
+                    sell_stop,
+                    filled_sell_limit,
+                    buy_limit,
+                    take_profit,
+                    stop_loss,
+                ],
                 ..TradingSnapshot::default()
             })
             .unwrap();
@@ -3166,12 +3217,13 @@ mod tests {
         let segments = chart.frame_pane_segments(0).unwrap();
         let trading = &frame.panes[0].main[segments.drawings_end..segments.trading_end];
         let style = chart.trading_style();
-        // Both limits share the neutral accent regardless of side; the stop and the fill do not.
         for (price, expected) in [
-            (103.0, style.working_order),
+            (103.0, style.sell),
             (100.5, style.working_order),
             (101.5, style.sell),
             (99.0, style.sell),
+            (104.0, style.take_profit),
+            (98.0, style.stop_loss),
         ] {
             let y = chart
                 .trading_price_coordinate(0, TradingPriceScale::Right, price)
@@ -3261,8 +3313,7 @@ mod tests {
         for (start, _, width, radii) in &chips {
             assert!(*width > 0.0);
             assert!(*start >= marker_start - 0.5);
-            // Marker chips are square chart chrome, never rounded pills.
-            assert_eq!(*radii, [0.0; 4], "chip at {start} rounded a corner");
+            assert_eq!(*radii, [6.0; 4], "chip at {start} missed the radius token");
         }
         // Every readout is followed by a close chip that clears it, and the separation is the
         // same on all four markers.
