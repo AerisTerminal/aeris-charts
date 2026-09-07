@@ -3313,7 +3313,10 @@ mod tests {
         for (start, _, width, radii) in &chips {
             assert!(*width > 0.0);
             assert!(*start >= marker_start - 0.5);
-            assert_eq!(*radii, [6.0; 4], "chip at {start} missed the radius token");
+            assert_eq!(
+                *radii, [4.0; 4],
+                "chip at {start} missed the small radius token"
+            );
         }
         // Every readout is followed by a close chip that clears it, and the separation is the
         // same on all four markers.

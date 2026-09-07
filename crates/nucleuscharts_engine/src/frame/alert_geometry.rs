@@ -3,9 +3,13 @@ use crate::{
     axis_metrics::{AxisMetrics, AXIS_FONT_SCALE},
     AlertLineStatus, AlertPriceScale, PriceScaleSide,
 };
+use nucleuscharts_core::style::{DEFAULT_MUTED_FOREGROUND_RGB, MARKET_WARNING_RGB};
 
-const ALERT_ACTIVE: Color = PRIMARY;
-const ALERT_TRIGGERED: Color = Color::rgb(0xf5, 0xa6, 0x23);
+const ALERT_TRIGGERED: Color = Color::rgb(
+    MARKET_WARNING_RGB.0,
+    MARKET_WARNING_RGB.1,
+    MARKET_WARNING_RGB.2,
+);
 const ALERT_EXPIRED: Color = Color::rgb(0x78, 0x7b, 0x86);
 
 #[derive(Clone, Copy)]
@@ -18,14 +22,6 @@ pub(crate) struct AlertCreateChip {
     pub(crate) size: f64,
 }
 
-pub(crate) fn alert_color(status: AlertLineStatus) -> Color {
-    match status {
-        AlertLineStatus::Active => ALERT_ACTIVE,
-        AlertLineStatus::Triggered => ALERT_TRIGGERED,
-        AlertLineStatus::Expired => ALERT_EXPIRED,
-    }
-}
-
 /// Fraction of the create chip occupied by the host icon's SVG viewport.
 /// Leave a narrow inset around the asset so its outer stroke does not crowd the
 /// chip edge while retaining a stable one-pixel-or-wider stroke at 1x DPR.
@@ -34,6 +30,19 @@ pub(crate) fn alert_color(status: AlertLineStatus) -> Color {
 pub(crate) const CREATE_ICON_FRACTION: f64 = 0.9;
 
 impl ChartEngine {
+    pub(crate) fn alert_color(&self, status: AlertLineStatus) -> Color {
+        match status {
+            AlertLineStatus::Active => {
+                let fallback = DEFAULT_MUTED_FOREGROUND_RGB;
+                Color::parse_css(&self.options.get().layout.muted_text_color)
+                    .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2))
+                    .solid()
+            }
+            AlertLineStatus::Triggered => ALERT_TRIGGERED,
+            AlertLineStatus::Expired => ALERT_EXPIRED,
+        }
+    }
+
     pub(crate) fn alert_create_chip(&self) -> Option<AlertCreateChip> {
         if !self.alert_state.create_button_visible
             || self.crosshair_mode == CrosshairMode::Hidden
@@ -241,7 +250,7 @@ impl ChartEngine {
             let Some(y) = self.runtime_price_coordinate(pane_index, target, line.price) else {
                 continue;
             };
-            let color = alert_color(line.status);
+            let color = self.alert_color(line.status);
             out.push(Prim::HLine {
                 y: (y * vpr).round() as i32,
                 x0: 0,

@@ -358,7 +358,6 @@ function trading_features(chart, bars) {
           condition: "crossing",
           frequency: "only_once",
           status: "active",
-          label: "Demo alert",
         });
       };
       chart.subscribe_crosshair_action(create_demo_alert);

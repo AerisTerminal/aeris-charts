@@ -1566,15 +1566,14 @@ impl ChartEngine {
                     ))
                 })
                 .unwrap_or_else(|| self.price_formatter.format(line.price));
-            // The tag shows the price (or the host's label) and nothing else, exactly like every
-            // other axis tag; the attached bell badge is what marks the line as an alert.
-            let text = line.label.clone().unwrap_or(price);
+            // Labels are host metadata. The tag always shows the actual formatted price; the
+            // attached bell badge is what marks the line as an alert.
             append(
                 line.pane_index,
                 target,
                 line.price,
-                text,
-                super::alert_geometry::alert_color(line.status),
+                price,
+                self.alert_color(line.status),
                 true,
                 false,
                 false,

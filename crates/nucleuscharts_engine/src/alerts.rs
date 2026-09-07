@@ -462,9 +462,11 @@ mod tests {
     #[test]
     fn alert_lines_and_axis_indicators_use_the_shared_frame() {
         let mut chart = chart_with_market();
+        let mut active = line("active", AlertLineStatus::Active);
+        active.label = Some("Demo alert".to_string());
         chart
             .set_alert_snapshot(AlertSnapshot {
-                lines: vec![line("active", AlertLineStatus::Active)],
+                lines: vec![active],
             })
             .unwrap();
         let frame = chart.build_frame();
@@ -475,7 +477,7 @@ mod tests {
             .any(|primitive| matches!(primitive, Prim::HLine { .. })));
         // The line is named by an attached bell badge — drawn geometry, not a glyph — so the
         // axis tag itself carries nothing but the price, like every other tag.
-        let color = crate::frame::alert_geometry::alert_color(AlertLineStatus::Active);
+        let color = chart.alert_color(AlertLineStatus::Active);
         assert!(actionable.iter().any(|primitive| matches!(
             primitive,
             Prim::RoundRect { fill, radii, .. }
@@ -490,6 +492,24 @@ mod tests {
             |text, _bold| text.len() as f64 * 6.0,
         );
         assert!(axis.labels.iter().any(|label| label.text == "102.00"));
+        assert!(axis.labels.iter().all(|label| label.text != "Demo alert"));
+    }
+
+    #[test]
+    fn active_alerts_use_the_theme_muted_text_color() {
+        let mut chart = chart_with_market();
+        chart
+            .options
+            .apply_str(r##"{"layout":{"mutedTextColor":"#8a8f98"}}"##)
+            .unwrap();
+        assert_eq!(
+            chart.alert_color(AlertLineStatus::Active),
+            Color::rgb(0x8a, 0x8f, 0x98)
+        );
+        assert_ne!(
+            chart.alert_color(AlertLineStatus::Active),
+            Color::rgb(0x3e, 0x63, 0xdd)
+        );
     }
 
     #[test]

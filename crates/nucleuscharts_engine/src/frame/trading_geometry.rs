@@ -3,7 +3,7 @@ use crate::trading::{
     ExecutionKind, OrderRole, OrderSide, OrderStatus, PositionSide, TradingGroupVisualState,
 };
 use crate::Pane;
-use nucleuscharts_core::style::RADIUS_DEFAULT;
+use nucleuscharts_core::style::RADIUS_SMALL;
 
 #[derive(Clone, Copy)]
 struct TradingChipLayout {
@@ -382,7 +382,7 @@ impl ChartEngine {
         let by = ((y - height / 2.0) * vpr) as f32;
         let bw = (width * hpr) as f32;
         let bh = (height * vpr) as f32;
-        let radius = (RADIUS_DEFAULT * hpr.min(vpr)) as f32;
+        let radius = (RADIUS_SMALL * hpr.min(vpr)) as f32;
         let fill = match (filled, feedback) {
             (true, TradingControlFeedback::Idle) => color.solid(),
             (true, TradingControlFeedback::Hovered) => color.solid().lighten(0.16),
@@ -469,10 +469,10 @@ impl ChartEngine {
         let color = cluster.color;
         let left = cluster.start();
         let top = y - height / 2.0;
-        // Hairline outline on the chart's own device-pixel convention. The default design-system
+        // Hairline outline on the chart's own device-pixel convention. The small design-system
         // radius keeps these compact controls rounded without turning them into pills.
         let border = vpr.floor().max(1.0) as f32;
-        let radius = (RADIUS_DEFAULT * hpr.min(vpr)) as f32;
+        let radius = (RADIUS_SMALL * hpr.min(vpr)) as f32;
         let body_width = cluster.body_width();
         let cell_feedback = |kind: TradingControlSegmentKind| {
             if pressed == Some(kind) {
@@ -657,7 +657,7 @@ impl ChartEngine {
         } = layout;
         let font_size = self.options.get().layout.font_size;
         let height = font_size + 7.0;
-        let radius = (RADIUS_DEFAULT * hpr.min(vpr)) as f32;
+        let radius = (RADIUS_SMALL * hpr.min(vpr)) as f32;
         let width = self.measure_text_run(
             text,
             font_size,

@@ -1720,6 +1720,7 @@ export interface alert_line {
   condition?: alert_condition;
   frequency?: alert_frequency;
   status?: alert_line_status;
+  /** Optional host metadata. The chart's axis tag always renders the formatted `price`. */
   label?: string;
 }
 

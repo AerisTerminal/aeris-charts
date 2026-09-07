@@ -36,8 +36,8 @@ test("crosshair plus chip emits an exact host request and host alert lines stay 
     condition: "crossing",
     frequency: "only_once",
     status: "active",
-    label: "Demo alert",
   });
+  expect(demo_line.label).toBeUndefined();
 
   const state = await page.evaluate((price) => {
     const alerts = window.__chart.alerts();
