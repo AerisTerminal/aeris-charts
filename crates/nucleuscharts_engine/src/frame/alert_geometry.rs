@@ -46,6 +46,7 @@ impl ChartEngine {
     pub(crate) fn alert_create_chip(&self) -> Option<AlertCreateChip> {
         if !self.alert_state.create_button_visible
             || self.crosshair_mode == CrosshairMode::Hidden
+            || self.crosshair_suppressed_by_interaction()
             || !self.options.get().crosshair.horz_line.label_visible
         {
             return None;

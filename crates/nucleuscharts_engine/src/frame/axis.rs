@@ -2268,7 +2268,9 @@ impl ChartEngine {
         let Some((from, to)) = self.visible_range_for_frame() else {
             return;
         };
-        if self.crosshair_mode == CrosshairMode::Hidden {
+        if self.crosshair_mode == CrosshairMode::Hidden
+            || self.crosshair_suppressed_by_interaction()
+        {
             return;
         }
         // Price-axis label tracks the horizontal line (reference `horzLine`); time-axis label tracks the

@@ -261,6 +261,8 @@ labels, image placement, and every specialized series frame are constructed in R
 handles release their engine primitive plus any host subscription, timer, or DOM node exactly once;
 none of that runtime state enters engine persistence.
 
+Interactive chart objects own pointer feedback: the shared frame suppresses the complete visual crosshair (lines, markers, and axis labels) while any trading object or drawing is hovered, created, or dragged. The engine retains the crosshair position for snapping and host callbacks, while each host continues to show the object's pointer, click, grab, or drag cursor.
+
 ## Performance contract
 
 Performance comes from avoiding work:

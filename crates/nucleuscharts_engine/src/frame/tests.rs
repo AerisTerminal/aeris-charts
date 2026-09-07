@@ -538,6 +538,140 @@ fn crosshair_chart() -> ChartEngine {
     chart
 }
 
+fn visual_crosshair_presence(chart: &mut ChartEngine) -> (bool, bool) {
+    let line_color = Color::rgb(0x12, 0x34, 0x56);
+    let label_color = Color::rgb(0x65, 0x43, 0x21);
+    let frame = chart.build_frame();
+    let lines = frame
+        .panes
+        .iter()
+        .flat_map(|pane| &pane.main)
+        .any(|primitive| {
+            matches!(
+                primitive,
+                Prim::VLine { color, .. } | Prim::HLine { color, .. } if *color == line_color
+            )
+        });
+    let suppressed_after_frame = chart.crosshair_suppressed_by_interaction();
+    let axis = chart.build_axis_frame(
+        80.0,
+        |text, _| text.len() as f64 * 7.0,
+        |text, _| text.len() as f64 * 6.0,
+    );
+    let labels = axis.labels.iter().any(|label| {
+        !label.text.is_empty()
+            && matches!(label.background, Some((.., color)) if color == label_color)
+    });
+    assert_eq!(
+        suppressed_after_frame,
+        chart.crosshair_suppressed_by_interaction()
+    );
+    (lines, labels)
+}
+
+fn configure_distinct_crosshair(chart: &mut ChartEngine) {
+    chart
+        .apply_options(
+            r##"{
+                "crosshair": {
+                    "vertLine": {"color":"#123456","labelBackgroundColor":"#654321"},
+                    "horzLine": {"color":"#123456","labelBackgroundColor":"#654321"}
+                }
+            }"##,
+        )
+        .unwrap();
+    chart.set_crosshair_at(chart.time_scale.index_to_coordinate(1), 250.0);
+}
+
+#[test]
+fn trading_objects_suppress_the_visual_crosshair_without_clearing_its_position() {
+    let mut chart = crosshair_chart();
+    configure_distinct_crosshair(&mut chart);
+    assert_eq!(visual_crosshair_presence(&mut chart), (true, true));
+
+    chart
+        .set_trading_snapshot(crate::TradingSnapshot {
+            orders: vec![crate::WorkingOrder {
+                id: crate::OrderId::new("crosshair-order").unwrap(),
+                pane_index: 0,
+                price_scale: crate::TradingPriceScale::Right,
+                side: crate::OrderSide::Sell,
+                kind: crate::OrderKind::Limit,
+                role: crate::OrderRole::Working,
+                status: crate::OrderStatus::Working,
+                price: 11.5,
+                stop_price: None,
+                quantity: 1.0,
+                filled_quantity: 0.0,
+                position_id: None,
+                parent_order_id: None,
+                bracket_id: None,
+                oco_group_id: None,
+                revision: 1,
+            }],
+            ..crate::TradingSnapshot::default()
+        })
+        .unwrap();
+    chart.build_frame();
+    let y = chart
+        .trading_price_coordinate(0, crate::TradingPriceScale::Right, 11.5)
+        .unwrap();
+    assert!(chart.set_trading_hover(chart.trading_marker_start() + 20.0, y));
+    assert!(chart.crosshair_suppressed_by_interaction());
+    assert_eq!(visual_crosshair_presence(&mut chart), (false, false));
+    assert!(
+        chart.crosshair.is_some(),
+        "callbacks retain the pointer position"
+    );
+
+    assert!(chart.trading_drag_start_at(chart.trading_marker_start() + 20.0, y));
+    assert!(chart.clear_trading_hover());
+    assert_eq!(visual_crosshair_presence(&mut chart), (false, false));
+    assert!(chart.cancel_trading_drag());
+    assert_eq!(visual_crosshair_presence(&mut chart), (true, true));
+}
+
+#[test]
+fn drawing_hover_drag_and_creation_suppress_the_visual_crosshair() {
+    let mut chart = crosshair_chart();
+    configure_distinct_crosshair(&mut chart);
+    let id = chart
+        .add_drawing(
+            crate::DrawingKind::TrendLine,
+            0,
+            vec![
+                crate::DrawingPoint {
+                    logical: 1.0,
+                    price: 10.5,
+                },
+                crate::DrawingPoint {
+                    logical: 2.0,
+                    price: 12.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    assert_eq!(visual_crosshair_presence(&mut chart), (true, true));
+
+    chart.set_hovered_drawing(Some(id));
+    assert!(chart.crosshair_suppressed_by_interaction());
+    assert_eq!(visual_crosshair_presence(&mut chart), (false, false));
+    chart.set_hovered_drawing(None);
+    assert_eq!(visual_crosshair_presence(&mut chart), (true, true));
+
+    let (x, y) = chart.drawing_point_to_coordinate(id, 0).unwrap();
+    assert!(chart.drawing_drag_start_at(x, y));
+    assert_eq!(visual_crosshair_presence(&mut chart), (false, false));
+    chart.drawing_drag_end();
+    assert_eq!(visual_crosshair_presence(&mut chart), (true, true));
+
+    assert!(chart.drawing_create_begin(crate::DrawingKind::Rectangle, None));
+    assert_eq!(visual_crosshair_presence(&mut chart), (false, false));
+    chart.drawing_create_cancel();
+    assert_eq!(visual_crosshair_presence(&mut chart), (true, true));
+}
+
 #[test]
 fn crosshair_column_contains_the_wick_column_at_any_dpr() {
     // The vertical crosshair must land exactly on the hovered candle's wick at every device

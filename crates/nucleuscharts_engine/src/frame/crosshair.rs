@@ -3,6 +3,22 @@
 use super::*;
 
 impl ChartEngine {
+    /// Interactive chart objects own pointer feedback while they are hovered or manipulated.
+    /// Keep the stored crosshair position for host callbacks and snapping, but do not paint its
+    /// lines, markers, or labels through the object the pointer is acting on.
+    pub(crate) fn crosshair_suppressed_by_interaction(&self) -> bool {
+        self.hovered_drawing.is_some()
+            || self.drawing_drag.is_some()
+            || self.pending_drawing.is_some()
+            || self.brush_capture.is_some()
+            || self.trading_state.feedback_hover.is_some()
+            || matches!(
+                self.trading_state.interaction,
+                crate::trading::TradingInteractionState::Hovering { .. }
+                    | crate::trading::TradingInteractionState::DraggingOrder { .. }
+            )
+    }
+
     pub(super) fn build_crosshair_frame(
         &self,
         pane_index: usize,
@@ -17,7 +33,9 @@ impl ChartEngine {
         let Some((from, to)) = self.visible_range_for_frame() else {
             return;
         };
-        if self.crosshair_mode == CrosshairMode::Hidden {
+        if self.crosshair_mode == CrosshairMode::Hidden
+            || self.crosshair_suppressed_by_interaction()
+        {
             return;
         }
         let index = self.snapped_crosshair_index(x_css);

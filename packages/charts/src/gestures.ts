@@ -217,11 +217,9 @@ export function install_gestures(chart: chart_impl): () => void {
 
   const set_crosshair = (x: number, y: number) => {
     last_crosshair = { x, y };
-    // Pointing at a trading button suppresses the crosshair lines: the button is a control, not a
-    // price to read, and drawing the crosshair over it puts a line straight through the icon.
-    // Subscribers still receive the move — only the on-chart lines and their labels step aside.
-    if (chart.trading_hit_at(x, y)?.kind === "cancel_button") wasm.clear_crosshair();
-    else wasm.set_crosshair(x, y);
+    // The engine keeps this position for callbacks and snapping while suppressing its visual
+    // crosshair whenever an interactive trading object or drawing owns pointer feedback.
+    wasm.set_crosshair(x, y);
     // Phase C-d: refresh the hover hit-test (primitives + series) before the repaint that
     // follows, so a hovered series' `hoveredSeriesOnTop` z-bump lands on the same frame.
     chart.update_hover(x, y);

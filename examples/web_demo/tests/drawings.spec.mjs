@@ -388,6 +388,12 @@ test("path clicks add vertices, Backspace pops, and Enter or double-click finish
 
 test("click selects with anchor handles and part cursors; empty click deselects", async ({ page }) => {
   await goto_fixture(page);
+  await page.evaluate(() => window.__chart.apply_options({
+    crosshair: {
+      vertLine: { color: "#ff00ff", labelBackgroundColor: "#ff00ff" },
+      horzLine: { color: "#ff00ff", labelBackgroundColor: "#ff00ff" },
+    },
+  }));
   const s = await anchor_spots(page);
   // Black stroke: the blue handle discs are unambiguous against it.
   await page.evaluate(({ l0, l1, p_lo, p_hi }) => {
@@ -399,6 +405,11 @@ test("click selects with anchor handles and part cursors; empty click deselects"
   await settle_frames(page);
   const clean = await capture(page);
   expect(count_color(clean, BLUE), "no handles while unselected").toBe(0);
+  const empty = await empty_spot(page);
+  await page.mouse.move(empty.x, empty.y);
+  await settle_frames(page);
+  expect(count_color(await capture(page), [255, 0, 255]), "ordinary pane hover paints the crosshair")
+    .toBeGreaterThan(100);
 
   // Hovering the body reports the drawing with the move cursor.
   const mid = await page.evaluate(({ l0, l1, p_lo, p_hi }) => ({
@@ -413,6 +424,8 @@ test("click selects with anchor handles and part cursors; empty click deselects"
   const id = (await drawings(page))[0].id;
   expect(await page.evaluate(() => window.__hits[window.__hits.length - 1])).toBe(`drawing:${id}`);
   expect(await overlay_cursor(page)).toBe("move");
+  await settle_frames(page);
+  expect(count_color(await capture(page), [255, 0, 255]), "drawing hover suppresses crosshair chrome").toBe(0);
 
   // Click selects: anchor handles (blue discs) appear at both defining points.
   await page.mouse.click(mid.x, mid.y);
@@ -427,7 +440,6 @@ test("click selects with anchor handles and part cursors; empty click deselects"
   expect(await overlay_cursor(page)).toBe("pointer");
 
   // Clicking empty pane space deselects (handles gone; nothing else selects).
-  const empty = await empty_spot(page);
   await page.mouse.click(empty.x, empty.y);
   await settle_frames(page);
   expect(await page.evaluate(() => window.__chart.selected_drawing())).toBeNull();

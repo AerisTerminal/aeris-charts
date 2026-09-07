@@ -2833,6 +2833,7 @@ impl ChartEngine {
             drawing,
             preview: None,
         });
+        self.invalidate_frame_overlay();
         true
     }
 
@@ -2920,6 +2921,7 @@ impl ChartEngine {
     }
 
     fn commit_pending_drawing(&mut self, pending: PendingDrawing) -> DrawingId {
+        self.invalidate_frame_overlay();
         let Some(id) = self.take_drawing_id() else {
             return 0;
         };
@@ -3043,6 +3045,7 @@ impl ChartEngine {
     /// Abandon the in-progress creation (Escape / tool disarm).
     pub fn drawing_create_cancel(&mut self) {
         self.invalidate_frame_drawings();
+        self.invalidate_frame_overlay();
         self.pending_drawing = None;
     }
 
@@ -3083,6 +3086,7 @@ impl ChartEngine {
             last_px: (x, y),
             options,
         });
+        self.invalidate_frame_overlay();
         true
     }
 
@@ -3118,6 +3122,7 @@ impl ChartEngine {
     /// (fewer than two points / no capture active).
     pub fn brush_create_end(&mut self) -> DrawingId {
         self.invalidate_frame_drawings();
+        self.invalidate_frame_overlay();
         let Some(capture) = self.brush_capture.take() else {
             return 0;
         };
@@ -3145,6 +3150,7 @@ impl ChartEngine {
     /// Abandon the in-progress stroke (Escape / tool disarm).
     pub fn brush_create_cancel(&mut self) {
         self.invalidate_frame_drawings();
+        self.invalidate_frame_overlay();
         self.brush_capture = None;
     }
 

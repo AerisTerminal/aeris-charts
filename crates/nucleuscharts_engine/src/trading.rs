@@ -836,6 +836,7 @@ impl ChartEngine {
             });
         }
         self.invalidate_frame_trading();
+        self.invalidate_frame_overlay();
         true
     }
 
@@ -870,6 +871,7 @@ impl ChartEngine {
             self.trading_state.interaction = TradingInteractionState::Idle;
         }
         self.invalidate_frame_trading();
+        self.invalidate_frame_overlay();
         true
     }
 
@@ -1218,6 +1220,7 @@ impl ChartEngine {
             preview,
         };
         self.invalidate_frame_trading();
+        self.invalidate_frame_overlay();
         true
     }
 
@@ -1278,6 +1281,7 @@ impl ChartEngine {
             preview,
         };
         self.invalidate_frame_trading();
+        self.invalidate_frame_overlay();
         true
     }
 
@@ -1331,11 +1335,13 @@ impl ChartEngine {
         if (start_price - preview.price).abs() <= tolerance {
             self.trading_state.interaction = TradingInteractionState::Idle;
             self.invalidate_frame_trading();
+            self.invalidate_frame_overlay();
             return None;
         }
         if !self.trading_preview_price_valid(&preview) {
             self.trading_state.interaction = TradingInteractionState::Idle;
             self.invalidate_frame_trading();
+            self.invalidate_frame_overlay();
             return None;
         }
         let intent = self.commit_trading_preview();
@@ -1343,6 +1349,7 @@ impl ChartEngine {
             self.trading_state.interaction = TradingInteractionState::Idle;
             self.invalidate_frame_trading();
         }
+        self.invalidate_frame_overlay();
         intent
     }
 
@@ -1355,6 +1362,7 @@ impl ChartEngine {
         }
         self.trading_state.interaction = TradingInteractionState::Idle;
         self.invalidate_frame_trading();
+        self.invalidate_frame_overlay();
         true
     }
 
