@@ -9,7 +9,6 @@ use std::collections::{HashSet, VecDeque};
 use serde::{Deserialize, Serialize};
 
 use crate::{ChartEngine, ChartError, ErrorCode, PriceScaleTarget, PANELESS};
-use nucleuscharts_render::draw_list::RasterImage;
 
 pub const MAX_ALERT_LINES: usize = 4_096;
 const MAX_ALERT_REQUESTS: usize = 256;
@@ -147,15 +146,7 @@ pub(crate) struct AlertState {
     pub create_button_visible: bool,
     requests: VecDeque<AlertCreateRequest>,
     next_request_sequence: u32,
-    /// Host-rasterized create-chip icon (straight RGBA8). `None` falls back to
-    /// the prim-composed icon so headless/native hosts keep working.
-    pub(crate) create_icon: Option<RasterImage>,
-    next_icon_key: u64,
 }
-
-/// Hard cap for one create-icon side: 96px RGBA is 36 KiB, negligible next to
-/// the tape, and far above the ~17px the chip ever draws.
-pub const MAX_ALERT_ICON_PX: u32 = 96;
 
 impl Default for AlertState {
     fn default() -> Self {
@@ -164,8 +155,6 @@ impl Default for AlertState {
             create_button_visible: true,
             requests: VecDeque::new(),
             next_request_sequence: 0,
-            create_icon: None,
-            next_icon_key: 0,
         }
     }
 }
@@ -193,10 +182,6 @@ impl AlertState {
                     line.id.heap_bytes() + line.label.as_ref().map_or(0, |label| label.capacity())
                 })
                 .sum::<usize>()
-            + self
-                .create_icon
-                .as_ref()
-                .map_or(0, |icon| icon.pixels.len())
     }
 }
 
@@ -293,48 +278,6 @@ impl ChartEngine {
 
     pub fn alert_create_button_visible(&self) -> bool {
         self.alert_state.create_button_visible
-    }
-
-    /// Install a host-rasterized create-chip icon (straight-alpha RGBA8 rows).
-    /// The host owns rasterization (SVG decode, DPR supersampling, glyph
-    /// color); the engine retains these exact pixels like a watermark, so the
-    /// icon survives theme switches and device loss without re-decoding.
-    /// Rejects out-of-range dimensions or a short buffer without mutation.
-    pub fn set_alert_create_icon(&mut self, pixels: Vec<u8>, width: u32, height: u32) -> bool {
-        if width == 0
-            || height == 0
-            || width > MAX_ALERT_ICON_PX
-            || height > MAX_ALERT_ICON_PX
-            || pixels.len() != width as usize * height as usize * 4
-        {
-            return false;
-        }
-        self.alert_state.next_icon_key = self.alert_state.next_icon_key.wrapping_add(1).max(1);
-        let key = self.alert_state.next_icon_key;
-        self.alert_state.create_icon = Some(RasterImage {
-            key,
-            width,
-            height,
-            pixels: pixels.into(),
-        });
-        self.invalidate_frame_axis();
-        true
-    }
-
-    pub fn clear_alert_create_icon(&mut self) -> bool {
-        if self.alert_state.create_icon.take().is_none() {
-            return false;
-        }
-        self.invalidate_frame_axis();
-        true
-    }
-
-    /// CSS-px side of the create-chip icon box the host rasterizer should
-    /// target. The engine draws the installed image centered at this size, so
-    /// both sides agree through this one value.
-    pub fn alert_create_icon_css_size(&self) -> f64 {
-        use crate::frame::alert_geometry::CREATE_ICON_FRACTION;
-        self.axis_metrics().crosshair_price_tag_height() * CREATE_ICON_FRACTION
     }
 
     pub fn take_alert_create_requests(&mut self) -> Vec<AlertCreateRequest> {
@@ -586,8 +529,7 @@ mod tests {
             |text, _bold| text.len() as f64 * 7.0,
             |text, _bold| text.len() as f64 * 6.0,
         );
-        // The container is textless; the "+" label owns the icon-hugging ring so
-        // its glyph paints after its own boxes.
+        // The container fill stays separate from the shared vector icon.
         let container = axis
             .labels
             .iter()
@@ -604,46 +546,14 @@ mod tests {
         assert_eq!(plus_color, Color::rgb(0x12, 0x34, 0x56));
         assert_eq!(container.background_corners, crate::AxisLabelCorners::LEFT);
         assert_eq!(container.border, None);
-        // Icon and bars stay fixed white on every theme and state.
-        let glyph = Color::rgb(0xff, 0xff, 0xff);
-        // PlusSignSquare icon: compact rounded square plus two bars
-        // proportioned to the source 24-grid (arms 8/19 long, 1.5/19 thick).
-        let icon_side = chip.size * 0.62;
-        let stroke = (icon_side * 1.5 / 19.0).round().max(1.0);
-        let arm = icon_side * 8.0 / 19.0;
-        let icon = axis
-            .labels
-            .iter()
-            .find(|label| {
-                label.text.is_empty()
-                    && label.background.is_some_and(|(ix, iy, w, h, color)| {
-                        color == plus_color
-                            && (w - icon_side).abs() < 1e-9
-                            && (h - icon_side).abs() < 1e-9
-                            && (ix - (chip.x + chart.pane_left + chip.size * 0.19)).abs() < 1e-9
-                            && (iy - (chip.y - chip.size * 0.31)).abs() < 1e-9
-                    })
-            })
-            .expect("plus-square icon outline");
-        assert_eq!(icon.background_corners, crate::AxisLabelCorners::ALL);
-        assert_eq!(icon.border, Some((1.0, glyph)));
-        let center_x = chip.x + chart.pane_left + chip.size / 2.0;
-        for (bar_w, bar_h) in [(arm, stroke), (stroke, arm)] {
-            assert!(
-                axis.labels.iter().any(|label| {
-                    label.text.is_empty()
-                        && label.border.is_none()
-                        && label.background.is_some_and(|(bx, by, w, h, color)| {
-                            color == glyph
-                                && (w - bar_w).abs() < 1e-9
-                                && (h - bar_h).abs() < 1e-9
-                                && (bx + w / 2.0 - center_x).abs() < 1e-9
-                                && (by + h / 2.0 - chip.y).abs() < 1e-9
-                        })
-                }),
-                "plus arm {bar_w}x{bar_h} centered on the chip"
-            );
-        }
+        assert_eq!(
+            axis.crosshair_action_icon,
+            Some([
+                chip.x + chart.pane_left + chip.size / 2.0,
+                chip.y,
+                chip.size * 0.9,
+            ])
+        );
         // The crosshair sits mid-pane here, off the chip: idle styling above.
         // Parking it on the chip lifts the fill a step with no blue anywhere,
         // and the button keeps its geometry and hit rect.
@@ -654,8 +564,6 @@ mod tests {
             |text, _bold| text.len() as f64 * 6.0,
         );
         let lifted = Color::rgb(0x12, 0x34, 0x56).lighten(0.3);
-        // Hover lifts the fills; the icon keeps the theme foreground.
-        let lifted_glyph = glyph;
         let hovered_container = hovered_axis
             .labels
             .iter()
@@ -673,29 +581,9 @@ mod tests {
             hovered_container.background_corners,
             crate::AxisLabelCorners::LEFT
         );
-        assert!(
-            hovered_axis.labels.iter().any(|label| {
-                label.text.is_empty()
-                    && label.border == Some((1.0, lifted_glyph))
-                    && label.background.is_some_and(|(_, _, w, h, color)| {
-                        color == lifted
-                            && (w - icon_side).abs() < 1e-9
-                            && (h - icon_side).abs() < 1e-9
-                    })
-            }),
-            "hovered icon outline follows the glyph"
-        );
-        assert!(
-            hovered_axis.labels.iter().any(|label| {
-                label.text.is_empty()
-                    && label.border.is_none()
-                    && label.background.is_some_and(|(_, _, w, h, color)| {
-                        color == lifted_glyph
-                            && ((w - arm).abs() < 1e-9 && (h - stroke).abs() < 1e-9
-                                || (w - stroke).abs() < 1e-9 && (h - arm).abs() < 1e-9)
-                    })
-            }),
-            "hovered plus arms follow the glyph"
+        assert_eq!(
+            hovered_axis.crosshair_action_icon,
+            axis.crosshair_action_icon
         );
         let price_chip = axis
             .labels
@@ -724,93 +612,72 @@ mod tests {
     }
 
     #[test]
-    fn host_rasterized_create_icon_replaces_the_fallback_and_reaches_prims() {
-        let mut chart = chart_with_market();
-        let y = chart
-            .runtime_price_coordinate(0, PriceScaleTarget::Right, 102.0)
-            .expect("populated right scale");
-        chart.crosshair = Some((200.0, y));
-        // Rejections leave state untouched.
-        assert!(!chart.set_alert_create_icon(vec![0u8; 3], 1, 1));
-        assert!(!chart.set_alert_create_icon(vec![0u8; 4 * 97 * 97], 97, 97));
-        assert!(!chart.set_alert_create_icon(vec![0u8; 4], 0, 1));
-        assert!(chart.alert_state.create_icon.is_none());
-        // Accept a 2x2 white square and confirm the axis picks it up.
-        assert!(chart.set_alert_create_icon(vec![0xffu8; 16], 2, 2));
-        assert!(chart.frame_requires_axis());
-        let chip = chart
-            .alert_create_chip()
-            .expect("visible crosshair alert chip");
-        let axis = chart.build_axis_frame(
-            100.0,
-            |text, _bold| text.len() as f64 * 7.0,
-            |text, _bold| text.len() as f64 * 6.0,
-        );
-        assert!(!chart.frame_requires_axis());
-        assert_eq!(axis.images.len(), 1);
-        let icon = &axis.images[0];
-        let side = chip.size * crate::frame::alert_geometry::CREATE_ICON_FRACTION;
-        let inset = (chip.size - side) / 2.0;
-        assert!((icon.x - (chip.x + chart.pane_left + inset)).abs() < 1e-9);
-        assert!((icon.y - (chip.y - chip.size / 2.0 + inset)).abs() < 1e-9);
-        assert!((icon.width - side).abs() < 1e-9);
-        assert!((icon.height - side).abs() < 1e-9);
-        assert_eq!((icon.image.width, icon.image.height), (2, 2));
-        assert_eq!(icon.image.pixels.as_ref(), &[0xffu8; 16]);
-        // The container fill remains; the prim-composed fallback is gone.
-        assert!(
-            axis.labels.iter().any(|label| {
-                label.text.is_empty()
-                    && label.background.is_some_and(|(_, _, w, h, _)| {
-                        (w - chip.size).abs() < 1e-9 && (h - chip.size).abs() < 1e-9
-                    })
-            }),
-            "container fill stays under the raster icon"
-        );
-        assert!(
-            !axis.labels.iter().any(|label| {
-                label.border.is_some()
-                    && label.background.is_some_and(|(_, _, w, h, _)| {
-                        (w - chip.size * 0.62).abs() < 1e-9 && (h - chip.size * 0.62).abs() < 1e-9
-                    })
-            }),
-            "no fallback icon outline while the raster icon is installed"
-        );
-        // The shared converter lowers it to one image prim for every backend.
-        let mut prims = Vec::new();
-        chart.build_axis_primitives_into(&axis, &mut prims, |_| 0.0);
-        let images = prims
-            .iter()
-            .filter_map(|prim| match prim {
-                Prim::Image {
-                    image,
-                    rect,
-                    opacity,
-                } => Some((image, rect, opacity)),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(images.len(), 1);
-        assert_eq!(*images[0].2, 1.0);
-        assert!(images[0].1.iter().all(|value| value.fract() == 0.0));
-        // Clearing restores the prim fallback.
-        assert!(chart.clear_alert_create_icon());
-        assert!(!chart.clear_alert_create_icon());
-        let axis = chart.build_axis_frame(
-            100.0,
-            |text, _bold| text.len() as f64 * 7.0,
-            |text, _bold| text.len() as f64 * 6.0,
-        );
-        assert!(axis.images.is_empty());
-        assert!(
-            axis.labels.iter().any(|label| {
-                label.text.is_empty()
-                    && label.border.is_some()
-                    && label.background.is_some_and(|(_, _, w, h, _)| {
-                        (w - chip.size * 0.62).abs() < 1e-9 && (h - chip.size * 0.62).abs() < 1e-9
-                    })
-            }),
-            "fallback icon returns after clear"
-        );
+    fn crosshair_action_uses_svg_circle_geometry_at_each_dpr() {
+        for dpr in [1.0, 1.25, 1.5, 2.0, 3.0] {
+            let mut chart = chart_with_market();
+            chart.dpr = dpr;
+            let y = chart
+                .runtime_price_coordinate(0, PriceScaleTarget::Right, 102.0)
+                .unwrap();
+            chart.crosshair = Some((200.0, y));
+            let axis = chart.build_axis_frame(
+                100.0,
+                |text, _| text.len() as f64 * 7.0,
+                |text, _| text.len() as f64 * 6.0,
+            );
+            let chip = chart.alert_create_chip().unwrap();
+            let mut prims = Vec::new();
+            chart.build_axis_primitives_into(&axis, &mut prims, |_| 0.0);
+            let unit = chip.size * 0.9 / 24.0 * dpr;
+            let ring = prims
+                .iter()
+                .find_map(|prim| match prim {
+                    Prim::Circle {
+                        cx,
+                        cy,
+                        radius,
+                        fill,
+                        stroke_width,
+                        stroke,
+                    } => Some((*cx, *cy, *radius, *fill, *stroke_width, *stroke)),
+                    _ => None,
+                })
+                .expect(
+                    "crosshair action must use the web SVG circle in the shared primitive stream",
+                );
+            assert_eq!(
+                ring.0,
+                ((chip.x + chart.pane_left + chip.size / 2.0) * dpr) as f32
+            );
+            assert_eq!(ring.1, (chip.y * dpr) as f32);
+            assert_eq!(ring.2, (10.0 * unit) as f32);
+            assert_eq!(ring.3, Color::rgba(0, 0, 0, 0));
+            assert_eq!(ring.4, (1.5 * unit) as f32);
+            assert_eq!(ring.5, Color::rgb(255, 255, 255));
+            let glyph = Color::rgb(255, 255, 255);
+            let stroke = 1.5 * unit;
+            for (prim, (w, h)) in prims[prims.len() - 2..]
+                .iter()
+                .zip([(9.5 * unit, stroke), (stroke, 9.5 * unit)])
+            {
+                let Prim::RoundRect {
+                    w: actual_w,
+                    h: actual_h,
+                    radii,
+                    fill,
+                    border_width,
+                    ..
+                } = prim
+                else {
+                    panic!("SVG plus arms must be round-capped capsules");
+                };
+                assert!((*actual_w - w as f32).abs() < 0.0001);
+                assert!((*actual_h - h as f32).abs() < 0.0001);
+                assert_eq!(*radii, [(stroke / 2.0) as f32; 4]);
+                assert_eq!(*fill, glyph);
+                assert_eq!(*border_width, 0.0);
+            }
+            assert!(!prims.iter().any(|prim| matches!(prim, Prim::Image { .. })));
+        }
     }
 }

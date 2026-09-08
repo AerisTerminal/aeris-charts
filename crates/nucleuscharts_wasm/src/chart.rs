@@ -966,28 +966,6 @@ impl NucleusChart {
             .set_alert_create_button_visible(visible)
     }
 
-    /// Install the host-rasterized create-chip icon from straight-alpha RGBA8
-    /// rows (`pixels.length === width * height * 4`). The TypeScript package
-    /// rasterizes the button glyph from vector paths at DPR-aware resolution;
-    /// the engine retains these pixels like a watermark and paints them on the
-    /// axis through the shared image primitive on every backend.
-    pub fn set_alert_create_icon(&mut self, pixels: Vec<u8>, width: u32, height: u32) -> bool {
-        self.inner
-            .borrow_mut()
-            .engine
-            .set_alert_create_icon(pixels, width, height)
-    }
-
-    pub fn clear_alert_create_icon(&mut self) -> bool {
-        self.inner.borrow_mut().engine.clear_alert_create_icon()
-    }
-
-    /// CSS-px side the installed icon is drawn at; the rasterizer targets
-    /// this size so host and engine agree without duplicating the fraction.
-    pub fn alert_create_icon_css_size(&self) -> f64 {
-        self.inner.borrow().engine.alert_create_icon_css_size()
-    }
-
     pub fn alert_create_hit_at(&self, x_css: f64, y_css: f64) -> bool {
         self.inner.borrow().engine.alert_create_hit_at(x_css, y_css)
     }

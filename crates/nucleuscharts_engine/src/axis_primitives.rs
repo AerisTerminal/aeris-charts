@@ -370,24 +370,36 @@ impl ChartEngine {
             }
             append_text(label, output);
         }
-        // Host-rasterized icons paint last: above label fills, below glyphs is
-        // unnecessary since icons carry their own pixels — top keeps them crisp
-        // over any box they share (e.g. the alert create chip's fill).
-        for icon in &axis_frame.images {
-            // Axis icons are already rasterized for their settled device-pixel
-            // footprint. Keep both the position and extent on the device grid;
-            // fractional texture coordinates make every texel interpolate and
-            // blur the whole control even when the source bitmap is sharp.
-            output.push(Prim::Image {
-                image: icon.image.clone(),
-                rect: [
-                    (icon.x * dpr).round() as f32,
-                    (icon.y * dpr).round() as f32,
-                    (icon.width * dpr).round().max(1.0) as f32,
-                    (icon.height * dpr).round().max(1.0) as f32,
-                ],
-                opacity: 1.0,
+        // Canonical geometry from assets/icons/add.svg: 24-unit viewport, radius 10,
+        // 1.5-unit stroke and 8-unit plus arms with round caps. Keep the media-space
+        // proportions through DPR conversion; rounding individual strokes changes their weight.
+        if let Some([x, y, side]) = axis_frame.crosshair_action_icon {
+            let unit = side / 24.0 * dpr;
+            let cx = x * dpr;
+            let cy = y * dpr;
+            let stroke = 1.5 * unit;
+            let glyph = Color::rgb(255, 255, 255);
+            output.push(Prim::Circle {
+                cx: cx as f32,
+                cy: cy as f32,
+                radius: (10.0 * unit) as f32,
+                fill: Color::rgba(0, 0, 0, 0),
+                stroke_width: stroke as f32,
+                stroke: glyph,
             });
+            // A capsule extends half a stroke beyond each SVG path endpoint.
+            for (w, h) in [(8.0 * unit + stroke, stroke), (stroke, 8.0 * unit + stroke)] {
+                output.push(Prim::RoundRect {
+                    x: (cx - w / 2.0) as f32,
+                    y: (cy - h / 2.0) as f32,
+                    w: w as f32,
+                    h: h as f32,
+                    radii: [(stroke / 2.0) as f32; 4],
+                    fill: glyph,
+                    border_width: 0.0,
+                    border_color: Color::rgba(0, 0, 0, 0),
+                });
+            }
         }
     }
 }

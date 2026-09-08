@@ -45,7 +45,6 @@ import {
   is_feature_series_kind, is_footprint_series_kind,
 } from "./types.js";
 import { default_theme_name, theme_palette } from "./theme.js";
-import alert_create_icon_svg from "./assets/icons/add.svg";
 
 // ---------------------------------------------------------------------------------------------
 // Implementation
@@ -2390,85 +2389,6 @@ class trading_impl implements trading_api {
   }
 }
 
-/**
- * The browser rasterizes the bundled SVG once per settled device-pixel size,
- * then hands the RGBA pixels to the engine so every backend paints the same
- * icon. The engine retains a primitive fallback for non-browser hosts.
- */
-/** Fixed white: the chip fill is dark on both themes. */
-const ALERT_CREATE_ICON_COLOR = "#ffffff";
-/** Absolute pixel cap matching the engine's `MAX_ALERT_ICON_PX`. */
-const ALERT_CREATE_ICON_MAX_PX = 96;
-
-type alert_create_icon_geometry = {
-  min_x: number;
-  min_y: number;
-  width: number;
-  height: number;
-  stroke_width: number;
-  paths: Path2D[];
-};
-
-let cached_alert_create_icon_geometry: alert_create_icon_geometry | null | undefined;
-
-function parse_alert_create_icon(): alert_create_icon_geometry | null {
-  if (cached_alert_create_icon_geometry !== undefined) {
-    return cached_alert_create_icon_geometry;
-  }
-  try {
-    const svg = new DOMParser().parseFromString(alert_create_icon_svg, "image/svg+xml").documentElement;
-    if (svg.localName !== "svg" || svg.querySelector("parsererror") !== null) {
-      cached_alert_create_icon_geometry = null;
-      return null;
-    }
-    const view_box = svg.getAttribute("viewBox")?.trim().split(/[\s,]+/).map(Number);
-    if (
-      view_box === undefined ||
-      view_box.length !== 4 ||
-      view_box.some((value) => !Number.isFinite(value)) ||
-      view_box[2] === undefined ||
-      view_box[2] <= 0 ||
-      view_box[3] === undefined ||
-      view_box[3] <= 0
-    ) {
-      cached_alert_create_icon_geometry = null;
-      return null;
-    }
-    const paths = Array.from(svg.querySelectorAll("path[d]"), (path) =>
-      new Path2D(path.getAttribute("d") ?? ""),
-    );
-    for (const circle of svg.querySelectorAll("circle[cx][cy][r]")) {
-      const cx = Number(circle.getAttribute("cx"));
-      const cy = Number(circle.getAttribute("cy"));
-      const radius = Number(circle.getAttribute("r"));
-      if (![cx, cy, radius].every(Number.isFinite) || radius <= 0) {
-        cached_alert_create_icon_geometry = null;
-        return null;
-      }
-      const path = new Path2D();
-      path.arc(cx, cy, radius, 0, Math.PI * 2);
-      paths.push(path);
-    }
-    const stroke_width = Number(svg.getAttribute("stroke-width"));
-    if (paths.length === 0 || !Number.isFinite(stroke_width) || stroke_width <= 0) {
-      cached_alert_create_icon_geometry = null;
-      return null;
-    }
-    cached_alert_create_icon_geometry = {
-      min_x: view_box[0] ?? 0,
-      min_y: view_box[1] ?? 0,
-      width: view_box[2],
-      height: view_box[3],
-      stroke_width,
-      paths,
-    };
-    return cached_alert_create_icon_geometry;
-  } catch {
-    cached_alert_create_icon_geometry = null;
-    return null;
-  }
-}
-
 type engine_alert_create_request = {
   sequence: number;
   pane_index: number;
@@ -2477,53 +2397,6 @@ type engine_alert_create_request = {
   condition: alert_condition;
   frequency: alert_frequency;
 };
-
-function alert_create_icon_pixel_size(css_size: number, dpr: number): number {
-  return Math.min(
-    ALERT_CREATE_ICON_MAX_PX,
-    Math.max(1, Math.round(css_size * Math.max(dpr, Number.EPSILON))),
-  );
-}
-
-function rasterize_alert_create_icon(
-  css_size: number,
-  dpr: number,
-): { pixels: Uint8Array; size: number } | null {
-  try {
-    const icon = parse_alert_create_icon();
-    if (icon === null) return null;
-    // Match the bitmap to the icon's settled device-pixel footprint. A fixed
-    // supersample is rescaled by a different amount at every browser zoom and,
-    // with the GPU image sampler, makes the 1.5-unit strokes alternate between
-    // visibly light and heavy. One source pixel per destination pixel keeps the
-    // rasterizer's antialiasing and stroke coverage stable across DPR changes.
-    const size = alert_create_icon_pixel_size(css_size, dpr);
-    const canvas = document.createElement("canvas");
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext("2d", { alpha: true });
-    if (ctx === null) return null;
-    const scale = Math.min(size / icon.width, size / icon.height);
-    ctx.translate(
-      (size - icon.width * scale) / 2 - icon.min_x * scale,
-      (size - icon.height * scale) / 2 - icon.min_y * scale,
-    );
-    ctx.scale(scale, scale);
-    ctx.strokeStyle = ALERT_CREATE_ICON_COLOR;
-    ctx.lineWidth = icon.stroke_width;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    for (const path of icon.paths) ctx.stroke(path);
-    const data = ctx.getImageData(0, 0, size, size).data;
-    return {
-      pixels: new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
-      size,
-    };
-  } catch {
-    // No canvas 2D (or no Path2D): the engine keeps its prim-composed icon.
-    return null;
-  }
-}
 
 class alert_impl implements alert_api {
   constructor(private readonly chart: chart_impl) {}
@@ -2571,8 +2444,6 @@ export class chart_impl implements chart_api {
     tracking_exit_mode: "on_next_tap",
   };
   private accessibility_handle: accessibility_handle | null = null;
-  /** Raster pixel size of the uploaded alert-create icon; `null` until first upload. */
-  private alert_icon_size: number | null = null;
   /** DPR used by the engine/canvas, including an explicit manual-resize override. */
   private pixel_ratio = window.devicePixelRatio || 1;
   private readonly ts = new time_scale_impl(this);
@@ -2930,11 +2801,6 @@ export class chart_impl implements chart_api {
     return this.backend_loss_count;
   }
 
-  /** Deterministic browser-test hook; confirms the create glyph follows the render DPR. */
-  alert_icon_size_for_test(): number | null {
-    return this.alert_icon_size;
-  }
-
   /**
    * Coalesce renders onto the next animation frame. The streaming hot path
    * (series `update` on built-in series) must not pay a full render per tick: N calls
@@ -3009,24 +2875,6 @@ export class chart_impl implements chart_api {
     this.ring_raf = requestAnimationFrame(this.ring_tick);
   };
 
-  /**
-   * Keep the engine's create-chip icon fed with the rasterized glyph. Runs
-   * before every render but only rasterizes when the target device-pixel size
-   * changed (font option or DPR/browser zoom) — a few compares on steady frames. Failures keep the
-   * engine's prim-composed fallback, so headless and restricted hosts (and
-   * offscreen workers, which never call this) keep working.
-   */
-  private ensure_alert_create_icon(): void {
-    const css = this.wasm.alert_create_icon_css_size();
-    if (!(css > 0)) return;
-    const size = alert_create_icon_pixel_size(css, this.pixel_ratio);
-    if (size === this.alert_icon_size) return;
-    const raster = rasterize_alert_create_icon(css, this.pixel_ratio);
-    if (raster === null) return;
-    if (!this.wasm.set_alert_create_icon(raster.pixels, raster.size, raster.size)) return;
-    this.alert_icon_size = raster.size;
-  }
-
   /** Repaint unless torn down. Named distinctly from the public `render` for internal use. */
   repaint(): void {
     if (this.repaint_raf !== null) {
@@ -3034,7 +2882,6 @@ export class chart_impl implements chart_api {
       this.repaint_raf = null;
     }
     if (!this.removed) {
-      this.ensure_alert_create_icon();
       this.wasm.render();
       // The text editor tracks its anchor through the change that drove this repaint
       // (wheel zoom/scroll, pinch, resize, data update) — before plugin passes composite.
