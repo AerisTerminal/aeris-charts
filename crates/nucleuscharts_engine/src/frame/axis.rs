@@ -623,7 +623,18 @@ impl ChartEngine {
                 );
                 for (mark, bold) in marks.iter().zip(bold_round) {
                     let y = mark.coord;
-                    if y >= pane.top - 0.5 && y <= pane.top + pane.height + 0.5 {
+                    // A tick coordinate is the glyph center, not its visible bounds.
+                    // Internal pane edges must leave room for the complete line box plus
+                    // one CSS pixel of clearance, even when entireTextOnly is disabled.
+                    let edge_inset = metrics.axis / 2.0 + 1.0;
+                    let top = pane.top + if pi > 0 { edge_inset } else { -0.5 };
+                    let bottom = pane.top + pane.height
+                        - if pi + 1 < self.panes.len() {
+                            edge_inset
+                        } else {
+                            -0.5
+                        };
+                    if y >= top && y <= bottom {
                         if ticks_visible {
                             let left = side == PriceScaleSide::Left;
                             out.price_ticks.push(PriceAxisTick {

@@ -171,3 +171,31 @@ test("crosshair hides on separator hover and during the resize drag, then resume
   await page.mouse.move(pane_x, geom.top + moved_sep - 60);
   expect(await legend(), "crosshair resumes over the pane").toContain("H");
 });
+
+for (const backend of ["canvas2d", "webgpu"]) {
+  test(`price-axis glyphs never paint across a pane separator (${backend})`, async ({ page }) => {
+    await page.goto(`/?backend=${backend}&forceFallbackAdapter=1`);
+    await wait_for_chart(page);
+    await page.check("#rsi_toggle");
+    await wait_for_chart(page);
+    await page.mouse.move(1, 1);
+    await page.evaluate(() => window.__chart.apply_options({ layout: { background: { type: "solid", color: "#131313" }, textColor: "#ffffff" } }));
+    for (const offset of [0, 1, 2, 10, 25, 49]) {
+      const geometry = await page.evaluate((offset) => {
+        window.__main.price_scale().set_visible_range({ from: 80 + offset, to: 220 + offset });
+        window.__rsi.price_scale().set_visible_range({ from: -50 + offset, to: 200 + offset });
+        return { separator: Array.from(window.__chart.wasm.pane_separator_ys())[0], width: document.querySelector("#chart_container").getBoundingClientRect().width, plot: window.__chart.time_scale().width() };
+      }, offset);
+      const png = await capture(page);
+      const dpr = png.width / geometry.width;
+      let ink = 0;
+      for (let y = Math.floor((geometry.separator - 1) * dpr); y <= Math.ceil((geometry.separator + 2) * dpr); y++) {
+        for (let x = Math.ceil((geometry.plot + 4) * dpr); x < png.width - 2; x++) {
+          const i = (y * png.width + x) * 4;
+          if (Math.min(png.data[i], png.data[i + 1], png.data[i + 2]) > 180) ink++;
+        }
+      }
+      expect(ink, `axis text crossed divider with range offset ${offset}`).toBe(0);
+    }
+  });
+}

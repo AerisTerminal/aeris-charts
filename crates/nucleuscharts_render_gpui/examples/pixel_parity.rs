@@ -269,6 +269,25 @@ impl Harness {
                 println!("\ncrisp-rect gate: NOT MEASURED — {}", crisp.note);
             }
         }
+        let icon = self
+            .results
+            .iter()
+            .find(|row| row.name == "crosshair_action")
+            .expect("crosshair icon parity fixture");
+        assert!(
+            icon.note.is_empty(),
+            "crosshair icon capture failed: {}",
+            icon.note
+        );
+        assert!(
+            icon.max_delta <= 1,
+            "crosshair icon differs beyond one-channel blending rounding: {}",
+            icon.max_delta
+        );
+        println!(
+            "crosshair-icon gate: PASS (max channel delta {})",
+            icon.max_delta
+        );
         write_results_json(&self.out_dir, &self.results);
     }
 }

@@ -107,7 +107,7 @@ impl ChartEngine {
         true
     }
 
-    pub(super) fn append_alert_create_chip(&self, frame: &mut AxisFrame) {
+    pub(super) fn append_alert_create_chip(&mut self, frame: &mut AxisFrame) {
         let Some(chip) = self.alert_create_chip() else {
             return;
         };
@@ -160,7 +160,24 @@ impl ChartEngine {
             attach_group: None,
             border: None,
         });
-        frame.crosshair_action_icon = Some([x + chip.size / 2.0, chip.y, chip.size * 0.9]);
+        let side = chip.size * 0.9;
+        let size = ((side * self.dpr).round() as u32)
+            .clamp(1, nucleuscharts_render::crosshair_icon::MAX_ICON_SIZE);
+        if self
+            .alert_state
+            .create_icon
+            .as_ref()
+            .is_none_or(|icon| icon.width != size)
+        {
+            self.alert_state.create_icon =
+                Some(nucleuscharts_render::crosshair_icon::crosshair_icon(size));
+        }
+        frame.crosshair_action_icon = self.alert_state.create_icon.clone().map(|image| AxisIcon {
+            x: x + (chip.size - side) / 2.0,
+            y: chip.y - side / 2.0,
+            side,
+            image,
+        });
     }
 
     pub(super) fn build_alert_lines_frame(

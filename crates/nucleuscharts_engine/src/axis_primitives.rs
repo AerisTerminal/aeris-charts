@@ -370,36 +370,19 @@ impl ChartEngine {
             }
             append_text(label, output);
         }
-        // Canonical geometry from assets/icons/add.svg: 24-unit viewport, radius 10,
-        // 1.5-unit stroke and 8-unit plus arms with round caps. Keep the media-space
-        // proportions through DPR conversion; rounding individual strokes changes their weight.
-        if let Some([x, y, side]) = axis_frame.crosshair_action_icon {
-            let unit = side / 24.0 * dpr;
-            let cx = x * dpr;
-            let cy = y * dpr;
-            let stroke = 1.5 * unit;
-            let glyph = Color::rgb(255, 255, 255);
-            output.push(Prim::Circle {
-                cx: cx as f32,
-                cy: cy as f32,
-                radius: (10.0 * unit) as f32,
-                fill: Color::rgba(0, 0, 0, 0),
-                stroke_width: stroke as f32,
-                stroke: glyph,
+        // The same original SVG pixels paint above the chip on every backend. Snap the
+        // destination to the pixel grid so the image sampler cannot blur the stroke.
+        if let Some(icon) = &axis_frame.crosshair_action_icon {
+            output.push(Prim::Image {
+                image: icon.image.clone(),
+                rect: [
+                    (icon.x * dpr).round() as f32,
+                    (icon.y * dpr).round() as f32,
+                    (icon.side * dpr).round().max(1.0) as f32,
+                    (icon.side * dpr).round().max(1.0) as f32,
+                ],
+                opacity: 1.0,
             });
-            // A capsule extends half a stroke beyond each SVG path endpoint.
-            for (w, h) in [(8.0 * unit + stroke, stroke), (stroke, 8.0 * unit + stroke)] {
-                output.push(Prim::RoundRect {
-                    x: (cx - w / 2.0) as f32,
-                    y: (cy - h / 2.0) as f32,
-                    w: w as f32,
-                    h: h as f32,
-                    radii: [(stroke / 2.0) as f32; 4],
-                    fill: glyph,
-                    border_width: 0.0,
-                    border_color: Color::rgba(0, 0, 0, 0),
-                });
-            }
         }
     }
 }

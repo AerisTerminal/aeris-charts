@@ -5652,3 +5652,52 @@ fn hollow_candles_keep_their_direction_color_on_the_live_price_chip() {
     chart.series[0].wick_visible = Some(false);
     assert_eq!(chip_color(&mut chart).a(), 0xFF);
 }
+
+#[test]
+fn price_tick_labels_keep_their_full_height_clear_of_pane_dividers() {
+    for dpr in [1.0, 1.25, 1.5, 2.0] {
+        let mut chart = chart_with_indicator_pane();
+        chart.dpr = dpr;
+        for offset in 0..50 {
+            chart.set_price_scale_visible_range(
+                0,
+                false,
+                80.0 + offset as f64,
+                220.0 + offset as f64,
+            );
+            chart.set_price_scale_visible_range(
+                1,
+                false,
+                -50.0 + offset as f64,
+                200.0 + offset as f64,
+            );
+            let axis = chart.build_axis_frame(
+                100.0,
+                |text, _| text.len() as f64 * 6.0,
+                |text, _| text.len() as f64 * 5.0,
+            );
+            let half = chart.axis_metrics().axis / 2.0;
+            for label in axis.labels.iter().filter(|label| {
+                label.background.is_none() && label.midpoint == AxisTextMidpoint::Label
+            }) {
+                let pane = &chart.panes[chart.pane_index_at_y(label.y)];
+                if pane.top > 0.0 {
+                    assert!(
+                        label.y - half >= pane.top,
+                        "{} crosses pane top at {}",
+                        label.text,
+                        label.y
+                    );
+                }
+                if pane.top + pane.height < chart.pane_h {
+                    assert!(
+                        label.y + half <= pane.top + pane.height,
+                        "{} crosses pane bottom at {}",
+                        label.text,
+                        label.y
+                    );
+                }
+            }
+        }
+    }
+}

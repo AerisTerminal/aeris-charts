@@ -53,8 +53,9 @@ pub use footprint::{
     FootprintVisualOptions, FootprintWorkStats,
 };
 pub use frame::{
-    AxisBand, AxisFrame, AxisLabel, AxisLabelCorners, AxisTextAlign, AxisTextMidpoint, ChartFrame,
-    FrameBuildStats, FrameDrawingSegment, FramePane, FramePaneSegments, FrameSeriesSegment,
+    AxisBand, AxisFrame, AxisIcon, AxisLabel, AxisLabelCorners, AxisTextAlign, AxisTextMidpoint,
+    ChartFrame, FrameBuildStats, FrameDrawingSegment, FramePane, FramePaneSegments,
+    FrameSeriesSegment,
 };
 pub use hit_test::{SeriesHit, SeriesHitKind};
 pub(crate) use indicators::{IndicatorBinding, IndicatorChange};

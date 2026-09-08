@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { PNG } from "pngjs";
+import { readFileSync } from "node:fs";
 
 async function open_alert_demo(page) {
   await page.goto("/?feature=trading&backend=canvas2d");
@@ -63,37 +64,41 @@ test("crosshair plus chip emits an exact host request and host alert lines stay 
   ]));
 });
 
-test("crosshair circular plus uses shared vector geometry at every DPR", async ({ page }) => {
+test("crosshair uses the original SVG pixels at every DPR", async ({ page }) => {
   await page.addInitScript(() => {
-    window.__action_rings = [];
-    const arc = CanvasRenderingContext2D.prototype.arc;
-    CanvasRenderingContext2D.prototype.arc = function (x, y, radius, ...rest) {
-      window.__action_rings.push({ x, y, radius });
-      return arc.call(this, x, y, radius, ...rest);
+    window.__action_images = [];
+    const draw = CanvasRenderingContext2D.prototype.drawImage;
+    CanvasRenderingContext2D.prototype.drawImage = function (source, ...rest) {
+      if (source.width <= 96 && source.height <= 96 && source.getContext) {
+        const pixels = source.getContext("2d").getImageData(0, 0, source.width, source.height).data;
+        window.__action_images.push({ size: source.width, alpha: Array.from(pixels).filter((_, i) => i % 4 === 3) });
+      }
+      return draw.call(this, source, ...rest);
     };
   });
-  await page.goto("/?feature=trading&backend=canvas2d");
-  await page.waitForFunction(() => window.__feature_lab?.active_ids().includes("trading-bracket"));
-  expect(await page.evaluate(() => window.__chart.backend())).toBe("canvas2d");
-  const overlay = page.locator("#chart_container canvas:last-of-type");
-  const box = await overlay.boundingBox();
+  await open_alert_demo(page);
+  const box = await page.locator("#chart_container canvas:last-of-type").boundingBox();
   await page.mouse.move(box.x + 200, box.y + box.height * 0.3);
+  const svg = readFileSync(new URL("../../../packages/charts/src/assets/icons/add.svg", import.meta.url), "utf8");
   for (const dpr of [1, 1.25, 1.5, 2, 3]) {
-    const rings = await page.evaluate((ratio) => {
-      window.__action_rings = [];
+    const result = await page.evaluate(({ dpr, svg }) => {
+      window.__action_images = [];
       const container = document.querySelector("#chart_container").getBoundingClientRect();
-      window.__chart.resize(container.width, container.height, ratio);
-      return window.__action_rings;
-    }, dpr);
-    // 19 CSS-pixel chip; the SVG occupies 90%, with radius 10 on its 24-grid.
-    expect(rings.some((ring) => Math.abs(ring.radius - 19 * 0.9 / 24 * 10 * dpr) < 0.001)).toBe(true);
+      window.__chart.resize(container.width, container.height, dpr);
+      const size = Math.round(19 * 0.9 * dpr);
+      const c = document.createElement("canvas"); c.width = c.height = size;
+      const ctx = c.getContext("2d", { willReadFrequently: true }); ctx.scale(size / 24, size / 24);
+      ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 1.5; ctx.lineCap = ctx.lineJoin = "round";
+      const root = new DOMParser().parseFromString(svg, "image/svg+xml");
+      for (const p of root.querySelectorAll("path")) ctx.stroke(new Path2D(p.getAttribute("d")));
+      for (const p of root.querySelectorAll("circle")) {
+        const path = new Path2D(); path.arc(+p.getAttribute("cx"), +p.getAttribute("cy"), +p.getAttribute("r"), 0, Math.PI * 2); ctx.stroke(path);
+      }
+      const expected = Array.from(ctx.getImageData(0, 0, size, size).data).filter((_, i) => i % 4 === 3);
+      return { actual: window.__action_images.find((image) => image.size === size)?.alpha, expected };
+    }, { dpr, svg });
+    expect(result.actual).toEqual(result.expected);
   }
-  await page.evaluate(() => {
-    window.__chart.set_crosshair_action_button_visible(false);
-    window.__action_rings = [];
-    window.__chart.render();
-  });
-  expect(await page.evaluate(() => window.__action_rings.some((ring) => Math.abs(ring.radius - 19 * 0.9 / 24 * 10 * 3) < 0.001))).toBe(false);
 });
 
 for (const backend of ["canvas2d", "webgpu"]) {

@@ -27,7 +27,9 @@ use nucleuscharts_core::style::{
 use nucleuscharts_render::bars::{build_bars, BarItem, BarsParams};
 use nucleuscharts_render::candles::{build_candles, CandleItem, CandlesParams};
 use nucleuscharts_render::color::Color;
-use nucleuscharts_render::draw_list::{Gradient, IRect, LineStyle, LineType, Prim, TextAlign};
+use nucleuscharts_render::draw_list::{
+    Gradient, IRect, LineStyle, LineType, Prim, RasterImage, TextAlign,
+};
 use nucleuscharts_render::histogram::{build_histogram, HistogramItem, HistogramParams};
 use nucleuscharts_render::line::{dash_split, expand_line, LinePoint};
 
@@ -609,12 +611,21 @@ pub struct AxisBand {
     pub color: Color,
 }
 
+/// One shared SVG image in chart-space CSS pixels.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AxisIcon {
+    pub x: f64,
+    pub y: f64,
+    pub side: f64,
+    pub image: RasterImage,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AxisFrame {
     pub bands: Vec<AxisBand>,
     pub labels: Vec<AxisLabel>,
-    /// Circular-plus SVG viewport: center x/y and side length in chart-space CSS pixels.
-    pub crosshair_action_icon: Option<[f64; 3]>,
+    /// Original SVG pixels, retained at the current DPR/font size.
+    pub crosshair_action_icon: Option<AxisIcon>,
     pub separators: Vec<f64>,
     /// Price-axis tick stubs (reference `ticksVisible`): 5 css px horizontal marks painted from the
     /// pane edge into the axis strip at each tick coordinate, in the strip's border color.

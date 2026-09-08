@@ -6,6 +6,7 @@
 
 use std::collections::{HashSet, VecDeque};
 
+use nucleuscharts_render::draw_list::RasterImage;
 use serde::{Deserialize, Serialize};
 
 use crate::{ChartEngine, ChartError, ErrorCode, PriceScaleTarget, PANELESS};
@@ -146,6 +147,7 @@ pub(crate) struct AlertState {
     pub create_button_visible: bool,
     requests: VecDeque<AlertCreateRequest>,
     next_request_sequence: u32,
+    pub(crate) create_icon: Option<RasterImage>,
 }
 
 impl Default for AlertState {
@@ -155,6 +157,7 @@ impl Default for AlertState {
             create_button_visible: true,
             requests: VecDeque::new(),
             next_request_sequence: 0,
+            create_icon: None,
         }
     }
 }
@@ -182,6 +185,10 @@ impl AlertState {
                     line.id.heap_bytes() + line.label.as_ref().map_or(0, |label| label.capacity())
                 })
                 .sum::<usize>()
+            + self
+                .create_icon
+                .as_ref()
+                .map_or(0, |image| image.pixels.len())
     }
 }
 
@@ -546,14 +553,12 @@ mod tests {
         assert_eq!(plus_color, Color::rgb(0x12, 0x34, 0x56));
         assert_eq!(container.background_corners, crate::AxisLabelCorners::LEFT);
         assert_eq!(container.border, None);
+        let icon = axis.crosshair_action_icon.as_ref().unwrap();
         assert_eq!(
-            axis.crosshair_action_icon,
-            Some([
-                chip.x + chart.pane_left + chip.size / 2.0,
-                chip.y,
-                chip.size * 0.9,
-            ])
+            icon.x + icon.side / 2.0,
+            chip.x + chart.pane_left + chip.size / 2.0
         );
+        assert_eq!(icon.y + icon.side / 2.0, chip.y);
         // The crosshair sits mid-pane here, off the chip: idle styling above.
         // Parking it on the chip lifts the fill a step with no blue anywhere,
         // and the button keeps its geometry and hit rect.
@@ -612,72 +617,46 @@ mod tests {
     }
 
     #[test]
-    fn crosshair_action_uses_svg_circle_geometry_at_each_dpr() {
+    fn crosshair_action_retains_original_svg_pixels_across_frames_and_dpr_changes() {
+        let mut chart = chart_with_market();
+        let y = chart
+            .runtime_price_coordinate(0, PriceScaleTarget::Right, 102.0)
+            .unwrap();
+        chart.crosshair = Some((200.0, y));
         for dpr in [1.0, 1.25, 1.5, 2.0, 3.0] {
-            let mut chart = chart_with_market();
             chart.dpr = dpr;
-            let y = chart
-                .runtime_price_coordinate(0, PriceScaleTarget::Right, 102.0)
-                .unwrap();
-            chart.crosshair = Some((200.0, y));
             let axis = chart.build_axis_frame(
                 100.0,
                 |text, _| text.len() as f64 * 7.0,
                 |text, _| text.len() as f64 * 6.0,
             );
-            let chip = chart.alert_create_chip().unwrap();
+            let icon = axis.crosshair_action_icon.as_ref().unwrap();
+            let expected = nucleuscharts_render::crosshair_icon::crosshair_icon(
+                (19.0 * 0.9 * dpr).round() as u32,
+            );
+            assert_eq!(icon.image.pixels, expected.pixels);
             let mut prims = Vec::new();
             chart.build_axis_primitives_into(&axis, &mut prims, |_| 0.0);
-            let unit = chip.size * 0.9 / 24.0 * dpr;
-            let ring = prims
-                .iter()
-                .find_map(|prim| match prim {
-                    Prim::Circle {
-                        cx,
-                        cy,
-                        radius,
-                        fill,
-                        stroke_width,
-                        stroke,
-                    } => Some((*cx, *cy, *radius, *fill, *stroke_width, *stroke)),
-                    _ => None,
-                })
-                .expect(
-                    "crosshair action must use the web SVG circle in the shared primitive stream",
-                );
-            assert_eq!(
-                ring.0,
-                ((chip.x + chart.pane_left + chip.size / 2.0) * dpr) as f32
+            let Some(Prim::Image {
+                image,
+                rect,
+                opacity,
+            }) = prims.last()
+            else {
+                panic!("shared SVG image must paint above the chip")
+            };
+            assert_eq!(image.pixels, expected.pixels);
+            assert!(rect.iter().all(|v| v.fract() == 0.0));
+            assert_eq!(*opacity, 1.0);
+            let next = chart.build_axis_frame(
+                100.0,
+                |text, _| text.len() as f64 * 7.0,
+                |text, _| text.len() as f64 * 6.0,
             );
-            assert_eq!(ring.1, (chip.y * dpr) as f32);
-            assert_eq!(ring.2, (10.0 * unit) as f32);
-            assert_eq!(ring.3, Color::rgba(0, 0, 0, 0));
-            assert_eq!(ring.4, (1.5 * unit) as f32);
-            assert_eq!(ring.5, Color::rgb(255, 255, 255));
-            let glyph = Color::rgb(255, 255, 255);
-            let stroke = 1.5 * unit;
-            for (prim, (w, h)) in prims[prims.len() - 2..]
-                .iter()
-                .zip([(9.5 * unit, stroke), (stroke, 9.5 * unit)])
-            {
-                let Prim::RoundRect {
-                    w: actual_w,
-                    h: actual_h,
-                    radii,
-                    fill,
-                    border_width,
-                    ..
-                } = prim
-                else {
-                    panic!("SVG plus arms must be round-capped capsules");
-                };
-                assert!((*actual_w - w as f32).abs() < 0.0001);
-                assert!((*actual_h - h as f32).abs() < 0.0001);
-                assert_eq!(*radii, [(stroke / 2.0) as f32; 4]);
-                assert_eq!(*fill, glyph);
-                assert_eq!(*border_width, 0.0);
-            }
-            assert!(!prims.iter().any(|prim| matches!(prim, Prim::Image { .. })));
+            assert!(std::sync::Arc::ptr_eq(
+                &icon.image.pixels,
+                &next.crosshair_action_icon.unwrap().image.pixels
+            ));
         }
     }
 }

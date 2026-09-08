@@ -8,7 +8,7 @@
 //!   encoding ([`edge_st`]): GPUI's path pass cannot rely on MSAA (its sample count can fall back
 //!   to 1x on Linux), so the same geometry the WebGPU backend's 4x MSAA target smooths carries its
 //!   own coverage fade here. Polyline transitions straddle their nominal edges and keep integrated
-//!   width exact; shape edges retain their exterior encoding (see [`edge_st`]).
+//!   width exact; rings share that centered encoding, while filled discs retain their exterior encoding (see [`edge_st`]).
 //!
 //! Uses Nucleus's coordinate, bar-width, and snapping calculations.
 
@@ -578,11 +578,8 @@ fn annulus_st(
     }
 }
 
-/// A ring (annulus) between `radius` and `radius - stroke_width`, for `Circle`'s stroke.
-///
-/// The Canvas2D executor strokes the disc's arc, which covers `[r - w/2, r + w/2]`; the same
-/// coverage as an annulus with those radii, solid between the nominal edges plus the exact 1 px
-/// coverage fade outside each. 24 segments keeps it aligned with [`disc_mesh`].
+/// A centered circle stroke with the same signed-distance coverage as polylines.
+/// Keep `s` constant: varying it selects solid triangles in GPUI's Windows shader.
 pub(crate) fn ring_mesh(
     pool: &mut Vec<MeshVertex>,
     cx: f32,
@@ -593,26 +590,35 @@ pub(crate) fn ring_mesh(
     let first = pool.len() as u32;
     let outer = radius + stroke_width / 2.0;
     let inner = (radius - stroke_width / 2.0).max(0.0);
-    if outer <= 0.0 {
+    if outer <= 0.0 || stroke_width <= 0.0 {
         return (first, 0);
     }
+    let middle = (inner + outer) / 2.0;
+    let core_outer = (outer - STROKE_AA_HALF_PX).max(middle);
+    let core_inner = (inner + STROKE_AA_HALF_PX).min(middle);
     annulus_st(
         pool,
         cx,
         cy,
-        outer,
-        FADE_IN_ST,
-        outer + FADE_PX,
-        FADE_OUT_ST,
+        core_outer,
+        stroke_distance_st(core_outer - outer),
+        outer + STROKE_AA_HALF_PX,
+        stroke_distance_st(STROKE_AA_HALF_PX),
     );
-    annulus_st(pool, cx, cy, inner, SOLID_ST, outer, SOLID_ST);
-    if inner > 0.0 {
-        // Fade into the hole: coverage distance is measured from the inner edge, positive inward.
-        // A sub-pixel hole collapses the inner row toward the centre with a proportionally
-        // smaller distance, which keeps the ramp linear.
-        let hole_r = (inner - FADE_PX).max(0.0);
-        let hole_st = edge_st((inner - hole_r) / FADE_PX);
-        annulus_st(pool, cx, cy, hole_r, hole_st, inner, FADE_IN_ST);
+    if inner == 0.0 {
+        annulus_st(pool, cx, cy, 0.0, SOLID_ST, core_outer, SOLID_ST);
+    } else {
+        annulus_st(pool, cx, cy, core_inner, SOLID_ST, core_outer, SOLID_ST);
+        let hole = (inner - STROKE_AA_HALF_PX).max(0.0);
+        annulus_st(
+            pool,
+            cx,
+            cy,
+            hole,
+            stroke_distance_st(inner - hole),
+            core_inner,
+            stroke_distance_st(inner - core_inner),
+        );
     }
     (first, pool.len() as u32 - first)
 }
@@ -1005,23 +1011,40 @@ mod tests {
     }
 
     #[test]
+    fn ring_coverage_uses_windows_compatible_centered_distance() {
+        let mut pool = Vec::new();
+        ring_mesh(&mut pool, 0.0, 0.0, 10.0, 1.5);
+        for vertex in &pool {
+            assert_eq!(
+                vertex.st[0], 0.0,
+                "varying s becomes solid coverage on Windows"
+            );
+            let radius = vertex.x.hypot(vertex.y);
+            assert!(
+                (8.749..=11.251).contains(&radius),
+                "AA must extend only half a pixel: {radius}"
+            );
+        }
+    }
+
+    #[test]
     fn ring_mesh_covers_the_stroke_band_with_a_coverage_fringe() {
         let mut pool = Vec::new();
         let (first, count) = ring_mesh(&mut pool, 0.0, 0.0, 10.0, 2.0);
         // Outer fade + solid middle + inner fade, 24 segments of 2 triangles each.
         assert_eq!(count, 3 * 24 * 6);
         // A Canvas2D `arc` + `stroke` of width 2 at radius 10 covers [9, 11]; the fade reaches
-        // one pixel past it on both sides, and nothing approaches the disc's interior.
+        // half a pixel past it on both sides, and nothing approaches the disc's interior.
         for v in &pool[first as usize..(first + count) as usize] {
             let r = (v.x * v.x + v.y * v.y).sqrt();
-            assert!((7.9..=12.1).contains(&r), "radius {r} outside the band");
+            assert!((8.49..=11.51).contains(&r), "radius {r} outside the band");
             assert!(r > 1.0, "the ring must not cover the disc's interior");
         }
-        // The extreme rows sit one pixel past the nominal edges, where coverage reaches zero.
+        // The extreme rows sit half a pixel past the nominal edges, where coverage reaches zero.
         assert!(
             pool[first as usize..(first + count) as usize]
                 .iter()
-                .any(|v| v.st == FADE_OUT_ST),
+                .any(|v| v.st == stroke_distance_st(STROKE_AA_HALF_PX)),
             "the fringe rows carry the Loop-Blinn edge encoding"
         );
     }

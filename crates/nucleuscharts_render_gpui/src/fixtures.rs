@@ -532,6 +532,49 @@ pub fn opaque_aa(dpr: f32) -> Fixture {
     }
 }
 
+/// The original SVG image through the shared axis converter.
+pub fn crosshair_action(dpr: f32) -> Fixture {
+    use nucleuscharts_engine::{AxisFrame, AxisIcon, ChartEngine};
+    let (width, height) = dims(dpr);
+    let engine = ChartEngine::new(LOGICAL_W as f64, LOGICAL_H as f64, dpr as f64);
+    let axis = AxisFrame {
+        crosshair_action_icon: Some(AxisIcon {
+            x: 40.0 - 19.0 * 0.9 / 2.0,
+            y: 40.0 - 19.0 * 0.9 / 2.0,
+            side: 19.0 * 0.9,
+            image: nucleuscharts_render::crosshair_icon::crosshair_icon(
+                (19.0 * 0.9 * dpr).round() as u32
+            ),
+        }),
+        ..AxisFrame::default()
+    };
+    let mut prims = Vec::new();
+    engine.build_axis_primitives_into(&axis, &mut prims, |_| 0.0);
+    // The icon paints last above axis chrome.
+    let mut icon = prims.split_off(prims.len() - 1);
+    icon.insert(
+        0,
+        Prim::Rect {
+            rect: IRect {
+                x: 0,
+                y: 0,
+                w: width as i32,
+                h: height as i32,
+            },
+            color: Color::rgb(0x13, 0x13, 0x13),
+        },
+    );
+    Fixture {
+        name: "crosshair_action",
+        attribution: "original SVG stroke weight and pixel alignment",
+        prims: icon,
+        points: Vec::new(),
+        width,
+        height,
+        background: Color::rgb(0x13, 0x13, 0x13),
+    }
+}
+
 /// Every fixture, in attribution order.
 ///
 /// `translucent` and `opaque_aa` sit between the exact fixture and the mixed ones deliberately: they
@@ -546,6 +589,7 @@ pub fn all(dpr: f32) -> Vec<Fixture> {
         curved_brushes(dpr),
         gradients(dpr),
         text(dpr),
+        crosshair_action(dpr),
     ]
 }
 

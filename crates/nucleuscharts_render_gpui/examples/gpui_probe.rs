@@ -327,6 +327,7 @@ enum DragMode {
     },
     Drawing,
     BrushCreation,
+    CrosshairAction,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1315,7 +1316,9 @@ impl Probe {
                 "nesw-resize" => CursorStyle::ResizeUpRightDownLeft,
                 _ => CursorStyle::Crosshair,
             });
-        let cursor = if active_separator || separator.is_some() {
+        let cursor = if self.engine.alert_create_hit_at(pane_x, y) {
+            CursorStyle::PointingHand
+        } else if active_separator || separator.is_some() {
             CursorStyle::ResizeRow
         } else if y > self.engine.pane_h {
             CursorStyle::ResizeLeftRight
@@ -1399,7 +1402,9 @@ impl Probe {
     }
 
     fn input_target_at(&self, chart_x: f64, pane_x: f64, y: f64) -> InputTarget {
-        if self.gesture_config.panes_resize && self.separator_at(y).is_some() {
+        if self.engine.alert_create_hit_at(pane_x, y) {
+            InputTarget::Alert
+        } else if self.gesture_config.panes_resize && self.separator_at(y).is_some() {
             InputTarget::Separator
         } else if y > self.engine.pane_h {
             InputTarget::TimeAxis
@@ -1486,7 +1491,7 @@ impl Probe {
                 self.engine.brush_create_cancel();
                 self.pending_brush_point = None;
             }
-            Some(DragMode::PaneSeparator { .. }) | None => {}
+            Some(DragMode::PaneSeparator { .. } | DragMode::CrosshairAction) | None => {}
         }
         self.cancel_kinetic_scroll();
         self.press_start = None;
@@ -1539,6 +1544,12 @@ impl Probe {
         self.update_cursor(chart_x, y);
         self.press_start = Some((pane_x, y));
         self.press_moved = false;
+
+        if self.input_target == InputTarget::Alert {
+            self.drag = Some(DragMode::CrosshairAction);
+            cx.notify();
+            return;
+        }
 
         if self.armed_tool == Some(DrawingKind::Brush) {
             let template = self.drawing_template.json();
@@ -1697,6 +1708,7 @@ impl Probe {
                 // Wayland event rate.
                 self.pending_brush_point = Some((pane_x, y));
             }
+            Some(DragMode::CrosshairAction) => {}
             _ => {
                 if self
                     .armed_tool
@@ -1736,6 +1748,17 @@ impl Probe {
         self.press_start = None;
         self.press_moved = false;
         let select_click = match self.drag.take() {
+            Some(DragMode::CrosshairAction) => {
+                if !moved && self.engine.activate_alert_create_at(pane_x, y) {
+                    for request in self.engine.take_alert_create_requests() {
+                        self.click_status = format!(
+                            "action requested: pane {} price {}",
+                            request.pane_index, request.price
+                        );
+                    }
+                }
+                false
+            }
             Some(DragMode::Pan { price_pan }) => {
                 if let Some((pane, target)) = price_pan {
                     self.engine.price_axis_end_scroll(pane, target);
@@ -3629,6 +3652,35 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn action_chip_hover_uses_click_cursor_and_control_input_target() {
+        let mut probe = Probe::new(64, Some(1));
+        probe.rebuild_with_measure(
+            1024.0,
+            640.0,
+            1.0,
+            |text, _| text.len() as f64 * 7.0,
+            |text, _| text.len() as f64 * 6.0,
+        );
+        probe.engine.clear_drawings();
+        let pane_x = probe.engine.pane_w - 9.5;
+        let chart_x = probe.engine.pane_left + pane_x;
+        let y = 200.0;
+        probe.update_pointer_feedback(chart_x, pane_x, y);
+        assert!(probe.engine.alert_create_hit_at(pane_x, y));
+        assert_eq!(probe.cursor_style, CursorStyle::PointingHand);
+        assert_eq!(
+            probe.input_target_at(chart_x, pane_x, y),
+            InputTarget::Alert
+        );
+        probe.engine.set_alert_create_button_visible(false);
+        probe.update_pointer_feedback(chart_x, pane_x, y);
+        assert_ne!(
+            probe.input_target_at(chart_x, pane_x, y),
+            InputTarget::Alert
+        );
+    }
 
     /// Issue #12: Wayland delivers per-HID-report pointer motion (~1000 Hz, often one axis per
     /// event). The brush must capture at most one coalesced sample per painted frame — the newest
