@@ -301,7 +301,6 @@ input[type="number"] {
   background: var(--nc-tooltip-surface, var(--surface));
   border: 1px solid var(--nc-tooltip-border, var(--border));
   border-radius: var(--radius-default);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 22%);
   color: var(--nc-tooltip-foreground, var(--text-primary));
   font-family: var(--nc-tooltip-font-family, var(--font-sans));
   font-size: 12px;

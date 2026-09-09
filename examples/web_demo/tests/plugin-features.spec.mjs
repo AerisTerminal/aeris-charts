@@ -692,7 +692,7 @@ test("tooltip presents themed OHLC market data with explicit volume", async ({ p
   expect(content.background).toBe("rgb(20, 20, 20)");
   expect(content.color).toBe("rgb(240, 240, 240)");
   expect(content.borderRadius).toBe("6px");
-  expect(content.shadow).not.toBe("none");
+  expect(content.shadow).toBe("none");
   expect(content.transform).toContain("20px");
 
   await page.evaluate(async () => {
