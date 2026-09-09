@@ -1166,27 +1166,20 @@ export function install_gestures(chart: chart_impl): () => void {
   // ---------------------------------------------------------------------------------------------
 
   let scroll_anim: number | null = null;
+  let keyboard_pan_key: "ArrowLeft" | "ArrowRight" | null = null;
+  let keyboard_pan_delta = 0;
   const stop_scroll_anim = () => {
     // A user gesture also supersedes any in-flight programmatic or keyboard scroll animation.
     chart.cancel_scroll_animation();
     wasm.cancel_keyboard_scroll();
+    keyboard_pan_key = null;
+    keyboard_pan_delta = 0;
     if (scroll_anim !== null) {
       cancelAnimationFrame(scroll_anim);
       scroll_anim = null;
     }
   };
-  /** Keyboard pan uses the same per-ms damping coefficient as pointer kinetic scrolling.
-   *  Same-direction repeats extend the destination instead of restarting a canned tween. */
-  const animate_keyboard_scroll = (delta: number) => {
-    stop_kinetic();
-    chart.cancel_scroll_animation();
-    if (chart.prefers_reduced_motion()) {
-      wasm.cancel_keyboard_scroll();
-      wasm.scroll_to_position(wasm.scroll_position() + delta);
-      chart.repaint();
-      return;
-    }
-    wasm.start_keyboard_scroll(delta, performance.now());
+  const ensure_keyboard_scroll_frames = () => {
     if (scroll_anim !== null) return;
     const step_fn = () => {
       const done = Number.isNaN(wasm.keyboard_scroll_tick(performance.now()));
@@ -1194,6 +1187,41 @@ export function install_gestures(chart: chart_impl): () => void {
       scroll_anim = done ? null : requestAnimationFrame(step_fn);
     };
     scroll_anim = requestAnimationFrame(step_fn);
+  };
+  /** Keyboard pan is velocity-owned: key-down ramps into sustained motion; key-up cancels it
+   *  immediately. OS key-repeat never drives the animation clock. */
+  const begin_keyboard_scroll = (key: "ArrowLeft" | "ArrowRight", delta: number, repeat: boolean) => {
+    stop_kinetic();
+    // Supersede only the public scroll-to-position tween here. `chart.cancel_scroll_animation()`
+    // also cancels keyboard kinetic state, which would make an OS key-repeat stop a still-held key.
+    wasm.cancel_scroll_animation();
+    if (chart.prefers_reduced_motion()) {
+      wasm.cancel_keyboard_scroll();
+      wasm.scroll_to_position(wasm.scroll_position() + delta);
+      chart.repaint();
+      return;
+    }
+    // OS key-repeat is not the motion clock. Once held, the engine sustains velocity itself;
+    // repeats only matter when the modifier changes the requested speed while the key stays down.
+    if (!repeat || keyboard_pan_key !== key || keyboard_pan_delta !== delta) {
+      wasm.start_keyboard_scroll(delta, performance.now());
+      keyboard_pan_key = key;
+      keyboard_pan_delta = delta;
+    }
+    ensure_keyboard_scroll_frames();
+  };
+  const release_keyboard_scroll = (e: KeyboardEvent) => {
+    if ((e.key !== "ArrowLeft" && e.key !== "ArrowRight") || keyboard_pan_key !== e.key) return;
+    e.preventDefault();
+    keyboard_pan_key = null;
+    keyboard_pan_delta = 0;
+    wasm.cancel_keyboard_scroll();
+    if (scroll_anim !== null) {
+      cancelAnimationFrame(scroll_anim);
+      scroll_anim = null;
+    }
+    chart.repaint();
+    chart.announce_view();
   };
 
   const on_keydown = (e: KeyboardEvent) => {
@@ -1214,10 +1242,10 @@ export function install_gestures(chart: chart_impl): () => void {
       // TradingView: Left scrolls back in time (older data), Right forward (newer data);
       // Ctrl/Shift steps 10 bars. reference rightOffset grows toward newer data, hence the signs.
       case "ArrowLeft":
-        animate_keyboard_scroll(-step);
+        begin_keyboard_scroll("ArrowLeft", -step, e.repeat);
         break;
       case "ArrowRight":
-        animate_keyboard_scroll(step);
+        begin_keyboard_scroll("ArrowRight", step, e.repeat);
         break;
       case "+":
       case "=":
@@ -1267,6 +1295,7 @@ export function install_gestures(chart: chart_impl): () => void {
   };
   const cancel_if_active = () => {
     if (pointers.size > 0) cancel_active_input();
+    if (keyboard_pan_key !== null) stop_scroll_anim();
   };
   const on_visibility_change = () => {
     if (document.visibilityState !== "visible") cancel_if_active();
@@ -1292,6 +1321,7 @@ export function install_gestures(chart: chart_impl): () => void {
   // Ctrl/Cmd press/release refreshes the crosshair magnet live (TradingView parity).
   window.addEventListener("keydown", on_modifier_key);
   window.addEventListener("keyup", on_modifier_key);
+  window.addEventListener("keyup", release_keyboard_scroll);
   window.addEventListener("blur", cancel_if_active);
   window.addEventListener("nucleuscharts-chart-backend-lost", cancel_if_active);
   document.addEventListener("visibilitychange", on_visibility_change);
@@ -1316,6 +1346,7 @@ export function install_gestures(chart: chart_impl): () => void {
     overlay.removeEventListener("mousedown", on_mousedown);
     window.removeEventListener("keydown", on_modifier_key);
     window.removeEventListener("keyup", on_modifier_key);
+    window.removeEventListener("keyup", release_keyboard_scroll);
     window.removeEventListener("blur", cancel_if_active);
     window.removeEventListener("nucleuscharts-chart-backend-lost", cancel_if_active);
     document.removeEventListener("visibilitychange", on_visibility_change);

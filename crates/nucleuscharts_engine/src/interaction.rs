@@ -521,6 +521,12 @@ pub const KINETIC_MIN_SPEED: f64 = 0.2;
 pub const KINETIC_MAX_SPEED: f64 = 7.0;
 pub const KINETIC_DUMPING: f64 = 0.997;
 pub const KINETIC_MIN_MOVE: f64 = 15.0;
+/// Keyboard navigation uses the same exponential velocity model as kinetic scrolling, but with a
+/// much quicker attack: it should feel guided immediately while held and stop exactly on key-up.
+pub const KEYBOARD_KINETIC_ATTACK: f64 = 0.98;
+/// Logical bars per millisecond for one arrow-step of sustained keyboard motion. Ctrl/Shift use
+/// the existing 10x step multiplier, so they share the same curve at a proportionally higher speed.
+pub const KEYBOARD_KINETIC_SPEED_PER_STEP: f64 = 0.006;
 
 /// reference pane-widget.ts `pinchEvent`: the incremental scale multiplier per pinch step.
 pub const PINCH_ZOOM_INTENSITY: f64 = 5.0;
@@ -575,27 +581,32 @@ impl ScrollAnimation {
     }
 }
 
-/// Keyboard pan animation with the same per-millisecond damping coefficient as kinetic pointer
-/// scrolling, but an exact logical target. Repeated same-direction key presses extend the target;
-/// a reversal immediately retargets from the current eased position instead of finishing stale
-/// momentum first.
+/// Velocity-owned keyboard pan. While a key is held, `drive_velocity` pulls the current velocity
+/// toward a cruise speed with an exponential attack. Key-up cancels this state immediately.
 #[derive(Clone, Copy, Debug)]
-pub struct KeyboardScrollAnimation {
-    pub start_position: f64,
-    pub target_position: f64,
-    pub start_time_ms: f64,
-    pub epsilon_bars: f64,
+pub struct KeyboardKineticScroll {
+    pub position: f64,
+    pub velocity: f64,
+    pub drive_velocity: f64,
+    pub last_time_ms: f64,
 }
 
-impl KeyboardScrollAnimation {
-    fn position(&self, now_ms: f64) -> f64 {
-        let elapsed = (now_ms - self.start_time_ms).max(0.0);
-        self.target_position
-            + (self.start_position - self.target_position) * KINETIC_DUMPING.powf(elapsed)
-    }
-
-    fn finished(&self, now_ms: f64) -> bool {
-        (self.position(now_ms) - self.target_position).abs() <= self.epsilon_bars
+impl KeyboardKineticScroll {
+    fn advance(&mut self, now_ms: f64) {
+        if !now_ms.is_finite() {
+            return;
+        }
+        let elapsed = (now_ms - self.last_time_ms).max(0.0);
+        if elapsed == 0.0 {
+            return;
+        }
+        let ln_damping = KEYBOARD_KINETIC_ATTACK.ln();
+        let decay = KEYBOARD_KINETIC_ATTACK.powf(elapsed);
+        let initial_velocity = self.velocity;
+        self.position += self.drive_velocity * elapsed
+            + (initial_velocity - self.drive_velocity) * (decay - 1.0) / ln_damping;
+        self.velocity = self.drive_velocity + (initial_velocity - self.drive_velocity) * decay;
+        self.last_time_ms = now_ms;
     }
 }
 
@@ -677,48 +688,33 @@ impl ChartEngine {
 
     // --- keyboard kinetic pan ---
 
-    /// Add one logical-bar keyboard pan impulse. Same-direction repeats extend the destination;
-    /// reversing direction abandons the stale destination and responds from the current position.
+    /// Start or retune one held keyboard-pan direction. The existing one/ten-step distinction now
+    /// controls cruise speed; OS key-repeat is not the motion clock.
     pub fn start_keyboard_scroll(&mut self, delta_bars: f64, now_ms: f64) {
         if !delta_bars.is_finite() || delta_bars == 0.0 || !now_ms.is_finite() {
             return;
         }
-        let current = self.keyboard_scroll_animation.map_or_else(
-            || self.scroll_position(),
-            |animation| animation.position(now_ms),
-        );
-        self.scroll_to_position(current);
-
-        let target = self
-            .keyboard_scroll_animation
-            .map_or(current + delta_bars, |animation| {
-                let remaining = animation.target_position - current;
-                if remaining == 0.0 || remaining.signum() == delta_bars.signum() {
-                    animation.target_position + delta_bars
-                } else {
-                    current + delta_bars
-                }
-            });
-        let spacing = self.time_scale.bar_spacing().max(f64::EPSILON);
-        self.keyboard_scroll_animation = Some(KeyboardScrollAnimation {
-            start_position: current,
-            target_position: target,
-            start_time_ms: now_ms,
-            // Match the reference kinetic stop threshold of one physical CSS-pixel equivalent.
-            epsilon_bars: 1.0 / spacing,
+        let cruise_velocity = delta_bars * KEYBOARD_KINETIC_SPEED_PER_STEP;
+        if let Some(animation) = self.keyboard_scroll_animation.as_mut() {
+            animation.advance(now_ms);
+            animation.drive_velocity = cruise_velocity;
+            let position = animation.position;
+            self.scroll_to_position(position);
+            return;
+        }
+        self.keyboard_scroll_animation = Some(KeyboardKineticScroll {
+            position: self.scroll_position(),
+            velocity: 0.0,
+            drive_velocity: cruise_velocity,
+            last_time_ms: now_ms,
         });
     }
 
-    /// Apply one keyboard-pan animation tick. `None` means the destination was reached and the
-    /// animation self-cleared after snapping the final sub-pixel remainder to its exact target.
+    /// Apply one held keyboard-pan tick. `None` means no key-owned kinetic session is active.
     pub fn keyboard_scroll_tick(&mut self, now_ms: f64) -> Option<f64> {
-        let animation = self.keyboard_scroll_animation?;
-        if animation.finished(now_ms) {
-            self.scroll_to_position(animation.target_position);
-            self.keyboard_scroll_animation = None;
-            return None;
-        }
-        let position = animation.position(now_ms);
+        let animation = self.keyboard_scroll_animation.as_mut()?;
+        animation.advance(now_ms);
+        let position = animation.position;
         self.scroll_to_position(position);
         Some(position)
     }
@@ -1492,33 +1488,29 @@ mod tests {
     }
 
     #[test]
-    fn keyboard_scroll_uses_kinetic_damping_and_accumulates_directional_impulses() {
+    fn keyboard_scroll_accelerates_while_held_and_stops_on_release() {
         let mut chart = chart_with_data(400.0, 300.0);
         chart.time_scale.set_bar_spacing(10.0);
         chart.scroll_to_position(0.0);
 
         chart.start_keyboard_scroll(10.0, 1000.0);
-        let first = chart.keyboard_scroll_tick(1100.0).unwrap();
-        let expected = 10.0 - 10.0 * KINETIC_DUMPING.powf(100.0);
-        assert!((first - expected).abs() < 1e-9);
-        assert!(first > 0.0 && first < 10.0);
-
-        // Repeating in the same direction extends the destination from 10 to 20 while retaining
-        // the current eased position as the new start.
-        chart.start_keyboard_scroll(10.0, 1100.0);
-        assert!(chart.keyboard_scroll_active());
-        let repeated = chart.keyboard_scroll_tick(1200.0).unwrap();
-        assert!(repeated > first);
-
-        // Reversing direction abandons the stale +20 target and responds immediately from here.
-        chart.start_keyboard_scroll(-10.0, 1200.0);
-        let before_reverse = chart.scroll_position();
-        let reversed = chart.keyboard_scroll_tick(1300.0).unwrap();
-        assert!(reversed < before_reverse);
+        let held_50 = chart.keyboard_scroll_tick(1050.0).unwrap();
+        let held_100 = chart.keyboard_scroll_tick(1100.0).unwrap();
+        let held_150 = chart.keyboard_scroll_tick(1150.0).unwrap();
+        let first_step = held_100 - held_50;
+        let second_step = held_150 - held_100;
+        assert!(held_50 > 0.0);
+        assert!(first_step > 0.0);
+        assert!(
+            second_step > first_step,
+            "velocity should ramp toward cruise speed"
+        );
 
         chart.cancel_keyboard_scroll();
         assert!(!chart.keyboard_scroll_active());
-        assert!(chart.keyboard_scroll_tick(1400.0).is_none());
+        let stopped = chart.scroll_position();
+        assert!(chart.keyboard_scroll_tick(2000.0).is_none());
+        assert_eq!(chart.scroll_position(), stopped);
     }
 
     #[test]

@@ -224,9 +224,9 @@ test("interaction models run engine-side with canonical behavior", async ({ page
   const half = points.reduce((a, b) => (Math.abs(b.progress - 0.5) < Math.abs(a.progress - 0.5) ? b : a));
   expect(half.pos).toBeGreaterThan(4.2);
 
-  // 9) keyboard arrows: the same exponential damping family as pointer kinetic scrolling.
-  // Ctrl changes only the logical impulse size (10 bars); it must not jump or use a separate
-  // fixed-duration cubic tween, and Left/Right are symmetric.
+  // 9) keyboard arrows are velocity-owned while held. Motion ramps toward cruise speed without
+  // depending on OS key-repeat, and key-up stops immediately instead of coasting or finishing a
+  // destination tween.
   await page.evaluate(() => document.querySelector("#chart_container canvas:last-of-type").focus());
   await page.clock.runFor(50); // let the step-8 settle fully out of flight
   const k0 = (await state(page)).offset;
@@ -238,23 +238,43 @@ test("interaction models run engine-side with canonical behavior", async ({ page
     };
     requestAnimationFrame(sampler);
   });
-  await page.keyboard.press("Control+ArrowLeft");
-  await page.clock.runFor(150);
-  const k_mid = (await state(page)).offset;
-  expect(k_mid).toBeLessThan(k0);
-  expect(k_mid).toBeGreaterThan(k0 - 10, "kinetic keyboard pan must move through intermediate positions");
-  await page.clock.runFor(1800);
-  const k1 = (await state(page)).offset;
-  console.log("keyboard Ctrl+ArrowLeft:", k0.toFixed(2), "->", k_mid.toFixed(2), "->", k1.toFixed(2));
-  expect(k1).toBeCloseTo(k0 - 10, 3);
-  const key_anim = await page.evaluate(() => window.__key_anim);
-  const key_positions = key_anim.samples.map(([, position]) => position).filter((position) => position <= k0);
-  expect(key_positions.some((position) => position < k0 - 0.1 && position > k0 - 9.9)).toBe(true);
+  await page.keyboard.down("Control");
+  await page.keyboard.down("ArrowLeft");
+  await page.clock.runFor(50);
+  const k50 = (await state(page)).offset;
+  await page.clock.runFor(50);
+  const k100 = (await state(page)).offset;
+  await page.clock.runFor(50);
+  const k150 = (await state(page)).offset;
+  expect(k50).toBeLessThan(k0);
+  expect(k100).toBeLessThan(k50);
+  expect(k150).toBeLessThan(k100);
+  expect(k50 - k100).toBeGreaterThan(k0 - k50, "held motion should accelerate toward cruise speed");
 
-  await page.keyboard.press("Control+ArrowRight");
-  await page.clock.runFor(1950);
-  const k2 = (await state(page)).offset;
-  expect(k2).toBeCloseTo(k0, 3);
+  // Inject the repeat event that browsers receive while a key stays physically down. It must not
+  // cancel the engine-owned kinetic session; the chart should continue until the real key-up.
+  await page.evaluate(() => {
+    document.querySelector("#chart_container canvas:last-of-type").dispatchEvent(new KeyboardEvent("keydown", {
+      key: "ArrowLeft",
+      ctrlKey: true,
+      repeat: true,
+      bubbles: true,
+      cancelable: true,
+    }));
+  });
+  await page.clock.runFor(500);
+  const k650 = (await state(page)).offset;
+  expect(k650).toBeLessThan(k150, "keyboard kinetic motion must survive OS key repeat while held");
+  await page.keyboard.up("ArrowLeft");
+  const at_key_up = (await state(page)).offset;
+  await page.clock.runFor(300);
+  const after_release = (await state(page)).offset;
+  await page.keyboard.up("Control");
+  console.log(
+    "keyboard Ctrl+ArrowLeft held:",
+    k0.toFixed(2), "->", k50.toFixed(2), "->", k100.toFixed(2), "->", k150.toFixed(2),
+  );
+  expect(after_release).toBeCloseTo(at_key_up, 6);
 
   // 10) +/- keyboard zoom still works through the same zoom path.
   const kb0 = (await state(page)).spacing;

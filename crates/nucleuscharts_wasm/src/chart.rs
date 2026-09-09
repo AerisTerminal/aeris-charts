@@ -3014,13 +3014,13 @@ impl NucleusChart {
         self.inner.borrow_mut().kinetic_stop();
     }
 
-    /// Add one damped keyboard-pan impulse in logical bars.
+    /// Start or retune one held keyboard-pan direction in logical bars.
     pub fn start_keyboard_scroll(&mut self, delta_bars: f64, now_ms: f64) {
         self.inner
             .borrow_mut()
             .start_keyboard_scroll(delta_bars, now_ms);
     }
-    /// Apply one keyboard-pan tick; NaN when the exact target was reached.
+    /// Apply one keyboard-pan tick; NaN when no held kinetic session is active.
     pub fn keyboard_scroll_tick(&mut self, now_ms: f64) -> f64 {
         self.inner.borrow_mut().keyboard_scroll_tick(now_ms)
     }
