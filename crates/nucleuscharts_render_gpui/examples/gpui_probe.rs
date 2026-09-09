@@ -733,7 +733,6 @@ impl Probe {
 
     fn set_series_kind(&mut self, kind: SeriesKind) {
         self.engine.convert_series_kind(0, kind);
-        self.engine.series[0].kind = kind;
         self.click_status = format!("series: {kind:?}");
         self.dirty = true;
     }
@@ -3347,6 +3346,7 @@ impl Render for InteractiveDemo {
                     b("bars", DemoAction::Series(SeriesKind::Bar)),
                     b("line", DemoAction::Series(SeriesKind::Line)),
                     b("area", DemoAction::Series(SeriesKind::Area)),
+                    b("histogram", DemoAction::Series(SeriesKind::Histogram)),
                     b("baseline", DemoAction::Series(SeriesKind::Baseline)),
                 ],
             ),
@@ -3492,7 +3492,7 @@ impl Render for InteractiveDemo {
                     b("autoscale band", DemoAction::Fixture(2)),
                     b("markers", DemoAction::Fixture(3)),
                     b("plugin watermark", DemoAction::Fixture(4)),
-                    b("vertical line", DemoAction::Fixture(5)),
+                    b("canvas v-line fixture", DemoAction::Fixture(5)),
                 ],
             ),
         ];

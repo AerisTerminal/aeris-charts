@@ -113,6 +113,10 @@ Custom series, pane/series/canvas primitives, the exported custom-series/primiti
 built-in plugin helpers, offscreen-worker charts, split-grid helpers, and shortcut helpers are
 public experimental APIs. Their current lifecycle and containment behavior is tested, but their
 exact types may change in a pre-1.0 minor release.
+Convenience helpers such as `create_rectangle_drawing()` and `create_rectangle_drawing_tool()` are
+controllers over the canonical engine-owned drawing kind; they do not define a separate rectangle
+feature or persistence identity. Likewise, primitive helpers whose visual shape resembles a drawing
+remain primitives and should be presented as such by demos and hosts.
 Extensions run at host render time, must not re-enter a chart mutation from a render callback, own
 their external objects and persistence, and receive teardown exactly once. Callback failures are
 contained at the host boundary so one extension cannot prevent other teardown. Arbitrary extension

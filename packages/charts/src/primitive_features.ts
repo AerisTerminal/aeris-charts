@@ -1,4 +1,4 @@
-/** First-class primitive and chart helpers built on Nucleus's existing extension boundaries. */
+/** Primitive and compatibility helpers built on Nucleus's existing engine and extension boundaries. */
 
 import { chart_impl, time_to_utc_seconds } from "./impl.js";
 import {
@@ -122,7 +122,7 @@ export interface bands_indicator_api extends detachable_feature {
   apply_options(options: Partial<bands_indicator_options>): void;
 }
 
-/** Official ±10% source-price bands, drawn behind the source by the shared Rust frame. */
+/** Series primitive for ±10% source-price bands; distinct from the built-in indicator catalog. */
 export function create_bands_indicator(
   source: series_api,
   options: bands_indicator_options = {},
@@ -182,7 +182,10 @@ function normalize_rectangle_options(
   };
 }
 
-/** A committed official rectangle, with shared-engine pane and axis geometry. */
+/**
+ * Convenience wrapper over the canonical `drawing_kind = "rectangle"` object. This does not define
+ * a second rectangle implementation; pane/axis geometry and lifecycle remain engine-owned.
+ */
 export function create_rectangle_drawing(
   chart: chart_api,
   points: [drawing_point, drawing_point],
@@ -193,9 +196,9 @@ export function create_rectangle_drawing(
 }
 
 /**
- * Official two-click rectangle tool. Pointer placement, preview, commit, snapping, selection,
- * dragging, axis geometry, and persistence stay in Rust; this controller owns only its optional
- * DOM toolbar and the lifecycle of rectangles it created.
+ * Convenience controller over the canonical engine rectangle tool. Pointer placement, preview,
+ * commit, snapping, selection, dragging, axis geometry, and persistence stay in Rust; this wrapper
+ * owns only its optional DOM toolbar and the lifecycle of rectangles it created.
  */
 export function create_rectangle_drawing_tool(
   chart: chart_api,
@@ -334,7 +337,10 @@ export interface trend_line_options {
   label_text_color?: string;
 }
 
-/** Official engine-owned trend line with endpoint labels and autoscale participation. */
+/**
+ * Engine-owned series primitive with endpoint labels and autoscale participation. This is distinct
+ * from the canonical interactive `drawing_kind = "trend_line"` tool.
+ */
 export function create_trend_line(
   series: series_api,
   points: [trend_line_point, trend_line_point],
@@ -361,7 +367,10 @@ export interface vertical_line_options {
   show_label?: boolean;
 }
 
-/** Official engine-owned full-pane vertical line with optional time-axis label. */
+/**
+ * Engine-owned series primitive with an optional time-axis label. This is distinct from the
+ * canonical interactive `drawing_kind = "vertical_line"` tool.
+ */
 export function create_vertical_line(
   series: series_api,
   line_time: time,

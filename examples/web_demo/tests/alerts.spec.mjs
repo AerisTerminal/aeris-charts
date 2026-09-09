@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 
 async function open_alert_demo(page) {
   await page.goto("/?feature=trading&backend=canvas2d");
-  await page.waitForFunction(() => window.__feature_lab?.active_ids().includes("trading-bracket"));
+  await page.waitForFunction(() => window.__demo_catalogs?.lab.active_ids().includes("trading-bracket"));
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 }
 
@@ -104,7 +104,7 @@ test("crosshair uses the original SVG pixels at every DPR", async ({ page }) => 
 for (const backend of ["canvas2d", "webgpu"]) {
   test(`crosshair action visibly matches the circular SVG (${backend})`, async ({ page }) => {
     await page.goto(`/?feature=trading&backend=${backend}&forceFallbackAdapter=1`);
-    await page.waitForFunction(() => window.__feature_lab?.active_ids().includes("trading-bracket"));
+    await page.waitForFunction(() => window.__demo_catalogs?.lab.active_ids().includes("trading-bracket"));
     expect(await page.evaluate(() => window.__chart.backend())).toBe(backend);
     await page.evaluate(() => window.__chart.apply_options({ crosshair: { mode: 0 } }));
     const box = await page.locator("#chart_container canvas:last-of-type").boundingBox();

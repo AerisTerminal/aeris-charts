@@ -243,9 +243,9 @@ test("hoveredSeriesOnTop repaints the hovered series above an overlapping one", 
   });
   // Lift blue ~4 css px above red on the current scale; re-read red's y after the repaint
   // so the probe/sample coordinates match the settled frame exactly.
-  setup.y_red = await page.evaluate(({ line }) => {
-    const red_api = window.__chart.series_order()[2];
-    const blue_api = window.__chart.series_order()[3];
+  setup.y_red = await page.evaluate(({ line, red, blue }) => {
+    const red_api = window.__chart.series_order().find((series) => series.id === red);
+    const blue_api = window.__chart.series_order().find((series) => series.id === blue);
     const y_red = red_api.price_to_coordinate(line);
     blue_api.set_data(window.__data.map((d) => ({ time: d.time, value: red_api.coordinate_to_price(y_red - 4) })));
     return red_api.price_to_coordinate(line);

@@ -6,17 +6,14 @@ import {
   create_image_watermark,
   create_overlay_price_scale,
   create_partial_price_line,
-  create_rectangle_drawing_tool,
   create_session_highlighting,
   create_tooltip,
   create_trend_line,
   create_vertical_line,
   default_theme_name,
-  enable_accessibility,
   enable_brushable_area_interaction,
   theme_palette,
 } from "./dist/nucleuscharts_financial.js";
-import { volume_fixture } from "./fixture_features.js";
 import { hydrate_icons } from "./demo_icons.js";
 
 const PRIMARY_BLUE = theme_palette(default_theme_name).primary;
@@ -317,26 +314,16 @@ function primitive_features(chart, series, bars) {
   const end = bars[middle_index + 30];
   return [
     { id: "anchored-text", label: "Anchored text", detail: "Engine series primitive", icon: "draw", activate: () => { const handle = create_anchored_text(series, { text: "Anchored Text", vert_align: "middle", horz_align: "middle", line_height: 32, font: "italic bold 32px Arial", color: "#2962ff" }); return () => handle.detach(); } },
-    { id: "bands-indicator", label: "Price bands", detail: "Official ±10% background", icon: "analysis", activate: () => { const handle = create_bands_indicator(series); return () => handle.detach(); } },
-    { id: "rectangle", label: "Rectangle", detail: "Two-click tool + axis labels", icon: "draw", interactive: true, activate: () => { const tool = create_rectangle_drawing_tool(chart, series, undefined, { fill_color: "rgba(164,89,209,.75)", preview_fill_color: "rgba(164,89,209,.25)", label_color: "#a459d1" }); tool.start_drawing(); return () => tool.remove(); } },
-    { id: "trend-line", label: "Trend line", detail: "Line + endpoint labels", icon: "draw", activate: () => { const handle = create_trend_line(series, [{ time: start.time, price: start.low }, { time: end.time, price: end.high }], { line_color: "#f59e0b" }); return () => handle.detach(); } },
-    { id: "vertical-line", label: "Vertical line", detail: "Pane + time-axis primitive", icon: "draw", activate: () => { const handle = create_vertical_line(series, middle.time, { color: "#e1575a", label_text: "Event", label_background_color: "#e1575a", show_label: true }); return () => handle.detach(); } },
-    { id: "overlay-scale", label: "Overlay scale", detail: "In-pane rounded price labels", icon: "analysis", activate: () => { const overlay = chart.add_series("line", { color: "#a459d1", line_width: 2, price_line_visible: false, countdown_visible: false }); overlay.set_data(bars.filter((_, index) => index % 4 === 0).map((bar) => ({ time: bar.time, value: bar.close * .35 }))); const labels = create_overlay_price_scale(overlay); return () => { labels.detach(); chart.remove_series(overlay); }; } },
-    { id: "partial-price-line", label: "Partial line", detail: "Last value → edge", icon: "analysis", activate: () => { const handle = create_partial_price_line(series); return () => handle.detach(); } },
-    { id: "session-highlighting", label: "Sessions", detail: "Weekday / weekend", icon: "analysis", activate: () => { const handle = create_session_highlighting(series); return () => handle.detach(); } },
-    { id: "highlight-crosshair", label: "Bar highlight", detail: "Follow crosshair", icon: "analysis", activate: () => { const handle = create_highlight_bar_crosshair(chart, series); return () => handle.detach(); } },
-    { id: "image-watermark", label: "Image watermark", detail: "Engine raster primitive", icon: "lab", activate: () => { const image = document.createElement("canvas"); image.width = 96; image.height = 96; const context = image.getContext("2d"); context.fillStyle = "#2962ff"; context.beginPath(); context.roundRect(8, 8, 80, 80, 20); context.fill(); context.fillStyle = "white"; context.font = "700 52px Inter, sans-serif"; context.textAlign = "center"; context.textBaseline = "middle"; context.fillText("N", 48, 52); const handle = create_image_watermark(series, image, { max_width: 96, max_height: 96, alpha: .22 }); return () => handle.detach(); } },
+    { id: "bands-indicator", label: "Price-band primitive", detail: "Official ±10% background", icon: "analysis", activate: () => { const handle = create_bands_indicator(series); return () => handle.detach(); } },
+    { id: "trend-line", label: "Trend-line primitive", detail: "Series primitive + endpoint labels", icon: "draw", activate: () => { const handle = create_trend_line(series, [{ time: start.time, price: start.low }, { time: end.time, price: end.high }], { line_color: "#f59e0b" }); return () => handle.detach(); } },
+    { id: "vertical-line", label: "Event-line primitive", detail: "Series primitive + time-axis label", icon: "draw", activate: () => { const handle = create_vertical_line(series, middle.time, { color: "#e1575a", label_text: "Event", label_background_color: "#e1575a", show_label: true }); return () => handle.detach(); } },
+    { id: "overlay-scale", label: "Overlay-scale helper", detail: "In-pane rounded price labels", icon: "analysis", activate: () => { const overlay = chart.add_series("line", { color: "#a459d1", line_width: 2, price_line_visible: false, countdown_visible: false }); overlay.set_data(bars.filter((_, index) => index % 4 === 0).map((bar) => ({ time: bar.time, value: bar.close * .35 }))); const labels = create_overlay_price_scale(overlay); return () => { labels.detach(); chart.remove_series(overlay); }; } },
+    { id: "partial-price-line", label: "Partial-line primitive", detail: "Last value → edge", icon: "analysis", activate: () => { const handle = create_partial_price_line(series); return () => handle.detach(); } },
+    { id: "session-highlighting", label: "Session-highlighting primitive", detail: "Weekday / weekend", icon: "analysis", activate: () => { const handle = create_session_highlighting(series); return () => handle.detach(); } },
+    { id: "highlight-crosshair", label: "Crosshair-highlight helper", detail: "Bar highlight follows crosshair", icon: "analysis", activate: () => { const handle = create_highlight_bar_crosshair(chart, series); return () => handle.detach(); } },
+    { id: "image-watermark", label: "Image-watermark primitive", detail: "Engine raster primitive", icon: "lab", activate: () => { const image = document.createElement("canvas"); image.width = 96; image.height = 96; const context = image.getContext("2d"); context.fillStyle = "#2962ff"; context.beginPath(); context.roundRect(8, 8, 80, 80, 20); context.fill(); context.fillStyle = "white"; context.font = "700 52px Inter, sans-serif"; context.textAlign = "center"; context.textBaseline = "middle"; context.fillText("N", 48, 52); const handle = create_image_watermark(series, image, { max_width: 96, max_height: 96, alpha: .22 }); return () => handle.detach(); } },
     { id: "tooltip", label: "Tooltip", detail: "Hover values", icon: "lab", activate: () => { const handle = create_tooltip(chart, { series }); return () => handle.detach(); } },
     { id: "delta-tooltip", label: "Delta tooltip", detail: "Drag comparison", icon: "lab", activate: () => { const handle = create_delta_tooltip(chart, { series }); return () => handle.detach(); } },
-    { id: "volume-profile", label: "Volume profile", detail: "Visible range · POC · value area", icon: "chart", activate: () => {
-      const volume = chart.add_series("histogram", { visible: false, title: "Profile volume (synthetic)" });
-      volume.set_data(volume_fixture(bars));
-      let indicator;
-      try { indicator = chart.add_volume_profile(series, volume); }
-      catch (error) { chart.remove_series(volume); throw error; }
-      return () => { indicator.remove(); chart.remove_series(volume); };
-    } },
-    { id: "accessibility", label: "Accessibility", detail: "Keyboard + live text", icon: "lab", activate: () => { const handle = enable_accessibility(chart, { chart_title: "Nucleus feature lab chart" }); return () => handle.detach(); } },
   ];
 }
 
@@ -438,19 +425,31 @@ function trading_features(chart, bars) {
   }];
 }
 
-export function install_feature_lab({ chart, series, data }) {
+export function install_demo_catalogs({ chart, series, data, on_series_change }) {
   const grid = document.getElementById("feature_grid");
+  const series_grid = document.getElementById("series_grid");
   const search = document.getElementById("feature_search");
   const empty = document.getElementById("feature_empty");
   const active_count = document.getElementById("feature_active_count");
   const series_items = series_features(data).map((feature) => ({ ...feature, kind: "series" }));
   const primitive_items = primitive_features(chart, series, data).map((feature) => ({ ...feature, kind: "primitive" }));
   const trading_items = trading_features(chart, data).map((feature) => ({ ...feature, kind: "trading" }));
-  const features = [...series_items, ...primitive_items, ...trading_items];
+  const features = [...primitive_items, ...trading_items];
   const cleanups = new Map();
   let active_series = null;
+  let base_series_choice = document.querySelector('input[name="series"]:checked')?.value ?? "candlestick";
   let filter = "all";
 
+  for (const feature of series_items) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "feature-card";
+    button.dataset.seriesId = feature.id;
+    button.setAttribute("aria-pressed", "false");
+    button.title = `${feature.label}: ${feature.detail}`;
+    button.innerHTML = `<span class="feature-icon" data-icon="${feature.icon}"></span><strong>${feature.label}</strong><small>${feature.detail}</small>`;
+    series_grid.appendChild(button);
+  }
   for (const feature of features) {
     const button = document.createElement("button");
     button.type = "button";
@@ -462,58 +461,74 @@ export function install_feature_lab({ chart, series, data }) {
     button.innerHTML = `<span class="feature-icon" data-icon="${feature.icon}"></span><strong>${feature.label}</strong><small>${feature.detail}</small>`;
     grid.appendChild(button);
   }
+  hydrate_icons(series_grid);
   hydrate_icons(grid);
 
-  const card = (id) => grid.querySelector(`[data-feature-id="${id}"]`);
+  const feature_card = (id) => grid.querySelector(`[data-feature-id="${id}"]`);
+  const series_card = (id) => series_grid.querySelector(`[data-series-id="${id}"]`);
   const update_status = (message) => {
-    const count = cleanups.size + (active_series === null ? 0 : 1);
+    const count = cleanups.size;
     active_count.textContent = message ?? (count === 0 ? "No features active" : `${count} feature${count === 1 ? "" : "s"} active`);
   };
   const clear_series = () => {
     if (active_series === null) return;
     active_series.cleanup?.();
     chart.remove_series(active_series.handle);
-    card(active_series.id)?.setAttribute("aria-pressed", "false");
+    series_card(active_series.id)?.setAttribute("aria-pressed", "false");
     active_series = null;
     series.apply_options({ visible: true });
+    const base = document.querySelector(`input[name="series"][value="${base_series_choice}"]`);
+    if (base !== null) base.checked = true;
+    on_series_change?.(series.series_type());
   };
-  const toggle = (feature) => {
+  const toggle_series = (feature) => {
     try {
-      if (feature.kind === "series") {
-        const was_active = active_series?.id === feature.id;
-        clear_series();
-        if (!was_active) {
-          const handle = feature.create?.(chart) ?? chart.add_series(feature.series_kind, {
-            ...feature.options,
-            price_line_visible: false,
-            last_value_visible: false,
-            countdown_visible: false,
-          });
-          if (feature.create === undefined) handle.set_data(feature.data());
-          const interaction = feature.interactive === true
-            ? enable_brushable_area_interaction(chart, handle)
-            : null;
-          const remove_companion = feature.compose?.(chart, handle) ?? null;
-          active_series = {
-            id: feature.id,
-            handle,
-            cleanup: () => { interaction?.detach(); remove_companion?.(); },
-          };
-          series.apply_options({ visible: feature.overlay === true });
-          card(feature.id).setAttribute("aria-pressed", "true");
-        }
-      } else if (cleanups.has(feature.id)) {
-        cleanups.get(feature.id)();
-        cleanups.delete(feature.id);
-        card(feature.id).setAttribute("aria-pressed", "false");
-      } else {
-        const cleanup = feature.activate();
-        cleanups.set(feature.id, typeof cleanup === "function" ? cleanup : () => {});
-        card(feature.id).setAttribute("aria-pressed", "true");
+      const was_active = active_series?.id === feature.id;
+      clear_series();
+      if (!was_active) {
+        const checked = document.querySelector('input[name="series"]:checked');
+        if (checked !== null) base_series_choice = checked.value;
+        for (const radio of document.querySelectorAll('input[name="series"]')) radio.checked = false;
+        const handle = feature.create?.(chart) ?? chart.add_series(feature.series_kind, {
+          ...feature.options,
+          price_line_visible: false,
+          last_value_visible: false,
+          countdown_visible: false,
+        });
+        if (feature.create === undefined) handle.set_data(feature.data());
+        const interaction = feature.interactive === true
+          ? enable_brushable_area_interaction(chart, handle)
+          : null;
+        const remove_companion = feature.compose?.(chart, handle) ?? null;
+        active_series = {
+          id: feature.id,
+          handle,
+          cleanup: () => { interaction?.detach(); remove_companion?.(); },
+        };
+        series.apply_options({ visible: feature.overlay === true });
+        series_card(feature.id).setAttribute("aria-pressed", "true");
+        on_series_change?.(handle.series_type());
       }
       if (active_series?.id !== feature.id || feature.preserve_time_spacing !== true) {
         chart.time_scale().fit_content();
       }
+      chart.render();
+    } catch (error) {
+      console.error(`Series catalog could not activate ${feature.id}`, error);
+    }
+  };
+  const toggle_feature = (feature) => {
+    try {
+      if (cleanups.has(feature.id)) {
+        cleanups.get(feature.id)();
+        cleanups.delete(feature.id);
+        feature_card(feature.id).setAttribute("aria-pressed", "false");
+      } else {
+        const cleanup = feature.activate();
+        cleanups.set(feature.id, typeof cleanup === "function" ? cleanup : () => {});
+        feature_card(feature.id).setAttribute("aria-pressed", "true");
+      }
+      chart.time_scale().fit_content();
       chart.render();
       update_status();
     } catch (error) {
@@ -526,16 +541,21 @@ export function install_feature_lab({ chart, series, data }) {
     let visible = 0;
     for (const feature of features) {
       const match = (filter === "all" || feature.kind === filter) && `${feature.label} ${feature.detail}`.toLowerCase().includes(term);
-      card(feature.id).hidden = !match;
+      feature_card(feature.id).hidden = !match;
       if (match) visible += 1;
     }
     empty.dataset.visible = String(visible === 0);
   };
 
+  series_grid.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-series-id]");
+    const feature = series_items.find((item) => item.id === button?.dataset.seriesId);
+    if (feature !== undefined) toggle_series(feature);
+  });
   grid.addEventListener("click", (event) => {
     const button = event.target.closest("[data-feature-id]");
     const feature = features.find((item) => item.id === button?.dataset.featureId);
-    if (feature !== undefined) toggle(feature);
+    if (feature !== undefined) toggle_feature(feature);
   });
   search.addEventListener("input", apply_filter);
   for (const button of document.querySelectorAll("[data-feature-filter]")) {
@@ -546,10 +566,9 @@ export function install_feature_lab({ chart, series, data }) {
     });
   }
   document.getElementById("feature_clear").addEventListener("click", () => {
-    clear_series();
     for (const [id, cleanup] of cleanups) {
       cleanup();
-      card(id)?.setAttribute("aria-pressed", "false");
+      feature_card(id)?.setAttribute("aria-pressed", "false");
     }
     cleanups.clear();
     chart.time_scale().fit_content();
@@ -558,9 +577,26 @@ export function install_feature_lab({ chart, series, data }) {
   });
 
   return {
-    activate(id) { const feature = features.find((item) => item.id === id); if (feature !== undefined) toggle(feature); },
-    active_ids() { return [...(active_series === null ? [] : [active_series.id]), ...cleanups.keys()]; },
-    interaction_series() { return active_series?.handle ?? series; },
-    clear() { document.getElementById("feature_clear").click(); },
+    series: {
+      activate(id) {
+        const feature = series_items.find((item) => item.id === id);
+        if (feature !== undefined) toggle_series(feature);
+      },
+      active_id() { return active_series?.id ?? null; },
+      interaction_series() { return active_series?.handle ?? series; },
+      clear: clear_series,
+      select_base(value) {
+        base_series_choice = value;
+        clear_series();
+      },
+    },
+    lab: {
+      activate(id) {
+        const feature = features.find((item) => item.id === id);
+        if (feature !== undefined) toggle_feature(feature);
+      },
+      active_ids() { return [...cleanups.keys()]; },
+      clear() { document.getElementById("feature_clear").click(); },
+    },
   };
 }

@@ -78,10 +78,10 @@ test("demo volume profile uses the built-in calculation", async ({ page }) => {
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  const button = page.locator('[data-feature-id="volume-profile"]');
-  await button.click();
-  await expect(button).toHaveAttribute("aria-pressed", "true");
-  await button.click();
-  await expect(button).toHaveAttribute("aria-pressed", "false");
+  const toggle = page.locator("#volume_profile_toggle");
+  await toggle.check();
+  await expect(toggle).toBeChecked();
+  await toggle.uncheck();
+  await expect(toggle).not.toBeChecked();
   expect(errors).toEqual([]);
 });

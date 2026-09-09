@@ -3,7 +3,7 @@ import { PNG } from "pngjs";
 
 async function open_trading_demo(page, backend = "canvas2d") {
   await page.goto(`/?feature=trading&backend=${backend}`);
-  await page.waitForFunction(() => window.__feature_lab?.active_ids().includes("trading-bracket"));
+  await page.waitForFunction(() => window.__demo_catalogs?.lab.active_ids().includes("trading-bracket"));
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await page.evaluate(() => {
     // The close control is the trailing cell of the marker's one container. Sweep the marker span
@@ -159,7 +159,7 @@ test("trading lines use dedicated hits and render semantic colors through the sh
 
 test("trading state is chart-local and clear removes all live objects", async ({ page }) => {
   await open_trading_demo(page);
-  await page.evaluate(() => window.__feature_lab.clear());
+  await page.evaluate(() => window.__demo_catalogs.lab.clear());
   expect(await page.evaluate(() => window.__chart.trading().state())).toEqual({
     instrument: {},
     positions: [],

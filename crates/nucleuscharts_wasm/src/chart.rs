@@ -1673,7 +1673,8 @@ impl NucleusChart {
             .set_native_text_watermark_options(id, options_json)
     }
 
-    /// Attach the official full-pane vertical line and optional time-axis label.
+    /// Attach the series-primitive vertical line and optional time-axis label. This is not the
+    /// interactive `DrawingKind::VerticalLine` tool.
     pub fn add_native_vertical_line(
         &mut self,
         series_id: u32,
@@ -1742,7 +1743,8 @@ impl NucleusChart {
         self.inner.borrow_mut().engine.delta_tooltip_leave()
     }
 
-    /// Attach the official two-point trend-line primitive with endpoint labels.
+    /// Attach the two-point series primitive with endpoint labels. This is not the interactive
+    /// `DrawingKind::TrendLine` tool.
     #[allow(clippy::too_many_arguments)]
     pub fn add_native_trend_line(
         &mut self,

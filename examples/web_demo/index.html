@@ -92,16 +92,16 @@
   #feature_filters { display: flex; gap: 4px; width: 100%; margin: 12px 0 16px; padding: 4px; background: var(--surface-secondary); border-radius: 10px; }
   #feature_filters button { flex: 1; min-width: 0; padding: 6px; font-size: 11px; border-color: transparent; background: transparent; }
   #feature_filters button[aria-pressed="true"] { color: var(--primary); background: var(--surface); border-color: var(--border-secondary); }
-  #feature_grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; width: 100%; }
-  #feature_grid .feature-card { display: grid; grid-template-columns: 32px minmax(0, 1fr); grid-template-rows: auto auto; gap: 3px 12px; min-height: 64px; padding: 10px 8px; text-align: left; background: transparent; border-color: transparent; border-radius: 8px; }
-  #feature_grid .feature-card:hover { background: var(--hover-bg); }
+  .scenario-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; width: 100%; }
+  .scenario-grid .feature-card { display: grid; grid-template-columns: 32px minmax(0, 1fr); grid-template-rows: auto auto; gap: 3px 12px; min-height: 64px; padding: 10px 8px; text-align: left; background: transparent; border-color: transparent; border-radius: 8px; }
+  .scenario-grid .feature-card:hover { background: var(--hover-bg); }
   .feature-card .feature-icon { grid-row: 1 / 3; display: grid; place-items: center; width: 32px; height: 32px; margin-top: 2px; color: var(--icon); }
   .feature-card svg { width: 20px; height: 20px; }
   .feature-card strong { font-size: 13px; font-weight: 600; white-space: normal; }
   .feature-card small { color: var(--text-secondary); font-size: 11px; line-height: 1.4; white-space: normal; text-wrap: pretty; }
-  #feature_grid .feature-card[aria-pressed="true"] { border-color: color-mix(in srgb, var(--primary) 40%, transparent); background: color-mix(in srgb, var(--primary) 10%, var(--surface)); }
-  #feature_grid .feature-card[aria-pressed="true"] .feature-icon { color: var(--primary); }
-  #feature_grid .feature-card[hidden] { display: none; }
+  .scenario-grid .feature-card[aria-pressed="true"] { border-color: color-mix(in srgb, var(--primary) 40%, transparent); background: color-mix(in srgb, var(--primary) 10%, var(--surface)); }
+  .scenario-grid .feature-card[aria-pressed="true"] .feature-icon { color: var(--primary); }
+  .scenario-grid .feature-card[hidden] { display: none; }
   #feature_empty { display: none; padding: 24px 8px; color: var(--text-secondary); font-size: 12px; text-align: center; }
   #feature_empty[data-visible="true"] { display: block; }
   #feature_lab_status { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--text-secondary); font-size: 11px; }
@@ -217,15 +217,14 @@
 
     <section class="group" id="feature_lab_group" data-caption="Feature lab">
       <h2>Feature lab</h2>
-      <p class="feature-lab-intro">Explore a series or combine overlays. Each scenario runs on the active chart.</p>
+      <p class="feature-lab-intro">Explore composable helpers and trading scenarios. Primary series and drawing tools live in their canonical sections.</p>
       <label class="feature-search-wrap"><span data-icon="search"></span><input id="feature_search" type="search" placeholder="Search scenarios" aria-label="Search feature lab"></label>
       <div id="feature_filters" role="group" aria-label="Filter features">
         <button type="button" data-feature-filter="all" aria-pressed="true">All</button>
-        <button type="button" data-feature-filter="series" aria-pressed="false">Series</button>
         <button type="button" data-feature-filter="primitive" aria-pressed="false">Primitives</button>
         <button type="button" data-feature-filter="trading" aria-pressed="false">Trading</button>
       </div>
-      <div id="feature_grid" aria-live="polite"></div>
+      <div id="feature_grid" class="scenario-grid" aria-live="polite"></div>
       <div id="feature_empty">No matching features.</div>
       <div id="feature_lab_status"><span id="feature_active_count">No features active</span><button id="feature_clear" type="button">Clear lab</button></div>
     </section>
@@ -233,21 +232,19 @@
     <div class="group" id="type_group" data-caption="Series">
       <h2>Series</h2>
       <label><input type="radio" name="series" value="candlestick" checked> candles</label>
+      <label><input type="radio" name="series" value="hollow_candlestick"> hollow candles</label>
       <label><input type="radio" name="series" value="bar"> bars</label>
       <label><input type="radio" name="series" value="line"> line</label>
       <label><input type="radio" name="series" value="area"> area</label>
+      <label><input type="radio" name="series" value="histogram"> histogram</label>
       <label><input type="radio" name="series" value="baseline"> baseline</label>
+      <p class="feature-lab-intro">Advanced engine-owned series</p>
+      <div id="series_grid" class="scenario-grid" aria-label="Advanced series"></div>
     </div>
 
     <!-- candle/bar colors: body, wick, and border per direction + part visibility -->
     <div class="group" id="candle_style" data-caption="Candle style">
       <h2>Candle style</h2>
-      <label>body <select id="candle_body" title="Hollow candles, TradingView-style: the body goes transparent while the border and wick keep the direction's color">
-        <option value="solid">solid</option>
-        <option value="hollow_up">hollow bullish</option>
-        <option value="hollow_down">hollow bearish</option>
-        <option value="hollow">hollow both</option>
-      </select></label>
       <label>up <input type="color" id="up_color" value="#089981"></label>
       <label>down <input type="color" id="down_color" value="#f7525f"></label>
       <label>wick up <input type="color" id="wick_up_color" value="#089981"></label>
@@ -310,7 +307,7 @@
       <label title="Custom series (plugin platform): an OHLC renderer drawn by the plugin"><input type="checkbox" id="custom_toggle"> custom OHLC</label>
       <label title="Built-in plugin (reference createSeriesMarkers): the markers fixture drawn by the plugin platform — A/B against ?feature=markers (engine markers)"><input type="checkbox" id="plugin_markers_toggle"> plugin markers</label>
       <label title="Built-in plugin (reference createTextWatermark): two-line watermark painted through the overlay-text hook"><input type="checkbox" id="plugin_watermark_toggle"> plugin watermark</label>
-      <label title="Canvas primitive (plugin platform C-e): the reference vertical-line plugin example, painted with raw Canvas2D calls on the plugin overlay"><input type="checkbox" id="vertline_toggle"> vert line</label>
+      <label title="Canvas primitive (plugin platform C-e): the reference vertical-line plugin example, painted with raw Canvas2D calls on the plugin overlay"><input type="checkbox" id="vertline_toggle"> canvas v-line plugin</label>
     </div>
 
     <div class="group" id="drawings_group" data-caption="Drawings" title="Engine-owned drawing tools (TradingView-style): click a tool, then click the chart to place its anchors (two clicks for trend/rect; Path finishes on double-click or Enter and Backspace removes its latest pending vertex). Click a drawing to select it — drag its anchor handles to re-anchor, drag the body to move it; Delete/Backspace removes the selection, Escape deselects/cancels. Hold Ctrl to magnet-snap the crosshair and drawing anchors to the nearest bar's OHLC; hold Shift to straighten a dragged anchor to 0°/45°/90° (a rectangle to a square) or a body move to one axis.">
@@ -462,7 +459,7 @@ import { fixture_theme } from "./fixture_styles.js";
 import { marker_fixture, volume_fixture } from "./fixture_features.js";
 import { custom_ohlc_pane_view } from "./fixture_custom_series.js";
 import { vert_line_canvas_primitive } from "./fixture_canvas_plugin.js";
-import { install_feature_lab } from "./feature_lab.js";
+import { install_demo_catalogs } from "./demo_catalogs.js";
 
 const container = document.getElementById("chart_container");
 const status = document.getElementById("status");
@@ -633,9 +630,9 @@ window.__data = data;
 // price scale (TradingView-style — no separate pane / divider), colored green/red by bar direction.
 const volume_data = volume_fixture(data);
 let vol_series = null;
-window.__feature_lab = install_feature_lab({ chart, series: main, data });
-if (requested_feature === "trading") window.__feature_lab.activate("trading-bracket");
-if (requested_feature === "footprint") window.__feature_lab.activate("footprint");
+window.__demo_catalogs = install_demo_catalogs({ chart, series: main, data, on_series_change: sync_style_visibility });
+if (requested_feature === "trading") window.__demo_catalogs.lab.activate("trading-bracket");
+if (requested_feature === "footprint") window.__demo_catalogs.series.activate("footprint");
 
 // Fidelity fixtures use only the package's public handles. The demo supplies data and options;
 // all scale, layout, and rendering behavior remains inside the headless engine.
@@ -1133,6 +1130,7 @@ if (runtime_test === "screenshot") {
 // ---- styling controls ----------------------------------------------------------------------
 // Show only the style group(s) relevant to the current series kind.
 function sync_style_visibility(kind) {
+  if (kind === "hollow_candlestick") kind = "candlestick";
   document.getElementById("candle_style").hidden = !(kind === "candlestick" || kind === "bar");
   document.getElementById("line_style").hidden = !(kind === "line" || kind === "area" || kind === "baseline");
   document.getElementById("line_color_label").hidden = kind === "area";
@@ -1151,8 +1149,8 @@ const candle_part_touched = { wick_up: false, wick_down: false, border_up: false
 // color, so a transparent body would take the whole candle with it. A hollow direction therefore
 // pins its border and wick to that direction's picker, which becomes the outline color.
 let candle_body_mode = "solid";
-const hollow_up = () => candle_body_mode === "hollow_up" || candle_body_mode === "hollow";
-const hollow_down = () => candle_body_mode === "hollow_down" || candle_body_mode === "hollow";
+const hollow_up = () => candle_body_mode === "hollow";
+const hollow_down = () => candle_body_mode === "hollow";
 // Parts pinned by hollow mode rather than by the user, so going solid again can hand them back to
 // the follow-the-body default instead of stranding them on a pinned color.
 const hollow_pinned = { up: false, down: false };
@@ -1221,7 +1219,7 @@ let transient_price_pan_selection = null;
 container.addEventListener("pointerdown", () => {
   const target = active_chart();
   const series = target === chart
-    ? window.__feature_lab?.interaction_series?.() ?? main
+    ? window.__demo_catalogs?.series.interaction_series?.() ?? main
     : target.__seed_series ?? null;
   if (series === null || target.price_scale(series.price_scale_id()).options().auto_scale !== false) return;
   const had_selection = JSON.parse(target.wasm.selection_anchor_identities_json()).length > 0;
@@ -1241,9 +1239,14 @@ container.addEventListener("pointercancel", clear_transient_price_pan_selection)
 // Reflect the active chart in the toolbar: its series type selects the matching radio and
 // shows that type's style groups (called whenever the active cell changes).
 function sync_active_toolbar() {
-  const kind = active_series().series_type();
-  const radio = document.querySelector(`input[name="series"][value="${kind}"]`);
-  if (radio) radio.checked = true;
+  const current = active_series();
+  const kind = current.series_type();
+  const options = current.options();
+  const presented_kind = kind === "candlestick" && options.up_color === "transparent" && options.down_color === "transparent"
+    ? "hollow_candlestick"
+    : kind;
+  const radio = document.querySelector(`input[name="series"][value="${presented_kind}"]`);
+  for (const peer of document.querySelectorAll('input[name="series"]')) peer.checked = peer === radio;
   sync_style_visibility(kind);
   sync_comparison_controls();
 }
@@ -1318,10 +1321,6 @@ document.getElementById("bid_ask_toggle").addEventListener("change", (e) => {
 const apply_candle_body = () => active_series().apply_options(candle_body_options());
 document.getElementById("up_color").addEventListener("input", apply_candle_body);
 document.getElementById("down_color").addEventListener("input", apply_candle_body);
-document.getElementById("candle_body").addEventListener("change", (e) => {
-  candle_body_mode = e.target.value;
-  apply_candle_body();
-});
 document.getElementById("wick_up_color").addEventListener("input", (e) => { candle_part_touched.wick_up = true; active_series().apply_options({ wick_up_color: e.target.value }); });
 document.getElementById("wick_down_color").addEventListener("input", (e) => { candle_part_touched.wick_down = true; active_series().apply_options({ wick_down_color: e.target.value }); });
 document.getElementById("border_up_color").addEventListener("input", (e) => { candle_part_touched.border_up = true; active_series().apply_options({ border_up_color: e.target.value }); });
@@ -1335,7 +1334,11 @@ document.getElementById("candle_parts_reset").addEventListener("click", () => {
   // Hollow mode owns the border/wick pins, so clearing them means returning to solid bodies.
   candle_body_mode = "solid";
   hollow_pinned.up = hollow_pinned.down = false;
-  document.getElementById("candle_body").value = "solid";
+  if (active_series().series_type() === "candlestick") {
+    const solid_candles = document.querySelector('input[name="series"][value="candlestick"]');
+    solid_candles.checked = true;
+    if (active_chart() === chart) window.__demo_catalogs?.series.select_base("candlestick");
+  }
   active_series().apply_options({
     ...candle_body_options(),
     wick_up_color: "", wick_down_color: "", border_up_color: "", border_down_color: "",
@@ -1494,8 +1497,11 @@ if (grid !== null) {
 
 document.querySelectorAll('input[name="series"]').forEach((el) => {
   el.addEventListener("change", () => {
-    active_series().set_type(el.value);
-    sync_style_visibility(el.value);
+    if (active_chart() === chart) window.__demo_catalogs?.series.select_base(el.value);
+    const kind = el.value === "hollow_candlestick" ? "candlestick" : el.value;
+    candle_body_mode = el.value === "hollow_candlestick" ? "hollow" : "solid";
+    active_series().set_type(kind);
+    sync_style_visibility(kind);
     apply_main_style();
   });
 });

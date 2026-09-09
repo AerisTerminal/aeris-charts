@@ -383,6 +383,23 @@ test("the toolbar's series type and style act on the ACTIVE cell, not always the
   expect(await color_of(1)).not.toBe("#ff00ff");
 });
 
+test("changing a split cell series does not clear the root chart's advanced series", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+  await page.evaluate(() => window.__demo_catalogs.series.activate("hlc-area"));
+  expect(await page.evaluate(() => window.__demo_catalogs.series.active_id())).toBe("hlc-area");
+
+  await page.click("#split_h");
+  await page.waitForFunction(() => document.querySelectorAll("#chart_container canvas").length === 8);
+  await wait_cell_charts(page);
+  await activate_cell(page, 1);
+  await page.locator('input[name="series"][value="area"]').check();
+
+  expect(await page.evaluate(() => window.__demo_catalogs.series.active_id())).toBe("hlc-area");
+  expect(await page.evaluate(() => window.__main.options().visible)).toBe(false);
+  expect(await page.evaluate(() => window.__grid.cells()[1].chart.__seed_series.series_type())).toBe("area");
+});
+
 test("divider drags never disturb a cell's candle spacing (even with interactions off)", async ({ page }) => {
   await page.goto("/");
   await wait_grid(page);

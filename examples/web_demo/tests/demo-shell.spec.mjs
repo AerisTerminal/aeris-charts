@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 
 async function open_demo(page) {
   await page.goto("/");
-  await page.waitForFunction(() => window.__chart?.backend?.() !== undefined && window.__feature_lab !== undefined);
+  await page.waitForFunction(() => window.__chart?.backend?.() !== undefined && window.__demo_catalogs !== undefined);
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 }
 
@@ -71,36 +71,49 @@ test("demo shell is responsive, icon-led, and has no horizontal control ribbon",
   await expect(page.locator("#inspector_toggle")).toBeVisible();
 });
 
-test("feature lab exposes every first-class helper and manages series lifecycle", async ({ page }) => {
+test("canonical series stay in Series while feature lab contains only composable scenarios", async ({ page }) => {
   await open_demo(page);
-  // Every supported helper scenario remains represented after retiring three obsolete cards.
-  await expect(page.locator("#feature_grid .feature-card")).toHaveCount(26);
-  await expect(page.locator('[data-feature-id="footprint"]')).toBeVisible();
-  await expect(page.locator('[data-feature-id="heatmap-standalone"]')).toBeVisible();
-  await expect(page.locator('[data-feature-id="heatmap-line"]')).toBeVisible();
+  await expect(page.locator("#series_grid .feature-card")).toHaveCount(11);
+  await expect(page.locator("#feature_grid .feature-card")).toHaveCount(12);
+  expect(await page.locator('input[name="series"]').evaluateAll((radios) => radios.map((radio) => radio.value))).toEqual([
+    "candlestick", "hollow_candlestick", "bar", "line", "area", "histogram", "baseline",
+  ]);
+  await expect(page.locator('#series_grid [data-series-id="footprint"]')).toBeVisible();
+  await expect(page.locator('#series_grid [data-series-id="heatmap-standalone"]')).toBeVisible();
+  await expect(page.locator('#series_grid [data-series-id="heatmap-line"]')).toBeVisible();
+  await expect(page.locator('#feature_grid [data-feature-id="footprint"]')).toHaveCount(0);
+  await expect(page.locator('#feature_grid [data-feature-id="rectangle"]')).toHaveCount(0);
+  await expect(page.locator('#feature_grid [data-feature-id="accessibility"]')).toHaveCount(0);
+  await expect(page.locator('#feature_grid [data-feature-id="volume-profile"]')).toHaveCount(0);
+  await expect(page.locator('#drawings_group [data-tool="rectangle"]')).toHaveCount(1);
+  await expect(page.locator("#volume_profile_toggle")).toHaveCount(1);
 
-  await page.locator('[data-feature-id="hlc-area"]').click();
-  await expect(page.locator('[data-feature-id="hlc-area"]')).toHaveAttribute("aria-pressed", "true");
-  expect(await page.evaluate(() => window.__feature_lab.active_ids())).toEqual(["hlc-area"]);
+  await page.locator('#series_grid [data-series-id="hlc-area"]').click();
+  await expect(page.locator('#series_grid [data-series-id="hlc-area"]')).toHaveAttribute("aria-pressed", "true");
+  expect(await page.evaluate(() => window.__demo_catalogs.series.active_id())).toBe("hlc-area");
   expect(await page.evaluate(() => window.__chart.series_order().filter((item) => item.series_type() === "hlc_area").length)).toBe(1);
   expect(await page.evaluate(() => window.__main.options().visible)).toBe(false);
 
-  await page.locator('[data-feature-id="volume-profile"]').click();
-  expect(await page.evaluate(() => window.__feature_lab.active_ids().sort())).toEqual(["hlc-area", "volume-profile"]);
+  await page.locator('[data-feature-id="tooltip"]').click();
+  expect(await page.evaluate(() => window.__demo_catalogs.lab.active_ids())).toEqual(["tooltip"]);
+  expect(await page.evaluate(() => window.__demo_catalogs.series.active_id())).toBe("hlc-area");
   await page.locator("#feature_clear").click();
-  expect(await page.evaluate(() => window.__feature_lab.active_ids())).toEqual([]);
+  expect(await page.evaluate(() => window.__demo_catalogs.lab.active_ids())).toEqual([]);
+  expect(await page.evaluate(() => window.__demo_catalogs.series.active_id())).toBe("hlc-area");
+  await page.evaluate(() => window.__demo_catalogs.series.clear());
   expect(await page.evaluate(() => window.__chart.series_order().filter((item) => item.series_type() === "hlc_area").length)).toBe(0);
   expect(await page.evaluate(() => window.__main.options().visible)).toBe(true);
 });
 
-test("feature lab launches a readable tick-driven footprint preview", async ({ page }) => {
+test("Series launches a readable tick-driven footprint preview", async ({ page }) => {
   await open_demo(page);
-  await page.locator('[data-feature-id="footprint"]').click();
+  await page.locator('#series_grid [data-series-id="footprint"]').click();
+  await expect(page.locator("#candle_style")).toBeHidden();
   const state = await page.evaluate(() => {
     const footprint = window.__chart.series_order().find((series) => series.series_type() === "footprint");
     const bars = footprint?.footprint_bars() ?? [];
     return {
-      active: window.__feature_lab.active_ids(),
+      active: window.__demo_catalogs.series.active_id(),
       visible: footprint?.options().visible,
       bars: bars.length,
       levels: bars[0]?.levels.length ?? 0,
@@ -115,7 +128,7 @@ test("feature lab launches a readable tick-driven footprint preview", async ({ p
     };
   });
   expect(state).toMatchObject({
-    active: ["footprint"],
+    active: "footprint",
     visible: true,
     bars: 12,
     levels: 11,
@@ -136,13 +149,33 @@ test("every feature-lab card activates through its real public API wiring", asyn
     cards.map((card) => ({ id: card.dataset.featureId, kind: card.dataset.featureKind })),
   );
   for (const feature of features) {
-    await page.evaluate((id) => window.__feature_lab.activate(id), feature.id);
-    expect(await page.evaluate((id) => window.__feature_lab.active_ids().includes(id), feature.id)).toBe(true);
-    if (feature.kind === "primitive") await page.evaluate((id) => window.__feature_lab.activate(id), feature.id);
+    await page.evaluate((id) => window.__demo_catalogs.lab.activate(id), feature.id);
+    expect(await page.evaluate((id) => window.__demo_catalogs.lab.active_ids().includes(id), feature.id)).toBe(true);
+    if (feature.kind === "primitive") await page.evaluate((id) => window.__demo_catalogs.lab.activate(id), feature.id);
   }
-  await page.evaluate(() => window.__feature_lab.clear());
-  expect(await page.evaluate(() => window.__feature_lab.active_ids())).toEqual([]);
+  await page.evaluate(() => window.__demo_catalogs.lab.clear());
+  expect(await page.evaluate(() => window.__demo_catalogs.lab.active_ids())).toEqual([]);
   expect(errors).toEqual([]);
+});
+
+test("hollow candles are a Series choice backed by the canonical candlestick series", async ({ page }) => {
+  await open_demo(page);
+  await page.locator('input[name="series"][value="hollow_candlestick"]').check();
+  expect(await page.evaluate(() => ({
+    kind: window.__main.series_type(),
+    up: window.__main.options().up_color,
+    down: window.__main.options().down_color,
+  }))).toEqual({ kind: "candlestick", up: "transparent", down: "transparent" });
+
+  await page.locator('input[name="series"][value="candlestick"]').check();
+  expect(await page.evaluate(() => ({
+    kind: window.__main.series_type(),
+    up: window.__main.options().up_color,
+    down: window.__main.options().down_color,
+  }))).toEqual({ kind: "candlestick", up: "#089981", down: "#f7525f" });
+
+  await page.locator('input[name="series"][value="histogram"]').check();
+  expect(await page.evaluate(() => window.__main.series_type())).toBe("histogram");
 });
 
 test("reported plugin scenarios use full data and official line compositions", async ({ page }) => {
@@ -154,7 +187,7 @@ test("reported plugin scenarios use full data and official line compositions", a
   })));
 
   const initial_lines = (await inspect()).filter((item) => item.type === "line").length;
-  await page.evaluate(() => window.__feature_lab.activate("heatmap-standalone"));
+  await page.evaluate(() => window.__demo_catalogs.series.activate("heatmap-standalone"));
   let series = await inspect();
   expect(series.find((item) => item.type === "heatmap")).toMatchObject({
     points: await page.evaluate(() => window.__data.length),
@@ -166,7 +199,7 @@ test("reported plugin scenarios use full data and official line compositions", a
     bar_spacing: 21,
   });
 
-  await page.evaluate(() => window.__feature_lab.activate("heatmap-line"));
+  await page.evaluate(() => window.__demo_catalogs.series.activate("heatmap-line"));
   series = await inspect();
   expect(series.find((item) => item.type === "heatmap")).toMatchObject({
     points: await page.evaluate(() => window.__data.length),
@@ -178,7 +211,7 @@ test("reported plugin scenarios use full data and official line compositions", a
     return window.__chart.series_order().at(-1).options().color === theme_palette(default_theme_name).primary;
   })).toBe(true);
 
-  await page.evaluate(() => window.__feature_lab.activate("shaded-background"));
+  await page.evaluate(() => window.__demo_catalogs.series.activate("shaded-background"));
   series = await inspect();
   expect(series.find((item) => item.type === "background_shade")?.points).toBe(await page.evaluate(() => window.__data.length));
   expect(series.filter((item) => item.type === "line")).toHaveLength(initial_lines + 1);
@@ -208,7 +241,7 @@ test("reported plugin scenarios use full data and official line compositions", a
 
 test("brushable area writes a logical range whose color follows chronological delta in either drag direction", async ({ page }) => {
   await open_demo(page);
-  await page.locator('[data-feature-id="brushable-area"]').click();
+  await page.locator('#series_grid [data-series-id="brushable-area"]').click();
   const targets = await page.evaluate(() => {
     const feature = window.__chart.series_order().find((item) => item.series_type() === "brushable_area");
     const data = feature.data();
@@ -263,13 +296,13 @@ test("brushable area writes a logical range whose color follows chronological de
       return {
         color: brush?.style.line_color ?? null,
         range: brush?.range ?? null,
-        active: window.__feature_lab.active_ids(),
+        active: window.__demo_catalogs.series.active_id(),
       };
     });
   };
 
   const expect_brush = (result, color) => {
-    expect(result).toMatchObject({ color, active: expect.arrayContaining(["brushable-area"]) });
+    expect(result).toMatchObject({ color, active: "brushable-area" });
     expect(result.range.to).toBeGreaterThan(result.range.from);
   };
   expect_brush(await drag(targets.down_from, targets.down_to, "#ef5350"), "#ef5350");
