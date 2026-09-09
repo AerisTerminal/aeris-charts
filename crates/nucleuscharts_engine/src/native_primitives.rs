@@ -1702,6 +1702,62 @@ mod tests {
     }
 
     #[test]
+    fn brushable_area_delta_tooltip_emits_no_dedicated_vertical_guides() {
+        let mut chart = chart();
+        assert!(chart.configure_feature_series(
+            0,
+            crate::FeatureSeriesKind::BrushableArea,
+            crate::FeatureSeriesOptionsPatch::default(),
+        ));
+        chart
+            .set_feature_series_data(
+                0,
+                (0..10)
+                    .map(|day| crate::FeatureDataPoint {
+                        time: day as f64 * 86_400.0,
+                        value: Some(crate::FeatureValue::BrushableArea {
+                            value: 100.0 + day as f64,
+                        }),
+                    })
+                    .collect(),
+            )
+            .unwrap();
+        chart.time_scale.set_width(800.0);
+        chart.fit_content();
+
+        let guide_color = Color::rgb(12, 34, 56);
+        let primitive = chart
+            .add_delta_tooltip(
+                0,
+                DeltaTooltipOptions {
+                    line_color: Some(guide_color),
+                    ..DeltaTooltipOptions::default()
+                },
+            )
+            .unwrap();
+        let x2 = chart.time_scale.index_to_coordinate(2);
+        let x7 = chart.time_scale.index_to_coordinate(7);
+        chart.set_crosshair_at(x7, 250.0);
+        assert!(chart.delta_tooltip_mouse_down(x2));
+        assert!(chart.delta_tooltip_mouse_move(x7));
+        assert!(chart.delta_tooltip_active_range(primitive).is_some());
+
+        let frame = chart.build_frame();
+        assert_eq!(
+            frame.panes[0]
+                .main
+                .iter()
+                .filter(|primitive| matches!(
+                    primitive,
+                    Prim::VLine { color, .. } if *color == guide_color
+                ))
+                .count(),
+            0,
+            "brushable area must reuse the chart crosshair instead of emitting a second vertical guide",
+        );
+    }
+
+    #[test]
     fn bands_indicator_uses_official_ten_percent_data_background_and_visible_autoscale() {
         let mut chart = chart();
         let options = BandsIndicatorOptions::default();

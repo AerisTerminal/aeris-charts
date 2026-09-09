@@ -5,6 +5,7 @@ import type {
   feature_series_options,
   series_api,
 } from "./types.js";
+import { LINE_STYLE_TO_U8 } from "./types.js";
 import { create_delta_tooltip } from "./primitive_features.js";
 
 export interface brushable_area_interaction_options {
@@ -25,7 +26,8 @@ export interface brushable_area_interaction_handle {
 /**
  * Compose the official delta-tooltip gesture with a Rust-native `brushable_area` series. Pointer
  * lookup, chronological delta direction, touch state, and tooltip geometry stay in the engine;
- * this host adapter only applies the selected range's positive/negative style.
+ * this host adapter applies the selected range's positive/negative style and reuses the chart's
+ * native vertical crosshair as the single solid brush guide.
  */
 export function enable_brushable_area_interaction(
   chart: chart_api,
@@ -69,7 +71,13 @@ export function enable_brushable_area_interaction(
   const previous_options = chart.options() as chart_options;
   const previous_scroll = previous_options.handle_scroll;
   const previous_scale = previous_options.handle_scale;
+  const previous_vertical_crosshair_style = previous_options.crosshair.vertLine.style;
   chart.apply_options({ handle_scroll: false, handle_scale: false });
+  chart.apply_options({
+    crosshair: {
+      vertLine: { style: LINE_STYLE_TO_U8.solid },
+    },
+  });
   const tooltip = create_delta_tooltip(chart, {
     series,
     on_active_range_change(range) {
@@ -107,7 +115,13 @@ export function enable_brushable_area_interaction(
       chart.chart_element().removeEventListener("keydown", on_keydown, { capture: true });
       tooltip.clear();
       tooltip.detach();
-      chart.apply_options({ handle_scroll: previous_scroll, handle_scale: previous_scale });
+      chart.apply_options({
+        handle_scroll: previous_scroll,
+        handle_scale: previous_scale,
+        crosshair: {
+          vertLine: { style: previous_vertical_crosshair_style },
+        },
+      });
     },
   };
 }

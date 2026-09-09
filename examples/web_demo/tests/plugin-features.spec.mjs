@@ -746,7 +746,7 @@ test("tooltip preserves OHLC inspection on area and line presentations", async (
   await page.evaluate(() => window.__structured_tooltip.detach());
 });
 
-test("brushable area retains committed state, preserves crosshair options, and follows live theme", async ({ page }) => {
+test("brushable area reuses one solid vertical crosshair, preserves horizontal styling, and follows live theme", async ({ page }) => {
   await open_chart(page);
   const geometry = await page.evaluate(async () => {
     const api = await import("/dist/nucleuscharts_financial.js");
@@ -754,9 +754,9 @@ test("brushable area retains committed state, preserves crosshair options, and f
     chart.apply_options({ handle_scroll: false, handle_scale: false });
     chart.apply_options({
       crosshair: {
-        mode: 2,
-        vertLine: { visible: true, labelVisible: false, color: "#aa2244", width: 3 },
-        horzLine: { visible: false, labelVisible: true, color: "#22aa44", width: 2 },
+        mode: 0,
+        vertLine: { visible: true, labelVisible: false, color: "#aa2244", width: 3, style: 2 },
+        horzLine: { visible: true, labelVisible: true, color: "#22aa44", width: 2, style: 2 },
       },
     });
     window.__delta_crosshair = structuredClone(chart.options().crosshair);
@@ -797,9 +797,13 @@ test("brushable area retains committed state, preserves crosshair options, and f
       x_middle: chart.time_scale().logical_to_coordinate(middle),
     };
   });
-  expect(await page.evaluate(() => window.__chart.options().crosshair)).toEqual(
-    await page.evaluate(() => window.__delta_crosshair),
-  );
+  const active_crosshair = await page.evaluate(() => window.__chart.options().crosshair);
+  const original_crosshair = await page.evaluate(() => window.__delta_crosshair);
+  expect(active_crosshair).toEqual({
+    ...original_crosshair,
+    vertLine: { ...original_crosshair.vertLine, style: 0 },
+  });
+  expect(active_crosshair.horzLine.style).toBe(2);
   await page.waitForFunction(() => performance.now() > 600);
   const before = await page.screenshot();
   await page.mouse.move(geometry.left + geometry.x_first, geometry.y);
