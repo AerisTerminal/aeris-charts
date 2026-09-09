@@ -135,6 +135,11 @@ exact types may change in a pre-1.0 minor release.
 `create_delta_tooltip()` is intentionally unavailable on candlestick series; candles use the normal
 hover `create_tooltip()` instead. Delta Tooltip remains available on non-candlestick series such as
 area/line/bar and is composed directly into the brushable-area interaction.
+The normal `create_tooltip()` is the canonical structured market-data inspector. Its engine snapshot
+retains Open/High/Low/Close for every ordinary series presentation, including area and line; scalar
+rows naturally report the same value in all four fields, while area/line series fed retained OHLC
+rows can render Close and still inspect the full bar. Hosts may bind an explicit `volume_series` to
+add a timestamp-aligned Volume row; the chart never guesses which histogram represents volume.
 Convenience helpers such as `create_rectangle_drawing()` and `create_rectangle_drawing_tool()` are
 controllers over the canonical engine-owned drawing kind; they do not define a separate rectangle
 feature or persistence identity. Likewise, primitive helpers whose visual shape resembles a drawing

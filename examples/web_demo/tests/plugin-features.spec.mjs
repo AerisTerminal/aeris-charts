@@ -627,13 +627,20 @@ test("accessibility creates an independently named focus target for every live p
   expect(result.focused_label).toContain("Volume pane");
 });
 
-test("tooltip matches the official structured chrome over an engine source snapshot", async ({ page }) => {
+test("tooltip presents themed OHLC market data with explicit volume", async ({ page }) => {
   await open_chart(page);
   const target = await page.evaluate(async () => {
     const api = await import("/dist/nucleuscharts_financial.js");
     const chart = window.__chart;
+    chart.apply_options(api.theme_options("dark"));
+    const volume = chart.add_series("histogram", {
+      visible: false,
+      price_format: { type: "volume" },
+    });
+    volume.set_data(window.__data.map((bar, index) => ({ time: bar.time, value: 1_000 + index * 25 })));
     window.__official_tooltip = api.create_tooltip(chart, {
       series: window.__main,
+      volume_series: volume,
       title: "AAPL",
       follow_mode: "top",
       top_offset: 20,
@@ -642,9 +649,18 @@ test("tooltip matches the official structured chrome over an engine source snaps
     const logical = Math.round((range.from + range.to) * 0.5);
     const pane = chart.panes()[0].get_geometry();
     const bounds = chart.chart_element().getBoundingClientRect();
+    const price = window.__main.data_by_index(logical);
+    const volume_point = volume.data_by_index(logical);
     return {
       x: bounds.left + pane.left + chart.time_scale().logical_to_coordinate(logical),
       y: bounds.top + pane.top + pane.height * 0.5,
+      expected: {
+        close: window.__main.price_formatter()(price.close),
+        open: window.__main.price_formatter()(price.open),
+        high: window.__main.price_formatter()(price.high),
+        low: window.__main.price_formatter()(price.low),
+        volume: volume.price_formatter()(volume_point.value),
+      },
     };
   });
   await page.waitForFunction(() => performance.now() > 600);
@@ -652,22 +668,82 @@ test("tooltip matches the official structured chrome over an engine source snaps
   await page.mouse.move(target.x, target.y);
   await expect.poll(() => page.locator(".nucleuscharts-tooltip").evaluate((element) => element.style.opacity)).toBe("1");
   const content = await page.locator(".nucleuscharts-tooltip").evaluate((element) => ({
-    rows: [...element.children].map((row) => row.textContent),
+    timestamp: element.querySelector(".nucleuscharts-tooltip__timestamp")?.textContent,
+    title: element.querySelector(".nucleuscharts-tooltip__title")?.textContent,
+    rows: [...element.querySelectorAll(".nucleuscharts-tooltip__row:not([hidden])")].map((row) => ({
+      label: row.querySelector(".nucleuscharts-tooltip__label")?.textContent,
+      value: row.querySelector(".nucleuscharts-tooltip__value")?.textContent,
+    })),
     background: getComputedStyle(element).backgroundColor,
+    color: getComputedStyle(element).color,
+    borderRadius: getComputedStyle(element).borderRadius,
     shadow: getComputedStyle(element).boxShadow,
     transform: element.style.transform,
   }));
-  expect(content.rows[0]).toBe("AAPL");
-  expect(content.rows[1]).toMatch(/^-?\d+\.\d{2}$/);
-  expect(content.rows[2]).toMatch(/^\d{2} .+ \d{4}$/);
-  expect(content.rows[3]).toMatch(/^\d{2}:\d{2}$/);
-  expect(content.background).toBe("rgb(255, 255, 255)");
+  expect(content.timestamp).toMatch(/\w{3} \d{1,2}.*\d{1,2}:\d{2}/);
+  expect(content.title).toBe("AAPL");
+  expect(content.rows).toEqual([
+    { label: "Close", value: target.expected.close },
+    { label: "Open", value: target.expected.open },
+    { label: "High", value: target.expected.high },
+    { label: "Low", value: target.expected.low },
+    { label: "Volume", value: target.expected.volume },
+  ]);
+  expect(content.background).toBe("rgb(20, 20, 20)");
+  expect(content.color).toBe("rgb(240, 240, 240)");
+  expect(content.borderRadius).toBe("6px");
   expect(content.shadow).not.toBe("none");
   expect(content.transform).toContain("20px");
+
+  await page.evaluate(async () => {
+    const api = await import("/dist/nucleuscharts_financial.js");
+    window.__chart.apply_options(api.theme_options("light"));
+  });
+  await expect.poll(() => page.locator(".nucleuscharts-tooltip").evaluate((element) => getComputedStyle(element).backgroundColor)).toBe("rgb(255, 255, 255)");
+  expect(await page.locator(".nucleuscharts-tooltip").evaluate((element) => getComputedStyle(element).color)).toBe("rgb(20, 20, 20)");
+
   const after = await page.screenshot();
   expect(after.equals(before)).toBe(false);
   await page.evaluate(() => window.__official_tooltip.detach());
   await expect(page.locator(".nucleuscharts-tooltip")).toHaveCount(0);
+});
+
+test("tooltip preserves OHLC inspection on area and line presentations", async ({ page }) => {
+  await open_chart(page);
+  const target = await page.evaluate(async () => {
+    const api = await import("/dist/nucleuscharts_financial.js");
+    const chart = window.__chart;
+    const series = chart.add_series("area", {
+      price_line_visible: false,
+      last_value_visible: false,
+      countdown_visible: false,
+    });
+    series.set_data(window.__data.slice(0, 80));
+    window.__structured_series = series;
+    window.__structured_tooltip = api.create_tooltip(chart, { series });
+    chart.time_scale().fit_content();
+    const logical = 40;
+    const pane = chart.panes()[0].get_geometry();
+    const bounds = chart.chart_element().getBoundingClientRect();
+    const point = window.__data[logical];
+    return {
+      x: bounds.left + pane.left + chart.time_scale().logical_to_coordinate(logical),
+      y: bounds.top + pane.top + pane.height * 0.5,
+      expected: [point.close, point.open, point.high, point.low].map(series.price_formatter()),
+    };
+  });
+
+  const read_values = () => page.locator(".nucleuscharts-tooltip__row:not([hidden]) .nucleuscharts-tooltip__value").allTextContents();
+  await page.mouse.move(target.x, target.y);
+  await expect.poll(read_values).toEqual(target.expected);
+  await expect(page.locator(".nucleuscharts-tooltip__row").filter({ hasText: "Volume" })).toBeHidden();
+
+  await page.evaluate(() => window.__structured_series.set_type("line"));
+  await page.mouse.move(target.x + 1, target.y);
+  await page.mouse.move(target.x, target.y);
+  await expect.poll(read_values).toEqual(target.expected);
+
+  await page.evaluate(() => window.__structured_tooltip.detach());
 });
 
 test("brushable area retains committed state, preserves crosshair options, and follows live theme", async ({ page }) => {

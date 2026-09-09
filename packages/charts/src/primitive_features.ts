@@ -16,6 +16,7 @@ import {
   attach_native_volume_profile,
 } from "./impl.js";
 import type {
+  chart_options,
   chart_api,
   drawing_api,
   drawing_kind,
@@ -624,6 +625,8 @@ export function create_image_watermark(
 
 export interface tooltip_options {
   series?: series_api;
+  /** Optional timestamp-aligned scalar series rendered as the Volume row. */
+  volume_series?: series_api;
   class_name?: string;
   title?: string;
   /** Vertical-guide color. Omit to use a contrasting tint for the chart surface. */
@@ -644,30 +647,42 @@ interface native_tooltip_snapshot {
   x: number;
   index: number;
   price: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
   time: number;
 }
 
-function tooltip_text(element: HTMLDivElement, value: string): void {
+function tooltip_text(element: HTMLElement, value: string): void {
   if (element.innerText !== value) element.innerText = value;
-  element.style.display = value.length > 0 ? "block" : "none";
+  element.hidden = value.length === 0;
 }
 
-function tooltip_date_time(timestamp: number): [string, string] {
-  if (timestamp === 0) return ["", ""];
-  const date = new Date(timestamp * 1_000);
-  const day = String(date.getDate()).padStart(2, "0");
-  const month = date.toLocaleString(undefined, { month: "short" });
-  const year = date.getFullYear();
-  const hours = String(date.getHours()).padStart(2, "0");
-  const minutes = String(date.getMinutes()).padStart(2, "0");
-  return [`${day} ${month} ${year}`, `${hours}:${minutes}`];
+function tooltip_row_text(row: HTMLDivElement, value: HTMLSpanElement, text: string): void {
+  if (value.innerText !== text) value.innerText = text;
+  row.hidden = text.length === 0;
 }
 
-/** Official structured DOM tooltip; source lookup and its vertical guide are engine-owned. */
+const tooltip_time_formatter = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  timeZoneName: "short",
+});
+
+function tooltip_timestamp(timestamp: number): string {
+  if (timestamp === 0) return "";
+  return tooltip_time_formatter.format(new Date(timestamp * 1_000));
+}
+
+/** Structured OHLC market-data tooltip; source lookup and its vertical guide are engine-owned. */
 export function create_tooltip(chart: chart_api, options: tooltip_options = {}): tooltip_handle {
-  let current: Required<Omit<tooltip_options, "series" | "format" | "line_color">>
-    & Pick<tooltip_options, "series" | "format" | "line_color"> = {
+  let current: Required<Omit<tooltip_options, "series" | "volume_series" | "format" | "line_color">>
+    & Pick<tooltip_options, "series" | "volume_series" | "format" | "line_color"> = {
     series: options.series,
+    volume_series: options.volume_series,
     class_name: options.class_name ?? "nucleuscharts-tooltip",
     title: options.title ?? "",
     line_color: options.line_color,
@@ -688,21 +703,63 @@ export function create_tooltip(chart: chart_api, options: tooltip_options = {}):
   const host = chart.chart_element();
   const element = document.createElement("div");
   element.className = current.class_name;
-  element.style.cssText = "display:flex;flex-direction:column;align-items:center;position:absolute;transform:translate(calc(0px - 50%),0);opacity:0;left:0;top:0;z-index:100;background-color:white;border-radius:4px;padding:5px 10px;font-family:-apple-system,BlinkMacSystemFont,'Trebuchet MS',Roboto,Ubuntu,sans-serif;font-size:12px;font-weight:400;box-shadow:0 2px 4px rgba(0,0,0,.2);line-height:16px;pointer-events:none;color:#131722";
+  element.style.cssText = "position:absolute;transform:translate(calc(0px - 50%),0);opacity:0;left:0;top:0;z-index:100;pointer-events:none";
+
+  const header = document.createElement("div");
+  header.className = "nucleuscharts-tooltip__header";
+  const timestamp = document.createElement("div");
+  timestamp.className = "nucleuscharts-tooltip__timestamp";
   const title = document.createElement("div");
-  title.style.cssText = "font-size:16px;line-height:24px;font-weight:590";
-  const price = document.createElement("div");
-  price.style.cssText = "font-size:14px;line-height:18px;font-weight:590";
-  const date = document.createElement("div");
-  date.style.color = "#787B86";
-  const time_element = document.createElement("div");
-  time_element.style.color = "#787B86";
-  element.append(title, price, date, time_element);
+  title.className = "nucleuscharts-tooltip__title";
+  header.append(timestamp, title);
+
+  const body = document.createElement("div");
+  body.className = "nucleuscharts-tooltip__body";
+  const make_row = (label: string): { row: HTMLDivElement; value: HTMLSpanElement } => {
+    const row = document.createElement("div");
+    row.className = "nucleuscharts-tooltip__row";
+    const key = document.createElement("span");
+    key.className = "nucleuscharts-tooltip__label";
+    key.textContent = label;
+    const value = document.createElement("span");
+    value.className = "nucleuscharts-tooltip__value";
+    row.append(key, value);
+    body.append(row);
+    return { row, value };
+  };
+  const close = make_row("Close");
+  const open = make_row("Open");
+  const high = make_row("High");
+  const low = make_row("Low");
+  const volume = make_row("Volume");
+  element.append(header, body);
   host.appendChild(element);
   tooltip_text(title, current.title);
-  tooltip_text(price, "");
-  tooltip_text(date, "");
-  tooltip_text(time_element, "");
+  tooltip_text(timestamp, "");
+  tooltip_row_text(close.row, close.value, "");
+  tooltip_row_text(open.row, open.value, "");
+  tooltip_row_text(high.row, high.value, "");
+  tooltip_row_text(low.row, low.value, "");
+  tooltip_row_text(volume.row, volume.value, "");
+
+  const apply_theme = (): void => {
+    const resolved = chart.options() as chart_options;
+    element.style.setProperty("--nc-tooltip-surface", resolved.layout.background.color);
+    element.style.setProperty("--nc-tooltip-foreground", resolved.layout.textColor);
+    element.style.setProperty("--nc-tooltip-muted", resolved.layout.mutedTextColor);
+    element.style.setProperty(
+      "--nc-tooltip-border",
+      resolved.rightPriceScale.borderColor ?? resolved.layout.panes.separatorColor,
+    );
+    element.style.setProperty("--nc-tooltip-font-family", resolved.layout.fontFamily);
+  };
+  apply_theme();
+  const on_options_change = (): void => apply_theme();
+  chart.subscribe_options_change(on_options_change);
+
+  const price_formatter = series.price_formatter();
+  const format_price = (event: mouse_event_params, value: number): string =>
+    current.format?.(event, value) ?? price_formatter(value);
 
   const hide = (): void => {
     element.style.opacity = "0";
@@ -717,11 +774,28 @@ export function create_tooltip(chart: chart_api, options: tooltip_options = {}):
       hide();
       return;
     }
-    const [date_text, time_text] = tooltip_date_time(snapshot.time);
     tooltip_text(title, current.title);
-    tooltip_text(price, current.format?.(event, snapshot.price) ?? snapshot.price.toFixed(2));
-    tooltip_text(date, date_text);
-    tooltip_text(time_element, time_text);
+    tooltip_text(timestamp, tooltip_timestamp(snapshot.time));
+    tooltip_row_text(close.row, close.value, Number.isFinite(snapshot.close) ? format_price(event, snapshot.close) : "");
+    tooltip_row_text(open.row, open.value, Number.isFinite(snapshot.open) ? format_price(event, snapshot.open) : "");
+    tooltip_row_text(high.row, high.value, Number.isFinite(snapshot.high) ? format_price(event, snapshot.high) : "");
+    tooltip_row_text(low.row, low.value, Number.isFinite(snapshot.low) ? format_price(event, snapshot.low) : "");
+
+    const volume_point = current.volume_series?.data_by_index(snapshot.index) ?? null;
+    const volume_value = volume_point === null
+      ? null
+      : "value" in volume_point && typeof volume_point.value === "number"
+        ? volume_point.value
+        : "close" in volume_point && typeof volume_point.close === "number"
+          ? volume_point.close
+          : null;
+    tooltip_row_text(
+      volume.row,
+      volume.value,
+      volume_value !== null && Number.isFinite(volume_value) && current.volume_series !== undefined
+        ? current.volume_series.price_formatter()(volume_value)
+        : "",
+    );
     const geometry = chart.panes()[event.pane_index]?.get_geometry();
     if (geometry === undefined) {
       hide();
@@ -756,13 +830,16 @@ export function create_tooltip(chart: chart_api, options: tooltip_options = {}):
   return {
     apply_options(patch) {
       current = { ...current, ...patch };
+      element.className = current.class_name;
       if (!native.set_options_json(native_options())) {
         throw new Error("Nucleus rejected tooltip options");
       }
+      apply_theme();
       tooltip_text(title, current.title);
     },
     detach() {
       chart.unsubscribe_crosshair_move(on_move);
+      chart.unsubscribe_options_change(on_options_change);
       element.remove();
       native.detach();
     },

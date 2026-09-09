@@ -59,7 +59,13 @@ impl Default for TooltipOptions {
 pub struct TooltipSnapshot {
     pub x: f64,
     pub index: i64,
+    /// Retained for compatibility with the original single-value tooltip contract; always the
+    /// canonical close/value at this row.
     pub price: f64,
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
     pub time: i64,
 }
 
@@ -831,13 +837,30 @@ impl ChartEngine {
             return None;
         }
         let (times, _) = self.data.series_data(series_id)?;
+        let open = plot.value_at(
+            row,
+            nucleuscharts_core::model::plot_list::PlotValueIndex::Open,
+        );
+        let high = plot.value_at(
+            row,
+            nucleuscharts_core::model::plot_list::PlotValueIndex::High,
+        );
+        let low = plot.value_at(
+            row,
+            nucleuscharts_core::model::plot_list::PlotValueIndex::Low,
+        );
+        let close = plot.value_at(
+            row,
+            nucleuscharts_core::model::plot_list::PlotValueIndex::Close,
+        );
         Some(TooltipSnapshot {
             x: self.time_scale.index_to_coordinate(index),
             index,
-            price: plot.value_at(
-                row,
-                nucleuscharts_core::model::plot_list::PlotValueIndex::Close,
-            ),
+            price: close,
+            open,
+            high,
+            low,
+            close,
             time: *times.get(row)?,
         })
     }
@@ -2199,6 +2222,10 @@ mod tests {
                 x,
                 index: 4,
                 price: 104.0,
+                open: 103.0,
+                high: 106.0,
+                low: 102.0,
+                close: 104.0,
                 time: 4 * 86_400,
             })
         );
@@ -2226,6 +2253,43 @@ mod tests {
         assert!(chart.build_frame().panes[0].under.iter().all(
             |primitive| !matches!(primitive, Prim::Rect { color: actual, .. } if *actual == color)
         ));
+    }
+
+    #[test]
+    fn tooltip_snapshot_keeps_ohlc_for_scalar_presentations() {
+        let mut chart = chart();
+        chart.convert_series_kind(0, SeriesKind::Area);
+        let primitive = chart.add_tooltip(0, TooltipOptions::default()).unwrap();
+        let _ = chart.build_frame();
+        let x = chart.time_scale.index_to_coordinate(4);
+        chart.set_crosshair_at(x, 200.0);
+        let snapshot = chart.tooltip_snapshot(primitive).unwrap();
+        assert_eq!(snapshot.open, 103.0);
+        assert_eq!(snapshot.high, 106.0);
+        assert_eq!(snapshot.low, 102.0);
+        assert_eq!(snapshot.close, 104.0);
+
+        chart.convert_series_kind(0, SeriesKind::Line);
+        let _ = chart.build_frame();
+        chart.set_crosshair_at(x, 200.0);
+        let snapshot = chart.tooltip_snapshot(primitive).unwrap();
+        assert_eq!(snapshot.open, 103.0);
+        assert_eq!(snapshot.high, 106.0);
+        assert_eq!(snapshot.low, 102.0);
+        assert_eq!(snapshot.close, 104.0);
+
+        let scalar: Vec<f64> = (0..10).map(|day| 200.0 + day as f64).collect();
+        let times: Vec<f64> = (0..10).map(|day| day as f64 * 86_400.0).collect();
+        chart
+            .set_series_data(0, &times, &scalar, &scalar, &scalar, &scalar)
+            .unwrap();
+        let _ = chart.build_frame();
+        chart.set_crosshair_at(x, 200.0);
+        let snapshot = chart.tooltip_snapshot(primitive).unwrap();
+        assert_eq!(snapshot.open, 204.0);
+        assert_eq!(snapshot.high, 204.0);
+        assert_eq!(snapshot.low, 204.0);
+        assert_eq!(snapshot.close, 204.0);
     }
 
     #[test]

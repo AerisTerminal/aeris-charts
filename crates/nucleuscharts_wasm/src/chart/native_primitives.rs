@@ -254,6 +254,10 @@ impl ChartInner {
                     "x": snapshot.x,
                     "index": snapshot.index,
                     "price": snapshot.price,
+                    "open": snapshot.open,
+                    "high": snapshot.high,
+                    "low": snapshot.low,
+                    "close": snapshot.close,
                     "time": snapshot.time,
                 })
                 .to_string()

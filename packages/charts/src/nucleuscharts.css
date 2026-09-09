@@ -295,6 +295,70 @@ input[type="number"] {
 .nc-interactive-muted:not([aria-disabled="true"]):focus-visible { color: var(--icon-active); }
 .nc-interactive-muted[aria-disabled="true"] { color: var(--text-muted); cursor: not-allowed; }
 
+.nucleuscharts-tooltip {
+  min-width: 156px;
+  overflow: hidden;
+  background: var(--nc-tooltip-surface, var(--surface));
+  border: 1px solid var(--nc-tooltip-border, var(--border));
+  border-radius: var(--radius-default);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 22%);
+  color: var(--nc-tooltip-foreground, var(--text-primary));
+  font-family: var(--nc-tooltip-font-family, var(--font-sans));
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+}
+
+.nucleuscharts-tooltip__header {
+  display: grid;
+  gap: 1px;
+  padding: 7px 10px 6px;
+  background: color-mix(
+    in srgb,
+    var(--nc-tooltip-foreground, var(--text-primary)) 4%,
+    var(--nc-tooltip-surface, var(--surface))
+  );
+  border-bottom: 1px solid var(--nc-tooltip-border, var(--border));
+}
+
+.nucleuscharts-tooltip__timestamp {
+  color: var(--nc-tooltip-foreground, var(--text-primary));
+  font-weight: 590 !important;
+  white-space: nowrap;
+}
+
+.nucleuscharts-tooltip__title {
+  color: var(--nc-tooltip-muted, var(--text-secondary));
+  white-space: nowrap;
+}
+
+.nucleuscharts-tooltip__body {
+  display: grid;
+  gap: 2px;
+  padding: 6px 10px 7px;
+}
+
+.nucleuscharts-tooltip__row {
+  display: grid;
+  grid-template-columns: minmax(48px, auto) minmax(70px, 1fr);
+  gap: 12px;
+  align-items: baseline;
+}
+
+.nucleuscharts-tooltip__row[hidden] {
+  display: none;
+}
+
+.nucleuscharts-tooltip__label {
+  color: var(--nc-tooltip-muted, var(--text-secondary));
+}
+
+.nucleuscharts-tooltip__value {
+  color: var(--nc-tooltip-foreground, var(--text-primary));
+  text-align: right;
+  white-space: nowrap;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
