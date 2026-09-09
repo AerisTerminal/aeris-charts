@@ -17,7 +17,6 @@ use std::mem::size_of;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FeatureSeriesKind {
-    BrushableArea,
     GroupedBars,
     Heatmap,
     HlcArea,
@@ -31,7 +30,6 @@ pub enum FeatureSeriesKind {
 impl FeatureSeriesKind {
     pub fn from_u8(kind: u8) -> Option<Self> {
         Some(match kind {
-            0 => Self::BrushableArea,
             2 => Self::GroupedBars,
             3 => Self::Heatmap,
             4 => Self::HlcArea,
@@ -46,7 +44,6 @@ impl FeatureSeriesKind {
 
     pub fn to_u8(self) -> u8 {
         match self {
-            Self::BrushableArea => 0,
             Self::GroupedBars => 2,
             Self::Heatmap => 3,
             Self::HlcArea => 4,
@@ -83,22 +80,6 @@ impl HeatmapCell {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct BrushStyle {
-    pub line_color: Color,
-    pub top_color: Color,
-    pub bottom_color: Color,
-    pub line_width: f64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct BrushRange {
-    /// Inclusive logical start. The renderer follows the reference and excludes `to`.
-    pub from: f64,
-    pub to: f64,
-    pub style: BrushStyle,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StackedAreaColor {
     pub line: Color,
     pub area: Color,
@@ -106,9 +87,6 @@ pub struct StackedAreaColor {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum FeatureValue {
-    BrushableArea {
-        value: f64,
-    },
     GroupedBars {
         values: Vec<f64>,
     },
@@ -142,7 +120,6 @@ pub enum FeatureValue {
 impl FeatureValue {
     fn kind(&self) -> FeatureSeriesKind {
         match self {
-            Self::BrushableArea { .. } => FeatureSeriesKind::BrushableArea,
             Self::GroupedBars { .. } => FeatureSeriesKind::GroupedBars,
             Self::Heatmap { .. } => FeatureSeriesKind::Heatmap,
             Self::HlcArea { .. } => FeatureSeriesKind::HlcArea,
@@ -158,9 +135,7 @@ impl FeatureValue {
         let safe =
             |value: f64| value.is_finite() && (MIN_SAFE_VALUE..=MAX_SAFE_VALUE).contains(&value);
         match self {
-            Self::BrushableArea { value }
-            | Self::PrettyHistogram { value, .. }
-            | Self::BackgroundShade { value } => safe(*value),
+            Self::PrettyHistogram { value, .. } | Self::BackgroundShade { value } => safe(*value),
             Self::GroupedBars { values }
             | Self::StackedArea { values }
             | Self::StackedBars { values } => {
@@ -195,7 +170,7 @@ impl FeatureValue {
     /// in [`FeatureSeriesState`]; this projection is a derived index, not renderer-owned data.
     pub(crate) fn projection(&self) -> [f64; 4] {
         match self {
-            Self::BrushableArea { value } | Self::PrettyHistogram { value, .. } => [*value; 4],
+            Self::PrettyHistogram { value, .. } => [*value; 4],
             Self::GroupedBars { values } => {
                 range_projection(values, *values.last().unwrap_or(&0.0))
             }
@@ -248,7 +223,6 @@ pub struct FeatureSeriesOptionsPatch {
     pub bottom_color: Option<Color>,
     pub line_width: Option<f64>,
     pub base_price: Option<f64>,
-    pub brush_ranges: Option<Vec<BrushRange>>,
     pub cell_border_width: Option<f64>,
     pub cell_border_color: Option<Color>,
     pub high_line_color: Option<Color>,
@@ -282,7 +256,6 @@ pub(crate) struct FeatureSeriesOptions {
     pub bottom_color: Color,
     pub line_width: f64,
     pub base_price: f64,
-    pub brush_ranges: Vec<BrushRange>,
     pub cell_border_width: f64,
     pub cell_border_color: Color,
     pub high_line_color: Color,
@@ -347,7 +320,6 @@ impl Default for FeatureSeriesOptions {
             bottom_color: rgba(40, 98, 255, 0),
             line_width: 2.0,
             base_price: 0.0,
-            brush_ranges: Vec::new(),
             cell_border_width: 1.0,
             cell_border_color: rgba(0, 0, 0, 0),
             high_line_color: market_rgb(MARKET_UP_RGB),
@@ -408,17 +380,6 @@ impl FeatureSeriesOptions {
         }
         if patch.base_price.is_some_and(f64::is_finite) {
             self.base_price = patch.base_price.unwrap_or(self.base_price);
-        }
-        if let Some(ranges) = patch.brush_ranges {
-            self.brush_ranges = ranges
-                .into_iter()
-                .filter(|range| {
-                    range.from.is_finite()
-                        && range.to.is_finite()
-                        && range.style.line_width.is_finite()
-                        && range.style.line_width > 0.0
-                })
-                .collect();
         }
         if patch
             .cell_border_width
@@ -525,7 +486,6 @@ impl FeatureSeriesState {
             + row_payload
             + self.options.colors.capacity() * size_of::<Color>()
             + self.options.stacked_area_colors.capacity() * size_of::<StackedAreaColor>()
-            + self.options.brush_ranges.capacity() * size_of::<BrushRange>()
     }
 }
 
@@ -536,18 +496,6 @@ impl ChartEngine {
         let value = feature.rows.get(row)?.value.as_ref()?;
         let options = &feature.options;
         Some(match value {
-            FeatureValue::BrushableArea { .. } => {
-                let logical = self.data.plot(id).index_at(row)? as f64;
-                options
-                    .brush_ranges
-                    .iter()
-                    .find(|range| {
-                        let start = range.from.min(range.to);
-                        let end = range.from.max(range.to);
-                        logical >= start && logical < end
-                    })
-                    .map_or(options.line_color, |range| range.style.line_color)
-            }
             FeatureValue::GroupedBars { values } => {
                 options.colors[values.len().saturating_sub(1) % options.colors.len()]
             }
@@ -662,15 +610,6 @@ impl ChartEngine {
             "bottom_color": options.bottom_color.to_css(),
             "line_width": options.line_width,
             "base_price": options.base_price,
-            "brush_ranges": options.brush_ranges.iter().map(|range| serde_json::json!({
-                "range": { "from": range.from, "to": range.to },
-                "style": {
-                    "line_color": range.style.line_color.to_css(),
-                    "top_color": range.style.top_color.to_css(),
-                    "bottom_color": range.style.bottom_color.to_css(),
-                    "line_width": range.style.line_width,
-                }
-            })).collect::<Vec<_>>(),
             "cell_border_width": options.cell_border_width,
             "cell_border_color": options.cell_border_color.to_css(),
             "high_line_color": options.high_line_color.to_css(),
@@ -1023,7 +962,6 @@ mod tests {
     #[test]
     fn feature_kind_codes_preserve_surviving_public_ids() {
         let expected = [
-            (0, FeatureSeriesKind::BrushableArea),
             (2, FeatureSeriesKind::GroupedBars),
             (3, FeatureSeriesKind::Heatmap),
             (4, FeatureSeriesKind::HlcArea),
@@ -1037,6 +975,7 @@ mod tests {
             assert_eq!(FeatureSeriesKind::from_u8(code), Some(kind));
             assert_eq!(kind.to_u8(), code);
         }
+        assert_eq!(FeatureSeriesKind::from_u8(0), None);
         assert_eq!(FeatureSeriesKind::from_u8(1), None);
         assert_eq!(FeatureSeriesKind::from_u8(6), None);
     }
@@ -1044,7 +983,6 @@ mod tests {
     fn sample_value(kind: FeatureSeriesKind, index: usize) -> FeatureValue {
         let value = 10.0 + index as f64;
         match kind {
-            FeatureSeriesKind::BrushableArea => FeatureValue::BrushableArea { value },
             FeatureSeriesKind::GroupedBars => FeatureValue::GroupedBars {
                 values: vec![value, value + 2.0, value - 2.0],
             },
@@ -1412,7 +1350,10 @@ mod tests {
                 0,
                 vec![FeatureDataPoint {
                     time: 1.0,
-                    value: Some(FeatureValue::BrushableArea { value: 10.0 }),
+                    value: Some(FeatureValue::PrettyHistogram {
+                        value: 10.0,
+                        color: None,
+                    }),
                 }],
             )
             .unwrap();
@@ -1454,7 +1395,6 @@ mod tests {
     #[test]
     fn every_feature_kind_builds_shared_frame_geometry() {
         let kinds = [
-            FeatureSeriesKind::BrushableArea,
             FeatureSeriesKind::GroupedBars,
             FeatureSeriesKind::Heatmap,
             FeatureSeriesKind::HlcArea,
@@ -1878,12 +1818,15 @@ mod tests {
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
         chart.configure_feature_series(
             0,
-            FeatureSeriesKind::BrushableArea,
+            FeatureSeriesKind::PrettyHistogram,
             FeatureSeriesOptionsPatch::default(),
         );
         let point = |time| FeatureDataPoint {
             time,
-            value: Some(FeatureValue::BrushableArea { value: time }),
+            value: Some(FeatureValue::PrettyHistogram {
+                value: time,
+                color: None,
+            }),
         };
         chart
             .set_feature_series_data(

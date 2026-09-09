@@ -25,7 +25,7 @@ use nucleuscharts_core::model::data_layer::SeriesId;
 use nucleuscharts_core::model::plot_list::PlotValueIndex;
 use nucleuscharts_render::draw_list::LineType;
 
-use crate::feature_series::{FeatureSeriesKind, FeatureValue};
+use crate::feature_series::FeatureSeriesKind;
 use crate::frame::{pane_scale, series_scale_target};
 use crate::{
     ChartEngine, SelectionAnchorSnapshot, SeriesKind, MAX_SELECTION_ANCHORS,
@@ -438,32 +438,6 @@ impl ChartEngine {
                 let feature = series.feature.as_ref()?;
                 match feature.kind {
                     FeatureSeriesKind::BackgroundShade => None,
-                    FeatureSeriesKind::BrushableArea => {
-                        let points = plot
-                            .visible_rows(from, to)
-                            .filter_map(|row| {
-                                let FeatureValue::BrushableArea { value } =
-                                    feature.rows.get(row)?.value.as_ref()?
-                                else {
-                                    return None;
-                                };
-                                Some((
-                                    self.time_scale.index_to_coordinate(plot.index_at(row)?),
-                                    scale.price_to_coordinate(*value, base_value),
-                                ))
-                            })
-                            .collect::<Vec<_>>();
-                        hit_test_line_series(
-                            &points,
-                            x_css,
-                            y_css,
-                            LineType::Simple,
-                            feature.options.line_width,
-                            None,
-                            bar_spacing,
-                            HIT_TEST_TOLERANCE,
-                        )
-                    }
                     _ => {
                         let items = plot
                             .visible_rows(from, to)

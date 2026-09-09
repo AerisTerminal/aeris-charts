@@ -858,6 +858,8 @@ export interface delta_tooltip_options {
   line_color?: string;
   show_time?: boolean;
   top_offset?: number;
+  /** Require Shift+primary-drag for mouse/pen activation, preserving ordinary grab-to-pan. */
+  requires_shift_drag?: boolean;
   on_active_range_change?: (range: delta_tooltip_active_range | null) => void;
 }
 

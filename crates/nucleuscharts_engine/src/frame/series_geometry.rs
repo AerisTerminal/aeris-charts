@@ -83,6 +83,29 @@ fn color_runs(colors: &[Color]) -> Vec<(usize, usize, Color)> {
     out
 }
 
+fn mix_area_brush_color(low: Color, high: Color, amount: f64) -> Color {
+    let t = amount.clamp(0.0, 1.0);
+    let channel = |a: u8, b: u8| (a as f64 + (b as f64 - a as f64) * t).round() as u8;
+    Color::rgba(
+        channel(low.r(), high.r()),
+        channel(low.g(), high.g()),
+        channel(low.b(), high.b()),
+        channel(low.a(), high.a()),
+    )
+}
+
+fn area_brush_style_for(brush: &crate::AreaBrushState, logical: i64) -> crate::BrushStyle {
+    brush
+        .ranges
+        .iter()
+        .find(|range| {
+            let start = range.from.min(range.to);
+            let end = range.from.max(range.to);
+            logical as f64 >= start && (logical as f64) < end
+        })
+        .map_or(brush.outside, |range| range.style)
+}
+
 impl ChartEngine {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn build_grid_frame(
@@ -500,6 +523,12 @@ impl ChartEngine {
                     })
                     .collect::<Vec<_>>()
             });
+        let area_brush = (rs.kind == SeriesKind::Area)
+            .then(|| {
+                self.series_entry(rs.id)
+                    .and_then(|series| series.area_brush.as_ref())
+            })
+            .flatten();
         if rs.kind == SeriesKind::Area {
             // reference `invertFilledArea` (area-renderer-base.ts): fill from the pane's top edge
             // down to the line instead of from the line down to the pane's bottom edge.
@@ -508,78 +537,163 @@ impl ChartEngine {
             } else {
                 band_bottom
             };
-            // Deviation: the area fill keeps the series-level gradient even with per-point
-            // colors — the reference's `color`/`lineColor` data-item field affects only the stroke
-            // (per-point `topColor`/`bottomColor` fill overrides are not modeled).
-            out.push(Prim::AreaFill {
-                first_point: first,
-                point_count: count,
-                base_y: (base_y * vpr) as f32,
-                line_type: self
-                    .series_entry(rs.id)
-                    .map_or(LineType::Simple, |series| series.line_type),
-                gradient: Gradient {
-                    top: rs.area_top,
-                    bottom: rs.area_bottom,
-                },
-            });
+            if let Some(brush) = area_brush {
+                // Brush styling is transient presentation state on the ordinary Area series. Split
+                // only the fill into styled adjacent segments; canonical rows, LOD selection, scale
+                // math, and the normal Area hit-test remain untouched.
+                let global_top = row_points
+                    .iter()
+                    .map(|point| point[1] as f64 / vpr)
+                    .fold(base_y, f64::min);
+                let global_bottom = row_points
+                    .iter()
+                    .map(|point| point[1] as f64 / vpr)
+                    .fold(base_y, f64::max);
+                let global_span = (global_bottom - global_top).max(1.0);
+                for (segment_index, pair) in row_points.windows(2).enumerate() {
+                    let Some(logical) = plot.index_at(rows[segment_index + 1]) else {
+                        continue;
+                    };
+                    let style = area_brush_style_for(brush, logical);
+                    let left_y = pair[0][1] as f64 / vpr;
+                    let right_y = pair[1][1] as f64 / vpr;
+                    let segment_top = left_y.min(right_y).min(base_y);
+                    let segment_bottom = left_y.max(right_y).max(base_y);
+                    let segment_first = points.len() as u32;
+                    points.extend_from_slice(pair);
+                    out.push(Prim::AreaFill {
+                        first_point: segment_first,
+                        point_count: 2,
+                        base_y: (base_y * vpr) as f32,
+                        line_type: rs.line_type,
+                        gradient: Gradient {
+                            top: mix_area_brush_color(
+                                style.top_color,
+                                style.bottom_color,
+                                (segment_top - global_top) / global_span,
+                            ),
+                            bottom: mix_area_brush_color(
+                                style.top_color,
+                                style.bottom_color,
+                                (segment_bottom - global_top) / global_span,
+                            ),
+                        },
+                    });
+                }
+            } else {
+                // Deviation: the area fill keeps the series-level gradient even with per-point
+                // colors — the reference's `color`/`lineColor` data-item field affects only the stroke
+                // (per-point `topColor`/`bottomColor` fill overrides are not modeled).
+                out.push(Prim::AreaFill {
+                    first_point: first,
+                    point_count: count,
+                    base_y: (base_y * vpr) as f32,
+                    line_type: self
+                        .series_entry(rs.id)
+                        .map_or(LineType::Simple, |series| series.line_type),
+                    gradient: Gradient {
+                        top: rs.area_top,
+                        bottom: rs.area_bottom,
+                    },
+                });
+            }
         }
         // reference `lineVisible` (line-renderer-base.ts): the stroke is skipped; an area keeps its
         // fill and a line series keeps only its point markers.
         if rs.line_visible {
-            let width = (rs.line_width * vpr) as f32;
-            match &resolved {
-                Some(colors) => {
-                    // Per-point colors: one stroke run per maximal equal-color span (the
-                    // walkLine split). With steps/curves each run expands independently, and a
-                    // dashed style restarts its pattern per run — reference keeps dash offset and
-                    // splits the step corner at the color change; those sub-segment details are
-                    // not modeled (documented deviation; Simple lines are exact).
-                    for (start, end, run_color) in color_runs(colors) {
+            if let Some(brush) = area_brush {
+                let mut run_style: Option<crate::BrushStyle> = None;
+                let mut run = Vec::<[f32; 2]>::new();
+                for (segment_index, pair) in row_points.windows(2).enumerate() {
+                    let Some(logical) = plot.index_at(rows[segment_index + 1]) else {
+                        continue;
+                    };
+                    let style = area_brush_style_for(brush, logical);
+                    if run_style.is_some_and(|current| current != style) {
+                        let current = run_style.expect("brush run style");
+                        push_line_stroke(
+                            out,
+                            points,
+                            &run,
+                            (current.line_width * vpr) as f32,
+                            rs.line_style,
+                            rs.line_type,
+                            current.line_color,
+                        );
+                        run.clear();
+                    }
+                    if run.is_empty() {
+                        run.push(pair[0]);
+                    }
+                    run.push(pair[1]);
+                    run_style = Some(style);
+                }
+                if let Some(style) = run_style {
+                    push_line_stroke(
+                        out,
+                        points,
+                        &run,
+                        (style.line_width * vpr) as f32,
+                        rs.line_style,
+                        rs.line_type,
+                        style.line_color,
+                    );
+                }
+            } else {
+                let width = (rs.line_width * vpr) as f32;
+                match &resolved {
+                    Some(colors) => {
+                        // Per-point colors: one stroke run per maximal equal-color span (the
+                        // walkLine split). With steps/curves each run expands independently, and a
+                        // dashed style restarts its pattern per run — reference keeps dash offset and
+                        // splits the step corner at the color change; those sub-segment details are
+                        // not modeled (documented deviation; Simple lines are exact).
+                        for (start, end, run_color) in color_runs(colors) {
+                            if rs.line_style == LineStyle::Solid {
+                                let run_first = points.len() as u32;
+                                points.extend_from_slice(&row_points[start..end]);
+                                out.push(Prim::Polyline {
+                                    first_point: run_first,
+                                    point_count: (end - start) as u32,
+                                    width,
+                                    style: LineStyle::Solid,
+                                    line_type: rs.line_type,
+                                    color: run_color,
+                                });
+                            } else {
+                                push_line_stroke(
+                                    out,
+                                    points,
+                                    &row_points[start..end],
+                                    width,
+                                    rs.line_style,
+                                    rs.line_type,
+                                    run_color,
+                                );
+                            }
+                        }
+                    }
+                    None => {
                         if rs.line_style == LineStyle::Solid {
-                            let run_first = points.len() as u32;
-                            points.extend_from_slice(&row_points[start..end]);
                             out.push(Prim::Polyline {
-                                first_point: run_first,
-                                point_count: (end - start) as u32,
+                                first_point: first,
+                                point_count: count,
                                 width,
                                 style: LineStyle::Solid,
                                 line_type: rs.line_type,
-                                color: run_color,
+                                color,
                             });
                         } else {
                             push_line_stroke(
                                 out,
                                 points,
-                                &row_points[start..end],
+                                &row_points,
                                 width,
                                 rs.line_style,
                                 rs.line_type,
-                                run_color,
+                                color,
                             );
                         }
-                    }
-                }
-                None => {
-                    if rs.line_style == LineStyle::Solid {
-                        out.push(Prim::Polyline {
-                            first_point: first,
-                            point_count: count,
-                            width,
-                            style: LineStyle::Solid,
-                            line_type: rs.line_type,
-                            color,
-                        });
-                    } else {
-                        push_line_stroke(
-                            out,
-                            points,
-                            &row_points,
-                            width,
-                            rs.line_style,
-                            rs.line_type,
-                            color,
-                        );
                     }
                 }
             }
@@ -590,7 +704,12 @@ impl ChartEngine {
             // each in its point's own resolved color.
             let radius = rs.point_markers_radius.unwrap_or(rs.line_width / 2.0 + 2.0);
             for (i, p) in row_points.iter().enumerate() {
-                let marker_color = resolved.as_ref().map_or(color, |colors| colors[i]);
+                let marker_color = area_brush
+                    .and_then(|brush| {
+                        plot.index_at(rows[i])
+                            .map(|logical| area_brush_style_for(brush, logical).line_color)
+                    })
+                    .unwrap_or_else(|| resolved.as_ref().map_or(color, |colors| colors[i]));
                 out.push(Prim::Circle {
                     cx: p[0],
                     cy: p[1],

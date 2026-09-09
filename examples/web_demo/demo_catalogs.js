@@ -205,9 +205,9 @@ function series_features(bars) {
       },
     },
     {
-      id: "brushable-area", label: "Brushable area", detail: "Drag to brush", icon: "chart", interactive: true,
-      series_kind: "brushable_area",
-      options: { base_price: base },
+      id: "brushable-area", label: "Brushable area", detail: "Shift-drag to compare", icon: "chart", interactive: true,
+      series_kind: "area",
+      options: {},
       data: () => bars.map((bar) => ({ time: bar.time, value: bar.close })),
     },
     {
@@ -519,6 +519,7 @@ export function install_demo_catalogs({ chart, series, data, on_series_change })
         active_series = {
           id: feature.id,
           handle,
+          interaction,
           cleanup: () => { interaction?.detach(); remove_companion?.(); },
         };
         series.apply_options({ visible: feature.overlay === true });
@@ -602,6 +603,7 @@ export function install_demo_catalogs({ chart, series, data, on_series_change })
       },
       active_id() { return active_series?.id ?? null; },
       interaction_series() { return active_series?.handle ?? series; },
+      interaction_range() { return active_series?.interaction?.active_range?.() ?? null; },
       clear: clear_series,
       select_base(value) {
         base_series_choice = value;

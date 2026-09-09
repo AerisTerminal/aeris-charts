@@ -47,8 +47,8 @@ pub use drawings::{
     DrawingPriceScale, DrawingWorkStats, TextMeasureFn, DRAWING_DEFAULT_COLOR,
 };
 pub use feature_series::{
-    BrushRange, BrushStyle, FeatureDataPoint, FeatureSeriesKind, FeatureSeriesOptionsPatch,
-    FeatureValue, HeatmapCell, StackedAreaColor,
+    FeatureDataPoint, FeatureSeriesKind, FeatureSeriesOptionsPatch, FeatureValue, HeatmapCell,
+    StackedAreaColor,
 };
 pub use footprint::{
     AggressorSide, FootprintAggregationOptions, FootprintAggregator, FootprintBar,
@@ -620,6 +620,30 @@ pub struct PriceLine {
     pub axis_label_text_color: Option<String>,
 }
 
+/// Transient presentation style used by the brushable-area interaction. The source remains an
+/// ordinary [`SeriesKind::Area`] series; brushing never owns or duplicates market data.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BrushStyle {
+    pub line_color: Color,
+    pub top_color: Color,
+    pub bottom_color: Color,
+    pub line_width: f64,
+}
+
+/// One logical half-open range styled by the brushable-area interaction.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BrushRange {
+    pub from: f64,
+    pub to: f64,
+    pub style: BrushStyle,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct AreaBrushState {
+    pub outside: BrushStyle,
+    pub ranges: Vec<BrushRange>,
+}
+
 pub struct SeriesEntry {
     pub id: SeriesId,
     pub kind: SeriesKind,
@@ -647,6 +671,9 @@ pub struct SeriesEntry {
     /// parsed at render time.
     pub area_top_color: Option<String>,
     pub area_bottom_color: Option<String>,
+    /// Optional transient range styling for an ordinary Area series. This is interaction/presentation
+    /// state only; canonical rows, hit testing, ingestion, LOD, and scale ownership remain unchanged.
+    pub(crate) area_brush: Option<AreaBrushState>,
     pub histogram_updown: bool,
     pub price_scale_target: PriceScaleTarget,
     pub pane_index: usize,
@@ -803,6 +830,7 @@ impl SeriesEntry {
             line_width: None,
             area_top_color: None,
             area_bottom_color: None,
+            area_brush: None,
             histogram_updown: false,
             price_scale_target: PriceScaleTarget::Right,
             pane_index: 0,
@@ -1661,6 +1689,9 @@ impl ChartEngine {
                 return;
             }
             s.kind = kind;
+            if kind != SeriesKind::Area {
+                s.area_brush = None;
+            }
             if kind == SeriesKind::Candlestick {
                 s.native_primitives.retain(|primitive| {
                     !matches!(

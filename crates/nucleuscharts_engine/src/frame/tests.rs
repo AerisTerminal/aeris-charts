@@ -2977,6 +2977,85 @@ fn area_per_point_colors_split_only_the_stroke() {
 }
 
 #[test]
+fn area_brush_is_transient_presentation_on_the_builtin_area_series() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart.convert_series_kind(0, SeriesKind::Area);
+    let times: Vec<f64> = (0..5).map(|i| i as f64).collect();
+    let values: Vec<f64> = (0..5).map(|i| 100.0 + i as f64).collect();
+    chart
+        .set_series_data(0, &times, &values, &values, &values, &values)
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+
+    let faded = crate::BrushStyle {
+        line_color: Color::rgb(80, 80, 80),
+        top_color: Color::rgba(80, 80, 80, 40),
+        bottom_color: Color::rgba(80, 80, 80, 0),
+        line_width: 2.0,
+    };
+    let selected = crate::BrushStyle {
+        line_color: Color::rgb(4, 153, 129),
+        top_color: Color::rgba(4, 153, 129, 102),
+        bottom_color: Color::rgba(4, 153, 129, 0),
+        line_width: 3.0,
+    };
+    assert!(chart.set_area_brush_state(
+        0,
+        faded,
+        vec![crate::BrushRange {
+            from: 1.0,
+            to: 3.0,
+            style: selected,
+        }],
+    ));
+
+    let entry = chart.series_entry(0).unwrap();
+    assert_eq!(entry.kind, SeriesKind::Area);
+    assert!(
+        entry.feature.is_none(),
+        "brushing must not create feature-series state"
+    );
+    assert_eq!(
+        chart.data.plot(0).size(),
+        5,
+        "canonical Area rows stay authoritative"
+    );
+
+    let frame = chart.build_frame();
+    assert_eq!(
+        frame.panes[0]
+            .main
+            .iter()
+            .filter(|primitive| matches!(primitive, Prim::AreaFill { .. }))
+            .count(),
+        4,
+        "range styling splits only the Area presentation into adjacent fill segments",
+    );
+    let stroke_colors: Vec<Color> = frame.panes[0]
+        .main
+        .iter()
+        .filter_map(|primitive| match primitive {
+            Prim::Polyline { color, .. } => Some(*color),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(stroke_colors, vec![selected.line_color, faded.line_color]);
+
+    assert!(chart.clear_area_brush_state(0));
+    let frame = chart.build_frame();
+    assert_eq!(
+        frame.panes[0]
+            .main
+            .iter()
+            .filter(|primitive| matches!(primitive, Prim::AreaFill { .. }))
+            .count(),
+        1,
+        "clearing the interaction restores the untouched ordinary Area render path",
+    );
+}
+
+#[test]
 fn last_value_label_background_honors_the_per_point_color() {
     let mut chart = ohlc_chart(SeriesKind::Candlestick, 3);
     // The final bar carries a custom body color: the last-value label (and the built-in

@@ -60,7 +60,6 @@ test("all advanced series render through the shared Rust engine", async ({ page 
     const api = await import("/dist/nucleuscharts_financial.js");
     const bars = window.__data.slice(0, 20);
     const definitions = [
-      ["brushable_area", { brush_ranges: [{ range: { from: 5, to: 10 }, style: { line_color: "#f23645", top_color: "#f2364555", bottom_color: "#f2364500", line_width: 2 } }] }, bars.map((bar) => ({ time: bar.time, value: bar.close }))],
       ["grouped_bars", {}, bars.map((bar, index) => ({ time: bar.time, values: [index + 1, index + 3, index + 2] }))],
       ["heatmap", {}, bars.map((bar, index) => ({ time: bar.time, cells: [{ low: bar.low, high: bar.close, amount: index * 5 }, { low: bar.close, high: bar.high, amount: 100 - index * 5 }] }))],
       ["hlc_area", {}, bars.map((bar) => ({ time: bar.time, high: bar.high, low: bar.low, close: bar.close }))],
@@ -81,9 +80,9 @@ test("all advanced series render through the shared Rust engine", async ({ page 
     return { count: series.length, kinds: series.map((item) => item.series_type()) };
   });
   const after = await page.screenshot();
-  expect(result.count).toBe(9);
+  expect(result.count).toBe(8);
   expect(new Set(result.kinds)).toEqual(new Set([
-    "brushable_area", "grouped_bars", "heatmap", "hlc_area",
+    "grouped_bars", "heatmap", "hlc_area",
     "pretty_histogram", "background_shade", "stacked_area",
     "stacked_bars", "whisker_box",
   ]));
@@ -240,6 +239,21 @@ test("primitive feature helpers compose existing engine and host boundaries", as
   expect(result.label).toContain("Test financial chart");
   expect(result.announcement).toContain("Point");
   expect(page_errors).toEqual([]);
+});
+
+test("legacy brushable_area input normalizes to the built-in Area series", async ({ page }) => {
+  await open_chart(page);
+  expect(await page.evaluate(() => {
+    const legacy = window.__chart.add_series("brushable_area", {
+      price_line_visible: false,
+      last_value_visible: false,
+    });
+    legacy.set_data(window.__data.slice(0, 20).map((bar) => ({ time: bar.time, value: bar.close })));
+    return {
+      kind: legacy.series_type(),
+      data: legacy.data().length,
+    };
+  })).toEqual({ kind: "area", data: 20 });
 });
 
 test("Delta Tooltip rejects candlesticks, normal Tooltip still works, and type conversion removes Delta Tooltip", async ({ page }) => {
@@ -746,12 +760,11 @@ test("tooltip preserves OHLC inspection on area and line presentations", async (
   await page.evaluate(() => window.__structured_tooltip.detach());
 });
 
-test("brushable area reuses one solid vertical crosshair, preserves horizontal styling, and follows live theme", async ({ page }) => {
+test("brushable area is an ordinary area: normal pan/axis gestures stay free and Shift-drag compares", async ({ page }) => {
   await open_chart(page);
-  const geometry = await page.evaluate(async () => {
+  const setup = await page.evaluate(async () => {
     const api = await import("/dist/nucleuscharts_financial.js");
     const chart = window.__chart;
-    chart.apply_options({ handle_scroll: false, handle_scale: false });
     chart.apply_options({
       crosshair: {
         mode: 0,
@@ -759,14 +772,19 @@ test("brushable area reuses one solid vertical crosshair, preserves horizontal s
         horzLine: { visible: true, labelVisible: true, color: "#22aa44", width: 2, style: 2 },
       },
     });
-    window.__delta_crosshair = structuredClone(chart.options().crosshair);
-    const brush = chart.add_series("brushable_area", {
+    const before_options = {
+      handle_scroll: structuredClone(chart.options().handle_scroll),
+      handle_scale: structuredClone(chart.options().handle_scale),
+      crosshair: structuredClone(chart.options().crosshair),
+    };
+    const brush = chart.add_series("area", {
       price_line_visible: false,
       last_value_visible: false,
     });
     brush.set_data(window.__main.data().map((bar) => ({ time: bar.time, value: bar.close })));
     window.__delta_brush = brush;
     window.__delta_tooltip = api.enable_brushable_area_interaction(chart, brush);
+    window.__delta_options_before = before_options;
     chart.apply_options({
       layout: {
         background: { color: "#102030" },
@@ -777,6 +795,54 @@ test("brushable area reuses one solid vertical crosshair, preserves horizontal s
       },
       rightPriceScale: { borderColor: "#456789" },
     });
+    const pane = chart.panes()[0].get_geometry();
+    const bounds = chart.chart_element().getBoundingClientRect();
+    return {
+      left: bounds.left + pane.left,
+      top: bounds.top + pane.top,
+      width: pane.width,
+      height: pane.height,
+      y: bounds.top + pane.top + pane.height * 0.5,
+      price_axis_x: bounds.left + pane.left + chart.wasm.time_scale_width() + 10,
+      scroll_position: chart.wasm.scroll_position(),
+    };
+  });
+  expect(await page.evaluate(() => window.__delta_brush.series_type())).toBe("area");
+  expect(await page.evaluate(() => ({
+    handle_scroll: window.__chart.options().handle_scroll,
+    handle_scale: window.__chart.options().handle_scale,
+    crosshair: window.__chart.options().crosshair,
+  }))).toEqual({
+    ...await page.evaluate(() => window.__delta_options_before),
+  });
+
+  // Plain primary-drag remains the chart's normal grab-to-pan gesture. The helper must not turn it
+  // into a comparison or globally disable scrolling.
+  const pan_start_x = setup.left + setup.width * 0.6;
+  await page.mouse.move(pan_start_x, setup.y);
+  await page.mouse.down();
+  await page.mouse.move(pan_start_x - 120, setup.y, { steps: 6 });
+  expect(await page.evaluate(() => window.__chart.wasm.scroll_position())).toBeGreaterThan(setup.scroll_position);
+  await expect.poll(() => page.evaluate(() => window.__delta_tooltip.active_range())).toBe(null);
+  await page.mouse.up();
+
+  // Price-axis drag retains the canonical scale interaction too: it leaves auto-scale and becomes
+  // a manual scale exactly as it does on every ordinary series.
+  await page.evaluate(() => window.__chart.price_scale("right").set_auto_scale(true));
+  expect(await page.evaluate(() => window.__chart.price_scale("right").options().auto_scale)).toBe(true);
+  await page.mouse.move(setup.price_axis_x, setup.y);
+  await page.mouse.down();
+  await page.mouse.move(setup.price_axis_x, setup.y + 60, { steps: 5 });
+  await page.mouse.up();
+  expect(await page.evaluate(() => window.__chart.price_scale("right").options().auto_scale)).toBe(false);
+  await page.evaluate(async () => {
+    window.__chart.price_scale("right").set_auto_scale(true);
+    window.__chart.time_scale().fit_content();
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  });
+
+  const geometry = await page.evaluate(() => {
+    const chart = window.__chart;
     const pane = chart.panes()[0].get_geometry();
     const bounds = chart.chart_element().getBoundingClientRect();
     const range = chart.time_scale().get_visible_logical_range();
@@ -797,20 +863,11 @@ test("brushable area reuses one solid vertical crosshair, preserves horizontal s
       x_middle: chart.time_scale().logical_to_coordinate(middle),
     };
   });
-  const active_crosshair = await page.evaluate(() => window.__chart.options().crosshair);
-  const original_crosshair = await page.evaluate(() => window.__delta_crosshair);
-  expect(active_crosshair).toEqual({
-    ...original_crosshair,
-    vertLine: { ...original_crosshair.vertLine, style: 0 },
-  });
-  expect(active_crosshair.horzLine.style).toBe(2);
-  await page.waitForFunction(() => performance.now() > 600);
   const before = await page.screenshot();
   await page.mouse.move(geometry.left + geometry.x_first, geometry.y);
-  await expect.poll(() => page.evaluate(() => window.__delta_tooltip.active_range())).toBe(null);
   const hover = await page.screenshot();
   expect(hover.equals(before)).toBe(false);
-
+  await page.keyboard.down("Shift");
   await page.mouse.down();
   await page.mouse.move(geometry.left + geometry.x_second, geometry.y, { steps: 4 });
   await expect.poll(() => page.evaluate(() => window.__delta_tooltip.active_range())).toEqual({
@@ -835,6 +892,7 @@ test("brushable area reuses one solid vertical crosshair, preserves horizontal s
   expect(await page.evaluate(() => window.__chart.chart_element().querySelectorAll(".nucleuscharts-delta-tooltip").length)).toBe(0);
 
   await page.mouse.up();
+  await page.keyboard.up("Shift");
   expect(await page.evaluate(() => window.__delta_tooltip.active_range())).toMatchObject({
     from: geometry.first + 1,
     to: geometry.second + 1,
@@ -844,24 +902,23 @@ test("brushable area reuses one solid vertical crosshair, preserves horizontal s
     from: geometry.first + 1,
     to: geometry.second + 1,
   });
-  expect(await page.evaluate(() => window.__delta_brush.options().brush_ranges)).toHaveLength(1);
 
   await page.evaluate(() => window.__delta_tooltip.clear());
   expect(await page.evaluate(() => window.__delta_tooltip.active_range())).toBe(null);
-  expect(await page.evaluate(() => window.__delta_brush.options().brush_ranges)).toEqual([]);
 
   await page.mouse.move(geometry.left + geometry.x_first, geometry.y);
+  await page.keyboard.down("Shift");
   await page.mouse.down();
   await page.mouse.move(geometry.left + geometry.x_second, geometry.y, { steps: 4 });
   await page.mouse.up();
-  expect(await page.evaluate(() => window.__delta_brush.options().brush_ranges)).toHaveLength(1);
+  await page.keyboard.up("Shift");
+  expect(await page.evaluate(() => window.__delta_tooltip.active_range())).not.toBe(null);
   await page.evaluate(() => {
     window.__delta_tooltip.detach();
     window.__delta_tooltip.detach();
   });
-  expect(await page.evaluate(() => window.__delta_brush.options().brush_ranges)).toEqual([]);
   expect(await page.evaluate(() => window.__chart.options().crosshair)).toEqual(
-    await page.evaluate(() => window.__delta_crosshair),
+    await page.evaluate(() => window.__delta_options_before.crosshair),
   );
 });
 
@@ -870,7 +927,7 @@ test("brushable area guides reproject and Escape or double click clears", async 
   const selection = await page.evaluate(async () => {
     const api = await import("/dist/nucleuscharts_financial.js");
     const chart = window.__chart;
-    const brush = chart.add_series("brushable_area", {
+    const brush = chart.add_series("area", {
       price_line_visible: false,
       last_value_visible: false,
     });
@@ -898,9 +955,11 @@ test("brushable area guides reproject and Escape or double click clears", async 
   });
 
   await page.mouse.move(selection.start.x, selection.start.y);
+  await page.keyboard.down("Shift");
   await page.mouse.down();
   await page.mouse.move(selection.end.x, selection.end.y, { steps: 4 });
   await page.mouse.up();
+  await page.keyboard.up("Shift");
   const committed = await page.evaluate(() => window.__reproject_interaction.active_range());
   expect(committed).toMatchObject({ from: selection.from + 1, to: selection.to + 1 });
 
@@ -945,12 +1004,13 @@ test("brushable area guides reproject and Escape or double click clears", async 
 
   await page.keyboard.press("Escape");
   await expect.poll(() => page.evaluate(() => window.__reproject_interaction.active_range())).toBe(null);
-  expect(await page.evaluate(() => window.__reproject_brush.options().brush_ranges)).toEqual([]);
 
   await page.mouse.move(selection.start.x, selection.start.y);
+  await page.keyboard.down("Shift");
   await page.mouse.down();
   await page.mouse.move(selection.end.x, selection.end.y, { steps: 4 });
   await page.mouse.up();
+  await page.keyboard.up("Shift");
   expect(await page.evaluate(() => window.__reproject_interaction.active_range())).not.toBe(null);
 
   const pane_center = await page.evaluate(() => {
@@ -961,5 +1021,4 @@ test("brushable area guides reproject and Escape or double click clears", async 
   });
   await page.mouse.dblclick(pane_center.x, pane_center.y);
   await expect.poll(() => page.evaluate(() => window.__reproject_interaction.active_range())).toBe(null);
-  expect(await page.evaluate(() => window.__reproject_brush.options().brush_ranges)).toEqual([]);
 });

@@ -4,7 +4,6 @@ use nucleuscharts_render::bar_width::optimal_candlestick_width;
 
 #[derive(Clone, Copy)]
 struct VisibleFeatureBar<'a> {
-    logical: i64,
     x_media: f64,
     value: &'a FeatureValue,
 }
@@ -86,17 +85,6 @@ fn column_positions(xs: &[f64], spacing: f64, hpr: f64) -> Vec<ColumnPosition> {
     positions
 }
 
-fn mix_color(low: Color, high: Color, amount: f64) -> Color {
-    let t = amount.clamp(0.0, 1.0);
-    let channel = |a: u8, b: u8| (a as f64 + (b as f64 - a as f64) * t).round() as u8;
-    Color::rgba(
-        channel(low.r(), high.r()),
-        channel(low.g(), high.g()),
-        channel(low.b(), high.b()),
-        channel(low.a(), high.a()),
-    )
-}
-
 fn mix_background_color(low: Color, high: Color, amount: f64) -> Color {
     let channel = |a: u8, b: u8| {
         (a as f64 + (b as f64 - a as f64) * amount)
@@ -168,7 +156,6 @@ impl ChartEngine {
                 let value = feature.rows.get(row)?.value.as_ref()?;
                 let logical = plot.index_at(row)?;
                 Some(VisibleFeatureBar {
-                    logical,
                     x_media: self.time_scale.index_to_coordinate(logical),
                     value,
                 })
@@ -178,17 +165,6 @@ impl ChartEngine {
             return;
         }
         match feature.kind {
-            FeatureSeriesKind::BrushableArea => self.build_brushable_area_feature(
-                &bars,
-                &feature.options,
-                hpr,
-                vpr,
-                pane_top + pane_height,
-                out,
-                points,
-                scale,
-                rs.base_value,
-            ),
             FeatureSeriesKind::GroupedBars => self.build_grouped_bars_feature(
                 &bars,
                 &feature.options,
@@ -263,137 +239,6 @@ impl ChartEngine {
                 scale,
                 rs.base_value,
             ),
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn build_brushable_area_feature(
-        &self,
-        bars: &[VisibleFeatureBar<'_>],
-        options: &FeatureSeriesOptions,
-        hpr: f64,
-        vpr: f64,
-        pane_bottom: f64,
-        out: &mut Vec<Prim>,
-        points: &mut Vec<[f32; 2]>,
-        scale: &nucleuscharts_core::scale::price_scale_core::PriceScaleCore,
-        base: f64,
-    ) {
-        let style_for = |logical: i64| {
-            options
-                .brush_ranges
-                .iter()
-                .find(|range| {
-                    let start = range.from.min(range.to);
-                    let end = range.from.max(range.to);
-                    logical as f64 >= start && (logical as f64) < end
-                })
-                .map(|range| range.style)
-                .unwrap_or(crate::BrushStyle {
-                    line_color: options.line_color,
-                    top_color: options.top_color,
-                    bottom_color: options.bottom_color,
-                    line_width: options.line_width,
-                })
-        };
-        // The reference creates every style gradient over one shared vertical span: the minimum
-        // visible line y through the pane bottom. `AreaFill` shades over its own segment bounds,
-        // so pre-interpolate the segment's top stop into that shared ramp; linear interpolation
-        // from the adjusted stop to the common bottom is then pixel-identical without extending
-        // the backend-neutral primitive contract.
-        let global_top = bars
-            .iter()
-            .filter_map(|bar| match bar.value {
-                FeatureValue::BrushableArea { value } => {
-                    Some(scale.price_to_coordinate(*value, base))
-                }
-                _ => None,
-            })
-            .fold(f64::INFINITY, f64::min);
-        let global_span = (pane_bottom - global_top).max(1.0);
-        for pair in bars.windows(2) {
-            let [left, right] = pair else { continue };
-            let (
-                FeatureValue::BrushableArea { value: left_value },
-                FeatureValue::BrushableArea { value: right_value },
-            ) = (left.value, right.value)
-            else {
-                continue;
-            };
-            let style = style_for(right.logical);
-            let left_y = scale.price_to_coordinate(*left_value, base);
-            let right_y = scale.price_to_coordinate(*right_value, base);
-            let segment_top = left_y.min(right_y);
-            let adjusted_top = mix_color(
-                style.top_color,
-                style.bottom_color,
-                (segment_top - global_top) / global_span,
-            );
-            let segment = [
-                [(left.x_media * hpr).round() as f32, (left_y * vpr) as f32],
-                [(right.x_media * hpr).round() as f32, (right_y * vpr) as f32],
-            ];
-            let first = points.len() as u32;
-            points.extend_from_slice(&segment);
-            out.push(Prim::AreaFill {
-                first_point: first,
-                point_count: 2,
-                base_y: (pane_bottom * vpr) as f32,
-                line_type: LineType::Simple,
-                gradient: Gradient {
-                    top: adjusted_top,
-                    bottom: style.bottom_color,
-                },
-            });
-        }
-
-        // The reference strokes one path per contiguous style run. Keeping those runs intact
-        // preserves joins and avoids a cap/seam at every bar.
-        let mut run_style: Option<crate::BrushStyle> = None;
-        let mut run = Vec::<[f32; 2]>::new();
-        for pair in bars.windows(2) {
-            let [left, right] = pair else { continue };
-            let (
-                FeatureValue::BrushableArea { value: left_value },
-                FeatureValue::BrushableArea { value: right_value },
-            ) = (left.value, right.value)
-            else {
-                continue;
-            };
-            let style = style_for(right.logical);
-            let left_point = [
-                (left.x_media * hpr).round() as f32,
-                (scale.price_to_coordinate(*left_value, base) * vpr) as f32,
-            ];
-            let right_point = [
-                (right.x_media * hpr).round() as f32,
-                (scale.price_to_coordinate(*right_value, base) * vpr) as f32,
-            ];
-            if run_style.is_some_and(|current| current != style) {
-                let current = run_style.unwrap();
-                push_polyline(
-                    out,
-                    points,
-                    &run,
-                    (current.line_width * vpr) as f32,
-                    current.line_color,
-                );
-                run.clear();
-            }
-            if run.is_empty() {
-                run.push(left_point);
-            }
-            run.push(right_point);
-            run_style = Some(style);
-        }
-        if let Some(style) = run_style {
-            push_polyline(
-                out,
-                points,
-                &run,
-                (style.line_width * vpr) as f32,
-                style.line_color,
-            );
         }
     }
 

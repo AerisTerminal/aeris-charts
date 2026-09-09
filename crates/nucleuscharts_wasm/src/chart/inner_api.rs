@@ -5,6 +5,39 @@ use super::inner_render::measure_text_ctx;
 use super::*;
 
 impl ChartInner {
+    pub fn set_series_area_brush_state(&mut self, id: u32, state_json: &str) -> bool {
+        if state_json.is_empty() || state_json == "null" {
+            return self.engine.clear_area_brush_state(id as SeriesId);
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(state_json) else {
+            return false;
+        };
+        let Some(outside) = value.get("outside").and_then(parse_area_brush_style) else {
+            return false;
+        };
+        let Some(ranges) = value.get("ranges").and_then(serde_json::Value::as_array) else {
+            return false;
+        };
+        let mut parsed_ranges = Vec::with_capacity(ranges.len());
+        for entry in ranges {
+            let Some(range) = entry.get("range") else {
+                return false;
+            };
+            let Some(from) = range.get("from").and_then(serde_json::Value::as_f64) else {
+                return false;
+            };
+            let Some(to) = range.get("to").and_then(serde_json::Value::as_f64) else {
+                return false;
+            };
+            let Some(style) = entry.get("style").and_then(parse_area_brush_style) else {
+                return false;
+            };
+            parsed_ranges.push(BrushRange { from, to, style });
+        }
+        self.engine
+            .set_area_brush_state(id as SeriesId, outside, parsed_ranges)
+    }
+
     fn price_scale_error_json(error: nucleuscharts_engine::ChartError) -> String {
         serde_json::json!({
             "ok": false,
@@ -2275,6 +2308,24 @@ impl ChartInner {
     pub fn set_visible_time_range(&mut self, from_time: f64, to_time: f64) {
         self.engine.set_visible_time_range(from_time, to_time);
     }
+}
+
+fn parse_area_brush_style(value: &serde_json::Value) -> Option<BrushStyle> {
+    Some(BrushStyle {
+        line_color: value
+            .get("line_color")?
+            .as_str()
+            .and_then(Color::parse_css)?,
+        top_color: value
+            .get("top_color")?
+            .as_str()
+            .and_then(Color::parse_css)?,
+        bottom_color: value
+            .get("bottom_color")?
+            .as_str()
+            .and_then(Color::parse_css)?,
+        line_width: value.get("line_width")?.as_f64()?,
+    })
 }
 
 /// 2024-01-01T00:00:00Z in Unix-ms — the reference year for locale month-name generation

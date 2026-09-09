@@ -74,6 +74,9 @@ pub struct DeltaTooltipOptions {
     pub line_color: Option<Color>,
     pub show_time: bool,
     pub top_offset: f64,
+    /// Mouse activation is Shift+primary-drag instead of primary-drag. This is used by composed
+    /// interactions that must preserve the chart's ordinary grab-to-pan gesture.
+    pub requires_shift_drag: bool,
 }
 
 impl Default for DeltaTooltipOptions {
@@ -82,6 +85,7 @@ impl Default for DeltaTooltipOptions {
             line_color: None,
             show_time: false,
             top_offset: 20.0,
+            requires_shift_drag: false,
         }
     }
 }
@@ -974,6 +978,10 @@ impl ChartEngine {
     /// Capture the first comparison point for the official mouse-drag interaction. The host
     /// forwards only the pane x-coordinate; logical lookup and all plugin state stay here.
     pub fn delta_tooltip_mouse_down(&mut self, x: f64) -> bool {
+        self.delta_tooltip_mouse_down_with_shift(x, false)
+    }
+
+    pub fn delta_tooltip_mouse_down_with_shift(&mut self, x: f64, shift: bool) -> bool {
         if !x.is_finite() {
             return false;
         }
@@ -985,7 +993,10 @@ impl ChartEngine {
                     .native_primitives
                     .iter()
                     .filter_map(move |primitive| {
-                        matches!(primitive.kind, NativeSeriesPrimitiveKind::DeltaTooltip(_))
+                        let NativeSeriesPrimitiveKind::DeltaTooltip(state) = &primitive.kind else {
+                            return None;
+                        };
+                        (!state.options.requires_shift_drag || shift)
                             .then_some((series.id, primitive.id))
                     })
             })
@@ -1003,6 +1014,9 @@ impl ChartEngine {
                 let NativeSeriesPrimitiveKind::DeltaTooltip(state) = &mut primitive.kind else {
                     continue;
                 };
+                if state.options.requires_shift_drag && !shift {
+                    continue;
+                }
                 handled = true;
                 if !state.preview_points.is_empty() {
                     state.preview_points.clear();
@@ -1121,8 +1135,10 @@ impl ChartEngine {
                     .native_primitives
                     .iter()
                     .filter_map(move |primitive| {
-                        matches!(primitive.kind, NativeSeriesPrimitiveKind::DeltaTooltip(_))
-                            .then_some((series.id, primitive.id))
+                        let NativeSeriesPrimitiveKind::DeltaTooltip(state) = &primitive.kind else {
+                            return None;
+                        };
+                        (!state.options.requires_shift_drag).then_some((series.id, primitive.id))
                     })
             })
             .collect();
@@ -1702,26 +1718,9 @@ mod tests {
     }
 
     #[test]
-    fn brushable_area_delta_tooltip_emits_no_dedicated_vertical_guides() {
+    fn shift_drag_delta_tooltip_preserves_normal_drag_and_owns_its_guides() {
         let mut chart = chart();
-        assert!(chart.configure_feature_series(
-            0,
-            crate::FeatureSeriesKind::BrushableArea,
-            crate::FeatureSeriesOptionsPatch::default(),
-        ));
-        chart
-            .set_feature_series_data(
-                0,
-                (0..10)
-                    .map(|day| crate::FeatureDataPoint {
-                        time: day as f64 * 86_400.0,
-                        value: Some(crate::FeatureValue::BrushableArea {
-                            value: 100.0 + day as f64,
-                        }),
-                    })
-                    .collect(),
-            )
-            .unwrap();
+        chart.convert_series_kind(0, crate::SeriesKind::Area);
         chart.time_scale.set_width(800.0);
         chart.fit_content();
 
@@ -1731,6 +1730,7 @@ mod tests {
                 0,
                 DeltaTooltipOptions {
                     line_color: Some(guide_color),
+                    requires_shift_drag: true,
                     ..DeltaTooltipOptions::default()
                 },
             )
@@ -1738,8 +1738,17 @@ mod tests {
         let x2 = chart.time_scale.index_to_coordinate(2);
         let x7 = chart.time_scale.index_to_coordinate(7);
         chart.set_crosshair_at(x7, 250.0);
-        assert!(chart.delta_tooltip_mouse_down(x2));
+
+        assert!(!chart.delta_tooltip_mouse_down(x2));
         assert!(chart.delta_tooltip_mouse_move(x7));
+        assert!(chart.delta_tooltip_mouse_up());
+        assert!(chart.delta_tooltip_active_range(primitive).is_none());
+        assert!(!chart.delta_tooltip_touch_move(&[x2, x7]));
+        assert!(chart.delta_tooltip_active_range(primitive).is_none());
+
+        assert!(chart.delta_tooltip_mouse_down_with_shift(x2, true));
+        assert!(chart.delta_tooltip_mouse_move(x7));
+        assert!(chart.delta_tooltip_mouse_up());
         assert!(chart.delta_tooltip_active_range(primitive).is_some());
 
         let frame = chart.build_frame();
@@ -1752,8 +1761,8 @@ mod tests {
                     Prim::VLine { color, .. } if *color == guide_color
                 ))
                 .count(),
-            0,
-            "brushable area must reuse the chart crosshair instead of emitting a second vertical guide",
+            2,
+            "the delta tooltip owns both comparison guides without mutating chart crosshair options",
         );
     }
 

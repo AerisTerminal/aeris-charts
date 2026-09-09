@@ -216,24 +216,18 @@ impl ChartEngine {
                 let line_color =
                     surface_contrast_line_color(state.options.line_color, &layout.background.color);
                 let top = pane.top + state.options.top_offset;
-                let brushable_area = series
-                    .feature
-                    .as_ref()
-                    .is_some_and(|feature| feature.kind == crate::FeatureSeriesKind::BrushableArea);
                 for (x, _, price, _) in &items {
                     let y = self
                         .series_price_to_coordinate(series.id, *price)
                         .unwrap_or(-1_000.0);
-                    if !brushable_area {
-                        out.push(Prim::VLine {
-                            x: (*x * hpr).round() as i32,
-                            y0: (top * vpr).round() as i32,
-                            y1: ((pane.top + pane.height) * vpr).round() as i32,
-                            width: hpr.round().max(1.0) as i32,
-                            style: LineStyle::Solid,
-                            color: line_color,
-                        });
-                    }
+                    out.push(Prim::VLine {
+                        x: (*x * hpr).round() as i32,
+                        y0: (top * vpr).round() as i32,
+                        y1: ((pane.top + pane.height) * vpr).round() as i32,
+                        width: hpr.round().max(1.0) as i32,
+                        style: LineStyle::Solid,
+                        color: line_color,
+                    });
                     if y.is_finite() {
                         out.push(Prim::Circle {
                             cx: (*x * hpr) as f32,

@@ -18,7 +18,6 @@ import type { accessibility_handle, accessibility_options } from "./accessibilit
  * {@link chart_api.add_series} — custom series are created with {@link chart_api.add_custom_series}.
  */
 export type feature_series_kind =
-  | "brushable_area"
   | "grouped_bars"
   | "heatmap"
   | "hlc_area"
@@ -36,6 +35,8 @@ export type series_kind =
   | "histogram"
   | "baseline"
   | "footprint"
+  /** @deprecated Use an ordinary `"area"` series with `enable_brushable_area_interaction()`. */
+  | "brushable_area"
   | feature_series_kind
   | "custom";
 
@@ -104,6 +105,7 @@ export interface whitespace_data {
   time: time;
 }
 
+/** @deprecated Brushable Area now uses ordinary scalar Area data (`single_value_data`). */
 export interface brushable_area_data { time: time; value: number }
 export interface grouped_bars_data { time: time; values: readonly number[] }
 export interface heatmap_cell { low: number; high: number; amount: number }
@@ -1058,6 +1060,10 @@ export interface feature_series_options {
   top_color: string;
   bottom_color: string;
   base_price: number;
+  /**
+   * @deprecated Brush ranges are transient presentation state owned by
+   * `enable_brushable_area_interaction()` on an ordinary Area series.
+   */
   brush_ranges: readonly feature_brush_range[];
   cell_border_width: number;
   cell_border_color: string;
@@ -1186,7 +1192,8 @@ export const KIND_TO_U8: Record<series_kind, number> = {
   histogram: 4,
   baseline: 5,
   footprint: 8,
-  brushable_area: 7,
+  // Compatibility alias only: brushable area is an ordinary Area series in the engine.
+  brushable_area: 3,
   grouped_bars: 7,
   heatmap: 7,
   hlc_area: 7,
@@ -1199,7 +1206,6 @@ export const KIND_TO_U8: Record<series_kind, number> = {
 };
 
 export const FEATURE_KIND_TO_U8: Record<feature_series_kind, number> = {
-  brushable_area: 0,
   grouped_bars: 2,
   heatmap: 3,
   hlc_area: 4,

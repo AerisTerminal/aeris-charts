@@ -66,6 +66,9 @@ export function install_gestures(chart: chart_impl): () => void {
   // Engine-owned drawing drag (anchor re-anchor or body move) started by a pane press on a
   // drawing (drawings.rs); mutually exclusive with a pan `dragging` session.
   let drawing_dragging = false;
+  // Delta Tooltip may intentionally own a mouse drag (brushable Area uses Shift+primary-drag).
+  // Ordinary primary-drag remains the normal pan path when no tooltip accepts the press.
+  let delta_tooltip_dragging = false;
   // Trading controls own the pointer before drawings and chart pan. Moves update only the
   // engine's local preview; confirmed broker state is never mutated by this gesture path.
   let trading_dragging = false;
@@ -508,7 +511,6 @@ export function install_gestures(chart: chart_impl): () => void {
     // Any active pointer pauses the countdown timer (no mid-gesture repaint/lag).
     if (pointers.size === 1) chart.set_interacting(true);
     if (pointers.size !== 1) return;
-    chart.native_delta_tooltip_mouse_down(p.x);
     press_start = p;
     moved = false;
     const region = arm_press(p);
@@ -569,8 +571,11 @@ export function install_gestures(chart: chart_impl): () => void {
       chart.repaint();
       return;
     }
+    // A Delta Tooltip gets first refusal on the pane gesture. Brushable Area configures it for
+    // Shift+primary-drag, so an unmodified grab always remains ordinary chart pan.
+    delta_tooltip_dragging = chart.native_delta_tooltip_mouse_down(p.x, e.shiftKey);
     // pane press: pan (time + price in one drag, like reference).
-    if (chart.gesture_config().pan) {
+    if (!delta_tooltip_dragging && chart.gesture_config().pan) {
       begin_scroll(p.x, "mouse");
       arm_price_pan(pane_of(p.y), p.x, p.y);
     }
@@ -697,6 +702,7 @@ export function install_gestures(chart: chart_impl): () => void {
     touch_tracking = false;
     track_point = null;
     chart.native_delta_tooltip_mouse_up();
+    delta_tooltip_dragging = false;
     feed_pointer("up", e);
     pointers.delete(e.pointerId);
     pointer_targets.delete(e.pointerId);
@@ -880,6 +886,7 @@ export function install_gestures(chart: chart_impl): () => void {
     pointer_targets.clear();
     chart.set_interacting(false);
     chart.native_delta_tooltip_mouse_up();
+    delta_tooltip_dragging = false;
     chart.repaint();
   };
 

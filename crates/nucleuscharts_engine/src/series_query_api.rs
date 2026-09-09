@@ -3,7 +3,56 @@
 
 use super::*;
 
+const MAX_AREA_BRUSH_RANGES: usize = 64;
+
 impl ChartEngine {
+    /// Install transient brush styling on an ordinary Area series. Canonical data and all ordinary
+    /// series behavior stay on the built-in Area path; an empty/absent interaction clears this state.
+    pub fn set_area_brush_state(
+        &mut self,
+        id: SeriesId,
+        outside: BrushStyle,
+        ranges: Vec<BrushRange>,
+    ) -> bool {
+        let Some(series) = self
+            .series
+            .iter_mut()
+            .find(|series| series.id == id && !series.removed && series.kind == SeriesKind::Area)
+        else {
+            return false;
+        };
+        if ranges.len() > MAX_AREA_BRUSH_RANGES
+            || !outside.line_width.is_finite()
+            || outside.line_width <= 0.0
+            || ranges.iter().any(|range| {
+                !range.from.is_finite()
+                    || !range.to.is_finite()
+                    || !range.style.line_width.is_finite()
+                    || range.style.line_width <= 0.0
+            })
+        {
+            return false;
+        }
+        series.area_brush = Some(AreaBrushState { outside, ranges });
+        self.invalidate_frame_scene();
+        true
+    }
+
+    pub fn clear_area_brush_state(&mut self, id: SeriesId) -> bool {
+        let Some(series) = self
+            .series
+            .iter_mut()
+            .find(|series| series.id == id && !series.removed)
+        else {
+            return false;
+        };
+        let changed = series.area_brush.take().is_some();
+        if changed {
+            self.invalidate_frame_scene();
+        }
+        true
+    }
+
     /// A unified value snapshot for every live series. `None` selects each engine-owned series' own
     /// latest non-whitespace row; `Some(index)` performs an exact merged-logical lookup and never
     /// borrows a neighboring value. Custom-series values are host-produced, so only their last

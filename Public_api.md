@@ -142,7 +142,11 @@ public experimental APIs. Their current lifecycle and containment behavior is te
 exact types may change in a pre-1.0 minor release.
 `create_delta_tooltip()` is intentionally unavailable on candlestick series; candles use the normal
 hover `create_tooltip()` instead. Delta Tooltip remains available on non-candlestick series such as
-area/line/bar and is composed directly into the brushable-area interaction.
+area/line/bar and is composed directly into the brushable-area interaction. Brushable Area is a
+composition over the ordinary `area` series rather than a separate data-bearing series kind; the
+legacy `brushable_area` input spelling remains a compatibility alias that normalizes to `area`.
+The helper preserves normal chart manipulation: unmodified primary-drag pans, axis drags keep their
+ordinary auto/manual-scale behavior, and Shift+primary-drag activates the comparison brush.
 The normal `create_tooltip()` is the canonical structured market-data inspector. Its engine snapshot
 retains Open/High/Low/Close for every ordinary series presentation, including area and line; scalar
 rows naturally report the same value in all four fields, while area/line series fed retained OHLC

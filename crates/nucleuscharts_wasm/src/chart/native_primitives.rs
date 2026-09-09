@@ -226,6 +226,10 @@ impl ChartInner {
                         .get("top_offset")
                         .and_then(serde_json::Value::as_f64)
                         .unwrap_or(defaults.top_offset),
+                    requires_shift_drag: value
+                        .get("requires_shift_drag")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(defaults.requires_shift_drag),
                 },
             )
             .unwrap_or(0)

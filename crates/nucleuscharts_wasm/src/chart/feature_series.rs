@@ -2,8 +2,7 @@
 
 use super::*;
 use nucleuscharts_engine::{
-    BrushRange, BrushStyle, FeatureDataPoint, FeatureSeriesOptionsPatch, FeatureValue, HeatmapCell,
-    StackedAreaColor,
+    FeatureDataPoint, FeatureSeriesOptionsPatch, FeatureValue, HeatmapCell, StackedAreaColor,
 };
 
 fn property(value: &JsValue, key: &str) -> Option<JsValue> {
@@ -36,9 +35,9 @@ fn has_any(value: &JsValue, keys: &[&str]) -> bool {
 
 fn parse_feature_value(kind: FeatureSeriesKind, item: &JsValue) -> Option<FeatureValue> {
     let payload_present = match kind {
-        FeatureSeriesKind::BrushableArea
-        | FeatureSeriesKind::PrettyHistogram
-        | FeatureSeriesKind::BackgroundShade => has_any(item, &["value"]),
+        FeatureSeriesKind::PrettyHistogram | FeatureSeriesKind::BackgroundShade => {
+            has_any(item, &["value"])
+        }
         FeatureSeriesKind::GroupedBars
         | FeatureSeriesKind::StackedArea
         | FeatureSeriesKind::StackedBars => has_any(item, &["values"]),
@@ -50,9 +49,6 @@ fn parse_feature_value(kind: FeatureSeriesKind, item: &JsValue) -> Option<Featur
         return None;
     }
     Some(match kind {
-        FeatureSeriesKind::BrushableArea => FeatureValue::BrushableArea {
-            value: number(item, "value").unwrap_or(f64::NAN),
-        },
         FeatureSeriesKind::GroupedBars => {
             let values = numbers(item, "values").unwrap_or_default();
             FeatureValue::GroupedBars { values }
@@ -129,9 +125,7 @@ fn feature_point_to_js(point: FeatureDataPoint) -> JsValue {
         return object.into();
     };
     match value {
-        FeatureValue::BrushableArea { value } | FeatureValue::BackgroundShade { value } => {
-            set_property(&object, "value", value)
-        }
+        FeatureValue::BackgroundShade { value } => set_property(&object, "value", value),
         FeatureValue::PrettyHistogram { value, color } => {
             set_property(&object, "value", value);
             if let Some(color) = color {
@@ -207,31 +201,6 @@ fn parse_options(json: &str) -> FeatureSeriesOptionsPatch {
                 .collect::<Vec<_>>()
         })
         .filter(|colors| !colors.is_empty());
-    let brush_ranges = value
-        .get("brush_ranges")
-        .and_then(serde_json::Value::as_array)
-        .map(|ranges| {
-            ranges
-                .iter()
-                .filter_map(|entry| {
-                    let range = entry.get("range").unwrap_or(entry);
-                    let style = entry.get("style")?;
-                    Some(BrushRange {
-                        from: json_number(range, "from")?,
-                        to: json_number(range, "to")?,
-                        style: BrushStyle {
-                            line_color: json_color(style, "line_color")
-                                .unwrap_or(Color::rgb(40, 98, 255)),
-                            top_color: json_color(style, "top_color")
-                                .unwrap_or(Color::rgba(40, 98, 255, 102)),
-                            bottom_color: json_color(style, "bottom_color")
-                                .unwrap_or(Color::rgba(40, 98, 255, 0)),
-                            line_width: json_number(style, "line_width").unwrap_or(2.0),
-                        },
-                    })
-                })
-                .collect()
-        });
     FeatureSeriesOptionsPatch {
         color: json_color(&value, "color"),
         colors: json_colors(&value, "colors"),
@@ -241,7 +210,6 @@ fn parse_options(json: &str) -> FeatureSeriesOptionsPatch {
         bottom_color: json_color(&value, "bottom_color"),
         line_width: json_number(&value, "line_width"),
         base_price: json_number(&value, "base_price"),
-        brush_ranges,
         cell_border_width: json_number(&value, "cell_border_width"),
         cell_border_color: json_color(&value, "cell_border_color"),
         high_line_color: json_color(&value, "high_line_color"),

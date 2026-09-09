@@ -164,7 +164,7 @@ const PRICE_SCALE_JSON_OPTION_KEYS = [
 /** Engine kind ordinal → public kind name (index-aligned with `KIND_TO_U8`). */
 const KIND_NAMES = ["candlestick", "bar", "line", "area", "histogram", "baseline", "custom", undefined, "footprint"] as const;
 const FEATURE_KIND_NAMES = [
-  "brushable_area",
+  undefined,
   undefined,
   "grouped_bars",
   "heatmap",
@@ -1011,6 +1011,12 @@ class series_impl implements series_api {
     this.assert_live();
     return this.chart.wasm.add_native_delta_tooltip(this.id, options_json);
   }
+  native_set_area_brush_state(state_json: string): boolean {
+    this.assert_live();
+    const changed = this.chart.wasm.set_series_area_brush_state(this.id, state_json);
+    if (changed) this.chart.repaint();
+    return changed;
+  }
   native_add_tooltip(options_json: string): number {
     this.assert_live();
     return this.chart.wasm.add_native_tooltip(this.id, options_json);
@@ -1135,6 +1141,11 @@ function native_series(series: series_api): series_impl {
     );
   }
   return series;
+}
+
+/** Package-internal controller for transient brush styling on a built-in Area series. */
+export function set_native_area_brush_state(series: series_api, state_json: string): boolean {
+  return native_series(series).native_set_area_brush_state(state_json);
 }
 
 function native_handle(series: series_impl, id: number): native_primitive_handle {
@@ -2700,8 +2711,8 @@ export class chart_impl implements chart_api {
   }
 
   /** Standard gesture forwarding for the engine-owned delta-tooltip interaction model. */
-  native_delta_tooltip_mouse_down(x: number): void {
-    this.wasm.native_delta_tooltip_mouse_down(x);
+  native_delta_tooltip_mouse_down(x: number, shift: boolean): boolean {
+    return this.wasm.native_delta_tooltip_mouse_down(x, shift);
   }
 
   native_delta_tooltip_mouse_move(x: number): void {

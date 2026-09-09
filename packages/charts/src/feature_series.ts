@@ -1,11 +1,9 @@
 import type {
   chart_api,
-  chart_options,
   feature_brush_style,
-  feature_series_options,
   series_api,
 } from "./types.js";
-import { LINE_STYLE_TO_U8 } from "./types.js";
+import { set_native_area_brush_state } from "./impl.js";
 import { create_delta_tooltip } from "./primitive_features.js";
 
 export interface brushable_area_interaction_options {
@@ -24,18 +22,17 @@ export interface brushable_area_interaction_handle {
 }
 
 /**
- * Compose the official delta-tooltip gesture with a Rust-native `brushable_area` series. Pointer
- * lookup, chronological delta direction, touch state, and tooltip geometry stay in the engine;
- * this host adapter applies the selected range's positive/negative style and reuses the chart's
- * native vertical crosshair as the single solid brush guide.
+ * Compose Delta Tooltip range selection with an ordinary Area series. Normal primary-drag remains
+ * chart pan; Shift+primary-drag intentionally brushes. The brush is transient presentation state:
+ * the Area series keeps its ordinary data, hit testing, scales, LOD, and ingestion behavior.
  */
 export function enable_brushable_area_interaction(
   chart: chart_api,
   series: series_api,
   options: brushable_area_interaction_options = {},
 ): brushable_area_interaction_handle {
-  if (series.series_type() !== "brushable_area") {
-    throw new Error("enable_brushable_area_interaction requires a brushable_area series");
+  if (series.series_type() !== "area") {
+    throw new Error("enable_brushable_area_interaction requires an area series");
   }
   const base: feature_brush_style = {
     line_color: "rgb(40,98,255)",
@@ -68,30 +65,21 @@ export function enable_brushable_area_interaction(
     ...options.selected_style,
     ...options.negative_style,
   };
-  const previous_options = chart.options() as chart_options;
-  const previous_scroll = previous_options.handle_scroll;
-  const previous_scale = previous_options.handle_scale;
-  const previous_vertical_crosshair_style = previous_options.crosshair.vertLine.style;
-  chart.apply_options({ handle_scroll: false, handle_scale: false });
-  chart.apply_options({
-    crosshair: {
-      vertLine: { style: LINE_STYLE_TO_U8.solid },
-    },
-  });
   const tooltip = create_delta_tooltip(chart, {
     series,
+    requires_shift_drag: true,
     on_active_range_change(range) {
       if (range === null) {
-        series.apply_options({ ...base, brush_ranges: [] });
+        set_native_area_brush_state(series, "null");
         return;
       }
-      series.apply_options({
-        ...faded,
-        brush_ranges: [{
+      set_native_area_brush_state(series, JSON.stringify({
+        outside: faded,
+        ranges: [{
           range: { from: range.from, to: range.to },
           style: range.positive ? positive : negative,
         }],
-      } satisfies Partial<feature_series_options>);
+      }));
     },
   });
   let detached = false;
@@ -115,13 +103,7 @@ export function enable_brushable_area_interaction(
       chart.chart_element().removeEventListener("keydown", on_keydown, { capture: true });
       tooltip.clear();
       tooltip.detach();
-      chart.apply_options({
-        handle_scroll: previous_scroll,
-        handle_scale: previous_scale,
-        crosshair: {
-          vertLine: { style: previous_vertical_crosshair_style },
-        },
-      });
+      set_native_area_brush_state(series, "null");
     },
   };
 }

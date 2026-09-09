@@ -55,10 +55,10 @@ use nucleuscharts_core::scale::price_scale_core::PriceScaleMode;
 use nucleuscharts_engine::{
     crosshair_mode_from_u8, line_style_from_u8, marker_pos, marker_shape, AlertId, AlertLine,
     AlertSnapshot, AxisFrame, AxisLabel, AxisLabelCorners, AxisTextAlign, AxisTextMidpoint,
-    ChartEngine, DrawingKind, DrawingModifiers, DrawingPoint, ExecutionId, FeatureSeriesKind,
-    GestureResolver, GestureUpdate, InputDevice, InputModifiers, InputTarget, InstrumentMetadata,
-    Marker, OrderId, PaneId, PointerSample, PositionId, PriceFormatterFn, PriceScaleId,
-    PriceScaleSide, PriceScaleTarget, PrimitiveAutoscaleContribution, SeriesKind,
+    BrushRange, BrushStyle, ChartEngine, DrawingKind, DrawingModifiers, DrawingPoint, ExecutionId,
+    FeatureSeriesKind, GestureResolver, GestureUpdate, InputDevice, InputModifiers, InputTarget,
+    InstrumentMetadata, Marker, OrderId, PaneId, PointerSample, PositionId, PriceFormatterFn,
+    PriceScaleId, PriceScaleSide, PriceScaleTarget, PrimitiveAutoscaleContribution, SeriesKind,
     TickMarkFormatterFn, TimeFormatterFn, TradingExecution, TradingPosition, TradingSnapshot,
     TradingStyleOptions, WorkingOrder,
 };
@@ -1395,6 +1395,14 @@ impl NucleusChart {
         self.inner.borrow_mut().add_series(kind)
     }
 
+    /// Install or clear transient brush styling on an ordinary Area series. This does not create a
+    /// feature series or alter canonical data ownership.
+    pub fn set_series_area_brush_state(&mut self, id: u32, state_json: &str) -> bool {
+        self.inner
+            .borrow_mut()
+            .set_series_area_brush_state(id, state_json)
+    }
+
     /// Add one of Nucleus's engine-owned advanced series. `kind` is [`FeatureSeriesKind::to_u8`];
     /// the host supplies data and options, while every render/scale semantic stays in Rust.
     pub fn add_feature_series(&mut self, kind: u8, adopt_primary: bool, options_json: &str) -> u32 {
@@ -1716,8 +1724,11 @@ impl NucleusChart {
     }
 
     /// Forward normalized host mouse samples to every engine-owned delta tooltip.
-    pub fn native_delta_tooltip_mouse_down(&mut self, x: f64) -> bool {
-        self.inner.borrow_mut().engine.delta_tooltip_mouse_down(x)
+    pub fn native_delta_tooltip_mouse_down(&mut self, x: f64, shift: bool) -> bool {
+        self.inner
+            .borrow_mut()
+            .engine
+            .delta_tooltip_mouse_down_with_shift(x, shift)
     }
 
     pub fn native_delta_tooltip_mouse_move(&mut self, x: f64) -> bool {

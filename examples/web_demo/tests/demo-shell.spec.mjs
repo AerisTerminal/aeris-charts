@@ -365,11 +365,12 @@ test("reported plugin scenarios use full data and official line compositions", a
   expect(shade_state.value_range[1]).toBeLessThan(900);
 });
 
-test("brushable area writes a logical range whose color follows chronological delta in either drag direction", async ({ page }) => {
+test("brushable area compares chronological delta in either Shift-drag direction", async ({ page }) => {
   await open_demo(page);
   await page.locator('#series_grid [data-series-id="brushable-area"]').click();
   const targets = await page.evaluate(() => {
-    const feature = window.__chart.series_order().find((item) => item.series_type() === "brushable_area");
+    const feature = window.__demo_catalogs.series.interaction_series();
+    if (feature.series_type() !== "area") throw new Error("brushable demo must use an ordinary Area series");
     const data = feature.data();
     const pane = window.__chart.panes()[0].get_geometry();
     const visible = window.__chart.time_scale().get_visible_logical_range();
@@ -406,34 +407,35 @@ test("brushable area writes a logical range whose color follows chronological de
       up_to: point(up_to),
     };
   });
-  const drag = async (from, to, color) => {
+  const drag = async (from, to, positive) => {
     await page.mouse.move(from.x, from.y);
+    await page.keyboard.down("Shift");
     await page.mouse.down();
     await page.mouse.move(to.x, to.y, { steps: 4 });
     await expect.poll(() => page.evaluate(() => {
-      const feature = window.__chart.series_order().find((item) => item.series_type() === "brushable_area");
-      return feature.options().brush_ranges[0]?.style.line_color ?? null;
-    })).toBe(color);
+      return window.__demo_catalogs.series.interaction_range()?.positive ?? null;
+    })).toBe(positive);
     await page.mouse.up();
+    await page.keyboard.up("Shift");
     await page.mouse.move((from.x + to.x) * 0.5, from.y + 12);
     return page.evaluate(() => {
-      const feature = window.__chart.series_order().find((item) => item.series_type() === "brushable_area");
-      const brush = feature.options().brush_ranges[0];
+      const brush = window.__demo_catalogs.series.interaction_range();
       return {
-        color: brush?.style.line_color ?? null,
-        range: brush?.range ?? null,
+        positive: brush?.positive ?? null,
+        range: brush === null ? null : { from: brush.from, to: brush.to },
         active: window.__demo_catalogs.series.active_id(),
+        kind: window.__demo_catalogs.series.interaction_series().series_type(),
       };
     });
   };
 
-  const expect_brush = (result, color) => {
-    expect(result).toMatchObject({ color, active: "brushable-area" });
+  const expect_brush = (result, positive) => {
+    expect(result).toMatchObject({ positive, active: "brushable-area", kind: "area" });
     expect(result.range.to).toBeGreaterThan(result.range.from);
   };
-  expect_brush(await drag(targets.down_from, targets.down_to, "#ef5350"), "#ef5350");
-  expect_brush(await drag(targets.down_to, targets.down_from, "#ef5350"), "#ef5350");
-  expect_brush(await drag(targets.up_to, targets.up_from, "#049981"), "#049981");
+  expect_brush(await drag(targets.down_from, targets.down_to, false), false);
+  expect_brush(await drag(targets.down_to, targets.down_from, false), false);
+  expect_brush(await drag(targets.up_to, targets.up_from, true), true);
 });
 
 test("theme action and compact inspector remain directly usable", async ({ page }) => {
