@@ -1,9 +1,43 @@
 import { test, expect } from "@playwright/test";
 
-async function open_demo(page) {
-  await page.goto("/");
+async function open_demo(page, url = "/") {
+  await page.goto(url);
   await page.waitForFunction(() => window.__chart?.backend?.() !== undefined && window.__demo_catalogs !== undefined);
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+}
+
+for (const [backend, url] of [
+  ["webgpu", "/"],
+  ["canvas2d", "/?backend=canvas2d&forceFallbackAdapter=1"],
+]) {
+  test(`${backend} interactive demo preserves engine defaults except hidden grid`, async ({ page }) => {
+    await open_demo(page, url);
+    const state = await page.evaluate(async () => {
+      const api = await import("../dist/nucleuscharts_financial.js");
+      const host = document.createElement("div");
+      Object.assign(host.style, { position: "fixed", width: "320px", height: "180px", left: "-10000px", top: "0" });
+      document.body.appendChild(host);
+      const scratch = await api.create_chart(host, { autoSize: true, backend: "canvas2d" });
+      const scratch_series = scratch.add_series("candlestick");
+      const expected_chart = structuredClone(scratch.options());
+      expected_chart.grid.vertLines.visible = false;
+      expected_chart.grid.horzLines.visible = false;
+      const result = {
+        actual_chart: window.__chart.options(),
+        expected_chart,
+        actual_series: window.__main.options(),
+        expected_series: scratch_series.options(),
+      };
+      scratch.remove();
+      host.remove();
+      return result;
+    });
+    expect(state.actual_chart).toEqual(state.expected_chart);
+    expect(state.actual_series).toEqual(state.expected_series);
+    expect(state.actual_chart.grid.vertLines).toMatchObject({ visible: false, style: 2 });
+    expect(state.actual_chart.grid.horzLines).toMatchObject({ visible: false, style: 2 });
+    expect(state.actual_series).toMatchObject({ title: "", countdown_visible: true });
+  });
 }
 
 test("demo controls have readable headings and usable desktop and phone targets", async ({ page }) => {

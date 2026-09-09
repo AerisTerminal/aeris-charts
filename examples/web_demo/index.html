@@ -378,13 +378,13 @@
           <option value="dark">dark</option>
         </select>
       </label>
-      <label><input type="checkbox" id="grid_toggle" checked> grid</label>
+      <label><input type="checkbox" id="grid_toggle"> grid</label>
       <label>grid color <input type="color" id="grid_color" value="#f1f1f1"></label>
       <label>grid style
         <select id="grid_style">
-          <option value="0" selected>solid</option>
+          <option value="0">solid</option>
           <option value="1">dotted</option>
-          <option value="2">dashed</option>
+          <option value="2" selected>dashed</option>
         </select>
       </label>
       <label>font
@@ -415,8 +415,8 @@
       </label>
       <label><input type="checkbox" id="last_value_toggle" checked> last value</label>
       <label title="TradingView-style title chip in the last-value cluster (darker shade of the label color, left of the price)"><input type="checkbox" id="title_chip_toggle" checked> title chip</label>
-      <label>title <input type="text" id="series_title" value="NUCLEUS" size="6"></label>
-      <label title="TradingView-style candle-close countdown stacked below the price in the last-value cluster"><input type="checkbox" id="countdown_toggle"> countdown</label>
+      <label>title <input type="text" id="series_title" value="" size="6"></label>
+      <label title="TradingView-style candle-close countdown stacked below the price in the last-value cluster"><input type="checkbox" id="countdown_toggle" checked> countdown</label>
       <label title="TradingView-style bid/ask lines + Bid/Ask axis chips (default off). Enable to stream synthetic quotes around the last price so the lines and chips move live"><input type="checkbox" id="bid_ask_toggle"> bid/ask</label>
     </div>
 
@@ -458,7 +458,7 @@
 <script type="module">
 // Built from the real package distribution. The demo build copies @nucleuscharts/financial' published
 // artifacts; it does not compile or wire an engine of its own.
-import { create_chart, create_chart_grid, create_series_markers, default_theme_name, theme_options, theme_palette } from "./dist/nucleuscharts_financial.js";
+import { create_chart, create_chart_grid, create_series_markers, default_theme_name, theme_options } from "./dist/nucleuscharts_financial.js";
 import { generate_fixture_data } from "./fixture_data.js";
 import { fixture_theme } from "./fixture_styles.js";
 import { marker_fixture, volume_fixture } from "./fixture_features.js";
@@ -500,24 +500,11 @@ const runtime_test = query.get("runtimeTest");
 const requested_spacing = Number.parseFloat(query.get("spacing") ?? "");
 const requested_dpr = Number.parseFloat(query.get("dpr") ?? "");
 const theme_param = query.get("theme");
-const THEME_STORAGE_KEY = "nucleuscharts.demo.theme";
-function stored_demo_theme() {
-  try {
-    const stored = localStorage.getItem(THEME_STORAGE_KEY);
-    return stored === "light" || stored === "dark" ? stored : null;
-  } catch {
-    return null;
-  }
-}
-function persist_demo_theme(theme) {
-  if (runtime_test !== null) return;
-  try { localStorage.setItem(THEME_STORAGE_KEY, theme); } catch { /* storage can be unavailable */ }
-}
-// Runtime fixtures retain their historical light default. The real demo follows the package's
-// canonical default until the user chooses a theme, after which reloads restore that preference.
+// Runtime fixtures retain their historical light default. A normal interactive load always starts
+// from the package/engine default theme; theme changes are explicit actions for the current session.
 const requested_theme = theme_param === "light" || theme_param === "dark"
   ? theme_param
-  : runtime_test === null ? stored_demo_theme() ?? default_theme_name : "light";
+  : runtime_test === null ? default_theme_name : "light";
 sync_page_theme(requested_theme);
 const requested_feature = query.get("feature");
 const requested_left_scale = query.get("leftScale") === "1";
@@ -535,11 +522,22 @@ if (runtime_test === "presentedFrame" || runtime_test === "backendParity") {
 }
 const chart_options = {
   autoSize: parity_fixture === null,
-  theme: requested_theme,
   // The backend-parity gate must begin on the ordinary automatic path; the second chart is forced
   // to Canvas2D by the separate runtime-test consumer.
   backend: runtime_test === "backendParity" ? "auto" : requested_backend === "canvas2d" ? "canvas2d" : "auto",
 };
+// Real demos intentionally change exactly one engine-owned startup option: hide both grid families.
+// Their canonical style/color stay untouched (the engine default is dashed + visible).
+if (parity_fixture === null) {
+  chart_options.grid = {
+    vertLines: { visible: false },
+    horzLines: { visible: false },
+  };
+}
+// A query/theme used by a deterministic fixture is an explicit request, not normal demo startup.
+if (theme_param === "light" || theme_param === "dark" || runtime_test !== null) {
+  chart_options.theme = requested_theme;
+}
 if (requested_left_scale) {
   chart_options.leftPriceScale = { visible: true };
   chart_options.rightPriceScale = { visible: false };
@@ -605,17 +603,10 @@ if (last_bar !== undefined) {
   market_price.textContent = last_bar.close.toFixed(2);
   market_price.dataset.direction = last_bar.close >= last_bar.open ? "up" : "down";
 }
-// Seed the series title on a clean demo load so the title chip renders immediately (the
-// engine default "" suppresses it). Fixture/purity runs (?feature/?runtimeTest/params) keep
-// the empty title so their pixel baselines stay untouched.
-const pristine_demo = query.toString() === "";
 const main = chart.add_series("candlestick", {
-  // Keep the shared demo fixture deterministic. The toolbar enables the live countdown
-  // explicitly; leaving its one-second timer active by default makes unrelated pixel-parity
-  // checks depend on how quickly their two captures run.
-  countdown_visible: false,
   ...(requested_left_scale ? { priceScaleId: "left" } : {}),
   ...(parity_fixture !== null ? {
+    countdown_visible: false,
     up_color: "#089981",
     down_color: "#f7525f",
     wick_up_color: "#089981",
@@ -623,7 +614,6 @@ const main = chart.add_series("candlestick", {
     border_up_color: "#089981",
     border_down_color: "#f7525f",
   } : {}),
-  ...(pristine_demo ? { title: document.getElementById("series_title").value } : {}),
 });
 main.set_data(data);
 if (grid !== null) {
@@ -631,7 +621,7 @@ if (grid !== null) {
   // series controls (type + style) resolve the ACTIVE cell's series uniformly.
   chart.__seed_series = main;
 }
-chart.time_scale().fit_content();
+if (parity_fixture !== null) chart.time_scale().fit_content();
 if (Number.isFinite(requested_spacing)) {
   chart.time_scale().apply_options({ bar_spacing: requested_spacing, right_offset: 0 });
 }
@@ -1251,6 +1241,9 @@ function sync_active_toolbar() {
   document.getElementById("price_line_extent").value = options.price_line_extent ?? "partial";
   document.getElementById("price_line_style").value = String(options.price_line_style ?? 1);
   document.getElementById("last_value_toggle").checked = options.last_value_visible ?? true;
+  document.getElementById("title_chip_toggle").checked = options.title_visible ?? true;
+  document.getElementById("series_title").value = options.title ?? "";
+  document.getElementById("countdown_toggle").checked = options.countdown_visible ?? true;
   sync_style_visibility(kind);
   sync_comparison_controls();
 }
@@ -1259,15 +1252,6 @@ function sync_active_toolbar() {
 // so a package consumer can style each family independently. Style set: 0 solid, 1 dotted
 // (renders sparse), 2 dashed (renders large) — the reference's normal dot/dash patterns are
 // intentionally absent.
-// Follow-or-pin: until the user pins a custom color, grid/axis colors track the theme tokens.
-const theme_color_touched = {
-  grid: false,
-  axis_border: false,
-  axis_text: false,
-  separator: false,
-  crosshair_line: false,
-  crosshair_label: false,
-};
 function apply_grid_style() {
   const color = document.getElementById("grid_color").value;
   const style = Number(document.getElementById("grid_style").value);
@@ -1275,7 +1259,7 @@ function apply_grid_style() {
   chart.apply_options({ grid: { vertLines: { color, style, visible }, horzLines: { color, style, visible } } });
 }
 document.getElementById("grid_toggle").addEventListener("change", apply_grid_style);
-document.getElementById("grid_color").addEventListener("input", () => { theme_color_touched.grid = true; apply_grid_style(); });
+document.getElementById("grid_color").addEventListener("input", apply_grid_style);
 document.getElementById("grid_style").addEventListener("change", apply_grid_style);
 
 // Built-in last-price line + last-value label toggles (active cell's series).
@@ -1466,10 +1450,10 @@ function seed_split_cell(cell) {
     wick_span: 0.9,
     end_time: data_end_time(),
   });
-  const series = cell.chart.add_series("candlestick", { title: `ASSET ${split_asset_seq}` });
+  const series = cell.chart.add_series("candlestick");
   series.set_data(data);
-  cell.chart.apply_options(theme_options(document.getElementById("theme_select").value));
-  cell.chart.time_scale().fit_content();
+  const selected_theme = document.getElementById("theme_select").value;
+  if (selected_theme !== default_theme_name) cell.chart.apply_options(theme_options(selected_theme));
   cell.chart.__seed_series = series; // debug/test handle
 }
 function data_end_time() {
@@ -1529,7 +1513,6 @@ function apply_crosshair_style() {
   });
 }
 document.getElementById("cross_color").addEventListener("input", () => {
-  theme_color_touched.crosshair_line = true;
   apply_crosshair_style();
 });
 document.getElementById("cross_width").addEventListener("input", (e) => {
@@ -1538,7 +1521,6 @@ document.getElementById("cross_width").addEventListener("input", (e) => {
 });
 document.getElementById("cross_style").addEventListener("change", apply_crosshair_style);
 document.getElementById("cross_label_bg").addEventListener("input", () => {
-  theme_color_touched.crosshair_label = true;
   apply_crosshair_style();
 });
 document.getElementById("cross_label_visible").addEventListener("change", apply_crosshair_style);
@@ -1556,8 +1538,7 @@ document.getElementById("font_family").addEventListener("change", apply_font);
 document.getElementById("font_size").addEventListener("input", apply_font);
 
 document.getElementById("pane_separator_color").addEventListener("input", (e) => {
-  // Pin an explicit divider color; until touched, the engine follows the axis border color.
-  theme_color_touched.separator = true;
+  separator_color_pinned = true;
   chart.apply_options({ layout: { panes: { separatorColor: e.target.value } } });
 });
 
@@ -1574,10 +1555,9 @@ function apply_axis_border() {
   // The split dividers follow the axis border token — re-resolve on an explicit border change.
   if (grid !== null) grid.set_divider_color(null);
 }
-document.getElementById("axis_border_color").addEventListener("input", () => { theme_color_touched.axis_border = true; apply_axis_border(); });
+document.getElementById("axis_border_color").addEventListener("input", apply_axis_border);
 document.getElementById("axis_border_visible").addEventListener("change", apply_axis_border);
 document.getElementById("axis_text_color").addEventListener("input", (e) => {
-  theme_color_touched.axis_text = true;
   chart.apply_options({ layout: { textColor: e.target.value } });
 });
 
@@ -1611,7 +1591,6 @@ function apply_interaction() {
 }
 document.getElementById("axis_scale_toggle").addEventListener("change", apply_interaction);
 document.getElementById("kinetic_toggle").addEventListener("change", apply_interaction);
-apply_interaction();
 
 // Theme presets come from the package's style settings file (theme.ts); applying one maps its
 // tokens onto the chart options live (background + axis borders + axis text), then the pickers
@@ -1621,50 +1600,45 @@ function sync_page_theme(theme) {
   document.documentElement.classList.toggle("dark", theme === "dark");
   document.getElementById("theme_select").value = theme;
 }
+let separator_color_pinned = false;
 document.getElementById("theme_select").addEventListener("change", (e) => {
-  const palette = theme_palette(e.target.value);
-  // theme_options now includes the grid lines (grid follows the border token per theme).
+  // Theme changes are explicit user actions. Apply only the theme itself; do not re-apply whatever
+  // values happen to be sitting in demo controls on top of it.
   chart.apply_options(theme_options(e.target.value));
-  // Every split cell follows the theme too; the split dividers re-resolve the border token.
   if (grid !== null) {
     for (const cell of grid.cells()) cell.chart.apply_options(theme_options(e.target.value));
     grid.set_divider_color(null);
   }
-  // Follow-or-pin: untouched pickers adopt the new theme tokens; pinned colors are re-applied
-  // after the theme patch so a user's explicit choice always wins.
-  if (!theme_color_touched.axis_border) document.getElementById("axis_border_color").value = palette.border;
-  apply_axis_border();
-  if (!theme_color_touched.separator) document.getElementById("pane_separator_color").value = palette.border;
-  else chart.apply_options({ layout: { panes: { separatorColor: document.getElementById("pane_separator_color").value } } });
-  if (!theme_color_touched.axis_text) document.getElementById("axis_text_color").value = palette.foreground;
-  chart.apply_options({ layout: { textColor: palette.foreground, mutedTextColor: palette.muted_foreground } });
-  // Drawing label color follows the theme unless the user has a selection that already pinned one.
-  if (active_chart().selected_drawing() === null) {
-    document.getElementById("drawing_text_color").value = css_to_hex(palette.foreground) || palette.foreground;
+  if (separator_color_pinned) {
+    chart.apply_options({ layout: { panes: { separatorColor: document.getElementById("pane_separator_color").value } } });
   }
-  if (!theme_color_touched.grid) document.getElementById("grid_color").value = palette.border;
-  apply_grid_style();
-  if (!theme_color_touched.crosshair_line) document.getElementById("cross_color").value = palette.crosshair_line;
-  if (!theme_color_touched.crosshair_label) document.getElementById("cross_label_bg").value = palette.crosshair_label;
-  apply_crosshair_style();
   sync_page_theme(e.target.value);
-  persist_demo_theme(e.target.value);
+  sync_chart_controls_from_engine();
 });
-// The chart was created with `requested_theme`; mirror that palette into the demo controls.
-// Parity fixtures pin their own controls and rendering state.
-if (parity_fixture === null) {
-  const palette = theme_palette(requested_theme);
-  document.getElementById("axis_border_color").value = palette.border;
-  apply_axis_border();
-  document.getElementById("pane_separator_color").value = palette.border;
-  document.getElementById("axis_text_color").value = palette.foreground;
-  document.getElementById("drawing_text_color").value = css_to_hex(palette.foreground) || palette.foreground;
-  document.getElementById("grid_color").value = palette.border;
-  apply_grid_style();
-  document.getElementById("cross_color").value = palette.crosshair_line;
-  document.getElementById("cross_label_bg").value = palette.crosshair_label;
-  apply_crosshair_style();
+function sync_chart_controls_from_engine() {
+  const options = chart.options();
+  const hex = (value, fallback) => css_to_hex(value) || fallback;
+  document.getElementById("axis_border_color").value = hex(options.rightPriceScale.borderColor, "#262626");
+  document.getElementById("axis_border_visible").checked = options.rightPriceScale.borderVisible !== false;
+  document.getElementById("axis_text_color").value = hex(options.layout.textColor, "#f0f0f0");
+  document.getElementById("pane_separator_color").value = hex(options.layout.panes.separatorColor, "#262626");
+  document.getElementById("grid_toggle").checked = options.grid.vertLines.visible === true && options.grid.horzLines.visible === true;
+  document.getElementById("grid_color").value = hex(options.grid.vertLines.color, "#262626");
+  document.getElementById("grid_style").value = String(options.grid.vertLines.style);
+  document.getElementById("cross_mode").value = String(options.crosshair.mode);
+  document.getElementById("cross_color").value = hex(options.crosshair.vertLine.color, "#262626");
+  document.getElementById("cross_width").value = String(options.crosshair.vertLine.width);
+  document.getElementById("cross_width_val").textContent = String(options.crosshair.vertLine.width);
+  document.getElementById("cross_style").value = String(options.crosshair.vertLine.style);
+  document.getElementById("cross_label_bg").value = hex(options.crosshair.vertLine.labelBackgroundColor, "#262626");
+  document.getElementById("cross_label_visible").checked = options.crosshair.vertLine.labelVisible !== false;
+  document.getElementById("font_family").value = options.layout.fontFamily;
+  document.getElementById("font_size").value = String(options.layout.fontSize);
+  document.getElementById("font_size_val").textContent = String(options.layout.fontSize);
+  document.getElementById("drawing_text_color").value = hex(options.layout.textColor, "#f0f0f0");
 }
+// Startup is read-only from here: reflect the engine into the controls without re-applying it.
+if (parity_fixture === null) sync_chart_controls_from_engine();
 sync_style_visibility("candlestick");
 
 // crosshair-move subscription → OHLC legend (the public event API); a hovered primitive

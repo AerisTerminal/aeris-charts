@@ -652,7 +652,7 @@ export type deep_partial<T> = { [K in keyof T]?: deep_partial<T[K]> };
 export interface grid_line_options {
   color: string;
   style: number;
-  /** Show the grid lines (Nucleus default `false` — charts ship grid-free). */
+  /** Show the grid lines (Nucleus default `true`; the canonical default style is dashed). */
   visible: boolean;
 }
 

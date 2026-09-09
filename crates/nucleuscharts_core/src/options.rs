@@ -231,9 +231,10 @@ impl Default for GridLineOptions {
     fn default() -> Self {
         Self {
             color: grid_color(),
-            style: line_style::SOLID,
-            // Deliberate divergence from the reference (visible): Nucleus charts ship grid-free.
-            visible: false,
+            // Nucleus's canonical chart starts with a visible dashed grid. Hosts that want a
+            // cleaner presentation can hide it without replacing the engine's style/color state.
+            style: line_style::DASHED,
+            visible: true,
         }
     }
 }
@@ -488,7 +489,7 @@ impl Default for ChartOptionsStore {
 }
 
 impl ChartOptionsStore {
-    /// Start from the reference-matching defaults.
+    /// Start from the canonical Nucleus engine defaults.
     pub fn new() -> Self {
         let typed = ChartOptions::default();
         Self {
@@ -551,7 +552,9 @@ mod tests {
         assert_eq!(o.layout.muted_text_color, DEFAULT_MUTED_FOREGROUND_CSS);
         assert_eq!(o.layout.font_size, 12.0);
         assert_eq!(o.grid.vert_lines.color, DEFAULT_BORDER_CSS);
-        assert_eq!(o.grid.horz_lines.style, line_style::SOLID);
+        assert_eq!(o.grid.horz_lines.style, line_style::DASHED);
+        assert!(o.grid.vert_lines.visible);
+        assert!(o.grid.horz_lines.visible);
         assert_eq!(o.crosshair.mode, crosshair_mode::NORMAL);
         assert!(!o.crosshair.do_not_snap_to_hidden_series_indices);
         assert_eq!(o.crosshair.vert_line.style, line_style::DASHED);
@@ -663,8 +666,8 @@ mod tests {
         // the targeted leaf changed...
         assert_eq!(o.grid.vert_lines.color, "#000000");
         // ...siblings within the same object survived...
-        assert_eq!(o.grid.vert_lines.style, line_style::SOLID);
-        assert!(!o.grid.vert_lines.visible);
+        assert_eq!(o.grid.vert_lines.style, line_style::DASHED);
+        assert!(o.grid.vert_lines.visible);
         // ...and the neighbouring family is untouched.
         assert_eq!(o.grid.horz_lines.color, DEFAULT_BORDER_CSS);
     }

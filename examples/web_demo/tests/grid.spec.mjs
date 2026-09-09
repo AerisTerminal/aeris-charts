@@ -383,20 +383,19 @@ test("the toolbar's series type and style act on the ACTIVE cell, not always the
   expect(await color_of(1)).not.toBe("#ff00ff");
 });
 
-test("demo theme persists across reloads while runtime fixtures stay deterministic", async ({ page }) => {
+test("demo reload returns to the engine default theme while runtime fixtures stay deterministic", async ({ page }) => {
   await page.goto("/");
   await wait_grid(page);
   await page.selectOption("#theme_select", "light");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  expect(await page.evaluate(() => localStorage.getItem("nucleuscharts.demo.theme"))).toBe("light");
 
   await page.reload();
   await wait_grid(page);
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  await expect(page.locator("#theme_select")).toHaveValue("light");
-  expect(await page.evaluate(() => window.__chart.options().layout.background.color)).toBe("#ffffff");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(page.locator("#theme_select")).toHaveValue("dark");
+  expect(await page.evaluate(() => window.__chart.options().layout.background.color)).toBe("#141414");
 
-  await page.selectOption("#theme_select", "dark");
+  await page.selectOption("#theme_select", "light");
   await page.reload();
   await wait_grid(page);
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");

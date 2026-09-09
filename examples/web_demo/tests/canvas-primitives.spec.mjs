@@ -201,6 +201,10 @@ test("canvas primitive repaints after auto-resize and chart.resize", async ({ pa
   // ---- autoSize path (no runtimeTest → the demo enables autoSize) ----
   await page.goto("/?backend=canvas2d");
   await wait_for_chart(page);
+  // This geometry fixture needs the source range in view. The interactive demo deliberately no
+  // longer auto-fits at startup, so the test requests that viewport explicitly.
+  await page.evaluate(() => window.__chart.time_scale().fit_content());
+  await settle_frames(page);
   await set_vert_line(page, true);
 
   const painted_alpha = () => page.evaluate(() => {

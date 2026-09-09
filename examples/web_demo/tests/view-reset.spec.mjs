@@ -60,17 +60,22 @@ test("native partial price line is default and shares full-line style and width 
   await wait_for_chart(page);
   // Give the partial line a visible right-side runway and pin a unique color so series pixels can
   // never be mistaken for it. Hide the last-value chip so only the line contributes magenta.
-  const probe = await page.evaluate(() => {
+  await page.evaluate(() => {
+    window.__chart.time_scale().fit_content();
     window.__chart.time_scale().apply_options({ bar_spacing: 20, right_offset: 5 });
     window.__main.apply_options({
       price_line_color: "#ff00ff",
       price_line_width: 3,
       last_value_visible: false,
     });
+  });
+  await wait_for_chart(page);
+  const probe = await page.evaluate(() => {
     const last = window.__data[window.__data.length - 1];
     return {
       y: window.__main.price_to_coordinate(last.close),
       x: window.__chart.time_scale().time_to_coordinate(last.time),
+      pane_right: window.__chart.wasm.pane_left() + window.__chart.wasm.time_scale_width(),
       extent: window.__main.options().price_line_extent,
       width: window.__main.options().price_line_width,
     };
@@ -85,7 +90,11 @@ test("native partial price line is default and shares full-line style and width 
   const solid_png = await capture(page);
   const scale = solid_png.width / css_w;
   const row = best_line_row(solid_png, Math.round(probe.y * scale), is_line);
-  const solid = price_line_runs(solid_png, row, is_line);
+  const pane_right = Math.round(probe.pane_right * scale);
+  const pane_runs = (png, y) => price_line_runs(png, y, is_line)
+    .filter((run) => run.s < pane_right)
+    .map((run) => ({ s: run.s, e: Math.min(run.e, pane_right - 1) }));
+  const solid = pane_runs(solid_png, row);
   expect(solid.length, "solid partial style: one continuous run").toBe(1);
   expect(Math.abs(solid[0].s - Math.round(probe.x * scale)), "partial line starts at tracked bar").toBeLessThanOrEqual(3);
   expect(solid[0].e - solid[0].s, "partial line reaches toward the price axis").toBeGreaterThan(80);
@@ -93,13 +102,13 @@ test("native partial price line is default and shares full-line style and width 
   await page.selectOption("#price_line_style", "1"); // dotted
   await wait_for_chart(page);
   const dotted_png = await capture(page);
-  const dotted = price_line_runs(dotted_png, best_line_row(dotted_png, row, is_line), is_line);
+  const dotted = pane_runs(dotted_png, best_line_row(dotted_png, row, is_line));
   expect(dotted.length, "dotted style: repeated short runs").toBeGreaterThan(6);
 
   await page.selectOption("#price_line_style", "2"); // dashed
   await wait_for_chart(page);
   const dashed_png = await capture(page);
-  const dashed = price_line_runs(dashed_png, best_line_row(dashed_png, row, is_line), is_line);
+  const dashed = pane_runs(dashed_png, best_line_row(dashed_png, row, is_line));
   expect(dashed.length, "dashed style: multiple long runs").toBeGreaterThan(3);
   expect(dashed.length).toBeLessThan(dotted.length);
 
@@ -107,7 +116,7 @@ test("native partial price line is default and shares full-line style and width 
   await page.selectOption("#price_line_extent", "full");
   await wait_for_chart(page);
   const full_png = await capture(page);
-  const full = price_line_runs(full_png, best_line_row(full_png, row, is_line), is_line);
+  const full = pane_runs(full_png, best_line_row(full_png, row, is_line));
   expect(full.length).toBe(1);
   expect(full[0].s, "full extent remains explicitly available").toBeLessThanOrEqual(2);
 });

@@ -2527,24 +2527,8 @@ fn grid_line_style_and_color_flow_from_options() {
     chart.time_scale.set_width(760.0);
     chart.fit_content();
 
-    // Default: grid hidden (Nucleus ships grid-free); no grid lines in the under-paint bucket.
+    // Canonical default: both grid families are visible and dashed.
     use nucleuscharts_render::draw_list::Prim;
-    let mut frame = ChartFrame::default();
-    chart.build_frame_into(&mut frame);
-    let grid_lines: Vec<_> = frame.panes[0]
-        .under
-        .iter()
-        .filter(|p| matches!(p, Prim::VLine { .. } | Prim::HLine { .. }))
-        .collect();
-    assert!(grid_lines.is_empty());
-
-    // Turning the grid on yields solid lines in both families.
-    chart
-        .options
-        .apply_str(
-            r##"{"grid": { "vertLines": { "visible": true }, "horzLines": { "visible": true } }}"##,
-        )
-        .unwrap();
     let mut frame = ChartFrame::default();
     chart.build_frame_into(&mut frame);
     let grid_lines: Vec<_> = frame.panes[0]
@@ -2556,21 +2540,38 @@ fn grid_line_style_and_color_flow_from_options() {
     assert!(grid_lines.iter().all(|p| matches!(
         p,
         Prim::VLine {
-            style: LineStyle::Solid,
+            style: LineStyle::Dashed,
             ..
         } | Prim::HLine {
-            style: LineStyle::Solid,
+            style: LineStyle::Dashed,
             ..
         }
     )));
 
-    // reference numeric styles (2 dashed, 3 large-dashed) + per-family colors reach the frame.
+    // A host can hide the grid without changing its canonical style/color state.
+    chart
+        .options
+        .apply_str(
+            r##"{"grid": { "vertLines": { "visible": false }, "horzLines": { "visible": false } }}"##,
+        )
+        .unwrap();
+    let mut frame = ChartFrame::default();
+    chart.build_frame_into(&mut frame);
+    let grid_lines: Vec<_> = frame.panes[0]
+        .under
+        .iter()
+        .filter(|p| matches!(p, Prim::VLine { .. } | Prim::HLine { .. }))
+        .collect();
+    assert!(grid_lines.is_empty());
+
+    // Explicit visibility, numeric styles (2 dashed, 3 large-dashed), and per-family colors reach
+    // the frame without any renderer-specific policy.
     chart
         .options
         .apply_str(
             r##"{"grid": {
-                "vertLines": { "style": 2, "color": "#112233" },
-                "horzLines": { "style": 3, "color": "#445566" }
+                "vertLines": { "visible": true, "style": 2, "color": "#112233" },
+                "horzLines": { "visible": true, "style": 3, "color": "#445566" }
             }}"##,
         )
         .unwrap();

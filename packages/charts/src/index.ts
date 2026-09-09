@@ -125,14 +125,17 @@ export async function create_chart(
   );
   // Default style settings first (theme.ts), explicit options second — the engine deep-merges
   // successive patches, so caller options always win over the theme palette. `theme`,
-  // `handle_scroll`, `handle_scale`, `kinetic_scroll`, `tracking_mode`, and
-  // `layout.panes.enableResize` are package-level keys and are not forwarded to the engine's
-  // options store (gestures live entirely in TS).
+  // `handle_scroll`, `handle_scale`, `kinetic_scroll`, `tracking_mode`, backend selection/test
+  // flags, and `layout.panes.enableResize` are package-level keys and are not forwarded to the
+  // engine's options store (gestures/backend ownership live entirely in TS/WASM host code).
   const { theme, handle_scroll, handle_scale, kinetic_scroll, wheel_behavior, tracking_mode, localization, accessibility, ...rest } =
     (options ?? {}) as deep_partial<chart_options> & {
       tracking_mode?: tracking_mode_options;
     };
   let engine_options: Record<string, unknown> = rest;
+  delete engine_options.backend;
+  delete engine_options.__simulate_webgpu_adapter_failure;
+  delete engine_options.__force_webgpu_fallback_adapter;
   let panes_resize: boolean | undefined;
   const panes = (rest.layout as { panes?: { enableResize?: boolean } } | undefined)?.panes;
   if (panes?.enableResize !== undefined) {

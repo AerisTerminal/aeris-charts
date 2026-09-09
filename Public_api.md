@@ -107,6 +107,10 @@ The declaration manifest at `packages/charts/api/public-api-v1.json` records eve
 declaration file. CI runs `npm run check:api`; after deliberate review, update it with
 `npm run update:api`.
 
+Grid lines are engine-owned and default to visible dashed lines. Demo hosts may hide grid
+visibility without replacing the canonical grid style/color; that presentation choice is not a
+library default.
+
 The built-in series live-price line is engine-owned. `price_line_extent` defaults to `"partial"`
 (tracked bar/value to the pane's right edge); `"full"` preserves the conventional pane-wide line.
 Both extents use the same `price_line_source`, color, width, and line-style options, including solid,

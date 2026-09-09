@@ -425,6 +425,7 @@ struct Probe {
     dirty: bool,
     plan_dirty: bool,
     fitted: bool,
+    fit_on_first_frame: bool,
     /// Newest brush pointer sample since the last painted frame. Wayland delivers per-HID-report
     /// motion (~1000 Hz, often one axis per event); capturing every sample records that
     /// axis-alternating staircase as stroke knots. Browsers coalesce pointer events to display
@@ -512,6 +513,7 @@ impl Probe {
             dirty: true,
             plan_dirty: true,
             fitted: false,
+            fit_on_first_frame: true,
             pending_brush_point: None,
             viewport_offset: (0.0, 0.0),
             gesture_config: GestureConfig::default(),
@@ -551,8 +553,18 @@ impl Probe {
 
     fn new_interactive(bars: usize) -> Self {
         let mut probe = Self::new(bars, None);
+        // The interactive demo is a view of canonical engine defaults, not a second style owner.
+        // Reset the deterministic finite-probe theme and change only the one intentional demo
+        // presentation choice: hide both grid families while preserving their native dashed style.
+        probe.engine.options = Default::default();
+        probe
+            .engine
+            .options
+            .apply_str(r#"{"grid":{"vertLines":{"visible":false},"horzLines":{"visible":false}}}"#)
+            .expect("interactive demo grid visibility patch is valid");
         probe.engine.series[0].price_lines.clear();
         probe.engine.clear_drawings();
+        probe.fit_on_first_frame = false;
         probe.replace_source_bars(interactive_root_bars(bars));
         probe
     }
@@ -1096,13 +1108,17 @@ impl Probe {
             |text, bold| countdown_measure(text, bold),
         );
         if !self.fitted {
-            self.engine.fit_content();
+            if self.fit_on_first_frame {
+                self.engine.fit_content();
+            }
             self.fitted = true;
-            self.engine.recompute_layout_with_measure(
-                true,
-                |text, bold| measure(text, bold),
-                |text, bold| countdown_measure(text, bold),
-            );
+            if self.fit_on_first_frame {
+                self.engine.recompute_layout_with_measure(
+                    true,
+                    |text, bold| measure(text, bold),
+                    |text, bold| countdown_measure(text, bold),
+                );
+            }
         }
         let max_label_width = (self.engine.axis_font_size() + 4.0) * 5.0 / 8.0
             * f64::from(self.engine.tick_mark_max_character_length.max(1));
@@ -2425,8 +2441,6 @@ impl InteractiveDemo {
     fn new(bars: usize, cx: &mut Context<Self>) -> Self {
         let chart = cx.new(|cx| {
             let mut probe = Probe::new_interactive(bars);
-            probe.engine.series[0].title = "NUCLEUS".into();
-            probe.engine.series[0].countdown_visible = false;
             probe.focus_handle = Some(cx.focus_handle());
             probe
         });
@@ -2436,7 +2450,7 @@ impl InteractiveDemo {
             cells: vec![DemoCell { id: 1, chart }],
             active: 1,
             maximized: None,
-            theme: DemoTheme::Light,
+            theme: DemoTheme::Dark,
             max_index: 0,
             max_charts: None,
             split_asset_seq: 0,
@@ -2511,14 +2525,10 @@ impl InteractiveDemo {
                 self.maximized = None;
                 self.split_asset_seq += 1;
                 let split_bars = split_asset_bars(self.split_asset_seq, end_time);
-                let theme = self.theme;
                 let sequence = self.split_asset_seq;
                 let chart = cx.new(|cx| {
                     let mut probe = Probe::new_interactive(300);
                     probe.replace_source_bars(split_bars);
-                    apply_package_theme(&mut probe.engine, theme);
-                    probe.engine.series[0].title = format!("ASSET {sequence}");
-                    probe.engine.series[0].countdown_visible = false;
                     probe.focus_handle = Some(cx.focus_handle());
                     probe
                 });
@@ -4095,6 +4105,22 @@ mod tests {
         assert_theme(&probe.engine, DemoTheme::Light);
         probe.apply_theme(DemoTheme::Dark);
         assert_theme(&probe.engine, DemoTheme::Dark);
+    }
+
+    #[test]
+    fn interactive_demo_uses_engine_defaults_except_hidden_grid() {
+        let probe = Probe::new_interactive(32);
+        let mut expected = nucleuscharts_core::options::ChartOptions::default();
+        expected.grid.vert_lines.visible = false;
+        expected.grid.horz_lines.visible = false;
+        assert_eq!(probe.engine.options.get(), &expected);
+
+        let series = &probe.engine.series[0];
+        assert!(series.title.is_empty());
+        assert!(series.title_visible);
+        assert!(series.countdown_visible);
+        assert!(series.price_line_visible);
+        assert_eq!(series.price_line_extent, PriceLineExtent::Partial);
     }
 
     #[test]

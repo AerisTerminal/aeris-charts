@@ -34,6 +34,10 @@ async function chart_box(page) {
 test("interaction models run engine-side with reference behavior", async ({ page }) => {
   await page.goto("/");
   await wait_grid(page);
+  // Keep this gesture fixture on its historical fitted viewport without making fit-content a demo
+  // startup policy. The production demo now leaves the engine's native time-scale state untouched.
+  await page.evaluate(() => window.__chart.time_scale().fit_content());
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const box = await chart_box(page);
   const s0 = await state(page);
   const pane_left = await page.evaluate(() => window.__chart.wasm.pane_left());
