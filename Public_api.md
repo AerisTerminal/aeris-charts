@@ -55,6 +55,7 @@ const volume = chart.add_series("histogram", { visible: false });
 volume.set_data(volumeBars); // { time, value }, actual volume in the host's chosen units
 const profile = chart.add_volume_profile(candles, volume, {
   rows: 48, value_area_percent: 70, width_percent: 25,
+  up_color: "rgba(8,153,129,0.45)", down_color: "rgba(247,82,95,0.45)",
 });
 const distribution = profile.snapshot(); // rows, total_volume, bar_count, poc, value-area bounds
 profile.apply_options({ show_poc: true, show_value_area: true });
@@ -64,12 +65,15 @@ profile.apply_options({ show_poc: true, show_value_area: true });
 The price source must initially be a candlestick/bar series and volume a scalar series from the
 same chart. Volume is matched by exact timestamp; missing, whitespace, nonfinite, zero and negative
 volume contribute nothing. Each valid bar's volume is distributed uniformly over its high/low
-interval. Flat bars contribute to one bin. This OHLCV estimate is not exact traded volume at each
-price, buy/sell volume, or order flow. Demo volume is synthetic.
+interval and classified as bullish when close is at or above open, otherwise bearish. Each row
+stacks the green bullish and red bearish shares and ends flush at the pane's right edge. Flat bars
+contribute to one bin. This OHLCV estimate is not exact traded volume at each price, buy/sell volume,
+profit/loss, or order flow. Demo volume is synthetic.
 
-POC is the center of the largest-volume bin (lowest price wins ties). The contiguous value area
-expands from POC toward the larger adjacent bin, choosing the lower bin on ties, until it reaches
-the requested fraction. Rows are limited to 1–512, area to >0–100%, width to >0–50% of the pane, and
+POC is the center of the largest-volume bin (lowest price wins ties) and uses one solid marker. The
+contiguous value area expands from POC toward the larger adjacent bin, choosing the lower bin on ties,
+until it reaches the requested fraction; stronger row colors show membership without boundary lines.
+Rows are limited to 1–512, area to >0–100%, width to >0–50% of the pane, and
 live profiles to 16 per chart. `snapshot().error` reports unrepresentable arithmetic; empty/missing
 volume produces empty rows and null levels. Invalid option updates leave the prior options intact.
 

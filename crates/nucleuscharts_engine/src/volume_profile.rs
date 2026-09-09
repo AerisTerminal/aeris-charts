@@ -17,8 +17,10 @@ pub struct VolumeProfileIndicatorOptions {
     pub visible: bool,
     pub show_poc: bool,
     pub show_value_area: bool,
-    pub color: String,
-    pub value_area_color: String,
+    pub up_color: String,
+    pub down_color: String,
+    pub value_area_up_color: String,
+    pub value_area_down_color: String,
     pub poc_color: String,
 }
 impl Default for VolumeProfileIndicatorOptions {
@@ -30,9 +32,11 @@ impl Default for VolumeProfileIndicatorOptions {
             visible: true,
             show_poc: true,
             show_value_area: true,
-            color: "rgba(51,92,255,0.25)".into(),
-            value_area_color: "rgba(51,92,255,0.5)".into(),
-            poc_color: "#ff9800".into(),
+            up_color: "rgba(8,153,129,0.45)".into(),
+            down_color: "rgba(247,82,95,0.45)".into(),
+            value_area_up_color: "rgba(8,153,129,0.78)".into(),
+            value_area_down_color: "rgba(247,82,95,0.78)".into(),
+            poc_color: "#f5a623".into(),
         }
     }
 }
@@ -45,9 +49,15 @@ impl VolumeProfileIndicatorOptions {
             && self.width_percent.is_finite()
             && self.width_percent > 0.0
             && self.width_percent <= 50.0
-            && [&self.color, &self.value_area_color, &self.poc_color]
-                .iter()
-                .all(|color| color.len() <= 128 && Color::parse_css(color).is_some())
+            && [
+                &self.up_color,
+                &self.down_color,
+                &self.value_area_up_color,
+                &self.value_area_down_color,
+                &self.poc_color,
+            ]
+            .iter()
+            .all(|color| color.len() <= 128 && Color::parse_css(color).is_some())
     }
 }
 
@@ -68,8 +78,10 @@ impl VolumeProfileIndicatorState {
     pub(crate) fn capacity_bytes(&self) -> usize {
         self.snapshot.profile.rows.capacity()
             * core::mem::size_of::<nucleuscharts_indicators::volume_profile::ProfileRow>()
-            + self.options.color.capacity()
-            + self.options.value_area_color.capacity()
+            + self.options.up_color.capacity()
+            + self.options.down_color.capacity()
+            + self.options.value_area_up_color.capacity()
+            + self.options.value_area_down_color.capacity()
             + self.options.poc_color.capacity()
     }
 }
@@ -116,12 +128,14 @@ impl ChartEngine {
         }
         self.insert_native_primitive(
             source,
-            NativeSeriesPrimitiveKind::VolumeProfileIndicator(VolumeProfileIndicatorState {
-                volume_source,
-                options,
-                snapshot: VolumeProfileIndicatorSnapshot::default(),
-                key: None,
-            }),
+            NativeSeriesPrimitiveKind::VolumeProfileIndicator(Box::new(
+                VolumeProfileIndicatorState {
+                    volume_source,
+                    options,
+                    snapshot: VolumeProfileIndicatorSnapshot::default(),
+                    key: None,
+                },
+            )),
         )
     }
 
@@ -285,8 +299,10 @@ impl ChartEngine {
                             f64::NAN
                         };
                         ProfileBar {
+                            open: values[0][row],
                             low: values[2][row],
                             high: values[1][row],
+                            close: values[3][row],
                             volume: if values[3][row].is_finite() {
                                 volume
                             } else {
@@ -382,11 +398,23 @@ mod tests {
         assert_eq!(profile.profile.total_volume, 120.0);
         assert_eq!(profile.profile.bar_count, 2);
         let revision = profile.calculation_revision;
-        let profile_color =
-            Color::parse_css(&VolumeProfileIndicatorOptions::default().value_area_color).unwrap();
-        assert!(frame.panes[0].main.iter().any(
-            |primitive| matches!(primitive, Prim::Rect { color, .. } if *color == profile_color)
-        ));
+        let options = VolumeProfileIndicatorOptions::default();
+        let up_color = Color::parse_css(&options.value_area_up_color).unwrap();
+        let base_up_color = Color::parse_css(&options.up_color).unwrap();
+        let pane_right = frame.panes[0].scissor[2] as i32;
+        assert!(frame.panes[0].main.iter().any(|primitive| matches!(
+            primitive,
+            Prim::Rect { rect, color }
+                if (*color == up_color || *color == base_up_color)
+                    && rect.x + rect.w == pane_right
+        )));
+        assert!(!frame.panes[0].main.iter().any(|primitive| matches!(
+            primitive,
+            Prim::HLine {
+                style: crate::LineStyle::Dashed,
+                ..
+            }
+        )));
         chart.build_frame();
         assert_eq!(
             chart

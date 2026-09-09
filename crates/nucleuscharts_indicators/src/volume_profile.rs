@@ -5,15 +5,19 @@ pub const MAX_VOLUME_PROFILE_ROWS: usize = 512;
 
 #[derive(Clone, Copy, Debug)]
 pub struct ProfileBar {
+    pub open: f64,
     pub low: f64,
     pub high: f64,
+    pub close: f64,
     pub volume: f64,
 }
 
 impl ProfileBar {
     fn valid(self) -> bool {
-        self.low.is_finite()
+        self.open.is_finite()
+            && self.low.is_finite()
             && self.high.is_finite()
+            && self.close.is_finite()
             && self.high >= self.low
             && self.volume.is_finite()
             && self.volume > 0.0
@@ -25,6 +29,8 @@ pub struct ProfileRow {
     pub low: f64,
     pub high: f64,
     pub volume: f64,
+    pub up_volume: f64,
+    pub down_volume: f64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -78,10 +84,17 @@ pub fn volume_profile(
     if !step.is_finite() || step <= 0.0 || low + step == low {
         return Err("volume-profile price range cannot be represented");
     }
-    let mut volumes = vec![0.0; row_count];
-    let mut differences = vec![0.0; row_count + 1];
+    let mut up_volumes = vec![0.0; row_count];
+    let mut down_volumes = vec![0.0; row_count];
+    let mut up_differences = vec![0.0; row_count + 1];
+    let mut down_differences = vec![0.0; row_count + 1];
     let bin = |price: f64| (((price - low) / step).floor() as usize).min(row_count - 1);
     for bar in bars.filter(|bar| bar.valid()) {
+        let (volumes, differences) = if bar.close >= bar.open {
+            (&mut up_volumes, &mut up_differences)
+        } else {
+            (&mut down_volumes, &mut down_differences)
+        };
         let first = bin(bar.low);
         let last = bin(bar.high);
         if first == last || bar.low == bar.high {
@@ -98,13 +111,19 @@ pub fn volume_profile(
             differences[last] -= full;
         }
     }
-    let mut running = 0.0;
-    for (index, volume) in volumes.iter_mut().enumerate() {
-        running += differences[index];
-        *volume = (*volume + running).max(0.0);
+    let mut up_running = 0.0;
+    let mut down_running = 0.0;
+    let mut volumes = Vec::with_capacity(row_count);
+    for index in 0..row_count {
+        up_running += up_differences[index];
+        down_running += down_differences[index];
+        up_volumes[index] = (up_volumes[index] + up_running).max(0.0);
+        down_volumes[index] = (down_volumes[index] + down_running).max(0.0);
+        let volume = up_volumes[index] + down_volumes[index];
         if !volume.is_finite() {
             return Err("volume-profile bin overflow");
         }
+        volumes.push(volume);
         result.rows.push(ProfileRow {
             low: low + index as f64 * step,
             high: if index + 1 == row_count {
@@ -112,7 +131,9 @@ pub fn volume_profile(
             } else {
                 low + (index + 1) as f64 * step
             },
-            volume: *volume,
+            volume,
+            up_volume: up_volumes[index],
+            down_volume: down_volumes[index],
         });
     }
     let mut poc = 0;
@@ -147,13 +168,17 @@ mod tests {
     fn uniform_overlap_conserves_volume_and_value_area_is_contiguous() {
         let bars = [
             ProfileBar {
+                open: 0.0,
                 low: 0.0,
                 high: 4.0,
+                close: 1.0,
                 volume: 40.0,
             },
             ProfileBar {
+                open: 2.0,
                 low: 1.0,
                 high: 2.0,
+                close: 1.0,
                 volume: 30.0,
             },
         ];
@@ -167,6 +192,8 @@ mod tests {
             [10.0, 40.0, 10.0, 10.0]
         );
         assert_eq!(profile.total_volume, 70.0);
+        assert_eq!(profile.rows[1].up_volume, 10.0);
+        assert_eq!(profile.rows[1].down_volume, 30.0);
         assert_eq!(profile.poc_index, Some(1));
         assert_eq!(
             (profile.value_area_low_index, profile.value_area_high_index),
@@ -178,18 +205,24 @@ mod tests {
     fn flat_missing_and_invalid_data_never_create_fictitious_volume() {
         let bars = [
             ProfileBar {
+                open: 2.0,
                 low: 2.0,
                 high: 2.0,
+                close: 2.0,
                 volume: 7.0,
             },
             ProfileBar {
+                open: 1.0,
                 low: 0.0,
                 high: 3.0,
+                close: 2.0,
                 volume: -1.0,
             },
             ProfileBar {
+                open: 1.0,
                 low: f64::NAN,
                 high: 4.0,
+                close: 2.0,
                 volume: 5.0,
             },
         ];
@@ -207,8 +240,10 @@ mod tests {
     #[test]
     fn overflow_is_reported_and_ties_are_deterministic() {
         let bars = [ProfileBar {
+            open: 0.0,
             low: 0.0,
             high: 4.0,
+            close: 1.0,
             volume: 40.0,
         }];
         assert_eq!(
@@ -218,8 +253,10 @@ mod tests {
             Some(0)
         );
         let huge = [ProfileBar {
+            open: 0.0,
             low: 0.0,
             high: 1.0,
+            close: 1.0,
             volume: f64::MAX,
         }; 2];
         assert!(volume_profile(huge.into_iter(), 4, 70.0, 0.01).is_err());

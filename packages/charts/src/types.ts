@@ -1954,12 +1954,14 @@ export interface volume_profile_indicator_options {
   visible: boolean;
   show_poc: boolean;
   show_value_area: boolean;
-  color: string;
-  value_area_color: string;
+  up_color: string;
+  down_color: string;
+  value_area_up_color: string;
+  value_area_down_color: string;
   poc_color: string;
 }
 export interface volume_profile_indicator_snapshot {
-  rows: readonly { low: number; high: number; volume: number }[];
+  rows: readonly { low: number; high: number; volume: number; up_volume: number; down_volume: number }[];
   total_volume: number;
   bar_count: number;
   poc: number | null;

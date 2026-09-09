@@ -10,12 +10,19 @@ for (const backend of ["canvas2d", "webgpu"]) {
       window.__main.apply_options({ visible: false });
       const prices = chart.add_series("candlestick");
       const times = window.__data.slice(-3).map((bar) => bar.time);
-      prices.set_data(times.map((time) => ({ time, open: 101, high: 104, low: 100, close: 102 })));
+      prices.set_data(times.map((time, index) => ({
+        time, open: index === 2 ? 103 : 101, high: 104, low: 100, close: 102,
+      })));
       const volume = chart.add_series("histogram", { visible: false });
       volume.set_data([{ time: times[0], value: 40 }, { time: times[2], value: 80 }]);
       chart.time_scale().set_visible_range({ from: times[0], to: times[2] });
       const profile = chart.add_volume_profile(prices, volume, {
-        rows: 4, color: "#8b17e8", value_area_color: "#8b17e8", poc_color: "#ff9800",
+        rows: 4,
+        up_color: "#089981",
+        down_color: "#f7525f",
+        value_area_up_color: "#089981",
+        value_area_down_color: "#f7525f",
+        poc_color: "#f5a623",
       });
       window.__profile_test = { chart, prices, volume, profile, times };
       return profile.snapshot();
@@ -23,16 +30,21 @@ for (const backend of ["canvas2d", "webgpu"]) {
     expect(initial.total_volume).toBe(120);
     expect(initial.bar_count).toBe(2);
     expect(initial.rows.map((row) => row.volume)).toEqual([30, 30, 30, 30]);
+    expect(initial.rows.map((row) => row.up_volume)).toEqual([10, 10, 10, 10]);
+    expect(initial.rows.map((row) => row.down_volume)).toEqual([20, 20, 20, 20]);
     expect(initial.poc).toBe(100.5);
     expect(initial.value_area_low).toBe(100);
     expect(initial.value_area_high).toBe(103);
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     const pixels = PNG.sync.read(await page.locator("#chart_wrap").screenshot());
-    let purple = 0;
+    let green = 0;
+    let red = 0;
     for (let offset = 0; offset < pixels.data.length; offset += 4) {
-      if (Math.abs(pixels.data[offset] - 139) <= 2 && Math.abs(pixels.data[offset + 1] - 23) <= 2 && Math.abs(pixels.data[offset + 2] - 232) <= 2) purple++;
+      if (Math.abs(pixels.data[offset] - 8) <= 2 && Math.abs(pixels.data[offset + 1] - 153) <= 2 && Math.abs(pixels.data[offset + 2] - 129) <= 2) green++;
+      if (Math.abs(pixels.data[offset] - 247) <= 2 && Math.abs(pixels.data[offset + 1] - 82) <= 2 && Math.abs(pixels.data[offset + 2] - 95) <= 2) red++;
     }
-    expect(purple).toBeGreaterThan(500);
+    expect(green).toBeGreaterThan(100);
+    expect(red).toBeGreaterThan(100);
     const updates = await page.evaluate(() => {
       const { chart, volume, profile, times } = window.__profile_test;
       const cached = profile.snapshot().calculation_revision;

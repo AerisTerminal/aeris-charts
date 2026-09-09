@@ -360,7 +360,7 @@ pub(crate) enum NativeSeriesPrimitiveKind {
         second_price: f64,
         options: TrendLineOptions,
     },
-    VolumeProfileIndicator(crate::volume_profile::VolumeProfileIndicatorState),
+    VolumeProfileIndicator(Box<crate::volume_profile::VolumeProfileIndicatorState>),
     VolumeProfile {
         data: VolumeProfileData,
         options: VolumeProfileOptions,

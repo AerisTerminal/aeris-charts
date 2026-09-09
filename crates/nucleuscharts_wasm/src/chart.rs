@@ -1839,9 +1839,10 @@ impl NucleusChart {
         let rows = profile
             .rows
             .iter()
-            .map(
-                |row| serde_json::json!({ "low": row.low, "high": row.high, "volume": row.volume }),
-            )
+            .map(|row| {
+                serde_json::json!({ "low": row.low, "high": row.high, "volume": row.volume,
+                    "up_volume": row.up_volume, "down_volume": row.down_volume })
+            })
             .collect::<Vec<_>>();
         let poc = profile.poc_index.map(|index| {
             let row = &profile.rows[index];
