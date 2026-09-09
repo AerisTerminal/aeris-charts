@@ -163,7 +163,7 @@ const TOOLBAR_FEATURE_MANIFEST: &[&str] = &[
     "axes:border-visible,border-color,text-color,separator",
     "watermark:visible,text,color,size",
     "interaction:axis-scaling,mouse-kinetic,reset-view",
-    "native-visual-approximations:day-bands,position-band,autoscale-band,markers,plugin-watermark,vertical-line",
+    "native-visual-approximations:day-bands,position-band,autoscale-band,markers,vertical-line",
 ];
 
 /// Column-major OHLC, in the shape `ChartEngine::set_series_data` takes.
@@ -3491,7 +3491,6 @@ impl Render for InteractiveDemo {
                     b("position band", DemoAction::Fixture(1)),
                     b("autoscale band", DemoAction::Fixture(2)),
                     b("markers", DemoAction::Fixture(3)),
-                    b("plugin watermark", DemoAction::Fixture(4)),
                     b("canvas v-line fixture", DemoAction::Fixture(5)),
                 ],
             ),
@@ -4105,7 +4104,6 @@ mod tests {
             "bid-ask",
             "separator",
             "mouse-kinetic",
-            "plugin-watermark",
             "vertical-line",
         ] {
             assert!(

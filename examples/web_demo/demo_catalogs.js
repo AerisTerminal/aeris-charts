@@ -1,9 +1,7 @@
 import {
-  create_anchored_text,
   create_bands_indicator,
   create_delta_tooltip,
   create_highlight_bar_crosshair,
-  create_image_watermark,
   create_overlay_price_scale,
   create_partial_price_line,
   create_session_highlighting,
@@ -313,7 +311,6 @@ function primitive_features(chart, series, bars) {
   const middle = bars[middle_index];
   const end = bars[middle_index + 30];
   return [
-    { id: "anchored-text", label: "Anchored text", detail: "Engine series primitive", icon: "draw", activate: () => { const handle = create_anchored_text(series, { text: "Anchored Text", vert_align: "middle", horz_align: "middle", line_height: 32, font: "italic bold 32px Arial", color: "#2962ff" }); return () => handle.detach(); } },
     { id: "bands-indicator", label: "Price-band primitive", detail: "Official ±10% background", icon: "analysis", activate: () => { const handle = create_bands_indicator(series); return () => handle.detach(); } },
     { id: "trend-line", label: "Trend-line primitive", detail: "Series primitive + endpoint labels", icon: "draw", activate: () => { const handle = create_trend_line(series, [{ time: start.time, price: start.low }, { time: end.time, price: end.high }], { line_color: "#f59e0b" }); return () => handle.detach(); } },
     { id: "vertical-line", label: "Event-line primitive", detail: "Series primitive + time-axis label", icon: "draw", activate: () => { const handle = create_vertical_line(series, middle.time, { color: "#e1575a", label_text: "Event", label_background_color: "#e1575a", show_label: true }); return () => handle.detach(); } },
@@ -321,7 +318,6 @@ function primitive_features(chart, series, bars) {
     { id: "partial-price-line", label: "Partial-line primitive", detail: "Last value → edge", icon: "analysis", activate: () => { const handle = create_partial_price_line(series); return () => handle.detach(); } },
     { id: "session-highlighting", label: "Session-highlighting primitive", detail: "Weekday / weekend", icon: "analysis", activate: () => { const handle = create_session_highlighting(series); return () => handle.detach(); } },
     { id: "highlight-crosshair", label: "Crosshair-highlight helper", detail: "Bar highlight follows crosshair", icon: "analysis", activate: () => { const handle = create_highlight_bar_crosshair(chart, series); return () => handle.detach(); } },
-    { id: "image-watermark", label: "Image-watermark primitive", detail: "Engine raster primitive", icon: "lab", activate: () => { const image = document.createElement("canvas"); image.width = 96; image.height = 96; const context = image.getContext("2d"); context.fillStyle = "#2962ff"; context.beginPath(); context.roundRect(8, 8, 80, 80, 20); context.fill(); context.fillStyle = "white"; context.font = "700 52px Inter, sans-serif"; context.textAlign = "center"; context.textBaseline = "middle"; context.fillText("N", 48, 52); const handle = create_image_watermark(series, image, { max_width: 96, max_height: 96, alpha: .22 }); return () => handle.detach(); } },
     { id: "tooltip", label: "Tooltip", detail: "Hover values", icon: "lab", activate: () => { const handle = create_tooltip(chart, { series }); return () => handle.detach(); } },
     { id: "delta-tooltip", label: "Delta tooltip", detail: "Drag comparison", icon: "lab", activate: () => { const handle = create_delta_tooltip(chart, { series }); return () => handle.detach(); } },
   ];

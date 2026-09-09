@@ -206,7 +206,7 @@ test("plugin markers clear with set_markers([]) and detach; auto_scale expands t
 
 // (d) The text watermark plugin paints its lines on the overlay (the engine watermark's
 // slot) and detach clears them exactly.
-test("plugin watermark paints its lines and detach clears them", async ({ page }) => {
+test("text watermark API paints its lines and detach clears them without a duplicate demo control", async ({ page }) => {
   await goto_fixture(page, "canvas2d");
   const baseline = await screenshot(page);
 
@@ -221,17 +221,27 @@ test("plugin watermark paints its lines and detach clears them", async ({ page }
     300,
   );
 
-  await page.evaluate(() => window.__set_plugin_watermark(true));
+  await page.evaluate(async () => {
+    const { create_text_watermark } = await import("/dist/nucleuscharts_financial.js");
+    window.__test_text_watermark = create_text_watermark(window.__chart.panes()[0], {
+      lines: [
+        { text: "NUCLEUS", color: "rgba(41, 98, 255, 0.16)", fontSize: 72, fontStyle: "bold" },
+        { text: "watermark", color: "rgba(41, 98, 255, 0.30)", fontSize: 24, fontFamily: "monospace" },
+      ],
+    });
+  });
   await settle_frames(page);
-  expect(await page.evaluate(() => window.__plugin_watermark_active())).toBe(true);
+  expect(await page.locator("#plugin_watermark_toggle").count()).toBe(0);
   const watermarked = await screenshot(page);
   expect(
     count_different(center(baseline), center(watermarked)),
     "the watermark lines must paint in the pane's center",
   ).toBeGreaterThan(0);
 
-  await page.evaluate(() => window.__set_plugin_watermark(false));
+  await page.evaluate(() => {
+    window.__test_text_watermark.detach();
+    window.__test_text_watermark = null;
+  });
   await settle_frames(page);
-  expect(await page.evaluate(() => window.__plugin_watermark_active())).toBe(false);
   expect(count_different(baseline, await screenshot(page))).toBe(0);
 });

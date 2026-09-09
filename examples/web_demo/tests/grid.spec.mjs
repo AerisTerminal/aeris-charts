@@ -383,6 +383,30 @@ test("the toolbar's series type and style act on the ACTIVE cell, not always the
   expect(await color_of(1)).not.toBe("#ff00ff");
 });
 
+test("demo theme persists across reloads while runtime fixtures stay deterministic", async ({ page }) => {
+  await page.goto("/");
+  await wait_grid(page);
+  await page.selectOption("#theme_select", "light");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  expect(await page.evaluate(() => localStorage.getItem("nucleuscharts.demo.theme"))).toBe("light");
+
+  await page.reload();
+  await wait_grid(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page.locator("#theme_select")).toHaveValue("light");
+  expect(await page.evaluate(() => window.__chart.options().layout.background.color)).toBe("#ffffff");
+
+  await page.selectOption("#theme_select", "dark");
+  await page.reload();
+  await wait_grid(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  expect(await page.evaluate(() => window.__chart.options().layout.background.color)).toBe("#141414");
+
+  await page.goto("/?runtimeTest=presentedFrame&backend=canvas2d&forceFallbackAdapter=1");
+  await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+});
+
 test("changing a split cell series does not clear the root chart's advanced series", async ({ page }) => {
   await page.goto("/");
   await wait_grid(page);
