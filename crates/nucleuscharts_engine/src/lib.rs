@@ -1418,7 +1418,7 @@ pub struct ChartEngine {
     /// reference `KineticAnimation`); the host feeds samples and drives the coast per frame.
     kinetic: Option<nucleuscharts_core::model::kinetic_animation::KineticAnimation>,
     /// Velocity-owned keyboard pan. This is separate from public `scroll_to_position(..., true)`:
-    /// arrow navigation ramps toward cruise velocity while held and stops on key release.
+    /// a held arrow receives bounded engine-timed velocity kicks with light drag; key-up stops it.
     keyboard_scroll_animation: Option<interaction::KeyboardKineticScroll>,
     /// In-flight eased scroll-to-position (engine interaction module); the host schedules the
     /// ticks, the engine owns the easing and applies each step.

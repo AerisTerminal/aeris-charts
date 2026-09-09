@@ -521,12 +521,15 @@ pub const KINETIC_MIN_SPEED: f64 = 0.2;
 pub const KINETIC_MAX_SPEED: f64 = 7.0;
 pub const KINETIC_DUMPING: f64 = 0.997;
 pub const KINETIC_MIN_MOVE: f64 = 15.0;
-/// Keyboard navigation uses the same exponential velocity model as kinetic scrolling, but with a
-/// much quicker attack: it should feel guided immediately while held and stop exactly on key-up.
-pub const KEYBOARD_KINETIC_ATTACK: f64 = 0.98;
-/// Logical bars per millisecond for one arrow-step of sustained keyboard motion. Ctrl/Shift use
-/// the existing 10x step multiplier, so they share the same curve at a proportionally higher speed.
-pub const KEYBOARD_KINETIC_SPEED_PER_STEP: f64 = 0.006;
+/// Keyboard navigation is a low-friction velocity model. A held key receives small internal
+/// velocity kicks at a fixed cadence; between kicks velocity decays only slightly. This avoids the
+/// sticky zero-velocity startup of a force/thrust model while still keeping motion bounded.
+pub const KEYBOARD_KINETIC_DAMPING: f64 = 0.9985;
+pub const KEYBOARD_KINETIC_IMPULSE_INTERVAL_MS: f64 = 70.0;
+/// Logical bars / ms added by one internal keyboard impulse per arrow step.
+pub const KEYBOARD_KINETIC_IMPULSE_SPEED_PER_STEP: f64 = 0.0045;
+/// Hard velocity ceiling per arrow step. Ctrl/Shift retain the existing 10x relationship.
+pub const KEYBOARD_KINETIC_MAX_SPEED_PER_STEP: f64 = 0.020;
 
 /// reference pane-widget.ts `pinchEvent`: the incremental scale multiplier per pinch step.
 pub const PINCH_ZOOM_INTENSITY: f64 = 5.0;
@@ -581,32 +584,47 @@ impl ScrollAnimation {
     }
 }
 
-/// Velocity-owned keyboard pan. While a key is held, `drive_velocity` pulls the current velocity
-/// toward a cruise speed with an exponential attack. Key-up cancels this state immediately.
+/// Velocity-owned keyboard pan. It launches with an immediate velocity kick and receives further
+/// engine-timed kicks while held. Light damping between kicks produces a slippery glide without
+/// relying on OS key-repeat cadence. Key-up cancels this state immediately.
 #[derive(Clone, Copy, Debug)]
 pub struct KeyboardKineticScroll {
     pub position: f64,
     pub velocity: f64,
-    pub drive_velocity: f64,
+    pub impulse_velocity: f64,
+    pub max_velocity: f64,
     pub last_time_ms: f64,
+    pub next_impulse_ms: f64,
 }
 
 impl KeyboardKineticScroll {
+    fn integrate_to(&mut self, target_time_ms: f64) {
+        let elapsed = (target_time_ms - self.last_time_ms).max(0.0);
+        if elapsed == 0.0 {
+            return;
+        }
+        let rate = -KEYBOARD_KINETIC_DAMPING.ln();
+        let decay = KEYBOARD_KINETIC_DAMPING.powf(elapsed);
+        self.position += self.velocity * (1.0 - decay) / rate;
+        self.velocity *= decay;
+        self.last_time_ms = target_time_ms;
+    }
+
+    fn kick(&mut self) {
+        self.velocity =
+            (self.velocity + self.impulse_velocity).clamp(-self.max_velocity, self.max_velocity);
+    }
+
     fn advance(&mut self, now_ms: f64) {
         if !now_ms.is_finite() {
             return;
         }
-        let elapsed = (now_ms - self.last_time_ms).max(0.0);
-        if elapsed == 0.0 {
-            return;
+        while self.next_impulse_ms <= now_ms {
+            self.integrate_to(self.next_impulse_ms);
+            self.kick();
+            self.next_impulse_ms += KEYBOARD_KINETIC_IMPULSE_INTERVAL_MS;
         }
-        let ln_damping = KEYBOARD_KINETIC_ATTACK.ln();
-        let decay = KEYBOARD_KINETIC_ATTACK.powf(elapsed);
-        let initial_velocity = self.velocity;
-        self.position += self.drive_velocity * elapsed
-            + (initial_velocity - self.drive_velocity) * (decay - 1.0) / ln_damping;
-        self.velocity = self.drive_velocity + (initial_velocity - self.drive_velocity) * decay;
-        self.last_time_ms = now_ms;
+        self.integrate_to(now_ms);
     }
 }
 
@@ -688,26 +706,40 @@ impl ChartEngine {
 
     // --- keyboard kinetic pan ---
 
-    /// Start or retune one held keyboard-pan direction. The existing one/ten-step distinction now
-    /// controls cruise speed; OS key-repeat is not the motion clock.
+    /// Start or retune one held keyboard-pan session. The engine owns the impulse cadence; browser
+    /// key-repeat does not drive motion. The existing one/ten-step distinction controls kick
+    /// strength and velocity ceiling.
     pub fn start_keyboard_scroll(&mut self, delta_bars: f64, now_ms: f64) {
         if !delta_bars.is_finite() || delta_bars == 0.0 || !now_ms.is_finite() {
             return;
         }
-        let cruise_velocity = delta_bars * KEYBOARD_KINETIC_SPEED_PER_STEP;
+        let impulse_velocity = delta_bars * KEYBOARD_KINETIC_IMPULSE_SPEED_PER_STEP;
+        let max_velocity = delta_bars.abs() * KEYBOARD_KINETIC_MAX_SPEED_PER_STEP;
         if let Some(animation) = self.keyboard_scroll_animation.as_mut() {
             animation.advance(now_ms);
-            animation.drive_velocity = cruise_velocity;
+            if animation.velocity != 0.0 && animation.velocity.signum() != delta_bars.signum() {
+                animation.velocity = 0.0;
+            }
+            animation.impulse_velocity = impulse_velocity;
+            animation.max_velocity = max_velocity;
+            if animation.velocity == 0.0 {
+                animation.kick();
+            }
+            animation.next_impulse_ms = now_ms + KEYBOARD_KINETIC_IMPULSE_INTERVAL_MS;
             let position = animation.position;
             self.scroll_to_position(position);
             return;
         }
-        self.keyboard_scroll_animation = Some(KeyboardKineticScroll {
+        let mut animation = KeyboardKineticScroll {
             position: self.scroll_position(),
             velocity: 0.0,
-            drive_velocity: cruise_velocity,
+            impulse_velocity,
+            max_velocity,
             last_time_ms: now_ms,
-        });
+            next_impulse_ms: now_ms + KEYBOARD_KINETIC_IMPULSE_INTERVAL_MS,
+        };
+        animation.kick();
+        self.keyboard_scroll_animation = Some(animation);
     }
 
     /// Apply one held keyboard-pan tick. `None` means no key-owned kinetic session is active.
@@ -1488,7 +1520,7 @@ mod tests {
     }
 
     #[test]
-    fn keyboard_scroll_accelerates_while_held_and_stops_on_release() {
+    fn keyboard_scroll_is_fast_low_friction_and_stops_on_release() {
         let mut chart = chart_with_data(400.0, 300.0);
         chart.time_scale.set_bar_spacing(10.0);
         chart.scroll_to_position(0.0);
@@ -1497,13 +1529,25 @@ mod tests {
         let held_50 = chart.keyboard_scroll_tick(1050.0).unwrap();
         let held_100 = chart.keyboard_scroll_tick(1100.0).unwrap();
         let held_150 = chart.keyboard_scroll_tick(1150.0).unwrap();
-        let first_step = held_100 - held_50;
-        let second_step = held_150 - held_100;
-        assert!(held_50 > 0.0);
-        assert!(first_step > 0.0);
+        let held_200 = chart.keyboard_scroll_tick(1200.0).unwrap();
+        let held_250 = chart.keyboard_scroll_tick(1250.0).unwrap();
+        let held_300 = chart.keyboard_scroll_tick(1300.0).unwrap();
+        let first_step = held_50;
+        let second_step = held_100 - held_50;
+        let third_step = held_150 - held_100;
+        let late_step = held_300 - held_250;
         assert!(
-            second_step > first_step,
-            "velocity should ramp toward cruise speed"
+            first_step > 1.5,
+            "Ctrl+Arrow should launch with visible velocity instead of a sticky slow start"
+        );
+        assert!(
+            second_step > first_step && third_step > second_step,
+            "engine-timed impulses should build momentum smoothly while held"
+        );
+        assert!(held_200 > held_150 && held_250 > held_200 && held_300 > held_250);
+        assert!(
+            late_step > first_step,
+            "low friction should retain more speed than launch"
         );
 
         chart.cancel_keyboard_scroll();

@@ -224,9 +224,9 @@ test("interaction models run engine-side with canonical behavior", async ({ page
   const half = points.reduce((a, b) => (Math.abs(b.progress - 0.5) < Math.abs(a.progress - 0.5) ? b : a));
   expect(half.pos).toBeGreaterThan(4.2);
 
-  // 9) keyboard arrows are velocity-owned while held. Motion ramps toward cruise speed without
-  // depending on OS key-repeat, and key-up stops immediately instead of coasting or finishing a
-  // destination tween.
+  // 9) keyboard arrows are low-friction velocity motion while held. The engine owns repeat cadence,
+  // so it launches immediately, builds speed smoothly, ignores OS-repeat jitter, and key-up stops
+  // immediately instead of coasting or finishing a destination tween.
   await page.evaluate(() => document.querySelector("#chart_container canvas:last-of-type").focus());
   await page.clock.runFor(50); // let the step-8 settle fully out of flight
   const k0 = (await state(page)).offset;
@@ -246,10 +246,13 @@ test("interaction models run engine-side with canonical behavior", async ({ page
   const k100 = (await state(page)).offset;
   await page.clock.runFor(50);
   const k150 = (await state(page)).offset;
+  await page.clock.runFor(150);
+  const k300 = (await state(page)).offset;
   expect(k50).toBeLessThan(k0);
   expect(k100).toBeLessThan(k50);
   expect(k150).toBeLessThan(k100);
-  expect(k50 - k100).toBeGreaterThan(k0 - k50, "held motion should accelerate toward cruise speed");
+  expect(k0 - k50).toBeGreaterThan(1.5, "keyboard kinetic launch should not feel sticky or delayed");
+  expect(k50 - k100).toBeGreaterThan(k0 - k50, "held motion should build velocity after launch");
 
   // Inject the repeat event that browsers receive while a key stays physically down. It must not
   // cancel the engine-owned kinetic session; the chart should continue until the real key-up.
@@ -262,9 +265,9 @@ test("interaction models run engine-side with canonical behavior", async ({ page
       cancelable: true,
     }));
   });
-  await page.clock.runFor(500);
-  const k650 = (await state(page)).offset;
-  expect(k650).toBeLessThan(k150, "keyboard kinetic motion must survive OS key repeat while held");
+  await page.clock.runFor(150);
+  const k450 = (await state(page)).offset;
+  expect(k450).toBeLessThan(k300, "keyboard kinetic motion must survive OS repeat while held");
   await page.keyboard.up("ArrowLeft");
   const at_key_up = (await state(page)).offset;
   await page.clock.runFor(300);
@@ -272,7 +275,7 @@ test("interaction models run engine-side with canonical behavior", async ({ page
   await page.keyboard.up("Control");
   console.log(
     "keyboard Ctrl+ArrowLeft held:",
-    k0.toFixed(2), "->", k50.toFixed(2), "->", k100.toFixed(2), "->", k150.toFixed(2),
+    k0.toFixed(2), "->", k50.toFixed(2), "->", k100.toFixed(2), "->", k150.toFixed(2), "->", k300.toFixed(2),
   );
   expect(after_release).toBeCloseTo(at_key_up, 6);
 

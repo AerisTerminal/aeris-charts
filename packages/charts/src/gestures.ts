@@ -1188,8 +1188,8 @@ export function install_gestures(chart: chart_impl): () => void {
     };
     scroll_anim = requestAnimationFrame(step_fn);
   };
-  /** Keyboard pan is velocity-owned: key-down ramps into sustained motion; key-up cancels it
-   *  immediately. OS key-repeat never drives the animation clock. */
+  /** Keyboard pan is velocity-owned: the engine supplies low-friction repeat kicks while held and
+   *  key-up cancels immediately. OS key-repeat never becomes the motion clock. */
   const begin_keyboard_scroll = (key: "ArrowLeft" | "ArrowRight", delta: number, repeat: boolean) => {
     stop_kinetic();
     // Supersede only the public scroll-to-position tween here. `chart.cancel_scroll_animation()`
@@ -1201,8 +1201,8 @@ export function install_gestures(chart: chart_impl): () => void {
       chart.repaint();
       return;
     }
-    // OS key-repeat is not the motion clock. Once held, the engine sustains velocity itself;
-    // repeats only matter when the modifier changes the requested speed while the key stays down.
+    // The engine owns held-key cadence. Repeats are ignored unless a modifier changed the requested
+    // speed, avoiding OS-repeat jitter while preserving live Ctrl/Shift retuning.
     if (!repeat || keyboard_pan_key !== key || keyboard_pan_delta !== delta) {
       wasm.start_keyboard_scroll(delta, performance.now());
       keyboard_pan_key = key;
