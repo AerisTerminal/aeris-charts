@@ -126,6 +126,14 @@ dotted, and dashed modes. Indicator outputs inherit the same default because the
 series. `create_partial_price_line()` remains only as a compatibility controller over these canonical
 series options, not a separate primitive or rendering implementation.
 
+`layout.attributionLogo` defaults to `true` and, in browser charts, renders the supplied Axiusflow
+wordmark at the Lightweight Charts attribution position: 10 CSS px from the left and bottom edges of
+the final pane's content cell, at 19 CSS px tall. The host selects the dark or light asset from the
+resolved chart-background luminance and adds the opposite-tone outline used by attribution marks so
+custom light or dark canvas colors cannot erase the logo. Setting `attributionLogo: false` removes
+the DOM mark immediately; it is host chrome and does not enter engine persistence or the canvas-only
+`take_screenshot()` result.
+
 ## Experimental surfaces
 
 Custom series, pane/series/canvas primitives, the exported custom-series/primitive feature packs,

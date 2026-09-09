@@ -270,9 +270,16 @@ The browser package's official-feature modules are thin lifecycle and platform a
 engine owners. They normalize public data/options, translate pointer or keyboard events, decode
 browser images, and create optional DOM chrome; they do not simulate financial geometry. Tooltip
 guides/value lookup, accessibility focus geometry, drawings, bands, price lines, overlay
-labels, image placement, and every specialized series frame are constructed in Rust. Feature
-handles release their engine primitive plus any host subscription, timer, or DOM node exactly once;
-none of that runtime state enters engine persistence.
+labels, image placement, and every specialized series frame are constructed in Rust. The built-in
+Axiusflow attribution mark is intentionally host chrome, matching Lightweight Charts' attribution
+widget rather than becoming a second scene-graph primitive: the engine remains canonical for the
+`layout.attributionLogo` option and final-pane geometry, while the browser inlines the packaged
+dark/light SVG wordmarks at 19 CSS px tall and 10 CSS px from the final pane's left/bottom content
+edges. Background luminance chooses the wordmark and an opposite-tone non-scaling outline, so custom
+chart surfaces cannot erase it. It is excluded from engine frames, canvas-only `take_screenshot()`
+captures, persistence, and offscreen/native backends. Feature handles release their engine primitive
+plus any host subscription,
+timer, or DOM node exactly once; none of that runtime state enters engine persistence.
 
 The GPUI demo uses the shared crosshair-action hit test for its pointing-hand cursor and `Alert` input target. Its dedicated press/release state prevents chart pan and selection underneath the button; an unmoved release within the hit area emits the shared action request and displays its pane and price in the demo status line. Pointer cancellation discards the pending press.
 
