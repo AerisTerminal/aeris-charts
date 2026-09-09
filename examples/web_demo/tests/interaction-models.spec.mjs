@@ -4,7 +4,7 @@ import { test, expect } from "@playwright/test";
 // recognizer only classifies events and forwards samples — the axis drag-to-scale, vertical
 // price pan, wheel/pinch zoom increments, kinetic coast, and eased scroll animations all
 // compute in Rust. These specs drive the real gestures in the browser and assert the same
-// behavior the headless engine tests pin down.
+// behavior the headless engine tests pin down, including Nucleus's higher-sensitivity wheel zoom.
 
 async function wait_grid(page) {
   await page.waitForFunction(() => window.__grid !== undefined && window.__chart?.backend?.() !== undefined);
@@ -31,7 +31,7 @@ async function chart_box(page) {
   });
 }
 
-test("interaction models run engine-side with reference behavior", async ({ page }) => {
+test("interaction models run engine-side with canonical behavior", async ({ page }) => {
   await page.goto("/");
   await wait_grid(page);
   // Keep this gesture fixture on its historical fitted viewport without making fit-content a demo
@@ -142,7 +142,7 @@ test("interaction models run engine-side with reference behavior", async ({ page
   await wait_grid(page);
   const z1 = (await state(page)).spacing;
   console.log("wheel zoom in:", z0.toFixed(4), "->", z1.toFixed(4));
-  expect(z1).toBeGreaterThan(z0);
+  expect(z1).toBeGreaterThan(z0 * 1.1);
 
   // 6) wheel scroll (deltaX): offset moves by 80px/spacing bars.
   await page.evaluate(() => window.__chart.apply_options({ wheel_behavior: "pan" }));

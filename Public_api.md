@@ -111,6 +111,10 @@ Grid lines are engine-owned and default to visible dashed lines. Demo hosts may 
 visibility without replacing the canonical grid style/color; that presentation choice is not a
 library default.
 
+Mouse-wheel time-scale zoom uses the engine's high-sensitivity response: a saturated wheel step
+changes bar spacing by 20%, remains anchored under the pointer, and smaller trackpad deltas stay
+proportional. Horizontal wheel/trackpad panning keeps its independent scroll coefficient.
+
 The built-in series live-price line is engine-owned. `price_line_extent` defaults to `"partial"`
 (tracked bar/value to the pane's right edge); `"full"` preserves the conventional pane-wide line.
 Both extents use the same `price_line_source`, color, width, and line-style options, including solid,

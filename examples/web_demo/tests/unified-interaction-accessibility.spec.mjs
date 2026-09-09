@@ -6,7 +6,7 @@ async function open_chart(page) {
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 }
 
-test("default wheel behavior matches Lightweight Charts axis semantics", async ({ page }) => {
+test("default wheel behavior zooms vertical deltas and pans horizontal deltas", async ({ page }) => {
   await open_chart(page);
   const box = await page.locator("#chart_container canvas:last-of-type").boundingBox();
   const state = () => page.evaluate(() => ({

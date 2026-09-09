@@ -516,10 +516,16 @@ pub const PINCH_ZOOM_INTENSITY: f64 = 5.0;
 /// coefficient, and minus is for the 'natural' scroll".
 pub const WHEEL_SCROLL_PX_PER_DELTA: f64 = -80.0;
 
-/// reference chart-widget.ts `_onMousewheel`: `sign(deltaY) * min(1, |deltaY|)` — the wheel
-/// delta normalized to a zoom increment in 1/10-spacing units (the input to `zoom`).
+/// Nucleus wheel zoom sensitivity. A value of 2 makes one saturated mouse-wheel step change bar
+/// spacing by 20% instead of the 10% Lightweight Charts baseline, matching the faster interaction
+/// expected from TradingView's full chart while keeping trackpad deltas proportional.
+pub const WHEEL_ZOOM_INTENSITY: f64 = 2.0;
+
+/// Convert a host-normalized wheel delta to the engine zoom increment. The input still saturates at
+/// one normalized wheel step so unusually large OS/browser deltas cannot create an unbounded jump;
+/// sensitivity is applied after that clamp and the time scale remains cursor-anchored.
 pub fn wheel_zoom_scale(delta_y: f64) -> f64 {
-    delta_y.signum() * delta_y.abs().min(1.0)
+    delta_y.signum() * delta_y.abs().min(1.0) * WHEEL_ZOOM_INTENSITY
 }
 
 /// reference pane-widget.ts `pinchEvent`: the scale ratio delta since the previous step, times
@@ -1335,12 +1341,13 @@ mod tests {
     }
 
     #[test]
-    fn wheel_and_pinch_increments_match_the_reference_coefficients() {
-        assert_eq!(wheel_zoom_scale(0.42), 0.42);
-        assert_eq!(wheel_zoom_scale(-3.7), -1.0);
+    fn wheel_zoom_is_high_sensitivity_while_pinch_and_scroll_keep_their_reference_coefficients() {
+        assert_eq!(wheel_zoom_scale(0.42), 0.84);
+        assert_eq!(wheel_zoom_scale(-3.7), -2.0);
         assert_eq!(wheel_zoom_scale(0.0), 0.0);
         assert_eq!(pinch_zoom_scale(0.1), 0.5);
         assert_eq!(WHEEL_SCROLL_PX_PER_DELTA, -80.0);
+        assert_eq!(WHEEL_ZOOM_INTENSITY, 2.0);
         assert_eq!(PINCH_ZOOM_INTENSITY, 5.0);
     }
 
