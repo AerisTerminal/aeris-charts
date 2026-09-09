@@ -317,7 +317,14 @@ function primitive_features(chart, series, bars) {
     { id: "session-highlighting", label: "Session-highlighting primitive", detail: "Weekday / weekend", icon: "analysis", activate: () => { const handle = create_session_highlighting(series); return () => handle.detach(); } },
     { id: "highlight-crosshair", label: "Crosshair-highlight helper", detail: "Bar highlight follows crosshair", icon: "analysis", activate: () => { const handle = create_highlight_bar_crosshair(chart, series); return () => handle.detach(); } },
     { id: "tooltip", label: "Tooltip", detail: "Hover values", icon: "lab", activate: () => { const handle = create_tooltip(chart, { series }); return () => handle.detach(); } },
-    { id: "delta-tooltip", label: "Delta tooltip", detail: "Drag comparison", icon: "lab", activate: () => { const handle = create_delta_tooltip(chart, { series }); return () => handle.detach(); } },
+    {
+      id: "delta-tooltip",
+      label: "Delta tooltip",
+      detail: "Drag comparison",
+      icon: "lab",
+      available: () => series.series_type() !== "candlestick",
+      activate: () => { const handle = create_delta_tooltip(chart, { series }); return () => handle.detach(); },
+    },
   ];
 }
 
@@ -460,9 +467,24 @@ export function install_demo_catalogs({ chart, series, data, on_series_change })
 
   const feature_card = (id) => grid.querySelector(`[data-feature-id="${id}"]`);
   const series_card = (id) => series_grid.querySelector(`[data-series-id="${id}"]`);
+  const feature_available = (feature) => feature.available?.() !== false;
   const update_status = (message) => {
     const count = cleanups.size;
     active_count.textContent = message ?? (count === 0 ? "No features active" : `${count} feature${count === 1 ? "" : "s"} active`);
+  };
+  const refresh_feature_availability = () => {
+    for (const feature of features) {
+      const available = feature_available(feature);
+      const button = feature_card(feature.id);
+      button.disabled = !available;
+      button.setAttribute("aria-disabled", String(!available));
+      if (!available && cleanups.has(feature.id)) {
+        cleanups.get(feature.id)();
+        cleanups.delete(feature.id);
+        button.setAttribute("aria-pressed", "false");
+      }
+    }
+    update_status();
   };
   const clear_series = () => {
     if (active_series === null) return;
@@ -513,6 +535,7 @@ export function install_demo_catalogs({ chart, series, data, on_series_change })
   };
   const toggle_feature = (feature) => {
     try {
+      if (!feature_available(feature)) return;
       if (cleanups.has(feature.id)) {
         cleanups.get(feature.id)();
         cleanups.delete(feature.id);
@@ -569,6 +592,7 @@ export function install_demo_catalogs({ chart, series, data, on_series_change })
     chart.render();
     update_status();
   });
+  refresh_feature_availability();
 
   return {
     series: {
@@ -582,6 +606,7 @@ export function install_demo_catalogs({ chart, series, data, on_series_change })
       select_base(value) {
         base_series_choice = value;
         clear_series();
+        queueMicrotask(refresh_feature_availability);
       },
     },
     lab: {
@@ -591,6 +616,7 @@ export function install_demo_catalogs({ chart, series, data, on_series_change })
       },
       active_ids() { return [...cleanups.keys()]; },
       clear() { document.getElementById("feature_clear").click(); },
+      refresh: refresh_feature_availability,
     },
   };
 }

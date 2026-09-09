@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use crate::{ChartEngine, PaneId, SeriesId};
+use crate::{ChartEngine, PaneId, SeriesId, SeriesKind};
 use nucleuscharts_render::color::Color;
 use nucleuscharts_render::draw_list::RasterImage;
 
@@ -740,6 +740,14 @@ impl ChartEngine {
         series_id: SeriesId,
         options: DeltaTooltipOptions,
     ) -> Option<NativePrimitiveId> {
+        // Product contract: candlesticks use the ordinary hover tooltip. The drag-comparison
+        // delta tooltip is intentionally unavailable on candlestick series because its two-point
+        // interaction conflicts with candle inspection and produces misleading/broken chrome.
+        // Keep the restriction in the engine so every host (WASM, native/GPUI, future adapters)
+        // observes the same capability boundary rather than relying on demo/UI gating.
+        if self.series_entry(series_id)?.kind == SeriesKind::Candlestick {
+            return None;
+        }
         if !options.top_offset.is_finite() || !(0.0..=1_000.0).contains(&options.top_offset) {
             return None;
         }
@@ -1170,6 +1178,18 @@ impl ChartEngine {
         true
     }
 
+    /// Whether any live series currently owns a delta-tooltip interaction. Hosts use this rather
+    /// than retained callback/listener counts so converting an attached series to candlesticks
+    /// immediately stops delta-tooltip touch ownership after the engine removes the primitive.
+    pub fn has_delta_tooltip(&self) -> bool {
+        self.series.iter().any(|series| {
+            !series.removed
+                && series.native_primitives.iter().any(|primitive| {
+                    matches!(&primitive.kind, NativeSeriesPrimitiveKind::DeltaTooltip(_))
+                })
+        })
+    }
+
     fn delta_tooltip_point(&self, series_id: SeriesId, x: f64) -> Option<DeltaTooltipPoint> {
         if !(0.0..=self.pane_w).contains(&x) {
             return None;
@@ -1468,6 +1488,62 @@ mod tests {
         chart
     }
 
+    fn delta_chart() -> ChartEngine {
+        let mut chart = chart();
+        chart.series[0].kind = SeriesKind::Area;
+        chart
+    }
+
+    #[test]
+    fn delta_tooltip_rejects_candlesticks_and_accepts_non_candlestick_series() {
+        let mut candles = chart();
+        assert!(candles
+            .add_delta_tooltip(0, DeltaTooltipOptions::default())
+            .is_none());
+        assert!(candles.add_tooltip(0, TooltipOptions::default()).is_some());
+
+        for kind in [
+            SeriesKind::Bar,
+            SeriesKind::Line,
+            SeriesKind::Area,
+            SeriesKind::Histogram,
+            SeriesKind::Baseline,
+            SeriesKind::Custom,
+            SeriesKind::Feature,
+            SeriesKind::Footprint,
+        ] {
+            let mut chart = chart();
+            chart.series[0].kind = kind;
+            assert!(
+                chart
+                    .add_delta_tooltip(0, DeltaTooltipOptions::default())
+                    .is_some(),
+                "delta tooltip should support {kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn converting_a_delta_series_to_candlestick_removes_the_interaction() {
+        let mut chart = delta_chart();
+        let primitive = chart
+            .add_delta_tooltip(0, DeltaTooltipOptions::default())
+            .unwrap();
+        assert!(chart.has_delta_tooltip());
+
+        let x2 = chart.time_scale.index_to_coordinate(2);
+        let x7 = chart.time_scale.index_to_coordinate(7);
+        assert!(chart.delta_tooltip_mouse_down(x2));
+        assert!(chart.delta_tooltip_mouse_move(x7));
+        assert!(chart.delta_tooltip_active_range(primitive).is_some());
+
+        chart.convert_series_kind(0, SeriesKind::Candlestick);
+        assert!(!chart.has_delta_tooltip());
+        assert_eq!(chart.delta_tooltip_active_range(primitive), None);
+        assert!(!chart.delta_tooltip_mouse_down(x2));
+        assert!(!chart.delta_tooltip_mouse_move(x7));
+    }
+
     fn profile() -> VolumeProfileData {
         VolumeProfileData {
             time: 2 * 86_400,
@@ -1579,7 +1655,7 @@ mod tests {
                 .count()
         }
 
-        let mut chart = chart();
+        let mut chart = delta_chart();
         chart.add_tooltip(0, TooltipOptions::default()).unwrap();
         chart
             .add_delta_tooltip(0, DeltaTooltipOptions::default())
@@ -1781,7 +1857,7 @@ mod tests {
 
     #[test]
     fn delta_tooltip_owns_pointer_state_sorted_range_and_official_frame_content() {
-        let mut chart = chart();
+        let mut chart = delta_chart();
         let guide_color = Color::rgb(12, 34, 56);
         let options = DeltaTooltipOptions {
             line_color: Some(guide_color),
@@ -1910,7 +1986,7 @@ mod tests {
 
     #[test]
     fn delta_tooltip_guides_reproject_with_the_time_scale() {
-        let mut chart = chart();
+        let mut chart = delta_chart();
         let guide_color = Color::rgb(12, 34, 56);
         let options = DeltaTooltipOptions {
             line_color: Some(guide_color),
@@ -1961,7 +2037,7 @@ mod tests {
 
     #[test]
     fn delta_tooltip_reads_runtime_chart_theme_and_font_options() {
-        let mut chart = chart();
+        let mut chart = delta_chart();
         let primitive = chart
             .add_delta_tooltip(0, DeltaTooltipOptions::default())
             .unwrap();
@@ -2012,7 +2088,7 @@ mod tests {
 
     #[test]
     fn delta_tooltip_replaces_only_with_complete_mouse_or_touch_ranges() {
-        let mut chart = chart();
+        let mut chart = delta_chart();
         let primitive = chart
             .add_delta_tooltip(0, DeltaTooltipOptions::default())
             .unwrap();
@@ -2060,7 +2136,7 @@ mod tests {
 
     #[test]
     fn delta_tooltip_direction_uses_chronological_prices_not_drag_order() {
-        let mut chart = chart();
+        let mut chart = delta_chart();
         let times: Vec<f64> = (0..10).map(|day| day as f64 * 86_400.0).collect();
         let close: Vec<f64> = (0..10).map(|day| 110.0 - day as f64).collect();
         let open: Vec<f64> = close.iter().map(|value| value + 1.0).collect();

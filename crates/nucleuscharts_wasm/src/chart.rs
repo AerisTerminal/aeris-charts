@@ -1732,6 +1732,10 @@ impl NucleusChart {
         self.inner.borrow_mut().engine.delta_tooltip_touch_move(xs)
     }
 
+    pub fn native_delta_tooltip_active(&self) -> bool {
+        self.inner.borrow().engine.has_delta_tooltip()
+    }
+
     pub fn native_delta_tooltip_leave(&mut self) -> bool {
         self.inner.borrow_mut().engine.delta_tooltip_leave()
     }

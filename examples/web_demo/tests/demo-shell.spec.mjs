@@ -185,9 +185,10 @@ test("every feature-lab card activates through its real public API wiring", asyn
   page.on("pageerror", (error) => errors.push(error.message));
   await open_demo(page);
   const features = await page.locator("#feature_grid .feature-card").evaluateAll((cards) =>
-    cards.map((card) => ({ id: card.dataset.featureId, kind: card.dataset.featureKind })),
+    cards.map((card) => ({ id: card.dataset.featureId, kind: card.dataset.featureKind, disabled: card.disabled })),
   );
   for (const feature of features) {
+    if (feature.disabled) continue;
     await page.evaluate((id) => window.__demo_catalogs.lab.activate(id), feature.id);
     expect(await page.evaluate((id) => window.__demo_catalogs.lab.active_ids().includes(id), feature.id)).toBe(true);
     if (feature.kind === "primitive") await page.evaluate((id) => window.__demo_catalogs.lab.activate(id), feature.id);
@@ -195,6 +196,24 @@ test("every feature-lab card activates through its real public API wiring", asyn
   await page.evaluate(() => window.__demo_catalogs.lab.clear());
   expect(await page.evaluate(() => window.__demo_catalogs.lab.active_ids())).toEqual([]);
   expect(errors).toEqual([]);
+});
+
+test("Delta Tooltip is unavailable on candlesticks and becomes available on area series", async ({ page }) => {
+  await open_demo(page);
+  const delta = page.locator('[data-feature-id="delta-tooltip"]');
+
+  await expect(delta).toBeDisabled();
+  await page.evaluate(() => window.__demo_catalogs.lab.activate("delta-tooltip"));
+  expect(await page.evaluate(() => window.__demo_catalogs.lab.active_ids())).not.toContain("delta-tooltip");
+
+  await page.locator('input[name="series"][value="area"]').check();
+  await expect(delta).toBeEnabled();
+  await page.evaluate(() => window.__demo_catalogs.lab.activate("delta-tooltip"));
+  expect(await page.evaluate(() => window.__demo_catalogs.lab.active_ids())).toContain("delta-tooltip");
+
+  await page.locator('input[name="series"][value="candlestick"]').check();
+  await expect(delta).toBeDisabled();
+  await expect.poll(() => page.evaluate(() => window.__demo_catalogs.lab.active_ids())).not.toContain("delta-tooltip");
 });
 
 test("hollow candles are a Series choice backed by the canonical candlestick series", async ({ page }) => {

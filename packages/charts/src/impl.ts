@@ -2701,11 +2701,11 @@ export class chart_impl implements chart_api {
   native_delta_tooltip_touch_move(xs: Float64Array): boolean {
     const changed = this.wasm.native_delta_tooltip_touch_move(xs);
     if (changed) this.notify_delta_tooltip_ranges();
-    return this.delta_tooltip_range_listeners.size > 0;
+    return this.wasm.native_delta_tooltip_active();
   }
 
   native_delta_tooltip_touch_active(): boolean {
-    return this.delta_tooltip_range_listeners.size > 0;
+    return this.wasm.native_delta_tooltip_active();
   }
 
   native_delta_tooltip_leave(): boolean {

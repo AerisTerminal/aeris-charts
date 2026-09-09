@@ -208,7 +208,7 @@ test("primitive feature helpers compose existing engine and host boundaries", as
     image.getContext("2d").fillRect(0, 0, 16, 16);
     handles.push(api.create_image_watermark(series, image.toDataURL(), { maxWidth: 32, maxHeight: 32, alpha: 0.4 }));
     handles.push(api.create_tooltip(chart));
-    handles.push(api.create_delta_tooltip(chart, { series }));
+    handles.push(api.create_delta_tooltip(chart, { series: overlay }));
 
     const a11y = api.enable_accessibility(chart, {
       chart_title: "Test financial chart",
@@ -240,6 +240,59 @@ test("primitive feature helpers compose existing engine and host boundaries", as
   expect(result.label).toContain("Test financial chart");
   expect(result.announcement).toContain("Point");
   expect(page_errors).toEqual([]);
+});
+
+test("Delta Tooltip rejects candlesticks, normal Tooltip still works, and type conversion removes Delta Tooltip", async ({ page }) => {
+  await open_chart(page);
+  const result = await page.evaluate(async () => {
+    const api = await import("/dist/nucleuscharts_financial.js");
+    const chart = window.__chart;
+    const candles = window.__main;
+    let candle_error = "";
+    try {
+      api.create_delta_tooltip(chart, { series: candles });
+    } catch (error) {
+      candle_error = String(error?.message ?? error);
+    }
+
+    const tooltip = api.create_tooltip(chart, { series: candles });
+    tooltip.detach();
+
+    const area = chart.add_series("area", {
+      price_line_visible: false,
+      last_value_visible: false,
+      countdown_visible: false,
+    });
+    area.set_data(window.__data.slice(0, 40).map((bar) => ({ time: bar.time, value: bar.close })));
+    const delta = api.create_delta_tooltip(chart, { series: area });
+    const active_before_conversion = chart.wasm.native_delta_tooltip_active();
+
+    area.set_type("candlestick");
+    const active_after_conversion = chart.wasm.native_delta_tooltip_active();
+    const range_after_conversion = delta.active_range();
+
+    let converted_error = "";
+    try {
+      api.create_delta_tooltip(chart, { series: area });
+    } catch (error) {
+      converted_error = String(error?.message ?? error);
+    }
+    delta.detach();
+
+    return {
+      candle_error,
+      converted_error,
+      active_before_conversion,
+      active_after_conversion,
+      range_after_conversion,
+    };
+  });
+
+  expect(result.candle_error).toContain("not supported on candlestick series");
+  expect(result.converted_error).toContain("not supported on candlestick series");
+  expect(result.active_before_conversion).toBe(true);
+  expect(result.active_after_conversion).toBe(false);
+  expect(result.range_after_conversion).toBe(null);
 });
 
 test("bar highlight default follows dark and light chart surfaces", async ({ page }) => {

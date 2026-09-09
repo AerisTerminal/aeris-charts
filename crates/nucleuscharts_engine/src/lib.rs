@@ -1661,6 +1661,14 @@ impl ChartEngine {
                 return;
             }
             s.kind = kind;
+            if kind == SeriesKind::Candlestick {
+                s.native_primitives.retain(|primitive| {
+                    !matches!(
+                        &primitive.kind,
+                        native_primitives::NativeSeriesPrimitiveKind::DeltaTooltip(_)
+                    )
+                });
+            }
             if kind != SeriesKind::Feature {
                 s.feature = None;
             }

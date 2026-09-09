@@ -1,6 +1,7 @@
 /** Primitive and compatibility helpers built on Nucleus's existing engine and extension boundaries. */
 
 import { chart_impl, time_to_utc_seconds } from "./impl.js";
+import { nucleuscharts_error } from "./errors.js";
 import {
   attach_native_bands_indicator,
   attach_native_anchored_text,
@@ -789,7 +790,10 @@ export interface delta_tooltip_handle extends detachable_feature {
   clear(): void;
 }
 
-/** Official one/two-pointer delta tooltip, with all bar lookup and geometry owned by Rust. */
+/**
+ * Official one/two-pointer delta tooltip, with all bar lookup and geometry owned by Rust.
+ * Candlestick series intentionally reject this interaction; use `create_tooltip` there.
+ */
 export function create_delta_tooltip(
   chart: chart_api,
   options: delta_tooltip_options,
@@ -797,6 +801,12 @@ export function create_delta_tooltip(
   const { series, on_active_range_change, ...native_options } = options;
   if (!(chart instanceof chart_impl)) {
     throw new Error("engine-owned delta tooltips require a Nucleus chart instance");
+  }
+  if (series.series_type() === "candlestick") {
+    throw new nucleuscharts_error(
+      "unsupported_operation",
+      "delta tooltip is not supported on candlestick series; use create_tooltip for candle inspection",
+    );
   }
   const native = attach_native_delta_tooltip(series, JSON.stringify(native_options));
   let last_range_json = "null";
