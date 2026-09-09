@@ -112,7 +112,7 @@ visibility without replacing the canonical grid style/color; that presentation c
 library default.
 
 Mouse-wheel time-scale zoom uses the engine's high-sensitivity response: a saturated wheel step
-changes bar spacing by 20%, remains anchored under the pointer, and smaller trackpad deltas stay
+changes bar spacing by 15%, remains anchored under the pointer, and smaller trackpad deltas stay
 proportional. Horizontal wheel/trackpad panning keeps its independent scroll coefficient.
 
 The built-in series live-price line is engine-owned. `price_line_extent` defaults to `"partial"`

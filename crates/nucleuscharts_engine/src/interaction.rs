@@ -516,10 +516,10 @@ pub const PINCH_ZOOM_INTENSITY: f64 = 5.0;
 /// coefficient, and minus is for the 'natural' scroll".
 pub const WHEEL_SCROLL_PX_PER_DELTA: f64 = -80.0;
 
-/// Nucleus wheel zoom sensitivity. A value of 2 makes one saturated mouse-wheel step change bar
-/// spacing by 20% instead of the 10% Lightweight Charts baseline, matching the faster interaction
-/// expected from TradingView's full chart while keeping trackpad deltas proportional.
-pub const WHEEL_ZOOM_INTENSITY: f64 = 2.0;
+/// Nucleus wheel zoom sensitivity. A value of 1.5 makes one saturated mouse-wheel step change bar
+/// spacing by 15% instead of the 10% Lightweight Charts baseline, keeping the interaction faster
+/// without making each wheel step overly aggressive. Trackpad deltas remain proportional.
+pub const WHEEL_ZOOM_INTENSITY: f64 = 1.5;
 
 /// Convert a host-normalized wheel delta to the engine zoom increment. The input still saturates at
 /// one normalized wheel step so unusually large OS/browser deltas cannot create an unbounded jump;
@@ -1342,12 +1342,12 @@ mod tests {
 
     #[test]
     fn wheel_zoom_is_high_sensitivity_while_pinch_and_scroll_keep_their_reference_coefficients() {
-        assert_eq!(wheel_zoom_scale(0.42), 0.84);
-        assert_eq!(wheel_zoom_scale(-3.7), -2.0);
+        assert_eq!(wheel_zoom_scale(0.42), 0.63);
+        assert_eq!(wheel_zoom_scale(-3.7), -1.5);
         assert_eq!(wheel_zoom_scale(0.0), 0.0);
         assert_eq!(pinch_zoom_scale(0.1), 0.5);
         assert_eq!(WHEEL_SCROLL_PX_PER_DELTA, -80.0);
-        assert_eq!(WHEEL_ZOOM_INTENSITY, 2.0);
+        assert_eq!(WHEEL_ZOOM_INTENSITY, 1.5);
         assert_eq!(PINCH_ZOOM_INTENSITY, 5.0);
     }
 
