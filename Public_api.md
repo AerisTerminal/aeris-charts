@@ -13,6 +13,8 @@ entry point and `./design.css` are the only npm export paths. The supported root
   `chart.price_scale()`/`pane.price_scale()`, and series scale identity/rebinding;
 - built-in series, indicators, drawing kinds, options, themes, data ingestion, interactions,
   subscriptions, screenshots, and lifecycle operations declared by those handles;
+- visible-range volume profiles through `chart.add_volume_profile(prices, volume, options)`,
+  returning a distribution handle with `options()`, `apply_options()`, `snapshot()` and `remove()`;
 - first-class tick-driven footprint / numbers-bar series through `chart.add_series("footprint")`,
   including object and typed-column trade ingestion, explicit/quote/tick-rule aggressor handling,
   per-level Bid × Ask/total/delta, POC, final/Max/Min/session delta, configurable diagonal and
@@ -45,6 +47,37 @@ entry point and `./design.css` are the only npm export paths. The supported root
 - read-only backend diagnostics through `chart.backend_status()`, including the requested and active
   backend, stable fallback stage/reason, secure-context and `navigator.gpu` exposure, and optional
   unstable platform detail. `chart.backend()` retains its existing active-backend return value.
+
+### Volume profile
+
+```ts
+const volume = chart.add_series("histogram", { visible: false });
+volume.set_data(volumeBars); // { time, value }, actual volume in the host's chosen units
+const profile = chart.add_volume_profile(candles, volume, {
+  rows: 48, value_area_percent: 70, width_percent: 25,
+});
+const distribution = profile.snapshot(); // rows, total_volume, bar_count, poc, value-area bounds
+profile.apply_options({ show_poc: true, show_value_area: true });
+// profile.remove(); // idempotent; does not remove either source
+```
+
+The price source must initially be a candlestick/bar series and volume a scalar series from the
+same chart. Volume is matched by exact timestamp; missing, whitespace, nonfinite, zero and negative
+volume contribute nothing. Each valid bar's volume is distributed uniformly over its high/low
+interval. Flat bars contribute to one bin. This OHLCV estimate is not exact traded volume at each
+price, buy/sell volume, or order flow. Demo volume is synthetic.
+
+POC is the center of the largest-volume bin (lowest price wins ties). The contiguous value area
+expands from POC toward the larger adjacent bin, choosing the lower bin on ties, until it reaches
+the requested fraction. Rows are limited to 1–512, area to >0–100%, width to >0–50% of the pane, and
+live profiles to 16 per chart. `snapshot().error` reports unrepresentable arithmetic; empty/missing
+volume produces empty rows and null levels. Invalid option updates leave the prior options intact.
+
+Profiles follow the source pane/scale and current visible time range. Source data updates and range
+changes recompute bins; color/width changes and pointer movement reuse them. Removing either source
+invalidates the handle. Profiles are runtime-only distributions, not scalar output series, and are
+not included in V1 state exports; recreate their bindings after restoring the source data.
+The older `create_volume_profile()` helper remains a drawing of caller-supplied bins.
 
 Generated `wasm-bindgen` classes, methods reachable only through implementation objects, telemetry,
 benchmark counters, demo globals, fixtures, and test hooks are internal even when JavaScript can

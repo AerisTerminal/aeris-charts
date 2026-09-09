@@ -1942,6 +1942,41 @@ export interface backend_status {
   readonly detail?: string;
 }
 
+/** Visible-range volume profile. OHLCV volume is spread uniformly across each bar's
+ * low/high range; these bins estimate activity and are not exact trade-at-price data. */
+export interface volume_profile_indicator_options {
+  /** Price rows, 1-512. Default 48. */
+  rows: number;
+  /** Contiguous volume coverage around POC, >0-100. Default 70. */
+  value_area_percent: number;
+  /** Width as a percentage of the pane, >0-50. Default 25. */
+  width_percent: number;
+  visible: boolean;
+  show_poc: boolean;
+  show_value_area: boolean;
+  color: string;
+  value_area_color: string;
+  poc_color: string;
+}
+export interface volume_profile_indicator_snapshot {
+  rows: readonly { low: number; high: number; volume: number }[];
+  total_volume: number;
+  bar_count: number;
+  poc: number | null;
+  value_area_low: number | null;
+  value_area_high: number | null;
+  calculation_revision: number;
+  error: string | null;
+  method: "ohlcv_uniform";
+}
+export interface volume_profile_indicator_api {
+  readonly id: number;
+  options(): volume_profile_indicator_options;
+  apply_options(options: Partial<volume_profile_indicator_options>): void;
+  snapshot(): volume_profile_indicator_snapshot;
+  remove(): void;
+}
+
 /** The chart. Create with {@link create_chart}. */
 export interface chart_api {
   /** Active pane backend: `webgpu` when available, otherwise the shared `canvas2d` fallback. */
@@ -2040,6 +2075,11 @@ export interface chart_api {
   /** Add a session-anchored (UTC-day reset) VWAP line on the source's pane. `volume_source`
    *  supplies per-bar volume (e.g. the volume histogram series); `null`/omitted = unit weights. */
   add_vwap(source: series_api, volume_source?: series_api | null, options?: Partial<series_options>): series_api;
+  /** Create a Rust-calculated visible-range volume profile. Source must initially be OHLC;
+   * volume_source must be a scalar series on this chart. Missing timestamps, whitespace,
+   * nonpositive volume, and invalid price intervals contribute nothing. Source removal
+   * removes the indicator. Distribution handles are runtime-only, not V1 scalar bindings. */
+  add_volume_profile(source: series_api, volume_source: series_api, options?: Partial<volume_profile_indicator_options>): volume_profile_indicator_api;
   /** Add a Rust-native weighted moving-average line (linear weights, recent heaviest). */
   add_wma(source: series_api, period: number, options?: Partial<series_options>): series_api;
   apply_options(options: deep_partial<chart_options>): void;

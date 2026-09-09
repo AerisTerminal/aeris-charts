@@ -11,12 +11,12 @@ import {
   create_tooltip,
   create_trend_line,
   create_vertical_line,
-  create_volume_profile,
   default_theme_name,
   enable_accessibility,
   enable_brushable_area_interaction,
   theme_palette,
 } from "./dist/nucleuscharts_financial.js";
+import { volume_fixture } from "./fixture_features.js";
 import { hydrate_icons } from "./demo_icons.js";
 
 const PRIMARY_BLUE = theme_palette(default_theme_name).primary;
@@ -328,7 +328,14 @@ function primitive_features(chart, series, bars) {
     { id: "image-watermark", label: "Image watermark", detail: "Engine raster primitive", icon: "lab", activate: () => { const image = document.createElement("canvas"); image.width = 96; image.height = 96; const context = image.getContext("2d"); context.fillStyle = "#2962ff"; context.beginPath(); context.roundRect(8, 8, 80, 80, 20); context.fill(); context.fillStyle = "white"; context.font = "700 52px Inter, sans-serif"; context.textAlign = "center"; context.textBaseline = "middle"; context.fillText("N", 48, 52); const handle = create_image_watermark(series, image, { max_width: 96, max_height: 96, alpha: .22 }); return () => handle.detach(); } },
     { id: "tooltip", label: "Tooltip", detail: "Hover values", icon: "lab", activate: () => { const handle = create_tooltip(chart, { series }); return () => handle.detach(); } },
     { id: "delta-tooltip", label: "Delta tooltip", detail: "Drag comparison", icon: "lab", activate: () => { const handle = create_delta_tooltip(chart, { series }); return () => handle.detach(); } },
-    { id: "volume-profile", label: "Volume profile", detail: "Time-anchored rows", icon: "chart", activate: () => { const base = start.close; const profile = Array.from({ length: 15 }, (_, index) => ({ price: base + (index - 7) * .45, vol: 4 + (index * 13) % 25 })); const handle = create_volume_profile(series, { time: start.time, profile, width: 12 }); return () => handle.detach(); } },
+    { id: "volume-profile", label: "Volume profile", detail: "Visible range · POC · value area", icon: "chart", activate: () => {
+      const volume = chart.add_series("histogram", { visible: false, title: "Profile volume (synthetic)" });
+      volume.set_data(volume_fixture(bars));
+      let indicator;
+      try { indicator = chart.add_volume_profile(series, volume); }
+      catch (error) { chart.remove_series(volume); throw error; }
+      return () => { indicator.remove(); chart.remove_series(volume); };
+    } },
     { id: "accessibility", label: "Accessibility", detail: "Keyboard + live text", icon: "lab", activate: () => { const handle = enable_accessibility(chart, { chart_title: "Nucleus feature lab chart" }); return () => handle.detach(); } },
   ];
 }

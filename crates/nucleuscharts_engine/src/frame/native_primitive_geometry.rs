@@ -991,6 +991,80 @@ impl ChartEngine {
                         x = x.saturating_add(dash + gap);
                     }
                 }
+                NativeSeriesPrimitiveKind::VolumeProfileIndicator(state) => {
+                    if !state.options.visible {
+                        continue;
+                    }
+                    let profile = &state.snapshot.profile;
+                    let Some(poc) = profile.poc_index else {
+                        continue;
+                    };
+                    let max_volume = profile.rows[poc].volume;
+                    if max_volume <= 0.0 {
+                        continue;
+                    }
+                    let right = (self.pane_w - 4.0).max(0.0);
+                    let width = right * state.options.width_percent / 100.0;
+                    let color =
+                        Color::parse_css(&state.options.color).expect("validated profile color");
+                    let area_color = Color::parse_css(&state.options.value_area_color)
+                        .expect("validated value-area color");
+                    let poc_color =
+                        Color::parse_css(&state.options.poc_color).expect("validated POC color");
+                    for (index, row) in profile.rows.iter().enumerate() {
+                        if row.volume <= 0.0 {
+                            continue;
+                        }
+                        let (x, w) =
+                            positions_box(right - width * row.volume / max_volume, right, hpr);
+                        let (y, h) = positions_box(
+                            scale.price_to_coordinate(row.low, base_value),
+                            scale.price_to_coordinate(row.high, base_value),
+                            vpr,
+                        );
+                        let in_area = state.options.show_value_area
+                            && profile.value_area_low_index.is_some_and(|low| index >= low)
+                            && profile
+                                .value_area_high_index
+                                .is_some_and(|high| index <= high);
+                        out.push(Prim::Rect {
+                            rect: IRect {
+                                x,
+                                y,
+                                w,
+                                h: h.max(1),
+                            },
+                            color: if in_area { area_color } else { color },
+                        });
+                    }
+                    let mut levels = Vec::with_capacity(3);
+                    if state.options.show_value_area {
+                        if let (Some(low), Some(high)) =
+                            (profile.value_area_low_index, profile.value_area_high_index)
+                        {
+                            levels.push((profile.rows[low].low, area_color, LineStyle::Dashed));
+                            levels.push((profile.rows[high].high, area_color, LineStyle::Dashed));
+                        }
+                    }
+                    if state.options.show_poc {
+                        levels.push((
+                            profile.rows[poc].low
+                                + (profile.rows[poc].high - profile.rows[poc].low) * 0.5,
+                            poc_color,
+                            LineStyle::Solid,
+                        ));
+                    }
+                    for (price, color, style) in levels {
+                        out.push(Prim::HLine {
+                            y: (scale.price_to_coordinate(price, base_value) * vpr).round() as i32,
+                            x0: ((right - width) * hpr).round() as i32,
+                            x1: (right * hpr).round() as i32,
+                            width: vpr.floor().max(1.0) as i32,
+                            style,
+                            color,
+                        });
+                    }
+                }
                 NativeSeriesPrimitiveKind::VolumeProfile { data, options } => {
                     let Some(logical) = self.time_to_index(data.time as f64, false) else {
                         continue;

@@ -360,6 +360,7 @@ pub(crate) enum NativeSeriesPrimitiveKind {
         second_price: f64,
         options: TrendLineOptions,
     },
+    VolumeProfileIndicator(crate::volume_profile::VolumeProfileIndicatorState),
     VolumeProfile {
         data: VolumeProfileData,
         options: VolumeProfileOptions,
@@ -396,6 +397,7 @@ impl NativeSeriesPrimitive {
                     items.capacity() * core::mem::size_of::<SessionHighlightingData>()
                 })
             }
+            NativeSeriesPrimitiveKind::VolumeProfileIndicator(state) => state.capacity_bytes(),
             NativeSeriesPrimitiveKind::VolumeProfile { data, .. } => {
                 data.profile.capacity() * core::mem::size_of::<VolumeProfilePoint>()
             }
@@ -514,7 +516,7 @@ impl ChartEngine {
         Some(id)
     }
 
-    fn insert_native_primitive(
+    pub(crate) fn insert_native_primitive(
         &mut self,
         series_id: SeriesId,
         kind: NativeSeriesPrimitiveKind,

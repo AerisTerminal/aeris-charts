@@ -1221,6 +1221,7 @@ impl ChartEngine {
             self.layout_for_frame();
             self.frame_build_stats.layout_rebuilds += 1;
         }
+        self.refresh_volume_profile_indicators();
         let visible = self.visible_range_for_frame();
         if autoscale_dirty {
             self.autoscale_visible();

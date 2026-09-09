@@ -6,6 +6,7 @@
 //!   Target B — 1M-bar load under 300 ms:      `set_series_data` of 1,000,000 bars
 //!   Target C — canonical pointer sample:      fixed-capacity resolver under 0.01 ms/sample
 //!   Target D — footprint history/live/correction ingestion plus shared-frame construction
+//!   Target E — 100k visible-bar volume profile refresh and cached shared frame
 //!
 //! Report-only by default (prints numbers + PASS/FAIL). Set `NUCLEUSCHARTS_PERF_STRICT=1` to exit non-zero
 //! on any failure so CI can treat it as a hard gate; thresholds are machine-dependent, so the
@@ -280,7 +281,56 @@ fn main() {
     let d_pass =
         d_load_pass && d_live_pass && d_correction_pass && d_frame_pass && d_retention_pass;
 
-    let all_pass = a_pass && b_pass && c_pass && d_pass;
+    // Profile work is measured through the real frame path, including timestamp matching.
+    let volume = load_chart.add_series(SeriesKind::Histogram);
+    let values = vec![1000.0; LOAD_BARS];
+    load_chart
+        .set_series_data(volume, &t, &values, &values, &values, &values)
+        .unwrap();
+    load_chart
+        .series
+        .iter_mut()
+        .find(|series| series.id == volume)
+        .unwrap()
+        .visible = false;
+    load_chart.time_scale.set_width(1600.0);
+    load_chart.set_min_bar_spacing(0.001);
+    load_chart.build_frame();
+    load_chart.set_visible_logical_range(900_000.0, 999_999.0);
+    let profile = load_chart
+        .add_volume_profile_indicator(0, volume, Default::default())
+        .unwrap();
+    let start = Instant::now();
+    load_chart.build_frame();
+    let profile_ms = start.elapsed().as_secs_f64() * 1000.0;
+    assert_eq!(
+        load_chart
+            .volume_profile_indicator_snapshot(profile)
+            .unwrap()
+            .profile
+            .bar_count,
+        100_000
+    );
+    let revision = load_chart
+        .volume_profile_indicator_snapshot(profile)
+        .unwrap()
+        .calculation_revision;
+    let start = Instant::now();
+    for _ in 0..FRAMES {
+        load_chart.build_frame();
+    }
+    let cached_ms = start.elapsed().as_secs_f64() * 1000.0 / FRAMES as f64;
+    assert_eq!(
+        load_chart
+            .volume_profile_indicator_snapshot(profile)
+            .unwrap()
+            .calculation_revision,
+        revision
+    );
+    println!("Target E — 100k visible-bar volume profile (48 rows):");
+    let e_refresh = report("profile refresh + frame", profile_ms, FRAME_BUDGET_MS);
+    let e_cached = report("cached profile frame", cached_ms, FRAME_BUDGET_MS);
+    let all_pass = a_pass && b_pass && c_pass && d_pass && e_refresh && e_cached;
     println!(
         "\n{}",
         if all_pass {

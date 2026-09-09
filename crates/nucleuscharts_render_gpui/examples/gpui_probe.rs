@@ -447,6 +447,7 @@ struct Probe {
     fixtures: NativeFixtures,
     sma_id: Option<SeriesId>,
     volume_id: Option<SeriesId>,
+    volume_profile: Option<(u32, SeriesId)>,
     rsi_id: Option<SeriesId>,
     legend: String,
     click_status: String,
@@ -528,6 +529,7 @@ impl Probe {
             fixtures: NativeFixtures::default(),
             sma_id: None,
             volume_id: None,
+            volume_profile: None,
             rsi_id: None,
             legend: "O —  H —  L —  C —".to_string(),
             click_status: "ready".to_string(),
@@ -752,6 +754,45 @@ impl Probe {
                     series.line_width = Some(2.0);
                 }
             }
+        }
+        self.dirty = true;
+    }
+
+    fn toggle_volume_profile(&mut self) {
+        if let Some((indicator, volume)) = self.volume_profile.take() {
+            self.engine.remove_native_primitive(indicator);
+            self.engine.remove_series(volume);
+        } else {
+            self.set_series_kind(SeriesKind::Candlestick);
+            let volume = self.engine.add_series(SeriesKind::Histogram);
+            self.engine
+                .series
+                .iter_mut()
+                .find(|series| series.id == volume)
+                .unwrap()
+                .visible = false;
+            let values: Vec<f64> = self
+                .source_bars
+                .close
+                .iter()
+                .zip(&self.source_bars.open)
+                .map(|(close, open)| (800.0 + (close - open).abs() * 4000.0).round())
+                .collect();
+            self.engine
+                .set_series_data(
+                    volume,
+                    &self.source_bars.times,
+                    &values,
+                    &values,
+                    &values,
+                    &values,
+                )
+                .unwrap();
+            let indicator = self
+                .engine
+                .add_volume_profile_indicator(0, volume, Default::default())
+                .unwrap();
+            self.volume_profile = Some((indicator, volume));
         }
         self.dirty = true;
     }
@@ -1223,6 +1264,10 @@ impl Probe {
             let volume = (high - low) * 25_000.0 + i as f64 * 31.0;
             self.engine
                 .update_series_bar(id, time, [volume, volume, volume, volume]);
+        }
+        if let Some((_, id)) = self.volume_profile {
+            let volume = (800.0 + (c - o).abs() * 4000.0).round();
+            self.engine.update_series_bar(id, time, [volume; 4]);
         }
         self.source_bars.times.push(time);
         self.source_bars.open.push(o);
@@ -2294,6 +2339,7 @@ enum DemoAction {
     AreaColor,
     Sma,
     Volume,
+    VolumeProfile,
     Rsi,
     Split(SplitDirection),
     Close,
@@ -2665,6 +2711,7 @@ impl InteractiveDemo {
             }),
             DemoAction::Sma => self.update_root(cx, Probe::toggle_sma),
             DemoAction::Volume => self.update_root(cx, Probe::toggle_volume),
+            DemoAction::VolumeProfile => self.update_root(cx, Probe::toggle_volume_profile),
             DemoAction::Rsi => self.update_root(cx, Probe::toggle_rsi),
             DemoAction::Split(direction) => self.split(direction, true, cx),
             DemoAction::Close => self.close_active(),
@@ -2863,6 +2910,9 @@ impl InteractiveDemo {
             DemoAction::Sma => root
                 .as_ref()
                 .is_some_and(|chart| chart.read(cx).sma_id.is_some()),
+            DemoAction::VolumeProfile => root
+                .as_ref()
+                .is_some_and(|chart| chart.read(cx).volume_profile.is_some()),
             DemoAction::Volume => root
                 .as_ref()
                 .is_some_and(|chart| chart.read(cx).volume_id.is_some()),
@@ -3324,6 +3374,7 @@ impl Render for InteractiveDemo {
                 vec![
                     b("SMA(20)", DemoAction::Sma),
                     b("volume overlay", DemoAction::Volume),
+                    b("volume profile", DemoAction::VolumeProfile),
                     b("RSI(14) pane", DemoAction::Rsi),
                 ],
             ),
@@ -3864,6 +3915,38 @@ mod tests {
             2,
             "intermediate staircase samples must not become knots"
         );
+    }
+
+    #[test]
+    fn volume_profile_demo_owns_sources_and_tracks_live_append() {
+        let mut probe = Probe::new_interactive(32);
+        probe.toggle_volume_profile();
+        let (id, volume) = probe.volume_profile.unwrap();
+        probe.engine.time_scale.set_width(1024.0);
+        probe.engine.fit_content();
+        probe.engine.build_frame();
+        let before = probe
+            .engine
+            .volume_profile_indicator_snapshot(id)
+            .unwrap()
+            .profile
+            .total_volume;
+        probe.append_bar();
+        probe.engine.fit_content();
+        probe.engine.build_frame();
+        assert!(
+            probe
+                .engine
+                .volume_profile_indicator_snapshot(id)
+                .unwrap()
+                .profile
+                .total_volume
+                > before
+        );
+        probe.toggle_volume_profile();
+        assert!(probe.volume_profile.is_none());
+        assert!(probe.engine.volume_profile_indicator_snapshot(id).is_none());
+        assert!(!probe.engine.remove_series(volume));
     }
 
     #[test]

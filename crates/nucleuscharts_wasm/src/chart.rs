@@ -1788,6 +1788,72 @@ impl NucleusChart {
             .add_native_crosshair_highlight(series_id, color)
     }
 
+    /// Create a calculated visible-range OHLCV distribution, not a pre-binned primitive.
+    pub fn add_volume_profile_indicator(
+        &mut self,
+        source: u32,
+        volume_source: u32,
+        options_json: &str,
+    ) -> u32 {
+        let Ok(options) = serde_json::from_str::<nucleuscharts_engine::VolumeProfileIndicatorOptions>(
+            options_json,
+        ) else {
+            return 0;
+        };
+        self.inner
+            .borrow_mut()
+            .engine
+            .add_volume_profile_indicator(source, volume_source, options)
+            .unwrap_or(0)
+    }
+
+    pub fn set_volume_profile_indicator_options(&mut self, id: u32, options_json: &str) -> bool {
+        let Ok(options) = serde_json::from_str::<nucleuscharts_engine::VolumeProfileIndicatorOptions>(
+            options_json,
+        ) else {
+            return false;
+        };
+        self.inner
+            .borrow_mut()
+            .engine
+            .set_volume_profile_indicator_options(id, options)
+    }
+
+    pub fn volume_profile_indicator_options(&self, id: u32) -> String {
+        serde_json::to_string(
+            &self
+                .inner
+                .borrow()
+                .engine
+                .volume_profile_indicator_options(id),
+        )
+        .expect("validated profile options serialize")
+    }
+
+    pub fn volume_profile_indicator_snapshot(&mut self, id: u32) -> String {
+        let mut inner = self.inner.borrow_mut();
+        let Some(snapshot) = inner.engine.volume_profile_indicator_snapshot(id) else {
+            return "null".into();
+        };
+        let profile = &snapshot.profile;
+        let rows = profile
+            .rows
+            .iter()
+            .map(
+                |row| serde_json::json!({ "low": row.low, "high": row.high, "volume": row.volume }),
+            )
+            .collect::<Vec<_>>();
+        let poc = profile.poc_index.map(|index| {
+            let row = &profile.rows[index];
+            row.low + (row.high - row.low) * 0.5
+        });
+        serde_json::json!({ "rows": rows, "total_volume": profile.total_volume, "bar_count": profile.bar_count,
+            "poc": poc, "value_area_low": profile.value_area_low_index.map(|index| profile.rows[index].low),
+            "value_area_high": profile.value_area_high_index.map(|index| profile.rows[index].high),
+            "calculation_revision": snapshot.calculation_revision, "error": snapshot.error,
+            "method": "ohlcv_uniform" }).to_string()
+    }
+
     /// Attach the official time-anchored profile schema (`time`, `profile[{price,vol}]`, `width`).
     pub fn add_native_volume_profile(
         &mut self,

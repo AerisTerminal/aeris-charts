@@ -17,6 +17,10 @@ mod host_layout;
 mod indicators;
 mod interaction;
 mod native_primitives;
+mod volume_profile;
+pub use volume_profile::{
+    VolumeProfileIndicatorOptions, VolumeProfileIndicatorSnapshot, MAX_VOLUME_PROFILE_INDICATORS,
+};
 mod ordering;
 mod persistence;
 mod price_line_api;
@@ -1683,6 +1687,7 @@ impl ChartEngine {
         }
         for rid in &tombstones {
             let rid = *rid;
+            self.drop_volume_profiles_using(rid);
             if let Some(entry) = self.series.iter_mut().find(|s| s.id == rid) {
                 entry.removed = true;
                 entry.visible = false;

@@ -4,6 +4,8 @@
 //! rendering. It consumes a close/value slice and returns a derived value column that the
 //! headless engine can install as an ordinary series. `None` represents the warm-up window.
 
+pub mod volume_profile;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BollingerPoint {
     pub middle: Option<f64>,

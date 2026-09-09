@@ -39,6 +39,7 @@ import type {
   trading_intent, trading_intent_handler, trading_position, trading_preview, trading_snapshot,
   trading_style_options, instrument_metadata, working_order,
   visible_logical_range_handler, visible_time_range_handler,
+  volume_profile_indicator_api, volume_profile_indicator_options, volume_profile_indicator_snapshot,
 } from "./types.js";
 import {
   DRAWING_KIND_TO_U8, FEATURE_KIND_TO_U8, KIND_TO_U8, LINE_STYLE_TO_U8, LINE_TYPE_TO_U8,
@@ -3346,6 +3347,43 @@ export class chart_impl implements chart_api {
 
   add_vwap(source: series_api, volume_source?: series_api | null, options?: Partial<series_options>): series_api {
     return this.indicator_series(this.wasm.add_vwap(source.id, volume_source?.id ?? -1), options);
+  }
+
+  add_volume_profile(source: series_api, volume_source: series_api, options: Partial<volume_profile_indicator_options> = {}): volume_profile_indicator_api {
+    const wasm = this.wasm;
+    if (this.series_by_id.get(source.id) !== source || this.series_by_id.get(volume_source.id) !== volume_source) {
+      throw new nucleuscharts_error("invalid_handle", "volume profile requires two live series from this chart");
+    }
+    const id = wasm.add_volume_profile_indicator(source.id, volume_source.id, JSON.stringify(options));
+    if (id === 0) throw new nucleuscharts_error("invalid_options", "invalid volume-profile sources, options, or indicator limit (16)");
+    let removed = false;
+    const read_options = (): volume_profile_indicator_options => {
+      const result = removed ? null : JSON.parse(this.wasm.volume_profile_indicator_options(id)) as volume_profile_indicator_options | null;
+      if (result === null) throw new nucleuscharts_error("stale_handle", "volume-profile indicator has been removed");
+      return result;
+    };
+    this.repaint();
+    return {
+      id,
+      options: read_options,
+      apply_options: (patch) => {
+        const merged = { ...read_options(), ...patch };
+        if (!this.wasm.set_volume_profile_indicator_options(id, JSON.stringify(merged))) {
+          throw new nucleuscharts_error("invalid_options", "invalid volume-profile options");
+        }
+        this.repaint();
+      },
+      snapshot: () => {
+        const result = removed ? null : JSON.parse(this.wasm.volume_profile_indicator_snapshot(id)) as volume_profile_indicator_snapshot | null;
+        if (result === null) throw new nucleuscharts_error("stale_handle", "volume-profile indicator has been removed");
+        return result;
+      },
+      remove: () => {
+        if (removed) return;
+        if (this.wasm.remove_native_primitive(id)) this.repaint();
+        removed = true;
+      },
+    };
   }
 
   add_wma(source: series_api, period: number, options?: Partial<series_options>): series_api {

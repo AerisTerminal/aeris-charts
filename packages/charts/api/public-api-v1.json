@@ -63,13 +63,13 @@
     },
     {
       "path": "theme.d.ts",
-      "bytes": 1536,
-      "sha256": "4f7e12a79bc83913d65ff977f44e0962b075d13364fbfab34a364c8a8562aaed"
+      "bytes": 1557,
+      "sha256": "7f595214e1355cd158f608c01a6a8ddad13eb5c01b5afe03ed4511e478d35c8f"
     },
     {
       "path": "types.d.ts",
-      "bytes": 102526,
-      "sha256": "4d60b8e894c9a6cdd650f7a4efb18662ff43d7470aa18a342d8bcfb43307daf5"
+      "bytes": 104433,
+      "sha256": "150e9d218ff0d50f8c123fa4a567159abbf2605db18f7112720fbe03894896ca"
     }
   ]
 }
