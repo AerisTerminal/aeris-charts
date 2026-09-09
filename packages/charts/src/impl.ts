@@ -112,6 +112,7 @@ const SERIES_JSON_OPTION_KEYS = [
   "countdown_visible",
   "price_line_visible",
   "price_line_source",
+  "price_line_extent",
   "price_line_width",
   "price_line_color",
   "price_line_style",
@@ -918,10 +919,6 @@ class series_impl implements series_api {
   }
 
   /** Package-internal boundary for the first-class Rust primitive helpers. */
-  native_add_partial_price_line(): number {
-    this.assert_live();
-    return this.chart.wasm.add_native_partial_price_line(this.id);
-  }
   native_add_image_watermark(
     width: number,
     height: number,
@@ -1140,11 +1137,6 @@ function native_handle(series: series_impl, id: number): native_primitive_handle
       series.native_remove_primitive(id);
     },
   };
-}
-
-export function attach_native_partial_price_line(series: series_api): native_primitive_handle {
-  const owner = native_series(series);
-  return native_handle(owner, owner.native_add_partial_price_line());
 }
 
 export function attach_native_bands_indicator(

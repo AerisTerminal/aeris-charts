@@ -15,11 +15,11 @@ async function capture(page) {
   return PNG.sync.read(Buffer.from(data_url.split(",")[1], "base64"));
 }
 
-/** Colored pixel runs in the last-price line's row band (left half of the pane). */
+/** Colored pixel runs in the live-price line's row band. */
 function price_line_runs(png, y, is_line_pixel) {
   const runs = [];
   let cur = null;
-  for (let x = 0; x < Math.floor(png.width / 2); x++) {
+  for (let x = 0; x < png.width; x++) {
     const o = (y * png.width + x) * 4;
     if (is_line_pixel([png.data[o], png.data[o + 1], png.data[o + 2]])) {
       if (!cur) cur = { s: x, e: x };
@@ -43,7 +43,7 @@ function best_line_row(png, row, is_line_pixel) {
   let best_count = -1;
   for (let y = Math.max(row - 2, 0); y <= Math.min(row + 2, png.height - 1); y++) {
     let count = 0;
-    for (let x = 0; x < Math.floor(png.width / 2); x++) {
+    for (let x = 0; x < png.width; x++) {
       const o = (y * png.width + x) * 4;
       if (is_line_pixel([png.data[o], png.data[o + 1], png.data[o + 2]])) count += 1;
     }
@@ -55,17 +55,28 @@ function best_line_row(png, row, is_line_pixel) {
   return best;
 }
 
-test("price line style select restyles the live price line", async ({ page }) => {
+test("native partial price line is default and shares full-line style and width semantics", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   await wait_for_chart(page);
-  // Pin a unique line color so candle pixels can never be mistaken for the price line. Keep
-  // the RAW coordinate: row = round(y·scale) — rounding y first drifts the target row by one
-  // device px at .5 boundaries.
+  // Give the partial line a visible right-side runway and pin a unique color so series pixels can
+  // never be mistaken for it. Hide the last-value chip so only the line contributes magenta.
   const probe = await page.evaluate(() => {
-    window.__main.apply_options({ price_line_color: "#ff00ff" });
+    window.__chart.time_scale().apply_options({ bar_spacing: 20, right_offset: 5 });
+    window.__main.apply_options({
+      price_line_color: "#ff00ff",
+      price_line_width: 3,
+      last_value_visible: false,
+    });
     const last = window.__data[window.__data.length - 1];
-    return { y: window.__main.price_to_coordinate(last.close) };
+    return {
+      y: window.__main.price_to_coordinate(last.close),
+      x: window.__chart.time_scale().time_to_coordinate(last.time),
+      extent: window.__main.options().price_line_extent,
+      width: window.__main.options().price_line_width,
+    };
   });
+  expect(probe.extent).toBe("partial");
+  expect(probe.width).toBe(3);
   const is_line = (c) => Math.abs(c[0] - 255) < 40 && Math.abs(c[1] - 0) < 40 && Math.abs(c[2] - 255) < 40;
   const css_w = await page.evaluate(() => document.querySelector("#chart_container").getBoundingClientRect().width);
 
@@ -75,14 +86,30 @@ test("price line style select restyles the live price line", async ({ page }) =>
   const scale = solid_png.width / css_w;
   const row = best_line_row(solid_png, Math.round(probe.y * scale), is_line);
   const solid = price_line_runs(solid_png, row, is_line);
-  expect(solid.length, "solid style: one continuous run").toBeLessThanOrEqual(2);
-  expect(solid.reduce((n, r) => n + (r.e - r.s), 0)).toBeGreaterThan(100);
+  expect(solid.length, "solid partial style: one continuous run").toBe(1);
+  expect(Math.abs(solid[0].s - Math.round(probe.x * scale)), "partial line starts at tracked bar").toBeLessThanOrEqual(3);
+  expect(solid[0].e - solid[0].s, "partial line reaches toward the price axis").toBeGreaterThan(80);
 
   await page.selectOption("#price_line_style", "1"); // dotted
   await wait_for_chart(page);
   const dotted_png = await capture(page);
   const dotted = price_line_runs(dotted_png, best_line_row(dotted_png, row, is_line), is_line);
-  expect(dotted.length, "dotted style: many short runs").toBeGreaterThan(10);
+  expect(dotted.length, "dotted style: repeated short runs").toBeGreaterThan(6);
+
+  await page.selectOption("#price_line_style", "2"); // dashed
+  await wait_for_chart(page);
+  const dashed_png = await capture(page);
+  const dashed = price_line_runs(dashed_png, best_line_row(dashed_png, row, is_line), is_line);
+  expect(dashed.length, "dashed style: multiple long runs").toBeGreaterThan(3);
+  expect(dashed.length).toBeLessThan(dotted.length);
+
+  await page.selectOption("#price_line_style", "0");
+  await page.selectOption("#price_line_extent", "full");
+  await wait_for_chart(page);
+  const full_png = await capture(page);
+  const full = price_line_runs(full_png, best_line_row(full_png, row, is_line), is_line);
+  expect(full.length).toBe(1);
+  expect(full[0].s, "full extent remains explicitly available").toBeLessThanOrEqual(2);
 });
 
 test("reset view button restores time defaults and re-fits a contracted price scale", async ({ page }) => {

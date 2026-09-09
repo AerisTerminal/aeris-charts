@@ -397,14 +397,20 @@
       <label>size <input type="range" id="font_size" min="8" max="20" step="1" value="12"><span id="font_size_val">12</span></label>
     </div>
 
-    <div class="group" data-caption="Series chrome" title="Built-in last-price line and last-value axis label on the main series (reference defaults: both on; the line follows the bar direction color)">
+    <div class="group" data-caption="Series chrome" title="Built-in live-price line and last-value axis label. Nucleus defaults the line to the tracked value → right edge; full width remains available explicitly.">
       <h2>Series chrome</h2>
       <label><input type="checkbox" id="price_line_toggle" checked> price line</label>
+      <label title="Live price line extent (price_line_extent)">extent
+        <select id="price_line_extent">
+          <option value="partial" selected>partial</option>
+          <option value="full">full</option>
+        </select>
+      </label>
       <label title="Live price line style (price_line_style)">style
         <select id="price_line_style">
           <option value="0">solid</option>
-          <option value="1">dotted</option>
-          <option value="2" selected>dashed</option>
+          <option value="1" selected>dotted</option>
+          <option value="2">dashed</option>
         </select>
       </label>
       <label><input type="checkbox" id="last_value_toggle" checked> last value</label>
@@ -1241,6 +1247,10 @@ function sync_active_toolbar() {
     : kind;
   const radio = document.querySelector(`input[name="series"][value="${presented_kind}"]`);
   for (const peer of document.querySelectorAll('input[name="series"]')) peer.checked = peer === radio;
+  document.getElementById("price_line_toggle").checked = options.price_line_visible ?? true;
+  document.getElementById("price_line_extent").value = options.price_line_extent ?? "partial";
+  document.getElementById("price_line_style").value = String(options.price_line_style ?? 1);
+  document.getElementById("last_value_toggle").checked = options.last_value_visible ?? true;
   sync_style_visibility(kind);
   sync_comparison_controls();
 }
@@ -1270,6 +1280,7 @@ document.getElementById("grid_style").addEventListener("change", apply_grid_styl
 
 // Built-in last-price line + last-value label toggles (active cell's series).
 document.getElementById("price_line_toggle").addEventListener("change", (e) => active_series().apply_options({ price_line_visible: e.target.checked }));
+document.getElementById("price_line_extent").addEventListener("change", (e) => active_series().apply_options({ price_line_extent: e.target.value }));
 document.getElementById("price_line_style").addEventListener("change", (e) => active_series().apply_options({ price_line_style: Number(e.target.value) }));
 document.getElementById("reset_view_btn").addEventListener("click", () => active_chart_router.reset_view());
 document.getElementById("last_value_toggle").addEventListener("change", (e) => active_series().apply_options({ last_value_visible: e.target.checked }));

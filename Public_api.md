@@ -107,6 +107,13 @@ The declaration manifest at `packages/charts/api/public-api-v1.json` records eve
 declaration file. CI runs `npm run check:api`; after deliberate review, update it with
 `npm run update:api`.
 
+The built-in series live-price line is engine-owned. `price_line_extent` defaults to `"partial"`
+(tracked bar/value to the pane's right edge); `"full"` preserves the conventional pane-wide line.
+Both extents use the same `price_line_source`, color, width, and line-style options, including solid,
+dotted, and dashed modes. Indicator outputs inherit the same default because they are ordinary engine
+series. `create_partial_price_line()` remains only as a compatibility controller over these canonical
+series options, not a separate primitive or rendering implementation.
+
 ## Experimental surfaces
 
 Custom series, pane/series/canvas primitives, the exported custom-series/primitive feature packs,

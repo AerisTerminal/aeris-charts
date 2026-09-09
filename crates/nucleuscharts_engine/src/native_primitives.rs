@@ -341,7 +341,6 @@ pub(crate) enum NativeSeriesPrimitiveKind {
     },
     BandsIndicator(BandsIndicatorOptions),
     OverlayPriceScale(OverlayPriceScaleOptions),
-    PartialPriceLine,
     AccessibilityFocus(AccessibilityFocusState),
     SessionHighlighting(SessionHighlightingState),
     HighlightBarCrosshair {
@@ -529,10 +528,6 @@ impl ChartEngine {
             .push(NativeSeriesPrimitive { id, kind });
         self.invalidate_frame_series(series_id);
         Some(id)
-    }
-
-    pub fn add_partial_price_line(&mut self, series_id: SeriesId) -> Option<NativePrimitiveId> {
-        self.insert_native_primitive(series_id, NativeSeriesPrimitiveKind::PartialPriceLine)
     }
 
     pub fn add_bands_indicator(
@@ -1497,7 +1492,6 @@ mod tests {
     #[test]
     fn official_primitives_emit_shared_underlay_and_series_geometry() {
         let mut chart = chart();
-        chart.add_partial_price_line(0).unwrap();
         chart
             .add_session_highlighting(0, SessionHighlightingOptions::default())
             .unwrap();
@@ -1534,21 +1528,6 @@ mod tests {
             primitive,
             Prim::Rect { color, .. } if *color == profile_options.row_color
         )));
-        // The official partial line's 4:2 dash is emitted as exact solid runs rather than the
-        // generic line-style approximation.
-        assert!(
-            pane.main
-                .iter()
-                .filter(|primitive| matches!(
-                    primitive,
-                    Prim::HLine {
-                        style: nucleuscharts_render::draw_list::LineStyle::Solid,
-                        ..
-                    }
-                ))
-                .count()
-                > 2
-        );
     }
 
     #[test]

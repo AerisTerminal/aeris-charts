@@ -3209,6 +3209,7 @@ fn series_style_options_use_nucleus_defaults() {
         "last_value_visible",
         "price_line_visible",
         "price_line_source",
+        "price_line_extent",
         "price_line_width",
         "price_line_color",
         "price_line_style",
@@ -3240,6 +3241,7 @@ fn series_style_options_use_nucleus_defaults() {
     assert_eq!(options["last_value_visible"], true);
     assert_eq!(options["price_line_visible"], true);
     assert_eq!(options["price_line_source"], 0); // PriceLineSource.LastBar
+    assert_eq!(options["price_line_extent"], "partial");
     assert_eq!(options["price_line_width"], 1.0);
     assert_eq!(options["price_line_color"], "");
     assert_eq!(options["price_line_style"], 1); // LineStyle.Dotted
@@ -3274,6 +3276,7 @@ fn series_apply_options_json_round_trips_all_new_fields() {
         "last_value_visible": false,
         "price_line_visible": false,
         "price_line_source": 1,
+        "price_line_extent": "full",
         "price_line_width": 2,
         "price_line_color": "#112233",
         "price_line_style": 0,
@@ -3309,6 +3312,7 @@ fn series_apply_options_json_round_trips_all_new_fields() {
     assert_eq!(options["last_value_visible"], false);
     assert_eq!(options["price_line_visible"], false);
     assert_eq!(options["price_line_source"], 1);
+    assert_eq!(options["price_line_extent"], "full");
     assert_eq!(options["price_line_width"], 2.0);
     assert_eq!(options["price_line_color"], "#112233");
     assert_eq!(options["price_line_style"], 0);
@@ -3393,13 +3397,14 @@ fn series_apply_options_json_ignores_unknown_keys_and_bad_input() {
     // Unknown keys, wrong types, and out-of-range enum values leave state untouched.
     assert!(chart.series_apply_options_json(
         0,
-        r#"{"unknown_key": 1, "line_style": 9, "price_line_source": 4, "line_visible": "yes",
+        r#"{"unknown_key": 1, "line_style": 9, "price_line_source": 4, "price_line_extent": "wide", "line_visible": "yes",
             "price_line_width": -2, "price_line_color": 7}"#
     ));
     let options: serde_json::Value =
         serde_json::from_str(&chart.series_options_json(0).unwrap()).unwrap();
     assert_eq!(options["line_style"], 0);
     assert_eq!(options["price_line_source"], 0);
+    assert_eq!(options["price_line_extent"], "partial");
     assert_eq!(options["line_visible"], true);
     assert_eq!(options["price_line_width"], 1.0);
     assert_eq!(options["price_line_color"], "");

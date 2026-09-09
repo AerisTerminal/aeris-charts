@@ -946,6 +946,11 @@ export interface series_options {
   price_line_visible?: boolean;
   /** Value the price line tracks (reference `PriceLineSource`): 0 LastBar (default), 1 LastVisible. */
   price_line_source?: 0 | 1;
+  /**
+   * Built-in live-price line extent. `"partial"` (default) draws from the tracked bar/value to the
+   * pane's right edge; `"full"` draws the conventional full-pane horizontal line.
+   */
+  price_line_extent?: "partial" | "full";
   /** Price line width in CSS px (reference `priceLineWidth`, default 1). */
   price_line_width?: number;
   /**

@@ -1567,13 +1567,6 @@ impl NucleusChart {
             .apply_feature_series_options(id, options_json)
     }
 
-    /// Attach the official partial-last-price primitive with Rust-owned state and geometry.
-    pub fn add_native_partial_price_line(&mut self, series_id: u32) -> u32 {
-        self.inner
-            .borrow_mut()
-            .add_native_partial_price_line(series_id)
-    }
-
     pub fn add_native_bands_indicator(&mut self, series_id: u32, options_json: &str) -> u32 {
         self.inner
             .borrow_mut()

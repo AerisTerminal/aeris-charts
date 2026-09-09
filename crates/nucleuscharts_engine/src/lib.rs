@@ -331,6 +331,34 @@ pub enum SeriesKind {
     Footprint,
 }
 
+/// Horizontal extent of a series' built-in live-price line.
+///
+/// `Partial` is Nucleus's default: draw from the tracked bar/value to the pane's right edge.
+/// `Full` preserves the conventional full-pane horizontal line for hosts that explicitly want it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PriceLineExtent {
+    #[default]
+    Partial,
+    Full,
+}
+
+impl PriceLineExtent {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Partial => "partial",
+            Self::Full => "full",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "partial" => Some(Self::Partial),
+            "full" => Some(Self::Full),
+            _ => None,
+        }
+    }
+}
+
 /// One custom series' last-value record (Phase C-c): the plugin's current value for the item
 /// (the LAST element of `priceValueBuilder`, mirroring the Close slot of the reference's
 /// `[last, max, min, last]` custom plot-row mapping — get-series-plot-row-creator.ts), the bar
@@ -642,10 +670,13 @@ pub struct SeriesEntry {
     /// price inside the last-value cluster. Hidden when the series has no usable bar interval
     /// or the host installed no clock (`now_override`).
     pub countdown_visible: bool,
-    /// reference `priceLineVisible` (default true): draw the built-in last-price line for this series.
+    /// Draw the built-in last-price line for this series (default true).
     pub price_line_visible: bool,
     /// reference `priceLineSource` (PriceLineSource): 0 = LastBar (default), 1 = LastVisible.
     pub price_line_source: u8,
+    /// Nucleus live-line extent (default `Partial`): from the tracked bar/value to the pane's right
+    /// edge. `Full` preserves the conventional full-pane horizontal price line.
+    pub price_line_extent: PriceLineExtent,
     /// reference `priceLineWidth` in CSS px (default 1).
     pub price_line_width: f64,
     /// reference `priceLineColor` (default `''`): a valid color controls both the built-in live
@@ -780,14 +811,16 @@ impl SeriesEntry {
             visible: true,
             baseline: None,
             last_price_animation: false,
-            // Reference defaults except for crosshair markers, which Nucleus leaves disabled until
-            // the host opts in per series or indicator output.
+            // Reference-compatible defaults except for explicit Nucleus product choices: the live
+            // price line defaults to partial extent, and crosshair markers stay disabled until the
+            // host opts in per series or indicator output.
             last_value_visible: true,
             title: String::new(),
             title_visible: true,
             countdown_visible: true,
             price_line_visible: true,
             price_line_source: 0,
+            price_line_extent: PriceLineExtent::Partial,
             price_line_width: 1.0,
             price_line_color: None,
             price_line_style: 1,

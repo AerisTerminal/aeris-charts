@@ -342,6 +342,7 @@ impl ChartEngine {
         insert("countdown_visible", s.countdown_visible.into());
         insert("price_line_visible", s.price_line_visible.into());
         insert("price_line_source", s.price_line_source.into());
+        insert("price_line_extent", s.price_line_extent.as_str().into());
         insert("price_line_width", s.price_line_width.into());
         insert("price_line_color", verbatim(&s.price_line_color).into());
         insert("price_line_style", s.price_line_style.into());
@@ -430,6 +431,11 @@ impl ChartEngine {
                 "price_line_source" => {
                     if let Some(v) = u8_bounded(value, 1) {
                         s.price_line_source = v;
+                    }
+                }
+                "price_line_extent" => {
+                    if let Some(v) = value.as_str().and_then(PriceLineExtent::parse) {
+                        s.price_line_extent = v;
                     }
                 }
                 "price_line_width" => {

@@ -33,8 +33,8 @@ use nucleuscharts_core::model::data_layer::SeriesId;
 use nucleuscharts_engine::{
     crosshair_mode_from_u8, marker_pos, marker_shape, ChartEngine, ChartFrame, DrawingKind,
     DrawingModifiers, DrawingPoint, GestureResolver, InputDevice, InputModifiers, InputTarget,
-    Marker, PointerSample, PriceScaleTarget, PrimitiveAutoscaleContribution, SeriesKind,
-    SplitDirection, WheelBehavior, WheelDeltaMode, WheelIntent, WheelSample, Workspace,
+    Marker, PointerSample, PriceLineExtent, PriceScaleTarget, PrimitiveAutoscaleContribution,
+    SeriesKind, SplitDirection, WheelBehavior, WheelDeltaMode, WheelIntent, WheelSample, Workspace,
     WorkspaceLayout,
 };
 use nucleuscharts_render::color::Color;
@@ -159,7 +159,7 @@ const TOOLBAR_FEATURE_MANIFEST: &[&str] = &[
     "drawing:trend,h-line,h-ray,v-line,rect,text,path,brush,clear,color,style,width,label,text-color,size,weight,italic",
     "crosshair:mode,color,width,style,label-background,labels",
     "chart:theme,grid,grid-color,grid-style,font-family,font-size",
-    "series-chrome:price-line,style,last-value,title-visible,title-text,countdown,bid-ask",
+    "series-chrome:price-line,extent,style,last-value,title-visible,title-text,countdown,bid-ask",
     "axes:border-visible,border-color,text-color,separator",
     "watermark:visible,text,color,size",
     "interaction:axis-scaling,mouse-kinetic,reset-view",
@@ -2366,6 +2366,7 @@ enum DemoAction {
     Font,
     FontSize,
     PriceLine,
+    PriceLineExtent,
     PriceLineStyle,
     LastValue,
     TitleVisible,
@@ -2829,6 +2830,12 @@ impl InteractiveDemo {
                 p.renderer.invalidate_caches();
             }),
             DemoAction::PriceLine => self.update_active(cx, |p| p.engine.series[0].price_line_visible = !p.engine.series[0].price_line_visible),
+            DemoAction::PriceLineExtent => self.update_active(cx, |p| {
+                p.engine.series[0].price_line_extent = match p.engine.series[0].price_line_extent {
+                    PriceLineExtent::Partial => PriceLineExtent::Full,
+                    PriceLineExtent::Full => PriceLineExtent::Partial,
+                };
+            }),
             DemoAction::PriceLineStyle => self.update_active(cx, |p| p.engine.series[0].price_line_style = (p.engine.series[0].price_line_style + 1) % 3),
             DemoAction::LastValue => self.update_active(cx, |p| p.engine.series[0].last_value_visible = !p.engine.series[0].last_value_visible),
             DemoAction::TitleVisible => self.update_active(cx, |p| p.engine.series[0].title_visible = !p.engine.series[0].title_visible),
@@ -2945,6 +2952,9 @@ impl InteractiveDemo {
             DemoAction::PriceLine => active
                 .as_ref()
                 .is_some_and(|chart| chart.read(cx).engine.series[0].price_line_visible),
+            DemoAction::PriceLineExtent => active.as_ref().is_some_and(|chart| {
+                chart.read(cx).engine.series[0].price_line_extent == PriceLineExtent::Partial
+            }),
             DemoAction::LastValue => active
                 .as_ref()
                 .is_some_and(|chart| chart.read(cx).engine.series[0].last_value_visible),
@@ -3450,6 +3460,7 @@ impl Render for InteractiveDemo {
                 "Series chrome",
                 vec![
                     b("price line", DemoAction::PriceLine),
+                    b("partial/full", DemoAction::PriceLineExtent),
                     b("line style", DemoAction::PriceLineStyle),
                     b("last value", DemoAction::LastValue),
                     b("title chip", DemoAction::TitleVisible),
@@ -4101,6 +4112,7 @@ mod tests {
             "text-color",
             "crosshair",
             "price-line",
+            "extent",
             "bid-ask",
             "separator",
             "mouse-kinetic",

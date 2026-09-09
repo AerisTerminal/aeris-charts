@@ -74,7 +74,7 @@ test("demo shell is responsive, icon-led, and has no horizontal control ribbon",
 test("canonical series stay in Series while feature lab contains only composable scenarios", async ({ page }) => {
   await open_demo(page);
   await expect(page.locator("#series_grid .feature-card")).toHaveCount(11);
-  await expect(page.locator("#feature_grid .feature-card")).toHaveCount(10);
+  await expect(page.locator("#feature_grid .feature-card")).toHaveCount(9);
   expect(await page.locator('input[name="series"]').evaluateAll((radios) => radios.map((radio) => radio.value))).toEqual([
     "candlestick", "hollow_candlestick", "bar", "line", "area", "histogram", "baseline",
   ]);
@@ -87,6 +87,7 @@ test("canonical series stay in Series while feature lab contains only composable
   await expect(page.locator('#feature_grid [data-feature-id="volume-profile"]')).toHaveCount(0);
   await expect(page.locator('#feature_grid [data-feature-id="anchored-text"]')).toHaveCount(0);
   await expect(page.locator('#feature_grid [data-feature-id="image-watermark"]')).toHaveCount(0);
+  await expect(page.locator('#feature_grid [data-feature-id="partial-price-line"]')).toHaveCount(0);
   await expect(page.locator("#plugin_watermark_toggle")).toHaveCount(0);
   await expect(page.locator("#watermark_group")).toHaveCount(1);
   await expect(page.locator('#drawings_group [data-tool="rectangle"]')).toHaveCount(1);

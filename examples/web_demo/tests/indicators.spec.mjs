@@ -225,6 +225,10 @@ test("indicator chips: auto-name on, no countdown, 2px default, style overrides"
         title_visible: before.title_visible,
         countdown: before.countdown_visible,
         width: before.line_width,
+        price_line_visible: before.price_line_visible,
+        price_line_extent: before.price_line_extent,
+        price_line_width: before.price_line_width,
+        price_line_style: before.price_line_style,
       },
       after: {
         title: after.title,
@@ -234,7 +238,16 @@ test("indicator chips: auto-name on, no countdown, 2px default, style overrides"
       },
     };
   });
-  expect(out.before).toEqual({ title: "RSI 14", title_visible: true, countdown: false, width: 2 });
+  expect(out.before).toEqual({
+    title: "RSI 14",
+    title_visible: true,
+    countdown: false,
+    width: 2,
+    price_line_visible: true,
+    price_line_extent: "partial",
+    price_line_width: 1,
+    price_line_style: 1,
+  });
   expect(out.after).toEqual({ title: "RSI(14) 1h", title_visible: true, line_style: 1, line_width: 1 });
 });
 

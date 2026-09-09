@@ -7,7 +7,6 @@ use crate::native_primitives::{
 use nucleuscharts_core::format::time_formatter::{
     format_date_pattern, format_tick_label_with, TickMarkType,
 };
-use nucleuscharts_core::TimePointIndex;
 use nucleuscharts_render::draw_list::TextAlign;
 
 fn utc_hour(time: i64) -> u8 {
@@ -947,48 +946,6 @@ impl ChartEngine {
                             weight: 400,
                             italic: false,
                         });
-                    }
-                }
-                NativeSeriesPrimitiveKind::PartialPriceLine => {
-                    let plot = self.data.plot(rs.id);
-                    let Some(row) = plot.last_non_whitespace_row(TimePointIndex::MAX) else {
-                        continue;
-                    };
-                    let Some(logical) = plot.index_at(row) else {
-                        continue;
-                    };
-                    let price = plot.value_at(row, PlotValueIndex::Close);
-                    if !price.is_finite() {
-                        continue;
-                    }
-                    let start = (self.time_scale.index_to_coordinate(logical) * hpr).round() as i32;
-                    let end = (self.pane_w * hpr).round() as i32;
-                    if start >= end {
-                        continue;
-                    }
-                    let (line_y, line_height) =
-                        positions_line(scale.price_to_coordinate(price, base_value), vpr, 1.0);
-                    let y = line_y + line_height / 2;
-                    let baseline = (series.kind == SeriesKind::Baseline)
-                        .then(|| self.resolved_baseline_price(series.id, from, to))
-                        .flatten();
-                    let color = self.effective_series_live_color(
-                        series,
-                        self.series_bar_color(series, row, baseline),
-                    );
-                    let dash = (4.0 * vpr).round().max(1.0) as i32;
-                    let gap = (2.0 * vpr).round().max(1.0) as i32;
-                    let mut x = start;
-                    while x < end {
-                        out.push(Prim::HLine {
-                            y,
-                            x0: x,
-                            x1: (x + dash).min(end),
-                            width: vpr.round().max(1.0) as i32,
-                            style: LineStyle::Solid,
-                            color,
-                        });
-                        x = x.saturating_add(dash + gap);
                     }
                 }
                 NativeSeriesPrimitiveKind::VolumeProfileIndicator(state) => {

@@ -1583,20 +1583,21 @@ fn price_line_family_renders_per_series_with_reference_defaults() {
                     style: LineStyle::Dotted,
                     width,
                     color,
-                    ..
-                } => Some((*y, *width, *color)),
+                    x0,
+                    x1,
+                } => Some((*y, *width, *color, *x0, *x1)),
                 _ => None,
             })
             .collect::<Vec<_>>()
     };
 
-    // reference priceLineVisible default true: every visible series gets a built-in last-price
-    // line (dotted, 1px, following the bar color — the line color for a line series).
+    // Every visible series gets the Nucleus built-in live-price line by default: partial extent
+    // from its tracked data point to the pane edge, dotted, 1px, following the series/bar color.
     let lines = dashed_ylines(&mut chart);
     assert_eq!(lines.len(), 2);
     assert!(lines
         .iter()
-        .all(|&(_, width, color)| width == 1 && color == LINE));
+        .all(|&(_, width, color, x0, x1)| width == 1 && color == LINE && x0 > 0 && x1 > x0));
 
     // priceLineVisible: false hides only that series' line.
     chart.series[1].price_line_visible = false;
@@ -1607,6 +1608,9 @@ fn price_line_family_renders_per_series_with_reference_defaults() {
     chart.series[0].price_line_source = 1;
     chart.series[1].price_line_source = 0;
     chart.series[1].price_line_visible = true;
+    // A full line remains visible even when its LastBar anchor is beyond the viewport; the
+    // default partial line naturally appears only when its tracked anchor is in or left of view.
+    chart.series[1].price_line_extent = crate::PriceLineExtent::Full;
     chart.set_right_offset(-1.0);
     let lines = dashed_ylines(&mut chart); // builds the frame, autoscaling the new window first
     let scale = pane_scale(&chart.panes[0], PriceScaleTarget::Right);
@@ -1617,20 +1621,46 @@ fn price_line_family_renders_per_series_with_reference_defaults() {
     assert!(lines.iter().any(|&(y, ..)| y == y_last_visible));
     assert!(lines.iter().any(|&(y, ..)| y == y_last_bar));
 
-    // priceLineWidth / priceLineColor / priceLineStyle all reach the frame.
+    // Width/color/style are the same canonical options for partial and full extents.
     chart.series[0].price_line_width = 3.0;
     chart.series[0].price_line_color = Some("#112233".to_string());
     chart.series[0].price_line_style = 0;
+    chart.series[0].price_line_extent = crate::PriceLineExtent::Full;
     chart.set_right_offset(0.0);
     let frame = chart.build_frame();
     assert!(frame.panes[0].main.iter().any(|p| matches!(
         p,
         Prim::HLine {
+            x0: 0,
             width: 3,
             style: LineStyle::Solid,
             color,
             ..
         } if *color == Color::rgb(0x11, 0x22, 0x33)
+    )));
+}
+
+#[test]
+fn indicator_outputs_inherit_partial_live_price_lines() {
+    let mut chart = two_identical_line_series();
+    let sma = chart.add_sma(0, 2).expect("sma output");
+    assert_eq!(
+        chart
+            .series_entry(sma)
+            .expect("indicator series")
+            .price_line_extent,
+        crate::PriceLineExtent::Partial
+    );
+    let indicator_color = Color::rgb(0xa1, 0xb2, 0xc3);
+    chart
+        .series_entry_mut(sma)
+        .expect("indicator series")
+        .price_line_color = Some("#a1b2c3".into());
+
+    let frame = chart.build_frame();
+    assert!(frame.panes[0].main.iter().any(|prim| matches!(
+        prim,
+        Prim::HLine { x0, x1, color, .. } if *x0 > 0 && *x1 > *x0 && *color == indicator_color
     )));
 }
 

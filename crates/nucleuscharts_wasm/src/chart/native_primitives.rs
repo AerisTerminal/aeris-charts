@@ -360,10 +360,6 @@ impl ChartInner {
             .unwrap_or(0)
     }
 
-    pub(super) fn add_native_partial_price_line(&mut self, series_id: u32) -> u32 {
-        self.engine.add_partial_price_line(series_id).unwrap_or(0)
-    }
-
     pub(super) fn add_native_accessibility_focus(
         &mut self,
         series_id: u32,

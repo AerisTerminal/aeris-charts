@@ -1004,9 +1004,21 @@ impl ChartEngine {
                     continue;
                 };
                 let color = self.effective_series_live_color(series, last.color);
+                let x0 = match series.price_line_extent {
+                    crate::PriceLineExtent::Full => 0,
+                    crate::PriceLineExtent::Partial => {
+                        let Some(logical) = self.time_to_index(last.time as f64, false) else {
+                            continue;
+                        };
+                        (self.time_scale.index_to_coordinate(logical) * hpr).round() as i32
+                    }
+                };
+                if x0 >= width {
+                    continue;
+                }
                 out.push(Prim::HLine {
                     y: (scale.price_to_coordinate(last.value, base_value) * vpr).round() as i32,
-                    x0: 0,
+                    x0,
                     x1: width,
                     width: 1f64.max((series.price_line_width * hpr).floor()) as i32,
                     style: crate::line_style_from_u8(series.price_line_style),
@@ -1045,9 +1057,21 @@ impl ChartEngine {
             // The pinned CSS string parses here; an unparseable string falls back to ''.
             let color = self
                 .effective_series_live_color(series, self.series_bar_color(series, row, baseline));
+            let x0 = match series.price_line_extent {
+                crate::PriceLineExtent::Full => 0,
+                crate::PriceLineExtent::Partial => {
+                    let Some(logical) = plot.index_at(row) else {
+                        continue;
+                    };
+                    (self.time_scale.index_to_coordinate(logical) * hpr).round() as i32
+                }
+            };
+            if x0 >= width {
+                continue;
+            }
             out.push(Prim::HLine {
                 y: (scale.price_to_coordinate(close, base_value) * vpr).round() as i32,
-                x0: 0,
+                x0,
                 x1: width,
                 // reference horizontal-line-renderer.ts:65 scales lineWidth by the HORIZONTAL ratio
                 // (kept verbatim, including the ratio choice).

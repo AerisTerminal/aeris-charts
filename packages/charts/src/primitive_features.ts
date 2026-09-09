@@ -8,7 +8,6 @@ import {
   attach_native_delta_tooltip,
   attach_native_image_watermark,
   attach_native_overlay_price_scale,
-  attach_native_partial_price_line,
   attach_native_session_highlighting,
   attach_native_tooltip,
   attach_native_trend_line,
@@ -426,12 +425,26 @@ export function create_overlay_price_scale(
   };
 }
 
-/** Official partial-last-price line: the final value's x-coordinate to the pane's right edge. */
+/**
+ * Compatibility helper for the now-default native partial live-price line.
+ * Prefer `series.apply_options({ price_line_extent: "partial" })` for new code.
+ */
 export function create_partial_price_line(
   series: series_api,
 ): detachable_feature {
-  series.apply_options({ price_line_visible: false });
-  return attach_native_partial_price_line(series);
+  const previous = series.options();
+  series.apply_options({ price_line_visible: true, price_line_extent: "partial" });
+  let attached = true;
+  return {
+    detach() {
+      if (!attached) return;
+      attached = false;
+      series.apply_options({
+        price_line_visible: previous.price_line_visible ?? true,
+        price_line_extent: previous.price_line_extent ?? "partial",
+      });
+    },
+  };
 }
 
 export interface session_highlighting_options {
