@@ -244,6 +244,7 @@ test("demo-created indicators and feature companions never enable candle countdo
   const outputs = await page.evaluate(() => {
     window.__feature_lab.activate("shaded-background");
     window.__feature_lab.activate("overlay-scale");
+    document.getElementById("sma_toggle").click(); // Catalog indicators are created on demand.
     document.getElementById("rsi_toggle").click();
     return window.__chart.series_order()
       .filter((series) => series !== window.__main)

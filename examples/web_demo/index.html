@@ -272,15 +272,18 @@
       <label>color <input type="color" id="area_top" value="#089981"></label>
     </div>
 
-    <div class="group" id="overlays_group" data-caption="Overlays">
-      <h2>Overlays</h2>
-      <label><input type="checkbox" id="sma_toggle"> SMA(20)</label>
-      <label><input type="checkbox" id="vol_toggle"> volume</label>
+    <div class="group" id="overlays_group" data-caption="Indicators">
+      <h2>Indicators</h2>
+      <label>Find an indicator <input type="search" id="indicator_search" placeholder="Name or abbreviation"></label>
+      <span class="hint">11 built-in indicators · select to add, clear to remove</span>
+      <div id="indicator_catalog" style="display:grid;gap:8px;width:100%"></div>
+      <span id="indicator_empty" class="hint" hidden>No matching indicators</span>
+      <span id="indicator_error" role="alert"></span>
     </div>
-
-    <div class="group" data-caption="Separate pane">
-      <h2>Separate pane</h2>
-      <label title="RSI(14) oscillator in its own stacked pane (series.move_to_pane): dedicated price scale, draggable separator, crosshair + selection anchors work across panes; unchecking prunes the empty pane"><input type="checkbox" id="rsi_toggle"> RSI(14)</label>
+    <div class="group" data-caption="Volume">
+      <h2>Volume</h2>
+      <label><input type="checkbox" id="vol_toggle"> Volume histogram</label>
+      <span class="hint">Synthetic demo volume</span>
     </div>
 
     <div class="group" id="multi_chart_group" data-caption="Multi-chart" title="Split into independent charts (engine workspace): each cell is a full chart with its own scales, type, and data. Click a chart to make it active — split/close, series type, and style then act on it; drag the divider to resize.">
@@ -625,8 +628,6 @@ container.dataset.priceAxisWidth = String(visible_price_axis.width());
 window.__main = main; // debug/test handle
 window.__data = data;
 
-// The indicator is produced by Rust and owned by the same engine as the candle series.
-const sma_series = chart.add_sma(main, 20, { color: "#ff9800", line_width: 2, visible: false });
 
 // volume: single-value histogram on the SAME pane, pinned to the bottom band via the overlay
 // price scale (TradingView-style — no separate pane / divider), colored green/red by bar direction.
@@ -1355,10 +1356,6 @@ document.getElementById("area_top").addEventListener("input", (e) => {
   active_series().apply_options({ color: e.target.value, area_top_color: e.target.value, area_bottom_color: e.target.value + "00" });
 });
 
-document.getElementById("sma_toggle").addEventListener("change", (e) => {
-  sma_series.apply_options({ visible: e.target.checked });
-});
-
 document.getElementById("vol_toggle").addEventListener("change", (e) => {
   if (e.target.checked && vol_series === null) {
     // TradingView volume: overlay on the price pane's bottom band, green/red by bar direction,
@@ -1381,48 +1378,71 @@ document.getElementById("vol_toggle").addEventListener("change", (e) => {
   }
 });
 
-// RSI(14) over the main series' closes (Wilder smoothing), rendered as a line series moved
-// into its own stacked pane via the public move_to_pane API: the pane gets a dedicated price
-// scale and a draggable separator, and removing the series auto-prunes the empty pane.
-function rsi_fixture(bars, period = 14) {
-  const out = [];
-  let avg_gain = 0, avg_loss = 0;
-  for (let i = 1; i < bars.length; i++) {
-    const change = bars[i].close - bars[i - 1].close;
-    const gain = Math.max(change, 0), loss = Math.max(-change, 0);
-    if (i <= period) {
-      avg_gain += gain / period;
-      avg_loss += loss / period;
-      if (i < period) continue; // seed window: not enough changes yet
-    } else {
-      avg_gain = (avg_gain * (period - 1) + gain) / period;
-      avg_loss = (avg_loss * (period - 1) + loss) / period;
+// Every catalog entry invokes the package's built-in indicator API.
+const indicator_definitions = [
+  ["sma", "SMA · Simple moving average (20)", () => chart.add_sma(main, 20)],
+  ["ema", "EMA · Exponential moving average (20)", () => chart.add_ema(main, 20)],
+  ["wma", "WMA · Weighted moving average (20)", () => chart.add_wma(main, 20)],
+  ["ema_ribbon", "EMA ribbon · 5 / 10 / 20 / 50 / 200", () => chart.add_ema_ribbon(main)],
+  ["bollinger", "Bollinger Bands · 20 / 2", () => chart.add_bollinger(main, 20, 2)],
+  ["rsi", "RSI · Relative strength index (14)", () => chart.add_rsi(main, 14, { color: "#ab47bc", line_width: 2 })],
+  ["macd", "MACD · 12 / 26 / 9", () => chart.add_macd(main, 12, 26, 9)],
+  ["stochastic", "Stochastic · 14 / 3", () => chart.add_stochastic(main, 14, 3)],
+  ["atr", "ATR · Average true range (14)", () => chart.add_atr(main, 14)],
+  ["vwap", "VWAP · Session volume-weighted price", (volume) => chart.add_vwap(main, volume)],
+  ["volume_profile", "Volume Profile · Visible range / POC / 70%", (volume) => chart.add_volume_profile(main, volume)],
+];
+const indicator_catalog = document.getElementById("indicator_catalog");
+const indicator_handles = new Map();
+window.__demo_indicators = indicator_handles;
+for (const [id, title, create] of indicator_definitions) {
+  const label = document.createElement("label");
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.id = `${id}_toggle`;
+  label.append(checkbox, document.createTextNode(title));
+  indicator_catalog.append(label);
+  checkbox.addEventListener("change", () => {
+    const error = document.getElementById("indicator_error");
+    error.textContent = "";
+    if (!checkbox.checked) {
+      indicator_handles.get(id)?.remove();
+      indicator_handles.delete(id);
+      if (id === "rsi") window.__rsi = null;
+      return;
     }
-    out.push({ time: bars[i].time, value: avg_loss === 0 ? 100 : 100 - 100 / (1 + avg_gain / avg_loss) });
-  }
-  return out;
+    let volume;
+    try {
+      if (id === "vwap" || id === "volume_profile") {
+        volume = chart.add_series("histogram", { visible: false, title: "Synthetic demo volume" });
+        volume.set_data(volume_data);
+      }
+      const result = create(volume);
+      const outputs = Array.isArray(result) ? result : [result];
+      indicator_handles.set(id, {
+        outputs,
+        remove() {
+          if (id === "volume_profile") result.remove();
+          else for (const output of outputs) chart.remove_series(output);
+          if (volume) chart.remove_series(volume);
+        },
+      });
+      if (id === "rsi") window.__rsi = result;
+    } catch (cause) {
+      if (volume) chart.remove_series(volume);
+      checkbox.checked = false;
+      error.textContent = cause.message;
+    }
+  });
 }
-let rsi_series = null;
-document.getElementById("rsi_toggle").addEventListener("change", (e) => {
-  if (e.target.checked && rsi_series === null) {
-    rsi_series = chart.add_series("line", {
-      color: "#ab47bc",
-      line_width: 2,
-      title: "RSI(14)",
-      countdown_visible: false,
-    });
-    rsi_series.set_data(rsi_fixture(data));
-    // Pane 1 at ~30% of the main pane's stretch (heights split by stretch-factor ratio).
-    rsi_series.move_to_pane(1, 0.3);
-    // 70/30 guide lines on the oscillator's own scale.
-    rsi_series.create_price_line({ price: 70, color: "#787b86", line_width: 1, line_style: 2, title: "" });
-    rsi_series.create_price_line({ price: 30, color: "#787b86", line_width: 1, line_style: 2, title: "" });
-    window.__rsi = rsi_series; // debug/test handle
-  } else if (!e.target.checked && rsi_series !== null) {
-    chart.remove_series(rsi_series);
-    rsi_series = null;
-    window.__rsi = null;
+document.getElementById("indicator_search").addEventListener("input", (event) => {
+  const query = event.target.value.trim().toLowerCase();
+  let matches = 0;
+  for (const label of indicator_catalog.children) {
+    label.hidden = !label.textContent.toLowerCase().includes(query);
+    if (!label.hidden) matches++;
   }
+  document.getElementById("indicator_empty").hidden = matches !== 0;
 });
 
 // ---- Multi-chart (engine workspace): the main chart is the first cell; the toolbar acts on
