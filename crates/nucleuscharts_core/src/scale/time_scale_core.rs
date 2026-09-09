@@ -47,7 +47,11 @@ impl Default for TimeScaleOptions {
             fix_left_edge: false,
             fix_right_edge: false,
             lock_visible_time_range_on_resize: false,
-            right_bar_stays_on_scroll: false,
+            // TradingView's full chart keeps the right-most bar pinned during ordinary wheel zoom
+            // by default. Lightweight Charts exposes the same switch but defaults it to false.
+            // Nucleus follows the full-chart interaction default while preserving the explicit
+            // option for cursor-anchored zoom.
+            right_bar_stays_on_scroll: true,
             // reference defaults (time-scale-options-defaults.ts:17-18).
             shift_visible_range_on_new_bar: true,
             allow_shift_visible_range_on_whitespace_replacement: false,
@@ -574,8 +578,19 @@ impl TimeScaleCore {
 
     // --- zoom ---
 
-    /// `scale` is in 1/10 parts of the current bar spacing; negative zooms out.
+    /// `scale` is in 1/10 parts of the current bar spacing; negative zooms out. Ordinary wheel
+    /// zoom follows the configured right-bar pin policy.
     pub fn zoom(&mut self, zoom_point: Coordinate, scale: f64) {
+        self.zoom_impl(zoom_point, scale, !self.options.right_bar_stays_on_scroll);
+    }
+
+    /// Focused-area zoom always keeps the logical point under `zoom_point` fixed. TradingView uses
+    /// this interaction for Ctrl+wheel even when its normal wheel zoom keeps the right bar pinned.
+    pub fn zoom_focused(&mut self, zoom_point: Coordinate, scale: f64) {
+        self.zoom_impl(zoom_point, scale, true);
+    }
+
+    fn zoom_impl(&mut self, zoom_point: Coordinate, scale: f64, keep_zoom_point: bool) {
         let float_index_at_zoom_point = self.coordinate_to_float_index(zoom_point);
 
         let bar_spacing = self.bar_spacing;
@@ -583,7 +598,7 @@ impl TimeScaleCore {
 
         self.set_bar_spacing(new_bar_spacing);
 
-        if !self.options.right_bar_stays_on_scroll {
+        if keep_zoom_point {
             // move the index under zoom_point back to its coordinate
             let new_offset = self.right_offset
                 + (float_index_at_zoom_point - self.coordinate_to_float_index(zoom_point));
@@ -813,8 +828,21 @@ mod tests {
     }
 
     #[test]
-    fn zoom_keeps_point_under_cursor() {
+    fn ordinary_zoom_keeps_right_offset_with_tradingview_default() {
+        let mut s = scale(400.0, 6.0, 7.0, 500, 300);
+        let cursor = 250.0;
+        let before_index = s.coordinate_to_float_index(cursor);
+        let before_offset = s.right_offset();
+        s.zoom(cursor, 1.0); // zoom in 10%
+        assert!((s.bar_spacing() - 6.6).abs() < 1e-12);
+        assert_eq!(s.right_offset(), before_offset);
+        assert_ne!(s.coordinate_to_float_index(cursor), before_index);
+    }
+
+    #[test]
+    fn cursor_anchored_zoom_remains_available_when_right_bar_pin_is_disabled() {
         let mut s = scale(400.0, 6.0, 0.0, 500, 300);
+        s.set_right_bar_stays_on_scroll(false);
         let cursor = 250.0;
         let before = s.coordinate_to_float_index(cursor);
         s.zoom(cursor, 1.0); // zoom in 10%
@@ -824,6 +852,20 @@ mod tests {
             (before - after).abs() < 1e-6,
             "point drifted: {before} -> {after}"
         );
+    }
+
+    #[test]
+    fn focused_zoom_keeps_point_under_cursor_even_with_right_bar_pin_enabled() {
+        let mut s = scale(400.0, 6.0, 0.0, 500, 300);
+        let cursor = 250.0;
+        let before = s.coordinate_to_float_index(cursor);
+        s.zoom_focused(cursor, 1.0);
+        let after = s.coordinate_to_float_index(cursor);
+        assert!(
+            (before - after).abs() < 1e-6,
+            "point drifted: {before} -> {after}"
+        );
+        assert_ne!(s.right_offset(), 0.0);
     }
 
     #[test]

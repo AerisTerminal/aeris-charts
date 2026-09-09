@@ -550,7 +550,11 @@ export interface time_scale_options {
   fix_right_edge?: boolean;
   /** Keep the visible range constant across chart resizes (reference `lockVisibleTimeRangeOnResize`). */
   lock_visible_time_range_on_resize?: boolean;
-  /** Keep the right-most bar pinned to the right edge while scrolling (reference `rightBarStaysOnScroll`). */
+  /**
+   * Keep the right-most bar pinned during ordinary time-scale zoom. Nucleus defaults this to
+   * `true`, matching TradingView's full-chart `right_bar_stays_on_scroll` interaction; set `false`
+   * for Lightweight Charts-style cursor anchoring on every wheel zoom.
+   */
   right_bar_stays_on_scroll?: boolean;
   /**
    * Shift the visible range to the right (into the future) by the number of new bars when new
@@ -705,7 +709,7 @@ export interface handle_scroll_options {
 
 /** Zoom/scale gesture toggles (reference `handleScale`). `false` disables all zooming. */
 export interface handle_scale_options {
-  /** Mouse-wheel zoom on the pane. */
+  /** Mouse-wheel zoom on the pane. Ctrl+wheel uses focused/cursor-anchored zoom. */
   mouse_wheel?: boolean;
   /** Two-finger touch pinch zoom. */
   pinch?: boolean;

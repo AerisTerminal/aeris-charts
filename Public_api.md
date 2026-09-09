@@ -112,8 +112,12 @@ visibility without replacing the canonical grid style/color; that presentation c
 library default.
 
 Mouse-wheel time-scale zoom uses the engine's high-sensitivity response: a saturated wheel step
-changes bar spacing by 15%, remains anchored under the pointer, and smaller trackpad deltas stay
-proportional. Horizontal wheel/trackpad panning keeps its independent scroll coefficient.
+changes bar spacing by 15% and smaller trackpad deltas stay proportional. Ordinary wheel zoom keeps
+the right-most bar/right offset pinned by default, matching TradingView's full-chart
+`right_bar_stays_on_scroll` behavior; `right_bar_stays_on_scroll: false` restores Lightweight
+Charts-style cursor anchoring. Ctrl+wheel always performs focused cursor-anchored zoom, while
+Shift+wheel routes the vertical wheel gesture into horizontal chart movement. Horizontal
+wheel/trackpad panning keeps its independent scroll coefficient.
 
 The built-in series live-price line is engine-owned. `price_line_extent` defaults to `"partial"`
 (tracked bar/value to the pane's right edge); `"full"` preserves the conventional pane-wide line.

@@ -474,7 +474,9 @@ test("public time and price scale handles are engine-owned and reference-compati
     fix_left_edge: false,
     fix_right_edge: false,
     lock_visible_time_range_on_resize: false,
-    right_bar_stays_on_scroll: false,
+    // Intentional product default: TradingView's full chart enables right_bar_stays_on_scroll,
+    // even though Lightweight Charts itself defaults this option to false.
+    right_bar_stays_on_scroll: true,
     shift_visible_range_on_new_bar: true,
     allow_shift_visible_range_on_whitespace_replacement: false,
     allow_bold_labels: true,

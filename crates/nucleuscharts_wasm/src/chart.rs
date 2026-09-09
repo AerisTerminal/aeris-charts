@@ -2810,6 +2810,9 @@ impl NucleusChart {
     pub fn zoom(&mut self, x_css: f64, scale: f64) {
         self.inner.borrow_mut().zoom(x_css, scale);
     }
+    pub fn zoom_focused(&mut self, x_css: f64, scale: f64) {
+        self.inner.borrow_mut().zoom_focused(x_css, scale);
+    }
     pub fn scroll_start(&mut self, x_css: f64) {
         self.inner.borrow_mut().scroll_start(x_css);
     }
@@ -2932,6 +2935,7 @@ impl NucleusChart {
         delta_y: f64,
         delta_mode: u8,
         control: bool,
+        shift: bool,
     ) -> u8 {
         let behavior = match behavior {
             1 => nucleuscharts_engine::WheelBehavior::Pan,
@@ -2949,6 +2953,7 @@ impl NucleusChart {
             delta_mode,
             modifiers: nucleuscharts_engine::InputModifiers {
                 control,
+                shift,
                 ..nucleuscharts_engine::InputModifiers::default()
             },
             ..nucleuscharts_engine::WheelSample::default()

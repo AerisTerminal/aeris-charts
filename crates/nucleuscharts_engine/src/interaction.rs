@@ -81,12 +81,24 @@ impl WheelSample {
         match behavior {
             WheelBehavior::Pan => WheelIntent::Pan,
             WheelBehavior::Zoom => WheelIntent::Zoom,
-            WheelBehavior::Auto => match (self.delta_x != 0.0, self.delta_y != 0.0) {
-                (true, true) => WheelIntent::PanAndZoom,
-                (true, false) => WheelIntent::Pan,
-                (false, true) => WheelIntent::Zoom,
-                (false, false) => WheelIntent::Ignore,
-            },
+            WheelBehavior::Auto => {
+                // TradingView maps Shift+wheel to horizontal chart movement instead of zooming.
+                // Browsers often remap that gesture into deltaX themselves, but keeping the rule
+                // here makes native/worker hosts deterministic too.
+                if self.modifiers.shift {
+                    return if self.delta_x != 0.0 || self.delta_y != 0.0 {
+                        WheelIntent::Pan
+                    } else {
+                        WheelIntent::Ignore
+                    };
+                }
+                match (self.delta_x != 0.0, self.delta_y != 0.0) {
+                    (true, true) => WheelIntent::PanAndZoom,
+                    (true, false) => WheelIntent::Pan,
+                    (false, true) => WheelIntent::Zoom,
+                    (false, false) => WheelIntent::Ignore,
+                }
+            }
         }
     }
 }
@@ -569,6 +581,12 @@ impl ChartEngine {
         self.time_scale.zoom(x, scale);
     }
 
+    /// TradingView Ctrl+wheel focused-area zoom: keep the logical point under `x` fixed even when
+    /// normal wheel zoom is configured to keep the right-most bar pinned.
+    pub fn time_scale_zoom_focused(&mut self, x: f64, scale: f64) {
+        self.time_scale.zoom_focused(x, scale);
+    }
+
     pub fn time_scale_start_scroll(&mut self, x: f64) {
         self.time_scale.start_scroll(x);
     }
@@ -941,7 +959,7 @@ mod tests {
     }
 
     #[test]
-    fn wheel_auto_matches_reference_axis_semantics_without_a_modifier() {
+    fn wheel_auto_matches_tradingview_axis_and_modifier_semantics() {
         let mut sample = WheelSample {
             delta_y: -0.125,
             ..WheelSample::default()
@@ -954,6 +972,12 @@ mod tests {
         sample.delta_y = 0.0;
         assert_eq!(sample.intent(WheelBehavior::Auto), WheelIntent::Pan);
         assert_eq!(sample.intent(WheelBehavior::Pan), WheelIntent::Pan);
+
+        sample.delta_x = 0.0;
+        sample.delta_y = -0.25;
+        sample.modifiers.shift = true;
+        assert_eq!(sample.intent(WheelBehavior::Auto), WheelIntent::Pan);
+        assert_eq!(sample.intent(WheelBehavior::Zoom), WheelIntent::Zoom);
     }
 
     fn chart_with_data(width: f64, height: f64) -> ChartEngine {

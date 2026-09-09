@@ -438,9 +438,17 @@ export function install_gestures(chart: chart_impl): () => void {
     const delta_x = (adj * e.deltaX) / 100;
     const delta_y = -(adj * e.deltaY) / 100;
     const behavior = cfg.wheel_behavior === "pan" ? 1 : cfg.wheel_behavior === "zoom" ? 2 : 0;
-    const intent = wasm.classify_wheel(behavior, delta_x, delta_y, e.deltaMode, e.ctrlKey);
+    const intent = wasm.classify_wheel(
+      behavior,
+      delta_x,
+      delta_y,
+      e.deltaMode,
+      e.ctrlKey,
+      e.shiftKey,
+    );
     const pan_delta = cfg.wheel_behavior === "auto"
-      ? delta_x : Math.abs(delta_x) >= Math.abs(delta_y) ? delta_x : -delta_y;
+      ? (e.shiftKey ? (delta_x !== 0 ? delta_x : -delta_y) : delta_x)
+      : Math.abs(delta_x) >= Math.abs(delta_y) ? delta_x : -delta_y;
     const do_zoom = (intent & 2) !== 0 && delta_y !== 0 && cfg.wheel_zoom;
     const do_scroll = (intent & 1) !== 0 && pan_delta !== 0 && cfg.wheel_scroll;
     if (!do_zoom && !do_scroll) return; // let the page scroll
@@ -460,8 +468,11 @@ export function install_gestures(chart: chart_impl): () => void {
           wasm.wheel_zoom_scale(delta_y),
         );
       } else {
-        // reference `_onMousewheel`: the normalized delta becomes the zoom increment (engine).
-        wasm.zoom(x - pane_left, wasm.wheel_zoom_scale(delta_y));
+        const zoom = wasm.wheel_zoom_scale(delta_y);
+        // TradingView's normal wheel zoom follows the time-scale right-bar pin policy. Ctrl+wheel
+        // is its documented focused-area gesture and always keeps the bar under the pointer fixed.
+        if (e.ctrlKey) wasm.zoom_focused(x - pane_left, zoom);
+        else wasm.zoom(x - pane_left, zoom);
       }
     }
     if (do_scroll) {

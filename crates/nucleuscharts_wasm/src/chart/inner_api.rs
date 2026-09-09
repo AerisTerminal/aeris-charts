@@ -1656,6 +1656,10 @@ impl ChartInner {
         let x = x_css.max(1.0).min(self.time_scale.width());
         self.time_scale_zoom(x, scale);
     }
+    pub fn zoom_focused(&mut self, x_css: f64, scale: f64) {
+        let x = x_css.max(1.0).min(self.time_scale.width());
+        self.time_scale_zoom_focused(x, scale);
+    }
     pub fn scroll_start(&mut self, x_css: f64) {
         self.time_scale_start_scroll(x_css);
     }

@@ -1928,15 +1928,27 @@ impl Probe {
                 self.engine
                     .price_axis_wheel_zoom(pane, PriceScaleTarget::Right, y, zoom);
             } else {
-                self.engine.time_scale_zoom(pane_x, zoom);
+                if event.modifiers.control {
+                    self.engine.time_scale_zoom_focused(pane_x, zoom);
+                } else {
+                    self.engine.time_scale_zoom(pane_x, zoom);
+                }
             }
         }
-        let pan_delta = if self.gesture_config.wheel_behavior == WheelBehavior::Auto
-            || normalized_x.abs() >= normalized_y.abs()
-        {
+        let pan_delta = if self.gesture_config.wheel_behavior == WheelBehavior::Auto {
+            if event.modifiers.shift {
+                if normalized_x != 0.0 {
+                    normalized_x
+                } else {
+                    -normalized_y
+                }
+            } else {
+                normalized_x
+            }
+        } else if normalized_x.abs() >= normalized_y.abs() {
             normalized_x
         } else {
-            normalized_y
+            -normalized_y
         };
         if matches!(intent, WheelIntent::Pan | WheelIntent::PanAndZoom)
             && pan_delta != 0.0
