@@ -153,14 +153,13 @@ test("interaction models run engine-side with canonical behavior", async ({ page
   console.log("wheel scroll: offset", w0.toFixed(2), "->", w1.toFixed(2));
   expect(Math.abs(w1 - w0)).toBeGreaterThan(0.5);
 
-  // 7) kinetic coast: a fast flick keeps scrolling after release (no further input). Kinetic
-  // is touch-only by default (reference parity) — enable it for the mouse first. The engine's
-  // physics are wall-clock sensitive (50 ms release window, per-ms damping), so this and the
-  // animation steps below run on a fake clock for determinism (RAF fires on tick).
+  // 7) kinetic coast: a fast flick keeps scrolling after release (no further input). Reference
+  // sampling is in logical rightOffset units with its px thresholds divided by bar spacing, so the
+  // same flick remains consistent across zoom levels. Enable mouse kinetic explicitly first.
   await page.evaluate(() => window.__chart.apply_options({ kinetic_scroll: { mouse: true, touch: true } }));
   await page.clock.install();
-  // Freeze the fake clock so CDP dispatch latency cannot skew the flick's per-segment speed
-  // (the engine needs ≥0.2 px/ms to coast); time now advances only on explicit runFor. The
+  // Freeze the fake clock so CDP dispatch latency cannot skew the flick's per-segment speed;
+  // time now advances only on explicit runFor. The
   // freeze target is in the fake Date domain (pauseAt's input), slightly ahead of "now".
   await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 1000);
   await page.mouse.move(cx + 140, pane_mid_y);
@@ -225,15 +224,37 @@ test("interaction models run engine-side with canonical behavior", async ({ page
   const half = points.reduce((a, b) => (Math.abs(b.progress - 0.5) < Math.abs(a.progress - 0.5) ? b : a));
   expect(half.pos).toBeGreaterThan(4.2);
 
-  // 9) keyboard arrows: eased step pan (Left = older), completed after the 160 ms animation.
+  // 9) keyboard arrows: the same exponential damping family as pointer kinetic scrolling.
+  // Ctrl changes only the logical impulse size (10 bars); it must not jump or use a separate
+  // fixed-duration cubic tween, and Left/Right are symmetric.
   await page.evaluate(() => document.querySelector("#chart_container canvas:last-of-type").focus());
   await page.clock.runFor(50); // let the step-8 settle fully out of flight
   const k0 = (await state(page)).offset;
-  await page.keyboard.press("ArrowLeft");
-  await page.clock.runFor(300);
+  await page.evaluate(() => {
+    window.__key_anim = { t0: performance.now(), samples: [] };
+    const sampler = () => {
+      window.__key_anim.samples.push([performance.now(), window.__chart.wasm.scroll_position()]);
+      requestAnimationFrame(sampler);
+    };
+    requestAnimationFrame(sampler);
+  });
+  await page.keyboard.press("Control+ArrowLeft");
+  await page.clock.runFor(150);
+  const k_mid = (await state(page)).offset;
+  expect(k_mid).toBeLessThan(k0);
+  expect(k_mid).toBeGreaterThan(k0 - 10, "kinetic keyboard pan must move through intermediate positions");
+  await page.clock.runFor(1800);
   const k1 = (await state(page)).offset;
-  console.log("keyboard ArrowLeft:", k0.toFixed(2), "->", k1.toFixed(2));
-  expect(k1).toBeCloseTo(k0 - 1, 3);
+  console.log("keyboard Ctrl+ArrowLeft:", k0.toFixed(2), "->", k_mid.toFixed(2), "->", k1.toFixed(2));
+  expect(k1).toBeCloseTo(k0 - 10, 3);
+  const key_anim = await page.evaluate(() => window.__key_anim);
+  const key_positions = key_anim.samples.map(([, position]) => position).filter((position) => position <= k0);
+  expect(key_positions.some((position) => position < k0 - 0.1 && position > k0 - 9.9)).toBe(true);
+
+  await page.keyboard.press("Control+ArrowRight");
+  await page.clock.runFor(1950);
+  const k2 = (await state(page)).offset;
+  expect(k2).toBeCloseTo(k0, 3);
 
   // 10) +/- keyboard zoom still works through the same zoom path.
   const kb0 = (await state(page)).spacing;

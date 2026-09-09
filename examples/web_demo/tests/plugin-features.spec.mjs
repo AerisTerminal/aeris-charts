@@ -760,7 +760,7 @@ test("tooltip preserves OHLC inspection on area and line presentations", async (
   await page.evaluate(() => window.__structured_tooltip.detach());
 });
 
-test("brushable area is an ordinary area: normal pan/axis gestures stay free and Shift-drag compares", async ({ page }) => {
+test("brushable area keeps ordinary Area data/axes while pane drag is reserved for comparison", async ({ page }) => {
   await open_chart(page);
   const setup = await page.evaluate(async () => {
     const api = await import("/dist/nucleuscharts_financial.js");
@@ -816,15 +816,16 @@ test("brushable area is an ordinary area: normal pan/axis gestures stay free and
     ...await page.evaluate(() => window.__delta_options_before),
   });
 
-  // Plain primary-drag remains the chart's normal grab-to-pan gesture. The helper must not turn it
-  // into a comparison or globally disable scrolling.
+  // While the helper is attached, primary pane-drag is the comparison gesture. It must not start
+  // a competing canvas pan, but it also must not globally mutate the chart's scroll/scale options.
   const pan_start_x = setup.left + setup.width * 0.6;
   await page.mouse.move(pan_start_x, setup.y);
   await page.mouse.down();
   await page.mouse.move(pan_start_x - 120, setup.y, { steps: 6 });
-  expect(await page.evaluate(() => window.__chart.wasm.scroll_position())).toBeGreaterThan(setup.scroll_position);
-  await expect.poll(() => page.evaluate(() => window.__delta_tooltip.active_range())).toBe(null);
+  expect(await page.evaluate(() => window.__chart.wasm.scroll_position())).toBeCloseTo(setup.scroll_position, 6);
+  await expect.poll(() => page.evaluate(() => window.__delta_tooltip.active_range())).not.toBe(null);
   await page.mouse.up();
+  await page.evaluate(() => window.__delta_tooltip.clear());
 
   // Price-axis drag retains the canonical scale interaction too: it leaves auto-scale and becomes
   // a manual scale exactly as it does on every ordinary series.
@@ -867,7 +868,6 @@ test("brushable area is an ordinary area: normal pan/axis gestures stay free and
   await page.mouse.move(geometry.left + geometry.x_first, geometry.y);
   const hover = await page.screenshot();
   expect(hover.equals(before)).toBe(false);
-  await page.keyboard.down("Shift");
   await page.mouse.down();
   await page.mouse.move(geometry.left + geometry.x_second, geometry.y, { steps: 4 });
   await expect.poll(() => page.evaluate(() => window.__delta_tooltip.active_range())).toEqual({
@@ -892,7 +892,6 @@ test("brushable area is an ordinary area: normal pan/axis gestures stay free and
   expect(await page.evaluate(() => window.__chart.chart_element().querySelectorAll(".nucleuscharts-delta-tooltip").length)).toBe(0);
 
   await page.mouse.up();
-  await page.keyboard.up("Shift");
   expect(await page.evaluate(() => window.__delta_tooltip.active_range())).toMatchObject({
     from: geometry.first + 1,
     to: geometry.second + 1,
@@ -907,11 +906,9 @@ test("brushable area is an ordinary area: normal pan/axis gestures stay free and
   expect(await page.evaluate(() => window.__delta_tooltip.active_range())).toBe(null);
 
   await page.mouse.move(geometry.left + geometry.x_first, geometry.y);
-  await page.keyboard.down("Shift");
   await page.mouse.down();
   await page.mouse.move(geometry.left + geometry.x_second, geometry.y, { steps: 4 });
   await page.mouse.up();
-  await page.keyboard.up("Shift");
   expect(await page.evaluate(() => window.__delta_tooltip.active_range())).not.toBe(null);
   await page.evaluate(() => {
     window.__delta_tooltip.detach();

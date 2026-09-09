@@ -1801,10 +1801,11 @@ class time_scale_impl implements time_scale_api {
   /** Invalidate any in-flight animated scroll (a new scroll call or user gesture takes over). */
   cancel_scroll_animation(): void {
     this.chart.wasm.cancel_scroll_animation();
+    this.chart.wasm.cancel_keyboard_scroll();
   }
   scroll_to_position(position: number, animated: boolean): void {
     if (!animated || this.chart.prefers_reduced_motion()) {
-      this.chart.wasm.cancel_scroll_animation();
+      this.cancel_scroll_animation();
       this.chart.wasm.scroll_to_position(position);
       this.chart.repaint();
       return;
@@ -1812,9 +1813,10 @@ class time_scale_impl implements time_scale_api {
     // The engine owns the cubic ease-out easing and applies every tick; this RAF loop is just
     // host-side frame scheduling (a newer scroll or a user gesture supersedes engine-side).
     if (this.chart.wasm.scroll_position() === position) {
-      this.chart.wasm.cancel_scroll_animation();
+      this.cancel_scroll_animation();
       return;
     }
+    this.chart.wasm.cancel_keyboard_scroll();
     this.chart.wasm.start_scroll_animation(position, SCROLL_ANIM_MS, performance.now());
     const step = () => {
       const done = Number.isNaN(this.chart.wasm.scroll_animation_tick(performance.now()));

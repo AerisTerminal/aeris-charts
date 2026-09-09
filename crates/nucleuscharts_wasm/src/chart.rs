@@ -2990,20 +2990,20 @@ impl NucleusChart {
     }
 
     /// Open a kinetic sampling session alongside the drag (`enabled = false` = no coast).
-    pub fn kinetic_begin_sampling(&mut self, enabled: bool, x_css: f64, now_ms: f64) {
+    pub fn kinetic_begin_sampling(&mut self, enabled: bool, position: f64, now_ms: f64) {
         self.inner
             .borrow_mut()
-            .kinetic_begin_sampling(enabled, x_css, now_ms);
+            .kinetic_begin_sampling(enabled, position, now_ms);
     }
-    pub fn kinetic_add_sample(&mut self, x_css: f64, now_ms: f64) {
-        self.inner.borrow_mut().kinetic_add_sample(x_css, now_ms);
+    pub fn kinetic_add_sample(&mut self, position: f64, now_ms: f64) {
+        self.inner.borrow_mut().kinetic_add_sample(position, now_ms);
     }
     /// The drag was released: whether a momentum coast engaged (drive `kinetic_position`
     /// per frame instead of ending the scroll session).
-    pub fn kinetic_release(&mut self, x_css: f64, now_ms: f64) -> bool {
-        self.inner.borrow_mut().kinetic_release(x_css, now_ms)
+    pub fn kinetic_release(&mut self, position: f64, now_ms: f64) -> bool {
+        self.inner.borrow_mut().kinetic_release(position, now_ms)
     }
-    /// The coast's pointer position at `now_ms` (NaN when no coast is running).
+    /// The coast's logical rightOffset at `now_ms` (NaN when no coast is running).
     pub fn kinetic_position(&self, now_ms: f64) -> f64 {
         self.inner.borrow().kinetic_position(now_ms)
     }
@@ -3012,6 +3012,20 @@ impl NucleusChart {
     }
     pub fn kinetic_stop(&mut self) {
         self.inner.borrow_mut().kinetic_stop();
+    }
+
+    /// Add one damped keyboard-pan impulse in logical bars.
+    pub fn start_keyboard_scroll(&mut self, delta_bars: f64, now_ms: f64) {
+        self.inner
+            .borrow_mut()
+            .start_keyboard_scroll(delta_bars, now_ms);
+    }
+    /// Apply one keyboard-pan tick; NaN when the exact target was reached.
+    pub fn keyboard_scroll_tick(&mut self, now_ms: f64) -> f64 {
+        self.inner.borrow_mut().keyboard_scroll_tick(now_ms)
+    }
+    pub fn cancel_keyboard_scroll(&mut self) {
+        self.inner.borrow_mut().cancel_keyboard_scroll();
     }
 
     /// Axis drag-to-scale (reference pressedMouseMove on the axis widgets).

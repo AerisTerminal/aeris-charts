@@ -145,8 +145,9 @@ hover `create_tooltip()` instead. Delta Tooltip remains available on non-candles
 area/line/bar and is composed directly into the brushable-area interaction. Brushable Area is a
 composition over the ordinary `area` series rather than a separate data-bearing series kind; the
 legacy `brushable_area` input spelling remains a compatibility alias that normalizes to `area`.
-The helper preserves normal chart manipulation: unmodified primary-drag pans, axis drags keep their
-ordinary auto/manual-scale behavior, and Shift+primary-drag activates the comparison brush.
+The helper reserves primary mouse/pen pane-drag for the comparison brush while it is attached; axis
+drags keep their ordinary auto/manual-scale behavior and the helper does not globally disable chart
+scroll or scale options. Removing the helper restores the ordinary Area pane-drag path immediately.
 The normal `create_tooltip()` is the canonical structured market-data inspector. Its engine snapshot
 retains Open/High/Low/Close for every ordinary series presentation, including area and line; scalar
 rows naturally report the same value in all four fields, while area/line series fed retained OHLC

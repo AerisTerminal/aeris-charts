@@ -17,7 +17,6 @@ const LONGPRESS_MS = 240; // touch hold before entering crosshair tracking (refe
 const TRADING_TOOLTIP_MS = 450; // hover dwell before a trading control reveals its action tooltip
 const TAP_RESET_MS = 500; // window for a second tap to count as a double-tap (reference Delay.ResetClick)
 const DBL_TAP_MANHATTAN = 30; // max distance between the taps of a double-tap (reference DoubleTapManhattanDistance)
-const KEY_SCROLL_MS = 160; // keyboard scroll animation (TradingView-style smooth step)
 const INPUT_UPDATE_LEN = 12;
 
 const enum InputDeviceCode { Mouse = 0, Touch = 1, Pen = 2 }
@@ -66,7 +65,7 @@ export function install_gestures(chart: chart_impl): () => void {
   // Engine-owned drawing drag (anchor re-anchor or body move) started by a pane press on a
   // drawing (drawings.rs); mutually exclusive with a pan `dragging` session.
   let drawing_dragging = false;
-  // Delta Tooltip may intentionally own a mouse drag (brushable Area uses Shift+primary-drag).
+  // Delta Tooltip may intentionally own a mouse drag (brushable Area captures primary-drag).
   // Ordinary primary-drag remains the normal pan path when no tooltip accepts the press.
   let delta_tooltip_dragging = false;
   // Trading controls own the pointer before drawings and chart pan. Moves update only the
@@ -82,7 +81,6 @@ export function install_gestures(chart: chart_impl): () => void {
   // Vertical price pan session (reference `startScrollPrice`): the engine holds the range
   // snapshot and shift math; armed only while the scale is NOT in autoscale (its no-op gate).
   let price_pan: { pane: number; target: number } | null = null;
-  let last_pan_x: number | null = null;
 
   // Touch-only host state. Gesture classification itself is returned by the engine resolver.
   let active_touch_id: number | null = null;
@@ -267,26 +265,27 @@ export function install_gestures(chart: chart_impl): () => void {
     if (kinetic_raf !== null) {
       cancelAnimationFrame(kinetic_raf);
       kinetic_raf = null;
-      wasm.scroll_end();
     }
   };
-  /** Drive the engine's kinetic coast; it continues the drag's scroll session (the RAF loop is
-   *  host scheduling — the sampling, release speed, decay, and finish all live in the engine). */
-  const start_kinetic = (release_x: number) => {
+  /** Drive the engine's kinetic coast. The drag session closes before the coast starts, matching
+   *  the reference's rightOffset animation handoff; the host only schedules frames. */
+  const start_kinetic = () => {
     const now = performance.now();
-    if (!wasm.kinetic_release(release_x, now)) {
-      wasm.scroll_end();
+    const engaged = wasm.kinetic_release(wasm.scroll_position(), now);
+    wasm.scroll_end();
+    if (!engaged) {
       return;
     }
     const step = () => {
       const t = performance.now();
+      const position = wasm.kinetic_position(t);
+      if (!Number.isNaN(position)) wasm.scroll_to_position(position);
+      chart.repaint();
       if (wasm.kinetic_finished(t)) {
-        wasm.scroll_end();
+        wasm.kinetic_stop();
         kinetic_raf = null;
         return;
       }
-      wasm.scroll_move(wasm.kinetic_position(t));
-      chart.repaint();
       kinetic_raf = requestAnimationFrame(step);
     };
     kinetic_raf = requestAnimationFrame(step);
@@ -296,10 +295,9 @@ export function install_gestures(chart: chart_impl): () => void {
   const begin_scroll = (x: number, kind: "mouse" | "touch") => {
     wasm.scroll_start(x);
     dragging = true;
-    last_pan_x = x;
     const cfg = chart.gesture_config();
     const enabled = kind === "touch" ? cfg.kinetic_touch : cfg.kinetic_mouse;
-    wasm.kinetic_begin_sampling(enabled, x, performance.now());
+    wasm.kinetic_begin_sampling(enabled, wasm.scroll_position(), performance.now());
   };
   /** Resolve and arm the exact already-manual scale owned by the selected/hit series. */
   const arm_price_pan = (pane: number, start_x: number, start_y: number) => {
@@ -325,8 +323,8 @@ export function install_gestures(chart: chart_impl): () => void {
     const cfg = chart.gesture_config();
     const enabled =
       (kind === "touch" ? cfg.kinetic_touch : cfg.kinetic_mouse) && !chart.prefers_reduced_motion();
-    if (enabled && last_pan_x !== null) {
-      start_kinetic(last_pan_x);
+    if (enabled) {
+      start_kinetic();
     } else {
       wasm.kinetic_stop();
       wasm.scroll_end();
@@ -571,8 +569,8 @@ export function install_gestures(chart: chart_impl): () => void {
       chart.repaint();
       return;
     }
-    // A Delta Tooltip gets first refusal on the pane gesture. Brushable Area configures it for
-    // Shift+primary-drag, so an unmodified grab always remains ordinary chart pan.
+    // A Delta Tooltip gets first refusal on the pane gesture. Brushable Area intentionally uses
+    // that capture so primary dragging compares instead of starting a competing canvas pan.
     delta_tooltip_dragging = chart.native_delta_tooltip_mouse_down(p.x, e.shiftKey);
     // pane press: pan (time + price in one drag, like reference).
     if (!delta_tooltip_dragging && chart.gesture_config().pan) {
@@ -646,8 +644,7 @@ export function install_gestures(chart: chart_impl): () => void {
       wasm.drawing_drag_to(p.x, p.y, e.ctrlKey || e.metaKey, e.shiftKey);
     } else if (dragging) {
       wasm.scroll_move(p.x);
-      last_pan_x = p.x;
-      wasm.kinetic_add_sample(p.x, performance.now());
+      wasm.kinetic_add_sample(wasm.scroll_position(), performance.now());
       apply_price_pan(p.y);
     }
     // Crosshair: a hover over an axis strip is a pane mouseleave in the reference (its axis
@@ -933,7 +930,6 @@ export function install_gestures(chart: chart_impl): () => void {
         pinch_active = true;
         dragging = true;
         touch_scrolling = true;
-        last_pan_x = update.x;
         wasm.scroll_start(update.x);
         arm_price_pan(pane_of(update.y), update.x, update.y);
         if (e.cancelable && update.prevent_default) e.preventDefault();
@@ -1033,7 +1029,6 @@ export function install_gestures(chart: chart_impl): () => void {
         arm_price_pan(pane_of(update.previous_y), update.previous_x, update.previous_y);
       }
       wasm.scroll_move(update.x);
-      last_pan_x = update.x;
       apply_price_pan(update.y);
       if (chart.gesture_config().pinch_zoom && update.scale_delta !== 0) {
         wasm.zoom(update.x, wasm.pinch_zoom_scale(update.scale_delta));
@@ -1073,8 +1068,7 @@ export function install_gestures(chart: chart_impl): () => void {
         arm_price_pan(pane_of(update.previous_y), update.previous_x, update.previous_y);
       }
       wasm.scroll_move(p.x);
-      last_pan_x = p.x;
-      wasm.kinetic_add_sample(p.x, performance.now());
+      wasm.kinetic_add_sample(wasm.scroll_position(), performance.now());
       apply_price_pan(p.y);
     }
     chart.repaint();
@@ -1096,7 +1090,6 @@ export function install_gestures(chart: chart_impl): () => void {
       dragging = true;
       touch_scrolling = true;
       touch_moved = true;
-      last_pan_x = update.x;
       wasm.scroll_start(update.x);
       arm_price_pan(pane_of(update.y), update.x, update.y);
       suppress_compatibility_click = true;
@@ -1174,22 +1167,29 @@ export function install_gestures(chart: chart_impl): () => void {
 
   let scroll_anim: number | null = null;
   const stop_scroll_anim = () => {
-    // A user gesture also supersedes an in-flight animated scroll_to_position.
+    // A user gesture also supersedes any in-flight programmatic or keyboard scroll animation.
     chart.cancel_scroll_animation();
+    wasm.cancel_keyboard_scroll();
     if (scroll_anim !== null) {
       cancelAnimationFrame(scroll_anim);
       scroll_anim = null;
     }
   };
-  /** TradingView-style smooth keyboard scroll: the engine eases the scroll position to the
-   *  target over ~160 ms (cubic ease-out, engine-owned) instead of jumping. The RAF loop is
-   *  host scheduling; `rightOffset` semantics match reference: larger = newer view. */
-  const animate_scroll_to = (target: number) => {
-    stop_scroll_anim();
-    if (wasm.scroll_position() === target) return;
-    wasm.start_scroll_animation(target, KEY_SCROLL_MS, performance.now());
+  /** Keyboard pan uses the same per-ms damping coefficient as pointer kinetic scrolling.
+   *  Same-direction repeats extend the destination instead of restarting a canned tween. */
+  const animate_keyboard_scroll = (delta: number) => {
+    stop_kinetic();
+    chart.cancel_scroll_animation();
+    if (chart.prefers_reduced_motion()) {
+      wasm.cancel_keyboard_scroll();
+      wasm.scroll_to_position(wasm.scroll_position() + delta);
+      chart.repaint();
+      return;
+    }
+    wasm.start_keyboard_scroll(delta, performance.now());
+    if (scroll_anim !== null) return;
     const step_fn = () => {
-      const done = Number.isNaN(wasm.scroll_animation_tick(performance.now()));
+      const done = Number.isNaN(wasm.keyboard_scroll_tick(performance.now()));
       chart.repaint();
       scroll_anim = done ? null : requestAnimationFrame(step_fn);
     };
@@ -1214,10 +1214,10 @@ export function install_gestures(chart: chart_impl): () => void {
       // TradingView: Left scrolls back in time (older data), Right forward (newer data);
       // Ctrl/Shift steps 10 bars. reference rightOffset grows toward newer data, hence the signs.
       case "ArrowLeft":
-        animate_scroll_to(wasm.scroll_position() - step);
+        animate_keyboard_scroll(-step);
         break;
       case "ArrowRight":
-        animate_scroll_to(wasm.scroll_position() + step);
+        animate_keyboard_scroll(step);
         break;
       case "+":
       case "=":

@@ -1720,20 +1720,20 @@ impl ChartInner {
         delta_x * nucleuscharts_engine::WHEEL_SCROLL_PX_PER_DELTA
     }
 
-    /// Open a kinetic sampling session alongside the drag (seeded with the first sample);
-    /// `enabled = false` mirrors the reference's null animation (no coast on release).
-    pub fn kinetic_begin_sampling(&mut self, enabled: bool, x_css: f64, now_ms: f64) {
-        self.engine.kinetic_begin_sampling(enabled, x_css, now_ms);
+    /// Open a kinetic sampling session alongside the drag, seeded with logical rightOffset.
+    pub fn kinetic_begin_sampling(&mut self, enabled: bool, position: f64, now_ms: f64) {
+        self.engine
+            .kinetic_begin_sampling(enabled, position, now_ms);
     }
-    pub fn kinetic_add_sample(&mut self, x_css: f64, now_ms: f64) {
-        self.engine.kinetic_add_sample(x_css, now_ms);
+    pub fn kinetic_add_sample(&mut self, position: f64, now_ms: f64) {
+        self.engine.kinetic_add_sample(position, now_ms);
     }
     /// The drag was released: returns whether a momentum coast engaged (the host then drives
     /// `kinetic_position` per frame instead of ending the scroll session).
-    pub fn kinetic_release(&mut self, x_css: f64, now_ms: f64) -> bool {
-        self.engine.kinetic_release(x_css, now_ms)
+    pub fn kinetic_release(&mut self, position: f64, now_ms: f64) -> bool {
+        self.engine.kinetic_release(position, now_ms)
     }
-    /// The coast's pointer position at `now_ms` (-1 sentinel-free: NaN when no coast runs).
+    /// The coast's logical rightOffset at `now_ms` (NaN when no coast runs).
     pub fn kinetic_position(&self, now_ms: f64) -> f64 {
         self.engine.kinetic_position(now_ms).unwrap_or(f64::NAN)
     }
@@ -1742,6 +1742,16 @@ impl ChartInner {
     }
     pub fn kinetic_stop(&mut self) {
         self.engine.kinetic_stop();
+    }
+
+    pub fn start_keyboard_scroll(&mut self, delta_bars: f64, now_ms: f64) {
+        self.engine.start_keyboard_scroll(delta_bars, now_ms);
+    }
+    pub fn keyboard_scroll_tick(&mut self, now_ms: f64) -> f64 {
+        self.engine.keyboard_scroll_tick(now_ms).unwrap_or(f64::NAN)
+    }
+    pub fn cancel_keyboard_scroll(&mut self) {
+        self.engine.cancel_keyboard_scroll();
     }
 
     /// Axis drag-to-scale arms/applies (reference `TimeAxisWidget`/`PriceAxisWidget`

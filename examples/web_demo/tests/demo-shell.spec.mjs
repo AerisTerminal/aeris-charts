@@ -365,7 +365,7 @@ test("reported plugin scenarios use full data and official line compositions", a
   expect(shade_state.value_range[1]).toBeLessThan(900);
 });
 
-test("brushable area compares chronological delta in either Shift-drag direction", async ({ page }) => {
+test("brushable area compares chronological delta in either primary-drag direction", async ({ page }) => {
   await open_demo(page);
   await page.locator('#series_grid [data-series-id="brushable-area"]').click();
   const targets = await page.evaluate(() => {
@@ -409,14 +409,12 @@ test("brushable area compares chronological delta in either Shift-drag direction
   });
   const drag = async (from, to, positive) => {
     await page.mouse.move(from.x, from.y);
-    await page.keyboard.down("Shift");
     await page.mouse.down();
     await page.mouse.move(to.x, to.y, { steps: 4 });
     await expect.poll(() => page.evaluate(() => {
       return window.__demo_catalogs.series.interaction_range()?.positive ?? null;
     })).toBe(positive);
     await page.mouse.up();
-    await page.keyboard.up("Shift");
     await page.mouse.move((from.x + to.x) * 0.5, from.y + 12);
     return page.evaluate(() => {
       const brush = window.__demo_catalogs.series.interaction_range();

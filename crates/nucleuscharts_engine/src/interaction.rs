@@ -513,9 +513,10 @@ impl HitProfile {
     }
 }
 
-/// reference `KineticScrollConstants` (pane-widget.ts:38-43) in the px domain: the reference
-/// divides them by the bar spacing to work in rightOffset units; sampling pointer px directly
-/// with the raw constants is the equivalent formulation the Nucleus hosts have always used.
+/// reference `KineticScrollConstants` (pane-widget.ts) in the px domain. The reference samples the
+/// time scale's logical `rightOffset`, so these values are divided by the current bar spacing when
+/// a drag begins. Keeping the sampler in rightOffset units makes the coast feel invariant across
+/// zoom levels and matches the source implementation exactly.
 pub const KINETIC_MIN_SPEED: f64 = 0.2;
 pub const KINETIC_MAX_SPEED: f64 = 7.0;
 pub const KINETIC_DUMPING: f64 = 0.997;
@@ -574,6 +575,30 @@ impl ScrollAnimation {
     }
 }
 
+/// Keyboard pan animation with the same per-millisecond damping coefficient as kinetic pointer
+/// scrolling, but an exact logical target. Repeated same-direction key presses extend the target;
+/// a reversal immediately retargets from the current eased position instead of finishing stale
+/// momentum first.
+#[derive(Clone, Copy, Debug)]
+pub struct KeyboardScrollAnimation {
+    pub start_position: f64,
+    pub target_position: f64,
+    pub start_time_ms: f64,
+    pub epsilon_bars: f64,
+}
+
+impl KeyboardScrollAnimation {
+    fn position(&self, now_ms: f64) -> f64 {
+        let elapsed = (now_ms - self.start_time_ms).max(0.0);
+        self.target_position
+            + (self.start_position - self.target_position) * KINETIC_DUMPING.powf(elapsed)
+    }
+
+    fn finished(&self, now_ms: f64) -> bool {
+        (self.position(now_ms) - self.target_position).abs() <= self.epsilon_bars
+    }
+}
+
 impl ChartEngine {
     // --- canonical time-scale mutation boundary ---
 
@@ -601,36 +626,37 @@ impl ChartEngine {
 
     // --- kinetic (momentum) scroll ---
 
-    /// Open a kinetic sampling session alongside a drag-scroll (reference creates a fresh
-    /// `KineticAnimation` on the first scrolling move when the device option allows it;
-    /// `enabled = false` mirrors its `_scrollXAnimation = null`). Seeds the first sample.
-    pub fn kinetic_begin_sampling(&mut self, enabled: bool, x: f64, now_ms: f64) {
+    /// Open a kinetic sampling session alongside a drag-scroll. The reference samples logical
+    /// right-offset values and scales all px-domain thresholds by the current bar spacing.
+    /// `enabled = false` mirrors its `_scrollXAnimation = null`. Seeds the first logical sample.
+    pub fn kinetic_begin_sampling(&mut self, enabled: bool, position: f64, now_ms: f64) {
+        let spacing = self.time_scale.bar_spacing().max(f64::EPSILON);
         self.kinetic = enabled.then(|| {
             let mut animation = KineticAnimation::new(
-                KINETIC_MIN_SPEED,
-                KINETIC_MAX_SPEED,
+                KINETIC_MIN_SPEED / spacing,
+                KINETIC_MAX_SPEED / spacing,
                 KINETIC_DUMPING,
-                KINETIC_MIN_MOVE,
+                KINETIC_MIN_MOVE / spacing,
             );
-            animation.add_position(x, now_ms);
+            animation.add_position(position, now_ms);
             animation
         });
     }
 
-    /// Feed a drag-move sample (reference `addPosition` on every scrolling move).
-    pub fn kinetic_add_sample(&mut self, x: f64, now_ms: f64) {
+    /// Feed a drag-move logical right-offset sample (reference `addPosition`).
+    pub fn kinetic_add_sample(&mut self, position: f64, now_ms: f64) {
         if let Some(animation) = self.kinetic.as_mut() {
-            animation.add_position(x, now_ms);
+            animation.add_position(position, now_ms);
         }
     }
 
     /// The drag was released: freeze the coast. Returns whether a coast engaged (the host then
     /// drives `kinetic_position` from its frame scheduler instead of ending the scroll session).
-    pub fn kinetic_release(&mut self, x: f64, now_ms: f64) -> bool {
+    pub fn kinetic_release(&mut self, position: f64, now_ms: f64) -> bool {
         let Some(animation) = self.kinetic.as_mut() else {
             return false;
         };
-        animation.start(x, now_ms);
+        animation.start(position, now_ms);
         !animation.finished(now_ms)
     }
 
@@ -647,6 +673,62 @@ impl ChartEngine {
     /// Drop the sampler/coast entirely (a fresh gesture supersedes any in-flight coast).
     pub fn kinetic_stop(&mut self) {
         self.kinetic = None;
+    }
+
+    // --- keyboard kinetic pan ---
+
+    /// Add one logical-bar keyboard pan impulse. Same-direction repeats extend the destination;
+    /// reversing direction abandons the stale destination and responds from the current position.
+    pub fn start_keyboard_scroll(&mut self, delta_bars: f64, now_ms: f64) {
+        if !delta_bars.is_finite() || delta_bars == 0.0 || !now_ms.is_finite() {
+            return;
+        }
+        let current = self.keyboard_scroll_animation.map_or_else(
+            || self.scroll_position(),
+            |animation| animation.position(now_ms),
+        );
+        self.scroll_to_position(current);
+
+        let target = self
+            .keyboard_scroll_animation
+            .map_or(current + delta_bars, |animation| {
+                let remaining = animation.target_position - current;
+                if remaining == 0.0 || remaining.signum() == delta_bars.signum() {
+                    animation.target_position + delta_bars
+                } else {
+                    current + delta_bars
+                }
+            });
+        let spacing = self.time_scale.bar_spacing().max(f64::EPSILON);
+        self.keyboard_scroll_animation = Some(KeyboardScrollAnimation {
+            start_position: current,
+            target_position: target,
+            start_time_ms: now_ms,
+            // Match the reference kinetic stop threshold of one physical CSS-pixel equivalent.
+            epsilon_bars: 1.0 / spacing,
+        });
+    }
+
+    /// Apply one keyboard-pan animation tick. `None` means the destination was reached and the
+    /// animation self-cleared after snapping the final sub-pixel remainder to its exact target.
+    pub fn keyboard_scroll_tick(&mut self, now_ms: f64) -> Option<f64> {
+        let animation = self.keyboard_scroll_animation?;
+        if animation.finished(now_ms) {
+            self.scroll_to_position(animation.target_position);
+            self.keyboard_scroll_animation = None;
+            return None;
+        }
+        let position = animation.position(now_ms);
+        self.scroll_to_position(position);
+        Some(position)
+    }
+
+    pub fn cancel_keyboard_scroll(&mut self) {
+        self.keyboard_scroll_animation = None;
+    }
+
+    pub fn keyboard_scroll_active(&self) -> bool {
+        self.keyboard_scroll_animation.is_some()
     }
 
     // --- axis drag-to-scale ---
@@ -1000,36 +1082,40 @@ mod tests {
     }
 
     #[test]
-    fn kinetic_coast_engages_and_drives_the_scroll_session() {
+    fn kinetic_coast_samples_logical_offset_with_reference_bar_spacing_tuning() {
         let mut chart = chart_with_data(400.0, 300.0);
-        chart.time_scale.start_scroll(200.0);
-        chart.kinetic_begin_sampling(true, 200.0, 1000.0);
-        chart.time_scale.scroll_to(160.0);
-        chart.kinetic_add_sample(160.0, 1020.0);
-        chart.time_scale.scroll_to(120.0);
-        chart.kinetic_add_sample(120.0, 1040.0);
-        let offset_before = chart.right_offset();
+        chart.time_scale.set_bar_spacing(10.0);
+        chart.scroll_to_position(0.0);
+        chart.kinetic_begin_sampling(true, 0.0, 1000.0);
+        chart.scroll_to_position(4.0);
+        chart.kinetic_add_sample(4.0, 1020.0);
+        chart.scroll_to_position(8.0);
+        chart.kinetic_add_sample(8.0, 1040.0);
         assert!(
-            chart.kinetic_release(120.0, 1040.0),
+            chart.kinetic_release(8.0, 1040.0),
             "a fast flick engages the coast"
         );
         assert!(!chart.kinetic_finished(1040.0));
-        // The host drives the coast: positions feed the ongoing scroll session.
-        let x = chart.kinetic_position(1060.0).unwrap();
-        chart.time_scale.scroll_to(x);
-        assert_ne!(chart.right_offset(), offset_before);
+        let coast = chart.kinetic_position(1060.0).unwrap();
+        assert!(coast > 8.0, "same-direction momentum advances rightOffset");
         assert!(chart.kinetic_finished(100_000.0));
         chart.kinetic_stop();
         assert!(chart.kinetic_position(1060.0).is_none());
-        chart.time_scale.end_scroll();
+
+        // Reference divides ScrollMinMove (15px) by bar spacing. At spacing 2 the same four-bar
+        // change is below the 7.5-bar sampling threshold, so no release velocity can form.
+        chart.time_scale.set_bar_spacing(2.0);
+        chart.kinetic_begin_sampling(true, 0.0, 2000.0);
+        chart.kinetic_add_sample(4.0, 2020.0);
+        assert!(!chart.kinetic_release(4.0, 2020.0));
     }
 
     #[test]
     fn kinetic_disabled_sampler_never_engages() {
         let mut chart = chart_with_data(400.0, 300.0);
-        chart.kinetic_begin_sampling(false, 200.0, 1000.0);
-        chart.kinetic_add_sample(120.0, 1020.0);
-        assert!(!chart.kinetic_release(120.0, 1020.0));
+        chart.kinetic_begin_sampling(false, 0.0, 1000.0);
+        chart.kinetic_add_sample(4.0, 1020.0);
+        assert!(!chart.kinetic_release(4.0, 1020.0));
         assert!(chart.kinetic_finished(1020.0));
     }
 
@@ -1403,6 +1489,36 @@ mod tests {
         chart.start_scroll_animation(1.0, 0.0, 1000.0);
         assert!(chart.scroll_animation_tick(1000.0).is_none());
         assert_eq!(chart.scroll_position(), 1.0);
+    }
+
+    #[test]
+    fn keyboard_scroll_uses_kinetic_damping_and_accumulates_directional_impulses() {
+        let mut chart = chart_with_data(400.0, 300.0);
+        chart.time_scale.set_bar_spacing(10.0);
+        chart.scroll_to_position(0.0);
+
+        chart.start_keyboard_scroll(10.0, 1000.0);
+        let first = chart.keyboard_scroll_tick(1100.0).unwrap();
+        let expected = 10.0 - 10.0 * KINETIC_DUMPING.powf(100.0);
+        assert!((first - expected).abs() < 1e-9);
+        assert!(first > 0.0 && first < 10.0);
+
+        // Repeating in the same direction extends the destination from 10 to 20 while retaining
+        // the current eased position as the new start.
+        chart.start_keyboard_scroll(10.0, 1100.0);
+        assert!(chart.keyboard_scroll_active());
+        let repeated = chart.keyboard_scroll_tick(1200.0).unwrap();
+        assert!(repeated > first);
+
+        // Reversing direction abandons the stale +20 target and responds immediately from here.
+        chart.start_keyboard_scroll(-10.0, 1200.0);
+        let before_reverse = chart.scroll_position();
+        let reversed = chart.keyboard_scroll_tick(1300.0).unwrap();
+        assert!(reversed < before_reverse);
+
+        chart.cancel_keyboard_scroll();
+        assert!(!chart.keyboard_scroll_active());
+        assert!(chart.keyboard_scroll_tick(1400.0).is_none());
     }
 
     #[test]

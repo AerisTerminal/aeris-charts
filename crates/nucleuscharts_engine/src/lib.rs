@@ -1417,6 +1417,9 @@ pub struct ChartEngine {
     /// Kinetic (momentum) scroll sampler/coast for the active drag (engine interaction module,
     /// reference `KineticAnimation`); the host feeds samples and drives the coast per frame.
     kinetic: Option<nucleuscharts_core::model::kinetic_animation::KineticAnimation>,
+    /// Damped keyboard pan target. This is separate from public `scroll_to_position(..., true)`:
+    /// arrow navigation uses kinetic-style deceleration and accumulates repeated impulses.
+    keyboard_scroll_animation: Option<interaction::KeyboardScrollAnimation>,
     /// In-flight eased scroll-to-position (engine interaction module); the host schedules the
     /// ticks, the engine owns the easing and applies each step.
     scroll_animation: Option<interaction::ScrollAnimation>,
@@ -1503,6 +1506,7 @@ impl ChartEngine {
             hovered_drawing: None,
             text_measure_fn: None,
             kinetic: None,
+            keyboard_scroll_animation: None,
             scroll_animation: None,
             price_formatter_fn: None,
             tick_mark_formatter_fn: None,

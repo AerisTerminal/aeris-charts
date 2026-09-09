@@ -22,9 +22,10 @@ export interface brushable_area_interaction_handle {
 }
 
 /**
- * Compose Delta Tooltip range selection with an ordinary Area series. Normal primary-drag remains
- * chart pan; Shift+primary-drag intentionally brushes. The brush is transient presentation state:
- * the Area series keeps its ordinary data, hit testing, scales, LOD, and ingestion behavior.
+ * Compose Delta Tooltip range selection with an ordinary Area series. While attached, primary
+ * pane-drag belongs to the comparison brush instead of canvas pan; axis gestures remain ordinary.
+ * The brush is transient presentation state, so the Area series keeps its normal data, hit
+ * testing, scales, LOD, and ingestion behavior.
  */
 export function enable_brushable_area_interaction(
   chart: chart_api,
@@ -67,7 +68,6 @@ export function enable_brushable_area_interaction(
   };
   const tooltip = create_delta_tooltip(chart, {
     series,
-    requires_shift_drag: true,
     on_active_range_change(range) {
       if (range === null) {
         set_native_area_brush_state(series, "null");

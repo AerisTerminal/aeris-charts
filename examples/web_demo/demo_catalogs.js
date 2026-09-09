@@ -205,7 +205,7 @@ function series_features(bars) {
       },
     },
     {
-      id: "brushable-area", label: "Brushable area", detail: "Shift-drag to compare", icon: "chart", interactive: true,
+      id: "brushable-area", label: "Brushable area", detail: "Drag to compare", icon: "chart", interactive: true,
       series_kind: "area",
       options: {},
       data: () => bars.map((bar) => ({ time: bar.time, value: bar.close })),

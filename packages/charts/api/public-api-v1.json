@@ -28,8 +28,8 @@
     },
     {
       "path": "feature_series.d.ts",
-      "bytes": 1097,
-      "sha256": "15fc73fb144a37b4df62e8ec3ee7c16d24e9b2f9867ba918e53892ab8b1065b7"
+      "bytes": 1140,
+      "sha256": "c4895e8639ba5caf49c7a64466a453270b1d06383a6086e9537caf8613e6ac81"
     },
     {
       "path": "grid.d.ts",
