@@ -62,29 +62,61 @@ hydrate_icons();
 const inspector = document.getElementById("inspector");
 const backdrop = document.getElementById("mobile_backdrop");
 const inspector_toggle = document.getElementById("inspector_toggle");
+const compact_layout = window.matchMedia("(max-width: 820px)");
+const control_jump = document.getElementById("control_jump");
+const section_buttons = [...document.querySelectorAll("#tool_rail [data-scroll-target]")];
+
+new ResizeObserver(([entry]) => {
+  document.documentElement.style.setProperty("--demo-header-height", `${entry.target.getBoundingClientRect().height}px`);
+}).observe(document.getElementById("bar"));
 
 function set_inspector(open) {
   inspector.dataset.open = String(open);
   document.getElementById("workspace").dataset.inspectorOpen = String(open);
   backdrop.dataset.open = String(open);
   inspector_toggle.setAttribute("aria-expanded", String(open));
+  inspector.inert = !open;
+  document.getElementById("chart_wrap").inert = open && compact_layout.matches;
 }
 
-inspector_toggle.addEventListener("click", () => set_inspector(inspector.dataset.open !== "true"));
-backdrop.addEventListener("click", () => set_inspector(false));
-const compact_layout = window.matchMedia("(max-width: 820px)");
+inspector_toggle.setAttribute("aria-controls", "inspector");
+inspector_toggle.addEventListener("click", () => {
+  const open = inspector.dataset.open !== "true";
+  set_inspector(open);
+  if (open && compact_layout.matches) control_jump.focus();
+});
+backdrop.addEventListener("click", () => {
+  set_inspector(false);
+  inspector_toggle.focus();
+});
 set_inspector(!compact_layout.matches);
 compact_layout.addEventListener("change", (event) => set_inspector(!event.matches));
 
-for (const button of document.querySelectorAll("#tool_rail [data-scroll-target]")) {
+function jump_to_section(id) {
+  set_inspector(true);
+  // Section navigation is frequent; immediate positioning keeps the chart stable.
+  document.getElementById(id)?.scrollIntoView({ behavior: "instant", block: "start" });
+  control_jump.value = id;
+  for (const peer of section_buttons) peer.setAttribute("aria-current", String(peer.dataset.scrollTarget === id));
+}
+
+control_jump.addEventListener("change", () => jump_to_section(control_jump.value));
+for (const button of section_buttons) {
+  const label = document.createElement("span");
+  label.textContent = button.getAttribute("aria-label");
+  button.appendChild(label);
   button.addEventListener("click", () => {
-    set_inspector(true);
-    document.getElementById(button.dataset.scrollTarget)?.scrollIntoView({ behavior: "smooth", block: "start" });
-    for (const peer of document.querySelectorAll("#tool_rail [data-scroll-target]")) {
-      peer.setAttribute("aria-current", String(peer === button));
-    }
+    jump_to_section(button.dataset.scrollTarget);
   });
 }
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && compact_layout.matches && inspector.dataset.open === "true") {
+    set_inspector(false);
+    inspector_toggle.focus();
+    event.preventDefault();
+  }
+});
 
 const theme_toggle = document.getElementById("theme_toggle");
 

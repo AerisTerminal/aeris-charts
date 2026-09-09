@@ -25,7 +25,7 @@ use std::{
 use gpui::{
     canvas, div, prelude::*, px, relative, rgb, size, AnyElement, App, Bounds, Context,
     CursorStyle, Entity, FocusHandle, Focusable, KeyDownEvent, ModifiersChangedEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PinchEvent, Render, ScrollDelta,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PinchEvent, Render, ScrollDelta, ScrollHandle,
     ScrollWheelEvent, Subscription, Window, WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
@@ -2339,6 +2339,7 @@ enum DemoAction {
     Kinetic,
     Reset,
     Fixture(usize),
+    Controls,
 }
 
 struct DemoCell {
@@ -2370,6 +2371,8 @@ struct InteractiveDemo {
     _root_observer: Subscription,
     workspace_drag: Option<WorkspaceDrag>,
     status: String,
+    inspector_scroll: ScrollHandle,
+    inspector_open: bool,
 }
 
 impl InteractiveDemo {
@@ -2394,6 +2397,8 @@ impl InteractiveDemo {
             focus_initialized: false,
             _root_observer: root_observer,
             workspace_drag: None,
+            inspector_scroll: ScrollHandle::new(),
+            inspector_open: true,
             status: format!(
                 "interactive native GPUI demo · active cell 1 · {} feature groups",
                 TOOLBAR_FEATURE_MANIFEST.len()
@@ -2570,6 +2575,7 @@ impl InteractiveDemo {
 
     fn apply_action(&mut self, action: DemoAction, cx: &mut Context<Self>) {
         match action {
+            DemoAction::Controls => self.inspector_open = !self.inspector_open,
             DemoAction::Series(kind) => self.update_active(cx, |p| p.set_series_kind(kind)),
             DemoAction::CandleBodyColor => self.update_active(cx, |p| {
                 let s = &mut p.engine.series[0];
@@ -2837,6 +2843,7 @@ impl InteractiveDemo {
         let active = self.active_chart();
         let root = self.root_chart();
         match action {
+            DemoAction::Controls => self.inspector_open,
             DemoAction::Series(kind) => active.as_ref().is_some_and(|chart| {
                 chart
                     .read(cx)
@@ -3000,8 +3007,14 @@ impl InteractiveDemo {
         };
         let control = div()
             .id(label)
-            .px_2()
-            .py_1()
+            .flex()
+            .items_center()
+            .justify_center()
+            .min_w(px(40.0))
+            .min_h(px(40.0))
+            .px_3()
+            .py_2()
+            .text_size(px(12.0))
             .rounded_md()
             .border_1()
             .border_color(rgb(border))
@@ -3013,7 +3026,15 @@ impl InteractiveDemo {
         }
         control
             .cursor(CursorStyle::PointingHand)
-            .hover(|style| style.bg(rgb(0x2962ff)).text_color(rgb(0xffffff)))
+            .hover(move |style| {
+                style.bg(rgb(if selected {
+                    0x2459e6
+                } else if background == 0xffffff {
+                    0xf1f3f7
+                } else {
+                    0x252932
+                }))
+            })
             .active(|style| style.bg(rgb(0x1849b8)).text_color(rgb(0xffffff)))
             .tab_index(0)
             .focus(|style| style.border_color(rgb(0xff9800)))
@@ -3026,42 +3047,21 @@ impl InteractiveDemo {
     fn group(&self, caption: &'static str, controls: Vec<AnyElement>) -> AnyElement {
         div()
             .id(caption)
-            .relative()
             .flex()
-            .flex_wrap()
-            .items_center()
-            .gap_2()
-            .px_2()
-            .pt_2()
-            .pb_1()
-            .mt_1()
-            .border_1()
-            .rounded_md()
-            .border_color(rgb(if self.theme == DemoTheme::Dark {
-                0x23262e
-            } else {
-                0xe0e3eb
-            }))
+            .flex_col()
+            .flex_shrink_0()
+            .w_full()
+            .gap_3()
+            .py_4()
+            .border_b_1()
+            .border_color(rgb(shell_rgb(theme_border(self.theme), 0xe5e5e5)))
             .child(
                 div()
-                    .absolute()
-                    .top(px(-7.0))
-                    .left(px(8.0))
-                    .px_1()
-                    .bg(rgb(if self.theme == DemoTheme::Dark {
-                        0x0a0a0a
-                    } else {
-                        0xffffff
-                    }))
-                    .text_xs()
-                    .text_color(rgb(if self.theme == DemoTheme::Dark {
-                        0x9aa0ac
-                    } else {
-                        0x787b86
-                    }))
+                    .text_size(px(13.0))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
                     .child(caption),
             )
-            .children(controls)
+            .child(div().flex().flex_wrap().gap_2().children(controls))
             .into_any_element()
     }
 
@@ -3434,7 +3434,7 @@ impl Render for InteractiveDemo {
                 ],
             ),
             self.group(
-                "Native visual approximations (no JS bridge)",
+                "Native overlay approximations",
                 vec![
                     b("day bands", DemoAction::Fixture(0)),
                     b("position band", DemoAction::Fixture(1)),
@@ -3489,6 +3489,7 @@ impl Render for InteractiveDemo {
         let move_entity = cx.entity();
         let up_entity = move_entity.clone();
         let up_out_entity = move_entity.clone();
+        let entity_id = cx.entity_id();
         div()
             .id("interactive-demo-root")
             .flex()
@@ -3533,57 +3534,191 @@ impl Render for InteractiveDemo {
             })
             .child(
                 div()
-                    .id("interactive-toolbar")
-                    .tab_group()
-                    .tab_stop(false)
+                    .id("demo-header")
                     .flex()
-                    .flex_wrap()
                     .items_center()
-                    .gap_1()
-                    .p_2()
+                    .justify_between()
                     .flex_shrink_0()
+                    .h(px(64.0))
+                    .px_4()
+                    .border_b_1()
+                    .border_color(rgb(shell_rgb(theme_border(self.theme), 0xe5e5e5)))
                     .child(
                         div()
-                            .px_2()
-                            .py_1()
-                            .rounded_md()
-                            .bg(rgb(0x089981))
-                            .text_color(rgb(0xffffff))
-                            .child("@nucleuscharts/financial"),
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_size(px(15.0))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child("Nucleus Charts"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(rgb(0x787b86))
+                                    .child("Market lab · Native"),
+                            ),
                     )
-                    .children(toolbar)
-                    .child(div().text_xs().text_color(rgb(0x787b86)).child(format!(
-                            "{} · active {} · cap {}{}",
-                            self.status,
-                            self.active,
-                            ["∞", "2", "3", "4"][self.max_index],
-                            self.maximized
-                                .map(|id| format!(" · cell {id} maximized"))
-                                .unwrap_or_default(),
-                        ))),
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(self.button("Reset view", DemoAction::Reset, cx))
+                            .child(self.button("Light / dark", DemoAction::Theme, cx))
+                            .child(self.button("Controls", DemoAction::Controls, cx)),
+                    ),
             )
             .child(
-                div().relative().flex_1().w_full().child(chart).child(
-                    div()
-                        .absolute()
-                        .top_2()
-                        .left_2()
-                        .px_2()
-                        .py_1()
-                        .rounded_md()
-                        .bg(rgb(if self.theme == DemoTheme::Dark {
-                            0x0a0a0a
-                        } else {
-                            0xffffff
-                        }))
-                        .text_color(rgb(if self.theme == DemoTheme::Dark {
-                            0xfafafa
-                        } else {
-                            0x191919
-                        }))
-                        .text_sm()
-                        .child(legend),
-                ),
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .child(
+                        div()
+                            .relative()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .child(chart)
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top_3()
+                                    .left_3()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .bg(rgb(if self.theme == DemoTheme::Dark {
+                                        0x0a0a0a
+                                    } else {
+                                        0xffffff
+                                    }))
+                                    .text_size(px(12.0))
+                                    .child(legend),
+                            ),
+                    )
+                    .when(self.inspector_open, |body| {
+                        body.child(
+                            div()
+                                .id("demo-inspector")
+                                .flex()
+                                .flex_col()
+                                .flex_shrink_0()
+                                .w(px(340.0))
+                                .h_full()
+                                .border_l_1()
+                                .border_color(rgb(shell_rgb(theme_border(self.theme), 0xe5e5e5)))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_2()
+                                        .p_4()
+                                        .flex_shrink_0()
+                                        .border_b_1()
+                                        .border_color(rgb(shell_rgb(
+                                            theme_border(self.theme),
+                                            0xe5e5e5,
+                                        )))
+                                        .child(
+                                            div()
+                                                .text_size(px(16.0))
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .child("Chart controls"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(12.0))
+                                                .text_color(rgb(0x787b86))
+                                                .child("Style your chart or explore a section."),
+                                        )
+                                        .child(
+                                            div().flex().flex_wrap().gap_1().children(
+                                                [
+                                                    ("Series", 0),
+                                                    ("Analysis", 3),
+                                                    ("Workspace", 4),
+                                                    ("Drawings", 5),
+                                                    ("Appearance", 7),
+                                                    ("Examples", 13),
+                                                ]
+                                                .into_iter()
+                                                .map(|(label, index)| {
+                                                    let scroll = self.inspector_scroll.clone();
+                                                    div()
+                                                        .id(("section", index))
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_center()
+                                                        .min_h(px(40.0))
+                                                        .px_2()
+                                                        .rounded_md()
+                                                        .text_size(px(12.0))
+                                                        .cursor(CursorStyle::PointingHand)
+                                                        .tab_index(0)
+                                                        .border_1()
+                                                        .border_color(rgb(shell_rgb(
+                                                            theme_border(self.theme),
+                                                            0xe5e5e5,
+                                                        )))
+                                                        .hover(|style| {
+                                                            style
+                                                                .bg(rgb(0x2962ff))
+                                                                .text_color(rgb(0xffffff))
+                                                        })
+                                                        .focus(|style| {
+                                                            style.border_color(rgb(0x2962ff))
+                                                        })
+                                                        .on_click(move |_, _, cx| {
+                                                            scroll.scroll_to_top_of_item(index);
+                                                            cx.notify(entity_id);
+                                                        })
+                                                        .child(label)
+                                                }),
+                                            ),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .id("interactive-toolbar")
+                                        .tab_group()
+                                        .tab_stop(false)
+                                        .flex()
+                                        .flex_col()
+                                        .flex_1()
+                                        .min_h_0()
+                                        .overflow_y_scroll()
+                                        .track_scroll(&self.inspector_scroll)
+                                        .px_4()
+                                        .children(toolbar),
+                                ),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .id("demo-status")
+                    .flex()
+                    .items_center()
+                    .h(px(32.0))
+                    .flex_shrink_0()
+                    .px_4()
+                    .border_t_1()
+                    .border_color(rgb(shell_rgb(theme_border(self.theme), 0xe5e5e5)))
+                    .text_size(px(11.0))
+                    .text_color(rgb(0x787b86))
+                    .child(format!(
+                        "{} · active {} · cap {}{}",
+                        self.status,
+                        self.active,
+                        ["∞", "2", "3", "4"][self.max_index],
+                        self.maximized
+                            .map(|id| format!(" · cell {id} maximized"))
+                            .unwrap_or_default(),
+                    )),
             )
     }
 }
@@ -3631,7 +3766,8 @@ fn main() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            move |_, cx| {
+            move |window, cx| {
+                window.set_window_title("Nucleus Charts — Market lab");
                 let root = if interactive {
                     AppRoot::Interactive(cx.new(|cx| InteractiveDemo::new(bars, cx)))
                 } else {

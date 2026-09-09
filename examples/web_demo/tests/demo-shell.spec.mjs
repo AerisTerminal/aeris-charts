@@ -6,6 +6,53 @@ async function open_demo(page) {
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 }
 
+test("demo controls have readable headings and usable desktop and phone targets", async ({ page }) => {
+  await open_demo(page);
+  await expect(page.locator("#feature_lab_group h2")).toHaveText("Feature lab");
+  for (const selector of ["#theme_toggle", "#inspector_toggle", "#feature_search", "#feature_filters button"]) {
+    const sizes = await page.locator(selector).evaluateAll((elements) => elements.map((element) => {
+      const rect = element.getBoundingClientRect();
+      return { width: rect.width, height: rect.height };
+    }));
+    for (const size of sizes) {
+      expect(size.width).toBeGreaterThanOrEqual(40);
+      expect(size.height).toBeGreaterThanOrEqual(40);
+    }
+  }
+  await page.setViewportSize({ width: 360, height: 780 });
+  await page.locator("#inspector_toggle").click();
+  await expect(page.locator("#inspector")).toHaveAttribute("data-open", "true");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+  const target = await page.locator("#theme_toggle").boundingBox();
+  expect(target.width).toBeGreaterThanOrEqual(44);
+  expect(target.height).toBeGreaterThanOrEqual(44);
+  expect(await page.locator("#chart_wrap").evaluate((element) => element.inert)).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#inspector")).toHaveAttribute("data-open", "false");
+  await expect(page.locator("#inspector_toggle")).toBeFocused();
+  expect(await page.locator("#chart_wrap").evaluate((element) => element.inert)).toBe(false);
+  expect(await page.locator("#inspector").evaluate((element) => element.inert)).toBe(true);
+});
+
+test("section navigation leaves the chart in place and reduced motion removes shell transitions", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await open_demo(page);
+  const chart = await page.locator("#chart_wrap").boundingBox();
+  await page.locator('#tool_rail [data-scroll-target="drawings_group"]').click();
+  await expect(page.locator("#control_jump")).toHaveValue("drawings_group");
+  await expect(page.locator("#drawings_group h2")).toBeInViewport();
+  await page.locator("#control_jump").selectOption("type_group");
+  await expect(page.locator('#tool_rail [data-scroll-target="type_group"]')).toHaveAttribute("aria-current", "true");
+  await expect(page.locator("#type_group h2")).toBeInViewport();
+  expect(await page.locator("#chart_wrap").boundingBox()).toEqual(chart);
+  await page.locator("#theme_toggle").click();
+  // The shared stylesheet sets a tiny !important duration for reduced motion;
+  // the shell disables transition properties entirely, so no animation is created.
+  const animations = await page.locator("#theme_toggle [data-theme-icon]").evaluateAll((icons) =>
+    icons.map((icon) => icon.getAnimations().length));
+  expect(animations).toEqual([0, 0]);
+});
+
 test("demo shell is responsive, icon-led, and has no horizontal control ribbon", async ({ page }) => {
   await open_demo(page);
   const layout = await page.evaluate(() => ({

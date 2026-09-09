@@ -177,6 +177,13 @@ GPUI's path pass cannot rely on MSAA — its sample count is picked from the sur
 
 An interactive GPUI host requests another animation frame only for active engine animation or an explicit finite measurement run. Idle charts stop scheduling frames. The executor retains its lowered `ScenePlan`; a host presentation that does not change the canonical engine frame can repaint that plan without lowering every primitive again.
 
+The interactive `gpui_probe` example and `examples/web_demo` keep demo controls in a separate,
+scrolling inspector so adding control groups does not reduce chart height. Section navigation,
+inspector visibility, and responsive shell layout belong to these example hosts. GPUI uses its
+native scroll and keyboard-focus facilities; the browser uses semantic headings, labeled controls,
+and a dismissible compact inspector. These shells retain the existing engine/API action paths;
+the finite GPUI probe and browser runtime fixtures keep their dedicated measurement layouts.
+
 ### `nucleuscharts_render_wgpu`
 
 The WebGPU executor. It owns quad, triangle, textured-label, atlas, blend, multisample, scissor, and GPU timing resources. GPU objects are reused across frames and rebuilt only when their actual invalidation inputs change.
