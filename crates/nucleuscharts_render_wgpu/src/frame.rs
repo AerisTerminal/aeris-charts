@@ -55,8 +55,8 @@ pub struct DrawGroup {
     /// Solid-quad instances in prim order across all layers.
     pub quads: Vec<QuadInstance>,
     /// Textured-quad instances (browser-rasterized text runs). Scheduled in prim order by
-    /// [`prims_to_group`]; a buffer populated without any [`RunPipeline::TexQuad`] run keeps
-    /// the previous whole-buffer, drawn-last behavior.
+    /// [`prims_to_group`]; a buffer populated without any scheduled text run keeps the previous
+    /// whole-buffer, drawn-last behavior.
     pub tex_quads: Vec<TexQuadInstance>,
     /// Raster-image textured quads, kept separate from text so a large watermark cannot evict
     /// labels or force the whole frame onto Canvas2D.
@@ -114,6 +114,16 @@ fn push_run(runs: &mut Vec<DrawRun>, pipeline: RunPipeline, first: u32, count: u
         first,
         count,
     });
+}
+
+fn needs_legacy_tex_fallback(group: &DrawGroup) -> bool {
+    !group.tex_quads.is_empty()
+        && !group.runs.iter().any(|run| {
+            matches!(
+                run.pipeline,
+                RunPipeline::TexQuad | RunPipeline::RotatedTexQuad
+            )
+        })
 }
 
 /// Append one layer's prims to the group in list order, exactly as the Canvas2D executor
@@ -465,12 +475,7 @@ pub fn render_frame(
             }
             // A directly populated tex buffer with no scheduled runs keeps the previous
             // whole-buffer, drawn-last behavior (textured quads paint above everything).
-            if !group.tex_quads.is_empty()
-                && !group
-                    .runs
-                    .iter()
-                    .any(|run| run.pipeline == RunPipeline::TexQuad)
-            {
+            if needs_legacy_tex_fallback(group) {
                 if let Some(b) = &bufs.tex.buffer {
                     tex.draw(&mut pass, b, 0, group.tex_quads.len() as u32);
                     draw_calls += 1;
@@ -488,6 +493,31 @@ pub fn render_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn text_quad() -> TexQuadInstance {
+        TexQuadInstance {
+            rect: [0.0; 4],
+            uv: [0.0; 4],
+            color: [1.0; 4],
+        }
+    }
+
+    #[test]
+    fn scheduled_rotated_text_does_not_trigger_the_legacy_unrotated_draw() {
+        let mut group = DrawGroup::default();
+        group.tex_quads.push(text_quad());
+        assert!(needs_legacy_tex_fallback(&group));
+
+        group.runs.push(DrawRun {
+            pipeline: RunPipeline::RotatedTexQuad,
+            first: 0,
+            count: 1,
+        });
+        assert!(!needs_legacy_tex_fallback(&group));
+
+        group.runs[0].pipeline = RunPipeline::TexQuad;
+        assert!(!needs_legacy_tex_fallback(&group));
+    }
 
     #[test]
     fn vertex_capacity_grows_geometrically_and_never_exact_sizes() {
