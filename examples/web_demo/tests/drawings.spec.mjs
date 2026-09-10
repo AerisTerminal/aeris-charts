@@ -429,16 +429,17 @@ test("click selects with anchor handles and part cursors; empty click deselects"
   expect(count_color(await capture(page), [255, 0, 255]), "ordinary pane hover paints the crosshair")
     .toBeGreaterThan(100);
 
-  // Hovering the body reports the drawing with the move cursor.
-  const mid = await page.evaluate(({ l0, l1, p_lo, p_hi }) => ({
-    x: (window.__chart.time_scale().logical_to_coordinate(l0) + window.__chart.time_scale().logical_to_coordinate(l1)) / 2,
-    y: (window.__main.price_to_coordinate(p_lo) + window.__main.price_to_coordinate(p_hi)) / 2,
+  // Hovering the body away from the dedicated middle-label slot reports the drawing with the
+  // move cursor. The exact midpoint belongs to the empty trend-label prompt.
+  const body = await page.evaluate(({ l0, l1, p_lo, p_hi }) => ({
+    x: window.__chart.time_scale().logical_to_coordinate(l0) * 0.75 + window.__chart.time_scale().logical_to_coordinate(l1) * 0.25,
+    y: window.__main.price_to_coordinate(p_lo) * 0.75 + window.__main.price_to_coordinate(p_hi) * 0.25,
   }), s);
   await page.evaluate(() => {
     window.__hits = [];
     window.__chart.subscribe_crosshair_move((p) => window.__hits.push(p.hovered_object_id));
   });
-  await page.mouse.move(mid.x, mid.y);
+  await page.mouse.move(body.x, body.y);
   const id = (await drawings(page))[0].id;
   expect(await page.evaluate(() => window.__hits[window.__hits.length - 1])).toBe(`drawing:${id}`);
   expect(await overlay_cursor(page)).toBe("move");
@@ -446,7 +447,7 @@ test("click selects with anchor handles and part cursors; empty click deselects"
   expect(count_color(await capture(page), [255, 0, 255]), "drawing hover suppresses crosshair chrome").toBe(0);
 
   // Click selects: anchor handles (blue discs) appear at both defining points.
-  await page.mouse.click(mid.x, mid.y);
+  await page.mouse.click(body.x, body.y);
   await settle_frames(page);
   expect(await page.evaluate(() => window.__chart.selected_drawing()?.id ?? null)).toBe(id);
   const selected = await capture(page);
@@ -701,20 +702,20 @@ test("Delete and Backspace remove the selected drawing", async ({ page }) => {
       { logical: l1, price: p_hi },
     ]);
   }, s);
-  const mid = async () => {
+  const body = async () => {
     const points = (await drawings(page))[0].points;
     return {
-      x: (await x_of(page, points[0].logical) + await x_of(page, points[1].logical)) / 2,
+      x: await x_of(page, points[0].logical) * 0.75 + await x_of(page, points[1].logical) * 0.25,
       y: await page.evaluate(({ points }) => (
-        window.__main.price_to_coordinate(points[0].price) +
-        window.__main.price_to_coordinate(points[1].price)
-      ) / 2, { points }),
+        window.__main.price_to_coordinate(points[0].price) * 0.75 +
+        window.__main.price_to_coordinate(points[1].price) * 0.25
+      ), { points }),
     };
   };
   await focus_overlay(page);
 
   await add();
-  let grab = await mid();
+  let grab = await body();
   await page.mouse.click(grab.x, grab.y);
   expect(await page.evaluate(() => window.__chart.selected_drawing())).not.toBeNull();
   await page.keyboard.press("Delete");
@@ -722,7 +723,7 @@ test("Delete and Backspace remove the selected drawing", async ({ page }) => {
 
   // Backspace works the same way; with nothing selected both keys are no-ops.
   await add();
-  grab = await mid();
+  grab = await body();
   await page.mouse.click(grab.x, grab.y);
   await page.keyboard.press("Backspace");
   expect(await drawings(page)).toHaveLength(0);
@@ -848,9 +849,20 @@ test("drawing tools render pixel-identical on WebGPU and Canvas2D (AA coverage s
       window.__chart.render();
     });
     await settle_frames(page);
+    const trend_label = await page.evaluate(() => {
+      const first = window.__chart.drawings()[0];
+      const [x, y, angle] = window.__chart.wasm.drawing_text_transform(first.id);
+      const options = first.options();
+      const layout = window.__chart.options().layout;
+      const size = options.text_size ?? layout.fontSize;
+      const context = document.createElement("canvas").getContext("2d");
+      context.font = `${options.text_italic ? "italic " : ""}${options.text_weight ?? 400} ${size}px ${layout.fontFamily}`;
+      return { x, y, angle, size, width: context.measureText(options.text).width };
+    });
     return {
       backend: await page.evaluate(() => window.__chart.backend()),
       png: PNG.sync.read(await page.screenshot({ animations: "disabled", fullPage: false })),
+      trend_label,
     };
   };
 
@@ -859,6 +871,9 @@ test("drawing tools render pixel-identical on WebGPU and Canvas2D (AA coverage s
   const gpu = await run_scenario("auto");
   expect(gpu.backend).toBe("webgpu");
   expect([canvas.png.width, canvas.png.height]).toEqual([gpu.png.width, gpu.png.height]);
+  expect(gpu.trend_label.x).toBeCloseTo(canvas.trend_label.x, 6);
+  expect(gpu.trend_label.y).toBeCloseTo(canvas.trend_label.y, 6);
+  expect(gpu.trend_label.angle).toBeCloseTo(canvas.trend_label.angle, 6);
 
   // Vacuousness guard: the scenario paints substantially on EACH backend.
   const clean_probe = await (async () => {
@@ -874,7 +889,11 @@ test("drawing tools render pixel-identical on WebGPU and Canvas2D (AA coverage s
   // by more than an AA coverage step. Measurements across local and CI SwiftShader put isolated
   // diagonal-stroke coverage deltas at up to 121; paint-order swaps remain far above this band
   // (the regression fixture measured 201), so 128 separates raster coverage from wrong paint.
+  // Rotated browser text is the one intentional exception: Canvas2D rotates during fillText,
+  // while WebGPU rotates the cached unrotated glyph-atlas quad. Verify the canonical transform
+  // exactly above, then bound high-coverage differences to that measured glyph rectangle only.
   let ordering_diff = 0;
+  let rotated_glyph_diff = 0;
   let edge_diff = 0;
   let maximum_channel_delta = 0;
   for (let offset = 0; offset < canvas.png.data.length; offset += 4) {
@@ -883,10 +902,23 @@ test("drawing tools render pixel-identical on WebGPU and Canvas2D (AA coverage s
       pixel_delta = Math.max(pixel_delta, Math.abs(canvas.png.data[offset + channel] - gpu.png.data[offset + channel]));
     }
     maximum_channel_delta = Math.max(maximum_channel_delta, pixel_delta);
-    if (pixel_delta > 128) ordering_diff += 1;
+    if (pixel_delta > 128) {
+      const pixel = offset / 4;
+      const dx = (pixel % canvas.png.width) / PR - canvas.trend_label.x;
+      const dy = Math.floor(pixel / canvas.png.width) / PR - canvas.trend_label.y;
+      const cos = Math.cos(canvas.trend_label.angle);
+      const sin = Math.sin(canvas.trend_label.angle);
+      const local_x = dx * cos + dy * sin;
+      const local_y = -dx * sin + dy * cos;
+      const in_rotated_glyph =
+        Math.abs(local_x) <= canvas.trend_label.width / 2 + 3 &&
+        Math.abs(local_y) <= canvas.trend_label.size / 2 + 3;
+      if (in_rotated_glyph) rotated_glyph_diff += 1;
+      else ordering_diff += 1;
+    }
     else if (pixel_delta !== 0) edge_diff += 1;
   }
-  console.log(`drawings parity: ${edge_diff} AA-edge pixels (max step ${maximum_channel_delta}), ${ordering_diff} ordering pixels`);
+  console.log(`drawings parity: ${edge_diff} AA-edge pixels (max step ${maximum_channel_delta}), ${rotated_glyph_diff} rotated-glyph pixels, ${ordering_diff} ordering pixels`);
   if (ordering_diff !== 0) {
     const visual = new PNG({ width: canvas.png.width, height: canvas.png.height });
     pixelmatch(canvas.png.data, gpu.png.data, visual.data, canvas.png.width, canvas.png.height, { threshold: 0, includeAA: true });
@@ -894,6 +926,7 @@ test("drawing tools render pixel-identical on WebGPU and Canvas2D (AA coverage s
     await test_info.attach("webgpu.png", { body: PNG.sync.write(gpu.png), contentType: "image/png" });
     await test_info.attach("diff.png", { body: PNG.sync.write(visual), contentType: "image/png" });
   }
+  expect(rotated_glyph_diff, "rotated glyph raster residual stays bounded").toBeLessThanOrEqual(128);
   expect(ordering_diff, "drawing geometry/paint order must match (only AA coverage steps may differ)").toBe(0);
 });
 
@@ -1411,6 +1444,91 @@ test("tool customization templates new drawings and applies live to the selected
   expect(updated.width).toBe(3);
 });
 
+test("trend labels rotate, reverse, template alignment, and never inherit text-tool content", async ({ page }) => {
+  await page.goto("/");
+  await wait_for_chart(page);
+  await page.waitForFunction(() => performance.now() > 600);
+  const offset = await page.evaluate(() => {
+    const rect = document.getElementById("chart_container").getBoundingClientRect();
+    return { left: rect.left, top: rect.top };
+  });
+  const spots = await anchor_spots(page);
+  const a = await spot(page, spots.l0, spots.p_lo);
+  const b = await spot(page, spots.l1, spots.p_hi);
+
+  await page.fill("#drawing_text", "standalone only");
+  await page.evaluate(() => {
+    const input = document.getElementById("drawing_text_color");
+    input.value = "#d32f2f";
+    input.dispatchEvent(new Event("change"));
+  });
+  await page.selectOption("#drawing_text_h_align", "right");
+  await page.selectOption("#drawing_text_v_align", "bottom");
+  await page.click("#drawings_group [data-tool='trend_line']");
+  await page.mouse.click(a.x + offset.left, a.y + offset.top);
+  await page.mouse.click(b.x + offset.left, b.y + offset.top);
+
+  let first = await page.evaluate(() => window.__chart.drawings()[0].options());
+  expect(first.text, "trend templates never consume the standalone text field").toBe("");
+  expect([first.text_h_align, first.text_v_align]).toEqual(["right", "bottom"]);
+  expect(first.text_size, "drawing text defaults to 14 CSS px").toBe(14);
+  expect(first.text_color, "the visible text-color control templates trend labels").toBe("#d32f2f");
+
+  const [slot_x, slot_y, slot_angle] = await page.evaluate(() => (
+    window.__chart.wasm.drawing_text_transform(window.__chart.drawings()[0].id)
+  ));
+  const slot = { x: slot_x, y: slot_y, angle: slot_angle };
+  await page.mouse.move(slot.x + offset.left, slot.y + offset.top);
+  await settle_frames(page);
+  expect(await overlay_cursor(page)).toBe("text");
+  const prompt = crop_around(await capture(page), slot.x * PR, slot.y * PR, 140, 80);
+  let configured_red_pixels = 0;
+  for (let o = 0; o < prompt.data.length; o += 4) {
+    if (prompt.data[o] > prompt.data[o + 1] + 20 && prompt.data[o] > prompt.data[o + 2] + 20) {
+      configured_red_pixels += 1;
+    }
+  }
+  expect(configured_red_pixels, "the real WebGPU prompt uses configured text RGB, not gray").toBeGreaterThan(5);
+  await page.mouse.click(slot.x + offset.left, slot.y + offset.top);
+  const editor = page.locator("#chart_container #nucleuscharts-text-input");
+  await expect(editor).toBeFocused();
+  const wrap = page.locator("#chart_container #nucleuscharts-text-editor");
+  expect(await editor.evaluate((el) => getComputedStyle(el).fontSize)).toBe("14px");
+  const editor_angle = () => wrap.evaluate((el) => Number(el.style.transform.match(/rotate\(([-\d.e]+)rad\)/)?.[1]));
+  expect(await editor_angle()).toBeCloseTo(slot.angle, 6);
+  await editor.fill("owned trend label");
+
+  await page.evaluate(() => {
+    const drawing = window.__chart.drawings()[0];
+    drawing.set_points([...drawing.points()].reverse());
+  });
+  await settle_frames(page);
+  expect(await editor_angle()).toBeCloseTo(slot.angle, 6);
+  await page.keyboard.press("Enter");
+  first = await page.evaluate(() => window.__chart.drawings()[0].options());
+  expect(first.text).toBe("owned trend label");
+
+  await page.selectOption("#drawing_text_h_align", "left");
+  await page.selectOption("#drawing_text_v_align", "top");
+  first = await page.evaluate(() => window.__chart.drawings()[0].options());
+  expect([first.text_h_align, first.text_v_align]).toEqual(["left", "top"]);
+  expect(first.text, "alignment changes do not wipe an existing trend label").toBe("owned trend label");
+
+  await page.click("#drawings_group [data-tool='trend_line']");
+  await page.mouse.click(a.x + offset.left, a.y + offset.top);
+  await page.mouse.click(b.x + offset.left, b.y + offset.top);
+  const second = await page.evaluate(() => window.__chart.drawings()[1].options());
+  expect(second.text, "subsequent trend lines start empty").toBe("");
+  expect([second.text_h_align, second.text_v_align]).toEqual(["left", "top"]);
+
+  await page.click("#drawings_group [data-tool='text']");
+  await page.mouse.click((a.x + b.x) / 2 + offset.left, a.y + offset.top - 50);
+  await expect(editor).toHaveText("standalone only");
+  await page.keyboard.press("Enter");
+  const standalone = await page.evaluate(() => window.__chart.drawings().at(-1).options());
+  expect(standalone.text).toBe("standalone only");
+});
+
 test("text tool: press places and opens typing mode; typing commits; leaving empty removes", async ({ page }) => {
   await goto_fixture(page);
   // No crosshair pixels near the probes.
@@ -1652,9 +1770,9 @@ test("typing mode keeps the text pixel-anchored (no shift, same size) as it grow
       font_weight: cs.fontWeight,
     };
   });
-  // Exactly the engine's committed size: text_size, else the text tool's own 18px default
+  // Exactly the engine's committed size: text_size, else the text tool's own 14px default
   // (TEXT_TOOL_DEFAULT_SIZE, drawings.rs) — NOT layout.fontSize, and no editor-side floor.
-  const expected_size = 18;
+  const expected_size = 14;
   let m = await metrics();
   // Pixel-band bounds quantize both glyph edges independently, so their inferred center can
   // differ from the vector anchor by up to two physical pixels at fractional DPR.
@@ -1741,7 +1859,7 @@ test("empty typing mode is a blank caret box (no Add text ghost)", async ({ page
   await expect(editor).toHaveText("");
   await expect(page.locator("#nucleuscharts-text-preview")).toHaveCount(0);
   const font_size = await editor.evaluate((el) => getComputedStyle(el).fontSize);
-  expect(font_size).toBe("18px");
+  expect(font_size).toBe("14px");
   await page.keyboard.press("Escape");
   expect(await drawings(page)).toHaveLength(0);
 });

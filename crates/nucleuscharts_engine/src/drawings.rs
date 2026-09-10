@@ -561,7 +561,7 @@ pub struct Drawing {
 /// Default glyph size for the TEXT TOOL's label in CSS px when `text_size` is unset
 /// (TradingView's default text-tool size). Other tools' labels keep following the chart's
 /// `layout.font_size`.
-pub const TEXT_TOOL_DEFAULT_SIZE: f64 = 18.0;
+pub const TEXT_TOOL_DEFAULT_SIZE: f64 = 14.0;
 
 /// The text tool's interaction-chrome padding in CSS px: the editing border (2 px) plus its
 /// padding (4 px), mirrored by the host's `#nucleuscharts-text-editor` wrap (impl.ts). The
@@ -1853,7 +1853,7 @@ impl ChartEngine {
         reference: &TextBox,
         size: f64,
         pad: f64,
-    ) -> (f64, f64, DrawingTextHAlign) {
+    ) -> (f64, f64, DrawingTextHAlign, f64) {
         let h = drawing.text_h_align;
         let x = match h {
             DrawingTextHAlign::Left => reference.left + pad,
@@ -1865,7 +1865,7 @@ impl ChartEngine {
             DrawingTextVAlign::Middle => (reference.top + reference.bottom) / 2.0,
             DrawingTextVAlign::Bottom => reference.bottom + pad + size / 2.0,
         };
-        (x, y, h)
+        (x, y, h, 0.0)
     }
 
     pub(crate) fn drawing_text_placement(
@@ -1876,25 +1876,39 @@ impl ChartEngine {
         pane_h: f64,
         size: f64,
         pad: f64,
-    ) -> (f64, f64, DrawingTextHAlign) {
+    ) -> (f64, f64, DrawingTextHAlign, f64) {
         if drawing.kind == DrawingKind::TrendLine && px.len() >= 2 {
-            let (a, b) = (px[0], px[1]);
-            let dx = b.0 - a.0;
-            if dx.abs() > f64::EPSILON {
-                let (left, right) = if a.0 <= b.0 { (a, b) } else { (b, a) };
-                let usable_pad = pad.min((right.0 - left.0).abs() / 2.0);
-                let x = match drawing.text_h_align {
-                    DrawingTextHAlign::Left => left.0 + usable_pad,
-                    DrawingTextHAlign::Center => (left.0 + right.0) / 2.0,
-                    DrawingTextHAlign::Right => right.0 - usable_pad,
+            let (mut start, mut end) = (px[0], px[1]);
+            let mut dx = end.0 - start.0;
+            let mut dy = end.1 - start.1;
+            let length = dx.hypot(dy);
+            if length > f64::EPSILON {
+                // Text is never upside down. Reversing the readable axis also makes left/right
+                // visual slots stable when the user drags one endpoint through the other.
+                if dx < 0.0 || (dx.abs() <= f64::EPSILON && dy > 0.0) {
+                    std::mem::swap(&mut start, &mut end);
+                    dx = -dx;
+                    dy = -dy;
+                }
+                let ux = dx / length;
+                let uy = dy / length;
+                let usable_pad = pad.min(length / 2.0);
+                let distance = match drawing.text_h_align {
+                    DrawingTextHAlign::Left => usable_pad,
+                    DrawingTextHAlign::Center => length / 2.0,
+                    DrawingTextHAlign::Right => length - usable_pad,
                 };
-                let line_y = a.1 + (b.1 - a.1) * ((x - a.0) / dx);
-                let y = match drawing.text_v_align {
-                    DrawingTextVAlign::Top => line_y - pad - size / 2.0,
-                    DrawingTextVAlign::Middle => line_y,
-                    DrawingTextVAlign::Bottom => line_y + pad + size / 2.0,
+                let mut x = start.0 + ux * distance;
+                let mut y = start.1 + uy * distance;
+                let normal_distance = match drawing.text_v_align {
+                    DrawingTextVAlign::Top => pad + size / 2.0,
+                    DrawingTextVAlign::Middle => 0.0,
+                    DrawingTextVAlign::Bottom => -pad - size / 2.0,
                 };
-                return (x, y, drawing.text_h_align);
+                // Screen y grows downward, so `(uy, -ux)` is the readable line's top normal.
+                x += uy * normal_distance;
+                y -= ux * normal_distance;
+                return (x, y, drawing.text_h_align, dy.atan2(dx));
             }
         }
         let reference = Self::text_box(drawing.kind, px, pane_w, pane_top, pane_h);
@@ -2137,7 +2151,7 @@ impl ChartEngine {
         let px = self.drawing_px(drawing)?;
         let pane = self.panes.get(drawing.pane_index)?;
         let size = drawing.resolved_text_size(self.options.get().layout.font_size);
-        let (x, y, _) = Self::drawing_text_placement(
+        let (x, y, _, _) = Self::drawing_text_placement(
             drawing,
             &px,
             self.pane_w,
@@ -2147,6 +2161,24 @@ impl ChartEngine {
             TEXT_PAD,
         );
         Some((x, y))
+    }
+
+    /// Media-px text anchor plus clockwise radians, shared with the browser caret overlay.
+    pub fn drawing_text_transform(&self, id: DrawingId) -> Option<(f64, f64, f64)> {
+        let drawing = self.drawing(id)?;
+        let px = self.drawing_px(drawing)?;
+        let pane = self.panes.get(drawing.pane_index)?;
+        let size = drawing.resolved_text_size(self.options.get().layout.font_size);
+        let (x, y, _, angle) = Self::drawing_text_placement(
+            drawing,
+            &px,
+            self.pane_w,
+            pane.top,
+            pane.height,
+            size,
+            TEXT_PAD,
+        );
+        Some((x, y, angle))
     }
 
     /// Topmost trend-line label/placeholder at a media-px point. This keeps the browser host
@@ -2168,7 +2200,7 @@ impl ChartEngine {
             let px = self.drawing_px(drawing)?;
             let pane = self.panes.get(drawing.pane_index)?;
             let size = drawing.resolved_text_size(layout.font_size);
-            let (tx, ty, align) = Self::drawing_text_placement(
+            let (tx, ty, align, angle) = Self::drawing_text_placement(
                 drawing,
                 &px,
                 self.pane_w,
@@ -2184,16 +2216,18 @@ impl ChartEngine {
                 drawing.text_weight.unwrap_or(400),
                 drawing.text_italic,
             );
+            let local_x = (x - tx) * angle.cos() + (y - ty) * angle.sin();
+            let local_y = -(x - tx) * angle.sin() + (y - ty) * angle.cos();
             let left = match align {
-                DrawingTextHAlign::Left => tx,
-                DrawingTextHAlign::Center => tx - width / 2.0,
-                DrawingTextHAlign::Right => tx - width,
+                DrawingTextHAlign::Left => 0.0,
+                DrawingTextHAlign::Center => -width / 2.0,
+                DrawingTextHAlign::Right => -width,
             };
             let half_height = size * 0.6;
-            (x >= left - TEXT_PAD
-                && x <= left + width + TEXT_PAD
-                && y >= ty - half_height - TEXT_PAD
-                && y <= ty + half_height + TEXT_PAD)
+            (local_x >= left - TEXT_PAD
+                && local_x <= left + width + TEXT_PAD
+                && local_y >= -half_height - TEXT_PAD
+                && local_y <= half_height + TEXT_PAD)
                 .then_some(drawing.id)
         });
         self.recycle_drawing_candidates(candidates);
@@ -2602,7 +2636,7 @@ impl ChartEngine {
                 let layout = &self.options.get().layout;
                 let size = drawing.resolved_text_size(layout.font_size);
                 let reference = geometry.text_box;
-                let (tx, ty, align) = Self::text_placement(drawing, &reference, size, TEXT_PAD);
+                let (tx, ty, align, _) = Self::text_placement(drawing, &reference, size, TEXT_PAD);
                 let width = self.measure_drawing_text(drawing, size);
                 let height = size * 1.2;
                 let left = match align {

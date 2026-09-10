@@ -32,6 +32,8 @@ pub enum RunPipeline {
     Quad,
     /// Textured instanced quads (label atlas); `first`/`count` are instances.
     TexQuad,
+    /// Rotated label-atlas quads using location 2 as the canonical pivot/cosine/sine transform.
+    RotatedTexQuad,
     /// Raster-image atlas.
     ImageQuad,
 }
@@ -149,6 +151,13 @@ pub fn prims_to_group(
                     let first = group.tex_quads.len() as u32;
                     group.tex_quads.push(instance);
                     push_run(&mut group.runs, RunPipeline::TexQuad, first, 1);
+                }
+            }
+            Prim::RotatedText { .. } => {
+                if let Some(instance) = resolve_text(prim) {
+                    let first = group.tex_quads.len() as u32;
+                    group.tex_quads.push(instance);
+                    push_run(&mut group.runs, RunPipeline::RotatedTexQuad, first, 1);
                 }
             }
             Prim::Image { .. } => {
@@ -322,6 +331,7 @@ pub fn render_frame(
     clear_color: wgpu::Color,
     quad: &QuadRenderer,
     tex: &TexQuadRenderer,
+    rotated_tex: &TexQuadRenderer,
     image: &TexQuadRenderer,
     tri: &TriRenderer,
     groups: &[DrawGroup],
@@ -332,6 +342,7 @@ pub fn render_frame(
     let mut draw_calls = 0u32;
     quad.write_globals(queue, width_px, height_px);
     tex.write_globals(queue, width_px, height_px);
+    rotated_tex.write_globals(queue, width_px, height_px);
     image.write_globals(queue, width_px, height_px);
     tri.write_globals(queue, width_px, height_px);
 
@@ -435,6 +446,12 @@ pub fn render_frame(
                     RunPipeline::TexQuad => {
                         if let Some(b) = &bufs.tex.buffer {
                             tex.draw(&mut pass, b, run.first, run.count);
+                            draw_calls += 1;
+                        }
+                    }
+                    RunPipeline::RotatedTexQuad => {
+                        if let Some(b) = &bufs.tex.buffer {
+                            rotated_tex.draw(&mut pass, b, run.first, run.count);
                             draw_calls += 1;
                         }
                     }

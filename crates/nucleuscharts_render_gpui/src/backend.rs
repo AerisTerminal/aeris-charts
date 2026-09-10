@@ -24,9 +24,9 @@
 use std::{collections::HashMap, sync::Arc};
 
 use gpui::{
-    fill, linear_color_stop, linear_gradient, point, px, size, App, Background, Bounds,
+    fill, linear_color_stop, linear_gradient, point, px, radians, size, App, Background, Bounds,
     ContentMask, Font, FontStyle, FontWeight, Hsla, Path, Pixels, RenderImage, Rgba, ShapedLine,
-    SharedString, Window,
+    SharedString, TransformationMatrix, Window,
 };
 use image::{Frame, RgbaImage};
 use smallvec::SmallVec;
@@ -168,6 +168,7 @@ pub fn measure_text(
         align: nucleuscharts_render::draw_list::TextAlign::Left,
         weight,
         italic,
+        angle: 0.0,
     };
     let font = to_font(&run);
     let text_system = window.text_system().clone();
@@ -584,7 +585,19 @@ fn paint_range(
                 i += 1;
             }
             SceneOp::Text(run) => {
-                paint_text(run, transform, text_cache, shaped_text, window, cx, metrics);
+                if run.angle == 0.0 {
+                    paint_text(run, transform, text_cache, shaped_text, window, cx, metrics);
+                } else {
+                    paint_rotated_text(
+                        run,
+                        transform,
+                        text_cache,
+                        shaped_text,
+                        window,
+                        cx,
+                        metrics,
+                    );
+                }
                 i += 1;
             }
             SceneOp::Image {
@@ -611,6 +624,110 @@ fn paint_range(
                 i += 1;
             }
         }
+    }
+}
+
+fn escape_svg_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+/// GPUI's shaped-line painter has no affine-transform parameter. Rotated runs therefore use
+/// GPUI's transformed monochrome-sprite path: the same system font is rasterized once into the
+/// sprite atlas and the sprite is rotated around the canonical aligned anchor. The atlas key
+/// excludes the angle, so dragging an endpoint reuses glyph coverage instead of rerasterizing it.
+#[allow(clippy::too_many_arguments)]
+fn paint_rotated_text(
+    run: &TextRun,
+    transform: Transform,
+    text_cache: &mut crate::text::TextCache,
+    shaped_text: &mut ShapedTextCache,
+    window: &mut Window,
+    cx: &mut App,
+    metrics: &mut GpuiFrameMetrics,
+) {
+    let font_size = transform.len(run.size);
+    let shape_key = ShapedTextKey::for_run(run, font_size);
+    let cached = shaped_text.get_or_shape(shape_key, || {
+        let font = to_font(run);
+        let text_system = window.text_system().clone();
+        let font_id = text_system.resolve_font(&font);
+        let ascent: f32 = text_system.ascent(font_id, font_size).into();
+        let descent: f32 = text_system.descent(font_id, font_size).into();
+        let gpui_run = gpui::TextRun {
+            len: run.text.len(),
+            font,
+            color: to_hsla(run.color),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let line = text_system.shape_line(
+            SharedString::from(run.text.clone()),
+            font_size,
+            std::slice::from_ref(&gpui_run),
+            None,
+        );
+        CachedShapedText {
+            line,
+            ascent,
+            descent,
+        }
+    });
+
+    let logical_to_device = 1.0 / transform.inv_scale;
+    text_cache.measure_with(TextKey::for_run(run), || TextMetrics {
+        width: f32::from(cached.line.width) * logical_to_device,
+        ascent: cached.ascent * logical_to_device,
+        descent: -cached.descent * logical_to_device,
+    });
+
+    let width = f32::from(cached.line.width).max(1.0);
+    let font_size_value = f32::from(font_size);
+    let height = (cached.ascent + cached.descent).max(font_size_value);
+    let anchor_x = f32::from(transform.x(run.x));
+    let anchor_y = f32::from(transform.y(run.y));
+    let left = text::aligned_left(anchor_x, width, run.align);
+    let top = anchor_y - height / 2.0;
+    let bounds = Bounds {
+        origin: point(px(left), px(top)),
+        size: size(px(width), px(height)),
+    };
+    let family = escape_svg_text(&run.family);
+    let value = escape_svg_text(&run.text);
+    let style = if run.italic { "italic" } else { "normal" };
+    let svg = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}"><text x="0" y="{ascent}" font-family="{family}" font-size="{font_size_value}" font-weight="{weight}" font-style="{style}" fill="white">{value}</text></svg>"#,
+        ascent = cached.ascent,
+        weight = run.weight,
+    );
+    let scale_factor = 1.0 / transform.inv_scale;
+    let pivot = point(
+        gpui::ScaledPixels(anchor_x * scale_factor),
+        gpui::ScaledPixels(anchor_y * scale_factor),
+    );
+    let matrix = TransformationMatrix::unit()
+        .translate(pivot)
+        .rotate(radians(run.angle))
+        .translate(point(
+            gpui::ScaledPixels(-pivot.x.0),
+            gpui::ScaledPixels(-pivot.y.0),
+        ));
+    let key = SharedString::from(format!("nucleus-rotated-text:{svg}"));
+    match window.paint_svg(
+        bounds,
+        key,
+        Some(svg.as_bytes()),
+        matrix,
+        to_hsla(run.color),
+        cx,
+    ) {
+        Ok(()) => metrics.glyph_runs_painted += 1,
+        Err(_) => metrics.dropped_prims += 1,
     }
 }
 
@@ -844,6 +961,7 @@ mod tests {
             align: TextAlign::Left,
             weight: 400,
             italic: false,
+            angle: 0.0,
         }
     }
 

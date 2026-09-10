@@ -109,6 +109,8 @@ pub struct TextRun {
     /// Numeric CSS font weight (100–900).
     pub weight: u16,
     pub italic: bool,
+    /// Clockwise radians around the aligned `(x, y)` anchor.
+    pub angle: f32,
 }
 
 /// One GPUI-bound draw command. The plan's `Vec<SceneOp>` order **is** the paint order.

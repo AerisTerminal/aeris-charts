@@ -264,6 +264,7 @@ mod tests {
             align,
             weight: 400,
             italic: false,
+            angle: 0.0,
         }
     }
 

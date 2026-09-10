@@ -1395,9 +1395,9 @@ pub struct ChartEngine {
     /// One engine-owned drawing-tool controller: armed tool/template, anchored placement and
     /// freehand capture. Hosts forward normalized actions and never own per-tool creation logic.
     drawing_controller: DrawingController,
-    /// The text drawing the host's typing-mode editor currently owns (drawings.rs): its
-    /// placeholder/label is suppressed in the frame so the editor's preview is the only
-    /// visual for it.
+    /// The drawing whose dedicated host editor currently owns text input (drawings.rs).
+    /// Frame construction keeps committed glyphs for the transparent overlay-caret model and
+    /// keeps an empty trend label's measured middle gap while its editor is open.
     editing_drawing: Option<DrawingId>,
     /// The text drawing under the host's pointer (drawings.rs): the overlay frame paints its
     /// focus border at hover opacity (TradingView's hover ring). Only the text tool has hover

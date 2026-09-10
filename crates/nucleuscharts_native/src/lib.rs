@@ -369,6 +369,94 @@ impl Canvas2d for TinySkiaCanvas {
         }
     }
 
+    fn fill_rotated_text(
+        &mut self,
+        text: &str,
+        x: f32,
+        y: f32,
+        font: &str,
+        color: Color,
+        align: TextAlign,
+        angle: f32,
+    ) {
+        let Some(size) = font
+            .split_whitespace()
+            .find_map(|tok| tok.strip_suffix("px")?.parse::<f32>().ok())
+        else {
+            return;
+        };
+        let scale = PxScale::from(size);
+        let scaled = FONT.as_scaled(scale);
+        let run_width = |scaled: &ab_glyph::PxScaleFont<&FontArc>| -> f32 {
+            let mut width = 0.0;
+            let mut previous = None;
+            for ch in text.chars() {
+                let id = scaled.glyph_id(ch);
+                if let Some(prev) = previous {
+                    width += scaled.kern(prev, id);
+                }
+                width += scaled.h_advance(id);
+                previous = Some(id);
+            }
+            width
+        };
+        let width = run_width(&scaled);
+        let local_left = match align {
+            TextAlign::Left => 0.0,
+            TextAlign::Center => -width / 2.0,
+            TextAlign::Right => -width,
+        };
+        let line_height = (scaled.ascent() - scaled.descent()).max(size);
+        let origin_x = local_left.floor() - 2.0;
+        let origin_y = (-line_height / 2.0).floor() - 2.0;
+        let source_width = (width.ceil() + 4.0).max(1.0) as u32;
+        let source_height = (line_height.ceil() + 4.0).max(1.0) as u32;
+        let mut source = TinySkiaCanvas::new(source_width, source_height, Color::rgba(0, 0, 0, 0));
+        let mut pen_x = local_left;
+        let baseline = (scaled.ascent() + scaled.descent()) / 2.0;
+        let ink = sk(color);
+        let mut previous = None;
+        for ch in text.chars() {
+            let id = scaled.glyph_id(ch);
+            if let Some(prev) = previous {
+                pen_x += scaled.kern(prev, id);
+            }
+            let glyph = id.with_scale_and_position(scale, ab_glyph::point(pen_x, baseline));
+            pen_x += scaled.h_advance(id);
+            previous = Some(id);
+            if let Some(outlined) = FONT.outline_glyph(glyph) {
+                let bounds = outlined.px_bounds();
+                outlined.draw(|gx, gy, cov| {
+                    source.blend_coverage(
+                        (bounds.min.x + gx as f32 - origin_x).round() as i32,
+                        (bounds.min.y + gy as f32 - origin_y).round() as i32,
+                        ink,
+                        cov,
+                    );
+                });
+            }
+        }
+        let (sin, cos) = angle.sin_cos();
+        self.pixmap.draw_pixmap(
+            0,
+            0,
+            source.pixmap.as_ref(),
+            &PixmapPaint {
+                quality: FilterQuality::Bicubic,
+                ..PixmapPaint::default()
+            },
+            Transform::from_row(
+                cos,
+                sin,
+                -sin,
+                cos,
+                x + origin_x * cos - origin_y * sin,
+                y + origin_x * sin + origin_y * cos,
+            ),
+            None,
+        );
+    }
+
     fn draw_raster_image(&mut self, image: &RasterImage, rect: [f32; 4], opacity: f32) {
         let Some(size) = IntSize::from_wh(image.width, image.height) else {
             return;
@@ -694,6 +782,39 @@ mod tests {
         assert!(has_ink(&centered, 0, 100));
         assert!(has_ink(&centered, 100, 200));
         assert!(!has_ink(&canvas, 0, 10));
+    }
+
+    #[test]
+    fn rotated_text_raster_follows_the_canonical_angle() {
+        let bg = Color::rgb(0xff, 0xff, 0xff);
+        let ink = Color::rgb(0x00, 0x66, 0x00);
+        let canvas = render_prims(
+            120,
+            120,
+            bg,
+            &[Prim::RotatedText {
+                x: 60.0,
+                y: 60.0,
+                text: "TREND".into(),
+                color: ink,
+                size: 20.0,
+                family: "sans-serif".into(),
+                align: TextAlign::Center,
+                weight: 400,
+                italic: false,
+                angle: std::f32::consts::FRAC_PI_2,
+            }],
+            &[],
+        );
+        let ink_at = |x: u32, y: u32| canvas.pixel_rgba(x, y) != [255, 255, 255, 255];
+        assert!(
+            (5..115).any(|y| ink_at(60, y)),
+            "vertical run must cross its anchor x"
+        );
+        assert!(
+            !(5..45).any(|x| (50..70).any(|y| ink_at(x, y))),
+            "a quarter-turn must not remain in the old horizontal location"
+        );
     }
 
     #[test]

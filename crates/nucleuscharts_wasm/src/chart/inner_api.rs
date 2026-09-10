@@ -2117,6 +2117,12 @@ impl ChartInner {
             .map(|(x, y)| vec![x + self.pane_left, y])
             .unwrap_or_default()
     }
+    pub fn drawing_text_transform(&self, id: u32) -> Vec<f64> {
+        self.engine
+            .drawing_text_transform(id)
+            .map(|(x, y, angle)| vec![x + self.pane_left, y, angle])
+            .unwrap_or_default()
+    }
     pub fn drawing_text_hit_at(&self, x_css: f64, y_css: f64) -> u32 {
         self.engine.drawing_text_hit_at(x_css, y_css).unwrap_or(0)
     }

@@ -32,13 +32,15 @@ fn text_prim(x: f32) -> Prim {
 
 /// A resolver that maps every text prim to a dummy 2x2 atlas quad at its anchor.
 fn dummy_quad(prim: &Prim) -> Option<TexQuadInstance> {
-    let Prim::Text { x, y, .. } = prim else {
-        return None;
+    let (x, y, transform) = match prim {
+        Prim::Text { x, y, .. } => (x, y, [0.0, 0.0, 0.0, 1.0]),
+        Prim::RotatedText { x, y, angle, .. } => (x, y, [*x, *y, angle.cos(), angle.sin()]),
+        _ => return None,
     };
     Some(TexQuadInstance {
         rect: [*x, *y, 2.0, 2.0],
         uv: [0.0, 0.0, 0.5, 0.5],
-        color: [0.0, 0.0, 0.0, 1.0],
+        color: transform,
     })
 }
 
@@ -72,6 +74,18 @@ impl Canvas2d for CountingCanvas {
             [x, y, w, h],
             self.fill_color.expect("fill style before rect"),
         ));
+    }
+    fn fill_rotated_text(
+        &mut self,
+        _: &str,
+        _: f32,
+        _: f32,
+        _: &str,
+        _: Color,
+        _: nucleuscharts_render::draw_list::TextAlign,
+        _: f32,
+    ) {
+        self.calls += 1;
     }
     fn begin_path(&mut self) {
         self.calls += 1;
@@ -243,7 +257,6 @@ fn assert_runs_tile_buffers(group: &DrawGroup) {
     for (pipeline, len) in [
         (RunPipeline::Tri, group.tris.len()),
         (RunPipeline::Quad, group.quads.len()),
-        (RunPipeline::TexQuad, group.tex_quads.len()),
         (RunPipeline::ImageQuad, group.image_quads.len()),
     ] {
         let mut next = 0u32;
@@ -257,6 +270,20 @@ fn assert_runs_tile_buffers(group: &DrawGroup) {
             "{pipeline:?} runs must cover the buffer"
         );
     }
+    let mut next = 0u32;
+    for run in group.runs.iter().filter(|run| {
+        matches!(
+            run.pipeline,
+            RunPipeline::TexQuad | RunPipeline::RotatedTexQuad
+        )
+    }) {
+        assert_eq!(
+            run.first, next,
+            "text runs must share one contiguous buffer"
+        );
+        next += run.count;
+    }
+    assert_eq!(next, group.tex_quads.len() as u32);
 }
 
 #[test]
@@ -402,6 +429,31 @@ fn group_builder_schedules_resolved_text_quads_in_prim_order() {
         "consecutive text runs batch into one tex-quad draw"
     );
     assert_runs_tile_buffers(&group);
+}
+
+#[test]
+fn rotated_text_quad_carries_the_canonical_anchor_and_rotation() {
+    let angle = -0.75_f32;
+    let prim = Prim::RotatedText {
+        x: 41.0,
+        y: 27.0,
+        text: "trend".into(),
+        color: Color::rgb(1, 2, 3),
+        size: 12.0,
+        family: "Test".into(),
+        align: nucleuscharts_render::draw_list::TextAlign::Center,
+        weight: 400,
+        italic: false,
+        angle,
+    };
+    let mut group = DrawGroup::default();
+    prims_to_group(&[prim], &[], &mut group, &mut dummy_quad, &mut |_| None);
+    assert_eq!(group.tex_quads.len(), 1);
+    assert_eq!(group.runs[0].pipeline, RunPipeline::RotatedTexQuad);
+    assert_eq!(
+        group.tex_quads[0].color,
+        [41.0, 27.0, angle.cos(), angle.sin()]
+    );
 }
 
 #[test]

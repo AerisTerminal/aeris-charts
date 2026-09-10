@@ -328,6 +328,37 @@ fn lower_prim(
                 align: *align,
                 weight: *weight,
                 italic: *italic,
+                angle: 0.0,
+            }));
+            metrics.text_runs += 1;
+            metrics.ops += 1;
+        }
+        Prim::RotatedText {
+            x,
+            y,
+            text,
+            color,
+            size,
+            family,
+            align,
+            weight,
+            italic,
+            angle,
+        } => {
+            if text.is_empty() || *size <= 0.0 || color.a() == 0 {
+                return;
+            }
+            plan.ops.push(SceneOp::Text(TextRun {
+                x: *x,
+                y: *y,
+                text: text.clone(),
+                color: *color,
+                size: *size,
+                family: family.clone(),
+                align: *align,
+                weight: *weight,
+                italic: *italic,
+                angle: *angle,
             }));
             metrics.text_runs += 1;
             metrics.ops += 1;
@@ -814,6 +845,34 @@ mod tests {
         };
         assert_eq!((run.x, run.y, run.align), (10.5, 20.0, TextAlign::Center));
         assert_eq!(run.weight, 700);
+    }
+
+    #[test]
+    fn rotated_text_carries_the_complete_transform_verbatim() {
+        let (plan, metrics) = run(
+            &[Prim::RotatedText {
+                x: 10.5,
+                y: 20.0,
+                text: "trend".into(),
+                color: C,
+                size: 14.0,
+                family: "Roboto".into(),
+                align: TextAlign::Right,
+                weight: 600,
+                italic: true,
+                angle: -0.75,
+            }],
+            &[],
+        );
+        assert_eq!(metrics.text_runs, 1);
+        let SceneOp::Text(run) = &plan.ops[0] else {
+            panic!("expected text");
+        };
+        assert_eq!((run.x, run.y, run.angle), (10.5, 20.0, -0.75));
+        assert_eq!(
+            (run.align, run.weight, run.italic),
+            (TextAlign::Right, 600, true)
+        );
     }
 
     #[test]

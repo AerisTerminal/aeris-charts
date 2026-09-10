@@ -255,6 +255,30 @@ separate stable pane identity and intentionally issues fresh live IDs during res
 
 The ordered frame contract contains pane backgrounds and grids, idle indicator geometry, idle drawings, ordinary series geometry, active series/drawings/previews, custom-series contributions spliced at their paint marks, pane chrome, trading regions, trading/alerts, crosshair overlays, axes, labels, and text, plus per-series and per-drawing segment ranges for retained backend groups. `series_order`/`drawings` stay the stable saved orders; the frame derives the effective paint order without rewriting them, and series/drawing hit tests tie-break on stable order so promotion cannot oscillate hover. Backends preserve ordering, clipping, blending, and coordinate conversion. A backend may batch compatible adjacent primitives only when visible output is unchanged.
 
+Trend-line labels are owned by the trend-line feature rather than by `DrawingKind::Text`: the
+engine owns their text state, dedicated hover affordance and hit region, edit-session identity,
+segment-local transform, and middle-stroke cutout. Their 3×3 slots resolve along and perpendicular
+to the actual segment. The direction is normalized into the readable half-plane, including a
+deterministic vertical orientation, so endpoint crossing preserves visual left/right and never
+turns glyphs upside down. Pointer hits are inverse-transformed into the measured local text
+rectangle. Empty labels use the resolved label RGB at reduced alpha for `+ Add text`; entering or
+leaving the dedicated trend-label editor never converts or deletes the trend line. Middle labels
+split the stroke in segment-parameter space using measured advance plus padding, and the prompt-sized
+opening remains while an empty edit owns it; top and bottom slots never cut the stroke. The browser
+supplies only a borderless transparent-glyph caret at the engine's exact anchor and angle.
+Standalone Text retains its separate create/remove lifecycle and explicit toolbar text input.
+
+Segment-following text is an explicit `RotatedText` frame primitive carrying the final aligned
+anchor, clockwise angle, font, weight, italics, size, color, and text; no executor reconstructs
+trend geometry or silently ignores the angle. Canvas2D translates and rotates around the anchor
+before `fillText`; WebGPU sends only rotated runs through a dedicated vertex pipeline that rotates
+the unchanged cached glyph-atlas quad while preserving the ordinary-text instance/shader contract;
+tiny-skia resamples a local glyph-coverage raster around the same pivot; GPUI uses its transformed
+monochrome-sprite path backed by its atlas. Browser and GPUI caches key glyph-dependent inputs and
+subpixel phase but deliberately exclude angle, so endpoint motion reuses glyph coverage. Their
+fixed-capacity/LRU or atlas budgets bound retained entries, and font, DPR, device, or atlas-generation
+invalidation drops stale resources.
+
 ## Plugins and host extensions
 
 User-defined custom series and primitives remain explicit host boundaries. The engine owns their identity, layout participation, hit-test context, autoscale contribution, and built-in chrome integration. A host may execute an arbitrary user callback, then records the values the engine needs for the next canonical frame. The official plugin implementations above do not use that callback path.

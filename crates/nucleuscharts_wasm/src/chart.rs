@@ -358,6 +358,7 @@ struct FormatRenderers {
     quad: QuadRenderer,
     tri: TriRenderer,
     tex: TexQuadRenderer,
+    rotated_tex: TexQuadRenderer,
     image: TexQuadRenderer,
 }
 
@@ -385,6 +386,12 @@ impl SharedGpu {
             quad: QuadRenderer::new(&self.device, format, SAMPLE_COUNT),
             tri: TriRenderer::new(&self.device, format, SAMPLE_COUNT),
             tex: TexQuadRenderer::new(
+                &self.device,
+                format,
+                self.atlas.borrow().view(),
+                SAMPLE_COUNT,
+            ),
+            rotated_tex: TexQuadRenderer::new_rotated(
                 &self.device,
                 format,
                 self.atlas.borrow().view(),
@@ -3226,6 +3233,10 @@ impl NucleusChart {
     pub fn drawing_text_coordinate(&self, id: u32) -> Vec<f64> {
         self.inner.borrow().drawing_text_coordinate(id)
     }
+    /// Exact text-run transform `[x, y, clockwise_radians]` in overlay CSS px.
+    pub fn drawing_text_transform(&self, id: u32) -> Vec<f64> {
+        self.inner.borrow().drawing_text_transform(id)
+    }
     /// Trend-line label/placeholder hit identity, or zero when the point misses.
     pub fn drawing_text_hit_at(&self, x_css: f64, y_css: f64) -> u32 {
         self.inner.borrow().drawing_text_hit_at(x_css, y_css)
@@ -3257,9 +3268,9 @@ impl NucleusChart {
     pub fn set_selected_drawing(&mut self, id: Option<u32>) {
         self.inner.borrow_mut().set_selected_drawing(id);
     }
-    /// Mark the text drawing the host's typing-mode editor currently owns: its
-    /// placeholder/label is suppressed in the next `render()` so the editor's preview is the
-    /// only visual for it. Clear (`undefined`) when the editor closes.
+    /// Mark the drawing whose dedicated host editor currently owns text input. Frame
+    /// construction retains committed glyphs for the overlay caret and preserves an empty
+    /// trend label's measured middle gap. Clear (`undefined`) when the editor closes.
     pub fn set_editing_drawing(&mut self, id: Option<u32>) {
         self.inner.borrow_mut().engine.set_editing_drawing(id);
     }

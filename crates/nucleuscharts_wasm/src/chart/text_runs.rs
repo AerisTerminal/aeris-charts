@@ -91,19 +91,35 @@ impl TextRunStore {
         queue: &wgpu::Queue,
         prim: &Prim,
     ) -> Option<TexQuadInstance> {
-        let Prim::Text {
-            x,
-            y,
-            text,
-            color,
-            size,
-            family,
-            align,
-            weight,
-            italic,
-        } = prim
-        else {
-            return None;
+        let (x, y, text, color, size, family, align, weight, italic, angle, rotated) = match prim {
+            Prim::Text {
+                x,
+                y,
+                text,
+                color,
+                size,
+                family,
+                align,
+                weight,
+                italic,
+            } => (
+                x, y, text, color, size, family, align, weight, italic, 0.0, false,
+            ),
+            Prim::RotatedText {
+                x,
+                y,
+                text,
+                color,
+                size,
+                family,
+                align,
+                weight,
+                italic,
+                angle,
+            } => (
+                x, y, text, color, size, family, align, weight, italic, *angle, true,
+            ),
+            _ => return None,
         };
         if text.is_empty() {
             return None;
@@ -143,8 +159,13 @@ impl TextRunStore {
         Some(TexQuadInstance {
             rect: [x + run.dx, y + run.dy, run.slot.w as f32, run.slot.h as f32],
             uv: run.slot.uv(),
-            // The raster bakes the run color (module docs): white tint.
-            color: [1.0, 1.0, 1.0, 1.0],
+            // The raster bakes the run color (module docs). The dedicated rotated pipeline
+            // interprets this otherwise-white tint slot as its canonical transform.
+            color: if rotated {
+                [x, y, angle.cos(), angle.sin()]
+            } else {
+                [1.0, 1.0, 1.0, 1.0]
+            },
         })
     }
 

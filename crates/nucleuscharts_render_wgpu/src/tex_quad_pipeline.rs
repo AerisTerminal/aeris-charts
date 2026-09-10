@@ -74,6 +74,60 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+// Rotated glyphs use the same legacy 48-byte instance layout and atlas raster. Text rasters
+// always carry a white tint, so this dedicated pipeline interprets location 2 as
+// [pivot_x, pivot_y, cos(angle), sin(angle)] and supplies white to the fragment stage. Keeping
+// ordinary text on SHADER preserves its approved byte-for-byte raster and buffer contract.
+const ROTATED_SHADER: &str = r#"
+struct Globals {
+    viewport: vec2<f32>,
+    _pad: vec2<f32>,
+};
+
+@group(0) @binding(0) var<uniform> globals: Globals;
+@group(1) @binding(0) var atlas_tex: texture_2d<f32>;
+@group(1) @binding(1) var atlas_samp: sampler;
+
+struct VsOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(
+    @builtin(vertex_index) vi: u32,
+    @location(0) rect: vec4<f32>,
+    @location(1) uv: vec4<f32>,
+    @location(2) pivot_rotation: vec4<f32>,
+) -> VsOut {
+    var corners = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0),
+        vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
+    );
+    let c = corners[vi];
+    let unrotated = rect.xy + c * rect.zw;
+    let delta = unrotated - pivot_rotation.xy;
+    let px = pivot_rotation.xy + vec2<f32>(
+        delta.x * pivot_rotation.z - delta.y * pivot_rotation.w,
+        delta.x * pivot_rotation.w + delta.y * pivot_rotation.z,
+    );
+    let ndc = vec2<f32>(
+        px.x / globals.viewport.x * 2.0 - 1.0,
+        1.0 - px.y / globals.viewport.y * 2.0,
+    );
+    var out: VsOut;
+    out.pos = vec4<f32>(ndc, 0.0, 1.0);
+    out.uv = mix(uv.xy, uv.zw, c);
+    return out;
+}
+
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    let t = textureSample(atlas_tex, atlas_samp, in.uv);
+    return vec4<f32>(t.rgb * t.a, t.a);
+}
+"#;
+
 pub struct TexQuadRenderer {
     pipeline: wgpu::RenderPipeline,
     globals_buf: wgpu::Buffer,
@@ -88,9 +142,28 @@ impl TexQuadRenderer {
         atlas_view: &wgpu::TextureView,
         sample_count: u32,
     ) -> Self {
+        Self::new_with_shader(device, format, atlas_view, sample_count, SHADER)
+    }
+
+    pub fn new_rotated(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        atlas_view: &wgpu::TextureView,
+        sample_count: u32,
+    ) -> Self {
+        Self::new_with_shader(device, format, atlas_view, sample_count, ROTATED_SHADER)
+    }
+
+    fn new_with_shader(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        atlas_view: &wgpu::TextureView,
+        sample_count: u32,
+        shader_source: &'static str,
+    ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("tex_quad_shader"),
-            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
 
         let globals_buf = device.create_buffer(&wgpu::BufferDescriptor {

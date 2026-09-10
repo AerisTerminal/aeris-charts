@@ -86,6 +86,18 @@ impl Canvas2d for KindRecorder {
     fn fill_text(&mut self, _t: &str, _x: f32, _y: f32, _f: &str, _c: Color, _a: TextAlign) {
         self.ops.push("text");
     }
+    fn fill_rotated_text(
+        &mut self,
+        _: &str,
+        _: f32,
+        _: f32,
+        _: &str,
+        _: Color,
+        _: TextAlign,
+        _: f32,
+    ) {
+        self.ops.push("text");
+    }
 }
 
 fn mixed_prims() -> (Vec<Prim>, Vec<[f32; 2]>) {

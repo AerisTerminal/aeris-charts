@@ -330,9 +330,9 @@
         </select>
       </label>
       <label title="Stroke width in CSS px — templates new drawings and applies live to the selected one">w <input type="range" id="drawing_width" min="1" max="8" step="1" value="2"><span id="drawing_width_val">2</span></label>
-      <label title="Text label carried by newly created drawings (any tool)">label <input type="text" id="drawing_text" size="8"></label>
+      <label title="Standalone Text tool content; trend-line labels are edited in place">text tool <input type="text" id="drawing_text" size="8"></label>
       <label title="Label text color — templates new drawings and applies live to the selected one">text <input type="color" id="drawing_text_color" value="#f0f0f0"></label>
-      <label title="Label font size in CSS px — templates new drawings and applies live to the selected one">size <input type="number" id="drawing_text_size" min="8" max="72" step="1" value="18"></label>
+      <label title="Label font size in CSS px — templates new drawings and applies live to the selected one">size <input type="number" id="drawing_text_size" min="8" max="72" step="1" value="14"></label>
       <label title="Label font weight — templates new drawings and applies live to the selected one">weight
         <select id="drawing_weight">
           <option value="300">300</option>
@@ -345,6 +345,20 @@
         </select>
       </label>
       <label title="Italic label glyphs — templates new drawings and applies live to the selected one"><input type="checkbox" id="drawing_italic"> italic</label>
+      <label title="Trend-label position along the readable segment">label h
+        <select id="drawing_text_h_align">
+          <option value="left">left</option>
+          <option value="center" selected>center</option>
+          <option value="right">right</option>
+        </select>
+      </label>
+      <label title="Trend-label position perpendicular to the readable segment">label v
+        <select id="drawing_text_v_align">
+          <option value="top">top</option>
+          <option value="middle" selected>middle</option>
+          <option value="bottom">bottom</option>
+        </select>
+      </label>
       <button id="clear_drawings" type="button" title="Remove every drawing">clear all</button>
       <span class="hint">Ctrl = snap (while drawing) · Ctrl+click chart = fullscreen · Ctrl+H/V = split ↔/↕ · Shift = straighten</span>
     </div>
@@ -1032,21 +1046,24 @@ function sync_drawing_tool_buttons(tool) {
 }
 // The customization inputs template newly created drawings AND apply live to the selected one
 // (TradingView's floating settings, toolbar form).
-function drawing_options_from_inputs() {
-  return {
+function drawing_options_from_inputs(kind = null) {
+  const options = {
     color: document.getElementById("drawing_color").value,
     style: document.getElementById("drawing_style").value,
     width: Number(document.getElementById("drawing_width").value),
-    text: document.getElementById("drawing_text").value,
     text_color: document.getElementById("drawing_text_color").value,
     text_size: Number(document.getElementById("drawing_text_size").value),
     text_weight: Number(document.getElementById("drawing_weight").value),
     text_italic: document.getElementById("drawing_italic").checked,
+    text_h_align: document.getElementById("drawing_text_h_align").value,
+    text_v_align: document.getElementById("drawing_text_v_align").value,
   };
+  if (kind === "text") options.text = document.getElementById("drawing_text").value;
+  return options;
 }
 function arm_drawing_tool(kind) {
   const tool = active_chart_router.active_drawing_tool() === kind ? null : kind;
-  active_chart_router.set_drawing_tool(tool, drawing_options_from_inputs());
+  active_chart_router.set_drawing_tool(tool, drawing_options_from_inputs(tool));
 }
 for (const button of drawing_tool_buttons) {
   button.addEventListener("click", () => arm_drawing_tool(button.dataset.tool));
@@ -1071,26 +1088,27 @@ function sync_drawing_inputs_from_selection() {
   set("drawing_style", o.style);
   document.getElementById("drawing_width").value = String(o.width);
   document.getElementById("drawing_width_val").textContent = String(o.width);
-  set("drawing_text", o.text);
+  if (selected.kind() === "text") set("drawing_text", o.text);
   set("drawing_text_color", css_to_hex(o.text_color));
-  set("drawing_text_size", String(o.text_size ?? 18));
+  set("drawing_text_size", String(o.text_size ?? 14));
   set("drawing_weight", String(o.text_weight ?? 400));
   document.getElementById("drawing_italic").checked = o.text_italic;
+  set("drawing_text_h_align", o.text_h_align);
+  set("drawing_text_v_align", o.text_v_align);
 }
 document.getElementById("chart_container").addEventListener("pointerup", () => setTimeout(sync_drawing_inputs_from_selection, 0));
-for (const id of ["drawing_color", "drawing_style", "drawing_width", "drawing_text_color", "drawing_text_size", "drawing_weight", "drawing_italic"]) {
+for (const id of ["drawing_color", "drawing_style", "drawing_width", "drawing_text_color", "drawing_text_size", "drawing_weight", "drawing_italic", "drawing_text_h_align", "drawing_text_v_align"]) {
   document.getElementById(id).addEventListener("change", () => {
-    const options = drawing_options_from_inputs();
-    // Re-template the armed tool (the next drawing picks the new settings up).
     const tool = active_chart_router.active_drawing_tool();
+    const options = drawing_options_from_inputs(tool);
+    // Re-template the armed tool (the next drawing picks the new settings up).
     if (tool !== null) active_chart_router.set_drawing_tool(tool, options);
     // Apply live to the selected drawing, if any — but NEVER write an empty template label
     // over a drawing's real text (an empty `text` would wipe it back to the placeholder).
     const selected = active_chart().selected_drawing();
     if (selected !== null) {
-      const patch = { ...options };
-      if (patch.text === "") delete patch.text;
-      selected.apply_options(patch);
+      const { text: _template_text, ...style } = options;
+      selected.apply_options(style);
     }
   });
 }

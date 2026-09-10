@@ -924,7 +924,7 @@ fn translate_prims_x(prims: &mut [Prim], dx: i32) {
                 b[0] += dxf;
                 c[0] += dxf;
             }
-            Prim::Text { x, .. } => *x += dxf,
+            Prim::Text { x, .. } | Prim::RotatedText { x, .. } => *x += dxf,
             Prim::Image { rect, .. } => rect[0] += dxf,
             Prim::Polyline { .. }
             | Prim::AreaFill { .. }

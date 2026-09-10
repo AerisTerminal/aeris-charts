@@ -80,6 +80,19 @@ impl Canvas2d for RectRecorder {
     ) {
         self.text_runs.push((text.into(), x, y, font.into()));
     }
+    fn fill_rotated_text(
+        &mut self,
+        text: &str,
+        x: f32,
+        y: f32,
+        font: &str,
+        _color: Color,
+        _align: TextAlign,
+        angle: f32,
+    ) {
+        self.text_runs
+            .push((format!("{text}@{angle}"), x, y, font.into()));
+    }
 }
 
 fn canvas_rects(prims: &[Prim], points: &[[f32; 2]]) -> RectRecorder {
@@ -648,6 +661,31 @@ fn text_runs_reach_both_backends_with_the_same_font_and_anchor() {
         ),
         *font
     );
+}
+
+#[test]
+fn rotated_text_reaches_canvas_and_gpui_with_the_same_transform() {
+    let prims = [Prim::RotatedText {
+        x: 100.5,
+        y: 30.0,
+        text: "trend".into(),
+        color: Color::rgb(0x13, 0x17, 0x22),
+        size: 12.0,
+        family: "sans-serif".into(),
+        align: TextAlign::Center,
+        weight: 500,
+        italic: true,
+        angle: -0.625,
+    }];
+    let canvas = canvas_rects(&prims, &[]);
+    let (plan, metrics) = gpui_plan(&prims, &[]);
+    assert_eq!(canvas.text_runs.len(), 1);
+    assert_eq!(metrics.text_runs, 1);
+    assert_eq!(canvas.text_runs[0].0, "trend@-0.625");
+    let SceneOp::Text(run) = &plan.ops[0] else {
+        panic!("expected a text op");
+    };
+    assert_eq!((run.x, run.y, run.angle), (100.5, 30.0, -0.625));
 }
 
 /// A real multi-series, multi-pane engine frame — not a synthetic prim list.

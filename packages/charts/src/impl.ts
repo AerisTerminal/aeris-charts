@@ -2519,13 +2519,12 @@ export class chart_impl implements chart_api {
   private tool_listener: ((tool: drawing_kind | null) => void) | null = null;
   private readonly tool_change_subs = new Set<drawing_tool_change_handler>();
   private readonly drawing_created_subs = new Set<drawing_created_handler>();
-  /** The text-tool editing session (a contentEditable over the chart, TradingView's typing mode). */
+  /** Borderless caret surface shared by two explicitly separate product edit modes. */
   private text_editor: HTMLElement | null = null;
   private text_editor_id = 0;
   /** Snapshot of the drawing's text when the editor opened — restored on Escape. */
   private text_editor_original = "";
-  /** Only the standalone text tool is deleted when an edit finishes empty. */
-  private text_editor_remove_if_empty = true;
+  private text_editor_mode: "standalone_text" | "trend_label" | null = null;
   /**
    * The drawing selection snapshotted at pointer-DOWN, before the engine's drag grab selects
    * the hit (gestures.ts calls `note_drawing_press`). `emit_click` reads it for TradingView's
@@ -3721,7 +3720,7 @@ export class chart_impl implements chart_api {
     if (drawing_hit) {
       const selected = this.selected_drawing();
       if (selected !== null && selected.kind() === "trend_line" && selected.id === trend_text_hit) {
-        this.open_text_editor(selected);
+        this.open_trend_label_editor(selected);
       } else if (selected !== null && selected.kind() === "text") {
         const empty = !(selected.options().text ?? "").trim();
         if (empty || this.text_press_selected === selected.id) {
@@ -4014,8 +4013,8 @@ export class chart_impl implements chart_api {
   }
 
   // ---------------------------------------------------------------------------------------------
-  // Text-tool editing session (TradingView's typing mode — package-owned host DOM; the engine
-  // renders the label, the placeholder, and the container, and stays DOM-free)
+  // Inline drawing editors. Standalone text and trend labels share only the low-level caret
+  // surface; each enters with an explicit product mode and owns a different empty lifecycle.
   // ---------------------------------------------------------------------------------------------
 
   /**
@@ -4026,9 +4025,20 @@ export class chart_impl implements chart_api {
    * restores the pre-edit text. Leaving empty removes the drawing.
    */
   open_text_editor(drawing: drawing_api): void {
+    this.open_inline_editor(drawing, "standalone_text");
+  }
+
+  private open_trend_label_editor(drawing: drawing_api): void {
+    this.open_inline_editor(drawing, "trend_label");
+  }
+
+  private open_inline_editor(
+    drawing: drawing_api,
+    mode: "standalone_text" | "trend_label",
+  ): void {
     this.close_text_editor(true);
-    let coords = this.wasm.drawing_text_coordinate(drawing.id);
-    if (coords.length !== 2) return;
+    let transform = this.wasm.drawing_text_transform(drawing.id);
+    if (transform.length !== 3) return;
     const options = drawing.options();
     const layout = (this.options() as {
       layout?: {
@@ -4039,7 +4049,7 @@ export class chart_impl implements chart_api {
         background?: { color?: string };
       };
     }).layout ?? {};
-    const font_size = options.text_size ?? (drawing.kind() === "text" ? 18 : (layout.fontSize ?? 12));
+    const font_size = options.text_size ?? (drawing.kind() === "text" ? 14 : (layout.fontSize ?? 12));
     const font_family = layout.fontFamily ?? "sans-serif";
     const style_prefix = options.text_italic ? "italic " : "";
     const font = `${style_prefix}${options.text_weight ?? 400} ${font_size}px ${font_family}`;
@@ -4122,9 +4132,8 @@ export class chart_impl implements chart_api {
     }
     let baseline_in_editor = 0;
     const position_editor = () => {
-      const rect = this.container.getBoundingClientRect();
-      const anchor_x = Math.min(Math.max(coords[0]!, 20), rect.width - 20);
-      const anchor_y = Math.min(Math.max(coords[1]!, 20), rect.height - 20);
+      const anchor_x = transform[0]!;
+      const anchor_y = transform[1]!;
       const text = editor.textContent ?? "";
       let left_edge = anchor_x - (editor.offsetWidth || 0) / 2;
       if (measure_ctx !== null) {
@@ -4137,6 +4146,8 @@ export class chart_impl implements chart_api {
       const baseline = anchor_y + baseline_drop;
       wrap.style.left = `${left_edge}px`;
       wrap.style.top = `${baseline - baseline_in_editor}px`;
+      wrap.style.transformOrigin = `${anchor_x - left_edge}px ${anchor_y - (baseline - baseline_in_editor)}px`;
+      wrap.style.transform = `rotate(${transform[2]!}rad)`;
     };
     const push_live_text = () => {
       const text = (editor.textContent ?? "").replace(/\s*\n\s*/g, " ");
@@ -4179,7 +4190,7 @@ export class chart_impl implements chart_api {
     this.text_editor = editor;
     this.text_editor_id = drawing.id;
     this.text_editor_original = options.text ?? "";
-    this.text_editor_remove_if_empty = drawing.kind() === "text";
+    this.text_editor_mode = mode;
     // Width without a live push yet (avoids a redundant apply of the same text).
     if (measure_ctx !== null) {
       measure_ctx.font = font;
@@ -4193,12 +4204,12 @@ export class chart_impl implements chart_api {
 
     this.text_editor_reposition = () => {
       if (this.text_editor === null) return;
-      const fresh = this.wasm.drawing_text_coordinate(drawing.id);
-      if (fresh.length !== 2) {
+      const fresh = this.wasm.drawing_text_transform(drawing.id);
+      if (fresh.length !== 3) {
         this.close_text_editor(false);
         return;
       }
-      coords = fresh;
+      transform = fresh;
       position_editor();
     };
     // Marks typing mode for hosts; the engine keeps painting the label and the focus border
@@ -4231,18 +4242,18 @@ export class chart_impl implements chart_api {
     const id = this.text_editor_id;
     const text = (editor.textContent ?? "").replace(/\s*\n\s*/g, " ").trim();
     if (commit) {
-      if (text === "" && this.text_editor_remove_if_empty) {
+      if (text === "" && this.text_editor_mode === "standalone_text") {
         this.wasm.remove_drawing(id);
       } else {
         this.wasm.drawing_apply_options(id, JSON.stringify({ text }));
       }
-    } else if (!this.text_editor_original.trim() && this.text_editor_remove_if_empty) {
+    } else if (!this.text_editor_original.trim() && this.text_editor_mode === "standalone_text") {
       this.wasm.remove_drawing(id);
     } else {
       this.wasm.drawing_apply_options(id, JSON.stringify({ text: this.text_editor_original }));
     }
     this.text_editor_original = "";
-    this.text_editor_remove_if_empty = true;
+    this.text_editor_mode = null;
     this.repaint();
     this.overlay_el().focus();
   }

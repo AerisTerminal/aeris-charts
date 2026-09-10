@@ -49,6 +49,18 @@ impl Canvas2d for CountingCanvas {
     fn fill(&mut self) {
         self.calls += 1;
     }
+    fn fill_rotated_text(
+        &mut self,
+        _: &str,
+        _: f32,
+        _: f32,
+        _: &str,
+        _: Color,
+        _: nucleuscharts_render::draw_list::TextAlign,
+        _: f32,
+    ) {
+        self.calls += 1;
+    }
 }
 
 #[test]

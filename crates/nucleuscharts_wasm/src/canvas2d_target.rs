@@ -178,6 +178,25 @@ impl Canvas2d for WasmCanvas2d<'_> {
         let _ = self.ctx.fill_text(text, x as f64, y as f64);
     }
 
+    fn fill_rotated_text(
+        &mut self,
+        text: &str,
+        x: f32,
+        y: f32,
+        font: &str,
+        color: Color,
+        align: TextAlign,
+        angle: f32,
+    ) {
+        self.ctx.save();
+        let transformed =
+            self.ctx.translate(x as f64, y as f64).is_ok() && self.ctx.rotate(angle as f64).is_ok();
+        if transformed {
+            self.fill_text(text, 0.0, 0.0, font, color, align);
+        }
+        self.ctx.restore();
+    }
+
     fn draw_raster_image(&mut self, image: &RasterImage, rect: [f32; 4], opacity: f32) {
         let Some(store) = self.image_store.as_deref_mut() else {
             return;

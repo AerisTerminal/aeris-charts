@@ -270,6 +270,7 @@ fn the_text_cache_plateaus_at_its_capacity_under_scrolling_labels() {
             align: TextAlign::Left,
             weight: 400,
             italic: false,
+            angle: 0.0,
         };
         cache.measure_with(TextKey::for_run(&run), || TextMetrics {
             width: 30.0,

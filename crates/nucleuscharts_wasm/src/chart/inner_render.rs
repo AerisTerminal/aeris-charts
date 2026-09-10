@@ -457,6 +457,7 @@ impl ChartInner {
                             bg_clear,
                             &renderers.quad,
                             &renderers.tex,
+                            &renderers.rotated_tex,
                             &renderers.image,
                             &renderers.tri,
                             groups,

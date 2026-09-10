@@ -204,6 +204,21 @@ pub enum Prim {
         weight: u16,
         italic: bool,
     },
+    /// A text run rotated clockwise around its aligned `(x, y)` anchor. Used by geometry whose
+    /// label follows a segment; keeping the angle in the ordered frame makes every executor obey
+    /// the same placement instead of reconstructing drawing semantics in a backend.
+    RotatedText {
+        x: f32,
+        y: f32,
+        text: String,
+        color: Color,
+        size: f32,
+        family: String,
+        align: TextAlign,
+        weight: u16,
+        italic: bool,
+        angle: f32,
+    },
     /// Straight-alpha RGBA8 image scaled into `rect` in bitmap pixels. Resource decoding belongs
     /// to the host boundary; placement and rendering remain part of the shared frame contract.
     Image {

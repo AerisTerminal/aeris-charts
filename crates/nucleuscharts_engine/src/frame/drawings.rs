@@ -5,9 +5,9 @@
 //! scaled by the exact horizontal ratio (the trailing `translate_prims_x` shifts everything
 //! when a left axis reserves space), y is chart-top-relative media px scaled by the vertical
 //! ratio — the same space the price-line/series geometry uses, so a drawing's prims land
-//! exactly on its converted anchors. Text goes through `Prim::Text`, so labels rasterize
-//! identically on both backends (the Canvas2D `fillText` path and the WebGPU atlas share the
-//! browser's glyph rasterizer by construction).
+//! exactly on its converted anchors. Standalone drawing text uses `Prim::Text`; trend labels
+//! use the backend-neutral `Prim::RotatedText` contract so every executor receives the same
+//! aligned anchor and segment-normalized angle.
 
 use nucleuscharts_render::color::Color;
 use nucleuscharts_render::draw_list::{IRect, LineStyle, LineType, Prim, TextAlign};
@@ -41,37 +41,6 @@ const TREND_TEXT_PLACEHOLDER_ALPHA: u8 = 0x99;
 
 fn point_on_segment(a: (f64, f64), b: (f64, f64), t: f64) -> (f64, f64) {
     (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t)
-}
-
-fn segment_box_interval(
-    a: (f64, f64),
-    b: (f64, f64),
-    left: f64,
-    right: f64,
-    top: f64,
-    bottom: f64,
-) -> Option<(f64, f64)> {
-    let mut enter: f64 = 0.0;
-    let mut exit: f64 = 1.0;
-    for (origin, delta, min, max) in [
-        (a.0, b.0 - a.0, left.min(right), left.max(right)),
-        (a.1, b.1 - a.1, top.min(bottom), top.max(bottom)),
-    ] {
-        if delta.abs() <= f64::EPSILON {
-            if origin < min || origin > max {
-                return None;
-            }
-            continue;
-        }
-        let first = (min - origin) / delta;
-        let second = (max - origin) / delta;
-        enter = enter.max(first.min(second));
-        exit = exit.min(first.max(second));
-        if enter >= exit {
-            return None;
-        }
-    }
-    (enter < 1.0 && exit > 0.0).then_some((enter.clamp(0.0, 1.0), exit.clamp(0.0, 1.0)))
 }
 
 fn push_segment(
@@ -120,28 +89,56 @@ mod trend_label_tests {
                 },
             ],
         );
-        let line = [(10.0, 80.0), (90.0, 20.0)];
-        for (h_align, expected_x) in [
-            (DrawingTextHAlign::Left, 14.0),
-            (DrawingTextHAlign::Center, 50.0),
-            (DrawingTextHAlign::Right, 86.0),
-        ] {
-            drawing.text_h_align = h_align;
-            let line_y = 80.0 + (20.0 - 80.0) * ((expected_x - 10.0) / 80.0);
-            for (v_align, expected_y) in [
-                (DrawingTextVAlign::Top, line_y - 10.0),
-                (DrawingTextVAlign::Middle, line_y),
-                (DrawingTextVAlign::Bottom, line_y + 10.0),
+        for line in [
+            [(10.0, 50.0), (90.0, 50.0)],
+            [(10.0, 80.0), (90.0, 20.0)],
+            [(50.0, 90.0), (50.0, 10.0)],
+            [(90.0, 20.0), (10.0, 80.0)],
+        ] as [[(f64, f64); 2]; 4]
+        {
+            let mut start = line[0];
+            let mut end = line[1];
+            if end.0 < start.0 || ((end.0 - start.0).abs() <= f64::EPSILON && end.1 > start.1) {
+                std::mem::swap(&mut start, &mut end);
+            }
+            let dx: f64 = end.0 - start.0;
+            let dy: f64 = end.1 - start.1;
+            let length = dx.hypot(dy);
+            let (ux, uy) = (dx / length, dy / length);
+            for (h_align, expected_distance) in [
+                (DrawingTextHAlign::Left, 4.0),
+                (DrawingTextHAlign::Center, length / 2.0),
+                (DrawingTextHAlign::Right, length - 4.0),
             ] {
-                drawing.text_v_align = v_align;
-                let (x, y, align) = ChartEngine::drawing_text_placement(
-                    &drawing, &line, 100.0, 0.0, 100.0, 12.0, 4.0,
-                );
-                assert_eq!(align, h_align);
-                assert!((x - expected_x).abs() < 1e-9, "{h_align:?} {v_align:?}");
-                assert!((y - expected_y).abs() < 1e-9, "{h_align:?} {v_align:?}");
+                drawing.text_h_align = h_align;
+                for (v_align, expected_normal) in [
+                    (DrawingTextVAlign::Top, 10.0),
+                    (DrawingTextVAlign::Middle, 0.0),
+                    (DrawingTextVAlign::Bottom, -10.0),
+                ] {
+                    drawing.text_v_align = v_align;
+                    let (x, y, align, angle) = ChartEngine::drawing_text_placement(
+                        &drawing, &line, 100.0, 0.0, 100.0, 12.0, 4.0,
+                    );
+                    assert_eq!(align, h_align);
+                    let (from_x, from_y) = (x - start.0, y - start.1);
+                    assert!((from_x * ux + from_y * uy - expected_distance).abs() < 1e-9);
+                    assert!((from_x * uy - from_y * ux - expected_normal).abs() < 1e-9);
+                    assert!((-std::f64::consts::FRAC_PI_2..=std::f64::consts::FRAC_PI_2)
+                        .contains(&angle));
+                }
             }
         }
+
+        drawing.text_h_align = DrawingTextHAlign::Right;
+        drawing.text_v_align = DrawingTextVAlign::Middle;
+        let line = [(10.0, 80.0), (90.0, 20.0)];
+        let reversed = [line[1], line[0]];
+        let (x, y, _, angle) =
+            ChartEngine::drawing_text_placement(&drawing, &reversed, 100.0, 0.0, 100.0, 12.0, 4.0);
+        assert!((x - 86.8).abs() < 1e-9);
+        assert!((y - 22.4).abs() < 1e-9);
+        assert!((angle - (-0.6_f64).atan2(0.8)).abs() < 1e-9);
     }
 }
 
@@ -167,6 +164,17 @@ impl ChartEngine {
             && self.hovered_text == Some(drawing.id)
             && self.editing_drawing != Some(drawing.id))
         .then_some((TREND_TEXT_PLACEHOLDER, true))
+    }
+
+    /// Width source for the middle-line cutout. Editing an empty label hides placeholder ink,
+    /// but retains its opening so clicking the prompt cannot make the line jump closed.
+    fn drawing_frame_gap_text<'a>(&self, drawing: &'a Drawing) -> Option<&'a str> {
+        if !drawing.text.is_empty() {
+            return Some(drawing.display_text());
+        }
+        (drawing.kind == DrawingKind::TrendLine
+            && (self.hovered_text == Some(drawing.id) || self.editing_drawing == Some(drawing.id)))
+        .then_some(TREND_TEXT_PLACEHOLDER)
     }
 
     fn measure_drawing_frame_text(&self, drawing: &Drawing, text: &str, size: f64) -> f64 {
@@ -499,29 +507,35 @@ impl ChartEngine {
         match geometry.body {
             DrawingBodyGeometry::Segment { a, b } => {
                 let label_gap = self
-                    .drawing_frame_text(drawing)
+                    .drawing_frame_gap_text(drawing)
                     .filter(|_| {
                         drawing.kind == DrawingKind::TrendLine
                             && drawing.text_v_align == crate::drawings::DrawingTextVAlign::Middle
                     })
-                    .and_then(|(text, _)| {
-                        let (size, x, y, align) =
+                    .and_then(|text| {
+                        let (size, x, y, align, angle) =
                             self.text_run_geometry(drawing, px, pane_w_px, vpr);
                         let width = self.measure_drawing_frame_text(drawing, text, size);
-                        let left = match align {
-                            DrawingTextHAlign::Left => x,
-                            DrawingTextHAlign::Center => x - width / 2.0,
-                            DrawingTextHAlign::Right => x - width,
-                        };
                         let gap = TEXT_PAD * vpr;
-                        segment_box_interval(
-                            a,
-                            b,
-                            left - gap,
-                            left + width + gap,
-                            y - size * 0.6 - gap,
-                            y + size * 0.6 + gap,
-                        )
+                        let (local_start, local_end) = match align {
+                            DrawingTextHAlign::Left => (-gap, width + gap),
+                            DrawingTextHAlign::Center => (-width / 2.0 - gap, width / 2.0 + gap),
+                            DrawingTextHAlign::Right => (-width - gap, gap),
+                        };
+                        let length_sq = (b.0 - a.0).powi(2) + (b.1 - a.1).powi(2);
+                        if length_sq <= f64::EPSILON {
+                            return None;
+                        }
+                        let project = |distance: f64| {
+                            let px = x + angle.cos() * distance;
+                            let py = y + angle.sin() * distance;
+                            ((px - a.0) * (b.0 - a.0) + (py - a.1) * (b.1 - a.1)) / length_sq
+                        };
+                        let first = project(local_start);
+                        let second = project(local_end);
+                        let start = first.min(second).clamp(0.0, 1.0);
+                        let end = first.max(second).clamp(0.0, 1.0);
+                        (start < end).then_some((start, end))
                     });
                 if let Some((gap_start, gap_end)) = label_gap {
                     push_segment(
@@ -712,11 +726,11 @@ impl ChartEngine {
         px: &[(f64, f64)],
         pane_w_px: i32,
         vpr: f64,
-    ) -> (f64, f64, f64, DrawingTextHAlign) {
+    ) -> (f64, f64, f64, DrawingTextHAlign, f64) {
         let layout = &self.options.get().layout;
         let size = drawing.resolved_text_size(layout.font_size) * vpr;
         let pane = &self.panes[drawing.pane_index];
-        let (x, y, align) = ChartEngine::drawing_text_placement(
+        let (x, y, align, angle) = ChartEngine::drawing_text_placement(
             drawing,
             px,
             f64::from(pane_w_px),
@@ -725,7 +739,7 @@ impl ChartEngine {
             size,
             TEXT_PAD * vpr,
         );
-        (size, x, y, align)
+        (size, x, y, align, angle)
     }
 
     /// The text tool's interaction chrome (hover ring, focus border): a crisp integer-snapped
@@ -742,7 +756,7 @@ impl ChartEngine {
         color: Color,
         out: &mut Vec<Prim>,
     ) {
-        let (size, x, y, align) = self.text_run_geometry(drawing, px, pane_w_px, vpr);
+        let (size, x, y, align, _) = self.text_run_geometry(drawing, px, pane_w_px, vpr);
         let width = self.measure_drawing_text(drawing, size);
         let height = size * 1.2;
         let pad = TEXT_CHROME_PAD * vpr;
@@ -766,11 +780,11 @@ impl ChartEngine {
 
     /// One drawing's text label (every tool can carry one): the placement resolves the 3×3
     /// alignment against the tool's reference box, except trend lines, whose slots follow the
-    /// actual segment and whose middle slot opens a measured stroke gap. It then emits a
-    /// `Prim::Text` — x is the aligned edge, y the vertical center (the IR's middle-baseline
-    /// convention), so the run rasterizes identically on both backends. Empty
-    /// text (including an empty text tool) paints nothing — the host typing-mode editor is the
-    /// only empty-state UI, and leaving it without typed text removes the drawing. A text tool
+    /// actual segment and whose middle slot opens a measured stroke gap. Trend labels emit
+    /// `Prim::RotatedText`; other drawing text emits `Prim::Text`. In either contract x is the
+    /// aligned edge and y is the vertical center (the IR's middle-baseline convention). Empty
+    /// standalone text paints nothing; an empty hovered trend label paints its dedicated
+    /// prompt at the canonical label transform. A text tool
     /// with a `box_color`/`box_border_color` gets its container (crisp integer-snapped
     /// `Rect`/`RectFrame` prims behind the run — TradingView's text-box background/border).
     fn build_drawing_text(
@@ -789,7 +803,7 @@ impl ChartEngine {
             return;
         };
         let is_text_tool = drawing.kind == DrawingKind::Text;
-        let (size, x, y, align) = self.text_run_geometry(drawing, px, pane_w_px, vpr);
+        let (size, x, y, align, angle) = self.text_run_geometry(drawing, px, pane_w_px, vpr);
         let layout = &self.options.get().layout;
         let mut color = drawing
             .text_color
@@ -846,7 +860,7 @@ impl ChartEngine {
             }
         }
 
-        out.push(Prim::Text {
+        let text_prim = Prim::RotatedText {
             x: x as f32,
             y: y as f32,
             text: text.to_string(),
@@ -860,7 +874,35 @@ impl ChartEngine {
             },
             weight: drawing.text_weight.unwrap_or(400),
             italic: drawing.text_italic,
-        });
+            angle: angle as f32,
+        };
+        if drawing.kind == DrawingKind::TrendLine {
+            out.push(text_prim);
+        } else if let Prim::RotatedText {
+            x,
+            y,
+            text,
+            color,
+            size,
+            family,
+            align,
+            weight,
+            italic,
+            ..
+        } = text_prim
+        {
+            out.push(Prim::Text {
+                x,
+                y,
+                text,
+                color,
+                size,
+                family,
+                align,
+                weight,
+                italic,
+            });
+        }
     }
 
     fn build_position_labels(

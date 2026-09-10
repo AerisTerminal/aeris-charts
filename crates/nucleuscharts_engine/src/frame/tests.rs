@@ -5028,7 +5028,7 @@ fn trend_line_middle_label_follows_the_segment_and_opens_a_gap() {
         .main
         .iter()
         .find_map(|prim| match prim {
-            Prim::Text { x, y, text, .. } if text == "Middle center" => Some((*x, *y)),
+            Prim::RotatedText { x, y, text, .. } if text == "Middle center" => Some((*x, *y)),
             _ => None,
         })
         .expect("trend label");
@@ -5059,6 +5059,117 @@ fn trend_line_middle_label_follows_the_segment_and_opens_a_gap() {
     assert!((label.1 - line_mid[1]).abs() < 0.01);
     assert!(orange_runs[0][1][0] < label.0);
     assert!(orange_runs[1][0][0] > label.0);
+}
+
+#[test]
+fn rotated_trend_label_hit_test_uses_label_local_coordinates() {
+    use crate::{DrawingKind, DrawingPoint};
+
+    let mut chart = anchor_chart();
+    let id = chart
+        .add_drawing(
+            DrawingKind::TrendLine,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 0.0,
+                    price: 10.0,
+                },
+                DrawingPoint {
+                    logical: 4.0,
+                    price: 12.5,
+                },
+            ],
+            Some(r#"{"text":"rotated label","text_h_align":"center","text_v_align":"middle"}"#),
+        )
+        .unwrap();
+    chart.build_frame();
+    let (x, y, angle) = chart.drawing_text_transform(id).unwrap();
+    assert!(angle.abs() > 0.25, "fixture must exercise a rotated run");
+    let along = 42.0;
+    assert_eq!(
+        chart.drawing_text_hit_at(x + angle.cos() * along, y + angle.sin() * along),
+        Some(id)
+    );
+    assert_eq!(
+        chart.drawing_text_hit_at(x + along, y),
+        None,
+        "the obsolete screen-horizontal location must miss"
+    );
+}
+
+#[test]
+fn empty_middle_trend_label_keeps_its_gap_across_the_edit_lifecycle() {
+    use crate::{DrawingKind, DrawingPoint};
+
+    fn orange_segments(chart: &mut ChartEngine) -> Vec<Vec<[f32; 2]>> {
+        let frame = chart.build_frame();
+        let pane = &frame.panes[0];
+        pane.main
+            .iter()
+            .filter_map(|prim| match prim {
+                Prim::Polyline {
+                    first_point,
+                    point_count,
+                    color,
+                    ..
+                } if *color == Color::rgb(0x12, 0x34, 0x56) => Some(
+                    pane.points[*first_point as usize..(*first_point + *point_count) as usize]
+                        .to_vec(),
+                ),
+                _ => None,
+            })
+            .collect()
+    }
+
+    let mut chart = anchor_chart();
+    let id = chart
+        .add_drawing(
+            DrawingKind::TrendLine,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 0.0,
+                    price: 10.0,
+                },
+                DrawingPoint {
+                    logical: 4.0,
+                    price: 12.5,
+                },
+            ],
+            Some(
+                r##"{"color":"#123456","text_color":"#2468ac","text_h_align":"center","text_v_align":"middle"}"##,
+            ),
+        )
+        .unwrap();
+    chart.set_hovered_text(Some(id));
+    let hovered = orange_segments(&mut chart);
+    assert_eq!(hovered.len(), 2);
+    let prompt_color = chart.build_frame().panes[0]
+        .main
+        .iter()
+        .find_map(|prim| match prim {
+            Prim::RotatedText { text, color, .. } if text == "+ Add text" => Some(*color),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        (prompt_color.r(), prompt_color.g(), prompt_color.b()),
+        (0x24, 0x68, 0xac)
+    );
+    assert!(prompt_color.a() < 0xff);
+
+    chart.set_editing_drawing(Some(id));
+    let editing_empty = orange_segments(&mut chart);
+    assert_eq!(
+        editing_empty, hovered,
+        "clicking the prompt must not close the gap"
+    );
+    assert!(chart.drawing_apply_options(id, r#"{"text":"typing"}"#));
+    assert_eq!(orange_segments(&mut chart).len(), 2);
+    chart.set_editing_drawing(None);
+    chart.set_hovered_text(None);
+    assert_eq!(orange_segments(&mut chart).len(), 2);
 }
 
 /// The circle prims in the primary pane's main layer as `(cx, radius, fill)`. With the
@@ -5215,7 +5326,7 @@ fn text_tool_selection_paints_a_focus_border_without_anchor_handles() {
         .main
         .iter()
         .find_map(|prim| match prim {
-            Prim::Text { text, color, .. } if text == "+ Add text" => Some(*color),
+            Prim::RotatedText { text, color, .. } if text == "+ Add text" => Some(*color),
             _ => None,
         })
         .expect("hovered trend placeholder");
@@ -5224,7 +5335,7 @@ fn text_tool_selection_paints_a_focus_border_without_anchor_handles() {
     assert!(chart.build_frame().panes[0]
         .main
         .iter()
-        .all(|prim| !matches!(prim, Prim::Text { text, .. } if text == "+ Add text")));
+        .all(|prim| !matches!(prim, Prim::RotatedText { text, .. } if text == "+ Add text")));
     chart.set_editing_drawing(None);
     chart.set_hovered_text(None);
     chart.set_hovered_text(Some(text));

@@ -67,6 +67,20 @@ pub trait Canvas2d {
     ) {
     }
 
+    /// Draw a run rotated clockwise around its aligned anchor. Every executor must implement the
+    /// transform explicitly; there is intentionally no angle-dropping fallback.
+    #[allow(clippy::too_many_arguments)]
+    fn fill_rotated_text(
+        &mut self,
+        text: &str,
+        x: f32,
+        y: f32,
+        font: &str,
+        color: Color,
+        align: TextAlign,
+        angle: f32,
+    );
+
     /// Draw immutable straight-alpha RGBA8 pixels into a bitmap-space rectangle. Default no-op
     /// keeps command recorders lightweight; shipping browser/native targets implement it.
     fn draw_raster_image(&mut self, _image: &RasterImage, _rect: [f32; 4], _opacity: f32) {}
@@ -379,6 +393,30 @@ pub fn execute(
                     );
                 }
             }
+            Prim::RotatedText {
+                x,
+                y,
+                text,
+                color,
+                size,
+                family,
+                align,
+                weight,
+                italic,
+                angle,
+            } => {
+                if !text.is_empty() {
+                    target.fill_rotated_text(
+                        text,
+                        *x,
+                        *y,
+                        &text_font_spec(*size, family, *weight, *italic),
+                        *color,
+                        *align,
+                        *angle,
+                    );
+                }
+            }
             Prim::Image {
                 image,
                 rect,
@@ -502,6 +540,22 @@ mod tests {
         ) {
             self.ops.push(format!(
                 "text {text:?} {x} {y} {font:?} {} {}",
+                hx(color),
+                align.canvas_keyword()
+            ));
+        }
+        fn fill_rotated_text(
+            &mut self,
+            text: &str,
+            x: f32,
+            y: f32,
+            font: &str,
+            color: Color,
+            align: TextAlign,
+            angle: f32,
+        ) {
+            self.ops.push(format!(
+                "rotated_text {text:?} {x} {y} {font:?} {} {} {angle}",
                 hx(color),
                 align.canvas_keyword()
             ));
@@ -633,6 +687,29 @@ mod tests {
                 "fill_rect 5 0 1 6".into(),
                 "fill_rect 5 12 1 6".into(),
             ]
+        );
+    }
+
+    #[test]
+    fn rotated_text_is_forwarded_without_dropping_its_angle() {
+        let ops = run(
+            &[Prim::RotatedText {
+                x: 10.0,
+                y: 20.0,
+                text: "trend".into(),
+                color: C,
+                size: 12.0,
+                family: "sans-serif".into(),
+                align: TextAlign::Center,
+                weight: 500,
+                italic: true,
+                angle: -0.75,
+            }],
+            &[],
+        );
+        assert_eq!(
+            ops,
+            ["rotated_text \"trend\" 10 20 \"italic 500 12px sans-serif\" 102030ff center -0.75"]
         );
     }
 
