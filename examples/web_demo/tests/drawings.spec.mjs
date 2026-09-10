@@ -816,7 +816,7 @@ test("drawing tools render pixel-identical on WebGPU and Canvas2D (AA coverage s
       chart.add_drawing("trend_line", [
         { logical: l0, price: lo },
         { logical: l1, price: hi },
-      ], { text: "trend", text_v_align: "top", width: 3 });
+      ], { text: "trend", text_h_align: "center", text_v_align: "top", width: 3 });
       chart.add_drawing("horizontal_line", [{ logical: l0, price: (lo + hi) / 2 }], {
         style: "dashed", text: "h-line", text_h_align: "left",
       });
@@ -1456,6 +1456,7 @@ test("tool customization templates new drawings and applies live to the selected
   expect(created.width).toBe(5);
   expect(created.color).toBe("#ff00ff");
   expect(created.text_color, "fresh trend labels inherit their line color").toBe("");
+  expect([created.text_h_align, created.text_v_align], "fresh trend labels default to top-right").toEqual(["right", "top"]);
 
   const [label_x, label_y] = await page.evaluate(() => (
     window.__chart.wasm.drawing_text_transform(window.__chart.drawings()[0].id)

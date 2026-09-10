@@ -257,8 +257,9 @@ The ordered frame contract contains pane backgrounds and grids, idle indicator g
 
 Trend-line labels are owned by the trend-line feature rather than by `DrawingKind::Text`: the
 engine owns their text state, dedicated hover affordance and hit region, edit-session identity,
-segment-local transform, and middle-stroke cutout. Their 3×3 slots resolve along and perpendicular
-to the actual segment. The direction is normalized into the readable half-plane, including a
+segment-local transform, and middle-stroke cutout. New trend labels default to the top-right slot;
+their 3×3 slots resolve along and perpendicular to the actual segment. The direction is normalized
+into the readable half-plane, including a
 deterministic vertical orientation, so endpoint crossing preserves visual left/right and never
 turns glyphs upside down. Pointer hits are inverse-transformed into the measured local text
 rectangle. An unset trend-label text color follows the drawing stroke dynamically; an explicit text

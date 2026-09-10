@@ -50,6 +50,30 @@ fn add_trend(chart: &mut ChartEngine) -> DrawingId {
 }
 
 #[test]
+fn trend_labels_default_to_top_right_without_changing_standalone_text_defaults() {
+    let mut chart = settled_chart();
+    let trend = add_trend(&mut chart);
+    let trend = chart.drawing(trend).unwrap();
+    assert_eq!(trend.text_h_align, DrawingTextHAlign::Right);
+    assert_eq!(trend.text_v_align, DrawingTextVAlign::Top);
+
+    let text = chart
+        .add_drawing(
+            DrawingKind::Text,
+            0,
+            vec![DrawingPoint {
+                logical: 4.0,
+                price: 11.0,
+            }],
+            None,
+        )
+        .unwrap();
+    let text = chart.drawing(text).unwrap();
+    assert_eq!(text.text_h_align, DrawingTextHAlign::Center);
+    assert_eq!(text.text_v_align, DrawingTextVAlign::Middle);
+}
+
+#[test]
 fn drawing_history_reverses_create_delete_points_and_style() {
     let mut chart = settled_chart();
     let id = add_trend(&mut chart);

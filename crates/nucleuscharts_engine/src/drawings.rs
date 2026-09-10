@@ -579,6 +579,11 @@ impl Drawing {
         mut points: Vec<DrawingPoint>,
     ) -> Self {
         Self::normalize_position_points(kind, &mut points);
+        let (text_h_align, text_v_align) = if kind == DrawingKind::TrendLine {
+            (DrawingTextHAlign::Right, DrawingTextVAlign::Top)
+        } else {
+            (DrawingTextHAlign::Center, DrawingTextVAlign::Middle)
+        };
         Self {
             id,
             kind,
@@ -601,8 +606,8 @@ impl Drawing {
             text_size: None,
             text_weight: None,
             text_italic: false,
-            text_h_align: DrawingTextHAlign::Center,
-            text_v_align: DrawingTextVAlign::Middle,
+            text_h_align,
+            text_v_align,
             box_color: None,
             box_border_color: None,
             box_border_width: 1.0,
