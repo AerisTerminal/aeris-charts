@@ -181,9 +181,9 @@ function series_features(bars, primary_series) {
           cell_mode: "bid_ask",
           font_size: 10,
           show_bar_summary: true,
-          price_line_visible: false,
-          last_value_visible: false,
-          countdown_visible: false,
+          price_line_visible: true,
+          last_value_visible: true,
+          countdown_visible: true,
           title: "ORDER FLOW",
         });
         footprint.set_trades(footprint_trades(bars));

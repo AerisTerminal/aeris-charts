@@ -238,6 +238,9 @@ test("Series launches a readable tick-driven footprint preview", async ({ page }
     return {
       active: window.__demo_catalogs.series.active_id(),
       visible: footprint?.options().visible,
+      price_line_visible: footprint?.options().price_line_visible,
+      last_value_visible: footprint?.options().last_value_visible,
+      countdown_visible: footprint?.options().countdown_visible,
       bars: bars.length,
       levels: bars[0]?.levels.length ?? 0,
       has_stacked: bars.some((bar) => bar.levels.some(
@@ -259,6 +262,9 @@ test("Series launches a readable tick-driven footprint preview", async ({ page }
   expect(state).toMatchObject({
     active: "footprint",
     visible: true,
+    price_line_visible: true,
+    last_value_visible: true,
+    countdown_visible: true,
     bars: 12,
     levels: 11,
     has_stacked: true,
