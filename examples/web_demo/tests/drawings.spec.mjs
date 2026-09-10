@@ -659,7 +659,8 @@ test("an empty trend line offers direct inline text entry at its configured slot
     { logical: l1, price: p_lo },
   ], {
     color: "#f59e0b",
-    text_color: "#f59e0b",
+    text_color: "#7b1fa2",
+    text_size: 14,
     text_h_align: "center",
     text_v_align: "middle",
   }).id, s);
@@ -674,13 +675,38 @@ test("an empty trend line offers direct inline text entry at its configured slot
   const hovered = await capture(page);
   expect(pixel_diff(idle, hovered), "hover paints the low-opacity Add text affordance").toBeGreaterThan(20);
 
+  const gap_width = (png) => {
+    const center = slot.x * PR;
+    const candidates = [];
+    for (let y = Math.round(slot.y * PR) - 2; y <= Math.round(slot.y * PR) + 2; y += 1) {
+      let left = -1;
+      let right = png.width;
+      for (let x = 0; x < png.width; x += 1) {
+        const o = (y * png.width + x) * 4;
+        const orange = Math.abs(png.data[o] - 245) < 35 && Math.abs(png.data[o + 1] - 158) < 35 && png.data[o + 2] < 55;
+        if (!orange) continue;
+        if (x < center) left = Math.max(left, x);
+        else right = Math.min(right, x);
+      }
+      if (left >= 0 && right < png.width) candidates.push(right - left - 1);
+    }
+    return Math.min(...candidates);
+  };
+  const prompt_gap = gap_width(hovered);
+
   await page.mouse.click(slot.x, slot.y);
   const editor = page.locator("#nucleuscharts-text-input");
   await expect(editor).toBeVisible();
+  await settle_frames(page);
+  const caret_gap = gap_width(await capture(page));
+  expect(caret_gap, "empty editing uses a compact one-character gap").toBeLessThan(50);
+  expect(caret_gap, "clicking the prompt releases its full-width opening").toBeLessThan(prompt_gap);
   await page.keyboard.type("Dev");
   await expect.poll(() => page.evaluate(({ id }) => (
     window.__chart.drawings().find((drawing) => drawing.id === id)?.options().text
   ), { id })).toBe("Dev");
+  await settle_frames(page);
+  expect(gap_width(await capture(page)), "the line gap expands with measured typed text").toBeGreaterThan(caret_gap);
   const editor_box = await editor.boundingBox();
   expect(editor_box).not.toBeNull();
   expect(Math.abs((editor_box.x + editor_box.width / 2) - slot.x)).toBeLessThan(3);

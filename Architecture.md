@@ -263,8 +263,9 @@ deterministic vertical orientation, so endpoint crossing preserves visual left/r
 turns glyphs upside down. Pointer hits are inverse-transformed into the measured local text
 rectangle. Empty labels use the resolved label RGB at reduced alpha for `+ Add text`; entering or
 leaving the dedicated trend-label editor never converts or deletes the trend line. Middle labels
-split the stroke in segment-parameter space using measured advance plus padding, and the prompt-sized
-opening remains while an empty edit owns it; top and bottom slots never cut the stroke. The browser
+split the stroke in segment-parameter space using measured advance plus padding. Hover reserves the
+prompt advance; editing starts with a compact one-em caret opening and expands from shaped text
+advance as the user types. Top and bottom slots never cut the stroke. The browser
 supplies only a borderless transparent-glyph caret at the engine's exact anchor and angle.
 Standalone Text retains its separate create/remove lifecycle and explicit toolbar text input.
 

@@ -166,15 +166,17 @@ impl ChartEngine {
         .then_some((TREND_TEXT_PLACEHOLDER, true))
     }
 
-    /// Width source for the middle-line cutout. Editing an empty label hides placeholder ink,
-    /// but retains its opening so clicking the prompt cannot make the line jump closed.
+    /// Width source for the middle-line cutout. Hover reserves the full prompt; once editing
+    /// begins, an empty value uses the editor's one-em caret opening and measured text expands it.
     fn drawing_frame_gap_text<'a>(&self, drawing: &'a Drawing) -> Option<&'a str> {
+        if drawing.kind == DrawingKind::TrendLine && self.editing_drawing == Some(drawing.id) {
+            return Some(drawing.display_text());
+        }
         if !drawing.text.is_empty() {
             return Some(drawing.display_text());
         }
-        (drawing.kind == DrawingKind::TrendLine
-            && (self.hovered_text == Some(drawing.id) || self.editing_drawing == Some(drawing.id)))
-        .then_some(TREND_TEXT_PLACEHOLDER)
+        (drawing.kind == DrawingKind::TrendLine && self.hovered_text == Some(drawing.id))
+            .then_some(TREND_TEXT_PLACEHOLDER)
     }
 
     fn measure_drawing_frame_text(&self, drawing: &Drawing, text: &str, size: f64) -> f64 {
@@ -515,7 +517,12 @@ impl ChartEngine {
                     .and_then(|text| {
                         let (size, x, y, align, angle) =
                             self.text_run_geometry(drawing, px, pane_w_px, vpr);
-                        let width = self.measure_drawing_frame_text(drawing, text, size);
+                        let mut width = self.measure_drawing_frame_text(drawing, text, size);
+                        if self.editing_drawing == Some(drawing.id) {
+                            // Match the host editor's one-em empty/minimum width. This leaves a
+                            // compact caret slot and then grows from actual shaped advance.
+                            width = width.max(size);
+                        }
                         let gap = TEXT_PAD * vpr;
                         let (local_start, local_end) = match align {
                             DrawingTextHAlign::Left => (-gap, width + gap),

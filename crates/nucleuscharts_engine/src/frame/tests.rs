@@ -5099,7 +5099,7 @@ fn rotated_trend_label_hit_test_uses_label_local_coordinates() {
 }
 
 #[test]
-fn empty_middle_trend_label_keeps_its_gap_across_the_edit_lifecycle() {
+fn middle_trend_label_gap_shrinks_to_the_caret_then_expands_with_text() {
     use crate::{DrawingKind, DrawingPoint};
 
     fn orange_segments(chart: &mut ChartEngine) -> Vec<Vec<[f32; 2]>> {
@@ -5120,6 +5120,12 @@ fn empty_middle_trend_label_keeps_its_gap_across_the_edit_lifecycle() {
                 _ => None,
             })
             .collect()
+    }
+
+    fn gap_width(segments: &[Vec<[f32; 2]>]) -> f32 {
+        let left = segments[0].last().unwrap();
+        let right = segments[1].first().unwrap();
+        (right[0] - left[0]).hypot(right[1] - left[1])
     }
 
     let mut chart = anchor_chart();
@@ -5161,15 +5167,21 @@ fn empty_middle_trend_label_keeps_its_gap_across_the_edit_lifecycle() {
 
     chart.set_editing_drawing(Some(id));
     let editing_empty = orange_segments(&mut chart);
-    assert_eq!(
-        editing_empty, hovered,
-        "clicking the prompt must not close the gap"
+    assert_eq!(editing_empty.len(), 2);
+    assert!(
+        gap_width(&editing_empty) < gap_width(&hovered),
+        "clicking the prompt must shrink its opening to the one-character caret slot"
     );
     assert!(chart.drawing_apply_options(id, r#"{"text":"typing"}"#));
-    assert_eq!(orange_segments(&mut chart).len(), 2);
+    let typing = orange_segments(&mut chart);
+    assert_eq!(typing.len(), 2);
+    assert!(
+        gap_width(&typing) > gap_width(&editing_empty),
+        "measured typed text must expand the opening"
+    );
     chart.set_editing_drawing(None);
     chart.set_hovered_text(None);
-    assert_eq!(orange_segments(&mut chart).len(), 2);
+    assert_eq!(orange_segments(&mut chart), typing);
 }
 
 /// The circle prims in the primary pane's main layer as `(cx, radius, fill)`. With the
