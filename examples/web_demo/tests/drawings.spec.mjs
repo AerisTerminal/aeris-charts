@@ -1455,6 +1455,17 @@ test("tool customization templates new drawings and applies live to the selected
   expect(created.style).toBe("dotted");
   expect(created.width).toBe(5);
   expect(created.color).toBe("#ff00ff");
+  expect(created.text_color, "fresh trend labels inherit their line color").toBe("");
+
+  const [label_x, label_y] = await page.evaluate(() => (
+    window.__chart.wasm.drawing_text_transform(window.__chart.drawings()[0].id)
+  ));
+  await page.mouse.move(label_x + offset.left, label_y + offset.top);
+  await page.mouse.click(label_x + offset.left, label_y + offset.top);
+  const editor = page.locator("#nucleuscharts-text-input");
+  await expect(editor).toBeFocused();
+  expect(await editor.evaluate((el) => getComputedStyle(el).caretColor)).toBe("rgb(255, 0, 255)");
+  await page.keyboard.press("Escape");
 
   // Live-apply: with the drawing selected, changing the settings updates it in place.
   await page.mouse.click(a.x, a.y);

@@ -816,6 +816,11 @@ impl ChartEngine {
             .text_color
             .as_deref()
             .and_then(Color::parse_css)
+            .or_else(|| {
+                (drawing.kind == DrawingKind::TrendLine)
+                    .then(|| Color::parse_css(&drawing.color))
+                    .flatten()
+            })
             .or_else(|| Color::parse_css(&layout.text_color))
             .unwrap_or_else(|| {
                 let fallback = nucleuscharts_core::style::DEFAULT_FOREGROUND_RGB;

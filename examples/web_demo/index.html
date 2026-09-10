@@ -1046,18 +1046,23 @@ function sync_drawing_tool_buttons(tool) {
 }
 // The customization inputs template newly created drawings AND apply live to the selected one
 // (TradingView's floating settings, toolbar form).
+// A false value means trend-label ink follows the line color. The color input still displays the
+// resolved color, but it is serialized only after the user explicitly changes that control.
+let drawing_text_color_explicit = false;
 function drawing_options_from_inputs(kind = null) {
   const options = {
     color: document.getElementById("drawing_color").value,
     style: document.getElementById("drawing_style").value,
     width: Number(document.getElementById("drawing_width").value),
-    text_color: document.getElementById("drawing_text_color").value,
     text_size: Number(document.getElementById("drawing_text_size").value),
     text_weight: Number(document.getElementById("drawing_weight").value),
     text_italic: document.getElementById("drawing_italic").checked,
     text_h_align: document.getElementById("drawing_text_h_align").value,
     text_v_align: document.getElementById("drawing_text_v_align").value,
   };
+  if (drawing_text_color_explicit) {
+    options.text_color = document.getElementById("drawing_text_color").value;
+  }
   if (kind === "text") options.text = document.getElementById("drawing_text").value;
   return options;
 }
@@ -1089,7 +1094,12 @@ function sync_drawing_inputs_from_selection() {
   document.getElementById("drawing_width").value = String(o.width);
   document.getElementById("drawing_width_val").textContent = String(o.width);
   if (selected.kind() === "text") set("drawing_text", o.text);
-  set("drawing_text_color", css_to_hex(o.text_color));
+  const explicit_text_color = css_to_hex(o.text_color);
+  drawing_text_color_explicit = explicit_text_color !== null;
+  const inherited_text_color = selected.kind() === "trend_line"
+    ? css_to_hex(o.color)
+    : css_to_hex(active_chart().options().layout.textColor);
+  set("drawing_text_color", explicit_text_color ?? inherited_text_color);
   set("drawing_text_size", String(o.text_size ?? 14));
   set("drawing_weight", String(o.text_weight ?? 400));
   document.getElementById("drawing_italic").checked = o.text_italic;
@@ -1099,6 +1109,10 @@ function sync_drawing_inputs_from_selection() {
 document.getElementById("chart_container").addEventListener("pointerup", () => setTimeout(sync_drawing_inputs_from_selection, 0));
 for (const id of ["drawing_color", "drawing_style", "drawing_width", "drawing_text_color", "drawing_text_size", "drawing_weight", "drawing_italic", "drawing_text_h_align", "drawing_text_v_align"]) {
   document.getElementById(id).addEventListener("change", () => {
+    if (id === "drawing_text_color") drawing_text_color_explicit = true;
+    if (id === "drawing_color" && !drawing_text_color_explicit) {
+      document.getElementById("drawing_text_color").value = document.getElementById("drawing_color").value;
+    }
     const tool = active_chart_router.active_drawing_tool();
     const options = drawing_options_from_inputs(tool);
     // Re-template the armed tool (the next drawing picks the new settings up).
@@ -1670,7 +1684,9 @@ function sync_chart_controls_from_engine() {
   document.getElementById("font_family").value = options.layout.fontFamily;
   document.getElementById("font_size").value = String(options.layout.fontSize);
   document.getElementById("font_size_val").textContent = String(options.layout.fontSize);
-  document.getElementById("drawing_text_color").value = hex(options.layout.textColor, "#f0f0f0");
+  if (!drawing_text_color_explicit) {
+    document.getElementById("drawing_text_color").value = document.getElementById("drawing_color").value;
+  }
 }
 // Startup is read-only from here: reflect the engine into the controls without re-applying it.
 if (parity_fixture === null) sync_chart_controls_from_engine();

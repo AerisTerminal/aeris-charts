@@ -261,7 +261,9 @@ segment-local transform, and middle-stroke cutout. Their 3×3 slots resolve alon
 to the actual segment. The direction is normalized into the readable half-plane, including a
 deterministic vertical orientation, so endpoint crossing preserves visual left/right and never
 turns glyphs upside down. Pointer hits are inverse-transformed into the measured local text
-rectangle. Empty labels use the resolved label RGB at reduced alpha for `+ Add text`; entering or
+rectangle. An unset trend-label text color follows the drawing stroke dynamically; an explicit text
+color remains independent. Empty labels use that same resolved RGB at reduced alpha for
+`+ Add text`; entering or
 leaving the dedicated trend-label editor never converts or deletes the trend line. Middle labels
 split the stroke in segment-parameter space using measured advance plus padding. Hover reserves the
 prompt advance; editing starts with a compact one-em caret opening and expands from shaped text

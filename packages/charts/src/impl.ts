@@ -4053,12 +4053,14 @@ export class chart_impl implements chart_api {
     const font_family = layout.fontFamily ?? "sans-serif";
     const style_prefix = options.text_italic ? "italic " : "";
     const font = `${style_prefix}${options.text_weight ?? 400} ${font_size}px ${font_family}`;
-    // Same color the engine paints with: drawing override, else the chart's layout text color
-    // (theme foreground — light on dark, dark on light). Never the package default theme alone.
+    // Same color the engine paints with: explicit drawing override, then a trend label's line,
+    // otherwise the chart foreground used by standalone text. Never infer a different trend-label
+    // default in the host.
     const ink =
       (options.text_color && options.text_color.trim() !== ""
         ? options.text_color
         : null) ??
+      (drawing.kind() === "trend_line" ? options.color : null) ??
       layout.textColor ??
       theme_palette(default_theme_name).foreground;
 

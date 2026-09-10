@@ -540,7 +540,8 @@ pub struct Drawing {
     /// host typing-mode editor is the empty-state UI, and leaving it without typed text removes
     /// the drawing.
     pub text: String,
-    /// Label color CSS string; `None` follows the chart's `layout.textColor`.
+    /// Label color CSS string. `None` follows the drawing stroke for trend lines and the chart's
+    /// `layout.textColor` for the standalone text tool.
     pub text_color: Option<String>,
     /// Label glyph size in CSS px; `None` follows the chart's `layout.fontSize`.
     pub text_size: Option<f64>,

@@ -5062,6 +5062,53 @@ fn trend_line_middle_label_follows_the_segment_and_opens_a_gap() {
 }
 
 #[test]
+fn trend_label_color_follows_its_line_until_explicitly_overridden() {
+    use crate::{DrawingKind, DrawingPoint};
+
+    fn label_color(chart: &mut ChartEngine) -> Color {
+        chart.build_frame().panes[0]
+            .main
+            .iter()
+            .find_map(|prim| match prim {
+                Prim::RotatedText { text, color, .. } if text == "label" => Some(*color),
+                _ => None,
+            })
+            .expect("trend label")
+    }
+
+    let mut chart = anchor_chart();
+    let id = chart
+        .add_drawing(
+            DrawingKind::TrendLine,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 0.0,
+                    price: 10.0,
+                },
+                DrawingPoint {
+                    logical: 4.0,
+                    price: 12.5,
+                },
+            ],
+            Some(r##"{"color":"#123456","text":"label"}"##),
+        )
+        .unwrap();
+
+    assert_eq!(label_color(&mut chart), Color::rgb(0x12, 0x34, 0x56));
+    assert!(chart.drawing_apply_options(id, r##"{"color":"#abcdef"}"##));
+    assert_eq!(label_color(&mut chart), Color::rgb(0xab, 0xcd, 0xef));
+
+    assert!(chart.drawing_apply_options(id, r##"{"text_color":"#d32f2f"}"##));
+    assert!(chart.drawing_apply_options(id, r##"{"color":"#00aa88"}"##));
+    assert_eq!(
+        label_color(&mut chart),
+        Color::rgb(0xd3, 0x2f, 0x2f),
+        "an explicit label color must remain independent of later line-color changes"
+    );
+}
+
+#[test]
 fn rotated_trend_label_hit_test_uses_label_local_coordinates() {
     use crate::{DrawingKind, DrawingPoint};
 
