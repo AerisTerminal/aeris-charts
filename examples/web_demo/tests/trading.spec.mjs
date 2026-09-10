@@ -88,6 +88,75 @@ test("first-party trading snapshot preserves identity and broker relationships",
   expect(invalid).toEqual({ threw: true, code: "invalid_data", unchanged: true });
 });
 
+test("selected position drawing places one host-sized bracket request", async ({ page }) => {
+  await page.goto("/?backend=canvas2d");
+  await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  expect(await page.evaluate(() => window.__demo_catalogs.lab.active_ids())).not.toContain("trading-bracket");
+  const placement = await page.evaluate(() => {
+    const range = window.__chart.time_scale().get_visible_logical_range();
+    const logical = Math.floor(range.from + (range.to - range.from) * 0.55);
+    const bar = window.__main.data_by_index(logical);
+    const rect = document.getElementById("chart_container").getBoundingClientRect();
+    return {
+      x: rect.left + window.__chart.time_scale().logical_to_coordinate(logical),
+      y: rect.top + window.__main.price_to_coordinate((bar.high + bar.low) / 2),
+    };
+  });
+  await page.click('#drawings_group [data-tool="long_position"]');
+  await page.mouse.click(placement.x, placement.y);
+
+  const setup = await page.evaluate(() => {
+    const drawing = window.__chart.drawings().at(-1);
+    window.__placed_bracket_intents = [];
+    window.__chart.trading().subscribe_intents((intent) => {
+      if (intent.action === "place_bracket_order") window.__placed_bracket_intents.push(intent);
+    });
+    const points = drawing?.points() ?? [];
+    return {
+      drawing_id: drawing?.id,
+      drawing_kind: drawing?.kind(),
+      drawing_count: window.__chart.drawings().length,
+      entry_price: Math.round(points[0]?.price * 100) / 100,
+      take_profit_price: Math.round(points[1]?.price * 100) / 100,
+      stop_loss_price: Math.round(points[2]?.price * 100) / 100,
+    };
+  });
+  expect(setup.drawing_count).toBe(1);
+  expect(setup.drawing_kind).toBe("long_position");
+  await expect(page.locator("#place_position_order")).toBeEnabled();
+  await expect(page.locator("#place_position_order")).toHaveText("place long order");
+  await page.fill("#position_order_quantity", "7");
+  await page.click("#place_position_order");
+
+  const placed = await page.evaluate(() => ({
+    intents: window.__placed_bracket_intents,
+    orders: window.__chart.trading().state().orders.filter((order) => order.id.includes("-1")),
+    drawing_count: window.__chart.drawings().length,
+  }));
+  expect(placed.intents).toHaveLength(1);
+  expect(placed.intents[0]).toEqual(expect.objectContaining({
+    action: "place_bracket_order",
+    drawing_id: setup.drawing_id,
+    pane_index: 0,
+    price_scale: "right",
+    side: "buy",
+    kind: "limit",
+    role: "working",
+    quantity: 7,
+  }));
+  expect(placed.intents[0].price).toBeCloseTo(setup.entry_price, 10);
+  expect(placed.intents[0].take_profit_price).toBeCloseTo(setup.take_profit_price, 10);
+  expect(placed.intents[0].stop_loss_price).toBeCloseTo(setup.stop_loss_price, 10);
+  expect(await page.evaluate(() => window.__demo_catalogs.lab.active_ids())).toContain("trading-bracket");
+  expect(placed.orders).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: "demo-entry-1", role: "working", side: "buy", quantity: 7 }),
+    expect.objectContaining({ id: "demo-target-1", role: "take_profit", side: "sell", quantity: 7 }),
+    expect.objectContaining({ id: "demo-stop-1", role: "stop_loss", side: "sell", quantity: 7 }),
+  ]));
+  expect(placed.drawing_count, "broker acknowledgement does not remove the planning tool").toBe(1);
+});
+
 test("quantity cells fit their formatted text and move the close hit with them", async ({ page }) => {
   await open_trading_demo(page);
   const widths = await page.evaluate(() => {

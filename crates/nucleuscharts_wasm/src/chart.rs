@@ -1107,6 +1107,15 @@ impl NucleusChart {
         trading_result_json(self.inner.borrow_mut().engine.apply_trading_style(options))
     }
 
+    pub fn place_bracket_order_from_drawing(&mut self, drawing_id: u32, quantity: f64) -> String {
+        trading_result_json(
+            self.inner
+                .borrow_mut()
+                .engine
+                .place_bracket_order_from_drawing(drawing_id, quantity),
+        )
+    }
+
     pub fn trading_hit_json(&self, x_css: f64, y_css: f64) -> String {
         self.trading_hit_json_device(x_css, y_css, InputDevice::Mouse as u8)
     }

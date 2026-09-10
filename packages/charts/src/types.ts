@@ -1862,6 +1862,7 @@ export interface trading_hit {
 }
 
 export type trading_intent_action =
+  | "place_bracket_order"
   | "modify_order"
   | "cancel_order"
   | "create_stop_loss"
@@ -1871,13 +1872,18 @@ export type trading_intent_action =
 export interface trading_intent {
   sequence: number;
   action: trading_intent_action;
+  drawing_id?: number;
   order_id?: string;
   position_id?: string;
+  pane_index?: number;
+  price_scale?: trading_price_scale;
   side?: order_side;
   kind?: order_kind;
   role?: order_role;
   price?: number;
   stop_price?: number;
+  take_profit_price?: number;
+  stop_loss_price?: number;
   quantity?: number;
   bracket_id?: string;
   oco_group_id?: string;
@@ -1926,6 +1932,9 @@ export interface trading_api {
   remove_execution(id: string): boolean;
   set_instrument(instrument: instrument_metadata): void;
   apply_options(options: Partial<trading_style_options>): void;
+  /** Emit one atomic host-authoritative bracket request from a complete Long/Short Position
+   * drawing. The host supplies quantity, broker submission, IDs, and the resulting snapshot. */
+  place_bracket_order(drawing_id: number, quantity: number): void;
   hit_at(x: number, y: number): trading_hit | null;
   /** The live drag preview, or `null` when no drag is in flight. A released change is already
    * applied to the chart's own state, so nothing lingers here waiting on the host. */

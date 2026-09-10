@@ -321,6 +321,8 @@
       <button type="button" data-tool="brush" title="Freehand brush: drag to draw a smooth stroke; when selected its two end anchors re-anchor, the body moves">brush</button>
       <button type="button" data-tool="long_position" title="Long Position: one click places entry, target, stop, and width">long position</button>
       <button type="button" data-tool="short_position" title="Short Position: one click places entry, target, stop, and width">short position</button>
+      <label title="Host-supplied quantity for placing the selected Long/Short Position drawing">order qty <input type="number" id="position_order_quantity" min="0.00000001" step="any" value="1"></label>
+      <button id="place_position_order" type="button" disabled title="Place one host-authoritative bracket order from the selected Long/Short Position drawing">place order</button>
       <label title="Stroke/border color — templates new drawings and applies live to the selected one">color <input type="color" id="drawing_color" value="#3e63dd"></label>
       <label title="Stroke style (solid/dotted/dashed) — templates new drawings and applies live to the selected one">style
         <select id="drawing_style">
@@ -1086,6 +1088,12 @@ function css_to_hex(css) {
 }
 function sync_drawing_inputs_from_selection() {
   const selected = active_chart().selected_drawing();
+  const position_order_button = document.getElementById("place_position_order");
+  const position_selected = selected !== null && ["long_position", "short_position"].includes(selected.kind());
+  position_order_button.disabled = !position_selected;
+  position_order_button.textContent = position_selected
+    ? `place ${selected.kind() === "long_position" ? "long" : "short"} order`
+    : "place order";
   if (selected === null) return;
   const o = selected.options();
   const set = (id, value) => { if (value !== null && value !== undefined) document.getElementById(id).value = value; };
@@ -1129,7 +1137,28 @@ for (const id of ["drawing_color", "drawing_style", "drawing_width", "drawing_te
 document.getElementById("drawing_width").addEventListener("input", (e) => {
   document.getElementById("drawing_width_val").textContent = e.target.value;
 });
-document.getElementById("clear_drawings").addEventListener("click", () => active_chart().clear_drawings());
+document.getElementById("place_position_order").addEventListener("click", () => {
+  const selected = active_chart().selected_drawing();
+  if (selected === null || !["long_position", "short_position"].includes(selected.kind())) {
+    status.textContent = "Select a Long Position or Short Position drawing first";
+    sync_drawing_inputs_from_selection();
+    return;
+  }
+  const quantity = Number(document.getElementById("position_order_quantity").value);
+  try {
+    if (!window.__demo_catalogs.lab.active_ids().includes("trading-bracket")) {
+      window.__demo_catalogs.lab.activate("trading-bracket");
+    }
+    active_chart().trading().place_bracket_order(selected.id, quantity);
+    status.textContent = `${selected.kind() === "long_position" ? "Long" : "Short"} bracket requested · qty ${quantity}`;
+  } catch (error) {
+    status.textContent = error instanceof Error ? error.message : String(error);
+  }
+});
+document.getElementById("clear_drawings").addEventListener("click", () => {
+  active_chart().clear_drawings();
+  sync_drawing_inputs_from_selection();
+});
 document.getElementById("undo_drawing_btn").addEventListener("click", () => active_chart_router.undo_drawing());
 document.getElementById("redo_drawing_btn").addEventListener("click", () => active_chart_router.redo_drawing());
 sync_drawing_tool_buttons(null);

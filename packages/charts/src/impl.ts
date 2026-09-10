@@ -2385,6 +2385,11 @@ class trading_impl implements trading_api {
     this.chart.repaint();
   }
 
+  place_bracket_order(drawing_id: number, quantity: number): void {
+    assert_trading_result(this.chart.wasm.place_bracket_order_from_drawing(drawing_id, quantity));
+    this.dispatch_pending_intents();
+  }
+
   hit_at(x: number, y: number): trading_hit | null {
     return JSON.parse(this.chart.wasm.trading_hit_json(x, y)) as trading_hit | null;
   }

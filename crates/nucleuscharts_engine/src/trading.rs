@@ -8,7 +8,10 @@ use std::collections::{HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ChartEngine, ChartError, ErrorCode, HitProfile, PriceScaleTarget, PANELESS};
+use crate::{
+    ChartEngine, ChartError, DrawingId, DrawingKind, DrawingPriceScale, ErrorCode, HitProfile,
+    PriceScaleTarget, PANELESS,
+};
 use nucleuscharts_core::style::{
     DEFAULT_PRIMARY_RGB, MARKET_DOWN_RGB, MARKET_UP_RGB, MARKET_WARNING_RGB,
 };
@@ -305,6 +308,7 @@ pub struct TradingStyleOptions {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TradingIntentAction {
+    PlaceBracketOrder,
     ModifyOrder,
     CancelOrder,
     CreateStopLoss,
@@ -318,9 +322,15 @@ pub struct TradingIntent {
     pub sequence: u32,
     pub action: TradingIntentAction,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub drawing_id: Option<DrawingId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub order_id: Option<OrderId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub position_id: Option<PositionId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pane_index: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price_scale: Option<TradingPriceScale>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub side: Option<OrderSide>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -331,6 +341,10 @@ pub struct TradingIntent {
     pub price: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_price: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub take_profit_price: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_loss_price: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quantity: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -387,6 +401,7 @@ pub(crate) enum TradingInteractionState {
 
 #[derive(Clone, Debug)]
 pub(crate) enum TradingRollback {
+    CreatedBracketOrder,
     CreatedProtection,
     RemovedOrder {
         index: usize,
@@ -1169,13 +1184,18 @@ impl ChartEngine {
         let intent = TradingIntent {
             sequence,
             action,
+            drawing_id: None,
             order_id,
             position_id,
+            pane_index: None,
+            price_scale: None,
             side: Some(preview.side),
             kind,
             role: Some(preview.role),
             price: Some(preview.price),
             stop_price,
+            take_profit_price: None,
+            stop_loss_price: None,
             quantity: Some(preview.quantity),
             bracket_id,
             oco_group_id,
@@ -1366,6 +1386,124 @@ impl ChartEngine {
         true
     }
 
+    /// Emit one host-authoritative bracket request from a complete Long/Short Position drawing.
+    /// The drawing supplies semantic entry, target, stop, pane, and price-scale placement; the
+    /// host supplies quantity and remains responsible for broker submission and live order IDs.
+    /// No speculative trading objects are inserted into the chart.
+    pub fn place_bracket_order_from_drawing(
+        &mut self,
+        drawing_id: DrawingId,
+        quantity: f64,
+    ) -> Result<(), ChartError> {
+        if !quantity.is_finite() || quantity <= 0.0 {
+            return Err(invalid(
+                "bracket order quantity must be finite and positive",
+            ));
+        }
+        if self
+            .trading_state
+            .instrument
+            .minimum_quantity
+            .is_some_and(|minimum| quantity < minimum)
+        {
+            return Err(invalid(
+                "bracket order quantity is below the instrument minimum",
+            ));
+        }
+        if !self.trading_state.interaction.is_idle_or_hovering() {
+            return Err(ChartError::new(
+                ErrorCode::UnsupportedOperation,
+                "another trading request is still active",
+            ));
+        }
+
+        let (kind, pane_index, price_scale, points) = {
+            let drawing = self.drawing(drawing_id).ok_or_else(|| {
+                ChartError::new(ErrorCode::InvalidHandle, "unknown position drawing")
+            })?;
+            if !matches!(
+                drawing.kind,
+                DrawingKind::LongPosition | DrawingKind::ShortPosition
+            ) {
+                return Err(ChartError::new(
+                    ErrorCode::UnsupportedOperation,
+                    "bracket orders require a Long Position or Short Position drawing",
+                ));
+            }
+            if drawing.points.len() != 3 {
+                return Err(invalid(
+                    "position drawing must contain entry, target, and stop",
+                ));
+            }
+            (
+                drawing.kind,
+                drawing.pane_index,
+                drawing.price_scale,
+                [
+                    drawing.points[0].price,
+                    drawing.points[1].price,
+                    drawing.points[2].price,
+                ],
+            )
+        };
+
+        let entry_price = self.snap_trading_price(points[0]);
+        let take_profit_price = self.snap_trading_price(points[1]);
+        let stop_loss_price = self.snap_trading_price(points[2]);
+        let side = match kind {
+            DrawingKind::LongPosition
+                if take_profit_price > entry_price && stop_loss_price < entry_price =>
+            {
+                OrderSide::Buy
+            }
+            DrawingKind::ShortPosition
+                if take_profit_price < entry_price && stop_loss_price > entry_price =>
+            {
+                OrderSide::Sell
+            }
+            DrawingKind::LongPosition | DrawingKind::ShortPosition => {
+                return Err(invalid(
+                    "position levels collapse or cross after instrument tick snapping",
+                ));
+            }
+            _ => unreachable!(),
+        };
+        let price_scale = match price_scale {
+            DrawingPriceScale::Right => TradingPriceScale::Right,
+            DrawingPriceScale::Left => TradingPriceScale::Left,
+            DrawingPriceScale::Overlay => TradingPriceScale::Overlay,
+        };
+        let sequence = self.trading_state.next_sequence();
+        self.trading_state.push_intent(TradingIntent {
+            sequence,
+            action: TradingIntentAction::PlaceBracketOrder,
+            drawing_id: Some(drawing_id),
+            order_id: None,
+            position_id: None,
+            pane_index: Some(pane_index),
+            price_scale: Some(price_scale),
+            side: Some(side),
+            // An explicit entry level is a resting entry request. The host may translate or
+            // reject it against its live quote and venue rules; the chart never owns that quote.
+            kind: Some(OrderKind::Limit),
+            role: Some(OrderRole::Working),
+            price: Some(entry_price),
+            stop_price: None,
+            take_profit_price: Some(take_profit_price),
+            stop_loss_price: Some(stop_loss_price),
+            quantity: Some(quantity),
+            bracket_id: None,
+            oco_group_id: None,
+            base_revision: 0,
+        });
+        self.trading_state.interaction = TradingInteractionState::PendingHostAck {
+            sequence,
+            rollback: TradingRollback::CreatedBracketOrder,
+        };
+        self.invalidate_frame_trading();
+        Ok(())
+    }
+
     /// Activate the close control under the pointer. Closing REMOVES the object and emits the
     /// intent: there is no pending tint and no second gate, because "close" means the order or
     /// position is gone. A host that gates closes runs its confirmation around the intent and
@@ -1402,13 +1540,18 @@ impl ChartEngine {
                 let intent = TradingIntent {
                     sequence,
                     action: TradingIntentAction::CancelOrder,
+                    drawing_id: None,
                     order_id: Some(order_id.clone()),
                     position_id: order.position_id.clone(),
+                    pane_index: None,
+                    price_scale: None,
                     side: Some(order.side),
                     kind: Some(order.kind),
                     role: Some(order.role),
                     price: Some(order.price),
                     stop_price: order.stop_price,
+                    take_profit_price: None,
+                    stop_loss_price: None,
                     quantity: Some(remaining),
                     bracket_id: order.bracket_id.clone(),
                     oco_group_id: order.oco_group_id.clone(),
@@ -1435,13 +1578,18 @@ impl ChartEngine {
                 let intent = TradingIntent {
                     sequence,
                     action: TradingIntentAction::ClosePosition,
+                    drawing_id: None,
                     order_id: None,
                     position_id: Some(position_id),
+                    pane_index: None,
+                    price_scale: None,
                     side: None,
                     kind: None,
                     role: None,
                     price: None,
                     stop_price: None,
+                    take_profit_price: None,
+                    stop_loss_price: None,
                     quantity: None,
                     bracket_id: None,
                     oco_group_id: None,
@@ -1504,7 +1652,7 @@ impl ChartEngine {
                         order.price = price;
                     }
                 }
-                TradingRollback::CreatedProtection => {}
+                TradingRollback::CreatedBracketOrder | TradingRollback::CreatedProtection => {}
             }
             self.invalidate_frame_scene();
         }
@@ -2050,7 +2198,7 @@ impl ChartEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ChartEngine, TradingPriceScale};
+    use crate::{ChartEngine, DrawingPoint, TradingPriceScale};
     use nucleuscharts_render::draw_list::Prim;
 
     fn id<T>(value: &str, constructor: impl FnOnce(String) -> Result<T, ChartError>) -> T {
@@ -2071,6 +2219,104 @@ mod tests {
             .unwrap();
         chart.time_scale.set_width(400.0);
         chart
+    }
+
+    #[test]
+    fn position_drawing_emits_one_atomic_host_bracket_request() {
+        let mut chart = chart_with_market();
+        chart
+            .set_instrument_metadata(InstrumentMetadata {
+                tick_size: Some(0.25),
+                minimum_quantity: Some(2.0),
+                ..InstrumentMetadata::default()
+            })
+            .unwrap();
+        let drawing_id = chart
+            .add_drawing(
+                DrawingKind::LongPosition,
+                0,
+                vec![
+                    DrawingPoint {
+                        logical: 1.0,
+                        price: 101.12,
+                    },
+                    DrawingPoint {
+                        logical: 2.0,
+                        price: 104.13,
+                    },
+                    DrawingPoint {
+                        logical: 1.0,
+                        price: 98.11,
+                    },
+                ],
+                None,
+            )
+            .unwrap();
+        let authoritative = chart.trading_snapshot();
+
+        chart
+            .place_bracket_order_from_drawing(drawing_id, 3.0)
+            .unwrap();
+        assert_eq!(chart.trading_snapshot(), authoritative);
+        let intents = chart.take_trading_intents();
+        assert_eq!(intents.len(), 1);
+        let intent = &intents[0];
+        assert_eq!(intent.action, TradingIntentAction::PlaceBracketOrder);
+        assert_eq!(intent.drawing_id, Some(drawing_id));
+        assert_eq!(intent.pane_index, Some(0));
+        assert_eq!(intent.price_scale, Some(TradingPriceScale::Right));
+        assert_eq!(intent.side, Some(OrderSide::Buy));
+        assert_eq!(intent.kind, Some(OrderKind::Limit));
+        assert_eq!(intent.role, Some(OrderRole::Working));
+        assert_eq!(intent.price, Some(101.0));
+        assert_eq!(intent.take_profit_price, Some(104.25));
+        assert_eq!(intent.stop_loss_price, Some(98.0));
+        assert_eq!(intent.quantity, Some(3.0));
+        assert_eq!(intent.bracket_id, None);
+        assert_eq!(intent.oco_group_id, None);
+
+        let busy = chart
+            .place_bracket_order_from_drawing(drawing_id, 3.0)
+            .unwrap_err();
+        assert_eq!(busy.code(), ErrorCode::UnsupportedOperation);
+        assert!(chart.resolve_trading_intent(intent.sequence, false));
+        assert_eq!(chart.trading_snapshot(), authoritative);
+
+        let too_small = chart
+            .place_bracket_order_from_drawing(drawing_id, 1.0)
+            .unwrap_err();
+        assert_eq!(too_small.code(), ErrorCode::InvalidData);
+        assert!(chart.take_trading_intents().is_empty());
+
+        let short_drawing_id = chart
+            .add_drawing(
+                DrawingKind::ShortPosition,
+                0,
+                vec![
+                    DrawingPoint {
+                        logical: 1.0,
+                        price: 101.12,
+                    },
+                    DrawingPoint {
+                        logical: 2.0,
+                        price: 98.11,
+                    },
+                    DrawingPoint {
+                        logical: 1.0,
+                        price: 104.13,
+                    },
+                ],
+                None,
+            )
+            .unwrap();
+        chart
+            .place_bracket_order_from_drawing(short_drawing_id, 2.0)
+            .unwrap();
+        let short = chart.take_trading_intents().pop().unwrap();
+        assert_eq!(short.side, Some(OrderSide::Sell));
+        assert_eq!(short.price, Some(101.0));
+        assert_eq!(short.take_profit_price, Some(98.0));
+        assert_eq!(short.stop_loss_price, Some(104.25));
     }
 
     /// Center of the close cell that terminates the object's control cluster.

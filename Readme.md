@@ -120,6 +120,13 @@ trading.subscribe_intents(async (intent) => {
   trading.resolve_intent(intent.sequence, accepted);
   // On acceptance, push the resulting authoritative order/position update through this API.
 });
+
+// Convert a completed Long/Short Position drawing into one atomic bracket request. Quantity is
+// deliberately host-owned; the intent carries the drawing's tick-snapped entry, TP, and SL.
+const plan = chart.selected_drawing();
+if (plan && (plan.kind() === "long_position" || plan.kind() === "short_position")) {
+  trading.place_bracket_order(plan.id, quantity_from_host);
+}
 ```
 
 Live trading objects, previews, and intent queues are chart-local runtime state and are deliberately
