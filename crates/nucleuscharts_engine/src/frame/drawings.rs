@@ -37,6 +37,141 @@ const POSITION_PROGRESS_ALPHA: u8 = 96;
 /// roughly half strength until the drawing is actually selected).
 const HOVER_BORDER: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0x73);
 
+fn trend_line_text_placement(
+    drawing: &Drawing,
+    px: &[(f64, f64)],
+    size: f64,
+    pad: f64,
+) -> Option<(f64, f64, DrawingTextHAlign)> {
+    if drawing.kind != DrawingKind::TrendLine || px.len() < 2 {
+        return None;
+    }
+    let (a, b) = (px[0], px[1]);
+    let dx = b.0 - a.0;
+    if dx.abs() <= f64::EPSILON {
+        return None;
+    }
+    let (left, right) = if a.0 <= b.0 { (a, b) } else { (b, a) };
+    let usable_pad = pad.min((right.0 - left.0).abs() / 2.0);
+    let x = match drawing.text_h_align {
+        DrawingTextHAlign::Left => left.0 + usable_pad,
+        DrawingTextHAlign::Center => (left.0 + right.0) / 2.0,
+        DrawingTextHAlign::Right => right.0 - usable_pad,
+    };
+    let t = (x - a.0) / dx;
+    let line_y = a.1 + (b.1 - a.1) * t;
+    let y = match drawing.text_v_align {
+        crate::drawings::DrawingTextVAlign::Top => line_y - pad - size / 2.0,
+        crate::drawings::DrawingTextVAlign::Middle => line_y,
+        crate::drawings::DrawingTextVAlign::Bottom => line_y + pad + size / 2.0,
+    };
+    Some((x, y, drawing.text_h_align))
+}
+
+fn point_on_segment(a: (f64, f64), b: (f64, f64), t: f64) -> (f64, f64) {
+    (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t)
+}
+
+fn segment_box_interval(
+    a: (f64, f64),
+    b: (f64, f64),
+    left: f64,
+    right: f64,
+    top: f64,
+    bottom: f64,
+) -> Option<(f64, f64)> {
+    let mut enter: f64 = 0.0;
+    let mut exit: f64 = 1.0;
+    for (origin, delta, min, max) in [
+        (a.0, b.0 - a.0, left.min(right), left.max(right)),
+        (a.1, b.1 - a.1, top.min(bottom), top.max(bottom)),
+    ] {
+        if delta.abs() <= f64::EPSILON {
+            if origin < min || origin > max {
+                return None;
+            }
+            continue;
+        }
+        let first = (min - origin) / delta;
+        let second = (max - origin) / delta;
+        enter = enter.max(first.min(second));
+        exit = exit.min(first.max(second));
+        if enter >= exit {
+            return None;
+        }
+    }
+    (enter < 1.0 && exit > 0.0).then_some((enter.clamp(0.0, 1.0), exit.clamp(0.0, 1.0)))
+}
+
+fn push_segment(
+    a: (f64, f64),
+    b: (f64, f64),
+    drawing: &Drawing,
+    color: Color,
+    vpr: f64,
+    out: &mut Vec<Prim>,
+    points: &mut Vec<[f32; 2]>,
+) {
+    if (a.0 - b.0).abs() <= f64::EPSILON && (a.1 - b.1).abs() <= f64::EPSILON {
+        return;
+    }
+    let first_point = points.len() as u32;
+    points.extend([[a.0 as f32, a.1 as f32], [b.0 as f32, b.1 as f32]]);
+    out.push(Prim::Polyline {
+        first_point,
+        point_count: 2,
+        width: (drawing.width * vpr) as f32,
+        style: drawing.style,
+        line_type: LineType::Simple,
+        color,
+    });
+}
+
+#[cfg(test)]
+mod trend_label_tests {
+    use super::*;
+    use crate::drawings::{DrawingPoint, DrawingTextVAlign};
+
+    #[test]
+    fn all_nine_trend_label_positions_follow_the_segment() {
+        let mut drawing = Drawing::new(
+            1,
+            DrawingKind::TrendLine,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 0.0,
+                    price: 0.0,
+                },
+                DrawingPoint {
+                    logical: 1.0,
+                    price: 1.0,
+                },
+            ],
+        );
+        let line = [(10.0, 80.0), (90.0, 20.0)];
+        for (h_align, expected_x) in [
+            (DrawingTextHAlign::Left, 14.0),
+            (DrawingTextHAlign::Center, 50.0),
+            (DrawingTextHAlign::Right, 86.0),
+        ] {
+            drawing.text_h_align = h_align;
+            let line_y = 80.0 + (20.0 - 80.0) * ((expected_x - 10.0) / 80.0);
+            for (v_align, expected_y) in [
+                (DrawingTextVAlign::Top, line_y - 10.0),
+                (DrawingTextVAlign::Middle, line_y),
+                (DrawingTextVAlign::Bottom, line_y + 10.0),
+            ] {
+                drawing.text_v_align = v_align;
+                let (x, y, align) = trend_line_text_placement(&drawing, &line, 12.0, 4.0).unwrap();
+                assert_eq!(align, h_align);
+                assert!((x - expected_x).abs() < 1e-9, "{h_align:?} {v_align:?}");
+                assert!((y - expected_y).abs() < 1e-9, "{h_align:?} {v_align:?}");
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PositionRunSide {
     Reward,
@@ -366,17 +501,51 @@ impl ChartEngine {
         };
         match geometry.body {
             DrawingBodyGeometry::Segment { a, b } => {
-                let first_point = points.len() as u32;
-                points.push([a.0 as f32, a.1 as f32]);
-                points.push([b.0 as f32, b.1 as f32]);
-                out.push(Prim::Polyline {
-                    first_point,
-                    point_count: 2,
-                    width: (drawing.width * vpr) as f32,
-                    style: drawing.style,
-                    line_type: LineType::Simple,
-                    color,
-                });
+                let label_gap = (!drawing.text.is_empty()
+                    && drawing.kind == DrawingKind::TrendLine
+                    && drawing.text_v_align == crate::drawings::DrawingTextVAlign::Middle)
+                    .then(|| {
+                        let (size, x, y, align) =
+                            self.text_run_geometry(drawing, px, pane_w_px, vpr);
+                        let width = self.measure_drawing_text(drawing, size);
+                        let left = match align {
+                            DrawingTextHAlign::Left => x,
+                            DrawingTextHAlign::Center => x - width / 2.0,
+                            DrawingTextHAlign::Right => x - width,
+                        };
+                        let gap = TEXT_PAD * vpr;
+                        segment_box_interval(
+                            a,
+                            b,
+                            left - gap,
+                            left + width + gap,
+                            y - size * 0.6 - gap,
+                            y + size * 0.6 + gap,
+                        )
+                    })
+                    .flatten();
+                if let Some((gap_start, gap_end)) = label_gap {
+                    push_segment(
+                        a,
+                        point_on_segment(a, b, gap_start),
+                        drawing,
+                        color,
+                        vpr,
+                        out,
+                        points,
+                    );
+                    push_segment(
+                        point_on_segment(a, b, gap_end),
+                        b,
+                        drawing,
+                        color,
+                        vpr,
+                        out,
+                        points,
+                    );
+                } else {
+                    push_segment(a, b, drawing, color, vpr, out, points);
+                }
             }
             DrawingBodyGeometry::Horizontal { y, x0, x1 } => {
                 let x0 = (x0.round() as i32).clamp(0, pane_w_px);
@@ -555,7 +724,10 @@ impl ChartEngine {
             pane.top * vpr,
             pane.height * vpr,
         );
-        let (x, y, align) = ChartEngine::text_placement(drawing, &reference, size, TEXT_PAD * vpr);
+        let (x, y, align) = trend_line_text_placement(drawing, px, size, TEXT_PAD * vpr)
+            .unwrap_or_else(|| {
+                ChartEngine::text_placement(drawing, &reference, size, TEXT_PAD * vpr)
+            });
         (size, x, y, align)
     }
 
@@ -596,9 +768,10 @@ impl ChartEngine {
     }
 
     /// One drawing's text label (every tool can carry one): the placement resolves the 3×3
-    /// alignment against the tool's reference box (drawings.rs `text_box`/`text_placement`),
-    /// then emits a `Prim::Text` — x is the aligned edge, y the vertical center (the IR's
-    /// middle-baseline convention), so the run rasterizes identically on both backends. Empty
+    /// alignment against the tool's reference box, except trend lines, whose slots follow the
+    /// actual segment and whose middle slot opens a measured stroke gap. It then emits a
+    /// `Prim::Text` — x is the aligned edge, y the vertical center (the IR's middle-baseline
+    /// convention), so the run rasterizes identically on both backends. Empty
     /// text (including an empty text tool) paints nothing — the host typing-mode editor is the
     /// only empty-state UI, and leaving it without typed text removes the drawing. A text tool
     /// with a `box_color`/`box_border_color` gets its container (crisp integer-snapped

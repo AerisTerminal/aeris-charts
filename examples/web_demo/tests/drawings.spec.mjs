@@ -641,13 +641,13 @@ test("a trend line carries an aligned text label", async ({ page }) => {
   await settle_frames(page);
   const with_label = color_centroid(await capture(page), PURPLE);
   expect(with_label, "label paints above the segment").not.toBeNull();
-  const box_top = await page.evaluate(({ l0, l1, p_lo, p_hi }) => {
+  const line_mid = await page.evaluate(({ l0, l1, p_lo, p_hi }) => {
     const ys = [window.__main.price_to_coordinate(p_lo), window.__main.price_to_coordinate(p_hi)];
-    return Math.min(...ys);
+    return (ys[0] + ys[1]) / 2;
   }, s);
-  // Above the bounding box: the run's center lands at box_top − (pad + size/2), so the glyph
-  // ink's centroid is several device px above it.
-  expect(with_label.y, "above the segment's bounding box").toBeLessThan(box_top * PR - 8);
+  // Top-center is local to the actual segment, not its axis-aligned bounding box: the run sits
+  // above the line where the horizontal center slot intersects it.
+  expect(with_label.y, "above the segment at its center slot").toBeLessThan(line_mid * PR - 8);
 });
 
 test("Delete and Backspace remove the selected drawing", async ({ page }) => {

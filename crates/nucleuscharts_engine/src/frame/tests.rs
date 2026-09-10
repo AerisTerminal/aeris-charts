@@ -4995,6 +4995,72 @@ fn anchor_chart() -> ChartEngine {
     chart
 }
 
+#[test]
+fn trend_line_middle_label_follows_the_segment_and_opens_a_gap() {
+    use crate::{DrawingKind, DrawingPoint};
+
+    let mut chart = anchor_chart();
+    let id = chart
+        .add_drawing(
+            DrawingKind::TrendLine,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 0.0,
+                    price: 10.0,
+                },
+                DrawingPoint {
+                    logical: 4.0,
+                    price: 12.5,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    assert!(chart.drawing_apply_options(
+        id,
+        r##"{"color":"#ff9900","text":"Middle center","text_color":"#ff9900","text_h_align":"center","text_v_align":"middle"}"##,
+    ));
+
+    let frame = chart.build_frame();
+    let pane = &frame.panes[0];
+    let label = pane
+        .main
+        .iter()
+        .find_map(|prim| match prim {
+            Prim::Text { x, y, text, .. } if text == "Middle center" => Some((*x, *y)),
+            _ => None,
+        })
+        .expect("trend label");
+    let orange_runs = pane
+        .main
+        .iter()
+        .filter_map(|prim| match prim {
+            Prim::Polyline {
+                first_point,
+                point_count,
+                color,
+                ..
+            } if *color == Color::rgb(0xff, 0x99, 0x00) => {
+                Some(&pane.points[*first_point as usize..(*first_point + *point_count) as usize])
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(orange_runs.len(), 2, "the label must split the segment");
+    assert!(orange_runs.iter().all(|run| run.len() == 2));
+    let line_mid = {
+        let a = orange_runs[0][0];
+        let b = orange_runs[1][1];
+        [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]
+    };
+    assert!((label.0 - line_mid[0]).abs() < 0.01);
+    assert!((label.1 - line_mid[1]).abs() < 0.01);
+    assert!(orange_runs[0][1][0] < label.0);
+    assert!(orange_runs[1][0][0] > label.0);
+}
+
 /// The circle prims in the primary pane's main layer as `(cx, radius, fill)`. With the
 /// default options (no pulse, no markers, no crosshair) only selection anchors emit discs.
 fn frame_discs(chart: &mut ChartEngine) -> Vec<(f32, f32, Color)> {

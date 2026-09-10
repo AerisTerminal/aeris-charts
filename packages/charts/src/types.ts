@@ -1273,7 +1273,7 @@ export interface drawing_point {
 
 /** Horizontal label alignment shared by every tool's text (canvas `textAlign` keywords). */
 export type drawing_text_h_align = "left" | "center" | "right";
-/** Vertical label alignment shared by every tool's text: above / centered on / below the tool. */
+/** Vertical label alignment: above / inline with / below the tool at the selected horizontal slot. */
 export type drawing_text_v_align = "top" | "middle" | "bottom";
 
 /**
