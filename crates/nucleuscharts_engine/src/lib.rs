@@ -39,13 +39,12 @@ pub use alerts::{
     AlertCondition, AlertCreateRequest, AlertFrequency, AlertId, AlertLine, AlertLineStatus,
     AlertPriceScale, AlertSnapshot, MAX_ALERT_LINES,
 };
-pub(crate) use drawings::{
-    BrushCapture, DrawingDrag, DrawingHistory, DrawingRuntime, PendingDrawing,
-};
 pub use drawings::{
-    Drawing, DrawingDragPart, DrawingHit, DrawingId, DrawingKind, DrawingModifiers, DrawingPoint,
-    DrawingPriceScale, DrawingWorkStats, TextMeasureFn, DRAWING_DEFAULT_COLOR,
+    Drawing, DrawingCreationUpdate, DrawingDragPart, DrawingHit, DrawingId, DrawingKind,
+    DrawingModifiers, DrawingPoint, DrawingPriceScale, DrawingWorkStats, TextMeasureFn,
+    DRAWING_DEFAULT_COLOR,
 };
+pub(crate) use drawings::{DrawingController, DrawingDrag, DrawingHistory, DrawingRuntime};
 pub use feature_series::{
     FeatureDataPoint, FeatureSeriesKind, FeatureSeriesOptionsPatch, FeatureValue, HeatmapCell,
     StackedAreaColor,
@@ -1392,12 +1391,9 @@ pub struct ChartEngine {
     /// Bounded chart-local semantic history for committed drawing mutations. Runtime-only:
     /// persistence stores the current drawings, never this stack.
     drawing_history: DrawingHistory,
-    /// Interactive drawing creation in progress (drawings.rs): committed anchors plus a
-    /// preview point following the mouse.
-    pending_drawing: Option<PendingDrawing>,
-    /// Freehand brush capture in progress (drawings.rs): the decimated point list, committed
-    /// as-is on pointer-up.
-    brush_capture: Option<BrushCapture>,
+    /// One engine-owned drawing-tool controller: armed tool/template, anchored placement and
+    /// freehand capture. Hosts forward normalized actions and never own per-tool creation logic.
+    drawing_controller: DrawingController,
     /// The text drawing the host's typing-mode editor currently owns (drawings.rs): its
     /// placeholder/label is suppressed in the frame so the editor's preview is the only
     /// visual for it.
@@ -1499,8 +1495,7 @@ impl ChartEngine {
             drawing_drag: None,
             drawing_baselines_need_frame_refresh: false,
             drawing_history: DrawingHistory::default(),
-            pending_drawing: None,
-            brush_capture: None,
+            drawing_controller: DrawingController::default(),
             editing_drawing: None,
             hovered_text: None,
             hovered_drawing: None,

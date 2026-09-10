@@ -24,6 +24,15 @@ use nucleuscharts_render::draw_list::{LineStyle, LineType};
 
 use super::*;
 
+mod geometry;
+mod tools;
+
+pub(crate) use geometry::{resolve_drawing_geometry, DrawingBodyGeometry};
+pub(crate) use tools::{
+    DrawingHandleMode, DrawingLogicalExtent, DrawingMovementAxis, DrawingPlacement,
+    DrawingPriceExtent, DrawingStraightenMode, DRAWING_TOOL_SPECS,
+};
+
 /// Chart-unique drawing id (never reused within a chart; 0 is the "no drawing" sentinel).
 pub type DrawingId = u32;
 /// Hard cap shared by live drawing APIs and persistence so variable-point tools remain bounded.
@@ -100,26 +109,26 @@ impl DrawingBounds {
             min_price = min_price.min(point.price);
             max_price = max_price.max(point.price);
         }
-        if drawing.kind == DrawingKind::Brush {
-            let logical_pad = (max_logical - min_logical).abs() * 0.25;
-            let price_pad = (max_price - min_price).abs() * 0.25;
+        let spec = drawing.kind.spec();
+        if spec.bounds_padding_ratio > 0.0 {
+            let logical_pad = (max_logical - min_logical).abs() * spec.bounds_padding_ratio;
+            let price_pad = (max_price - min_price).abs() * spec.bounds_padding_ratio;
             min_logical -= logical_pad;
             max_logical += logical_pad;
             min_price -= price_pad;
             max_price += price_pad;
         }
-        let logical = match drawing.kind {
-            DrawingKind::HorizontalLine => LogicalBounds::Full,
-            DrawingKind::HorizontalRay => LogicalBounds::From(min_logical),
-            _ => LogicalBounds::Finite {
+        let logical = match spec.logical_extent {
+            DrawingLogicalExtent::Full => LogicalBounds::Full,
+            DrawingLogicalExtent::FromFirst => LogicalBounds::From(min_logical),
+            DrawingLogicalExtent::Finite => LogicalBounds::Finite {
                 min: min_logical,
                 max: max_logical,
             },
         };
-        let (min_price, max_price) = if drawing.kind == DrawingKind::VerticalLine {
-            (None, None)
-        } else {
-            (Some(min_price), Some(max_price))
+        let (min_price, max_price) = match spec.price_extent {
+            DrawingPriceExtent::Full => (None, None),
+            DrawingPriceExtent::Finite => (Some(min_price), Some(max_price)),
         };
         Self {
             logical,
@@ -355,75 +364,37 @@ pub enum DrawingKind {
 
 impl DrawingKind {
     pub fn from_u8(kind: u8) -> Option<Self> {
-        Some(match kind {
-            0 => Self::TrendLine,
-            1 => Self::HorizontalLine,
-            2 => Self::HorizontalRay,
-            3 => Self::VerticalLine,
-            4 => Self::Rectangle,
-            5 => Self::Text,
-            6 => Self::Brush,
-            7 => Self::Path,
-            _ => return None,
-        })
+        DRAWING_TOOL_SPECS
+            .iter()
+            .find(|spec| spec.wire_id == kind)
+            .map(|spec| spec.kind)
     }
 
     pub fn to_u8(self) -> u8 {
-        match self {
-            Self::TrendLine => 0,
-            Self::HorizontalLine => 1,
-            Self::HorizontalRay => 2,
-            Self::VerticalLine => 3,
-            Self::Rectangle => 4,
-            Self::Text => 5,
-            Self::Brush => 6,
-            Self::Path => 7,
-        }
+        self.spec().wire_id
     }
 
     /// The public snake_case wire name (TS `drawing_kind`).
     pub fn name(self) -> &'static str {
-        match self {
-            Self::TrendLine => "trend_line",
-            Self::HorizontalLine => "horizontal_line",
-            Self::HorizontalRay => "horizontal_ray",
-            Self::VerticalLine => "vertical_line",
-            Self::Rectangle => "rectangle",
-            Self::Text => "text",
-            Self::Brush => "brush",
-            Self::Path => "path",
-        }
+        self.spec().name
     }
 
     pub fn from_name(name: &str) -> Option<Self> {
-        Some(match name {
-            "trend_line" => Self::TrendLine,
-            "horizontal_line" => Self::HorizontalLine,
-            "horizontal_ray" => Self::HorizontalRay,
-            "vertical_line" => Self::VerticalLine,
-            "rectangle" => Self::Rectangle,
-            "text" => Self::Text,
-            "brush" => Self::Brush,
-            "path" => Self::Path,
-            _ => return None,
-        })
+        DRAWING_TOOL_SPECS
+            .iter()
+            .find(|spec| spec.name == name)
+            .map(|spec| spec.kind)
     }
 
     /// The number of defining anchors the kind is placed with (and its handles show). Brush and
     /// path are variable-length: this is their minimum.
     pub fn anchor_count(self) -> usize {
-        match self {
-            Self::TrendLine | Self::Rectangle | Self::Brush | Self::Path => 2,
-            Self::HorizontalLine | Self::HorizontalRay | Self::VerticalLine | Self::Text => 1,
-        }
+        self.spec().placement.minimum_points()
     }
 
     /// Whether `count` is a valid point count for a stored drawing of this kind.
     pub fn valid_point_count(self, count: usize) -> bool {
-        match self {
-            Self::Brush | Self::Path => count >= self.anchor_count(),
-            _ => count == self.anchor_count(),
-        }
+        self.spec().placement.valid_point_count(count)
     }
 }
 
@@ -605,11 +576,7 @@ impl Drawing {
             points,
             price_scale: DrawingPriceScale::Right,
             color: DRAWING_DEFAULT_COLOR.to_string(),
-            width: if kind == DrawingKind::Rectangle {
-                1.0
-            } else {
-                2.0
-            },
+            width: kind.spec().default_width,
             style: LineStyle::Solid,
             fill_color: None,
             preview_fill_color: None,
@@ -789,6 +756,9 @@ impl DrawingHistory {
 pub(crate) struct PendingDrawing {
     pub(crate) drawing: Drawing,
     pub(crate) preview: Option<DrawingPoint>,
+    /// Optional pane selected when the host armed the tool. Legacy low-level creation leaves this
+    /// `None` and binds to the first placed anchor.
+    pub(crate) pane_constraint: Option<usize>,
 }
 
 /// Freehand brush capture in progress (TradingView's brush drag, engine-owned): the points
@@ -801,6 +771,38 @@ pub(crate) struct BrushCapture {
     /// The last captured point in media px (the decimation reference).
     pub(crate) last_px: (f64, f64),
     pub(crate) options: Drawing,
+}
+
+/// An armed drawing tool and its immutable-at-arm-time defaults.  Hosts choose the tool and may
+/// update this template, but placement semantics stay engine-owned.  `pane_index` optionally pins
+/// creation to one pane (browser split-grid/tool routing); `None` binds on the first point.
+#[derive(Clone)]
+pub(crate) struct ArmedDrawingTool {
+    pub(crate) kind: DrawingKind,
+    pub(crate) pane_index: Option<usize>,
+    pub(crate) template: Drawing,
+}
+
+/// All transient drawing-tool creation state.  Keeping arming, click/multi-click placement and
+/// freehand capture under one owner prevents browser and native hosts from growing independent
+/// per-tool state machines.
+#[derive(Default)]
+pub(crate) struct DrawingController {
+    pub(crate) armed: Option<ArmedDrawingTool>,
+    pub(crate) pending: Option<PendingDrawing>,
+    pub(crate) brush: Option<BrushCapture>,
+}
+
+/// Result of forwarding a platform drawing-creation event into the engine.  Platform hosts use
+/// this only for effects they alone can perform (pointer capture, repaint scheduling, opening a
+/// text editor); tool behavior and committed state have already been resolved by the engine.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DrawingCreationUpdate {
+    pub consumed: bool,
+    pub changed: bool,
+    pub created: Option<DrawingId>,
+    pub request_text_edit: bool,
+    pub pointer_capture: bool,
 }
 
 /// Minimum spacing between captured brush points in media px (input decimation — anything
@@ -1047,6 +1049,7 @@ impl Drawing {
 /// bitmap px at render): the tool's bounding geometry the 3×3 alignment resolves against.
 /// Horizontal lines span the pane (or the ray's extent); a vertical line spans the pane's
 /// height; the text tool's box degenerates to its anchor point.
+#[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct TextBox {
     pub(crate) left: f64,
     pub(crate) right: f64,
@@ -1061,13 +1064,13 @@ impl ChartEngine {
             committed_changed |= drawing.rebase_logical(mapping);
         }
         let mut transient_changed = false;
-        if let Some(pending) = self.pending_drawing.as_mut() {
+        if let Some(pending) = self.drawing_controller.pending.as_mut() {
             transient_changed |= pending.drawing.rebase_logical(mapping);
             if let Some(preview) = pending.preview.as_mut() {
                 transient_changed |= rebase_points(std::slice::from_mut(preview), mapping);
             }
         }
-        if let Some(capture) = self.brush_capture.as_mut() {
+        if let Some(capture) = self.drawing_controller.brush.as_mut() {
             transient_changed |= rebase_points(&mut capture.points, mapping);
             transient_changed |= capture.options.rebase_logical(mapping);
         }
@@ -1108,11 +1111,11 @@ impl ChartEngine {
             drag.start_px = start_px;
         }
 
-        let brush_px = self
-            .brush_capture
-            .as_ref()
-            .and_then(|capture| self.drawing_to_px(capture.pane_index, *capture.points.last()?));
-        if let (Some(capture), Some(last_px)) = (self.brush_capture.as_mut(), brush_px) {
+        let brush_px =
+            self.drawing_controller.brush.as_ref().and_then(|capture| {
+                self.drawing_to_px(capture.pane_index, *capture.points.last()?)
+            });
+        if let (Some(capture), Some(last_px)) = (self.drawing_controller.brush.as_mut(), brush_px) {
             capture.last_px = last_px;
         }
     }
@@ -1214,8 +1217,8 @@ impl ChartEngine {
             return false;
         };
         self.invalidate_frame_drawings();
-        self.pending_drawing = None;
-        self.brush_capture = None;
+        self.drawing_controller.pending = None;
+        self.drawing_controller.brush = None;
         self.apply_drawing_command(&command, true);
         self.drawing_history.redo.push(command);
         true
@@ -1227,8 +1230,8 @@ impl ChartEngine {
             return false;
         };
         self.invalidate_frame_drawings();
-        self.pending_drawing = None;
-        self.brush_capture = None;
+        self.drawing_controller.pending = None;
+        self.drawing_controller.brush = None;
         self.apply_drawing_command(&command, false);
         self.drawing_history.undo.push(command);
         true
@@ -1415,8 +1418,8 @@ impl ChartEngine {
         let (fx, fy) = self.drawing_to_px_for(pane_index, price_scale, fixed)?;
         let (dx, dy) = self.drawing_to_px_for(pane_index, price_scale, dragged)?;
         let (mut vx, mut vy) = (dx - fx, dy - fy);
-        match kind {
-            DrawingKind::TrendLine => {
+        match kind.spec().straighten {
+            DrawingStraightenMode::Segment45 => {
                 let distance = vx.hypot(vy);
                 if distance == 0.0 {
                     return Some(dragged);
@@ -1427,12 +1430,12 @@ impl ChartEngine {
                 vx = distance * snapped.cos();
                 vy = distance * snapped.sin();
             }
-            DrawingKind::Rectangle => {
+            DrawingStraightenMode::Square => {
                 let side = vx.abs().max(vy.abs());
                 vx = if vx < 0.0 { -side } else { side };
                 vy = if vy < 0.0 { -side } else { side };
             }
-            _ => return Some(dragged),
+            DrawingStraightenMode::None => return Some(dragged),
         }
         self.drawing_from_px_for(pane_index, price_scale, fx + vx, fy + vy)
     }
@@ -1787,62 +1790,9 @@ impl ChartEngine {
         pane_top: f64,
         pane_h: f64,
     ) -> TextBox {
-        match kind {
-            DrawingKind::HorizontalLine => TextBox {
-                left: 0.0,
-                right: pane_w,
-                top: px[0].1,
-                bottom: px[0].1,
-            },
-            DrawingKind::HorizontalRay => TextBox {
-                left: px[0].0,
-                right: pane_w,
-                top: px[0].1,
-                bottom: px[0].1,
-            },
-            DrawingKind::VerticalLine => TextBox {
-                left: px[0].0,
-                right: px[0].0,
-                top: pane_top,
-                bottom: pane_top + pane_h,
-            },
-            DrawingKind::TrendLine | DrawingKind::Rectangle => {
-                let (a, b) = (px[0], px[1]);
-                TextBox {
-                    left: a.0.min(b.0),
-                    right: a.0.max(b.0),
-                    top: a.1.min(b.1),
-                    bottom: a.1.max(b.1),
-                }
-            }
-            DrawingKind::Brush | DrawingKind::Path => {
-                // The whole stroke/path's bounding box.
-                let (mut left, mut right, mut top, mut bottom) = (
-                    f64::INFINITY,
-                    f64::NEG_INFINITY,
-                    f64::INFINITY,
-                    f64::NEG_INFINITY,
-                );
-                for &(x, y) in px {
-                    left = left.min(x);
-                    right = right.max(x);
-                    top = top.min(y);
-                    bottom = bottom.max(y);
-                }
-                TextBox {
-                    left,
-                    right,
-                    top,
-                    bottom,
-                }
-            }
-            DrawingKind::Text => TextBox {
-                left: px[0].0,
-                right: px[0].0,
-                top: px[0].1,
-                bottom: px[0].1,
-            },
-        }
+        resolve_drawing_geometry(kind, px, pane_w, pane_top, pane_h, 1.0, 1.0)
+            .map(|geometry| geometry.text_box)
+            .unwrap_or_default()
     }
 
     /// The label's draw anchor `(x, y_center)` and horizontal alignment in the caller's units,
@@ -2253,44 +2203,46 @@ impl ChartEngine {
         if let Some(selected) = self.selected_drawing {
             if let Some(drawing) = self.drawing(selected) {
                 if drawing.pane_index == pane {
-                    if drawing.kind == DrawingKind::Brush && drawing.points.len() > 2 {
-                        for &index in &[0, drawing.points.len() - 1] {
-                            if let Some((ax, ay)) = self.drawing_to_px_for(
-                                drawing.pane_index,
-                                drawing.price_scale,
-                                drawing.points[index],
-                            ) {
-                                if (x - ax).hypot(y - ay) <= profile.drawing_anchor_radius {
-                                    return Some(DrawingHit {
-                                        id: selected,
-                                        part: DrawingDragPart::Anchor(index),
-                                        cursor: "pointer",
-                                    });
+                    if let Some(px) = self.drawing_px(drawing) {
+                        match drawing.kind.spec().handles {
+                            DrawingHandleMode::None => {}
+                            DrawingHandleMode::Endpoints if !px.is_empty() => {
+                                let last = px.len() - 1;
+                                for index in [0, last] {
+                                    let (ax, ay) = px[index];
+                                    if (x - ax).hypot(y - ay) <= profile.drawing_anchor_radius {
+                                        return Some(DrawingHit {
+                                            id: selected,
+                                            part: DrawingDragPart::Anchor(index),
+                                            cursor: "pointer",
+                                        });
+                                    }
                                 }
                             }
-                        }
-                    } else if let Some(px) = self.drawing_px(drawing) {
-                        if drawing.kind == DrawingKind::Rectangle && px.len() == 2 {
-                            let anchors = Self::rectangle_anchors(&px);
-                            for (index, &(ax, ay)) in anchors.iter().enumerate() {
-                                if (x - ax).hypot(y - ay) <= profile.drawing_anchor_radius {
-                                    return Some(DrawingHit {
-                                        id: selected,
-                                        part: DrawingDragPart::Anchor(index),
-                                        cursor: Self::rectangle_anchor_cursor(index),
-                                    });
+                            DrawingHandleMode::RectangleBounds if px.len() == 2 => {
+                                let anchors = Self::rectangle_anchors(&px);
+                                for (index, &(ax, ay)) in anchors.iter().enumerate() {
+                                    if (x - ax).hypot(y - ay) <= profile.drawing_anchor_radius {
+                                        return Some(DrawingHit {
+                                            id: selected,
+                                            part: DrawingDragPart::Anchor(index),
+                                            cursor: Self::rectangle_anchor_cursor(index),
+                                        });
+                                    }
                                 }
                             }
-                        } else {
-                            for (index, &(ax, ay)) in px.iter().enumerate() {
-                                if (x - ax).hypot(y - ay) <= profile.drawing_anchor_radius {
-                                    return Some(DrawingHit {
-                                        id: selected,
-                                        part: DrawingDragPart::Anchor(index),
-                                        cursor: "pointer",
-                                    });
+                            DrawingHandleMode::Anchors | DrawingHandleMode::Endpoints => {
+                                for (index, &(ax, ay)) in px.iter().enumerate() {
+                                    if (x - ax).hypot(y - ay) <= profile.drawing_anchor_radius {
+                                        return Some(DrawingHit {
+                                            id: selected,
+                                            part: DrawingDragPart::Anchor(index),
+                                            cursor: "pointer",
+                                        });
+                                    }
                                 }
                             }
+                            DrawingHandleMode::RectangleBounds => {}
                         }
                     }
                 }
@@ -2359,23 +2311,44 @@ impl ChartEngine {
     ) -> bool {
         let hit_tolerance = profile.drawing_stroke_tolerance;
         let tolerance = drawing.width / 2.0 + hit_tolerance;
-        match drawing.kind {
-            DrawingKind::TrendLine => {
-                let (a, b) = (px[0], px[1]);
+        let Some(pane) = self.panes.get(drawing.pane_index) else {
+            return false;
+        };
+        let Some(geometry) = resolve_drawing_geometry(
+            drawing.kind,
+            px,
+            self.pane_w,
+            pane.top,
+            pane.height,
+            drawing.width,
+            1.0,
+        ) else {
+            return false;
+        };
+        match geometry.body {
+            DrawingBodyGeometry::Segment { a, b } => {
                 distance_to_segment(x, y, a.0, a.1, b.0, b.1) <= tolerance
             }
-            DrawingKind::HorizontalLine => (y - px[0].1).abs() <= tolerance,
-            DrawingKind::HorizontalRay => {
-                (y - px[0].1).abs() <= tolerance && x >= px[0].0 - hit_tolerance
+            DrawingBodyGeometry::Horizontal { y: line_y, x0, x1 } => {
+                (y - line_y).abs() <= tolerance
+                    && x1 >= x0
+                    && x >= x0 - hit_tolerance
+                    && x <= x1 + hit_tolerance
             }
-            DrawingKind::VerticalLine => (x - px[0].0).abs() <= tolerance,
-            DrawingKind::Rectangle => {
+            DrawingBodyGeometry::Vertical { x: line_x, y0, y1 } => {
+                (x - line_x).abs() <= tolerance
+                    && y >= y0.min(y1) - hit_tolerance
+                    && y <= y0.max(y1) + hit_tolerance
+            }
+            DrawingBodyGeometry::Rectangle {
+                left,
+                right,
+                top,
+                bottom,
+            } => {
                 // TradingView: the fill is a drag surface only while the drawing is SELECTED
                 // (a border click selects first); unselected, the body hits just the band
                 // around the border frame and the middle pans the chart.
-                let (a, b) = (px[0], px[1]);
-                let (left, right) = (a.0.min(b.0), a.0.max(b.0));
-                let (top, bottom) = (a.1.min(b.1), a.1.max(b.1));
                 let within_x = x >= left - tolerance && x <= right + tolerance;
                 let within_y = y >= top - tolerance && y <= bottom + tolerance;
                 if !within_x || !within_y {
@@ -2388,28 +2361,16 @@ impl ChartEngine {
                 let near_h_edge = (y - top).abs() <= tolerance || (y - bottom).abs() <= tolerance;
                 near_v_edge || near_h_edge
             }
-            DrawingKind::Brush => {
-                // The stroke the user sees IS the smooth curve: test against the same curved
-                // geometry the series line hit test uses (hit_test.rs `hit_test_line_series`
-                // with LineType::Curved), so a hit lands exactly on the painted stroke.
-                crate::hit_test::hit_test_line_series(
-                    px,
-                    x,
-                    y,
-                    LineType::Curved,
-                    drawing.width,
-                    None,
-                    self.time_scale.bar_spacing(),
-                    hit_tolerance,
-                )
-                .is_some()
-            }
-            DrawingKind::Path => {
+            DrawingBodyGeometry::Polyline {
+                points,
+                line_type,
+                terminal,
+            } => {
                 if crate::hit_test::hit_test_line_series(
-                    px,
+                    points,
                     x,
                     y,
-                    LineType::Simple,
+                    line_type,
                     drawing.width,
                     None,
                     self.time_scale.bar_spacing(),
@@ -2419,11 +2380,11 @@ impl ChartEngine {
                 {
                     return true;
                 }
-                let Some(arrow) = path_arrow_points(px, drawing.width, 1.0) else {
+                let Some(terminal) = terminal else {
                     return false;
                 };
                 crate::hit_test::hit_test_line_series(
-                    &arrow,
+                    &terminal,
                     x,
                     y,
                     LineType::Simple,
@@ -2434,15 +2395,14 @@ impl ChartEngine {
                 )
                 .is_some()
             }
-            DrawingKind::Text => {
+            DrawingBodyGeometry::Empty => {
                 // The click/hover target is the interaction-chrome box (the label run while
                 // non-empty, else a one-em caret box — empty text paints nothing on the chart)
                 // plus the editing chrome's border+padding, so the painted hover/focus border
                 // is itself hittable.
                 let layout = &self.options.get().layout;
                 let size = drawing.resolved_text_size(layout.font_size);
-                let reference =
-                    Self::text_box(drawing.kind, px, self.pane_w, 0.0, self.pane_h.max(1.0));
+                let reference = geometry.text_box;
                 let (tx, ty, align) = Self::text_placement(drawing, &reference, size, TEXT_PAD);
                 let width = self.measure_drawing_text(drawing, size);
                 let height = size * 1.2;
@@ -2534,7 +2494,10 @@ impl ChartEngine {
         };
         match part {
             DrawingDragPart::Anchor(index) => {
-                if kind == DrawingKind::Rectangle && points.len() == 2 && index < 8 {
+                if kind.spec().handles == DrawingHandleMode::RectangleBounds
+                    && points.len() == 2
+                    && index < 8
+                {
                     // Rectangle anchors (drawings.rs `rectangle_anchors` clock order): a corner
                     // drag moves that corner (Shift squares against the fixed opposite corner),
                     // an edge-midpoint drag moves only that edge. Every slot KEEPS its corner
@@ -2620,7 +2583,7 @@ impl ChartEngine {
                     if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
                         drawing.points = points;
                     }
-                    if kind == DrawingKind::Brush {
+                    if kind.spec().placement.is_freehand() {
                         self.invalidate_brush_drag_runtime(id);
                     } else {
                         self.update_drawing_runtime(id);
@@ -2630,11 +2593,7 @@ impl ChartEngine {
                 if index >= points.len() {
                     return;
                 }
-                let (dx, dy) = match kind {
-                    DrawingKind::HorizontalLine => (0.0, dy),
-                    DrawingKind::VerticalLine => (dx, 0.0),
-                    _ => (dx, dy),
-                };
+                let (dx, dy) = kind.spec().movement_axis.constrain(dx, dy);
                 let Some(mut point) = convert(index, dx, dy) else {
                     return;
                 };
@@ -2646,16 +2605,16 @@ impl ChartEngine {
                 }
                 if modifiers.magnet {
                     let snapped = self.magnet_snap_point_at(pane, price_scale, x, y, point);
-                    point = match kind {
-                        DrawingKind::HorizontalLine => DrawingPoint {
+                    point = match kind.spec().movement_axis {
+                        DrawingMovementAxis::VerticalOnly => DrawingPoint {
                             price: snapped.price,
                             ..point
                         },
-                        DrawingKind::VerticalLine => DrawingPoint {
+                        DrawingMovementAxis::HorizontalOnly => DrawingPoint {
                             logical: snapped.logical,
                             ..point
                         },
-                        _ => snapped,
+                        DrawingMovementAxis::Both => snapped,
                     };
                 }
                 if modifiers.straighten && points.len() == 2 {
@@ -2682,11 +2641,7 @@ impl ChartEngine {
                 };
                 let single_anchor = points.len() == 1;
                 for (index, slot) in points.iter_mut().enumerate() {
-                    let (dx, dy) = match kind {
-                        DrawingKind::HorizontalLine => (0.0, dy),
-                        DrawingKind::VerticalLine => (dx, 0.0),
-                        _ => (dx, dy),
-                    };
+                    let (dx, dy) = kind.spec().movement_axis.constrain(dx, dy);
                     let Some(mut point) = convert(index, dx, dy) else {
                         return;
                     };
@@ -2701,16 +2656,16 @@ impl ChartEngine {
                     // line snaps to bar centers, a horizontal one to the nearest rendered price).
                     if modifiers.magnet && single_anchor {
                         let snapped = self.magnet_snap_point_at(pane, price_scale, x, y, point);
-                        point = match kind {
-                            DrawingKind::HorizontalLine => DrawingPoint {
+                        point = match kind.spec().movement_axis {
+                            DrawingMovementAxis::VerticalOnly => DrawingPoint {
                                 price: snapped.price,
                                 ..point
                             },
-                            DrawingKind::VerticalLine => DrawingPoint {
+                            DrawingMovementAxis::HorizontalOnly => DrawingPoint {
                                 logical: snapped.logical,
                                 ..point
                             },
-                            _ => snapped,
+                            DrawingMovementAxis::Both => snapped,
                         };
                     }
                     *slot = point;
@@ -2720,7 +2675,7 @@ impl ChartEngine {
         if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
             drawing.points = points;
         }
-        if kind == DrawingKind::Brush {
+        if kind.spec().placement.is_freehand() {
             self.invalidate_brush_drag_runtime(id);
         } else {
             self.update_drawing_runtime(id);
@@ -2808,6 +2763,342 @@ impl ChartEngine {
         true
     }
 
+    // --- drawing-tool controller --------------------------------------------------------------
+
+    fn drawing_template(kind: DrawingKind, options_json: Option<&str>) -> Option<Drawing> {
+        let mut template = Drawing::new(0, kind, 0, Vec::new());
+        if let Some(json) = options_json {
+            let patch = serde_json::from_str::<DrawingPatch>(json).ok()?;
+            template.apply_patch(patch);
+        }
+        Some(template)
+    }
+
+    /// Arm or disarm the chart's canonical drawing tool. The host may optionally constrain the
+    /// next drawing to one pane; placement, sequence completion, freehand capture and one-shot
+    /// disarming remain engine-owned.
+    pub fn set_drawing_tool(
+        &mut self,
+        kind: Option<DrawingKind>,
+        options_json: Option<&str>,
+        pane_index: Option<usize>,
+    ) -> bool {
+        let template = match kind {
+            Some(kind) => match Self::drawing_template(kind, options_json) {
+                Some(template) => Some(template),
+                None => return false,
+            },
+            None => None,
+        };
+        self.invalidate_frame_drawings();
+        self.invalidate_frame_overlay();
+        self.drawing_controller.pending = None;
+        self.drawing_controller.brush = None;
+        self.drawing_controller.armed = match (kind, template) {
+            (Some(kind), Some(template)) => Some(ArmedDrawingTool {
+                kind,
+                pane_index,
+                template,
+            }),
+            _ => None,
+        };
+        true
+    }
+
+    pub fn active_drawing_tool(&self) -> Option<DrawingKind> {
+        self.drawing_controller
+            .armed
+            .as_ref()
+            .map(|armed| armed.kind)
+    }
+
+    pub fn active_drawing_tool_pane(&self) -> Option<usize> {
+        self.drawing_controller
+            .armed
+            .as_ref()
+            .and_then(|armed| armed.pane_index)
+    }
+
+    /// Whether the active tool currently owns a captured pointer stream. Hosts use this only to
+    /// route subsequent normalized samples and platform capture lifecycle; the concrete placement
+    /// mode remains private to the engine catalog.
+    pub fn drawing_tool_capture_active(&self) -> bool {
+        self.drawing_controller.brush.is_some()
+    }
+
+    /// Whether the armed tool is an explicitly finished variable sequence. Hosts use this for
+    /// generic double-activation and Backspace routing without naming a concrete tool kind.
+    pub fn drawing_tool_sequence_active(&self) -> bool {
+        self.active_drawing_tool()
+            .is_some_and(|kind| kind.spec().placement.is_sequence())
+    }
+
+    /// Whether a newly created drawing requests the platform text editor. The editor remains a
+    /// host surface, while the decision to enter it is part of the canonical tool definition.
+    pub fn drawing_requests_text_edit(&self, id: DrawingId) -> bool {
+        self.drawing(id)
+            .is_some_and(|drawing| drawing.kind.spec().requests_text_editor)
+    }
+
+    /// Merge options into the armed template and any in-flight creation. Browser and native
+    /// toolbars both use this path, keeping preview and committed style identical.
+    pub fn drawing_tool_apply_options(&mut self, json: &str) -> bool {
+        let Ok(patch) = serde_json::from_str::<DrawingPatch>(json) else {
+            return false;
+        };
+        let Some(armed) = self.drawing_controller.armed.as_mut() else {
+            return false;
+        };
+        armed.template.apply_patch(patch.clone());
+        if let Some(pending) = self.drawing_controller.pending.as_mut() {
+            pending.drawing.apply_patch(patch.clone());
+        }
+        if let Some(capture) = self.drawing_controller.brush.as_mut() {
+            capture.options.apply_patch(patch);
+        }
+        self.invalidate_frame_drawings();
+        true
+    }
+
+    fn begin_pending_from_armed(&mut self) -> bool {
+        let Some(armed) = self.drawing_controller.armed.clone() else {
+            return false;
+        };
+        if armed.kind.spec().placement.is_freehand() {
+            return false;
+        }
+        let mut drawing = armed.template;
+        drawing.points.clear();
+        self.drawing_controller.pending = Some(PendingDrawing {
+            drawing,
+            preview: None,
+            pane_constraint: armed.pane_index,
+        });
+        true
+    }
+
+    fn creation_update_for_commit(
+        &mut self,
+        kind: DrawingKind,
+        id: DrawingId,
+        pointer_capture: bool,
+    ) -> DrawingCreationUpdate {
+        if id == 0 {
+            return DrawingCreationUpdate {
+                consumed: true,
+                changed: pointer_capture,
+                pointer_capture,
+                ..DrawingCreationUpdate::default()
+            };
+        }
+        self.drawing_controller.armed = None;
+        DrawingCreationUpdate {
+            consumed: true,
+            changed: true,
+            created: Some(id),
+            request_text_edit: kind.spec().requests_text_editor,
+            pointer_capture,
+        }
+    }
+
+    /// Forward pointer press while a drawing tool is armed. Placement classes decide what a
+    /// press means; hosts do not branch on concrete tool kinds.
+    pub fn drawing_tool_pointer_down(
+        &mut self,
+        x: f64,
+        y: f64,
+        modifiers: DrawingModifiers,
+    ) -> DrawingCreationUpdate {
+        let Some(armed) = self.drawing_controller.armed.clone() else {
+            return DrawingCreationUpdate::default();
+        };
+        if armed
+            .pane_index
+            .is_some_and(|pane| self.pane_at_y(y) != Some(pane))
+        {
+            return DrawingCreationUpdate {
+                consumed: true,
+                ..DrawingCreationUpdate::default()
+            };
+        }
+        match armed.kind.spec().placement {
+            DrawingPlacement::Freehand { .. } => {
+                let started =
+                    self.brush_create_start_with_template(armed.template, armed.pane_index, x, y);
+                DrawingCreationUpdate {
+                    consumed: true,
+                    changed: started,
+                    pointer_capture: started,
+                    ..DrawingCreationUpdate::default()
+                }
+            }
+            placement if placement.places_on_press() => {
+                if self.drawing_controller.pending.is_none() && !self.begin_pending_from_armed() {
+                    return DrawingCreationUpdate {
+                        consumed: true,
+                        ..DrawingCreationUpdate::default()
+                    };
+                }
+                let result = self.drawing_create_click(x, y, modifiers);
+                let id = u32::try_from(result).unwrap_or(0);
+                self.creation_update_for_commit(armed.kind, id, false)
+            }
+            _ => DrawingCreationUpdate {
+                consumed: true,
+                ..DrawingCreationUpdate::default()
+            },
+        }
+    }
+
+    /// Forward pointer movement. Only freehand placement samples an active drag; anchored tools
+    /// update the same pending preview that frame construction consumes.
+    pub fn drawing_tool_pointer_move(
+        &mut self,
+        x: f64,
+        y: f64,
+        modifiers: DrawingModifiers,
+        pressed: bool,
+    ) -> DrawingCreationUpdate {
+        let Some(kind) = self.active_drawing_tool() else {
+            return DrawingCreationUpdate::default();
+        };
+        if kind.spec().placement.is_freehand() {
+            let changed = pressed && self.brush_create_add(x, y);
+            let active = self.brush_create_active();
+            return DrawingCreationUpdate {
+                consumed: active,
+                changed,
+                pointer_capture: active,
+                ..DrawingCreationUpdate::default()
+            };
+        }
+        if self.drawing_create_active() {
+            self.drawing_create_move(x, y, modifiers);
+            return DrawingCreationUpdate {
+                consumed: true,
+                changed: true,
+                ..DrawingCreationUpdate::default()
+            };
+        }
+        DrawingCreationUpdate {
+            consumed: true,
+            ..DrawingCreationUpdate::default()
+        }
+    }
+
+    /// Forward pointer release. Freehand commits here; other placement classes wait for the
+    /// platform's click/tap activation so click-cancellation rules remain host-native.
+    pub fn drawing_tool_pointer_up(
+        &mut self,
+        x: f64,
+        y: f64,
+        _modifiers: DrawingModifiers,
+    ) -> DrawingCreationUpdate {
+        let Some(kind) = self.active_drawing_tool() else {
+            return DrawingCreationUpdate::default();
+        };
+        if !kind.spec().placement.is_freehand() || !self.brush_create_active() {
+            return DrawingCreationUpdate {
+                consumed: true,
+                ..DrawingCreationUpdate::default()
+            };
+        }
+        // The release point is part of canonical freehand semantics. Hosts may coalesce motion at
+        // different cadences, but the final pointer position must never depend on whether a last
+        // move event happened to arrive before pointer-up.
+        let changed = self.brush_create_add(x, y);
+        let id = self.brush_create_end();
+        let mut update = self.creation_update_for_commit(kind, id, false);
+        update.changed |= changed;
+        update
+    }
+
+    /// Forward one click/tap activation. Fixed-anchor and sequence tools share this path;
+    /// freehand and press-anchored tools have already consumed their pointer lifecycle.
+    pub fn drawing_tool_activate(
+        &mut self,
+        x: f64,
+        y: f64,
+        modifiers: DrawingModifiers,
+    ) -> DrawingCreationUpdate {
+        let Some(armed) = self.drawing_controller.armed.as_ref() else {
+            return DrawingCreationUpdate::default();
+        };
+        let kind = armed.kind;
+        if armed
+            .pane_index
+            .is_some_and(|pane| self.pane_at_y(y) != Some(pane))
+        {
+            return DrawingCreationUpdate {
+                consumed: true,
+                ..DrawingCreationUpdate::default()
+            };
+        }
+        match kind.spec().placement {
+            DrawingPlacement::ClickAnchors { .. } | DrawingPlacement::MultiClick { .. } => {}
+            _ => {
+                return DrawingCreationUpdate {
+                    consumed: true,
+                    ..DrawingCreationUpdate::default()
+                }
+            }
+        }
+        if self.drawing_controller.pending.is_none() && !self.begin_pending_from_armed() {
+            return DrawingCreationUpdate {
+                consumed: true,
+                ..DrawingCreationUpdate::default()
+            };
+        }
+        let result = self.drawing_create_click(x, y, modifiers);
+        let id = u32::try_from(result).unwrap_or(0);
+        if id > 0 {
+            return self.creation_update_for_commit(kind, id, false);
+        }
+        DrawingCreationUpdate {
+            consumed: true,
+            changed: true,
+            ..DrawingCreationUpdate::default()
+        }
+    }
+
+    /// Explicitly finish a variable-sequence tool (double-click/Enter). Other placement modes are
+    /// no-ops, so hosts never branch on a concrete drawing kind.
+    pub fn drawing_tool_finish(&mut self) -> DrawingCreationUpdate {
+        let Some(kind) = self.active_drawing_tool() else {
+            return DrawingCreationUpdate::default();
+        };
+        if !kind.spec().placement.is_sequence() {
+            return DrawingCreationUpdate::default();
+        }
+        let id = self.drawing_create_finish();
+        self.creation_update_for_commit(kind, id, false)
+    }
+
+    pub fn drawing_tool_pop_anchor(&mut self) -> bool {
+        self.active_drawing_tool()
+            .is_some_and(|kind| kind.spec().placement.is_sequence())
+            && self.drawing_create_pop_anchor()
+    }
+
+    /// Cancel creation and disarm the tool as one atomic controller operation.
+    pub fn cancel_drawing_tool(&mut self) {
+        self.invalidate_frame_drawings();
+        self.invalidate_frame_overlay();
+        self.drawing_controller.armed = None;
+        self.drawing_controller.pending = None;
+        self.drawing_controller.brush = None;
+    }
+
+    /// Abort only the in-flight placement/capture while leaving the currently armed tool intact.
+    /// Platform capture loss and gesture cancellation use this; explicit Escape/tool deselection
+    /// uses [`ChartEngine::cancel_drawing_tool`] instead.
+    pub fn cancel_drawing_creation(&mut self) {
+        self.invalidate_frame_drawings();
+        self.invalidate_frame_overlay();
+        self.drawing_controller.pending = None;
+        self.drawing_controller.brush = None;
+    }
+
     // --- interactive creation (click-place anchors, move previews) ---
 
     /// Arm interactive creation of `kind` (the reference rectangle-drawing-tool's
@@ -2829,9 +3120,10 @@ impl ChartEngine {
         if let Some(patch) = patch {
             drawing.apply_patch(patch);
         }
-        self.pending_drawing = Some(PendingDrawing {
+        self.drawing_controller.pending = Some(PendingDrawing {
             drawing,
             preview: None,
+            pane_constraint: None,
         });
         self.invalidate_frame_overlay();
         true
@@ -2846,11 +3138,13 @@ impl ChartEngine {
     /// left selected, TradingView-style.
     pub fn drawing_create_click(&mut self, x: f64, y: f64, modifiers: DrawingModifiers) -> i64 {
         self.invalidate_frame_drawings();
-        let Some(pending) = &self.pending_drawing else {
+        let Some(pending) = &self.drawing_controller.pending else {
             return 0;
         };
         let price_scale = pending.drawing.price_scale;
-        let bound_pane = (!pending.drawing.points.is_empty()).then_some(pending.drawing.pane_index);
+        let bound_pane = pending
+            .pane_constraint
+            .or_else(|| (!pending.drawing.points.is_empty()).then_some(pending.drawing.pane_index));
         let pane = match bound_pane {
             Some(pane) => pane,
             None => match self.pane_at_y(y) {
@@ -2865,7 +3159,7 @@ impl ChartEngine {
             return -1;
         };
         let (anchor_count, kind, fixed, snap_time_to_data) = {
-            let Some(pending) = &self.pending_drawing else {
+            let Some(pending) = &self.drawing_controller.pending else {
                 return 0;
             };
             (
@@ -2892,29 +3186,30 @@ impl ChartEngine {
                 }
             }
         }
-        let Some(pending) = self.pending_drawing.as_mut() else {
+        let Some(pending) = self.drawing_controller.pending.as_mut() else {
             return -1;
         };
         pending.drawing.pane_index = pane;
         // Native and browser double-click sequences both deliver the endpoint click twice. A
         // zero-length final segment has no semantic value, so retain one vertex before finish.
-        if kind == DrawingKind::Path && pending.drawing.points.last() == Some(&point) {
+        if kind.spec().placement.is_sequence() && pending.drawing.points.last() == Some(&point) {
             pending.preview = None;
             return -1;
         }
-        if kind == DrawingKind::Path && pending.drawing.points.len() == MAX_DRAWING_POINTS {
+        if kind.spec().placement.is_sequence() && pending.drawing.points.len() == MAX_DRAWING_POINTS
+        {
             return -1;
         }
         pending.drawing.points.push(point);
         pending.preview = None;
-        if kind == DrawingKind::Path {
+        if kind.spec().placement.is_sequence() {
             return -1;
         }
         if pending.drawing.points.len() < anchor_count {
             pending.preview = Some(point);
             return -1;
         }
-        let Some(pending) = self.pending_drawing.take() else {
+        let Some(pending) = self.drawing_controller.pending.take() else {
             return -1;
         };
         i64::from(self.commit_pending_drawing(pending))
@@ -2941,18 +3236,22 @@ impl ChartEngine {
     /// Commit an active multi-click path. Enter and double-click route here after at least two
     /// vertices have been placed. Other tools and degenerate paths are left unchanged.
     pub fn drawing_create_finish(&mut self) -> DrawingId {
-        let ready = self.pending_drawing.as_ref().is_some_and(|pending| {
-            pending.drawing.kind == DrawingKind::Path
-                && pending
-                    .drawing
-                    .kind
-                    .valid_point_count(pending.drawing.points.len())
-        });
+        let ready = self
+            .drawing_controller
+            .pending
+            .as_ref()
+            .is_some_and(|pending| {
+                pending.drawing.kind.spec().placement.is_sequence()
+                    && pending
+                        .drawing
+                        .kind
+                        .valid_point_count(pending.drawing.points.len())
+            });
         if !ready {
             return 0;
         }
         self.invalidate_frame_drawings();
-        let Some(pending) = self.pending_drawing.take() else {
+        let Some(pending) = self.drawing_controller.pending.take() else {
             return 0;
         };
         self.commit_pending_drawing(pending)
@@ -2961,10 +3260,12 @@ impl ChartEngine {
     /// Remove the latest committed vertex from an active multi-click path. The live preview is
     /// retained so the next segment continues following the pointer.
     pub fn drawing_create_pop_anchor(&mut self) -> bool {
-        let Some(pending) = self.pending_drawing.as_mut() else {
+        let Some(pending) = self.drawing_controller.pending.as_mut() else {
             return false;
         };
-        if pending.drawing.kind != DrawingKind::Path || pending.drawing.points.pop().is_none() {
+        if !pending.drawing.kind.spec().placement.is_sequence()
+            || pending.drawing.points.pop().is_none()
+        {
             return false;
         }
         self.invalidate_frame_drawings();
@@ -2975,22 +3276,26 @@ impl ChartEngine {
     /// `modifiers` snaps the preview exactly as a click would snap the placed anchor.
     pub fn drawing_create_move(&mut self, x: f64, y: f64, modifiers: DrawingModifiers) {
         self.invalidate_frame_drawings();
-        let Some(pending) = &self.pending_drawing else {
+        let Some(pending) = &self.drawing_controller.pending else {
             return;
         };
         let unplaced = pending.drawing.points.is_empty();
         let bound_pane = pending.drawing.pane_index;
+        let pane_constraint = pending.pane_constraint;
         let price_scale = pending.drawing.price_scale;
         // With nothing placed yet the preview follows the cursor in whichever pane it is over;
         // afterwards it stays bound to the first click's pane.
         let pane = if unplaced {
-            match self.pane_at_y(y) {
-                Some(pane) => pane,
-                None => return,
+            match pane_constraint.or_else(|| self.pane_at_y(y)) {
+                Some(pane) if self.pane_at_y(y) == Some(pane) => pane,
+                _ => return,
             }
         } else {
             bound_pane
         };
+        if self.pane_at_y(y) != Some(pane) {
+            return;
+        }
         let Some(mut point) = self.drawing_from_px_for(pane, price_scale, x, y) else {
             return;
         };
@@ -3004,7 +3309,7 @@ impl ChartEngine {
             point = self.magnet_snap_point_at(pane, price_scale, x, y, point);
         }
         if modifiers.straighten {
-            if let Some(pending) = &self.pending_drawing {
+            if let Some(pending) = &self.drawing_controller.pending {
                 if let Some(&fixed) = pending.drawing.points.last() {
                     if let Some(snapped) =
                         self.straighten_point(pane, price_scale, pending.drawing.kind, fixed, point)
@@ -3014,7 +3319,7 @@ impl ChartEngine {
                 }
             }
         }
-        if let Some(pending) = self.pending_drawing.as_mut() {
+        if let Some(pending) = self.drawing_controller.pending.as_mut() {
             pending.drawing.pane_index = pane;
             pending.preview = Some(point);
         }
@@ -3030,7 +3335,10 @@ impl ChartEngine {
         let Ok(patch) = serde_json::from_str::<DrawingPatch>(json) else {
             return false;
         };
-        match (&mut self.pending_drawing, &mut self.brush_capture) {
+        match (
+            &mut self.drawing_controller.pending,
+            &mut self.drawing_controller.brush,
+        ) {
             (Some(pending), Some(capture)) => {
                 pending.drawing.apply_patch(patch.clone());
                 capture.options.apply_patch(patch);
@@ -3046,41 +3354,41 @@ impl ChartEngine {
     pub fn drawing_create_cancel(&mut self) {
         self.invalidate_frame_drawings();
         self.invalidate_frame_overlay();
-        self.pending_drawing = None;
+        self.drawing_controller.pending = None;
     }
 
     pub fn drawing_create_active(&self) -> bool {
-        self.pending_drawing.is_some()
+        self.drawing_controller.pending.is_some()
     }
 
     /// The in-progress creation for the frame build (its committed anchors plus the preview
     /// point render as a tentative drawing).
     pub(crate) fn pending_drawing(&self) -> Option<&PendingDrawing> {
-        self.pending_drawing.as_ref()
+        self.drawing_controller.pending.as_ref()
     }
 
     // --- freehand brush capture (press-drag-release, TradingView's brush) ---
 
-    /// Begin a brush stroke at pane-relative media px `(x, y)` (pointer-down with the brush
-    /// tool armed): binds the stroke to the pane under the cursor and captures the first
-    /// point. `options_json` templates the committed drawing ([`DrawingPatch`]). Returns false
-    /// off the panes/data or for a malformed template.
-    pub fn brush_create_start(&mut self, options_json: Option<&str>, x: f64, y: f64) -> bool {
+    fn brush_create_start_with_template(
+        &mut self,
+        mut options: Drawing,
+        pane_constraint: Option<usize>,
+        x: f64,
+        y: f64,
+    ) -> bool {
         self.invalidate_frame_drawings();
         let Some(pane) = self.pane_at_y(y) else {
             return false;
         };
-        let Some(point) = self.drawing_from_px(pane, x, y) else {
+        if pane_constraint.is_some_and(|expected| expected != pane) {
+            return false;
+        }
+        let Some(point) = self.drawing_from_px_for(pane, options.price_scale, x, y) else {
             return false;
         };
-        let mut options = Drawing::new(0, DrawingKind::Brush, pane, Vec::new());
-        if let Some(json) = options_json {
-            let Ok(patch) = serde_json::from_str::<DrawingPatch>(json) else {
-                return false;
-            };
-            options.apply_patch(patch);
-        }
-        self.brush_capture = Some(BrushCapture {
+        options.pane_index = pane;
+        options.points.clear();
+        self.drawing_controller.brush = Some(BrushCapture {
             pane_index: pane,
             points: vec![point],
             last_px: (x, y),
@@ -3090,12 +3398,23 @@ impl ChartEngine {
         true
     }
 
+    /// Begin a brush stroke at pane-relative media px `(x, y)` (pointer-down with the brush
+    /// tool armed): binds the stroke to the pane under the cursor and captures the first
+    /// point. `options_json` templates the committed drawing ([`DrawingPatch`]). Returns false
+    /// off the panes/data or for a malformed template.
+    pub fn brush_create_start(&mut self, options_json: Option<&str>, x: f64, y: f64) -> bool {
+        let Some(options) = Self::drawing_template(DrawingKind::Brush, options_json) else {
+            return false;
+        };
+        self.brush_create_start_with_template(options, None, x, y)
+    }
+
     /// Capture the next stroke point from a pointer move, decimated by distance
     /// ([`BRUSH_MIN_POINT_DISTANCE`] in media px — closer samples are pointer noise). Returns
     /// whether a point was captured; rejected samples leave the frame untouched, so hosts can
     /// skip the repaint instead of rebuilding the drawings layer per raw pointer event.
     pub fn brush_create_add(&mut self, x: f64, y: f64) -> bool {
-        let Some(capture) = &self.brush_capture else {
+        let Some(capture) = &self.drawing_controller.brush else {
             return false;
         };
         if capture.points.len() == MAX_DRAWING_POINTS {
@@ -3108,7 +3427,7 @@ impl ChartEngine {
         let Some(point) = self.drawing_from_px(pane, x, y) else {
             return false;
         };
-        if let Some(capture) = self.brush_capture.as_mut() {
+        if let Some(capture) = self.drawing_controller.brush.as_mut() {
             capture.points.push(point);
             capture.last_px = (x, y);
         }
@@ -3123,7 +3442,7 @@ impl ChartEngine {
     pub fn brush_create_end(&mut self) -> DrawingId {
         self.invalidate_frame_drawings();
         self.invalidate_frame_overlay();
-        let Some(capture) = self.brush_capture.take() else {
+        let Some(capture) = self.drawing_controller.brush.take() else {
             return 0;
         };
         if capture.points.len() < 2 {
@@ -3151,16 +3470,16 @@ impl ChartEngine {
     pub fn brush_create_cancel(&mut self) {
         self.invalidate_frame_drawings();
         self.invalidate_frame_overlay();
-        self.brush_capture = None;
+        self.drawing_controller.brush = None;
     }
 
     pub fn brush_create_active(&self) -> bool {
-        self.brush_capture.is_some()
+        self.drawing_controller.brush.is_some()
     }
 
     /// The in-progress stroke for the frame build (paints as a live curved polyline).
     pub(crate) fn brush_capture(&self) -> Option<&BrushCapture> {
-        self.brush_capture.as_ref()
+        self.drawing_controller.brush.as_ref()
     }
 }
 

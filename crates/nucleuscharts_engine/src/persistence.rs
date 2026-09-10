@@ -609,8 +609,10 @@ impl ChartEngine {
         self.selected_drawing = None;
         self.drawing_drag = None;
         self.drawing_history = crate::DrawingHistory::default();
-        self.pending_drawing = None;
-        self.brush_capture = None;
+        // Persistence replaces committed semantic state, but an armed host tool is transient UI
+        // state and historically survived import. Abort only the in-flight placement/capture.
+        self.drawing_controller.pending = None;
+        self.drawing_controller.brush = None;
         self.editing_drawing = None;
         self.hovered_drawing = None;
         self.hovered_text = None;

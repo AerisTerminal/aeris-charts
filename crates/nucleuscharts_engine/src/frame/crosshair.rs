@@ -9,8 +9,8 @@ impl ChartEngine {
     pub(crate) fn crosshair_suppressed_by_interaction(&self) -> bool {
         self.hovered_drawing.is_some()
             || self.drawing_drag.is_some()
-            || self.pending_drawing.is_some()
-            || self.brush_capture.is_some()
+            || self.pending_drawing().is_some()
+            || self.brush_capture().is_some()
             || self.trading_state.feedback_hover.is_some()
             || matches!(
                 self.trading_state.interaction,

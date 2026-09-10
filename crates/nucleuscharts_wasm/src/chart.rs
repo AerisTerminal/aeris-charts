@@ -3310,6 +3310,92 @@ impl NucleusChart {
     pub fn can_redo_drawing(&self) -> bool {
         self.inner.borrow().can_redo_drawing()
     }
+
+    /// Arm/disarm the engine-owned drawing-tool controller. `kind = -1` disarms;
+    /// `pane = -1` lets the first placement bind the pane.
+    pub fn set_drawing_tool(&mut self, kind: i32, options_json: &str, pane: i32) -> bool {
+        self.inner
+            .borrow_mut()
+            .set_drawing_tool(kind, options_json, pane)
+    }
+    pub fn active_drawing_tool(&self) -> i32 {
+        self.inner.borrow().active_drawing_tool()
+    }
+    pub fn active_drawing_tool_pane(&self) -> i32 {
+        self.inner.borrow().active_drawing_tool_pane()
+    }
+    pub fn drawing_tool_apply_options(&mut self, options_json: &str) -> bool {
+        self.inner
+            .borrow_mut()
+            .drawing_tool_apply_options(options_json)
+    }
+    pub fn drawing_tool_pointer_down(
+        &mut self,
+        x_css: f64,
+        y_css: f64,
+        magnet: bool,
+        straighten: bool,
+    ) -> u32 {
+        self.inner
+            .borrow_mut()
+            .drawing_tool_pointer_down(x_css, y_css, magnet, straighten)
+    }
+    pub fn drawing_tool_pointer_move(
+        &mut self,
+        x_css: f64,
+        y_css: f64,
+        magnet: bool,
+        straighten: bool,
+        pressed: bool,
+    ) -> bool {
+        self.inner
+            .borrow_mut()
+            .drawing_tool_pointer_move(x_css, y_css, magnet, straighten, pressed)
+    }
+    pub fn drawing_tool_pointer_up(
+        &mut self,
+        x_css: f64,
+        y_css: f64,
+        magnet: bool,
+        straighten: bool,
+    ) -> u32 {
+        self.inner
+            .borrow_mut()
+            .drawing_tool_pointer_up(x_css, y_css, magnet, straighten)
+    }
+    pub fn drawing_tool_activate(
+        &mut self,
+        x_css: f64,
+        y_css: f64,
+        magnet: bool,
+        straighten: bool,
+    ) -> u32 {
+        self.inner
+            .borrow_mut()
+            .drawing_tool_activate(x_css, y_css, magnet, straighten)
+    }
+    pub fn drawing_tool_finish(&mut self) -> u32 {
+        self.inner.borrow_mut().drawing_tool_finish()
+    }
+    pub fn drawing_tool_pop_anchor(&mut self) -> bool {
+        self.inner.borrow_mut().drawing_tool_pop_anchor()
+    }
+    pub fn drawing_tool_capture_active(&self) -> bool {
+        self.inner.borrow().drawing_tool_capture_active()
+    }
+    pub fn drawing_tool_sequence_active(&self) -> bool {
+        self.inner.borrow().drawing_tool_sequence_active()
+    }
+    pub fn drawing_requests_text_edit(&self, id: u32) -> bool {
+        self.inner.borrow().drawing_requests_text_edit(id)
+    }
+    pub fn cancel_drawing_creation(&mut self) {
+        self.inner.borrow_mut().cancel_drawing_creation();
+    }
+    pub fn cancel_drawing_tool(&mut self) {
+        self.inner.borrow_mut().cancel_drawing_tool();
+    }
+
     /// Arm interactive creation of a tool kind ("" options = defaults): the next clicks place
     /// anchors through `drawing_create_click`, moves preview through `drawing_create_move`.
     pub fn drawing_create_begin(&mut self, kind: u8, options_json: &str) -> bool {

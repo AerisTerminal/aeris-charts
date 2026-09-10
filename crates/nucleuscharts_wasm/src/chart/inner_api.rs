@@ -2169,6 +2169,128 @@ impl ChartInner {
     pub fn can_redo_drawing(&self) -> bool {
         self.engine.can_redo_drawing()
     }
+
+    // Canonical drawing-tool controller. These are the host-facing interaction methods; the
+    // lower-level drawing_create_*/brush_create_* methods below remain as compatibility/test seams.
+    pub fn set_drawing_tool(&mut self, kind: i32, options_json: &str, pane: i32) -> bool {
+        let kind = if kind < 0 {
+            None
+        } else {
+            let Ok(wire_kind) = u8::try_from(kind) else {
+                return false;
+            };
+            let Some(kind) = DrawingKind::from_u8(wire_kind) else {
+                return false;
+            };
+            Some(kind)
+        };
+        let pane = usize::try_from(pane).ok();
+        let options = (!options_json.is_empty()).then_some(options_json);
+        self.engine.set_drawing_tool(kind, options, pane)
+    }
+
+    pub fn active_drawing_tool(&self) -> i32 {
+        self.engine
+            .active_drawing_tool()
+            .map_or(-1, |kind| i32::from(kind.to_u8()))
+    }
+
+    pub fn active_drawing_tool_pane(&self) -> i32 {
+        self.engine
+            .active_drawing_tool_pane()
+            .and_then(|pane| i32::try_from(pane).ok())
+            .unwrap_or(-1)
+    }
+
+    pub fn drawing_tool_apply_options(&mut self, options_json: &str) -> bool {
+        self.engine.drawing_tool_apply_options(options_json)
+    }
+
+    pub fn drawing_tool_pointer_down(
+        &mut self,
+        x_css: f64,
+        y_css: f64,
+        magnet: bool,
+        straighten: bool,
+    ) -> u32 {
+        self.engine
+            .drawing_tool_pointer_down(x_css, y_css, DrawingModifiers { magnet, straighten })
+            .created
+            .unwrap_or(0)
+    }
+
+    pub fn drawing_tool_pointer_move(
+        &mut self,
+        x_css: f64,
+        y_css: f64,
+        magnet: bool,
+        straighten: bool,
+        pressed: bool,
+    ) -> bool {
+        self.engine
+            .drawing_tool_pointer_move(
+                x_css,
+                y_css,
+                DrawingModifiers { magnet, straighten },
+                pressed,
+            )
+            .changed
+    }
+
+    pub fn drawing_tool_pointer_up(
+        &mut self,
+        x_css: f64,
+        y_css: f64,
+        magnet: bool,
+        straighten: bool,
+    ) -> u32 {
+        self.engine
+            .drawing_tool_pointer_up(x_css, y_css, DrawingModifiers { magnet, straighten })
+            .created
+            .unwrap_or(0)
+    }
+
+    pub fn drawing_tool_activate(
+        &mut self,
+        x_css: f64,
+        y_css: f64,
+        magnet: bool,
+        straighten: bool,
+    ) -> u32 {
+        self.engine
+            .drawing_tool_activate(x_css, y_css, DrawingModifiers { magnet, straighten })
+            .created
+            .unwrap_or(0)
+    }
+
+    pub fn drawing_tool_finish(&mut self) -> u32 {
+        self.engine.drawing_tool_finish().created.unwrap_or(0)
+    }
+
+    pub fn drawing_tool_pop_anchor(&mut self) -> bool {
+        self.engine.drawing_tool_pop_anchor()
+    }
+
+    pub fn drawing_tool_capture_active(&self) -> bool {
+        self.engine.drawing_tool_capture_active()
+    }
+
+    pub fn drawing_tool_sequence_active(&self) -> bool {
+        self.engine.drawing_tool_sequence_active()
+    }
+
+    pub fn drawing_requests_text_edit(&self, id: u32) -> bool {
+        self.engine.drawing_requests_text_edit(id)
+    }
+
+    pub fn cancel_drawing_creation(&mut self) {
+        self.engine.cancel_drawing_creation();
+    }
+
+    pub fn cancel_drawing_tool(&mut self) {
+        self.engine.cancel_drawing_tool();
+    }
+
     /// Arm interactive creation of a tool kind ("" options = defaults).
     pub fn drawing_create_begin(&mut self, kind: u8, options_json: &str) -> bool {
         let Some(kind) = DrawingKind::from_u8(kind) else {

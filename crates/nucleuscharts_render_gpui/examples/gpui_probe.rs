@@ -326,7 +326,7 @@ enum DragMode {
         last_y: f64,
     },
     Drawing,
-    BrushCreation,
+    DrawingCreation,
     CrosshairAction,
 }
 
@@ -426,12 +426,13 @@ struct Probe {
     plan_dirty: bool,
     fitted: bool,
     fit_on_first_frame: bool,
-    /// Newest brush pointer sample since the last painted frame. Wayland delivers per-HID-report
-    /// motion (~1000 Hz, often one axis per event); capturing every sample records that
-    /// axis-alternating staircase as stroke knots. Browsers coalesce pointer events to display
-    /// frames, so this host does the same for the brush: only the newest sample per painted frame
-    /// reaches `brush_create_add` (see `flush_pending_brush`).
-    pending_brush_point: Option<(f64, f64)>,
+    /// Newest captured drawing sample since the last painted frame. Wayland may deliver motion at
+    /// HID cadence; the platform host coalesces that stream to presentation cadence before
+    /// forwarding it to the engine-owned drawing controller.
+    pending_creation_point: Option<(f64, f64, DrawingModifiers)>,
+    /// A placement committed on pointer-down. Suppresses the release-side click selection without
+    /// the host knowing which concrete drawing kind uses press placement.
+    creation_press_committed: bool,
     viewport_offset: (f32, f32),
     gesture_config: GestureConfig,
     input: GestureResolver,
@@ -442,7 +443,6 @@ struct Probe {
     drag: Option<DragMode>,
     kinetic_active: bool,
     source_bars: Bars,
-    armed_tool: Option<DrawingKind>,
     drawing_template: DrawingTemplate,
     style_pins: StylePins,
     fixtures: NativeFixtures,
@@ -514,7 +514,8 @@ impl Probe {
             plan_dirty: true,
             fitted: false,
             fit_on_first_frame: true,
-            pending_brush_point: None,
+            pending_creation_point: None,
+            creation_press_committed: false,
             viewport_offset: (0.0, 0.0),
             gesture_config: GestureConfig::default(),
             input: GestureResolver::default(),
@@ -525,7 +526,6 @@ impl Probe {
             drag: None,
             kinetic_active: false,
             source_bars: b,
-            armed_tool: None,
             drawing_template: DrawingTemplate::default(),
             style_pins: StylePins::default(),
             fixtures: NativeFixtures::default(),
@@ -596,11 +596,15 @@ impl Probe {
     }
 
     fn arm_drawing(&mut self, kind: DrawingKind) {
-        self.engine.drawing_create_cancel();
-        self.engine.brush_create_cancel();
-        self.pending_brush_point = None;
-        self.armed_tool = (self.armed_tool != Some(kind)).then_some(kind);
-        self.click_status = self.armed_tool.map_or_else(
+        self.pending_creation_point = None;
+        self.creation_press_committed = false;
+        let next = (self.engine.active_drawing_tool() != Some(kind)).then_some(kind);
+        let template = self.drawing_template.json();
+        let armed = self
+            .engine
+            .set_drawing_tool(next, next.map(|_| template.as_str()), None);
+        debug_assert!(armed, "native drawing template is always valid JSON");
+        self.click_status = self.engine.active_drawing_tool().map_or_else(
             || "drawing tool disarmed".to_string(),
             |tool| format!("{} armed", tool.name()),
         );
@@ -608,43 +612,33 @@ impl Probe {
     }
 
     fn place_drawing_anchor(&mut self, x: f64, y: f64, modifiers: DrawingModifiers) -> i64 {
-        let Some(tool) = self.armed_tool.filter(|tool| *tool != DrawingKind::Brush) else {
+        if self.engine.active_drawing_tool().is_none() {
             return 0;
-        };
-        if !self.engine.drawing_create_active() {
-            let template = self.drawing_template.json();
-            if !self.engine.drawing_create_begin(tool, Some(&template)) {
-                self.armed_tool = None;
-                return 0;
-            }
         }
-        let result = self.engine.drawing_create_click(x, y, modifiers);
-        if result > 0 {
-            self.click_status = format!("created drawing #{result}");
-            self.armed_tool = None;
+        let update = self.engine.drawing_tool_activate(x, y, modifiers);
+        if let Some(id) = update.created {
+            self.click_status = format!("created drawing #{id}");
+            return i64::from(id);
         }
-        result
+        if update.consumed {
+            -1
+        } else {
+            0
+        }
     }
 
-    fn finish_path_creation(&mut self) -> bool {
-        if self.armed_tool != Some(DrawingKind::Path) {
+    fn finish_drawing_creation(&mut self) -> bool {
+        let update = self.engine.drawing_tool_finish();
+        let Some(id) = update.created else {
             return false;
-        }
-        let id = self.engine.drawing_create_finish();
-        if id == 0 {
-            return false;
-        }
-        self.click_status = format!("created path #{id}");
-        self.armed_tool = None;
+        };
+        self.click_status = format!("created drawing #{id}");
         self.dirty = true;
         true
     }
 
-    fn pop_path_anchor(&mut self) -> bool {
-        if self.armed_tool != Some(DrawingKind::Path) {
-            return false;
-        }
-        let changed = self.engine.drawing_create_pop_anchor();
+    fn pop_drawing_anchor(&mut self) -> bool {
+        let changed = self.engine.drawing_tool_pop_anchor();
         self.dirty |= changed;
         changed
     }
@@ -658,7 +652,9 @@ impl Probe {
         }
         // Merge only changed fields into both an in-progress creation and a selected drawing.
         // This preserves placed anchors and unrelated selected-drawing options.
-        self.engine.drawing_create_apply_options(&patch);
+        if self.engine.active_drawing_tool().is_some() {
+            self.engine.drawing_tool_apply_options(&patch);
+        }
         if let Some(id) = self.engine.selected_drawing() {
             self.engine.drawing_apply_options(id, &patch);
         }
@@ -1174,11 +1170,15 @@ impl Probe {
         );
     }
 
-    /// Capture the newest coalesced brush sample (at most one per painted frame). Only a captured
-    /// point dirties the frame; rejected sub-threshold samples leave the scene untouched.
-    fn flush_pending_brush(&mut self) {
-        if let Some((x, y)) = self.pending_brush_point.take() {
-            if self.engine.brush_create_add(x, y) {
+    /// Forward the newest coalesced captured-drawing sample (at most one per painted frame).
+    /// Only a semantic change dirties the frame.
+    fn flush_pending_drawing_creation(&mut self) {
+        if let Some((x, y, modifiers)) = self.pending_creation_point.take() {
+            if self
+                .engine
+                .drawing_tool_pointer_move(x, y, modifiers, true)
+                .changed
+            {
                 self.dirty = true;
             }
         }
@@ -1186,7 +1186,7 @@ impl Probe {
 
     /// GPUI prepaint entry: use the exact native shaper that the paint backend uses.
     fn rebuild(&mut self, width: f32, height: f32, scale_factor: f32, window: &Window) {
-        self.flush_pending_brush();
+        self.flush_pending_drawing_creation();
         if self.built_for == (width, height, scale_factor)
             && !self.dirty
             && !self.frame.panes.is_empty()
@@ -1360,7 +1360,7 @@ impl Probe {
             self.engine.set_separator_hover(separator_hover);
             self.dirty = true;
         }
-        let drawing_cursor = (self.armed_tool.is_none()
+        let drawing_cursor = (self.engine.active_drawing_tool().is_none()
             && pane_x >= 0.0
             && pane_x <= self.engine.pane_w
             && y >= 0.0
@@ -1472,7 +1472,9 @@ impl Probe {
             || chart_x > self.engine.pane_left + self.engine.pane_w
         {
             InputTarget::PriceAxis
-        } else if self.armed_tool.is_some() || self.engine.hit_test_drawing(pane_x, y).is_some() {
+        } else if self.engine.active_drawing_tool().is_some()
+            || self.engine.hit_test_drawing(pane_x, y).is_some()
+        {
             InputTarget::Drawing
         } else {
             InputTarget::Pane
@@ -1526,7 +1528,7 @@ impl Probe {
     }
 
     fn update_crosshair_modifier(&mut self, control: bool, platform: bool) {
-        let enabled = (control || platform) && self.armed_tool.is_some();
+        let enabled = (control || platform) && self.engine.active_drawing_tool().is_some();
         if self.engine.crosshair_ohlc_magnet != enabled {
             self.engine.crosshair_ohlc_magnet = enabled;
             self.dirty = true;
@@ -1547,9 +1549,9 @@ impl Probe {
                 self.engine.price_axis_end_scale(pane, target);
             }
             Some(DragMode::Drawing) => self.engine.drawing_drag_end(),
-            Some(DragMode::BrushCreation) => {
-                self.engine.brush_create_cancel();
-                self.pending_brush_point = None;
+            Some(DragMode::DrawingCreation) => {
+                self.engine.cancel_drawing_creation();
+                self.pending_creation_point = None;
             }
             Some(DragMode::PaneSeparator { .. } | DragMode::CrosshairAction) | None => {}
         }
@@ -1611,18 +1613,8 @@ impl Probe {
             return;
         }
 
-        if self.armed_tool == Some(DrawingKind::Brush) {
-            let template = self.drawing_template.json();
-            if self.engine.brush_create_start(Some(&template), pane_x, y) {
-                self.drag = Some(DragMode::BrushCreation);
-                self.update_crosshair(pane_x, y);
-                cx.notify();
-                return;
-            }
-        }
-
-        if event.click_count >= 2 && self.armed_tool == Some(DrawingKind::Path) {
-            self.place_drawing_anchor(
+        if event.click_count >= 2 && self.engine.drawing_tool_sequence_active() {
+            self.engine.drawing_tool_activate(
                 pane_x,
                 y,
                 DrawingModifiers {
@@ -1630,9 +1622,31 @@ impl Probe {
                     straighten: event.modifiers.shift,
                 },
             );
-            self.finish_path_creation();
+            self.finish_drawing_creation();
             self.press_moved = true;
             self.dirty = true;
+            cx.notify();
+            return;
+        }
+
+        if self.engine.active_drawing_tool().is_some() {
+            let update = self.engine.drawing_tool_pointer_down(
+                pane_x,
+                y,
+                DrawingModifiers {
+                    magnet: event.modifiers.control || event.modifiers.platform,
+                    straighten: event.modifiers.shift,
+                },
+            );
+            self.creation_press_committed = update.created.is_some();
+            if let Some(id) = update.created {
+                self.click_status = format!("created drawing #{id}");
+            }
+            if update.pointer_capture {
+                self.drag = Some(DragMode::DrawingCreation);
+            }
+            self.update_crosshair(pane_x, y);
+            self.dirty |= update.changed;
             cx.notify();
             return;
         }
@@ -1696,7 +1710,7 @@ impl Probe {
             } else {
                 None
             }
-        } else if self.armed_tool.is_some() {
+        } else if self.engine.active_drawing_tool().is_some() {
             None
         } else if self.engine.drawing_drag_start_at(pane_x, y) {
             Some(DragMode::Drawing)
@@ -1762,27 +1776,31 @@ impl Probe {
                     },
                 );
             }
-            Some(DragMode::BrushCreation) if event.dragging() => {
-                // Keep only the newest sample; `rebuild` captures it once per painted frame so the
-                // engine sees display-cadence samples (matching browser hosts) instead of the raw
-                // Wayland event rate.
-                self.pending_brush_point = Some((pane_x, y));
+            Some(DragMode::DrawingCreation) if event.dragging() => {
+                // Keep only the newest captured sample; `rebuild` forwards it once per painted
+                // frame so native high-Hz pointer delivery does not perturb canonical tool math.
+                self.pending_creation_point = Some((
+                    pane_x,
+                    y,
+                    DrawingModifiers {
+                        magnet: event.modifiers.control || event.modifiers.platform,
+                        straighten: event.modifiers.shift,
+                    },
+                ));
             }
             Some(DragMode::CrosshairAction) => {}
             _ => {
-                if self
-                    .armed_tool
-                    .is_some_and(|tool| tool != DrawingKind::Brush)
-                {
-                    self.engine.drawing_create_move(
+                if self.engine.active_drawing_tool().is_some() {
+                    let update = self.engine.drawing_tool_pointer_move(
                         pane_x,
                         y,
                         DrawingModifiers {
                             magnet: event.modifiers.control || event.modifiers.platform,
                             straighten: event.modifiers.shift,
                         },
+                        event.dragging(),
                     );
-                    self.dirty = true;
+                    self.dirty |= update.changed;
                 }
             }
         }
@@ -1805,6 +1823,7 @@ impl Probe {
         self.update_crosshair_modifier(event.modifiers.control, event.modifiers.platform);
         self.mark_press_moved(pane_x, y);
         let moved = self.press_moved;
+        let committed_on_press = std::mem::take(&mut self.creation_press_committed);
         self.press_start = None;
         self.press_moved = false;
         let select_click = match self.drag.take() {
@@ -1839,21 +1858,23 @@ impl Probe {
                 self.engine.drawing_drag_end();
                 false
             }
-            Some(DragMode::BrushCreation) => {
-                // The stroke must end exactly at the release position, not one frame behind it.
-                self.pending_brush_point = Some((pane_x, y));
-                self.flush_pending_brush();
-                let id = self.engine.brush_create_end();
-                if id > 0 {
-                    self.click_status = format!("created brush #{id}");
-                    self.armed_tool = None;
+            Some(DragMode::DrawingCreation) => {
+                let modifiers = DrawingModifiers {
+                    magnet: event.modifiers.control || event.modifiers.platform,
+                    straighten: event.modifiers.shift,
+                };
+                // Flush the newest coalesced move first. The controller itself then owns the exact
+                // release endpoint, so browser and native hosts cannot disagree on the terminal
+                // freehand point because of platform event cadence.
+                self.flush_pending_drawing_creation();
+                let update = self.engine.drawing_tool_pointer_up(pane_x, y, modifiers);
+                if let Some(id) = update.created {
+                    self.click_status = format!("created drawing #{id}");
                 }
                 false
             }
-            None if self
-                .armed_tool
-                .is_some_and(|tool| tool != DrawingKind::Brush) =>
-            {
+            None if committed_on_press => false,
+            None if self.engine.active_drawing_tool().is_some() => {
                 if !moved {
                     self.place_drawing_anchor(
                         pane_x,
@@ -2025,14 +2046,18 @@ impl Probe {
                 self.engine.fit_content();
                 true
             }
-            "enter" => self.finish_path_creation(),
-            "backspace" if self.armed_tool == Some(DrawingKind::Path) => self.pop_path_anchor(),
+            "enter" => self.finish_drawing_creation(),
+            "backspace"
+                if self.engine.drawing_tool_sequence_active()
+                    && self.engine.drawing_create_active() =>
+            {
+                self.pop_drawing_anchor()
+            }
             "delete" | "backspace" => self.engine.remove_selected_drawing(),
             "escape" => {
-                self.engine.drawing_create_cancel();
-                self.engine.brush_create_cancel();
-                self.pending_brush_point = None;
-                self.armed_tool = None;
+                self.engine.cancel_drawing_tool();
+                self.pending_creation_point = None;
+                self.creation_press_committed = false;
                 self.engine.set_selected_drawing(None);
                 self.engine.crosshair = None;
                 self.clear_hover();
@@ -2950,7 +2975,7 @@ impl InteractiveDemo {
             DemoAction::Cap => self.max_index != 0,
             DemoAction::Drawing(kind) => root
                 .as_ref()
-                .is_some_and(|chart| chart.read(cx).armed_tool == Some(kind)),
+                .is_some_and(|chart| chart.read(cx).engine.active_drawing_tool() == Some(kind)),
             DemoAction::DrawingItalic => root
                 .as_ref()
                 .is_some_and(|chart| chart.read(cx).drawing_template.text_italic),
@@ -3170,7 +3195,11 @@ impl InteractiveDemo {
                     .size_full()
                     .on_mouse_down(MouseButton::Left, move |event, _, app| {
                         entity.update(app, |demo, cx| {
-                            let drawing_armed = activation_chart.read(cx).armed_tool.is_some();
+                            let drawing_armed = activation_chart
+                                .read(cx)
+                                .engine
+                                .active_drawing_tool()
+                                .is_some();
                             if (event.modifiers.control || event.modifiers.platform)
                                 && !drawing_armed
                             {
@@ -3902,15 +3931,23 @@ mod tests {
     }
 
     /// Issue #12: Wayland delivers per-HID-report pointer motion (~1000 Hz, often one axis per
-    /// event). The brush must capture at most one coalesced sample per painted frame — the newest
-    /// one — or the axis-alternating staircase becomes stroke knots and renders jagged.
+    /// event). A captured drawing stream must forward at most one coalesced sample per painted
+    /// frame — the newest one — or device-specific event cadence leaks into canonical geometry.
     #[test]
-    fn brush_capture_coalesces_pointer_samples_to_one_knot_per_frame() {
+    fn drawing_capture_coalesces_pointer_samples_to_one_knot_per_frame() {
         let mut probe = Probe::new(32, Some(1));
         let measure = |text: &str, _bold: bool| text.chars().count() as f64 * 7.0;
         let countdown_measure = |text: &str, _bold: bool| text.chars().count() as f64 * 6.0;
         probe.rebuild_with_measure(1024.0, 640.0, 1.0, measure, countdown_measure);
-        assert!(probe.engine.brush_create_start(None, 100.0, 100.0));
+        assert!(probe
+            .engine
+            .set_drawing_tool(Some(DrawingKind::Brush), None, None));
+        assert!(
+            probe
+                .engine
+                .drawing_tool_pointer_down(100.0, 100.0, DrawingModifiers::default())
+                .pointer_capture
+        );
 
         // A diagonal drag as Wayland reports it: one axis per event, far above frame cadence.
         for (x, y) in [
@@ -3919,23 +3956,26 @@ mod tests {
             (103.0, 101.5),
             (103.0, 103.0),
         ] {
-            probe.pending_brush_point = Some((x, y));
+            probe.pending_creation_point = Some((x, y, DrawingModifiers::default()));
         }
-        probe.flush_pending_brush();
+        probe.flush_pending_drawing_creation();
         assert!(probe.dirty, "a captured knot repaints the frame");
         assert_eq!(
-            probe.pending_brush_point, None,
+            probe.pending_creation_point, None,
             "the pending sample is consumed by the frame"
         );
 
         // An idle frame with no pending sample captures nothing.
         probe.dirty = false;
-        probe.flush_pending_brush();
+        probe.flush_pending_drawing_creation();
         assert!(!probe.dirty);
 
         // Only the newest sample became a knot: start + one coalesced capture.
-        let id = probe.engine.brush_create_end();
-        assert!(id > 0);
+        let id = probe
+            .engine
+            .drawing_tool_pointer_up(103.0, 103.0, DrawingModifiers::default())
+            .created
+            .expect("captured drawing commits");
         let drawing = probe
             .engine
             .drawings()
@@ -4234,12 +4274,12 @@ mod tests {
                 -1
             );
         }
-        assert!(probe.pop_path_anchor());
-        assert!(probe.finish_path_creation());
+        assert!(probe.pop_drawing_anchor());
+        assert!(probe.finish_drawing_creation());
         assert_eq!(probe.engine.drawings().len(), 1);
         assert_eq!(probe.engine.drawings()[0].kind, DrawingKind::Path);
         assert_eq!(probe.engine.drawings()[0].points.len(), 2);
-        assert_eq!(probe.armed_tool, None);
+        assert_eq!(probe.engine.active_drawing_tool(), None);
     }
 
     #[test]

@@ -14,8 +14,8 @@ use nucleuscharts_render::draw_list::{IRect, LineStyle, LineType, Prim, TextAlig
 
 use super::PRIMARY;
 use crate::drawings::{
-    path_arrow_points, Drawing, DrawingId, DrawingKind, DrawingTextHAlign, TEXT_CHROME_PAD,
-    TEXT_PAD,
+    resolve_drawing_geometry, Drawing, DrawingBodyGeometry, DrawingHandleMode, DrawingId,
+    DrawingKind, DrawingTextHAlign, TEXT_CHROME_PAD, TEXT_PAD,
 };
 use crate::ChartEngine;
 
@@ -161,13 +161,13 @@ impl ChartEngine {
         if let Some(pending) = self.pending_drawing() {
             if pending.drawing.pane_index == pane_index {
                 let mut anchors = pending.drawing.points.clone();
-                let is_path = pending.drawing.kind == DrawingKind::Path;
+                let is_sequence = pending.drawing.kind.spec().placement.is_sequence();
                 if let Some(preview) = pending.preview {
-                    if is_path || anchors.len() < pending.drawing.kind.anchor_count() {
+                    if is_sequence || anchors.len() < pending.drawing.kind.anchor_count() {
                         anchors.push(preview);
                     }
                 }
-                let ready = if is_path {
+                let ready = if is_sequence {
                     anchors.len() >= pending.drawing.kind.anchor_count()
                 } else {
                     anchors.len() == pending.drawing.kind.anchor_count()
@@ -183,7 +183,8 @@ impl ChartEngine {
                         let px: Vec<(f64, f64)> =
                             px.into_iter().map(|(x, y)| (x * hpr, y * vpr)).collect();
                         let mut preview_drawing = pending.drawing.clone();
-                        if preview_drawing.kind == DrawingKind::Rectangle {
+                        if preview_drawing.kind.spec().handles == DrawingHandleMode::RectangleBounds
+                        {
                             if let Some(fill) = preview_drawing.preview_fill_color.clone() {
                                 preview_drawing.fill_color = Some(fill);
                             }
@@ -196,7 +197,8 @@ impl ChartEngine {
                             out,
                             points,
                         );
-                        if pending.drawing.kind == DrawingKind::Rectangle {
+                        if pending.drawing.kind.spec().handles == DrawingHandleMode::RectangleBounds
+                        {
                             // TradingView shows all eight anchors while the rectangle is being
                             // drawn (committed corner + live preview corner), not only after
                             // the commit.
@@ -262,7 +264,7 @@ impl ChartEngine {
         let Some(drawing) = self.drawing(id) else {
             return;
         };
-        if drawing.kind == DrawingKind::Text {
+        if drawing.kind.spec().requests_text_editor {
             let Some(px) = self.overlay_drawing_px(pane_index, id, hpr, vpr) else {
                 return;
             };
@@ -272,12 +274,18 @@ impl ChartEngine {
         let Some(px) = self.overlay_drawing_px(pane_index, id, hpr, vpr) else {
             return;
         };
-        if drawing.kind == DrawingKind::Rectangle && px.len() == 2 {
-            build_rectangle_handles(&px, vpr, self.anchor_fill(), out);
-        } else if drawing.kind == DrawingKind::Brush && px.len() > 2 {
-            build_anchor_handles(&[px[0], px[px.len() - 1]], vpr, self.anchor_fill(), out);
-        } else {
-            build_anchor_handles(&px, vpr, self.anchor_fill(), out);
+        match drawing.kind.spec().handles {
+            DrawingHandleMode::None => {}
+            DrawingHandleMode::RectangleBounds if px.len() == 2 => {
+                build_rectangle_handles(&px, vpr, self.anchor_fill(), out);
+            }
+            DrawingHandleMode::Endpoints if !px.is_empty() => {
+                build_anchor_handles(&[px[0], px[px.len() - 1]], vpr, self.anchor_fill(), out);
+            }
+            DrawingHandleMode::Anchors | DrawingHandleMode::Endpoints => {
+                build_anchor_handles(&px, vpr, self.anchor_fill(), out);
+            }
+            DrawingHandleMode::RectangleBounds => {}
         }
     }
 
@@ -319,11 +327,25 @@ impl ChartEngine {
     ) {
         let color = Color::parse_css(&drawing.color).unwrap_or(PRIMARY);
         let crisp_width = (drawing.width * vpr).round().max(1.0) as i32;
-        match drawing.kind {
-            DrawingKind::TrendLine => {
+        let Some(pane) = self.panes.get(drawing.pane_index) else {
+            return;
+        };
+        let Some(geometry) = resolve_drawing_geometry(
+            drawing.kind,
+            px,
+            f64::from(pane_w_px),
+            pane.top * vpr,
+            pane.height * vpr,
+            drawing.width,
+            vpr,
+        ) else {
+            return;
+        };
+        match geometry.body {
+            DrawingBodyGeometry::Segment { a, b } => {
                 let first_point = points.len() as u32;
-                points.push([px[0].0 as f32, px[0].1 as f32]);
-                points.push([px[1].0 as f32, px[1].1 as f32]);
+                points.push([a.0 as f32, a.1 as f32]);
+                points.push([b.0 as f32, b.1 as f32]);
                 out.push(Prim::Polyline {
                     first_point,
                     point_count: 2,
@@ -333,52 +355,44 @@ impl ChartEngine {
                     color,
                 });
             }
-            DrawingKind::HorizontalLine => {
-                out.push(Prim::HLine {
-                    y: px[0].1.round() as i32,
-                    x0: 0,
-                    x1: pane_w_px,
-                    width: crisp_width,
-                    style: drawing.style,
-                    color,
-                });
-            }
-            DrawingKind::HorizontalRay => {
-                let x0 = (px[0].0.round() as i32).clamp(0, pane_w_px);
-                if x0 < pane_w_px {
+            DrawingBodyGeometry::Horizontal { y, x0, x1 } => {
+                let x0 = (x0.round() as i32).clamp(0, pane_w_px);
+                let x1 = (x1.round() as i32).clamp(0, pane_w_px);
+                if x0 != x1 {
                     out.push(Prim::HLine {
-                        y: px[0].1.round() as i32,
-                        x0,
-                        x1: pane_w_px,
+                        y: y.round() as i32,
+                        x0: x0.min(x1),
+                        x1: x0.max(x1),
                         width: crisp_width,
                         style: drawing.style,
                         color,
                     });
                 }
             }
-            DrawingKind::VerticalLine => {
-                let pane = &self.panes[drawing.pane_index];
+            DrawingBodyGeometry::Vertical { x, y0, y1 } => {
                 out.push(Prim::VLine {
-                    x: px[0].0.round() as i32,
-                    y0: (pane.top * vpr).round().max(0.0) as i32,
-                    y1: ((pane.top + pane.height) * vpr).round().max(0.0) as i32,
+                    x: x.round() as i32,
+                    y0: y0.round().max(0.0) as i32,
+                    y1: y1.round().max(0.0) as i32,
                     width: crisp_width,
                     style: drawing.style,
                     color,
                 });
             }
-            DrawingKind::Rectangle => {
-                let (a, b) = (px[0], px[1]);
-                let ax = a.0.round() as i32;
-                let bx = b.0.round() as i32;
-                let ay = a.1.round() as i32;
-                let by = b.1.round() as i32;
-                let left = ax.min(bx);
-                let top = ay.min(by);
+            DrawingBodyGeometry::Rectangle {
+                left,
+                right,
+                top,
+                bottom,
+            } => {
+                let left = left.round() as i32;
+                let right = right.round() as i32;
+                let top = top.round() as i32;
+                let bottom = bottom.round() as i32;
                 // Official `positionsBox`: both endpoint pixels belong to the box, so an
                 // equal-point preview still occupies one bitmap pixel.
-                let width = (ax - bx).abs() + 1;
-                let height = (ay - by).abs() + 1;
+                let width = (right - left).abs() + 1;
+                let height = (bottom - top).abs() + 1;
                 // reference rectangle-drawing-tool default: the fill is the border color washed
                 // out (its `previewFillColor`/`fillColor` alpha pattern) — 20% here.
                 let fill = drawing
@@ -435,41 +449,28 @@ impl ChartEngine {
                     }
                 }
             }
-            // The text tool's geometry IS its label (emitted by `build_drawing_text`).
-            DrawingKind::Text => {}
-            DrawingKind::Brush => {
-                // TradingView's brush stroke: ONE smooth curved polyline through the captured
-                // path (the same `LineType::Curved` interpolation the series line family uses),
-                // so the stroke is ultra smooth and identical on both backends.
+            // The text tool's geometry is its label (emitted by `build_drawing_text`).
+            DrawingBodyGeometry::Empty => {}
+            DrawingBodyGeometry::Polyline {
+                points: line_points,
+                line_type,
+                terminal,
+            } => {
                 let first_point = points.len() as u32;
-                for &(x, y) in px {
+                for &(x, y) in line_points {
                     points.push([x as f32, y as f32]);
                 }
                 out.push(Prim::Polyline {
                     first_point,
-                    point_count: px.len() as u32,
+                    point_count: line_points.len() as u32,
                     width: (drawing.width * vpr) as f32,
                     style: drawing.style,
-                    line_type: LineType::Curved,
+                    line_type,
                     color,
                 });
-            }
-            DrawingKind::Path => {
-                let first_point = points.len() as u32;
-                for &(x, y) in px {
-                    points.push([x as f32, y as f32]);
-                }
-                out.push(Prim::Polyline {
-                    first_point,
-                    point_count: px.len() as u32,
-                    width: (drawing.width * vpr) as f32,
-                    style: drawing.style,
-                    line_type: LineType::Simple,
-                    color,
-                });
-                if let Some(arrow) = path_arrow_points(px, drawing.width, vpr) {
+                if let Some(terminal) = terminal {
                     let first_point = points.len() as u32;
-                    for (x, y) in arrow {
+                    for (x, y) in terminal {
                         points.push([x as f32, y as f32]);
                     }
                     out.push(Prim::Polyline {

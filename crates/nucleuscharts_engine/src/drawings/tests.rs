@@ -269,7 +269,7 @@ fn active_drawing_state_and_pixel_baselines_rebase_with_the_union() {
         start_points: drawing.points.clone(),
         start_px: vec![(f64::NAN, f64::NAN); 2],
     });
-    chart.pending_drawing = Some(PendingDrawing {
+    chart.drawing_controller.pending = Some(PendingDrawing {
         drawing: Drawing::new(
             0,
             DrawingKind::TrendLine,
@@ -283,8 +283,9 @@ fn active_drawing_state_and_pixel_baselines_rebase_with_the_union() {
             logical: 1.0,
             price: 11.0,
         }),
+        pane_constraint: None,
     });
-    chart.brush_capture = Some(BrushCapture {
+    chart.drawing_controller.brush = Some(BrushCapture {
         pane_index: 0,
         points: vec![
             DrawingPoint {
@@ -322,12 +323,20 @@ fn active_drawing_state_and_pixel_baselines_rebase_with_the_union() {
         2.5
     );
     assert_eq!(
-        chart.pending_drawing.as_ref().unwrap().drawing.points[0].logical,
+        chart
+            .drawing_controller
+            .pending
+            .as_ref()
+            .unwrap()
+            .drawing
+            .points[0]
+            .logical,
         1.0
     );
     assert_eq!(
         chart
-            .pending_drawing
+            .drawing_controller
+            .pending
             .as_ref()
             .unwrap()
             .preview
@@ -335,7 +344,7 @@ fn active_drawing_state_and_pixel_baselines_rebase_with_the_union() {
             .logical,
         2.0
     );
-    let capture = chart.brush_capture.as_ref().unwrap();
+    let capture = chart.drawing_controller.brush.as_ref().unwrap();
     assert_eq!(capture.points[0].logical, 0.5);
     assert_eq!(capture.points[1].logical, 2.25);
     assert_eq!(capture.options.points[0].logical, 1.5);
@@ -709,6 +718,29 @@ fn horizontal_line_and_ray_hits() {
         ray
     );
     assert!(chart.hit_test_drawing(anchor_x - 30.0, ray_y).is_none());
+
+    // A right ray whose origin is already beyond the right pane edge has no visible body. The
+    // resolved geometry must retain that direction instead of normalizing it into a backwards
+    // finite segment at the pane edge.
+    let offscreen_ray = chart
+        .add_drawing(
+            DrawingKind::HorizontalRay,
+            0,
+            vec![DrawingPoint {
+                logical: 10_000.0,
+                price: 13.0,
+            }],
+            None,
+        )
+        .unwrap();
+    let offscreen_px = chart
+        .drawing_px(chart.drawing(offscreen_ray).unwrap())
+        .unwrap()[0]
+        .0;
+    assert!(offscreen_px > chart.pane_w);
+    assert!(chart
+        .hit_test_drawing(chart.pane_w - 1.0, y_at(&chart, 13.0))
+        .is_none());
 }
 
 #[test]
@@ -1259,6 +1291,110 @@ fn creation_flow_commits_after_the_kinds_anchor_count() {
     assert_eq!(drawing.color, "#ff0000");
     assert!((drawing.points[0].logical - 2.0).abs() < 1e-6);
     assert!((drawing.points[1].price - 12.5).abs() < 1e-9);
+}
+
+#[test]
+fn drawing_tool_controller_routes_placement_classes_without_host_kind_branches() {
+    let mut chart = settled_chart();
+    let first = (x_at(&chart, 2.0), y_at(&chart, 10.5));
+    let second = (x_at(&chart, 7.0), y_at(&chart, 12.5));
+
+    // Fixed click anchors: pointer lifecycle is consumed, activations own semantic placement.
+    assert!(chart.set_drawing_tool(
+        Some(DrawingKind::TrendLine),
+        Some(r##"{"color":"#ff0000"}"##),
+        None,
+    ));
+    let down = chart.drawing_tool_pointer_down(first.0, first.1, DrawingModifiers::default());
+    assert!(down.consumed);
+    assert_eq!(down.created, None);
+    assert!(!down.pointer_capture);
+    let first_click = chart.drawing_tool_activate(first.0, first.1, DrawingModifiers::default());
+    assert!(first_click.consumed && first_click.changed);
+    assert_eq!(first_click.created, None);
+    chart.drawing_tool_pointer_move(second.0, second.1, DrawingModifiers::default(), false);
+    assert!(chart.drawing_create_active());
+    let second_click = chart.drawing_tool_activate(second.0, second.1, DrawingModifiers::default());
+    let trend = second_click.created.expect("second fixed anchor commits");
+    assert_eq!(chart.active_drawing_tool(), None);
+    assert_eq!(chart.drawing(trend).unwrap().kind, DrawingKind::TrendLine);
+
+    // Press placement is tool metadata, not a host special case.
+    assert!(chart.set_drawing_tool(Some(DrawingKind::Text), None, None));
+    let text = chart.drawing_tool_pointer_down(first.0, first.1, DrawingModifiers::default());
+    let text_id = text.created.expect("press-anchored text commits on press");
+    assert!(text.request_text_edit);
+    assert!(chart.drawing_requests_text_edit(text_id));
+    assert_eq!(chart.active_drawing_tool(), None);
+
+    // Freehand owns a captured pointer stream and commits on release.
+    assert!(chart.set_drawing_tool(Some(DrawingKind::Brush), None, None));
+    let brush_down = chart.drawing_tool_pointer_down(first.0, first.1, DrawingModifiers::default());
+    assert!(brush_down.pointer_capture);
+    assert!(chart.drawing_tool_capture_active());
+    assert!(
+        chart
+            .drawing_tool_pointer_move(second.0, second.1, DrawingModifiers::default(), true)
+            .changed
+    );
+    let release = (x_at(&chart, 8.0), y_at(&chart, 11.5));
+    let brush_up = chart.drawing_tool_pointer_up(release.0, release.1, DrawingModifiers::default());
+    let brush = brush_up.created.expect("freehand commits on release");
+    let brush_drawing = chart.drawing(brush).unwrap();
+    assert_eq!(brush_drawing.kind, DrawingKind::Brush);
+    let final_point = brush_drawing.points.last().unwrap();
+    assert!((final_point.logical - 8.0).abs() < 1e-6);
+    assert!((final_point.price - 11.5).abs() < 1e-6);
+    assert_eq!(chart.active_drawing_tool(), None);
+
+    // Variable sequences use the same activation route and an explicit generic finish action.
+    assert!(chart.set_drawing_tool(Some(DrawingKind::Path), None, None));
+    assert!(chart.drawing_tool_sequence_active());
+    assert_eq!(
+        chart
+            .drawing_tool_activate(first.0, first.1, DrawingModifiers::default())
+            .created,
+        None
+    );
+    assert_eq!(
+        chart
+            .drawing_tool_activate(second.0, second.1, DrawingModifiers::default())
+            .created,
+        None
+    );
+    let path = chart
+        .drawing_tool_finish()
+        .created
+        .expect("valid variable sequence commits on finish");
+    assert_eq!(chart.drawing(path).unwrap().kind, DrawingKind::Path);
+    assert_eq!(chart.active_drawing_tool(), None);
+}
+
+#[test]
+fn drawing_tool_controller_enforces_pane_constraint_and_preserves_arm_on_capture_cancel() {
+    let mut chart = settled_chart();
+    chart.add_pane(true);
+    chart.build_frame();
+    let first_pane_y = chart.panes[0].top + chart.panes[0].height * 0.5;
+    let second_pane_y = chart.panes[1].top + chart.panes[1].height * 0.5;
+
+    assert!(chart.set_drawing_tool(Some(DrawingKind::TrendLine), None, Some(0)));
+    let rejected = chart.drawing_tool_activate(100.0, second_pane_y, DrawingModifiers::default());
+    assert!(rejected.consumed);
+    assert_eq!(rejected.created, None);
+    assert!(!chart.drawing_create_active());
+    let accepted = chart.drawing_tool_activate(100.0, first_pane_y, DrawingModifiers::default());
+    assert!(accepted.changed);
+    assert!(chart.drawing_create_active());
+    assert_eq!(chart.pending_drawing().unwrap().drawing.pane_index, 0);
+
+    chart.cancel_drawing_creation();
+    assert!(!chart.drawing_create_active());
+    assert_eq!(chart.active_drawing_tool(), Some(DrawingKind::TrendLine));
+    assert_eq!(chart.active_drawing_tool_pane(), Some(0));
+
+    chart.cancel_drawing_tool();
+    assert_eq!(chart.active_drawing_tool(), None);
 }
 
 #[test]

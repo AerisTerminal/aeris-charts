@@ -55,6 +55,17 @@ import axiusflow_light_logo from "./assets/logos/axiusflow_light.svg";
 
 let init_promise: Promise<unknown> | null = null;
 
+const DRAWING_KIND_FROM_U8: readonly drawing_kind[] = [
+  "trend_line",
+  "horizontal_line",
+  "horizontal_ray",
+  "vertical_line",
+  "rectangle",
+  "text",
+  "brush",
+  "path",
+];
+
 type persistence_error_result = {
   ok: false;
   error: { code: nucleuscharts_error_code; message: string };
@@ -2501,9 +2512,7 @@ export class chart_impl implements chart_api {
   private last_crosshair: { x: number; y: number } | null = null;
   /** Last hover hit-test result (Phase C-d), refreshed on crosshair moves; feeds event params. */
   private hover: { series_id: number | null; object_id: string | null; cursor: string | null } | null = null;
-  /** The armed interactive drawing tool (`null` = none) and its options template JSON. */
-  private active_tool: drawing_kind | null = null;
-  private active_tool_pane: number | null = null;
+  /** Host-side serialization cache for the engine-owned armed drawing template. */
   private tool_options_json = "{}";
   private tool_listener: ((tool: drawing_kind | null) => void) | null = null;
   private readonly tool_change_subs = new Set<drawing_tool_change_handler>();
@@ -3844,22 +3853,26 @@ export class chart_impl implements chart_api {
     options?: Partial<drawing_options>,
     pane_index?: number,
   ): void {
+    const previous_tool = this.active_drawing_tool();
+    const previous_pane_wire = Number(this.wasm.active_drawing_tool_pane());
+    const previous_pane = previous_pane_wire >= 0 ? previous_pane_wire : null;
     const next_pane = tool === null
       ? null
-      : (pane_index ?? (this.active_tool === tool ? this.active_tool_pane : null));
-    const changed = this.active_tool !== tool || this.active_tool_pane !== next_pane;
+      : (pane_index ?? (previous_tool === tool ? previous_pane : null));
+    const changed = previous_tool !== tool || previous_pane !== next_pane;
     if (changed) this.close_text_editor(true); // arming another tool commits the edit
-    this.active_tool = tool;
-    this.active_tool_pane = next_pane;
     if (options !== undefined) {
       this.tool_options_json = JSON.stringify(options);
-      if (this.wasm.drawing_create_active()) {
-        this.wasm.drawing_create_apply_options(this.tool_options_json);
-      }
     }
-    if (tool === null) {
-      this.wasm.drawing_create_cancel();
-      this.wasm.brush_create_cancel();
+    if (!changed && tool !== null && options !== undefined) {
+      if (!this.wasm.drawing_tool_apply_options(this.tool_options_json)) {
+        throw new nucleuscharts_error("invalid_options", "drawing tool options are malformed");
+      }
+    } else if (changed || tool === null) {
+      const wire_kind = tool === null ? -1 : DRAWING_KIND_TO_U8[tool];
+      if (!this.wasm.set_drawing_tool(wire_kind, this.tool_options_json, next_pane ?? -1)) {
+        throw new nucleuscharts_error("invalid_options", "drawing tool options are malformed");
+      }
     }
     if (changed) {
       this.tool_listener?.(tool);
@@ -3868,7 +3881,8 @@ export class chart_impl implements chart_api {
   }
 
   active_drawing_tool(): drawing_kind | null {
-    return this.active_tool;
+    const wire = Number(this.wasm.active_drawing_tool());
+    return wire >= 0 ? (DRAWING_KIND_FROM_U8[wire] ?? null) : null;
   }
 
   set_drawing_tool_listener(listener: ((tool: drawing_kind | null) => void) | null): void {
@@ -3900,106 +3914,95 @@ export class chart_impl implements chart_api {
 
   /** Whether an interactive drawing tool is armed (the recognizer routes pane clicks to creation). */
   creation_armed(): boolean {
-    return this.active_tool !== null;
+    return this.active_drawing_tool() !== null;
   }
 
-  /** Whether an interactive creation is mid-placement (the engine's pending drawing). */
+  /** Whether an interactive creation is mid-placement/capture in the engine controller. */
   creation_active(): boolean {
-    return this.wasm.drawing_create_active();
+    return this.wasm.drawing_create_active() || this.wasm.drawing_tool_capture_active();
   }
 
-  /** Forward a mouse move to the engine's creation preview (no-op while unarmed). Modifiers:
-   * `magnet` snaps the preview anchor to the nearest rendered bar price (OHLC for candles/bars,
-   * close/value for scalar series); `straighten` constrains a second anchor to 0°/45°/90°
-   * (a rectangle to a square). */
-  creation_move(x: number, y: number, magnet = false, straighten = false): void {
-    if (this.active_tool_pane !== null && this.pane_index_at(x, y) !== this.active_tool_pane) return;
-    this.wasm.drawing_create_move(x, y, magnet, straighten);
+  /** Whether the current creation owns a captured pointer stream (freehand today, extensible). */
+  creation_capture_active(): boolean {
+    return this.wasm.drawing_tool_capture_active();
   }
 
-  /**
-   * Route a pane click into interactive creation (the gesture recognizer's click path): begins
-   * the engine's creation flow on the first click and places anchors on each click, disarming
-   * the tool after a commit (one-shot, TradingView default). `magnet` snaps the placed anchor
-   * to the nearest rendered bar price (OHLC for candles/bars, close/value for scalar series);
-   * `straighten` constrains a second anchor. Returns whether the click was consumed (an armed
-   * tool over a pane).
-   */
+  /** Whether the armed placement is a variable sequence requiring explicit finish. */
+  creation_sequence_active(): boolean {
+    return this.wasm.drawing_tool_sequence_active();
+  }
+
+  private drawing_created(created_id: number): boolean {
+    if (created_id <= 0) return false;
+    const info = (JSON.parse(this.wasm.drawings_json()) as drawing_info[]).find((drawing) => drawing.id === created_id);
+    if (info === undefined) return false;
+    const created = new drawing_impl(this, info.id, info.kind, info.pane_index);
+    for (const handler of this.drawing_created_subs) handler(created);
+    // One-shot disarming happened inside the engine controller; mirror that public state change.
+    this.tool_listener?.(null);
+    for (const handler of this.tool_change_subs) handler(null);
+    if (this.wasm.drawing_requests_text_edit(created_id)) this.open_text_editor(created);
+    return true;
+  }
+
+  /** Forward an armed-tool pointer press. Returns true only when placement committed on press. */
+  creation_pointer_down(x: number, y: number, magnet = false, straighten = false): boolean {
+    if (!this.creation_armed() || this.pane_index_at(x, y) === null) return false;
+    return this.drawing_created(Number(this.wasm.drawing_tool_pointer_down(x, y, magnet, straighten)));
+  }
+
+  /** Forward an armed-tool pointer move; `pressed` identifies an active captured drag stream. */
+  creation_pointer_move(
+    x: number,
+    y: number,
+    magnet = false,
+    straighten = false,
+    pressed = false,
+  ): boolean {
+    if (!this.creation_armed()) return false;
+    return this.wasm.drawing_tool_pointer_move(x, y, magnet, straighten, pressed);
+  }
+
+  /** Forward pointer release; returns true when the release committed a drawing. */
+  creation_pointer_up(x: number, y: number, magnet = false, straighten = false): boolean {
+    if (!this.creation_armed()) return false;
+    return this.drawing_created(Number(this.wasm.drawing_tool_pointer_up(x, y, magnet, straighten)));
+  }
+
+  /** Route one click/tap activation into the canonical placement state machine. */
   creation_click(x: number, y: number, magnet = false, straighten = false): boolean {
     const pane = this.pane_index_at(x, y);
-    if (
-      this.active_tool === null || pane === null ||
-      (this.active_tool_pane !== null && pane !== this.active_tool_pane)
-    ) return false;
-    if (!this.wasm.drawing_create_active()) {
-      if (!this.wasm.drawing_create_begin(DRAWING_KIND_TO_U8[this.active_tool], this.tool_options_json)) {
-        this.set_drawing_tool(null);
-        return false;
-      }
-    }
-    const created_id = Number(this.wasm.drawing_create_click(x, y, magnet, straighten));
-    if (created_id > 0) {
-      const tool = this.active_tool;
-      const created = new drawing_impl(this, created_id, tool, pane);
-      for (const handler of this.drawing_created_subs) handler(created);
-      this.set_drawing_tool(null);
-      // The text tool goes straight into typing mode after placement (TradingView parity).
-      if (tool === "text") {
-        const drawing = this.selected_drawing();
-        if (drawing !== null) this.open_text_editor(drawing);
-      }
-    }
+    if (!this.creation_armed() || pane === null) return false;
+    const pinned_pane = Number(this.wasm.active_drawing_tool_pane());
+    if (pinned_pane >= 0 && pane !== pinned_pane) return false;
+    this.drawing_created(Number(this.wasm.drawing_tool_activate(x, y, magnet, straighten)));
     return true;
   }
 
-  /** Commit an active multi-click path (double-click/Enter). */
+  /** Commit any active variable-sequence drawing (double-click/Enter). */
   creation_finish(): boolean {
-    if (this.active_tool !== "path") return false;
-    const created_id = Number(this.wasm.drawing_create_finish());
-    if (created_id <= 0) return false;
-    const pane = this.selected_drawing()?.pane_index() ?? this.active_tool_pane ?? 0;
-    const created = new drawing_impl(this, created_id, "path", pane);
-    for (const handler of this.drawing_created_subs) handler(created);
-    this.set_drawing_tool(null);
-    return true;
+    return this.drawing_created(Number(this.wasm.drawing_tool_finish()));
   }
 
-  /** Remove the latest placed vertex from an active multi-click path. */
+  /** Remove the latest placed vertex from an active variable-sequence drawing. */
   creation_pop_anchor(): boolean {
-    return this.active_tool === "path" && this.wasm.drawing_create_pop_anchor();
+    return this.wasm.drawing_tool_pop_anchor();
+  }
+
+  /** Abort an interrupted pointer capture while leaving the selected tool armed. */
+  cancel_active_drawing_creation(): void {
+    this.wasm.cancel_drawing_creation();
   }
 
   /** Escape: disarm the tool (cancelling any pending creation) and deselect any drawing. */
   cancel_drawing_interaction(): void {
-    this.set_drawing_tool(null);
-    this.wasm.set_selected_drawing(undefined);
-  }
-
-  /**
-   * Begin a freehand brush stroke (pointer-down with the brush tool armed): the engine captures
-   * and decimates the path, and renders it as a smooth curve.
-   * Returns whether the stroke started (a pane was hit).
-   */
-  brush_create_start(x: number, y: number): boolean {
-    const pane = this.pane_index_at(x, y);
-    if (pane === null || (this.active_tool_pane !== null && pane !== this.active_tool_pane)) return false;
-    return this.wasm.brush_create_start(this.tool_options_json, x, y);
-  }
-
-  /** Forward a drag position to the engine's brush capture (no-op without an active stroke). */
-  brush_create_add(x: number, y: number): void {
-    this.wasm.brush_create_add(x, y);
-  }
-
-  /**
-   * Commit the brush stroke (pointer-up): the captured path is stored as-is and rendered as a
-   * smooth curved drawing, left selected. Disarms the tool on a commit (one-shot, TradingView
-   * default); a click without a drag discards the stroke.
-   */
-  brush_create_end(): void {
-    if (this.wasm.brush_create_end() > 0) {
-      this.set_drawing_tool(null);
+    const changed = this.active_drawing_tool() !== null;
+    this.wasm.cancel_drawing_tool();
+    if (changed) {
+      this.tool_listener?.(null);
+      for (const handler of this.tool_change_subs) handler(null);
     }
+    this.wasm.set_selected_drawing(undefined);
   }
 
   // ---------------------------------------------------------------------------------------------

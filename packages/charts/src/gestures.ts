@@ -73,11 +73,9 @@ export function install_gestures(chart: chart_impl): () => void {
   let trading_dragging = false;
   let trading_press = false;
   let alert_press = false;
-  // Freehand brush capture in progress (the engine decimates the stroke by distance).
-  let brush_drawing = false;
-  // A text-tool press that already committed (mousedown placement) — the trailing click is
-  // swallowed so it cannot re-open the typing-mode editor.
-  let text_tool_press_committed = false;
+  // A drawing placement that committed directly on pointer-down. The trailing click/tap is
+  // swallowed generically; which placement classes commit on press is engine-owned.
+  let creation_press_committed = false;
   // Vertical price pan session (reference `startScrollPrice`): the engine holds the range
   // snapshot and shift math; armed only while the scale is NOT in autoscale (its no-op gate).
   let price_pan: { pane: number; target: number } | null = null;
@@ -537,22 +535,16 @@ export function install_gestures(chart: chart_impl): () => void {
       return;
     }
     chart.deactivate_trading_group();
-    // Drawing tools: an armed tool consumes pane presses (anchors place on click, not drag); a
-    // successful drawing grab starts an engine-owned anchor/body drag. Both skip the pan.
+    // Armed drawing tools own pane presses. The engine controller decides whether this placement
+    // class starts capture, commits on press, or waits for the click activation.
     if (chart.creation_armed()) {
       pointer_targets.set(e.pointerId, InputTargetCode.Drawing);
       feed_pointer("down", e, InputTargetCode.Drawing);
-      // The brush captures the stroke as a press-drag (its own engine session, not clicks).
-      if (chart.active_drawing_tool() === "brush" && chart.brush_create_start(p.x, p.y)) {
-        brush_drawing = true;
-      } else if (chart.active_drawing_tool() === "text") {
-        // TradingView: the text tool places on PRESS and opens typing mode immediately.
-        if (chart.creation_click(p.x, p.y, e.ctrlKey || e.metaKey, e.shiftKey)) {
-          text_tool_press_committed = true;
-          // Keep the browser's default mousedown focus-grab (to the overlay) from blurring
-          // the just-opened editor.
-          e.preventDefault();
-        }
+      if (chart.creation_pointer_down(p.x, p.y, e.ctrlKey || e.metaKey, e.shiftKey)) {
+        creation_press_committed = true;
+        // A press-committed placement may open a host editor. Keep the overlay's native focus
+        // grab from immediately blurring that editor.
+        e.preventDefault();
       }
       set_crosshair(p.x, p.y);
       chart.repaint();
@@ -632,9 +624,14 @@ export function install_gestures(chart: chart_impl): () => void {
 
     if (trading_dragging) {
       chart.trading_drag_to(p.y);
-    } else if (brush_drawing) {
-      // Freehand brush: the engine decimates and captures the stroke points (drawings.rs).
-      wasm.brush_create_add(p.x, p.y);
+    } else if (chart.creation_armed()) {
+      chart.creation_pointer_move(
+        p.x,
+        p.y,
+        e.ctrlKey || e.metaKey,
+        e.shiftKey,
+        (e.buttons & 1) !== 0,
+      );
     } else if (drawing_dragging) {
       // Engine-owned anchor/body drag (drawings.rs): the engine re-anchors from the start
       // snapshot; the crosshair feed below keeps tracking the cursor. Modifier keys are
@@ -660,12 +657,6 @@ export function install_gestures(chart: chart_impl): () => void {
       wasm.clear_crosshair();
       chart.clear_hover();
       chart.emit_crosshair_left();
-    }
-    // Interactive creation preview: the pending anchor follows the mouse (engine-owned), with
-    // the same live modifier snaps as a placement click (Ctrl = magnet to rendered price, Shift =
-    // straighten).
-    if (chart.creation_active()) {
-      chart.creation_move(p.x, p.y, e.ctrlKey || e.metaKey, e.shiftKey);
     }
     // Hover cursor feedback (no button pressed), resolved AFTER the crosshair feed refreshed
     // the hover hit-test, so a primitive's `hit_test` cursor applies on the same move it
@@ -698,6 +689,7 @@ export function install_gestures(chart: chart_impl): () => void {
     // Any mouse activity cancels touch tracking mode (reference `_onMouseEvent`).
     touch_tracking = false;
     track_point = null;
+    const p = local_xy(e);
     chart.native_delta_tooltip_mouse_up();
     delta_tooltip_dragging = false;
     feed_pointer("up", e);
@@ -714,12 +706,13 @@ export function install_gestures(chart: chart_impl): () => void {
       end_axis_drag();
       return;
     }
-    if (brush_drawing) {
-      // Commit the stroke (stored as a smooth curved drawing, left selected).
-      brush_drawing = false;
-      chart.brush_create_end();
+    if (chart.creation_capture_active()) {
+      chart.creation_pointer_up(p.x, p.y, e.ctrlKey || e.metaKey, e.shiftKey);
       chart.repaint();
       return;
+    }
+    if (chart.creation_armed()) {
+      chart.creation_pointer_up(p.x, p.y, e.ctrlKey || e.metaKey, e.shiftKey);
     }
     if (trading_dragging) {
       trading_dragging = false;
@@ -801,10 +794,9 @@ export function install_gestures(chart: chart_impl): () => void {
       return;
     }
     const p = local_xy(e);
-    // A text-tool press that already committed swallowed its trailing click (mousedown
-    // placement opened the typing-mode editor).
-    if (text_tool_press_committed) {
-      text_tool_press_committed = false;
+    // A placement that committed on pointer-down swallows its trailing compatibility click.
+    if (creation_press_committed) {
+      creation_press_committed = false;
       return;
     }
     const trading_hit = chart.trading_hit_at(p.x, p.y);
@@ -860,10 +852,7 @@ export function install_gestures(chart: chart_impl): () => void {
     end_axis_drag();
     sep_drag = null;
     pinch_active = false;
-    if (brush_drawing) {
-      brush_drawing = false;
-      wasm.brush_create_cancel();
-    }
+    if (chart.creation_capture_active()) chart.cancel_active_drawing_creation();
     if (trading_dragging) {
       trading_dragging = false;
       chart.cancel_trading_drag();
@@ -919,10 +908,7 @@ export function install_gestures(chart: chart_impl): () => void {
         trading_dragging = false;
         chart.cancel_trading_drag();
       }
-      if (brush_drawing) {
-        brush_drawing = false;
-        wasm.brush_create_cancel();
-      }
+      if (chart.creation_capture_active()) chart.cancel_active_drawing_creation();
       finish_scroll_without_coast();
       end_axis_drag();
       sep_drag = null;
@@ -962,9 +948,7 @@ export function install_gestures(chart: chart_impl): () => void {
         alert_press = true;
       } else if (chart.creation_armed()) {
         target = InputTargetCode.Drawing;
-        if (chart.active_drawing_tool() === "brush" && chart.brush_create_start(p.x, p.y)) {
-          brush_drawing = true;
-        }
+        creation_press_committed = chart.creation_pointer_down(p.x, p.y, false, false);
       } else {
         // Same pre-grab selection snapshot as the mouse path (two-step text editing).
         chart.note_drawing_press();
@@ -1047,8 +1031,8 @@ export function install_gestures(chart: chart_impl): () => void {
     if (trading_dragging) {
       chart.trading_drag_to(p.y);
       set_crosshair(p.x, p.y);
-    } else if (brush_drawing) {
-      wasm.brush_create_add(p.x, p.y);
+    } else if (chart.creation_armed()) {
+      chart.creation_pointer_move(p.x, p.y, false, false, true);
     } else if (drawing_dragging) {
       wasm.drawing_drag_to(p.x, p.y, e.ctrlKey || e.metaKey, e.shiftKey);
       set_crosshair(p.x, p.y);
@@ -1099,9 +1083,8 @@ export function install_gestures(chart: chart_impl): () => void {
 
     pinch_active = false;
     if (pointers.size === 0) chart.set_interacting(false);
-    if (brush_drawing) {
-      brush_drawing = false;
-      chart.brush_create_end();
+    if (chart.creation_capture_active()) {
+      chart.creation_pointer_up(p.x, p.y, false, false);
     } else if (trading_dragging) {
       trading_dragging = false;
       chart.trading_drag_end();
@@ -1113,17 +1096,19 @@ export function install_gestures(chart: chart_impl): () => void {
     }
 
     const was_tap = !touch_moved && !long_tap_active;
+    const committed_on_press = creation_press_committed;
+    creation_press_committed = false;
     tap_count += 1;
     if (tap_timer !== null && tap_count > 1) {
       const distance = Math.abs(e.clientX - tap_position.x) + Math.abs(e.clientY - tap_position.y);
-      if (distance < DBL_TAP_MANHATTAN && was_tap) {
+      if (distance < DBL_TAP_MANHATTAN && was_tap && !committed_on_press) {
         // Unlike mouse compatibility events, the second tap has no preceding `click` event.
-        // Place its endpoint before the shared double-click path finishes the drawing.
-        if (chart.active_drawing_tool() === "path") chart.creation_click(p.x, p.y, false, false);
+        // A variable-sequence placement receives this activation before the shared finish action.
+        if (chart.creation_sequence_active()) chart.creation_click(p.x, p.y, false, false);
         run_dblclick(p.x, p.y);
       }
       reset_tap();
-    } else if (was_tap) {
+    } else if (was_tap && !committed_on_press) {
       const trading_hit = chart.trading_hit_at_device(p.x, p.y, InputDeviceCode.Touch);
       if (trading_press && trading_hit !== null) {
         chart.trading_activate_at(p.x, p.y);
@@ -1262,9 +1247,9 @@ export function install_gestures(chart: chart_impl): () => void {
         handled = chart.creation_finish();
         break;
       case "Backspace":
-        // During path placement Backspace removes only the latest pending vertex. Otherwise it
-        // retains the ordinary selected-drawing deletion behavior.
-        handled = chart.active_drawing_tool() === "path" && chart.creation_active()
+        // During variable-sequence placement Backspace removes only the latest pending vertex.
+        // Otherwise it retains the ordinary selected-drawing deletion behavior.
+        handled = chart.creation_sequence_active() && chart.creation_active()
           ? chart.creation_pop_anchor()
           : wasm.remove_selected_drawing();
         break;
