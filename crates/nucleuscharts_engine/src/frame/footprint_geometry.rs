@@ -603,11 +603,12 @@ fn push_poc_stripe(out: &mut Vec<Prim>, left: i32, top: i32, height: i32, hpr: f
     });
 }
 
-/// High-contrast glyph color for a cell: an explicit host text color stays
-/// authoritative; otherwise pick black/white over the composited cell so numbers
-/// stay legible on every intensity step and on both themes.
+/// Glyph color for a footprint cell. An explicit host text color stays authoritative.
+/// On light surfaces the canonical layout foreground stays fixed so translucent cell
+/// fills cannot flip numbers to white; dark surfaces still resolve contrast against
+/// the composited cell.
 fn contrast_on(cell: Color, style: &FootprintTextStyle<'_>) -> Color {
-    if style.explicit_text {
+    if style.explicit_text || style.surface.luminance() > 160.0 {
         return style.fallback_color;
     }
     composite_over(cell, style.surface).contrast_text()

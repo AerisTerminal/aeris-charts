@@ -1822,9 +1822,21 @@ mod tests {
             .iter()
             .find(|segment| segment.series_id == Some(0))
             .unwrap();
-        assert!(themed.panes[0].main[segment.start..segment.end].iter().any(
-            |primitive| matches!(primitive, Prim::Text { color, .. } if *color == expected_text)
-        ));
+        let cell_text_colors = themed.panes[0].main[segment.start..segment.end]
+            .iter()
+            .filter_map(|primitive| match primitive {
+                Prim::Text { text, color, .. }
+                    if text
+                        .chars()
+                        .all(|character| character.is_ascii_digit() || character == '-') =>
+                {
+                    Some(*color)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(!cell_text_colors.is_empty());
+        assert!(cell_text_colors.iter().all(|color| *color == expected_text));
 
         chart.set_bar_spacing(20.0);
         let cells = chart.build_frame();
