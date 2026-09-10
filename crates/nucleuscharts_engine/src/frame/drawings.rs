@@ -28,6 +28,11 @@ const ANCHOR_RADIUS: f64 = 4.0;
 const ANCHOR_BORDER_WIDTH: f64 = 1.5;
 const ANCHOR_BORDER: Color = PRIMARY;
 const POSITION_ENTRY_WIDTH_CSS: f64 = 0.5;
+const POSITION_ZONE_ALPHA: u8 = 70;
+/// Progress must read as the emphasized portion of either semantic side on its own. Keep this
+/// above the base-zone alpha instead of relying on a second lower-alpha pass to become visible
+/// only through accidental compositing.
+const POSITION_PROGRESS_ALPHA: u8 = 96;
 /// The hover ring's dimmed variant of the focus border (TradingView shows the same border at
 /// roughly half strength until the drawing is actually selected).
 const HOVER_BORDER: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0x73);
@@ -825,7 +830,7 @@ impl ChartEngine {
                         y1: run_y,
                     },
                     semantic,
-                    58,
+                    POSITION_PROGRESS_ALPHA,
                 );
             }
             let progress_path = [
@@ -1182,7 +1187,7 @@ impl ChartEngine {
 }
 
 fn push_position_zone(out: &mut Vec<Prim>, zone: PositionZone, color: Color) {
-    push_position_zone_with_alpha(out, zone, color, 70);
+    push_position_zone_with_alpha(out, zone, color, POSITION_ZONE_ALPHA);
 }
 
 fn push_position_zone_with_alpha(out: &mut Vec<Prim>, zone: PositionZone, color: Color, alpha: u8) {

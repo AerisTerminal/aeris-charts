@@ -2405,8 +2405,8 @@ fn position_progress_darkens_the_run_and_keeps_labels_above_the_gray_trend() {
     let frame = chart.build_frame();
     let reward = Color::rgb(0x08, 0x99, 0x81);
     let risk = Color::rgb(0xf7, 0x52, 0x5f);
-    let progress_fill = Color::rgba(reward.r(), reward.g(), reward.b(), 58);
-    let risk_progress_fill = Color::rgba(risk.r(), risk.g(), risk.b(), 58);
+    let progress_fill = Color::rgba(reward.r(), reward.g(), reward.b(), 96);
+    let risk_progress_fill = Color::rgba(risk.r(), risk.g(), risk.b(), 96);
     let progress_rect = frame.panes[0]
         .main
         .iter()
@@ -2642,8 +2642,8 @@ fn position_run_stays_pending_until_entry_is_reached() {
     let frame = chart.build_frame();
     let reward = Color::rgb(0x08, 0x99, 0x81);
     let risk = Color::rgb(0xf7, 0x52, 0x5f);
-    let reward_progress = Color::rgba(reward.r(), reward.g(), reward.b(), 58);
-    let risk_progress = Color::rgba(risk.r(), risk.g(), risk.b(), 58);
+    let reward_progress = Color::rgba(reward.r(), reward.g(), reward.b(), 96);
+    let risk_progress = Color::rgba(risk.r(), risk.g(), risk.b(), 96);
     assert!(!frame.panes[0].main.iter().any(|prim| {
         matches!(prim, Prim::Rect { color, .. } if *color == reward_progress || *color == risk_progress)
     }));
@@ -2695,7 +2695,11 @@ fn position_progress_overlay_covers_only_the_traveled_price_slice() {
     let frame = chart.build_frame();
     let reward = Color::rgb(0x08, 0x99, 0x81);
     let base_fill = Color::rgba(reward.r(), reward.g(), reward.b(), 70);
-    let progress_fill = Color::rgba(reward.r(), reward.g(), reward.b(), 58);
+    let progress_fill = Color::rgba(reward.r(), reward.g(), reward.b(), 96);
+    assert!(
+        progress_fill.a() > base_fill.a(),
+        "the traveled reward slice must be intrinsically more opaque than the untouched zone"
+    );
     let base = frame.panes[0]
         .main
         .iter()
@@ -2969,8 +2973,13 @@ fn stop_first_progress_darkens_only_the_traveled_loss_slice() {
     let frame = chart.build_frame();
     let reward = Color::rgb(0x08, 0x99, 0x81);
     let risk = Color::rgb(0xf7, 0x52, 0x5f);
-    let reward_progress = Color::rgba(reward.r(), reward.g(), reward.b(), 58);
-    let risk_progress = Color::rgba(risk.r(), risk.g(), risk.b(), 58);
+    let reward_progress = Color::rgba(reward.r(), reward.g(), reward.b(), 96);
+    let risk_base = Color::rgba(risk.r(), risk.g(), risk.b(), 70);
+    let risk_progress = Color::rgba(risk.r(), risk.g(), risk.b(), 96);
+    assert!(
+        risk_progress.a() > risk_base.a(),
+        "the traveled stop-loss slice must be intrinsically more opaque than the untouched zone"
+    );
     assert!(frame.panes[0]
         .main
         .iter()
