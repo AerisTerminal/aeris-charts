@@ -4110,6 +4110,13 @@ export class chart_impl implements chart_api {
     caret.style.background = ink;
     caret.style.pointerEvents = "none";
 
+    // Selection is painted by the browser in a separate phase and can remain visible even when
+    // the editable element itself is transparent. Suppress it locally so a selected/composing
+    // trend label cannot place theme-colored blocks over the canonical canvas glyphs.
+    const selection_style = document.createElement("style");
+    selection_style.textContent =
+      "#nucleuscharts-text-input::selection{background:transparent!important;color:transparent!important;-webkit-text-fill-color:transparent!important;text-shadow:none!important}";
+
     const dpr = window.devicePixelRatio || 1;
     const measure_ctx = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
     let baseline_drop = 0;
@@ -4210,6 +4217,7 @@ export class chart_impl implements chart_api {
 
     wrap.appendChild(editor);
     wrap.appendChild(caret);
+    wrap.appendChild(selection_style);
     this.container.appendChild(wrap);
     const probe = document.createElement("span");
     probe.style.display = "inline-block";

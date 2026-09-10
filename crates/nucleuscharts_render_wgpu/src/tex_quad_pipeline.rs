@@ -142,7 +142,14 @@ impl TexQuadRenderer {
         atlas_view: &wgpu::TextureView,
         sample_count: u32,
     ) -> Self {
-        Self::new_with_shader(device, format, atlas_view, sample_count, SHADER)
+        Self::new_with_shader(
+            device,
+            format,
+            atlas_view,
+            sample_count,
+            SHADER,
+            wgpu::FilterMode::Nearest,
+        )
     }
 
     pub fn new_rotated(
@@ -151,7 +158,14 @@ impl TexQuadRenderer {
         atlas_view: &wgpu::TextureView,
         sample_count: u32,
     ) -> Self {
-        Self::new_with_shader(device, format, atlas_view, sample_count, ROTATED_SHADER)
+        Self::new_with_shader(
+            device,
+            format,
+            atlas_view,
+            sample_count,
+            ROTATED_SHADER,
+            wgpu::FilterMode::Linear,
+        )
     }
 
     fn new_with_shader(
@@ -160,6 +174,7 @@ impl TexQuadRenderer {
         atlas_view: &wgpu::TextureView,
         sample_count: u32,
         shader_source: &'static str,
+        filter: wgpu::FilterMode,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("tex_quad_shader"),
@@ -220,8 +235,10 @@ impl TexQuadRenderer {
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("atlas_sampler"),
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
+            // Axis-aligned text stays pixel-exact at 1:1. Rotated atlas quads need linear
+            // reconstruction or each source texel becomes a visibly jagged stair step.
+            mag_filter: filter,
+            min_filter: filter,
             ..Default::default()
         });
 

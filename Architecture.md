@@ -271,14 +271,16 @@ prompt advance; editing starts with a compact one-em caret opening and expands f
 advance as the user types. Top and bottom slots never cut the stroke. The browser uses a fully
 transparent borderless editing surface (including native caret and IME composition paint) plus one
 explicit colored caret at the engine's exact anchor and angle, leaving the frame as the sole glyph
-owner.
+owner. Its selection pseudo-element is transparent as well, preventing browser selection/IME paint
+from leaking theme-colored duplicate glyphs during live transforms.
 Standalone Text retains its separate create/remove lifecycle and explicit toolbar text input.
 
 Segment-following text is an explicit `RotatedText` frame primitive carrying the final aligned
 anchor, clockwise angle, font, weight, italics, size, color, and text; no executor reconstructs
 trend geometry or silently ignores the angle. Canvas2D translates and rotates around the anchor
 before `fillText`; WebGPU sends only rotated runs through a dedicated vertex pipeline that rotates
-the unchanged cached glyph-atlas quad while preserving the ordinary-text instance/shader contract;
+and linearly samples the unchanged cached glyph-atlas quad while preserving the ordinary-text
+instance/shader contract;
 tiny-skia resamples a local glyph-coverage raster around the same pivot; GPUI uses its transformed
 monochrome-sprite path backed by its atlas. Browser and GPUI caches key glyph-dependent inputs and
 subpixel phase but deliberately exclude angle, so endpoint motion reuses glyph coverage. Their
