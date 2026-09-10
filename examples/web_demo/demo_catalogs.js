@@ -328,6 +328,59 @@ function primitive_features(chart, series, bars) {
   ];
 }
 
+function install_demo_bracket_host(chart) {
+  const trading = chart.trading();
+  const place_demo_bracket = (intent) => {
+    if (intent.action !== "place_bracket_order") return;
+    const entry_id = `demo-entry-${intent.sequence}`;
+    const bracket_id = `demo-bracket-${intent.sequence}`;
+    const oco_group_id = `demo-oco-${intent.sequence}`;
+    const exit_side = intent.side === "buy" ? "sell" : "buy";
+    trading.resolve_intent(intent.sequence, true);
+    trading.update_order({
+      id: entry_id,
+      pane_index: intent.pane_index,
+      price_scale: intent.price_scale,
+      side: intent.side,
+      kind: intent.kind,
+      role: "working",
+      status: "working",
+      price: intent.price,
+      quantity: intent.quantity,
+      bracket_id,
+    });
+    trading.update_order({
+      id: `demo-target-${intent.sequence}`,
+      pane_index: intent.pane_index,
+      price_scale: intent.price_scale,
+      side: exit_side,
+      kind: "limit",
+      role: "take_profit",
+      status: "working",
+      price: intent.take_profit_price,
+      quantity: intent.quantity,
+      parent_order_id: entry_id,
+      bracket_id,
+      oco_group_id,
+    });
+    trading.update_order({
+      id: `demo-stop-${intent.sequence}`,
+      pane_index: intent.pane_index,
+      price_scale: intent.price_scale,
+      side: exit_side,
+      kind: "stop",
+      role: "stop_loss",
+      status: "working",
+      price: intent.stop_loss_price,
+      quantity: intent.quantity,
+      parent_order_id: entry_id,
+      bracket_id,
+      oco_group_id,
+    });
+  };
+  trading.subscribe_intents(place_demo_bracket);
+}
+
 function trading_features(chart, bars) {
   const middle = bars[Math.floor(bars.length * 0.62)];
   const entry = middle.close;
@@ -356,55 +409,6 @@ function trading_features(chart, bars) {
         });
       };
       chart.subscribe_crosshair_action(create_demo_alert);
-      const place_demo_bracket = (intent) => {
-        if (intent.action !== "place_bracket_order") return;
-        const entry_id = `demo-entry-${intent.sequence}`;
-        const bracket_id = `demo-bracket-${intent.sequence}`;
-        const oco_group_id = `demo-oco-${intent.sequence}`;
-        const exit_side = intent.side === "buy" ? "sell" : "buy";
-        trading.resolve_intent(intent.sequence, true);
-        trading.update_order({
-          id: entry_id,
-          pane_index: intent.pane_index,
-          price_scale: intent.price_scale,
-          side: intent.side,
-          kind: intent.kind,
-          role: "working",
-          status: "working",
-          price: intent.price,
-          quantity: intent.quantity,
-          bracket_id,
-        });
-        trading.update_order({
-          id: `demo-target-${intent.sequence}`,
-          pane_index: intent.pane_index,
-          price_scale: intent.price_scale,
-          side: exit_side,
-          kind: "limit",
-          role: "take_profit",
-          status: "working",
-          price: intent.take_profit_price,
-          quantity: intent.quantity,
-          parent_order_id: entry_id,
-          bracket_id,
-          oco_group_id,
-        });
-        trading.update_order({
-          id: `demo-stop-${intent.sequence}`,
-          pane_index: intent.pane_index,
-          price_scale: intent.price_scale,
-          side: exit_side,
-          kind: "stop",
-          role: "stop_loss",
-          status: "working",
-          price: intent.stop_loss_price,
-          quantity: intent.quantity,
-          parent_order_id: entry_id,
-          bracket_id,
-          oco_group_id,
-        });
-      };
-      trading.subscribe_intents(place_demo_bracket);
       trading.apply_snapshot({
         instrument: {
           tick_size: 0.01,
@@ -468,7 +472,6 @@ function trading_features(chart, bars) {
       });
       return () => {
         chart.unsubscribe_crosshair_action(create_demo_alert);
-        trading.unsubscribe_intents(place_demo_bracket);
         for (const id of demo_alert_ids) alerts.remove_line(id);
         trading.apply_snapshot({});
       };
@@ -477,6 +480,7 @@ function trading_features(chart, bars) {
 }
 
 export function install_demo_catalogs({ chart, series, data, on_series_change }) {
+  install_demo_bracket_host(chart);
   const grid = document.getElementById("feature_grid");
   const series_grid = document.getElementById("series_grid");
   const search = document.getElementById("feature_search");

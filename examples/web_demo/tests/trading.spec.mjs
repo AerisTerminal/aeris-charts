@@ -117,9 +117,9 @@ test("selected position drawing places one host-sized bracket request", async ({
       drawing_id: drawing?.id,
       drawing_kind: drawing?.kind(),
       drawing_count: window.__chart.drawings().length,
-      entry_price: Math.round(points[0]?.price * 100) / 100,
-      take_profit_price: Math.round(points[1]?.price * 100) / 100,
-      stop_loss_price: Math.round(points[2]?.price * 100) / 100,
+      entry_price: points[0]?.price,
+      take_profit_price: points[1]?.price,
+      stop_loss_price: points[2]?.price,
     };
   });
   expect(setup.drawing_count).toBe(1);
@@ -131,7 +131,7 @@ test("selected position drawing places one host-sized bracket request", async ({
 
   const placed = await page.evaluate(() => ({
     intents: window.__placed_bracket_intents,
-    orders: window.__chart.trading().state().orders.filter((order) => order.id.includes("-1")),
+    trading_state: window.__chart.trading().state(),
     drawing_count: window.__chart.drawings().length,
   }));
   expect(placed.intents).toHaveLength(1);
@@ -148,8 +148,11 @@ test("selected position drawing places one host-sized bracket request", async ({
   expect(placed.intents[0].price).toBeCloseTo(setup.entry_price, 10);
   expect(placed.intents[0].take_profit_price).toBeCloseTo(setup.take_profit_price, 10);
   expect(placed.intents[0].stop_loss_price).toBeCloseTo(setup.stop_loss_price, 10);
-  expect(await page.evaluate(() => window.__demo_catalogs.lab.active_ids())).toContain("trading-bracket");
-  expect(placed.orders).toEqual(expect.arrayContaining([
+  expect(await page.evaluate(() => window.__demo_catalogs.lab.active_ids())).not.toContain("trading-bracket");
+  expect(placed.trading_state.positions).toEqual([]);
+  expect(placed.trading_state.executions).toEqual([]);
+  expect(placed.trading_state.orders).toHaveLength(3);
+  expect(placed.trading_state.orders).toEqual(expect.arrayContaining([
     expect.objectContaining({ id: "demo-entry-1", role: "working", side: "buy", quantity: 7 }),
     expect.objectContaining({ id: "demo-target-1", role: "take_profit", side: "sell", quantity: 7 }),
     expect.objectContaining({ id: "demo-stop-1", role: "stop_loss", side: "sell", quantity: 7 }),

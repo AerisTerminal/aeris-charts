@@ -1146,9 +1146,6 @@ document.getElementById("place_position_order").addEventListener("click", () => 
   }
   const quantity = Number(document.getElementById("position_order_quantity").value);
   try {
-    if (!window.__demo_catalogs.lab.active_ids().includes("trading-bracket")) {
-      window.__demo_catalogs.lab.activate("trading-bracket");
-    }
     active_chart().trading().place_bracket_order(selected.id, quantity);
     status.textContent = `${selected.kind() === "long_position" ? "Long" : "Short"} bracket requested · qty ${quantity}`;
   } catch (error) {
