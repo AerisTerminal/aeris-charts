@@ -11,7 +11,7 @@ use nucleuscharts_core::TimePointIndex;
 /// concept; generating the gap geometry once keeps both backends pixel-identical by
 /// construction.
 #[allow(clippy::too_many_arguments)]
-fn push_line_stroke(
+pub(super) fn push_line_stroke(
     out: &mut Vec<Prim>,
     points: &mut Vec<[f32; 2]>,
     window: &[[f32; 2]],

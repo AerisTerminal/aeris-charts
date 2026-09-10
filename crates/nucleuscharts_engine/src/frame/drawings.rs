@@ -741,6 +741,7 @@ impl ChartEngine {
         &self,
         pane_index: usize,
         out: &mut Vec<Prim>,
+        points: &mut Vec<[f32; 2]>,
         hpr: f64,
         vpr: f64,
     ) {
@@ -752,9 +753,10 @@ impl ChartEngine {
                 )
                 && drawing.points.len() == 3
         }) {
-            let Some(live_price) = self.position_live_price(drawing) else {
+            let Some(live_point) = self.position_live_point(drawing) else {
                 continue;
             };
+            let live_price = live_point.price;
             let entry = drawing.points[0].price;
             let target = drawing.points[1].price;
             let stop = drawing.points[2].price;
@@ -826,27 +828,37 @@ impl ChartEngine {
                 58,
             );
 
-            // Keep the live marker inside the position bounds. Once price has run beyond target or
-            // stop the darker fill remains complete, but a clamped line avoids pretending the
-            // boundary itself is the current market price.
-            if live_price >= lower && live_price <= upper {
-                let left = position.left.round() as i32;
-                let right = position.right.round() as i32;
-                if left != right {
-                    out.push(Prim::HLine {
-                        y: progress_y.round() as i32,
-                        x0: left,
-                        x1: right,
-                        width: 1,
-                        style: LineStyle::Dotted,
-                        color: semantic.solid(),
-                    });
-                }
+            // Follow the actual price path from the exact entry anchor to the latest plotted bar.
+            // Once price leaves the position, clamp only its y coordinate to the completed target
+            // or stop boundary; its x coordinate remains the real latest-bar location.
+            let progress_point = crate::drawings::DrawingPoint {
+                logical: live_point.logical,
+                price: progress_price,
+            };
+            let Some((progress_x, _)) =
+                self.drawing_to_px_for(pane_index, drawing.price_scale, progress_point)
+            else {
+                continue;
+            };
+            let progress_path = [
+                [px[0].0 as f32, position.entry_y as f32],
+                [(progress_x * hpr) as f32, progress_y as f32],
+            ];
+            if progress_path[0] != progress_path[1] {
+                super::series_geometry::push_line_stroke(
+                    out,
+                    points,
+                    &progress_path,
+                    vpr.max(1.0) as f32,
+                    LineStyle::Dotted,
+                    LineType::Simple,
+                    semantic.solid(),
+                );
             }
         }
     }
 
-    fn position_live_price(&self, drawing: &Drawing) -> Option<f64> {
+    fn position_live_point(&self, drawing: &Drawing) -> Option<crate::drawings::DrawingPoint> {
         let target = match drawing.price_scale {
             crate::DrawingPriceScale::Right => crate::PriceScaleTarget::Right,
             crate::DrawingPriceScale::Left => crate::PriceScaleTarget::Left,
@@ -859,16 +871,24 @@ impl ChartEngine {
                 && super::series_scale_target(series) == target
         })?;
         if series.kind == crate::SeriesKind::Custom {
-            return series
-                .custom_frame
-                .last
-                .map(|last| last.value)
-                .filter(|value| value.is_finite());
+            let last = series.custom_frame.last?;
+            let logical = self.time_to_index(last.time as f64, false)?;
+            return last
+                .value
+                .is_finite()
+                .then_some(crate::drawings::DrawingPoint {
+                    logical: logical as f64,
+                    price: last.value,
+                });
         }
         let plot = self.data.plot(series.id);
         let row = plot.last_non_whitespace_row(i64::MAX)?;
+        let logical = plot.index_at(row)?;
         let value = plot.value_at(row, PlotValueIndex::Close);
-        value.is_finite().then_some(value)
+        value.is_finite().then_some(crate::drawings::DrawingPoint {
+            logical: logical as f64,
+            price: value,
+        })
     }
 
     fn push_position_label_block(

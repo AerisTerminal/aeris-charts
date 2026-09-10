@@ -1665,7 +1665,13 @@ impl ChartEngine {
                         hpr,
                         vpr,
                     );
-                    self.build_position_progress_frame(pi, &mut cache.chrome.prims, hpr, vpr);
+                    self.build_position_progress_frame(
+                        pi,
+                        &mut cache.chrome.prims,
+                        &mut cache.chrome.points,
+                        hpr,
+                        vpr,
+                    );
                     self.build_bid_ask_lines_frame(
                         pi,
                         from,

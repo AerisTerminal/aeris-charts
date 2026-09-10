@@ -2406,14 +2406,31 @@ fn position_progress_darkens_the_traversed_zone_and_marks_live_price() {
         .main
         .iter()
         .any(|prim| matches!(prim, Prim::Rect { color, .. } if *color == progress_fill)));
-    assert!(frame.panes[0].main.iter().any(|prim| matches!(
-        prim,
-        Prim::HLine {
-            color,
-            style: LineStyle::Dotted,
-            ..
-        } if *color == reward
-    )));
+    let progress = frame.panes[0]
+        .main
+        .iter()
+        .filter_map(|prim| match prim {
+            Prim::Polyline {
+                first_point,
+                point_count,
+                color,
+                style: LineStyle::Solid,
+                line_type: LineType::Simple,
+                ..
+            } if *color == reward => Some((*first_point as usize, *point_count as usize)),
+            _ => None,
+        })
+        .filter(|(_, count)| *count >= 2)
+        .collect::<Vec<_>>();
+    assert!(
+        progress.len() > 1,
+        "the dotted position path must be split into backend-identical solid runs"
+    );
+    for (first, count) in progress {
+        let run = &frame.panes[0].points[first..first + count];
+        assert_ne!(run[0][0], run[1][0], "progress must advance in time");
+        assert_ne!(run[0][1], run[1][1], "progress must track price");
+    }
 }
 
 #[test]
