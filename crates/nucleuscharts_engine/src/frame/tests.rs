@@ -2338,9 +2338,11 @@ fn position_drawings_paint_information_and_entry_target_stop_axis_prices() {
         })
         .collect::<Vec<_>>();
     assert!(text.iter().any(|text| text.starts_with("Target: ")));
-    assert!(text.contains(&"Open PnL: 0.00, Qty: 0"));
-    assert!(text.contains(&"Risk / reward ratio: 1.00"));
     assert!(text.iter().any(|text| text.starts_with("Stop: ")));
+    assert!(!text.iter().any(|text| text.starts_with("Open PnL: ")));
+    assert!(!text
+        .iter()
+        .any(|text| text.starts_with("Risk / reward ratio: ")));
 
     let labels = chart
         .build_axis_frame(
@@ -2372,7 +2374,7 @@ fn position_drawings_paint_information_and_entry_target_stop_axis_prices() {
 }
 
 #[test]
-fn position_progress_darkens_the_traversed_zone_and_marks_live_price() {
+fn position_progress_darkens_the_run_and_keeps_labels_above_the_gray_trend() {
     use crate::drawings::{DrawingKind, DrawingPoint};
 
     let mut chart = countdown_chart();
@@ -2417,20 +2419,144 @@ fn position_progress_darkens_the_traversed_zone_and_marks_live_price() {
                 style: LineStyle::Solid,
                 line_type: LineType::Simple,
                 ..
-            } if *color == reward => Some((*first_point as usize, *point_count as usize)),
+            } if *color == POSITION_ENTRY => Some((*first_point as usize, *point_count as usize)),
             _ => None,
         })
         .filter(|(_, count)| *count >= 2)
         .collect::<Vec<_>>();
     assert!(
         progress.len() > 1,
-        "the dotted position path must be split into backend-identical solid runs"
+        "the dashed gray position path must be split into backend-identical solid runs"
     );
     for (first, count) in progress {
         let run = &frame.panes[0].points[first..first + count];
         assert_ne!(run[0][0], run[1][0], "progress must advance in time");
         assert_ne!(run[0][1], run[1][1], "progress must track price");
     }
+
+    let last_progress_prim = frame.panes[0]
+        .main
+        .iter()
+        .enumerate()
+        .filter_map(|(index, prim)| match prim {
+            Prim::Polyline { color, .. } if *color == POSITION_ENTRY => Some(index),
+            _ => None,
+        })
+        .max()
+        .expect("position progress line");
+    let first_position_label = frame.panes[0]
+        .main
+        .iter()
+        .enumerate()
+        .filter_map(|(index, prim)| match prim {
+            Prim::Text { text, .. }
+                if text.starts_with("Target: ") || text.starts_with("Stop: ") =>
+            {
+                Some(index)
+            }
+            _ => None,
+        })
+        .min()
+        .expect("position information labels");
+    assert!(
+        last_progress_prim < first_position_label,
+        "position labels must paint over the dashed run line"
+    );
+    assert!(!frame.panes[0].main.iter().any(|prim| matches!(
+        prim,
+        Prim::Text { text, .. }
+            if text.starts_with("Open PnL: ") || text.starts_with("Risk / reward ratio: ")
+    )));
+}
+
+#[test]
+fn position_run_anchors_to_post_entry_ohlc_extreme_not_latest_close() {
+    use crate::drawings::{DrawingKind, DrawingPoint};
+
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart.series[0].kind = SeriesKind::Candlestick;
+    let times = [0.0, 60.0, 120.0, 180.0, 240.0];
+    let open = [10.0, 12.0, 13.0, 14.0, 13.0];
+    let high = [11.0, 13.0, 16.0, 15.0, 14.0];
+    let low = [9.0, 11.0, 12.0, 10.0, 11.0];
+    let close = [10.5, 12.5, 15.0, 12.0, 12.5];
+    chart
+        .set_series_data(0, &times, &open, &high, &low, &close)
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+
+    let long_id = chart
+        .add_drawing(
+            DrawingKind::LongPosition,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 1.0,
+                    price: 12.0,
+                },
+                DrawingPoint {
+                    logical: 3.0,
+                    price: 14.0,
+                },
+                DrawingPoint {
+                    logical: 1.0,
+                    price: 11.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    let short_id = chart
+        .add_drawing(
+            DrawingKind::ShortPosition,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 1.0,
+                    price: 14.0,
+                },
+                DrawingPoint {
+                    logical: 3.0,
+                    price: 12.0,
+                },
+                DrawingPoint {
+                    logical: 1.0,
+                    price: 15.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+
+    let long = chart
+        .drawings
+        .iter()
+        .find(|drawing| drawing.id == long_id)
+        .unwrap();
+    let long_run = chart.position_run_extreme_point(long).unwrap();
+    assert_eq!(long_run.logical, 2.0);
+    assert_eq!(long_run.price, 16.0, "long run uses the exact highest HIGH");
+
+    let short = chart
+        .drawings
+        .iter()
+        .find(|drawing| drawing.id == short_id)
+        .unwrap();
+    let short_run = chart.position_run_extreme_point(short).unwrap();
+    assert_eq!(short_run.logical, 3.0);
+    assert_eq!(short_run.price, 10.0, "short run uses the exact lowest LOW");
+
+    assert_ne!(
+        long_run.price,
+        *close.last().unwrap(),
+        "the run endpoint must not collapse to current/latest close"
+    );
+    assert_ne!(
+        short_run.price,
+        *close.last().unwrap(),
+        "the run endpoint must not collapse to current/latest close"
+    );
 }
 
 #[test]

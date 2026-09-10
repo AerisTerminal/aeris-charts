@@ -341,6 +341,7 @@ impl FrameInvalidation {
     fn drawings(&mut self) {
         let generation = self.tick();
         self.drawings = generation;
+        self.chrome = generation;
         self.overlay = generation;
         self.axis = generation;
     }
@@ -1686,6 +1687,9 @@ impl ChartEngine {
                 }
                 self.build_native_anchored_text_frame(pi, hpr, vpr, &mut cache.chrome.prims);
                 self.build_native_text_watermark_frame(pi, hpr, vpr, &mut cache.chrome.prims);
+                // Keep position information readable over its dynamic run overlay and all other
+                // pane chrome. Trading/interaction layers still paint above these labels.
+                self.build_position_labels_frame(pi, &mut cache.chrome.prims, hpr, vpr);
                 cache.chrome.revision = self.frame_invalidation.chrome;
                 cache.chrome.coordinate_revision = self.frame_invalidation.coordinate;
                 cache.top_layer.revision = self.frame_invalidation.chrome;

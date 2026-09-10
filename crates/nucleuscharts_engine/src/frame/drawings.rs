@@ -18,7 +18,7 @@ use crate::drawings::{
     DrawingKind, DrawingTextHAlign, PositionGeometry, PositionZone, TEXT_CHROME_PAD, TEXT_PAD,
 };
 use crate::ChartEngine;
-use nucleuscharts_core::model::plot_list::PlotValueIndex;
+use nucleuscharts_core::model::plot_list::{MismatchDirection, PlotValueIndex};
 
 /// TradingView-style drawing anchor handle: a theme-derived disc with the primary-token border
 /// (the crosshair-marks disc idiom — the border is a larger filled disc underneath). Slightly
@@ -473,7 +473,6 @@ impl ChartEngine {
                         color: POSITION_ENTRY,
                     });
                 }
-                self.build_position_labels(drawing, position, vpr, reward, risk, out);
             }
             // The text tool's geometry is its label (emitted by `build_drawing_text`).
             DrawingBodyGeometry::Empty => {}
@@ -691,20 +690,10 @@ impl ChartEngine {
         } else {
             0.0
         };
-        let ratio = (risk_distance > f64::EPSILON).then_some(reward_distance / risk_distance);
         let target_text = format!(
             "Target: {} ({reward_percent:.2}%)",
             self.price_formatter.format(reward_distance)
         );
-        let ratio_text = ratio
-            .map(|ratio| format!("Risk / reward ratio: {ratio:.2}"))
-            .unwrap_or_else(|| "Risk / reward ratio: —".to_string());
-        let summary_color = match drawing.kind {
-            DrawingKind::LongPosition => reward,
-            DrawingKind::ShortPosition => risk,
-            _ => return,
-        };
-        let pnl_text = "Open PnL: 0.00, Qty: 0".to_string();
         let stop_text = format!(
             "Stop: {} ({risk_percent:.2}%)",
             self.price_formatter.format(risk_distance)
@@ -721,22 +710,13 @@ impl ChartEngine {
         } else {
             position.stop_y + label_offset
         };
-        let summary_y = (position.target_y + position.stop_y) / 2.0;
         self.push_position_label_block(out, center_x, target_label_y, &[target_text], reward, vpr);
-        self.push_position_label_block(
-            out,
-            center_x,
-            summary_y,
-            &[pnl_text, ratio_text],
-            summary_color,
-            vpr,
-        );
         self.push_position_label_block(out, center_x, stop_label_y, &[stop_text], risk, vpr);
     }
 
     /// Dynamic position progress belongs to pane chrome rather than retained drawing geometry:
-    /// series updates already invalidate chrome, so the darker traversed fill and current-price
-    /// marker can follow live data without rebuilding every drawing on each tick.
+    /// series updates already invalidate chrome, so the darker traversed fill and run-extreme
+    /// trend can follow data without rebuilding every drawing on each tick.
     pub(super) fn build_position_progress_frame(
         &self,
         pane_index: usize,
@@ -753,20 +733,21 @@ impl ChartEngine {
                 )
                 && drawing.points.len() == 3
         }) {
-            let Some(live_point) = self.position_live_point(drawing) else {
+            let Some(run_point) = self.position_run_extreme_point(drawing) else {
                 continue;
             };
-            let live_price = live_point.price;
             let entry = drawing.points[0].price;
             let target = drawing.points[1].price;
             let stop = drawing.points[2].price;
             let lower = target.min(stop);
             let upper = target.max(stop);
-            if !live_price.is_finite() || !entry.is_finite() || lower >= upper {
+            if !run_point.price.is_finite() || !entry.is_finite() || lower >= upper {
                 continue;
             }
 
-            let progress_price = live_price.clamp(lower, upper);
+            // The shaded run is monotonic: long tracks the highest post-entry high and short the
+            // lowest post-entry low. Clamp only the fill to the semantic target/stop rectangle.
+            let progress_price = run_point.price.clamp(lower, upper);
             if (progress_price - entry).abs() <= f64::EPSILON {
                 continue;
             }
@@ -801,18 +782,8 @@ impl ChartEngine {
                 continue;
             };
             let progress_y = progress_y * vpr;
-            let is_profit = match drawing.kind {
-                DrawingKind::LongPosition => progress_price >= entry,
-                DrawingKind::ShortPosition => progress_price <= entry,
-                _ => false,
-            };
-            let semantic = if is_profit {
-                Color::parse_css(nucleuscharts_core::style::MARKET_UP_CSS)
-                    .unwrap_or(Color::rgb(8, 153, 129))
-            } else {
-                Color::parse_css(nucleuscharts_core::style::MARKET_DOWN_CSS)
-                    .unwrap_or(Color::rgb(247, 82, 95))
-            };
+            let semantic = Color::parse_css(nucleuscharts_core::style::MARKET_UP_CSS)
+                .unwrap_or(Color::rgb(8, 153, 129));
 
             // Layer a second translucent fill only over the traversed portion. The untouched
             // remainder keeps the base zone opacity, while progress reads progressively stronger.
@@ -828,21 +799,18 @@ impl ChartEngine {
                 58,
             );
 
-            // Follow the actual price path from the exact entry anchor to the latest plotted bar.
-            // Once price leaves the position, clamp only its y coordinate to the completed target
-            // or stop boundary; its x coordinate remains the real latest-bar location.
-            let progress_point = crate::drawings::DrawingPoint {
-                logical: live_point.logical,
-                price: progress_price,
-            };
-            let Some((progress_x, _)) =
-                self.drawing_to_px_for(pane_index, drawing.price_scale, progress_point)
+            // The run trend is not a current-price marker. Anchor it to the exact drawing entry and
+            // the exact favorable post-entry extreme: highest HIGH for long, lowest LOW for short.
+            // Do not clamp the trend to target/stop; if price ran through target the endpoint still
+            // represents the true market extreme.
+            let Some((run_x, run_y)) =
+                self.drawing_to_px_for(pane_index, drawing.price_scale, run_point)
             else {
                 continue;
             };
             let progress_path = [
                 [px[0].0 as f32, position.entry_y as f32],
-                [(progress_x * hpr) as f32, progress_y as f32],
+                [(run_x * hpr) as f32, (run_y * vpr) as f32],
             ];
             if progress_path[0] != progress_path[1] {
                 super::series_geometry::push_line_stroke(
@@ -850,15 +818,18 @@ impl ChartEngine {
                     points,
                     &progress_path,
                     vpr.max(1.0) as f32,
-                    LineStyle::Dotted,
+                    LineStyle::Dashed,
                     LineType::Simple,
-                    semantic.solid(),
+                    POSITION_ENTRY,
                 );
             }
         }
     }
 
-    fn position_live_point(&self, drawing: &Drawing) -> Option<crate::drawings::DrawingPoint> {
+    pub(super) fn position_run_extreme_point(
+        &self,
+        drawing: &Drawing,
+    ) -> Option<crate::drawings::DrawingPoint> {
         let target = match drawing.price_scale {
             crate::DrawingPriceScale::Right => crate::PriceScaleTarget::Right,
             crate::DrawingPriceScale::Left => crate::PriceScaleTarget::Left,
@@ -870,25 +841,115 @@ impl ChartEngine {
                 && series.pane_index == drawing.pane_index
                 && super::series_scale_target(series) == target
         })?;
+        // Custom-series frame values expose only their current value, not historical OHLC
+        // extrema. Fabricating a "run" endpoint from that current value would violate the
+        // position contract, so only canonical plot-backed series participate here.
         if series.kind == crate::SeriesKind::Custom {
-            let last = series.custom_frame.last?;
-            let logical = self.time_to_index(last.time as f64, false)?;
-            return last
-                .value
-                .is_finite()
-                .then_some(crate::drawings::DrawingPoint {
-                    logical: logical as f64,
-                    price: last.value,
-                });
+            return None;
         }
         let plot = self.data.plot(series.id);
-        let row = plot.last_non_whitespace_row(i64::MAX)?;
-        let logical = plot.index_at(row)?;
-        let value = plot.value_at(row, PlotValueIndex::Close);
-        value.is_finite().then_some(crate::drawings::DrawingPoint {
-            logical: logical as f64,
-            price: value,
-        })
+        let entry = drawing.points.first()?;
+        if !entry.logical.is_finite() || !entry.price.is_finite() {
+            return None;
+        }
+        let first_index = entry.logical.ceil();
+        if first_index < i64::MIN as f64 || first_index > i64::MAX as f64 {
+            return None;
+        }
+        let first_row = plot.search(first_index as i64, MismatchDirection::NearestRight)?;
+        let range = first_row..plot.size();
+        if range.is_empty() {
+            return None;
+        }
+
+        // The LOD summary preserves exact OHLC extrema rows, so a long-lived position does not
+        // rescan its entire post-entry history on every live tick. Small/no-LOD series fall back
+        // to the raw range, which remains exact.
+        let mut best = *entry;
+        let mut consider = |row: usize| {
+            if plot.is_whitespace_row(row) {
+                return;
+            }
+            let Some(logical) = plot.index_at(row) else {
+                return;
+            };
+            let value = match drawing.kind {
+                DrawingKind::LongPosition => plot.value_at(row, PlotValueIndex::High),
+                DrawingKind::ShortPosition => plot.value_at(row, PlotValueIndex::Low),
+                _ => return,
+            };
+            if !value.is_finite() {
+                return;
+            }
+            let improves = match drawing.kind {
+                DrawingKind::LongPosition => value > best.price,
+                DrawingKind::ShortPosition => value < best.price,
+                _ => false,
+            };
+            if improves {
+                best = crate::drawings::DrawingPoint {
+                    logical: logical as f64,
+                    price: value,
+                };
+            }
+        };
+        if let Some(lod) = plot.lod() {
+            let (rows, _) = lod.rows_on_range(range, usize::MAX);
+            for row in rows.iter() {
+                consider(row);
+            }
+        } else {
+            for row in range {
+                consider(row);
+            }
+        }
+        Some(best)
+    }
+
+    /// Position information labels paint in chrome after the dynamic run overlay. This keeps the
+    /// dashed run line visually behind the label chips instead of striking through their text.
+    pub(super) fn build_position_labels_frame(
+        &self,
+        pane_index: usize,
+        out: &mut Vec<Prim>,
+        hpr: f64,
+        vpr: f64,
+    ) {
+        let reward = Color::parse_css(nucleuscharts_core::style::MARKET_UP_CSS)
+            .unwrap_or(Color::rgb(8, 153, 129));
+        let risk = Color::parse_css(nucleuscharts_core::style::MARKET_DOWN_CSS)
+            .unwrap_or(Color::rgb(247, 82, 95));
+        for drawing in self.drawings.iter().filter(|drawing| {
+            drawing.pane_index == pane_index
+                && matches!(
+                    drawing.kind,
+                    DrawingKind::LongPosition | DrawingKind::ShortPosition
+                )
+                && drawing.points.len() == 3
+        }) {
+            let Some(px) = self.drawing_px(drawing) else {
+                continue;
+            };
+            let px = px
+                .into_iter()
+                .map(|(x, y)| (x * hpr, y * vpr))
+                .collect::<Vec<_>>();
+            let Some(geometry) = resolve_drawing_geometry(
+                drawing.kind,
+                &px,
+                self.pane_w * hpr,
+                self.panes[pane_index].top * vpr,
+                self.panes[pane_index].height * vpr,
+                drawing.width,
+                vpr,
+            ) else {
+                continue;
+            };
+            let DrawingBodyGeometry::Position(position) = geometry.body else {
+                continue;
+            };
+            self.build_position_labels(drawing, position, vpr, reward, risk, out);
+        }
     }
 
     fn push_position_label_block(
