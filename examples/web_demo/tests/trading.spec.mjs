@@ -121,6 +121,13 @@ test("trading lines use dedicated hits and render semantic colors through the sh
     const position = trading.state().positions[0];
     const position_y = window.__main.price_to_coordinate(position.average_price);
     const width = window.__chart.time_scale().width();
+    const first_line_hit = (id, y) => {
+      for (let x = 0; x <= width; x += 1) {
+        const hit = trading.hit_at(x, y);
+        if (hit?.id === id && hit.kind.endsWith("_line")) return x;
+      }
+      return null;
+    };
     const exact_axis_controls = [
       { id: position.id, price: position.average_price },
       ...trading.state().orders.map((order) => ({ id: order.id, price: order.price })),
@@ -132,6 +139,8 @@ test("trading lines use dedicated hits and render semantic colors through the sh
       empty_left: trading.hit_at(40, window.__main.price_to_coordinate(target.price)),
       order: trading.hit_at(width - 200, window.__main.price_to_coordinate(target.price)),
       position: trading.hit_at(width - 200, position_y),
+      order_start: first_line_hit(target.id, window.__main.price_to_coordinate(target.price)),
+      position_start: first_line_hit(position.id, position_y),
       close: trading.hit_at(window.__close_x(position.id, position_y), position_y),
       exact_axis_controls,
     };
@@ -143,6 +152,7 @@ test("trading lines use dedicated hits and render semantic colors through the sh
     kind: "order_line",
   });
   expect(probe.position).toMatchObject({ object_type: "position", kind: "position_line" });
+  expect(probe.position_start - probe.order_start, "orders get a short left lead-in").toBe(24);
   expect(probe.close).toMatchObject({ object_type: "position", kind: "cancel_button" });
   for (const control of probe.exact_axis_controls) {
     expect(control.hit, `${control.id} close control must remain on its exact price coordinate`).toMatchObject({

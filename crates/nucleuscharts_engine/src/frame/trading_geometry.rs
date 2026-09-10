@@ -87,6 +87,9 @@ const ORDER_TYPE_WIDTH: f64 = 92.0;
 /// Separation between the readout chip and the detached close chip.
 const CONTROL_GAP: f64 = 5.0;
 const ORDER_MARKER_SPAN: f64 = 280.0;
+/// Short lead-in before an order's control cluster, keeping its price rule visible at the left
+/// edge without turning the bounded marker into a full-pane line.
+const ORDER_LINE_LEAD_IN: f64 = 24.0;
 
 /// Protection semantics take precedence over their broker-side implementation: an SL remains
 /// warning yellow and a TP remains profit green. Ordinary sell orders read bearish red. The
@@ -262,6 +265,10 @@ impl ChartEngine {
 
     pub(crate) fn trading_marker_start(&self) -> f64 {
         (self.trading_marker_end() - ORDER_MARKER_SPAN).max(6.0)
+    }
+
+    pub(crate) fn trading_order_line_start(&self) -> f64 {
+        (self.trading_marker_start() - ORDER_LINE_LEAD_IN).max(6.0)
     }
 
     /// Quantity cells fit their formatted text instead of reserving a fixed-width box. The upper
@@ -469,10 +476,11 @@ impl ChartEngine {
         let color = cluster.color;
         let left = cluster.start();
         let top = y - height / 2.0;
-        // Hairline outline on the chart's own device-pixel convention. The small design-system
-        // radius keeps these compact controls rounded without turning them into pills.
+        // Hairline outline on the chart's own device-pixel convention. Trading brackets are
+        // deliberately square so the readout and detached close control align crisply with their
+        // horizontal price rule; tooltips and transient drag labels retain the shared radius.
         let border = vpr.floor().max(1.0) as f32;
-        let radius = (RADIUS_SMALL * hpr.min(vpr)) as f32;
+        let radius = 0.0;
         let body_width = cluster.body_width();
         let cell_feedback = |kind: TradingControlSegmentKind| {
             if pressed == Some(kind) {
@@ -872,13 +880,12 @@ impl ChartEngine {
             );
             lines.push(Prim::HLine {
                 y: (y * vpr).round() as i32,
-                x0: (self.trading_marker_start() * hpr).round() as i32,
+                x0: (self.trading_order_line_start() * hpr).round() as i32,
                 x1: (self.trading_marker_end() * hpr).round() as i32,
-                width: if hovered.is_some_and(|hit| hit.kind == crate::TradingHitKind::OrderLine) {
-                    min_line_width.max(2)
-                } else {
-                    min_line_width
-                },
+                // Hover is communicated by the dash pattern, not a thickness jump. Dash metrics
+                // scale with stroke width in every executor, so keeping the hairline also keeps
+                // the hover dashes compact and consistent across DPRs.
+                width: min_line_width,
                 style: if creating_protection
                     || (order.role == OrderRole::Working
                         && hovered.is_some_and(|hit| hit.kind == crate::TradingHitKind::OrderLine))
@@ -1024,7 +1031,7 @@ impl ChartEngine {
                     {
                         lines.push(Prim::HLine {
                             y: (stop_y * vpr).round() as i32,
-                            x0: (self.trading_marker_start() * hpr).round() as i32,
+                            x0: (self.trading_order_line_start() * hpr).round() as i32,
                             x1: (self.pane_w * hpr).round() as i32,
                             width: min_line_width,
                             style: LineStyle::Dotted,
@@ -1073,7 +1080,7 @@ impl ChartEngine {
                     };
                     lines.push(Prim::HLine {
                         y: (preview_y * vpr).round() as i32,
-                        x0: (self.trading_marker_start() * hpr).round() as i32,
+                        x0: (self.trading_order_line_start() * hpr).round() as i32,
                         x1: (self.trading_marker_end() * hpr).round() as i32,
                         width: min_line_width,
                         style: LineStyle::Dotted,

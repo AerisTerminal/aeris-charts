@@ -725,7 +725,7 @@ impl ChartEngine {
             if order.pane_index != pane_index {
                 continue;
             }
-            if x_css < self.trading_marker_start() || x_css > self.trading_marker_end() {
+            if x_css < self.trading_order_line_start() || x_css > self.trading_marker_end() {
                 continue;
             }
             let Some(y) = self.trading_price_coordinate(
@@ -2870,9 +2870,12 @@ mod tests {
                     primitive,
                     Prim::HLine {
                         y,
+                        x0,
+                        width: 1,
                         style: nucleuscharts_render::draw_list::LineStyle::Dashed,
                         ..
                     } if *y == start_y.round() as i32
+                        && *x0 == chart.trading_order_line_start().round() as i32
                 ))
         );
         assert!(chart.trading_drag_start_at(chart.trading_marker_start() + 20.0, start_y));
@@ -3321,10 +3324,7 @@ mod tests {
         for (start, _, width, radii) in &chips {
             assert!(*width > 0.0);
             assert!(*start >= marker_start - 0.5);
-            assert_eq!(
-                *radii, [4.0; 4],
-                "chip at {start} missed the small radius token"
-            );
+            assert_eq!(*radii, [0.0; 4], "chip at {start} must stay square");
         }
         // Every readout is followed by a close chip that clears it, and the separation is the
         // same on all four markers.
@@ -3370,6 +3370,20 @@ mod tests {
         assert!(trading
             .iter()
             .all(|primitive| !matches!(primitive, Prim::Text { text, .. } if matches!(text.as_str(), "TP" | "SL" | "×" | "↕"))));
+        let marker_end = chart.trading_marker_end().round() as i32;
+        assert_eq!(
+            trading
+                .iter()
+                .filter(|primitive| matches!(
+                    primitive,
+                    Prim::HLine { x0, x1, .. }
+                        if *x0 == chart.trading_order_line_start().round() as i32
+                            && *x1 == marker_end
+                ))
+                .count(),
+            3,
+            "every order line gets the short left lead-in"
+        );
         assert_eq!(
             trading
                 .iter()
@@ -3377,11 +3391,23 @@ mod tests {
                     primitive,
                     Prim::HLine { x0, x1, .. }
                         if *x0 == chart.trading_marker_start().round() as i32
-                            && *x1 == chart.trading_marker_end().round() as i32
+                            && *x1 == marker_end
                 ))
                 .count(),
-            4
+            1,
+            "the position marker keeps its existing span"
         );
+        let working_y = chart
+            .trading_price_coordinate(0, TradingPriceScale::Right, 102.0)
+            .expect("working-order coordinate");
+        let lead_in_hit = chart
+            .trading_hit_at(chart.trading_order_line_start() + 1.0, working_y)
+            .expect("the visible order lead-in must remain interactive");
+        assert_eq!(lead_in_hit.kind, TradingHitKind::OrderLine);
+        assert!(matches!(
+            lead_in_hit.object,
+            TradingObjectId::Order(ref order_id) if order_id.as_str() == "working-1"
+        ));
     }
 
     #[test]
