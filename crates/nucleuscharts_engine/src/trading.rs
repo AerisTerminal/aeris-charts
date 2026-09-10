@@ -725,7 +725,7 @@ impl ChartEngine {
             if order.pane_index != pane_index {
                 continue;
             }
-            if x_css < self.trading_order_line_start() || x_css > self.trading_marker_end() {
+            if x_css < self.trading_marker_start() || x_css > self.trading_marker_end() {
                 continue;
             }
             let Some(y) = self.trading_price_coordinate(
@@ -2875,7 +2875,7 @@ mod tests {
                         style: nucleuscharts_render::draw_list::LineStyle::Dashed,
                         ..
                     } if *y == start_y.round() as i32
-                        && *x0 == chart.trading_order_line_start().round() as i32
+                        && *x0 == chart.trading_marker_start().round() as i32
                 ))
         );
         assert!(chart.trading_drag_start_at(chart.trading_marker_start() + 20.0, start_y));
@@ -3372,17 +3372,9 @@ mod tests {
             .all(|primitive| !matches!(primitive, Prim::Text { text, .. } if matches!(text.as_str(), "TP" | "SL" | "×" | "↕"))));
         let marker_end = chart.trading_marker_end().round() as i32;
         assert_eq!(
-            trading
-                .iter()
-                .filter(|primitive| matches!(
-                    primitive,
-                    Prim::HLine { x0, x1, .. }
-                        if *x0 == chart.trading_order_line_start().round() as i32
-                            && *x1 == marker_end
-                ))
-                .count(),
-            3,
-            "every order line gets the short left lead-in"
+            (chart.trading_marker_end() - chart.trading_marker_start()).round(),
+            304.0,
+            "the complete marker cluster moves left with its line"
         );
         assert_eq!(
             trading
@@ -3394,18 +3386,18 @@ mod tests {
                             && *x1 == marker_end
                 ))
                 .count(),
-            1,
-            "the position marker keeps its existing span"
+            4,
+            "every marker line must begin flush with its shifted control cluster"
         );
         let working_y = chart
             .trading_price_coordinate(0, TradingPriceScale::Right, 102.0)
             .expect("working-order coordinate");
-        let lead_in_hit = chart
-            .trading_hit_at(chart.trading_order_line_start() + 1.0, working_y)
-            .expect("the visible order lead-in must remain interactive");
-        assert_eq!(lead_in_hit.kind, TradingHitKind::OrderLine);
+        let marker_start_hit = chart
+            .trading_hit_at(chart.trading_marker_start() + 1.0, working_y)
+            .expect("the shifted order marker must remain interactive");
+        assert_eq!(marker_start_hit.kind, TradingHitKind::OrderLine);
         assert!(matches!(
-            lead_in_hit.object,
+            marker_start_hit.object,
             TradingObjectId::Order(ref order_id) if order_id.as_str() == "working-1"
         ));
     }

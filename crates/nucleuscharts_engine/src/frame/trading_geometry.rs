@@ -86,10 +86,7 @@ const PNL_WIDTH: f64 = 96.0;
 const ORDER_TYPE_WIDTH: f64 = 92.0;
 /// Separation between the readout chip and the detached close chip.
 const CONTROL_GAP: f64 = 5.0;
-const ORDER_MARKER_SPAN: f64 = 280.0;
-/// Short lead-in before an order's control cluster, keeping its price rule visible at the left
-/// edge without turning the bounded marker into a full-pane line.
-const ORDER_LINE_LEAD_IN: f64 = 24.0;
+const ORDER_MARKER_SPAN: f64 = 304.0;
 
 /// Protection semantics take precedence over their broker-side implementation: an SL remains
 /// warning yellow and a TP remains profit green. Ordinary sell orders read bearish red. The
@@ -265,10 +262,6 @@ impl ChartEngine {
 
     pub(crate) fn trading_marker_start(&self) -> f64 {
         (self.trading_marker_end() - ORDER_MARKER_SPAN).max(6.0)
-    }
-
-    pub(crate) fn trading_order_line_start(&self) -> f64 {
-        (self.trading_marker_start() - ORDER_LINE_LEAD_IN).max(6.0)
     }
 
     /// Quantity cells fit their formatted text instead of reserving a fixed-width box. The upper
@@ -880,7 +873,7 @@ impl ChartEngine {
             );
             lines.push(Prim::HLine {
                 y: (y * vpr).round() as i32,
-                x0: (self.trading_order_line_start() * hpr).round() as i32,
+                x0: (self.trading_marker_start() * hpr).round() as i32,
                 x1: (self.trading_marker_end() * hpr).round() as i32,
                 // Hover is communicated by the dash pattern, not a thickness jump. Dash metrics
                 // scale with stroke width in every executor, so keeping the hairline also keeps
@@ -1031,7 +1024,7 @@ impl ChartEngine {
                     {
                         lines.push(Prim::HLine {
                             y: (stop_y * vpr).round() as i32,
-                            x0: (self.trading_order_line_start() * hpr).round() as i32,
+                            x0: (self.trading_marker_start() * hpr).round() as i32,
                             x1: (self.pane_w * hpr).round() as i32,
                             width: min_line_width,
                             style: LineStyle::Dotted,
@@ -1080,7 +1073,7 @@ impl ChartEngine {
                     };
                     lines.push(Prim::HLine {
                         y: (preview_y * vpr).round() as i32,
-                        x0: (self.trading_order_line_start() * hpr).round() as i32,
+                        x0: (self.trading_marker_start() * hpr).round() as i32,
                         x1: (self.trading_marker_end() * hpr).round() as i32,
                         width: min_line_width,
                         style: LineStyle::Dotted,

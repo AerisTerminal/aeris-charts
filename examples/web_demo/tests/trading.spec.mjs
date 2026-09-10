@@ -137,6 +137,7 @@ test("trading lines use dedicated hits and render semantic colors through the sh
     });
     return {
       empty_left: trading.hit_at(40, window.__main.price_to_coordinate(target.price)),
+      chart_width: width,
       order: trading.hit_at(width - 200, window.__main.price_to_coordinate(target.price)),
       position: trading.hit_at(width - 200, position_y),
       order_start: first_line_hit(target.id, window.__main.price_to_coordinate(target.price)),
@@ -152,7 +153,8 @@ test("trading lines use dedicated hits and render semantic colors through the sh
     kind: "order_line",
   });
   expect(probe.position).toMatchObject({ object_type: "position", kind: "position_line" });
-  expect(probe.position_start - probe.order_start, "orders get a short left lead-in").toBe(24);
+  expect(probe.position_start, "the line begins flush with its shifted container").toBe(probe.order_start);
+  expect(Math.round(probe.chart_width - probe.order_start), "the complete marker span moves left").toBe(304);
   expect(probe.close).toMatchObject({ object_type: "position", kind: "cancel_button" });
   for (const control of probe.exact_axis_controls) {
     expect(control.hit, `${control.id} close control must remain on its exact price coordinate`).toMatchObject({
