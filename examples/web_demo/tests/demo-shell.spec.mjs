@@ -216,11 +216,25 @@ test("canonical series stay in Series while feature lab contains only composable
 
 test("Series launches a readable tick-driven footprint preview", async ({ page }) => {
   await open_demo(page);
+  const anchor = await page.evaluate(() => {
+    const range = window.__chart.time_scale().get_visible_logical_range();
+    const logical = Math.floor(range.to) - 4;
+    const price = window.__main.data_by_index(logical).close;
+    const drawing = window.__chart.add_drawing("horizontal_line", [{ logical, price }]);
+    window.__footprint_sma = window.__chart.add_sma(window.__main, 20);
+    return {
+      drawing_id: drawing.id,
+      logical,
+      price,
+      bar_spacing: window.__chart.time_scale().options().bar_spacing,
+    };
+  });
   await page.locator('#series_grid [data-series-id="footprint"]').click();
   await expect(page.locator("#candle_style")).toBeHidden();
-  const state = await page.evaluate(() => {
+  const state = await page.evaluate((anchor) => {
     const footprint = window.__chart.series_order().find((series) => series.series_type() === "footprint");
     const bars = footprint?.footprint_bars() ?? [];
+    const drawing = window.__chart.drawings().find((item) => item.id === anchor.drawing_id);
     return {
       active: window.__demo_catalogs.series.active_id(),
       visible: footprint?.options().visible,
@@ -233,9 +247,15 @@ test("Series launches a readable tick-driven footprint preview", async ({ page }
       main_visible: window.__main.options().visible,
       footprint_scale_id: footprint?.price_scale_id(),
       main_scale_id: window.__main.price_scale_id(),
+      sma_scale_id: window.__footprint_sma.price_scale_id(),
+      drawing_scale_id: drawing?.options().price_scale_id,
+      drawing_points: drawing?.points(),
+      main_y: window.__main.price_to_coordinate(anchor.price),
+      sma_y: window.__footprint_sma.price_to_coordinate(anchor.price),
+      footprint_y: footprint?.price_to_coordinate(anchor.price),
       scale_ids: window.__chart.price_scales().map((scale) => scale.id),
     };
-  });
+  }, anchor);
   expect(state).toMatchObject({
     active: "footprint",
     visible: true,
@@ -244,10 +264,36 @@ test("Series launches a readable tick-driven footprint preview", async ({ page }
     has_stacked: true,
     spacing: 72,
     main_visible: false,
-    footprint_scale_id: "footprint-dedicated",
+    footprint_scale_id: "right",
     main_scale_id: "right",
+    sma_scale_id: "right",
   });
-  expect(state.scale_ids).toContain("footprint-dedicated");
+  expect(state.scale_ids).not.toContain("footprint-dedicated");
+  expect(state.drawing_scale_id).toBe("right");
+  expect(state.drawing_points).toEqual([{ logical: anchor.logical, price: anchor.price }]);
+  expect(state.footprint_y).toBeCloseTo(state.main_y, 10);
+  expect(state.footprint_y).toBeCloseTo(state.sma_y, 10);
+
+  await page.locator('#series_grid [data-series-id="footprint"]').click();
+  const restored = await page.evaluate((drawing_id) => {
+    const drawing = window.__chart.drawings().find((item) => item.id === drawing_id);
+    return {
+      active: window.__demo_catalogs.series.active_id(),
+      main_visible: window.__main.options().visible,
+      footprint_count: window.__chart.series_order().filter((series) => series.series_type() === "footprint").length,
+      drawing_points: drawing?.points(),
+      sma_scale_id: window.__footprint_sma.price_scale_id(),
+      spacing: window.__chart.time_scale().options().bar_spacing,
+    };
+  }, anchor.drawing_id);
+  expect(restored).toEqual({
+    active: null,
+    main_visible: true,
+    footprint_count: 0,
+    drawing_points: [{ logical: anchor.logical, price: anchor.price }],
+    sma_scale_id: "right",
+    spacing: anchor.bar_spacing,
+  });
 });
 
 test("every feature-lab card activates through its real public API wiring", async ({ page }) => {

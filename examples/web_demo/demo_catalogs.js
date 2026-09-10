@@ -159,7 +159,7 @@ function use_footprint_spacing(chart) {
   });
 }
 
-function series_features(bars) {
+function series_features(bars, primary_series) {
   const sampled = bars.filter((_, index) => index % 5 === 0);
   const closes = sampled.map((bar) => bar.close);
   const shade_data = background_shade_data(bars);
@@ -169,11 +169,10 @@ function series_features(bars) {
       id: "footprint", label: "Footprint", detail: "Bid × Ask · POC · stacked delta", icon: "chart",
       preserve_time_spacing: true,
       create: (chart) => {
-        if (!chart.price_scales().some((scale) => scale.id === "footprint-dedicated")) {
-          chart.add_price_scale({ id: "footprint-dedicated", side: "right", visible: true });
-        }
         const footprint = chart.add_series("footprint", {
-          price_scale_id: "footprint-dedicated",
+          // Footprint replaces the main price series, so it must keep the main scale. Drawings,
+          // price indicators, alerts, and trading lines are already bound to this scale.
+          price_scale_id: primary_series.price_scale_id(),
           tick_size: 0.25,
           interval_seconds: 3600,
           imbalance_ratio: 3,
@@ -190,19 +189,7 @@ function series_features(bars) {
         footprint.set_trades(footprint_trades(bars));
         return footprint;
       },
-      compose: (chart) => {
-        const restore_spacing = use_footprint_spacing(chart);
-        // The main candles are hidden while the replacement is active; hide their
-        // now-empty right scale too so it does not render a second dead axis
-        // beside the dedicated footprint scale.
-        const right_scale = chart.price_scale("right");
-        const right_visible = right_scale.options().visible !== false;
-        right_scale.apply_options({ visible: false });
-        return () => {
-          restore_spacing?.();
-          right_scale.apply_options({ visible: right_visible });
-        };
-      },
+      compose: (chart) => use_footprint_spacing(chart),
     },
     {
       id: "brushable-area", label: "Brushable area", detail: "Drag to compare", icon: "chart", interactive: true,
@@ -486,7 +473,7 @@ export function install_demo_catalogs({ chart, series, data, on_series_change })
   const search = document.getElementById("feature_search");
   const empty = document.getElementById("feature_empty");
   const active_count = document.getElementById("feature_active_count");
-  const series_items = series_features(data).map((feature) => ({ ...feature, kind: "series" }));
+  const series_items = series_features(data, series).map((feature) => ({ ...feature, kind: "series" }));
   const primitive_items = primitive_features(chart, series, data).map((feature) => ({ ...feature, kind: "primitive" }));
   const trading_items = trading_features(chart, data).map((feature) => ({ ...feature, kind: "trading" }));
   const features = [...primitive_items, ...trading_items];
