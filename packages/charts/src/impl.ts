@@ -4083,12 +4083,14 @@ export class chart_impl implements chart_api {
     editor.textContent = options.text;
     editor.style.font = font;
     editor.style.lineHeight = `${font_size * 1.2}px`;
-    // Invisible glyphs: the canvas label is the only ink the user sees. The caret uses the
-    // real text color so typing still feels like Excel/TradingView.
+    // The editing surface is fully transparent, including IME composition glyphs. Chromium can
+    // otherwise repaint composing text in `caret-color` despite transparent text fill, producing
+    // a second unrotated label. A dedicated one-pixel caret below is the only DOM ink.
     editor.style.color = "transparent";
-    editor.style.caretColor = ink;
+    editor.style.caretColor = "transparent";
     (editor.style as CSSStyleDeclaration & { webkitTextFillColor?: string }).webkitTextFillColor =
       "transparent";
+    editor.style.opacity = "0";
     editor.style.background = "transparent";
     editor.style.border = "none";
     editor.style.outline = "none";
@@ -4097,6 +4099,16 @@ export class chart_impl implements chart_api {
     editor.style.display = "block";
     editor.style.whiteSpace = "nowrap";
     editor.style.minWidth = `${font_size}px`;
+
+    const caret = document.createElement("span");
+    caret.id = "nucleuscharts-text-caret";
+    caret.setAttribute("aria-hidden", "true");
+    caret.style.position = "absolute";
+    caret.style.top = "0";
+    caret.style.width = "1px";
+    caret.style.height = `${font_size * 1.2}px`;
+    caret.style.background = ink;
+    caret.style.pointerEvents = "none";
 
     const dpr = window.devicePixelRatio || 1;
     const measure_ctx = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
@@ -4133,6 +4145,20 @@ export class chart_impl implements chart_api {
       probe_canvas.height = 0;
     }
     let baseline_in_editor = 0;
+    const position_caret = () => {
+      const text = editor.textContent ?? "";
+      let offset = text.length;
+      const selection = window.getSelection();
+      if (selection?.anchorNode && editor.contains(selection.anchorNode)) {
+        const prefix = document.createRange();
+        prefix.selectNodeContents(editor);
+        prefix.setEnd(selection.anchorNode, selection.anchorOffset);
+        offset = prefix.toString().length;
+      }
+      const before_caret = text.slice(0, offset);
+      const x = measure_ctx === null ? 0 : measure_ctx.measureText(before_caret).width;
+      caret.style.left = `${Math.ceil(x)}px`;
+    };
     const position_editor = () => {
       const anchor_x = transform[0]!;
       const anchor_y = transform[1]!;
@@ -4150,6 +4176,7 @@ export class chart_impl implements chart_api {
       wrap.style.top = `${baseline - baseline_in_editor}px`;
       wrap.style.transformOrigin = `${anchor_x - left_edge}px ${anchor_y - (baseline - baseline_in_editor)}px`;
       wrap.style.transform = `rotate(${transform[2]!}rad)`;
+      position_caret();
     };
     const push_live_text = () => {
       const text = (editor.textContent ?? "").replace(/\s*\n\s*/g, " ");
@@ -4167,6 +4194,8 @@ export class chart_impl implements chart_api {
       push_live_text();
     };
     editor.addEventListener("input", set_width);
+    editor.addEventListener("keyup", position_caret);
+    editor.addEventListener("pointerup", position_caret);
     editor.addEventListener("keydown", (e) => {
       e.stopPropagation();
       if (e.key === "Enter") {
@@ -4180,6 +4209,7 @@ export class chart_impl implements chart_api {
     editor.addEventListener("blur", () => this.close_text_editor(true));
 
     wrap.appendChild(editor);
+    wrap.appendChild(caret);
     this.container.appendChild(wrap);
     const probe = document.createElement("span");
     probe.style.display = "inline-block";
@@ -4227,6 +4257,7 @@ export class chart_impl implements chart_api {
       selection.removeAllRanges();
       selection.addRange(range);
     }
+    position_caret();
   }
 
   /**

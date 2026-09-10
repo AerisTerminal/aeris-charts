@@ -1464,7 +1464,8 @@ test("tool customization templates new drawings and applies live to the selected
   await page.mouse.click(label_x + offset.left, label_y + offset.top);
   const editor = page.locator("#nucleuscharts-text-input");
   await expect(editor).toBeFocused();
-  expect(await editor.evaluate((el) => getComputedStyle(el).caretColor)).toBe("rgb(255, 0, 255)");
+  expect(await editor.evaluate((el) => getComputedStyle(el).opacity)).toBe("0");
+  expect(await page.locator("#nucleuscharts-text-caret").evaluate((el) => getComputedStyle(el).backgroundColor)).toBe("rgb(255, 0, 255)");
   await page.keyboard.press("Escape");
 
   // Live-apply: with the drawing selected, changing the settings updates it in place.
@@ -1531,6 +1532,8 @@ test("trend labels rotate, reverse, template alignment, and never inherit text-t
   await expect(editor).toBeFocused();
   const wrap = page.locator("#chart_container #nucleuscharts-text-editor");
   expect(await editor.evaluate((el) => getComputedStyle(el).fontSize)).toBe("14px");
+  expect(await editor.evaluate((el) => getComputedStyle(el).opacity)).toBe("0");
+  expect(await page.locator("#nucleuscharts-text-caret")).toBeVisible();
   const editor_angle = () => wrap.evaluate((el) => Number(el.style.transform.match(/rotate\(([-\d.e]+)rad\)/)?.[1]));
   expect(await editor_angle()).toBeCloseTo(slot.angle, 6);
   await editor.fill("owned trend label");
@@ -1638,8 +1641,13 @@ test("text tool: first click selects (focus border), a second click opens typing
     color: getComputedStyle(el).color,
     fill: getComputedStyle(el).webkitTextFillColor,
     caret: getComputedStyle(el).caretColor,
+    opacity: getComputedStyle(el).opacity,
   }));
-  expect(ink.color === "rgba(0, 0, 0, 0)" || ink.fill === "rgba(0, 0, 0, 0)").toBe(true);
+  expect(ink.color).toBe("rgba(0, 0, 0, 0)");
+  expect(ink.fill).toBe("rgba(0, 0, 0, 0)");
+  expect(ink.caret).toBe("rgba(0, 0, 0, 0)");
+  expect(ink.opacity).toBe("0");
+  await expect(page.locator("#nucleuscharts-text-caret")).toBeVisible();
   // Escape discards the edit.
   await editor.fill("discarded");
   await page.keyboard.press("Escape");

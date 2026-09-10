@@ -267,8 +267,10 @@ color remains independent. Empty labels use that same resolved RGB at reduced al
 leaving the dedicated trend-label editor never converts or deletes the trend line. Middle labels
 split the stroke in segment-parameter space using measured advance plus padding. Hover reserves the
 prompt advance; editing starts with a compact one-em caret opening and expands from shaped text
-advance as the user types. Top and bottom slots never cut the stroke. The browser
-supplies only a borderless transparent-glyph caret at the engine's exact anchor and angle.
+advance as the user types. Top and bottom slots never cut the stroke. The browser uses a fully
+transparent borderless editing surface (including native caret and IME composition paint) plus one
+explicit colored caret at the engine's exact anchor and angle, leaving the frame as the sole glyph
+owner.
 Standalone Text retains its separate create/remove lifecycle and explicit toolbar text input.
 
 Segment-following text is an explicit `RotatedText` frame primitive carrying the final aligned
