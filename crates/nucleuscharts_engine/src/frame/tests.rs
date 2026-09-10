@@ -5204,11 +5204,29 @@ fn text_tool_selection_paints_a_focus_border_without_anchor_handles() {
     let initial = border_frames(&mut chart);
     assert!(initial.is_empty(), "unexpected chrome: {initial:?}");
 
-    // Hover: the focus border at hover opacity (dimmed alpha), and only for text — hovering
-    // a trend line sticks nothing.
+    // An empty trend line owns a borderless, low-opacity inline affordance at its configured
+    // text slot. Its measured box is also the direct-edit hit target.
     chart.set_hovered_text(Some(line));
     assert!(border_frames(&mut chart).is_empty());
-    assert_eq!(chart.hovered_text(), None);
+    assert_eq!(chart.hovered_text(), Some(line));
+    let (text_x, text_y) = chart.drawing_text_coordinate(line).unwrap();
+    assert_eq!(chart.drawing_text_hit_at(text_x, text_y), Some(line));
+    let placeholder = chart.build_frame().panes[0]
+        .main
+        .iter()
+        .find_map(|prim| match prim {
+            Prim::Text { text, color, .. } if text == "+ Add text" => Some(*color),
+            _ => None,
+        })
+        .expect("hovered trend placeholder");
+    assert_eq!(placeholder.a(), 0x99);
+    chart.set_editing_drawing(Some(line));
+    assert!(chart.build_frame().panes[0]
+        .main
+        .iter()
+        .all(|prim| !matches!(prim, Prim::Text { text, .. } if text == "+ Add text")));
+    chart.set_editing_drawing(None);
+    chart.set_hovered_text(None);
     chart.set_hovered_text(Some(text));
     assert_eq!(chart.hovered_text(), Some(text));
     let hover = border_frames(&mut chart);

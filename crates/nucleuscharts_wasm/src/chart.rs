@@ -3222,6 +3222,14 @@ impl NucleusChart {
     pub fn drawing_point_to_coordinate(&self, id: u32, index: usize) -> Vec<f64> {
         self.inner.borrow().drawing_point_to_coordinate(id, index)
     }
+    /// Exact text-run anchor `[x, y]` in overlay CSS px for inline drawing editing.
+    pub fn drawing_text_coordinate(&self, id: u32) -> Vec<f64> {
+        self.inner.borrow().drawing_text_coordinate(id)
+    }
+    /// Trend-line label/placeholder hit identity, or zero when the point misses.
+    pub fn drawing_text_hit_at(&self, x_css: f64, y_css: f64) -> u32 {
+        self.inner.borrow().drawing_text_hit_at(x_css, y_css)
+    }
     /// Every drawing as a JSON array in z-order (`{id, kind, pane_index, points, ...options}`).
     pub fn drawings_json(&self) -> String {
         self.inner.borrow().drawings_json()

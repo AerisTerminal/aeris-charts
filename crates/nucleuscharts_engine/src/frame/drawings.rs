@@ -16,6 +16,7 @@ use super::{POSITION_ENTRY, PRIMARY};
 use crate::drawings::{
     resolve_drawing_geometry, Drawing, DrawingBodyGeometry, DrawingHandleMode, DrawingId,
     DrawingKind, DrawingTextHAlign, PositionGeometry, PositionZone, TEXT_CHROME_PAD, TEXT_PAD,
+    TREND_TEXT_PLACEHOLDER,
 };
 use crate::ChartEngine;
 use nucleuscharts_core::model::plot_list::PlotValueIndex;
@@ -36,37 +37,7 @@ const POSITION_PROGRESS_ALPHA: u8 = 96;
 /// The hover ring's dimmed variant of the focus border (TradingView shows the same border at
 /// roughly half strength until the drawing is actually selected).
 const HOVER_BORDER: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0x73);
-
-fn trend_line_text_placement(
-    drawing: &Drawing,
-    px: &[(f64, f64)],
-    size: f64,
-    pad: f64,
-) -> Option<(f64, f64, DrawingTextHAlign)> {
-    if drawing.kind != DrawingKind::TrendLine || px.len() < 2 {
-        return None;
-    }
-    let (a, b) = (px[0], px[1]);
-    let dx = b.0 - a.0;
-    if dx.abs() <= f64::EPSILON {
-        return None;
-    }
-    let (left, right) = if a.0 <= b.0 { (a, b) } else { (b, a) };
-    let usable_pad = pad.min((right.0 - left.0).abs() / 2.0);
-    let x = match drawing.text_h_align {
-        DrawingTextHAlign::Left => left.0 + usable_pad,
-        DrawingTextHAlign::Center => (left.0 + right.0) / 2.0,
-        DrawingTextHAlign::Right => right.0 - usable_pad,
-    };
-    let t = (x - a.0) / dx;
-    let line_y = a.1 + (b.1 - a.1) * t;
-    let y = match drawing.text_v_align {
-        crate::drawings::DrawingTextVAlign::Top => line_y - pad - size / 2.0,
-        crate::drawings::DrawingTextVAlign::Middle => line_y,
-        crate::drawings::DrawingTextVAlign::Bottom => line_y + pad + size / 2.0,
-    };
-    Some((x, y, drawing.text_h_align))
-}
+const TREND_TEXT_PLACEHOLDER_ALPHA: u8 = 0x99;
 
 fn point_on_segment(a: (f64, f64), b: (f64, f64), t: f64) -> (f64, f64) {
     (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t)
@@ -163,7 +134,9 @@ mod trend_label_tests {
                 (DrawingTextVAlign::Bottom, line_y + 10.0),
             ] {
                 drawing.text_v_align = v_align;
-                let (x, y, align) = trend_line_text_placement(&drawing, &line, 12.0, 4.0).unwrap();
+                let (x, y, align) = ChartEngine::drawing_text_placement(
+                    &drawing, &line, 100.0, 0.0, 100.0, 12.0, 4.0,
+                );
                 assert_eq!(align, h_align);
                 assert!((x - expected_x).abs() < 1e-9, "{h_align:?} {v_align:?}");
                 assert!((y - expected_y).abs() < 1e-9, "{h_align:?} {v_align:?}");
@@ -186,6 +159,27 @@ pub(super) struct PositionRunProgress {
 }
 
 impl ChartEngine {
+    fn drawing_frame_text<'a>(&self, drawing: &'a Drawing) -> Option<(&'a str, bool)> {
+        if !drawing.text.is_empty() {
+            return Some((drawing.display_text(), false));
+        }
+        (drawing.kind == DrawingKind::TrendLine
+            && self.hovered_text == Some(drawing.id)
+            && self.editing_drawing != Some(drawing.id))
+        .then_some((TREND_TEXT_PLACEHOLDER, true))
+    }
+
+    fn measure_drawing_frame_text(&self, drawing: &Drawing, text: &str, size: f64) -> f64 {
+        let layout = &self.options.get().layout;
+        self.measure_text_run(
+            text,
+            size,
+            &layout.font_family,
+            drawing.text_weight.unwrap_or(400),
+            drawing.text_italic,
+        )
+    }
+
     #[cfg(test)]
     pub(crate) fn build_drawings_frame_reference(
         &self,
@@ -467,6 +461,9 @@ impl ChartEngine {
         let Some(drawing) = self.drawing(id) else {
             return;
         };
+        if drawing.kind != DrawingKind::Text {
+            return;
+        }
         let Some(px) = self.overlay_drawing_px(pane_index, id, hpr, vpr) else {
             return;
         };
@@ -501,13 +498,16 @@ impl ChartEngine {
         };
         match geometry.body {
             DrawingBodyGeometry::Segment { a, b } => {
-                let label_gap = (!drawing.text.is_empty()
-                    && drawing.kind == DrawingKind::TrendLine
-                    && drawing.text_v_align == crate::drawings::DrawingTextVAlign::Middle)
-                    .then(|| {
+                let label_gap = self
+                    .drawing_frame_text(drawing)
+                    .filter(|_| {
+                        drawing.kind == DrawingKind::TrendLine
+                            && drawing.text_v_align == crate::drawings::DrawingTextVAlign::Middle
+                    })
+                    .and_then(|(text, _)| {
                         let (size, x, y, align) =
                             self.text_run_geometry(drawing, px, pane_w_px, vpr);
-                        let width = self.measure_drawing_text(drawing, size);
+                        let width = self.measure_drawing_frame_text(drawing, text, size);
                         let left = match align {
                             DrawingTextHAlign::Left => x,
                             DrawingTextHAlign::Center => x - width / 2.0,
@@ -522,8 +522,7 @@ impl ChartEngine {
                             y - size * 0.6 - gap,
                             y + size * 0.6 + gap,
                         )
-                    })
-                    .flatten();
+                    });
                 if let Some((gap_start, gap_end)) = label_gap {
                     push_segment(
                         a,
@@ -717,17 +716,15 @@ impl ChartEngine {
         let layout = &self.options.get().layout;
         let size = drawing.resolved_text_size(layout.font_size) * vpr;
         let pane = &self.panes[drawing.pane_index];
-        let reference = ChartEngine::text_box(
-            drawing.kind,
+        let (x, y, align) = ChartEngine::drawing_text_placement(
+            drawing,
             px,
             f64::from(pane_w_px),
             pane.top * vpr,
             pane.height * vpr,
+            size,
+            TEXT_PAD * vpr,
         );
-        let (x, y, align) = trend_line_text_placement(drawing, px, size, TEXT_PAD * vpr)
-            .unwrap_or_else(|| {
-                ChartEngine::text_placement(drawing, &reference, size, TEXT_PAD * vpr)
-            });
         (size, x, y, align)
     }
 
@@ -788,13 +785,13 @@ impl ChartEngine {
         // the focus border still paint — the editor wrap is borderless with transparent glyphs,
         // so entering edit cannot lift the text or shift the outline (TradingView's
         // overlay-caret model).
-        if drawing.text.is_empty() {
+        let Some((text, placeholder)) = self.drawing_frame_text(drawing) else {
             return;
-        }
+        };
         let is_text_tool = drawing.kind == DrawingKind::Text;
         let (size, x, y, align) = self.text_run_geometry(drawing, px, pane_w_px, vpr);
         let layout = &self.options.get().layout;
-        let color = drawing
+        let mut color = drawing
             .text_color
             .as_deref()
             .and_then(Color::parse_css)
@@ -803,6 +800,14 @@ impl ChartEngine {
                 let fallback = nucleuscharts_core::style::DEFAULT_FOREGROUND_RGB;
                 Color::rgb(fallback.0, fallback.1, fallback.2)
             });
+        if placeholder {
+            color = Color::rgba(
+                color.r(),
+                color.g(),
+                color.b(),
+                color.a().min(TREND_TEXT_PLACEHOLDER_ALPHA),
+            );
+        }
 
         // The container (text tool with a background/border): a box wrapping the run, emitted
         // as the rectangle tool's crisp integer-snapped prims (`Rect` fill + `RectFrame`
@@ -844,7 +849,7 @@ impl ChartEngine {
         out.push(Prim::Text {
             x: x as f32,
             y: y as f32,
-            text: drawing.display_text().to_string(),
+            text: text.to_string(),
             color,
             size: size as f32,
             family: layout.font_family.clone(),

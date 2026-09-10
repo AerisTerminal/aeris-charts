@@ -323,6 +323,16 @@ impl ChartInner {
         // a TEXT drawing additionally gets the hover ring (the engine kind-filters; other
         // kinds have no hover chrome). Hit testing stays on stable z-order so promotion
         // cannot oscillate hover.
+        if let Some(id) = self.engine.drawing_text_hit_at(x_css, y_css) {
+            self.engine.set_hovered_series(None);
+            self.engine.set_hovered_text(Some(id));
+            self.engine.set_hovered_drawing(Some(id));
+            return result(
+                None,
+                Some(format!("drawing:{id}")),
+                Some("text".to_string()),
+            );
+        }
         if let Some(drawing) = self.engine.hit_test_drawing(x_css, y_css) {
             self.engine.set_hovered_series(None);
             self.engine.set_hovered_text(Some(drawing.id));

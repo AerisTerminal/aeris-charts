@@ -2524,6 +2524,8 @@ export class chart_impl implements chart_api {
   private text_editor_id = 0;
   /** Snapshot of the drawing's text when the editor opened — restored on Escape. */
   private text_editor_original = "";
+  /** Only the standalone text tool is deleted when an edit finishes empty. */
+  private text_editor_remove_if_empty = true;
   /**
    * The drawing selection snapshotted at pointer-DOWN, before the engine's drag grab selects
    * the hit (gestures.ts calls `note_drawing_press`). `emit_click` reads it for TradingView's
@@ -3709,14 +3711,18 @@ export class chart_impl implements chart_api {
     // TradingView-style click-to-select, drawings first: a drawing hit selects it and clears
     // the series selection; a miss clears the drawing selection and falls through to the
     // series under the click (or clears that on empty pane space).
-    const drawing_hit = this.wasm.select_drawing_at(x, y);
+    const trend_text_hit = Number(this.wasm.drawing_text_hit_at(x, y));
+    const drawing_hit = trend_text_hit > 0 || this.wasm.select_drawing_at(x, y);
+    if (trend_text_hit > 0) this.wasm.set_selected_drawing(trend_text_hit);
     this.wasm.set_selected_series(drawing_hit ? undefined : (this.hover?.series_id ?? undefined));
     // Text drawings: empty labels open typing mode on the first click (there is no ink to
     // "focus" otherwise). Non-empty labels follow TradingView's two-step model — first click
     // selects (focus border), a click opens typing mode only when already selected at press.
     if (drawing_hit) {
       const selected = this.selected_drawing();
-      if (selected !== null && selected.kind() === "text") {
+      if (selected !== null && selected.kind() === "trend_line" && selected.id === trend_text_hit) {
+        this.open_text_editor(selected);
+      } else if (selected !== null && selected.kind() === "text") {
         const empty = !(selected.options().text ?? "").trim();
         if (empty || this.text_press_selected === selected.id) {
           this.open_text_editor(selected);
@@ -4021,7 +4027,7 @@ export class chart_impl implements chart_api {
    */
   open_text_editor(drawing: drawing_api): void {
     this.close_text_editor(true);
-    let coords = this.wasm.drawing_point_to_coordinate(drawing.id, 0);
+    let coords = this.wasm.drawing_text_coordinate(drawing.id);
     if (coords.length !== 2) return;
     const options = drawing.options();
     const layout = (this.options() as {
@@ -4033,7 +4039,7 @@ export class chart_impl implements chart_api {
         background?: { color?: string };
       };
     }).layout ?? {};
-    const font_size = options.text_size ?? 18;
+    const font_size = options.text_size ?? (drawing.kind() === "text" ? 18 : (layout.fontSize ?? 12));
     const font_family = layout.fontFamily ?? "sans-serif";
     const style_prefix = options.text_italic ? "italic " : "";
     const font = `${style_prefix}${options.text_weight ?? 400} ${font_size}px ${font_family}`;
@@ -4119,20 +4125,16 @@ export class chart_impl implements chart_api {
       const rect = this.container.getBoundingClientRect();
       const anchor_x = Math.min(Math.max(coords[0]!, 20), rect.width - 20);
       const anchor_y = Math.min(Math.max(coords[1]!, 20), rect.height - 20);
-      const pad = 4;
       const text = editor.textContent ?? "";
       let left_edge = anchor_x - (editor.offsetWidth || 0) / 2;
       if (measure_ctx !== null) {
         measure_ctx.font = font;
         const advance = text === "" ? font_size : measure_ctx.measureText(text).width;
-        if (options.text_h_align === "left") left_edge = anchor_x + pad;
-        else if (options.text_h_align === "right") left_edge = anchor_x - pad - advance;
+        if (options.text_h_align === "left") left_edge = anchor_x;
+        else if (options.text_h_align === "right") left_edge = anchor_x - advance;
         else left_edge = anchor_x - advance / 2;
       }
-      let run_y = anchor_y;
-      if (options.text_v_align === "top") run_y = anchor_y - pad - font_size / 2;
-      else if (options.text_v_align === "bottom") run_y = anchor_y + pad + font_size / 2;
-      const baseline = run_y + baseline_drop;
+      const baseline = anchor_y + baseline_drop;
       wrap.style.left = `${left_edge}px`;
       wrap.style.top = `${baseline - baseline_in_editor}px`;
     };
@@ -4177,6 +4179,7 @@ export class chart_impl implements chart_api {
     this.text_editor = editor;
     this.text_editor_id = drawing.id;
     this.text_editor_original = options.text ?? "";
+    this.text_editor_remove_if_empty = drawing.kind() === "text";
     // Width without a live push yet (avoids a redundant apply of the same text).
     if (measure_ctx !== null) {
       measure_ctx.font = font;
@@ -4190,7 +4193,7 @@ export class chart_impl implements chart_api {
 
     this.text_editor_reposition = () => {
       if (this.text_editor === null) return;
-      const fresh = this.wasm.drawing_point_to_coordinate(drawing.id, 0);
+      const fresh = this.wasm.drawing_text_coordinate(drawing.id);
       if (fresh.length !== 2) {
         this.close_text_editor(false);
         return;
@@ -4228,17 +4231,18 @@ export class chart_impl implements chart_api {
     const id = this.text_editor_id;
     const text = (editor.textContent ?? "").replace(/\s*\n\s*/g, " ").trim();
     if (commit) {
-      if (text === "") {
+      if (text === "" && this.text_editor_remove_if_empty) {
         this.wasm.remove_drawing(id);
       } else {
         this.wasm.drawing_apply_options(id, JSON.stringify({ text }));
       }
-    } else if (!this.text_editor_original.trim()) {
+    } else if (!this.text_editor_original.trim() && this.text_editor_remove_if_empty) {
       this.wasm.remove_drawing(id);
     } else {
       this.wasm.drawing_apply_options(id, JSON.stringify({ text: this.text_editor_original }));
     }
     this.text_editor_original = "";
+    this.text_editor_remove_if_empty = true;
     this.repaint();
     this.overlay_el().focus();
   }

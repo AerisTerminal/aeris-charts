@@ -568,6 +568,7 @@ pub const TEXT_TOOL_DEFAULT_SIZE: f64 = 18.0;
 /// hit area and the hover/focus borders all use this box so selection, hovering, and typing
 /// mode land on exactly the same outline.
 pub(crate) const TEXT_CHROME_PAD: f64 = TEXT_PAD + 2.0;
+pub(crate) const TREND_TEXT_PLACEHOLDER: &str = "+ Add text";
 
 impl Drawing {
     pub(crate) fn new(
@@ -1657,12 +1658,25 @@ impl ChartEngine {
         font_size: f64,
         font_family: &str,
     ) -> Option<(f64, f64)> {
-        if drawing.text.is_empty() && drawing.kind != DrawingKind::Text {
+        if drawing.text.is_empty()
+            && !matches!(drawing.kind, DrawingKind::Text | DrawingKind::TrendLine)
+        {
             return None;
         }
         if entry.text_key != key {
             let size = drawing.resolved_text_size(font_size);
-            entry.text_width = self.measure_drawing_text_with_family(drawing, size, font_family);
+            entry.text_width = if drawing.kind == DrawingKind::TrendLine && drawing.text.is_empty()
+            {
+                self.measure_text_run(
+                    TREND_TEXT_PLACEHOLDER,
+                    size,
+                    font_family,
+                    drawing.text_weight.unwrap_or(400),
+                    drawing.text_italic,
+                )
+            } else {
+                self.measure_drawing_text_with_family(drawing, size, font_family)
+            };
             entry.text_size = size;
             entry.text_key = key;
         }
@@ -1852,6 +1866,39 @@ impl ChartEngine {
             DrawingTextVAlign::Bottom => reference.bottom + pad + size / 2.0,
         };
         (x, y, h)
+    }
+
+    pub(crate) fn drawing_text_placement(
+        drawing: &Drawing,
+        px: &[(f64, f64)],
+        pane_w: f64,
+        pane_top: f64,
+        pane_h: f64,
+        size: f64,
+        pad: f64,
+    ) -> (f64, f64, DrawingTextHAlign) {
+        if drawing.kind == DrawingKind::TrendLine && px.len() >= 2 {
+            let (a, b) = (px[0], px[1]);
+            let dx = b.0 - a.0;
+            if dx.abs() > f64::EPSILON {
+                let (left, right) = if a.0 <= b.0 { (a, b) } else { (b, a) };
+                let usable_pad = pad.min((right.0 - left.0).abs() / 2.0);
+                let x = match drawing.text_h_align {
+                    DrawingTextHAlign::Left => left.0 + usable_pad,
+                    DrawingTextHAlign::Center => (left.0 + right.0) / 2.0,
+                    DrawingTextHAlign::Right => right.0 - usable_pad,
+                };
+                let line_y = a.1 + (b.1 - a.1) * ((x - a.0) / dx);
+                let y = match drawing.text_v_align {
+                    DrawingTextVAlign::Top => line_y - pad - size / 2.0,
+                    DrawingTextVAlign::Middle => line_y,
+                    DrawingTextVAlign::Bottom => line_y + pad + size / 2.0,
+                };
+                return (x, y, drawing.text_h_align);
+            }
+        }
+        let reference = Self::text_box(drawing.kind, px, pane_w, pane_top, pane_h);
+        Self::text_placement(drawing, &reference, size, pad)
     }
 
     /// Measure (or estimate) a label's width in the same px units as `size`. Empty text tools
@@ -2084,6 +2131,75 @@ impl ChartEngine {
         self.drawing_to_px_for(drawing.pane_index, drawing.price_scale, *point)
     }
 
+    /// The exact media-px text-run anchor shared by frame rendering and the host caret overlay.
+    pub fn drawing_text_coordinate(&self, id: DrawingId) -> Option<(f64, f64)> {
+        let drawing = self.drawing(id)?;
+        let px = self.drawing_px(drawing)?;
+        let pane = self.panes.get(drawing.pane_index)?;
+        let size = drawing.resolved_text_size(self.options.get().layout.font_size);
+        let (x, y, _) = Self::drawing_text_placement(
+            drawing,
+            &px,
+            self.pane_w,
+            pane.top,
+            pane.height,
+            size,
+            TEXT_PAD,
+        );
+        Some((x, y))
+    }
+
+    /// Topmost trend-line label/placeholder at a media-px point. This keeps the browser host
+    /// from duplicating text measurement or 3×3 segment placement when opening inline edit.
+    pub fn drawing_text_hit_at(&self, x: f64, y: f64) -> Option<DrawingId> {
+        let layout = &self.options.get().layout;
+        let pane_index = self.pane_at_y(y)?;
+        let candidates = self.take_drawing_candidates(pane_index, Some((x, y)));
+        let hit = candidates.iter().rev().find_map(|&id| {
+            let drawing = self.drawing(id)?;
+            if drawing.kind != DrawingKind::TrendLine {
+                return None;
+            }
+            let text = if drawing.text.is_empty() {
+                TREND_TEXT_PLACEHOLDER
+            } else {
+                drawing.display_text()
+            };
+            let px = self.drawing_px(drawing)?;
+            let pane = self.panes.get(drawing.pane_index)?;
+            let size = drawing.resolved_text_size(layout.font_size);
+            let (tx, ty, align) = Self::drawing_text_placement(
+                drawing,
+                &px,
+                self.pane_w,
+                pane.top,
+                pane.height,
+                size,
+                TEXT_PAD,
+            );
+            let width = self.measure_text_run(
+                text,
+                size,
+                &layout.font_family,
+                drawing.text_weight.unwrap_or(400),
+                drawing.text_italic,
+            );
+            let left = match align {
+                DrawingTextHAlign::Left => tx,
+                DrawingTextHAlign::Center => tx - width / 2.0,
+                DrawingTextHAlign::Right => tx - width,
+            };
+            let half_height = size * 0.6;
+            (x >= left - TEXT_PAD
+                && x <= left + width + TEXT_PAD
+                && y >= ty - half_height - TEXT_PAD
+                && y <= ty + half_height + TEXT_PAD)
+                .then_some(drawing.id)
+        });
+        self.recycle_drawing_candidates(candidates);
+        hit
+    }
+
     /// Every drawing as a JSON array of `{id, kind, pane_index, points, ...options}` in z-order.
     pub fn drawings_json(&self) -> String {
         let list: Vec<serde_json::Value> = self
@@ -2121,35 +2237,56 @@ impl ChartEngine {
         self.selected_drawing
     }
 
-    /// Mark the text drawing the host's typing-mode editor currently owns. The frame keeps
+    /// Mark the text-capable drawing the host's typing-mode editor currently owns. The frame keeps
     /// painting the label and the focus border underneath the host's borderless caret overlay
     /// (TradingView's overlay-caret model); this flag is the host/query seam for that session.
     /// Cleared when the editor closes. An unknown id never sticks.
     pub fn set_editing_drawing(&mut self, id: Option<DrawingId>) {
-        self.invalidate_frame_overlay();
-        self.editing_drawing = id.filter(|&eid| {
-            self.drawings
-                .iter()
-                .any(|d| d.id == eid && d.kind == DrawingKind::Text)
+        let valid = id.filter(|&eid| {
+            self.drawings.iter().any(|d| {
+                d.id == eid && matches!(d.kind, DrawingKind::Text | DrawingKind::TrendLine)
+            })
         });
+        let changes_trend_placeholder =
+            [self.editing_drawing, valid]
+                .into_iter()
+                .flatten()
+                .any(|id| {
+                    self.drawing(id).is_some_and(|drawing| {
+                        drawing.kind == DrawingKind::TrendLine && drawing.text.is_empty()
+                    })
+                });
+        if changes_trend_placeholder {
+            self.invalidate_frame_drawings();
+        } else {
+            self.invalidate_frame_overlay();
+        }
+        self.editing_drawing = valid;
     }
 
     pub fn editing_drawing(&self) -> Option<DrawingId> {
         self.editing_drawing
     }
 
-    /// Mark the TEXT drawing under the host's pointer (`None` when hovering anything else):
-    /// the overlay frame paints its focus border at hover opacity (TradingView's hover ring).
-    /// Only text drawings stick — the other kinds have no hover affordance, so hovering them
-    /// must not invalidate the overlay. Repaint-worthy changes only.
+    /// Mark a text drawing or trend line under the host pointer. Text drawings paint their
+    /// hover ring; empty trend lines paint their inline `+ Add text` affordance.
     pub fn set_hovered_text(&mut self, id: Option<DrawingId>) {
         let valid = id.filter(|&hid| {
-            self.drawings
-                .iter()
-                .any(|d| d.id == hid && d.kind == DrawingKind::Text)
+            self.drawings.iter().any(|d| {
+                d.id == hid && matches!(d.kind, DrawingKind::Text | DrawingKind::TrendLine)
+            })
         });
         if valid != self.hovered_text {
-            self.invalidate_frame_overlay();
+            let changes_placeholder = [self.hovered_text, valid].into_iter().flatten().any(|id| {
+                self.drawing(id).is_some_and(|drawing| {
+                    drawing.kind == DrawingKind::TrendLine && drawing.text.is_empty()
+                })
+            });
+            if changes_placeholder {
+                self.invalidate_frame_drawings();
+            } else {
+                self.invalidate_frame_overlay();
+            }
             self.hovered_text = valid;
         }
     }

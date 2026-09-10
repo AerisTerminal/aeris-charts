@@ -650,6 +650,48 @@ test("a trend line carries an aligned text label", async ({ page }) => {
   expect(with_label.y, "above the segment at its center slot").toBeLessThan(line_mid * PR - 8);
 });
 
+test("an empty trend line offers direct inline text entry at its configured slot", async ({ page }) => {
+  await goto_fixture(page);
+  const s = await anchor_spots(page);
+  const id = await page.evaluate(({ l0, l1, p_lo }) => window.__chart.add_drawing("trend_line", [
+    { logical: l0, price: p_lo },
+    { logical: l1, price: p_lo },
+  ], {
+    color: "#f59e0b",
+    text_color: "#f59e0b",
+    text_h_align: "center",
+    text_v_align: "middle",
+  }).id, s);
+  const slot = {
+    x: (await x_of(page, s.l0) + await x_of(page, s.l1)) / 2,
+    y: await page.evaluate((price) => window.__main.price_to_coordinate(price), s.p_lo),
+  };
+
+  const idle = await capture(page);
+  await page.mouse.move(slot.x, slot.y);
+  await settle_frames(page);
+  const hovered = await capture(page);
+  expect(pixel_diff(idle, hovered), "hover paints the low-opacity Add text affordance").toBeGreaterThan(20);
+
+  await page.mouse.click(slot.x, slot.y);
+  const editor = page.locator("#nucleuscharts-text-input");
+  await expect(editor).toBeVisible();
+  await page.keyboard.type("Dev");
+  await expect.poll(() => page.evaluate(({ id }) => (
+    window.__chart.drawings().find((drawing) => drawing.id === id)?.options().text
+  ), { id })).toBe("Dev");
+  const editor_box = await editor.boundingBox();
+  expect(editor_box).not.toBeNull();
+  expect(Math.abs((editor_box.x + editor_box.width / 2) - slot.x)).toBeLessThan(3);
+  expect(Math.abs((editor_box.y + editor_box.height / 2) - slot.y)).toBeLessThan(3);
+
+  await page.keyboard.press("Enter");
+  await expect(editor).toHaveCount(0);
+  expect(await page.evaluate(({ id }) => (
+    window.__chart.drawings().find((drawing) => drawing.id === id)?.options().text
+  ), { id })).toBe("Dev");
+});
+
 test("Delete and Backspace remove the selected drawing", async ({ page }) => {
   await goto_fixture(page);
   const s = await anchor_spots(page);
