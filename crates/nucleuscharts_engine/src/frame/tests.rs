@@ -2325,10 +2325,11 @@ fn position_drawings_paint_information_and_entry_target_stop_axis_prices() {
         )),
         "position target/stop zones are fill-only, not bordered rectangles"
     );
-    assert!(frame.panes[0]
-        .main
-        .iter()
-        .any(|prim| matches!(prim, Prim::HLine { color, .. } if *color == entry)));
+    assert!(frame.panes[0].main.iter().any(|prim| matches!(
+        prim,
+        Prim::Polyline { color, width, .. }
+            if *color == entry && *width < 1.0
+    )));
     let text = frame.panes[0]
         .main
         .iter()
@@ -2393,7 +2394,7 @@ fn position_progress_darkens_the_run_and_keeps_labels_above_the_gray_trend() {
                 },
                 DrawingPoint {
                     logical: 1.0,
-                    price: 11.0,
+                    price: 9.0,
                 },
             ],
             None,
@@ -2416,10 +2417,13 @@ fn position_progress_darkens_the_run_and_keeps_labels_above_the_gray_trend() {
                 first_point,
                 point_count,
                 color,
+                width,
                 style: LineStyle::Solid,
                 line_type: LineType::Simple,
                 ..
-            } if *color == POSITION_ENTRY => Some((*first_point as usize, *point_count as usize)),
+            } if *color == POSITION_ENTRY && *width >= 1.0 => {
+                Some((*first_point as usize, *point_count as usize))
+            }
             _ => None,
         })
         .filter(|(_, count)| *count >= 2)
@@ -2439,7 +2443,9 @@ fn position_progress_darkens_the_run_and_keeps_labels_above_the_gray_trend() {
         .iter()
         .enumerate()
         .filter_map(|(index, prim)| match prim {
-            Prim::Polyline { color, .. } if *color == POSITION_ENTRY => Some(index),
+            Prim::Polyline { color, width, .. } if *color == POSITION_ENTRY && *width >= 1.0 => {
+                Some(index)
+            }
             _ => None,
         })
         .max()
@@ -2470,8 +2476,9 @@ fn position_progress_darkens_the_run_and_keeps_labels_above_the_gray_trend() {
 }
 
 #[test]
-fn position_run_anchors_to_post_entry_ohlc_extreme_not_latest_close() {
+fn position_run_attaches_to_latest_candle_wick_while_open() {
     use crate::drawings::{DrawingKind, DrawingPoint};
+    use crate::frame::drawings::PositionRunSide;
 
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     chart.series[0].kind = SeriesKind::Candlestick;
@@ -2497,11 +2504,11 @@ fn position_run_anchors_to_post_entry_ohlc_extreme_not_latest_close() {
                 },
                 DrawingPoint {
                     logical: 3.0,
-                    price: 14.0,
+                    price: 20.0,
                 },
                 DrawingPoint {
                     logical: 1.0,
-                    price: 11.0,
+                    price: 5.0,
                 },
             ],
             None,
@@ -2518,11 +2525,11 @@ fn position_run_anchors_to_post_entry_ohlc_extreme_not_latest_close() {
                 },
                 DrawingPoint {
                     logical: 3.0,
-                    price: 12.0,
+                    price: 5.0,
                 },
                 DrawingPoint {
                     logical: 1.0,
-                    price: 15.0,
+                    price: 20.0,
                 },
             ],
             None,
@@ -2534,29 +2541,235 @@ fn position_run_anchors_to_post_entry_ohlc_extreme_not_latest_close() {
         .iter()
         .find(|drawing| drawing.id == long_id)
         .unwrap();
-    let long_run = chart.position_run_extreme_point(long).unwrap();
-    assert_eq!(long_run.logical, 2.0);
-    assert_eq!(long_run.price, 16.0, "long run uses the exact highest HIGH");
+    let long_run = chart.position_run_endpoint(long).unwrap();
+    assert_eq!(long_run.side, PositionRunSide::Reward);
+    assert_eq!(long_run.point.logical, 4.0);
+    assert_eq!(
+        long_run.point.price, 14.0,
+        "open long run attaches to the latest candle HIGH, not a historical extreme"
+    );
 
     let short = chart
         .drawings
         .iter()
         .find(|drawing| drawing.id == short_id)
         .unwrap();
-    let short_run = chart.position_run_extreme_point(short).unwrap();
-    assert_eq!(short_run.logical, 3.0);
-    assert_eq!(short_run.price, 10.0, "short run uses the exact lowest LOW");
+    let short_run = chart.position_run_endpoint(short).unwrap();
+    assert_eq!(short_run.side, PositionRunSide::Reward);
+    assert_eq!(short_run.point.logical, 4.0);
+    assert_eq!(
+        short_run.point.price, 11.0,
+        "open short run attaches to the latest candle LOW, not a historical extreme"
+    );
 
     assert_ne!(
-        long_run.price,
+        long_run.point.price,
         *close.last().unwrap(),
-        "the run endpoint must not collapse to current/latest close"
+        "the long endpoint must use the candle wick, not Close"
     );
     assert_ne!(
-        short_run.price,
+        short_run.point.price,
         *close.last().unwrap(),
-        "the run endpoint must not collapse to current/latest close"
+        "the short endpoint must use the candle wick, not Close"
     );
+}
+
+#[test]
+fn position_run_freezes_on_the_first_boundary_and_uses_that_side_wick() {
+    use crate::drawings::{DrawingKind, DrawingPoint};
+    use crate::frame::drawings::PositionRunSide;
+
+    fn position(
+        chart: &mut ChartEngine,
+        kind: DrawingKind,
+        entry: f64,
+        target: f64,
+        stop: f64,
+    ) -> crate::drawings::DrawingId {
+        chart
+            .add_drawing(
+                kind,
+                0,
+                vec![
+                    DrawingPoint {
+                        logical: 0.0,
+                        price: entry,
+                    },
+                    DrawingPoint {
+                        logical: 3.0,
+                        price: target,
+                    },
+                    DrawingPoint {
+                        logical: 0.0,
+                        price: stop,
+                    },
+                ],
+                None,
+            )
+            .unwrap()
+    }
+
+    // Long: stop is touched on candle 1; a later candle reaches target, but the position was
+    // already terminated. The connector must stay on candle 1's LOW in the risk direction.
+    let mut long_stop = ChartEngine::new(800.0, 500.0, 1.0);
+    long_stop.series[0].kind = SeriesKind::Candlestick;
+    long_stop
+        .set_series_data(
+            0,
+            &[0.0, 60.0, 120.0],
+            &[100.0, 99.0, 102.0],
+            &[103.0, 104.0, 112.0],
+            &[98.0, 94.0, 99.0],
+            &[101.0, 96.0, 111.0],
+        )
+        .unwrap();
+    let id = position(
+        &mut long_stop,
+        DrawingKind::LongPosition,
+        100.0,
+        110.0,
+        95.0,
+    );
+    let drawing = long_stop
+        .drawings
+        .iter()
+        .find(|drawing| drawing.id == id)
+        .unwrap();
+    let run = long_stop.position_run_endpoint(drawing).unwrap();
+    assert_eq!(run.side, PositionRunSide::Risk);
+    assert_eq!(run.point.logical, 1.0);
+    assert_eq!(run.point.price, 94.0);
+
+    // Long target-first is the mirror: a later stop cannot flip an already completed reward run.
+    let mut long_target = ChartEngine::new(800.0, 500.0, 1.0);
+    long_target.series[0].kind = SeriesKind::Candlestick;
+    long_target
+        .set_series_data(
+            0,
+            &[0.0, 60.0, 120.0],
+            &[100.0, 102.0, 98.0],
+            &[103.0, 111.0, 104.0],
+            &[98.0, 99.0, 94.0],
+            &[101.0, 110.0, 95.0],
+        )
+        .unwrap();
+    let id = position(
+        &mut long_target,
+        DrawingKind::LongPosition,
+        100.0,
+        110.0,
+        95.0,
+    );
+    let drawing = long_target
+        .drawings
+        .iter()
+        .find(|drawing| drawing.id == id)
+        .unwrap();
+    let run = long_target.position_run_endpoint(drawing).unwrap();
+    assert_eq!(run.side, PositionRunSide::Reward);
+    assert_eq!(run.point.logical, 1.0);
+    assert_eq!(run.point.price, 111.0);
+
+    // Short: stop-first uses the terminal candle HIGH; target-first uses its LOW.
+    let mut short_stop = ChartEngine::new(800.0, 500.0, 1.0);
+    short_stop.series[0].kind = SeriesKind::Candlestick;
+    short_stop
+        .set_series_data(
+            0,
+            &[0.0, 60.0, 120.0],
+            &[100.0, 101.0, 98.0],
+            &[102.0, 106.0, 101.0],
+            &[97.0, 96.0, 89.0],
+            &[99.0, 104.0, 90.0],
+        )
+        .unwrap();
+    let id = position(
+        &mut short_stop,
+        DrawingKind::ShortPosition,
+        100.0,
+        90.0,
+        105.0,
+    );
+    let drawing = short_stop
+        .drawings
+        .iter()
+        .find(|drawing| drawing.id == id)
+        .unwrap();
+    let run = short_stop.position_run_endpoint(drawing).unwrap();
+    assert_eq!(run.side, PositionRunSide::Risk);
+    assert_eq!(run.point.logical, 1.0);
+    assert_eq!(run.point.price, 106.0);
+
+    let mut short_target = ChartEngine::new(800.0, 500.0, 1.0);
+    short_target.series[0].kind = SeriesKind::Candlestick;
+    short_target
+        .set_series_data(
+            0,
+            &[0.0, 60.0, 120.0],
+            &[100.0, 98.0, 102.0],
+            &[102.0, 103.0, 106.0],
+            &[97.0, 89.0, 96.0],
+            &[99.0, 90.0, 104.0],
+        )
+        .unwrap();
+    let id = position(
+        &mut short_target,
+        DrawingKind::ShortPosition,
+        100.0,
+        90.0,
+        105.0,
+    );
+    let drawing = short_target
+        .drawings
+        .iter()
+        .find(|drawing| drawing.id == id)
+        .unwrap();
+    let run = short_target.position_run_endpoint(drawing).unwrap();
+    assert_eq!(run.side, PositionRunSide::Reward);
+    assert_eq!(run.point.logical, 1.0);
+    assert_eq!(run.point.price, 89.0);
+}
+
+#[test]
+fn position_run_same_candle_target_and_stop_is_conservatively_stop_first() {
+    use crate::drawings::{DrawingKind, DrawingPoint};
+    use crate::frame::drawings::PositionRunSide;
+
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart.series[0].kind = SeriesKind::Candlestick;
+    chart
+        .set_series_data(0, &[0.0], &[100.0], &[111.0], &[94.0], &[102.0])
+        .unwrap();
+    let id = chart
+        .add_drawing(
+            DrawingKind::LongPosition,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 0.0,
+                    price: 100.0,
+                },
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 110.0,
+                },
+                DrawingPoint {
+                    logical: 0.0,
+                    price: 95.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    let drawing = chart
+        .drawings
+        .iter()
+        .find(|drawing| drawing.id == id)
+        .unwrap();
+    let run = chart.position_run_endpoint(drawing).unwrap();
+    assert_eq!(run.side, PositionRunSide::Risk);
+    assert_eq!(run.point.logical, 0.0);
+    assert_eq!(run.point.price, 94.0);
 }
 
 #[test]

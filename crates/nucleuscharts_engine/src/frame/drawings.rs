@@ -27,9 +27,22 @@ use nucleuscharts_core::model::plot_list::{MismatchDirection, PlotValueIndex};
 const ANCHOR_RADIUS: f64 = 4.0;
 const ANCHOR_BORDER_WIDTH: f64 = 1.5;
 const ANCHOR_BORDER: Color = PRIMARY;
+const POSITION_ENTRY_WIDTH_CSS: f64 = 0.5;
 /// The hover ring's dimmed variant of the focus border (TradingView shows the same border at
 /// roughly half strength until the drawing is actually selected).
 const HOVER_BORDER: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0x73);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PositionRunSide {
+    Reward,
+    Risk,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct PositionRunEndpoint {
+    pub(super) point: crate::drawings::DrawingPoint,
+    pub(super) side: PositionRunSide,
+}
 
 impl ChartEngine {
     #[cfg(test)]
@@ -464,14 +477,19 @@ impl ChartEngine {
                 let left_px = position.left.round() as i32;
                 let right_px = position.right.round() as i32;
                 if left_px != right_px {
-                    out.push(Prim::HLine {
-                        y: position.entry_y.round() as i32,
-                        x0: left_px,
-                        x1: right_px,
-                        width: crisp_width,
-                        style: drawing.style,
-                        color: POSITION_ENTRY,
-                    });
+                    let entry_path = [
+                        [left_px as f32, position.entry_y as f32],
+                        [right_px as f32, position.entry_y as f32],
+                    ];
+                    super::series_geometry::push_line_stroke(
+                        out,
+                        points,
+                        &entry_path,
+                        (POSITION_ENTRY_WIDTH_CSS * vpr) as f32,
+                        drawing.style,
+                        LineType::Simple,
+                        POSITION_ENTRY,
+                    );
                 }
             }
             // The text tool's geometry is its label (emitted by `build_drawing_text`).
@@ -715,7 +733,7 @@ impl ChartEngine {
     }
 
     /// Dynamic position progress belongs to pane chrome rather than retained drawing geometry:
-    /// series updates already invalidate chrome, so the darker traversed fill and run-extreme
+    /// series updates already invalidate chrome, so the darker traversed fill and terminal-candle
     /// trend can follow data without rebuilding every drawing on each tick.
     pub(super) fn build_position_progress_frame(
         &self,
@@ -733,24 +751,17 @@ impl ChartEngine {
                 )
                 && drawing.points.len() == 3
         }) {
-            let Some(run_point) = self.position_run_extreme_point(drawing) else {
+            let Some(run) = self.position_run_endpoint(drawing) else {
                 continue;
             };
+            let run_point = run.point;
             let entry = drawing.points[0].price;
             let target = drawing.points[1].price;
             let stop = drawing.points[2].price;
-            let lower = target.min(stop);
-            let upper = target.max(stop);
-            if !run_point.price.is_finite() || !entry.is_finite() || lower >= upper {
+            if !run_point.price.is_finite() || !entry.is_finite() {
                 continue;
             }
 
-            // The shaded run is monotonic: long tracks the highest post-entry high and short the
-            // lowest post-entry low. Clamp only the fill to the semantic target/stop rectangle.
-            let progress_price = run_point.price.clamp(lower, upper);
-            if (progress_price - entry).abs() <= f64::EPSILON {
-                continue;
-            }
             let Some(px) = self.drawing_px(drawing) else {
                 continue;
             };
@@ -772,37 +783,55 @@ impl ChartEngine {
             let DrawingBodyGeometry::Position(position) = geometry.body else {
                 continue;
             };
-            let progress_point = crate::drawings::DrawingPoint {
-                logical: drawing.points[0].logical,
-                price: progress_price,
-            };
-            let Some((_, progress_y)) =
-                self.drawing_to_px_for(pane_index, drawing.price_scale, progress_point)
-            else {
-                continue;
-            };
-            let progress_y = progress_y * vpr;
-            let semantic = Color::parse_css(nucleuscharts_core::style::MARKET_UP_CSS)
-                .unwrap_or(Color::rgb(8, 153, 129));
 
-            // Layer a second translucent fill only over the traversed portion. The untouched
-            // remainder keeps the base zone opacity, while progress reads progressively stronger.
-            push_position_zone_with_alpha(
-                out,
-                PositionZone {
-                    left: position.left,
-                    right: position.right,
-                    y0: position.entry_y,
-                    y1: progress_y,
-                },
-                semantic,
-                58,
-            );
-
-            // The run trend is not a current-price marker. Anchor it to the exact drawing entry and
-            // the exact favorable post-entry extreme: highest HIGH for long, lowest LOW for short.
-            // Do not clamp the trend to target/stop; if price ran through target the endpoint still
-            // represents the true market extreme.
+            let (zone_end, semantic) = match run.side {
+                PositionRunSide::Reward => (
+                    target,
+                    Color::parse_css(nucleuscharts_core::style::MARKET_UP_CSS)
+                        .unwrap_or(Color::rgb(8, 153, 129)),
+                ),
+                PositionRunSide::Risk => (
+                    stop,
+                    Color::parse_css(nucleuscharts_core::style::MARKET_DOWN_CSS)
+                        .unwrap_or(Color::rgb(247, 82, 95)),
+                ),
+            };
+            let progress_price = run_point
+                .price
+                .clamp(entry.min(zone_end), entry.max(zone_end));
+            if (progress_price - entry).abs() <= f64::EPSILON {
+                // A still-open candle can have its favorable wick on the adverse side of entry.
+                // The connector still belongs on that candle/wick, while there is simply no
+                // traversed semantic fill yet.
+            } else {
+                let Some(progress_y) = self
+                    .drawing_to_px_for(
+                        pane_index,
+                        drawing.price_scale,
+                        crate::drawings::DrawingPoint {
+                            logical: drawing.points[0].logical,
+                            price: progress_price,
+                        },
+                    )
+                    .map(|(_, y)| y * vpr)
+                else {
+                    continue;
+                };
+                push_position_zone_with_alpha(
+                    out,
+                    PositionZone {
+                        left: position.left,
+                        right: position.right,
+                        y0: position.entry_y,
+                        y1: progress_y,
+                    },
+                    semantic,
+                    58,
+                );
+            }
+            // Attach the run trend to the candle that currently terminates the position run. While
+            // open that is the latest candle. Once target or stop is touched first, it freezes on
+            // that first-hit candle. Y is the candle wick for the resolved side, never Close.
             let Some((run_x, run_y)) =
                 self.drawing_to_px_for(pane_index, drawing.price_scale, run_point)
             else {
@@ -826,10 +855,7 @@ impl ChartEngine {
         }
     }
 
-    pub(super) fn position_run_extreme_point(
-        &self,
-        drawing: &Drawing,
-    ) -> Option<crate::drawings::DrawingPoint> {
+    pub(super) fn position_run_endpoint(&self, drawing: &Drawing) -> Option<PositionRunEndpoint> {
         let target = match drawing.price_scale {
             crate::DrawingPriceScale::Right => crate::PriceScaleTarget::Right,
             crate::DrawingPriceScale::Left => crate::PriceScaleTarget::Left,
@@ -857,53 +883,93 @@ impl ChartEngine {
             return None;
         }
         let first_row = plot.search(first_index as i64, MismatchDirection::NearestRight)?;
-        let range = first_row..plot.size();
-        if range.is_empty() {
+        let last_row = plot.last_non_whitespace_row(i64::MAX)?;
+        if first_row > last_row {
             return None;
         }
 
-        // The LOD summary preserves exact OHLC extrema rows, so a long-lived position does not
-        // rescan its entire post-entry history on every live tick. Small/no-LOD series fall back
-        // to the raw range, which remains exact.
-        let mut best = *entry;
-        let mut consider = |row: usize| {
-            if plot.is_whitespace_row(row) {
-                return;
-            }
-            let Some(logical) = plot.index_at(row) else {
-                return;
+        let target_price = drawing.points.get(1)?.price;
+        let stop_price = drawing.points.get(2)?.price;
+        let range_hits = |start: usize, end: usize| {
+            let mut target_hit = false;
+            let mut stop_hit = false;
+            let mut inspect = |row: usize| {
+                if plot.is_whitespace_row(row) {
+                    return;
+                }
+                let high = plot.value_at(row, PlotValueIndex::High);
+                let low = plot.value_at(row, PlotValueIndex::Low);
+                match drawing.kind {
+                    DrawingKind::LongPosition => {
+                        target_hit |= high.is_finite() && high >= target_price;
+                        stop_hit |= low.is_finite() && low <= stop_price;
+                    }
+                    DrawingKind::ShortPosition => {
+                        target_hit |= low.is_finite() && low <= target_price;
+                        stop_hit |= high.is_finite() && high >= stop_price;
+                    }
+                    _ => {}
+                }
             };
-            let value = match drawing.kind {
-                DrawingKind::LongPosition => plot.value_at(row, PlotValueIndex::High),
-                DrawingKind::ShortPosition => plot.value_at(row, PlotValueIndex::Low),
-                _ => return,
-            };
-            if !value.is_finite() {
-                return;
+            if let Some(lod) = plot.lod() {
+                let (rows, _) = lod.rows_on_range(start..end, usize::MAX);
+                for row in rows.iter() {
+                    inspect(row);
+                }
+            } else {
+                for row in start..end {
+                    inspect(row);
+                }
             }
-            let improves = match drawing.kind {
-                DrawingKind::LongPosition => value > best.price,
-                DrawingKind::ShortPosition => value < best.price,
-                _ => false,
-            };
-            if improves {
-                best = crate::drawings::DrawingPoint {
-                    logical: logical as f64,
-                    price: value,
-                };
-            }
+            (target_hit, stop_hit)
         };
-        if let Some(lod) = plot.lod() {
-            let (rows, _) = lod.rows_on_range(range, usize::MAX);
-            for row in rows.iter() {
-                consider(row);
+
+        let (any_target, any_stop) = range_hits(first_row, last_row + 1);
+        let (terminal_row, side) = if any_target || any_stop {
+            // Prefix boundary-hit is monotonic, so binary search finds the first candle touching
+            // either target or stop without rescanning a long-lived position on every frame.
+            let mut lo = first_row;
+            let mut hi = last_row;
+            while lo < hi {
+                let mid = lo + (hi - lo) / 2;
+                let (target_hit, stop_hit) = range_hits(first_row, mid + 1);
+                if target_hit || stop_hit {
+                    hi = mid;
+                } else {
+                    lo = mid + 1;
+                }
             }
+            let (target_hit, stop_hit) = range_hits(lo, lo + 1);
+            // OHLC cannot tell intrabar order when both boundaries are touched by one candle.
+            // Resolve that ambiguity conservatively as stop-first.
+            let side = if stop_hit {
+                PositionRunSide::Risk
+            } else if target_hit {
+                PositionRunSide::Reward
+            } else {
+                return None;
+            };
+            (lo, side)
         } else {
-            for row in range {
-                consider(row);
-            }
-        }
-        Some(best)
+            (last_row, PositionRunSide::Reward)
+        };
+
+        let logical = plot.index_at(terminal_row)?;
+        let value_index = match (drawing.kind, side) {
+            (DrawingKind::LongPosition, PositionRunSide::Reward)
+            | (DrawingKind::ShortPosition, PositionRunSide::Risk) => PlotValueIndex::High,
+            (DrawingKind::LongPosition, PositionRunSide::Risk)
+            | (DrawingKind::ShortPosition, PositionRunSide::Reward) => PlotValueIndex::Low,
+            _ => return None,
+        };
+        let price = plot.value_at(terminal_row, value_index);
+        price.is_finite().then_some(PositionRunEndpoint {
+            point: crate::drawings::DrawingPoint {
+                logical: logical as f64,
+                price,
+            },
+            side,
+        })
     }
 
     /// Position information labels paint in chrome after the dynamic run overlay. This keeps the
