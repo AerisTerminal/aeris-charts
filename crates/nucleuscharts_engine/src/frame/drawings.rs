@@ -18,7 +18,7 @@ use crate::drawings::{
     DrawingKind, DrawingTextHAlign, PositionGeometry, PositionZone, TEXT_CHROME_PAD, TEXT_PAD,
 };
 use crate::ChartEngine;
-use nucleuscharts_core::model::plot_list::{MismatchDirection, PlotValueIndex};
+use nucleuscharts_core::model::plot_list::PlotValueIndex;
 
 /// TradingView-style drawing anchor handle: a theme-derived disc with the primary-token border
 /// (the crosshair-marks disc idiom — the border is a larger filled disc underneath). Slightly
@@ -39,7 +39,8 @@ pub(super) enum PositionRunSide {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct PositionRunEndpoint {
+pub(super) struct PositionRunProgress {
+    pub(super) start: crate::drawings::DrawingPoint,
     pub(super) point: crate::drawings::DrawingPoint,
     pub(super) side: PositionRunSide,
 }
@@ -751,13 +752,12 @@ impl ChartEngine {
                 )
                 && drawing.points.len() == 3
         }) {
-            let Some(run) = self.position_run_endpoint(drawing) else {
+            let Some(run) = self.position_run_progress(drawing) else {
                 continue;
             };
             let run_point = run.point;
+            let run_start = run.start;
             let entry = drawing.points[0].price;
-            let target = drawing.points[1].price;
-            let stop = drawing.points[2].price;
             if !run_point.price.is_finite() || !entry.is_finite() {
                 continue;
             }
@@ -784,62 +784,53 @@ impl ChartEngine {
                 continue;
             };
 
-            let (zone_end, semantic) = match run.side {
-                PositionRunSide::Reward => (
-                    target,
-                    Color::parse_css(nucleuscharts_core::style::MARKET_UP_CSS)
-                        .unwrap_or(Color::rgb(8, 153, 129)),
-                ),
-                PositionRunSide::Risk => (
-                    stop,
-                    Color::parse_css(nucleuscharts_core::style::MARKET_DOWN_CSS)
-                        .unwrap_or(Color::rgb(247, 82, 95)),
-                ),
+            // The progress origin is the first post-placement candle that actually reaches/crosses
+            // the entry. A position that has not filled emits no progress geometry at all.
+            let Some((start_x, _)) =
+                self.drawing_to_px_for(pane_index, drawing.price_scale, run_start)
+            else {
+                continue;
             };
-            let progress_price = run_point
-                .price
-                .clamp(entry.min(zone_end), entry.max(zone_end));
-            if (progress_price - entry).abs() <= f64::EPSILON {
-                // A still-open candle can have its favorable wick on the adverse side of entry.
-                // The connector still belongs on that candle/wick, while there is simply no
-                // traversed semantic fill yet.
-            } else {
-                let Some(progress_y) = self
-                    .drawing_to_px_for(
-                        pane_index,
-                        drawing.price_scale,
-                        crate::drawings::DrawingPoint {
-                            logical: drawing.points[0].logical,
-                            price: progress_price,
-                        },
-                    )
-                    .map(|(_, y)| y * vpr)
-                else {
-                    continue;
-                };
-                push_position_zone_with_alpha(
-                    out,
-                    PositionZone {
-                        left: position.left,
-                        right: position.right,
-                        y0: position.entry_y,
-                        y1: progress_y,
-                    },
-                    semantic,
-                    58,
-                );
-            }
-            // Attach the run trend to the candle that currently terminates the position run. While
-            // open that is the latest candle. Once target or stop is touched first, it freezes on
-            // that first-hit candle. Y is the candle wick for the resolved side, never Close.
             let Some((run_x, run_y)) =
                 self.drawing_to_px_for(pane_index, drawing.price_scale, run_point)
             else {
                 continue;
             };
+            let start_x = (start_x * hpr).clamp(position.left, position.right);
+            let run_x = (run_x * hpr).clamp(position.left, position.right);
+            let run_y = run_y * vpr;
+            let semantic = match run.side {
+                PositionRunSide::Reward => {
+                    Color::parse_css(nucleuscharts_core::style::MARKET_UP_CSS)
+                        .unwrap_or(Color::rgb(8, 153, 129))
+                }
+                PositionRunSide::Risk => {
+                    Color::parse_css(nucleuscharts_core::style::MARKET_DOWN_CSS)
+                        .unwrap_or(Color::rgb(247, 82, 95))
+                }
+            };
+
+            // Stronger opacity represents only the price/time space actually travelled since the
+            // fill: first-fill x -> current/terminal x, entry y -> current/terminal y. It never
+            // darkens the untouched remainder of either TP/SL zone.
+            let travel_left = start_x.min(run_x);
+            let travel_right = start_x.max(run_x);
+            if travel_right > travel_left && (run_y - position.entry_y).abs() > f64::EPSILON {
+                push_position_zone_with_alpha(
+                    out,
+                    PositionZone {
+                        left: travel_left,
+                        right: travel_right,
+                        y0: position.entry_y,
+                        y1: run_y,
+                    },
+                    semantic,
+                    58,
+                );
+            }
             let progress_path = [
-                [px[0].0 as f32, position.entry_y as f32],
-                [(run_x * hpr) as f32, (run_y * vpr) as f32],
+                [start_x as f32, position.entry_y as f32],
+                [run_x as f32, run_y as f32],
             ];
             if progress_path[0] != progress_path[1] {
                 super::series_geometry::push_line_stroke(
@@ -855,7 +846,7 @@ impl ChartEngine {
         }
     }
 
-    pub(super) fn position_run_endpoint(&self, drawing: &Drawing) -> Option<PositionRunEndpoint> {
+    pub(super) fn position_run_progress(&self, drawing: &Drawing) -> Option<PositionRunProgress> {
         let target = match drawing.price_scale {
             crate::DrawingPriceScale::Right => crate::PriceScaleTarget::Right,
             crate::DrawingPriceScale::Left => crate::PriceScaleTarget::Left,
@@ -875,21 +866,97 @@ impl ChartEngine {
         }
         let plot = self.data.plot(series.id);
         let entry = drawing.points.first()?;
-        if !entry.logical.is_finite() || !entry.price.is_finite() {
+        let extent = drawing.points.get(1)?;
+        let target_price = extent.price;
+        let stop_price = drawing.points.get(2)?.price;
+        if !entry.logical.is_finite()
+            || !entry.price.is_finite()
+            || !extent.logical.is_finite()
+            || !target_price.is_finite()
+            || !stop_price.is_finite()
+            || extent.logical < entry.logical
+        {
             return None;
         }
         let first_index = entry.logical.ceil();
-        if first_index < i64::MIN as f64 || first_index > i64::MAX as f64 {
+        let last_index = extent.logical.floor();
+        if first_index < i64::MIN as f64
+            || first_index > i64::MAX as f64
+            || last_index < i64::MIN as f64
+            || last_index > i64::MAX as f64
+            || first_index > last_index
+        {
             return None;
         }
-        let first_row = plot.search(first_index as i64, MismatchDirection::NearestRight)?;
-        let last_row = plot.last_non_whitespace_row(i64::MAX)?;
+        let first_row = plot.first_non_whitespace_row(first_index as i64)?;
+        let last_row = plot.last_non_whitespace_row(last_index as i64)?;
         if first_row > last_row {
             return None;
         }
 
-        let target_price = drawing.points.get(1)?.price;
-        let stop_price = drawing.points.get(2)?.price;
+        let first_high = plot.value_at(first_row, PlotValueIndex::High);
+        let first_low = plot.value_at(first_row, PlotValueIndex::Low);
+        if !first_high.is_finite() || !first_low.is_finite() {
+            return None;
+        }
+
+        // Before fill, entry is approached from whichever side contains the first post-placement
+        // candle. A candle already spanning entry fills immediately. Otherwise a one-sided extrema
+        // predicate (High >= entry from below, Low <= entry from above) lets the LOD hierarchy find
+        // the first touch/cross without scanning every historical candle. A gap across entry is a
+        // deterministic OHLC "cross" and is anchored visually at the exact entry level.
+        let starts_below = first_high < entry.price;
+        let starts_above = first_low > entry.price;
+        let fill_row = if !starts_below && !starts_above {
+            first_row
+        } else {
+            let range_crosses_entry = |start: usize, end: usize| {
+                let mut crossed = false;
+                let mut inspect = |row: usize| {
+                    if crossed || plot.is_whitespace_row(row) {
+                        return;
+                    }
+                    let value_index = if starts_below {
+                        PlotValueIndex::High
+                    } else {
+                        PlotValueIndex::Low
+                    };
+                    let value = plot.value_at(row, value_index);
+                    crossed |= value.is_finite()
+                        && if starts_below {
+                            value >= entry.price
+                        } else {
+                            value <= entry.price
+                        };
+                };
+                if let Some(lod) = plot.lod() {
+                    let (rows, _) = lod.rows_on_range(start..end, usize::MAX);
+                    for row in rows.iter() {
+                        inspect(row);
+                    }
+                } else {
+                    for row in start..end {
+                        inspect(row);
+                    }
+                }
+                crossed
+            };
+            if !range_crosses_entry(first_row, last_row + 1) {
+                return None;
+            }
+            let mut lo = first_row;
+            let mut hi = last_row;
+            while lo < hi {
+                let mid = lo + (hi - lo) / 2;
+                if range_crosses_entry(first_row, mid + 1) {
+                    hi = mid;
+                } else {
+                    lo = mid + 1;
+                }
+            }
+            lo
+        };
+
         let range_hits = |start: usize, end: usize| {
             let mut target_hit = false;
             let mut stop_hit = false;
@@ -924,15 +991,15 @@ impl ChartEngine {
             (target_hit, stop_hit)
         };
 
-        let (any_target, any_stop) = range_hits(first_row, last_row + 1);
-        let (terminal_row, side) = if any_target || any_stop {
+        let (any_target, any_stop) = range_hits(fill_row, last_row + 1);
+        let (terminal_row, side, closed) = if any_target || any_stop {
             // Prefix boundary-hit is monotonic, so binary search finds the first candle touching
             // either target or stop without rescanning a long-lived position on every frame.
-            let mut lo = first_row;
+            let mut lo = fill_row;
             let mut hi = last_row;
             while lo < hi {
                 let mid = lo + (hi - lo) / 2;
-                let (target_hit, stop_hit) = range_hits(first_row, mid + 1);
+                let (target_hit, stop_hit) = range_hits(fill_row, mid + 1);
                 if target_hit || stop_hit {
                     hi = mid;
                 } else {
@@ -949,21 +1016,49 @@ impl ChartEngine {
             } else {
                 return None;
             };
-            (lo, side)
+            (lo, side, true)
         } else {
-            (last_row, PositionRunSide::Reward)
+            let current = plot.value_at(last_row, PlotValueIndex::Close);
+            if !current.is_finite() {
+                return None;
+            }
+            let current = current.clamp(target_price.min(stop_price), target_price.max(stop_price));
+            let side = match drawing.kind {
+                DrawingKind::LongPosition => {
+                    if current >= entry.price {
+                        PositionRunSide::Reward
+                    } else {
+                        PositionRunSide::Risk
+                    }
+                }
+                DrawingKind::ShortPosition => {
+                    if current <= entry.price {
+                        PositionRunSide::Reward
+                    } else {
+                        PositionRunSide::Risk
+                    }
+                }
+                _ => return None,
+            };
+            (last_row, side, false)
         };
 
         let logical = plot.index_at(terminal_row)?;
-        let value_index = match (drawing.kind, side) {
-            (DrawingKind::LongPosition, PositionRunSide::Reward)
-            | (DrawingKind::ShortPosition, PositionRunSide::Risk) => PlotValueIndex::High,
-            (DrawingKind::LongPosition, PositionRunSide::Risk)
-            | (DrawingKind::ShortPosition, PositionRunSide::Reward) => PlotValueIndex::Low,
-            _ => return None,
+        let price = if closed {
+            match side {
+                PositionRunSide::Reward => target_price,
+                PositionRunSide::Risk => stop_price,
+            }
+        } else {
+            plot.value_at(terminal_row, PlotValueIndex::Close)
+                .clamp(target_price.min(stop_price), target_price.max(stop_price))
         };
-        let price = plot.value_at(terminal_row, value_index);
-        price.is_finite().then_some(PositionRunEndpoint {
+        let start_logical = plot.index_at(fill_row)?;
+        price.is_finite().then_some(PositionRunProgress {
+            start: crate::drawings::DrawingPoint {
+                logical: start_logical as f64,
+                price: entry.price,
+            },
             point: crate::drawings::DrawingPoint {
                 logical: logical as f64,
                 price,

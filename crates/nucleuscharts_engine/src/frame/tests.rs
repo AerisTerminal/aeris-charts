@@ -2389,7 +2389,7 @@ fn position_progress_darkens_the_run_and_keeps_labels_above_the_gray_trend() {
                     price: 12.0,
                 },
                 DrawingPoint {
-                    logical: 3.0,
+                    logical: 4.0,
                     price: 14.0,
                 },
                 DrawingPoint {
@@ -2404,11 +2404,28 @@ fn position_progress_darkens_the_run_and_keeps_labels_above_the_gray_trend() {
     // countdown_chart's latest close is 12.5: inside the long reward zone.
     let frame = chart.build_frame();
     let reward = Color::rgb(0x08, 0x99, 0x81);
+    let risk = Color::rgb(0xf7, 0x52, 0x5f);
     let progress_fill = Color::rgba(reward.r(), reward.g(), reward.b(), 58);
-    assert!(frame.panes[0]
+    let risk_progress_fill = Color::rgba(risk.r(), risk.g(), risk.b(), 58);
+    let progress_rect = frame.panes[0]
         .main
         .iter()
-        .any(|prim| matches!(prim, Prim::Rect { color, .. } if *color == progress_fill)));
+        .find_map(|prim| match prim {
+            Prim::Rect { rect, color } if *color == progress_fill => Some(*rect),
+            _ => None,
+        })
+        .expect("reward travel overlay");
+    assert!(
+        progress_rect.w < chart.pane_w.round() as i32,
+        "progress must darken only the elapsed horizontal travel, not the whole position width"
+    );
+    assert!(
+        !frame.panes[0]
+            .main
+            .iter()
+            .any(|prim| matches!(prim, Prim::Rect { color, .. } if *color == risk_progress_fill)),
+        "an open/profit-side long run must not alter the stop-loss zone opacity"
+    );
     let progress = frame.panes[0]
         .main
         .iter()
@@ -2476,7 +2493,7 @@ fn position_progress_darkens_the_run_and_keeps_labels_above_the_gray_trend() {
 }
 
 #[test]
-fn position_run_attaches_to_latest_candle_wick_while_open() {
+fn position_run_starts_at_first_fill_and_tracks_latest_close_while_open() {
     use crate::drawings::{DrawingKind, DrawingPoint};
     use crate::frame::drawings::PositionRunSide;
 
@@ -2486,7 +2503,7 @@ fn position_run_attaches_to_latest_candle_wick_while_open() {
     let open = [10.0, 12.0, 13.0, 14.0, 13.0];
     let high = [11.0, 13.0, 16.0, 15.0, 14.0];
     let low = [9.0, 11.0, 12.0, 10.0, 11.0];
-    let close = [10.5, 12.5, 15.0, 12.0, 12.5];
+    let close = [10.5, 12.5, 15.0, 10.5, 12.5];
     chart
         .set_series_data(0, &times, &open, &high, &low, &close)
         .unwrap();
@@ -2541,12 +2558,18 @@ fn position_run_attaches_to_latest_candle_wick_while_open() {
         .iter()
         .find(|drawing| drawing.id == long_id)
         .unwrap();
-    let long_run = chart.position_run_endpoint(long).unwrap();
-    assert_eq!(long_run.side, PositionRunSide::Reward);
-    assert_eq!(long_run.point.logical, 4.0);
+    let long_run = chart.position_run_progress(long).unwrap();
+    assert_eq!(long_run.start.logical, 1.0);
+    assert_eq!(long_run.start.price, 12.0);
     assert_eq!(
-        long_run.point.price, 14.0,
-        "open long run attaches to the latest candle HIGH, not a historical extreme"
+        long_run.side,
+        PositionRunSide::Risk,
+        "an active long follows the current side of entry rather than a prior favorable wick"
+    );
+    assert_eq!(long_run.point.logical, 3.0);
+    assert_eq!(
+        long_run.point.price, 10.5,
+        "the position width ends at logical 3, so progress must use that last in-box Close"
     );
 
     let short = chart
@@ -2554,28 +2577,153 @@ fn position_run_attaches_to_latest_candle_wick_while_open() {
         .iter()
         .find(|drawing| drawing.id == short_id)
         .unwrap();
-    let short_run = chart.position_run_endpoint(short).unwrap();
+    let short_run = chart.position_run_progress(short).unwrap();
+    assert_eq!(short_run.start.logical, 2.0);
+    assert_eq!(short_run.start.price, 14.0);
     assert_eq!(short_run.side, PositionRunSide::Reward);
-    assert_eq!(short_run.point.logical, 4.0);
+    assert_eq!(short_run.point.logical, 3.0);
     assert_eq!(
-        short_run.point.price, 11.0,
-        "open short run attaches to the latest candle LOW, not a historical extreme"
-    );
-
-    assert_ne!(
-        long_run.point.price,
-        *close.last().unwrap(),
-        "the long endpoint must use the candle wick, not Close"
-    );
-    assert_ne!(
-        short_run.point.price,
-        *close.last().unwrap(),
-        "the short endpoint must use the candle wick, not Close"
+        short_run.point.price, 10.5,
+        "an open short also uses the latest in-box Close rather than its wick"
     );
 }
 
 #[test]
-fn position_run_freezes_on_the_first_boundary_and_uses_that_side_wick() {
+fn position_run_stays_pending_until_entry_is_reached() {
+    use crate::drawings::{DrawingKind, DrawingPoint};
+
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart.series[0].kind = SeriesKind::Candlestick;
+    chart
+        .set_series_data(
+            0,
+            &[0.0, 60.0, 120.0, 180.0],
+            &[100.0, 101.0, 102.0, 103.0],
+            &[102.0, 103.0, 104.0, 105.0],
+            &[98.0, 99.0, 100.0, 101.0],
+            &[101.0, 102.0, 103.0, 104.0],
+        )
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    let id = chart
+        .add_drawing(
+            DrawingKind::LongPosition,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 0.0,
+                    price: 110.0,
+                },
+                DrawingPoint {
+                    logical: 3.0,
+                    price: 120.0,
+                },
+                DrawingPoint {
+                    logical: 0.0,
+                    price: 105.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    let drawing = chart
+        .drawings
+        .iter()
+        .find(|drawing| drawing.id == id)
+        .unwrap();
+
+    assert_eq!(
+        chart.position_run_progress(drawing),
+        None,
+        "an RR tool placed above untouched price must remain pending"
+    );
+
+    let frame = chart.build_frame();
+    let reward = Color::rgb(0x08, 0x99, 0x81);
+    let risk = Color::rgb(0xf7, 0x52, 0x5f);
+    let reward_progress = Color::rgba(reward.r(), reward.g(), reward.b(), 58);
+    let risk_progress = Color::rgba(risk.r(), risk.g(), risk.b(), 58);
+    assert!(!frame.panes[0].main.iter().any(|prim| {
+        matches!(prim, Prim::Rect { color, .. } if *color == reward_progress || *color == risk_progress)
+    }));
+    assert!(!frame.panes[0].main.iter().any(|prim| {
+        matches!(prim, Prim::Polyline { color, width, .. } if *color == POSITION_ENTRY && *width >= 1.0)
+    }));
+}
+
+#[test]
+fn position_progress_overlay_covers_only_the_traveled_price_slice() {
+    use crate::drawings::{DrawingKind, DrawingPoint};
+
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart.series[0].kind = SeriesKind::Candlestick;
+    chart
+        .set_series_data(
+            0,
+            &[0.0, 60.0, 120.0, 180.0],
+            &[95.0, 98.0, 101.0, 102.0],
+            &[97.0, 100.5, 104.0, 104.0],
+            &[93.0, 96.0, 99.0, 100.0],
+            &[96.0, 100.0, 103.0, 102.0],
+        )
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    chart
+        .add_drawing(
+            DrawingKind::LongPosition,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 0.0,
+                    price: 100.0,
+                },
+                DrawingPoint {
+                    logical: 3.0,
+                    price: 110.0,
+                },
+                DrawingPoint {
+                    logical: 0.0,
+                    price: 90.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+
+    let frame = chart.build_frame();
+    let reward = Color::rgb(0x08, 0x99, 0x81);
+    let base_fill = Color::rgba(reward.r(), reward.g(), reward.b(), 70);
+    let progress_fill = Color::rgba(reward.r(), reward.g(), reward.b(), 58);
+    let base = frame.panes[0]
+        .main
+        .iter()
+        .find_map(|prim| match prim {
+            Prim::Rect { rect, color } if *color == base_fill => Some(*rect),
+            _ => None,
+        })
+        .expect("base reward zone");
+    let progress = frame.panes[0]
+        .main
+        .iter()
+        .find_map(|prim| match prim {
+            Prim::Rect { rect, color } if *color == progress_fill => Some(*rect),
+            _ => None,
+        })
+        .expect("traveled reward slice");
+    assert!(
+        progress.w < base.w,
+        "progress starts on the first fill candle, not the placement edge"
+    );
+    assert!(
+        progress.h < base.h,
+        "progress darkens entry-to-current price only, not the full target zone"
+    );
+}
+
+#[test]
+fn position_run_freezes_on_the_first_boundary_at_the_exact_exit_price() {
     use crate::drawings::{DrawingKind, DrawingPoint};
     use crate::frame::drawings::PositionRunSide;
 
@@ -2610,7 +2758,7 @@ fn position_run_freezes_on_the_first_boundary_and_uses_that_side_wick() {
     }
 
     // Long: stop is touched on candle 1; a later candle reaches target, but the position was
-    // already terminated. The connector must stay on candle 1's LOW in the risk direction.
+    // already terminated. The connector must stay on candle 1 at the exact stop boundary.
     let mut long_stop = ChartEngine::new(800.0, 500.0, 1.0);
     long_stop.series[0].kind = SeriesKind::Candlestick;
     long_stop
@@ -2635,10 +2783,13 @@ fn position_run_freezes_on_the_first_boundary_and_uses_that_side_wick() {
         .iter()
         .find(|drawing| drawing.id == id)
         .unwrap();
-    let run = long_stop.position_run_endpoint(drawing).unwrap();
+    let run = long_stop.position_run_progress(drawing).unwrap();
     assert_eq!(run.side, PositionRunSide::Risk);
     assert_eq!(run.point.logical, 1.0);
-    assert_eq!(run.point.price, 94.0);
+    assert_eq!(
+        run.point.price, 95.0,
+        "completed stop run ends at the exact stop exit level, not the candle's overshoot low"
+    );
 
     // Long target-first is the mirror: a later stop cannot flip an already completed reward run.
     let mut long_target = ChartEngine::new(800.0, 500.0, 1.0);
@@ -2665,12 +2816,15 @@ fn position_run_freezes_on_the_first_boundary_and_uses_that_side_wick() {
         .iter()
         .find(|drawing| drawing.id == id)
         .unwrap();
-    let run = long_target.position_run_endpoint(drawing).unwrap();
+    let run = long_target.position_run_progress(drawing).unwrap();
     assert_eq!(run.side, PositionRunSide::Reward);
     assert_eq!(run.point.logical, 1.0);
-    assert_eq!(run.point.price, 111.0);
+    assert_eq!(
+        run.point.price, 110.0,
+        "completed target run ends at the exact target exit level, not the candle's overshoot high"
+    );
 
-    // Short: stop-first uses the terminal candle HIGH; target-first uses its LOW.
+    // Short is the mirror: stop-first freezes at the stop price, target-first at target.
     let mut short_stop = ChartEngine::new(800.0, 500.0, 1.0);
     short_stop.series[0].kind = SeriesKind::Candlestick;
     short_stop
@@ -2695,10 +2849,10 @@ fn position_run_freezes_on_the_first_boundary_and_uses_that_side_wick() {
         .iter()
         .find(|drawing| drawing.id == id)
         .unwrap();
-    let run = short_stop.position_run_endpoint(drawing).unwrap();
+    let run = short_stop.position_run_progress(drawing).unwrap();
     assert_eq!(run.side, PositionRunSide::Risk);
     assert_eq!(run.point.logical, 1.0);
-    assert_eq!(run.point.price, 106.0);
+    assert_eq!(run.point.price, 105.0);
 
     let mut short_target = ChartEngine::new(800.0, 500.0, 1.0);
     short_target.series[0].kind = SeriesKind::Candlestick;
@@ -2724,10 +2878,10 @@ fn position_run_freezes_on_the_first_boundary_and_uses_that_side_wick() {
         .iter()
         .find(|drawing| drawing.id == id)
         .unwrap();
-    let run = short_target.position_run_endpoint(drawing).unwrap();
+    let run = short_target.position_run_progress(drawing).unwrap();
     assert_eq!(run.side, PositionRunSide::Reward);
     assert_eq!(run.point.logical, 1.0);
-    assert_eq!(run.point.price, 89.0);
+    assert_eq!(run.point.price, 90.0);
 }
 
 #[test]
@@ -2766,10 +2920,65 @@ fn position_run_same_candle_target_and_stop_is_conservatively_stop_first() {
         .iter()
         .find(|drawing| drawing.id == id)
         .unwrap();
-    let run = chart.position_run_endpoint(drawing).unwrap();
+    let run = chart.position_run_progress(drawing).unwrap();
     assert_eq!(run.side, PositionRunSide::Risk);
     assert_eq!(run.point.logical, 0.0);
-    assert_eq!(run.point.price, 94.0);
+    assert_eq!(run.point.price, 95.0);
+}
+
+#[test]
+fn stop_first_progress_darkens_only_the_traveled_loss_slice() {
+    use crate::drawings::{DrawingKind, DrawingPoint};
+
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart.series[0].kind = SeriesKind::Candlestick;
+    chart
+        .set_series_data(
+            0,
+            &[0.0, 60.0, 120.0],
+            &[100.0, 99.0, 102.0],
+            &[103.0, 104.0, 112.0],
+            &[98.0, 94.0, 99.0],
+            &[101.0, 96.0, 111.0],
+        )
+        .unwrap();
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    chart
+        .add_drawing(
+            DrawingKind::LongPosition,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 0.0,
+                    price: 100.0,
+                },
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 110.0,
+                },
+                DrawingPoint {
+                    logical: 0.0,
+                    price: 95.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+
+    let frame = chart.build_frame();
+    let reward = Color::rgb(0x08, 0x99, 0x81);
+    let risk = Color::rgb(0xf7, 0x52, 0x5f);
+    let reward_progress = Color::rgba(reward.r(), reward.g(), reward.b(), 58);
+    let risk_progress = Color::rgba(risk.r(), risk.g(), risk.b(), 58);
+    assert!(frame.panes[0]
+        .main
+        .iter()
+        .any(|prim| matches!(prim, Prim::Rect { color, .. } if *color == risk_progress)));
+    assert!(!frame.panes[0]
+        .main
+        .iter()
+        .any(|prim| matches!(prim, Prim::Rect { color, .. } if *color == reward_progress)));
 }
 
 #[test]
