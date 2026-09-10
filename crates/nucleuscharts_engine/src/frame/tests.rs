@@ -2288,6 +2288,135 @@ fn horizontal_line_drawings_label_the_axis_in_the_line_color() {
 }
 
 #[test]
+fn position_drawings_paint_information_and_entry_target_stop_axis_prices() {
+    use crate::drawings::{DrawingKind, DrawingPoint};
+
+    let mut chart = countdown_chart();
+    chart
+        .add_drawing(
+            DrawingKind::LongPosition,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 1.0,
+                    price: 12.0,
+                },
+                DrawingPoint {
+                    logical: 3.0,
+                    price: 13.0,
+                },
+                DrawingPoint {
+                    logical: 3.0,
+                    price: 11.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+
+    let frame = chart.build_frame();
+    let entry = Color::rgb(0x78, 0x7b, 0x86);
+    let reward = Color::rgb(0x08, 0x99, 0x81);
+    let risk = Color::rgb(0xf7, 0x52, 0x5f);
+    assert!(
+        frame.panes[0].main.iter().all(|prim| !matches!(
+            prim,
+            Prim::RectFrame { color, .. } if *color == reward || *color == risk
+        )),
+        "position target/stop zones are fill-only, not bordered rectangles"
+    );
+    assert!(frame.panes[0]
+        .main
+        .iter()
+        .any(|prim| matches!(prim, Prim::HLine { color, .. } if *color == entry)));
+    let text = frame.panes[0]
+        .main
+        .iter()
+        .filter_map(|prim| match prim {
+            Prim::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(text.iter().any(|text| text.starts_with("Target: ")));
+    assert!(text.contains(&"Open PnL: 0.00, Qty: 0"));
+    assert!(text.contains(&"Risk / reward ratio: 1.00"));
+    assert!(text.iter().any(|text| text.starts_with("Stop: ")));
+
+    let labels = chart
+        .build_axis_frame(
+            80.0,
+            |text, _bold| text.len() as f64 * 7.0,
+            |text, _bold| text.len() as f64 * 6.0,
+        )
+        .labels;
+    let boxed = labels
+        .iter()
+        .filter_map(|label| {
+            label
+                .background
+                .map(|(_, _, _, _, color)| (&label.text, color))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        boxed
+            .iter()
+            .any(|(text, color)| text.as_str() == "12.00" && *color == entry),
+        "boxed labels: {boxed:?}"
+    );
+    assert!(boxed
+        .iter()
+        .any(|(text, color)| text.as_str() == "13.00" && *color == reward));
+    assert!(boxed
+        .iter()
+        .any(|(text, color)| text.as_str() == "11.00" && *color == risk));
+}
+
+#[test]
+fn position_progress_darkens_the_traversed_zone_and_marks_live_price() {
+    use crate::drawings::{DrawingKind, DrawingPoint};
+
+    let mut chart = countdown_chart();
+    chart
+        .add_drawing(
+            DrawingKind::LongPosition,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 1.0,
+                    price: 12.0,
+                },
+                DrawingPoint {
+                    logical: 3.0,
+                    price: 14.0,
+                },
+                DrawingPoint {
+                    logical: 1.0,
+                    price: 11.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+
+    // countdown_chart's latest close is 12.5: inside the long reward zone.
+    let frame = chart.build_frame();
+    let reward = Color::rgb(0x08, 0x99, 0x81);
+    let progress_fill = Color::rgba(reward.r(), reward.g(), reward.b(), 58);
+    assert!(frame.panes[0]
+        .main
+        .iter()
+        .any(|prim| matches!(prim, Prim::Rect { color, .. } if *color == progress_fill)));
+    assert!(frame.panes[0].main.iter().any(|prim| matches!(
+        prim,
+        Prim::HLine {
+            color,
+            style: LineStyle::Dotted,
+            ..
+        } if *color == reward
+    )));
+}
+
+#[test]
 fn bollinger_band_fill_paints_between_upper_and_lower() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     let times = [1.0, 2.0, 3.0, 4.0];

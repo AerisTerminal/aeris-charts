@@ -730,11 +730,11 @@ mod tests {
     }
 
     #[test]
-    fn all_eight_kinds_and_multi_pane_associations_restore() {
+    fn all_ten_kinds_and_multi_pane_associations_restore() {
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
         let restored = chart.import_state_json(ALL_DRAWINGS).unwrap();
         assert_eq!(restored.panes, 2);
-        assert_eq!(restored.drawings, 8);
+        assert_eq!(restored.drawings, 10);
         assert_eq!(
             chart
                 .drawings
@@ -750,6 +750,8 @@ mod tests {
                 DrawingKind::Text,
                 DrawingKind::Brush,
                 DrawingKind::Path,
+                DrawingKind::LongPosition,
+                DrawingKind::ShortPosition,
             ]
         );
         assert!(chart.drawings[..3]

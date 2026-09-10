@@ -1230,9 +1230,10 @@ export function is_footprint_series_kind(kind: series_kind): kind is "footprint"
 
 /**
  * The drawing-tool kinds. Each tool is an engine-owned drawing object with defining anchor
- * points: trend line (2), rectangle (2), horizontal line/ray, vertical line, and text
- * (1 each), a multi-click arrow-ended straight-segment path (variable length, every vertex
- * editable), and the freehand brush (a variable-length curve, anchor handles at the two ends).
+ * points: trend line (2), rectangle (2), Long Position / Short Position tools (3: entry, target,
+ * stop), horizontal line/ray, vertical line, and text (1 each), a multi-click arrow-ended
+ * straight-segment path (variable length, every vertex editable), and the freehand brush (a
+ * variable-length curve, anchor handles at the two ends).
  */
 export type drawing_kind =
   | "trend_line"
@@ -1242,7 +1243,9 @@ export type drawing_kind =
   | "rectangle"
   | "text"
   | "brush"
-  | "path";
+  | "path"
+  | "long_position"
+  | "short_position";
 
 export const DRAWING_KIND_TO_U8: Record<drawing_kind, number> = {
   trend_line: 0,
@@ -1253,6 +1256,8 @@ export const DRAWING_KIND_TO_U8: Record<drawing_kind, number> = {
   text: 5,
   brush: 6,
   path: 7,
+  long_position: 8,
+  short_position: 9,
 };
 
 /**

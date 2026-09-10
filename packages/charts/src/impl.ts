@@ -64,6 +64,8 @@ const DRAWING_KIND_FROM_U8: readonly drawing_kind[] = [
   "text",
   "brush",
   "path",
+  "long_position",
+  "short_position",
 ];
 
 type persistence_error_result = {

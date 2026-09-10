@@ -188,7 +188,7 @@ async function empty_spot(page) {
   });
 }
 
-test("all six tools create through the armed-tool click flow", async ({ page }) => {
+test("click-placed drawing tools create through the armed-tool flow", async ({ page }) => {
   await goto_fixture(page);
   const s = await anchor_spots(page);
   const clean = await capture(page);
@@ -199,6 +199,8 @@ test("all six tools create through the armed-tool click flow", async ({ page }) 
     { kind: "horizontal_ray", clicks: [[s.l0, s.p_lo]] },
     { kind: "vertical_line", clicks: [[Math.floor((s.l0 + s.l1) / 2), s.p_mid]] },
     { kind: "rectangle", clicks: [[s.l0, s.p_lo], [s.l1, s.p_hi]] },
+    { kind: "long_position", clicks: [[s.l0, s.p_mid]], point_count: 3 },
+    { kind: "short_position", clicks: [[s.l0, s.p_mid]], point_count: 3 },
     { kind: "text", clicks: [[s.l1, s.p_hi]] },
   ];
   for (const [index, entry] of cases.entries()) {
@@ -214,7 +216,23 @@ test("all six tools create through the armed-tool click flow", async ({ page }) 
     const list = await drawings(page);
     expect(list, `after ${entry.kind}`).toHaveLength(index + 1);
     expect(list[index].kind).toBe(entry.kind);
-    expect(list[index].points).toHaveLength(entry.clicks.length);
+    expect(list[index].points).toHaveLength(entry.point_count ?? entry.clicks.length);
+    if (entry.kind === "long_position") {
+      expect(list[index].points[1].price).toBeGreaterThan(list[index].points[0].price);
+      expect(list[index].points[2].price).toBeLessThan(list[index].points[0].price);
+      expect(list[index].points[2].logical).toBeCloseTo(list[index].points[0].logical, 8);
+      const reward = Math.abs(list[index].points[1].price - list[index].points[0].price);
+      const risk = Math.abs(list[index].points[0].price - list[index].points[2].price);
+      expect(reward / risk).toBeCloseTo(2, 8);
+    }
+    if (entry.kind === "short_position") {
+      expect(list[index].points[1].price).toBeLessThan(list[index].points[0].price);
+      expect(list[index].points[2].price).toBeGreaterThan(list[index].points[0].price);
+      expect(list[index].points[2].logical).toBeCloseTo(list[index].points[0].logical, 8);
+      const reward = Math.abs(list[index].points[1].price - list[index].points[0].price);
+      const risk = Math.abs(list[index].points[0].price - list[index].points[2].price);
+      expect(reward / risk).toBeCloseTo(2, 8);
+    }
     for (const point of list[index].points) {
       expect(Number.isFinite(point.logical)).toBe(true);
       expect(Number.isFinite(point.price)).toBe(true);
@@ -763,6 +781,16 @@ test("drawing tools render pixel-identical on WebGPU and Canvas2D (AA coverage s
         { logical: Math.floor((l0 + l1) / 2), price: lo - 0.8 },
         { logical: l1 - 1, price: hi + 0.2 },
       ], { color: "#089981", width: 2 });
+      chart.add_drawing("long_position", [
+        { logical: l0 + 3, price: (lo + hi) / 2 },
+        { logical: l0 + 12, price: hi + 0.6 },
+        { logical: l0 + 12, price: lo - 0.6 },
+      ]);
+      chart.add_drawing("short_position", [
+        { logical: l1 - 14, price: (lo + hi) / 2 },
+        { logical: l1 - 4, price: lo - 0.9 },
+        { logical: l1 - 4, price: hi + 0.9 },
+      ]);
       // One interactive creation through the click flow shares the engine path too.
       chart.set_drawing_tool("trend_line", { color: "#089981" });
     });
@@ -790,7 +818,7 @@ test("drawing tools render pixel-identical on WebGPU and Canvas2D (AA coverage s
   expect(gpu.backend).toBe("webgpu");
   expect([canvas.png.width, canvas.png.height]).toEqual([gpu.png.width, gpu.png.height]);
 
-  // Vacuousness guard: the scenario paints substantially on EACH backend (all eight drawings).
+  // Vacuousness guard: the scenario paints substantially on EACH backend.
   const clean_probe = await (async () => {
     await goto_fixture(page, "canvas2d");
     await page.evaluate(() => window.__chart.apply_options({ crosshair: { mode: 2 } }));

@@ -3183,7 +3183,7 @@ impl NucleusChart {
 
     // --- drawing tools (engine-owned drawing objects; nucleuscharts_engine drawings.rs) ---
     // Kinds: 0 trend_line, 1 horizontal_line, 2 horizontal_ray, 3 vertical_line, 4 rectangle,
-    // 5 text. All coordinates are pane-relative CSS px (x from the pane's left, y from the
+    // 5 text, 6 brush, 7 path, 8 long_position, 9 short_position. All coordinates are pane-relative CSS px (x from the pane's left, y from the
     // chart's top — the crosshair's space). Call `render()` after mutations.
 
     /// Add a drawing to `pane` from a JSON `[{logical, price}, ...]` anchor array and an

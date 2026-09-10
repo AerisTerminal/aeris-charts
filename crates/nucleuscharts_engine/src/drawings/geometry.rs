@@ -31,11 +31,67 @@ pub(crate) enum DrawingBodyGeometry<'a> {
         top: f64,
         bottom: f64,
     },
+    Position(PositionGeometry),
     Polyline {
         points: &'a [(f64, f64)],
         line_type: LineType,
         terminal: Option<[(f64, f64); 3]>,
     },
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PositionGeometry {
+    pub(crate) left: f64,
+    pub(crate) right: f64,
+    pub(crate) entry_y: f64,
+    pub(crate) target_y: f64,
+    pub(crate) stop_y: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PositionZone {
+    pub(crate) left: f64,
+    pub(crate) right: f64,
+    pub(crate) y0: f64,
+    pub(crate) y1: f64,
+}
+
+impl PositionGeometry {
+    fn from_points(entry: (f64, f64), target: (f64, f64), stop: (f64, f64)) -> Self {
+        Self {
+            left: entry.0.min(target.0),
+            right: entry.0.max(target.0),
+            entry_y: entry.1,
+            target_y: target.1,
+            stop_y: stop.1,
+        }
+    }
+
+    pub(crate) fn reward_zone(self) -> PositionZone {
+        PositionZone {
+            left: self.left,
+            right: self.right,
+            y0: self.entry_y,
+            y1: self.target_y,
+        }
+    }
+
+    pub(crate) fn risk_zone(self) -> PositionZone {
+        PositionZone {
+            left: self.left,
+            right: self.right,
+            y0: self.entry_y,
+            y1: self.stop_y,
+        }
+    }
+
+    pub(crate) fn top(self) -> f64 {
+        self.entry_y.min(self.target_y).min(self.stop_y)
+    }
+
+    pub(crate) fn bottom(self) -> f64 {
+        self.entry_y.max(self.target_y).max(self.stop_y)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -113,6 +169,12 @@ pub(crate) fn resolve_drawing_geometry<'a>(
             line_type: LineType::Simple,
             terminal: path_arrow_points(px, line_width, device_scale),
         },
+        DrawingKind::LongPosition | DrawingKind::ShortPosition => {
+            let entry = *px.first()?;
+            let target = *px.get(1)?;
+            let stop = *px.get(2)?;
+            DrawingBodyGeometry::Position(PositionGeometry::from_points(entry, target, stop))
+        }
     };
 
     let text_box = match body {
@@ -158,6 +220,12 @@ pub(crate) fn resolve_drawing_geometry<'a>(
             bottom,
         },
         DrawingBodyGeometry::Polyline { points, .. } => points_box(points)?,
+        DrawingBodyGeometry::Position(position) => TextBox {
+            left: position.left,
+            right: position.right,
+            top: position.top(),
+            bottom: position.bottom(),
+        },
     };
     Some(ResolvedDrawingGeometry { body, text_box })
 }

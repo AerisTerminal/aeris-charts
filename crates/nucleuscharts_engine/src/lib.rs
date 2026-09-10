@@ -1372,6 +1372,7 @@ pub struct ChartEngine {
     /// `autoscale_for_frame` unions them into the owning scales.
     primitive_autoscale: Vec<PrimitiveAutoscaleContribution>,
     /// Engine-owned drawing objects (drawing tools: trend/horizontal/vertical lines, rectangle,
+    /// Long/Short Position,
     /// text) in z-order, bottom first. See drawings.rs.
     drawings: Vec<Drawing>,
     /// Derived, chart-local drawing bounds, pane candidates, and coordinate geometry. Semantic

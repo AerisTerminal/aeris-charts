@@ -750,6 +750,7 @@ impl ChartEngine {
             self.append_native_vertical_line_labels(&mut out.labels, &measure);
         }
         self.append_rectangle_drawing_axis_views(&mut out, &measure);
+        self.append_position_drawing_axis_views(&mut out, &measure);
         self.append_price_line_labels(&mut out.labels, &measure);
         self.append_drawing_line_labels(&mut out.labels, &measure);
         let last_value_start = out.labels.len();
@@ -1029,6 +1030,127 @@ impl ChartEngine {
                     border: None,
                 });
             }
+        }
+    }
+
+    fn append_position_drawing_axis_views<F>(&self, out: &mut AxisFrame, measure: &F)
+    where
+        F: Fn(&str, bool) -> f64,
+    {
+        for drawing in &self.drawings {
+            if matches!(
+                drawing.kind,
+                DrawingKind::LongPosition | DrawingKind::ShortPosition
+            ) && drawing.points.len() == 3
+            {
+                self.append_position_axis_view(drawing, &drawing.points, out, measure);
+            }
+        }
+
+        let Some(pending) = self.pending_drawing() else {
+            return;
+        };
+        if !matches!(
+            pending.drawing.kind,
+            DrawingKind::LongPosition | DrawingKind::ShortPosition
+        ) {
+            return;
+        }
+        let mut points = pending.drawing.points.clone();
+        if points.len() < 3 {
+            if let Some(preview) = pending.preview {
+                points.push(preview);
+            }
+        }
+        if points.len() == 3 {
+            self.append_position_axis_view(&pending.drawing, &points, out, measure);
+        }
+    }
+
+    fn append_position_axis_view<F>(
+        &self,
+        drawing: &crate::Drawing,
+        points: &[crate::DrawingPoint],
+        out: &mut AxisFrame,
+        measure: &F,
+    ) where
+        F: Fn(&str, bool) -> f64,
+    {
+        let Some(pane) = self.panes.get(drawing.pane_index) else {
+            return;
+        };
+        if points.len() != 3 {
+            return;
+        }
+        let target = match drawing.price_scale {
+            crate::DrawingPriceScale::Right => PriceScaleTarget::Right,
+            crate::DrawingPriceScale::Left => PriceScaleTarget::Left,
+            crate::DrawingPriceScale::Overlay => PriceScaleTarget::Overlay,
+        };
+        let Some(scale) = self.price_scale_for(drawing.pane_index, target) else {
+            return;
+        };
+        let base = self.drawing_scale_base_for(drawing.pane_index, drawing.price_scale);
+        let metrics = self.axis_metrics();
+        let reward = Color::parse_css(nucleuscharts_core::style::MARKET_UP_CSS)
+            .unwrap_or(Color::rgb(8, 153, 129))
+            .solid();
+        let risk = Color::parse_css(nucleuscharts_core::style::MARKET_DOWN_CSS)
+            .unwrap_or(Color::rgb(247, 82, 95))
+            .solid();
+        let colors = [POSITION_ENTRY, reward, risk];
+
+        let left_side = matches!(drawing.price_scale, crate::DrawingPriceScale::Left);
+        let visible = if left_side {
+            self.options.get().left_price_scale.visible
+        } else {
+            self.options.get().right_price_scale.visible
+        };
+        if !visible {
+            return;
+        }
+
+        for (point, background) in points.iter().zip(colors) {
+            let Some((_, y)) =
+                self.drawing_to_px_for(drawing.pane_index, drawing.price_scale, *point)
+            else {
+                continue;
+            };
+            if y < pane.top || y > pane.top + pane.height {
+                continue;
+            }
+            let logical_price = scale.price_to_logical_value(point.price, base);
+            let text = self.format_tick_value(drawing.pane_index, target, scale, logical_price);
+            let width = AxisMetrics::price_tag_width(measure(&text, false));
+            let height = metrics.price_tag_height();
+            let (x, align, background_x) = if left_side {
+                (
+                    self.pane_left - AxisMetrics::PRICE_TEXT_INSET,
+                    AxisTextAlign::Right,
+                    self.pane_left - width,
+                )
+            } else {
+                (
+                    self.pane_left + self.pane_w + AxisMetrics::PRICE_TEXT_INSET,
+                    AxisTextAlign::Left,
+                    self.pane_left + self.pane_w,
+                )
+            };
+            out.labels.push(AxisLabel {
+                text,
+                x,
+                y,
+                color: self.axis_label_text_color(background),
+                align,
+                midpoint: AxisTextMidpoint::Label,
+                font_scale: AXIS_FONT_SCALE,
+                bold: false,
+                background: Some((background_x, y - height / 2.0, width, height, background)),
+                background_corners: AxisLabelCorners::for_align(align),
+                measure_extra: 0.0,
+                attach_group: None,
+                border: None,
+            });
         }
     }
 

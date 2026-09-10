@@ -12,12 +12,13 @@
 use nucleuscharts_render::color::Color;
 use nucleuscharts_render::draw_list::{IRect, LineStyle, LineType, Prim, TextAlign};
 
-use super::PRIMARY;
+use super::{POSITION_ENTRY, PRIMARY};
 use crate::drawings::{
     resolve_drawing_geometry, Drawing, DrawingBodyGeometry, DrawingHandleMode, DrawingId,
-    DrawingKind, DrawingTextHAlign, TEXT_CHROME_PAD, TEXT_PAD,
+    DrawingKind, DrawingTextHAlign, PositionGeometry, PositionZone, TEXT_CHROME_PAD, TEXT_PAD,
 };
 use crate::ChartEngine;
+use nucleuscharts_core::model::plot_list::PlotValueIndex;
 
 /// TradingView-style drawing anchor handle: a theme-derived disc with the primary-token border
 /// (the crosshair-marks disc idiom — the border is a larger filled disc underneath). Slightly
@@ -279,13 +280,16 @@ impl ChartEngine {
             DrawingHandleMode::RectangleBounds if px.len() == 2 => {
                 build_rectangle_handles(&px, vpr, self.anchor_fill(), out);
             }
+            DrawingHandleMode::Position if px.len() == 3 => {
+                build_position_handles(&px, vpr, self.anchor_fill(), out);
+            }
             DrawingHandleMode::Endpoints if !px.is_empty() => {
                 build_anchor_handles(&[px[0], px[px.len() - 1]], vpr, self.anchor_fill(), out);
             }
             DrawingHandleMode::Anchors | DrawingHandleMode::Endpoints => {
                 build_anchor_handles(&px, vpr, self.anchor_fill(), out);
             }
-            DrawingHandleMode::RectangleBounds => {}
+            DrawingHandleMode::RectangleBounds | DrawingHandleMode::Position => {}
         }
     }
 
@@ -448,6 +452,28 @@ impl ChartEngine {
                         });
                     }
                 }
+            }
+            DrawingBodyGeometry::Position(position) => {
+                let reward = Color::parse_css(nucleuscharts_core::style::MARKET_UP_CSS)
+                    .unwrap_or(Color::rgb(8, 153, 129));
+                let risk = Color::parse_css(nucleuscharts_core::style::MARKET_DOWN_CSS)
+                    .unwrap_or(Color::rgb(247, 82, 95));
+                push_position_zone(out, position.reward_zone(), reward);
+                push_position_zone(out, position.risk_zone(), risk);
+
+                let left_px = position.left.round() as i32;
+                let right_px = position.right.round() as i32;
+                if left_px != right_px {
+                    out.push(Prim::HLine {
+                        y: position.entry_y.round() as i32,
+                        x0: left_px,
+                        x1: right_px,
+                        width: crisp_width,
+                        style: drawing.style,
+                        color: POSITION_ENTRY,
+                    });
+                }
+                self.build_position_labels(drawing, position, vpr, reward, risk, out);
             }
             // The text tool's geometry is its label (emitted by `build_drawing_text`).
             DrawingBodyGeometry::Empty => {}
@@ -636,6 +662,269 @@ impl ChartEngine {
         });
     }
 
+    fn build_position_labels(
+        &self,
+        drawing: &Drawing,
+        position: PositionGeometry,
+        vpr: f64,
+        reward: Color,
+        risk: Color,
+        out: &mut Vec<Prim>,
+    ) {
+        let (Some(entry), Some(target), Some(stop)) = (
+            drawing.points.first(),
+            drawing.points.get(1),
+            drawing.points.get(2),
+        ) else {
+            return;
+        };
+        let reward_distance = (target.price - entry.price).abs();
+        let risk_distance = (entry.price - stop.price).abs();
+        let base = entry.price.abs();
+        let reward_percent = if base > f64::EPSILON {
+            reward_distance / base * 100.0
+        } else {
+            0.0
+        };
+        let risk_percent = if base > f64::EPSILON {
+            risk_distance / base * 100.0
+        } else {
+            0.0
+        };
+        let ratio = (risk_distance > f64::EPSILON).then_some(reward_distance / risk_distance);
+        let target_text = format!(
+            "Target: {} ({reward_percent:.2}%)",
+            self.price_formatter.format(reward_distance)
+        );
+        let ratio_text = ratio
+            .map(|ratio| format!("Risk / reward ratio: {ratio:.2}"))
+            .unwrap_or_else(|| "Risk / reward ratio: —".to_string());
+        let summary_color = match drawing.kind {
+            DrawingKind::LongPosition => reward,
+            DrawingKind::ShortPosition => risk,
+            _ => return,
+        };
+        let pnl_text = "Open PnL: 0.00, Qty: 0".to_string();
+        let stop_text = format!(
+            "Stop: {} ({risk_percent:.2}%)",
+            self.price_formatter.format(risk_distance)
+        );
+        let center_x = (position.left + position.right) / 2.0;
+        let label_offset = 14.0 * vpr;
+        let target_label_y = if position.target_y < position.entry_y {
+            position.target_y - label_offset
+        } else {
+            position.target_y + label_offset
+        };
+        let stop_label_y = if position.stop_y < position.entry_y {
+            position.stop_y - label_offset
+        } else {
+            position.stop_y + label_offset
+        };
+        let summary_y = (position.target_y + position.stop_y) / 2.0;
+        self.push_position_label_block(out, center_x, target_label_y, &[target_text], reward, vpr);
+        self.push_position_label_block(
+            out,
+            center_x,
+            summary_y,
+            &[pnl_text, ratio_text],
+            summary_color,
+            vpr,
+        );
+        self.push_position_label_block(out, center_x, stop_label_y, &[stop_text], risk, vpr);
+    }
+
+    /// Dynamic position progress belongs to pane chrome rather than retained drawing geometry:
+    /// series updates already invalidate chrome, so the darker traversed fill and current-price
+    /// marker can follow live data without rebuilding every drawing on each tick.
+    pub(super) fn build_position_progress_frame(
+        &self,
+        pane_index: usize,
+        out: &mut Vec<Prim>,
+        hpr: f64,
+        vpr: f64,
+    ) {
+        for drawing in self.drawings.iter().filter(|drawing| {
+            drawing.pane_index == pane_index
+                && matches!(
+                    drawing.kind,
+                    DrawingKind::LongPosition | DrawingKind::ShortPosition
+                )
+                && drawing.points.len() == 3
+        }) {
+            let Some(live_price) = self.position_live_price(drawing) else {
+                continue;
+            };
+            let entry = drawing.points[0].price;
+            let target = drawing.points[1].price;
+            let stop = drawing.points[2].price;
+            let lower = target.min(stop);
+            let upper = target.max(stop);
+            if !live_price.is_finite() || !entry.is_finite() || lower >= upper {
+                continue;
+            }
+
+            let progress_price = live_price.clamp(lower, upper);
+            if (progress_price - entry).abs() <= f64::EPSILON {
+                continue;
+            }
+            let Some(px) = self.drawing_px(drawing) else {
+                continue;
+            };
+            let px = px
+                .into_iter()
+                .map(|(x, y)| (x * hpr, y * vpr))
+                .collect::<Vec<_>>();
+            let Some(geometry) = resolve_drawing_geometry(
+                drawing.kind,
+                &px,
+                self.pane_w * hpr,
+                self.panes[pane_index].top * vpr,
+                self.panes[pane_index].height * vpr,
+                drawing.width,
+                vpr,
+            ) else {
+                continue;
+            };
+            let DrawingBodyGeometry::Position(position) = geometry.body else {
+                continue;
+            };
+            let progress_point = crate::drawings::DrawingPoint {
+                logical: drawing.points[0].logical,
+                price: progress_price,
+            };
+            let Some((_, progress_y)) =
+                self.drawing_to_px_for(pane_index, drawing.price_scale, progress_point)
+            else {
+                continue;
+            };
+            let progress_y = progress_y * vpr;
+            let is_profit = match drawing.kind {
+                DrawingKind::LongPosition => progress_price >= entry,
+                DrawingKind::ShortPosition => progress_price <= entry,
+                _ => false,
+            };
+            let semantic = if is_profit {
+                Color::parse_css(nucleuscharts_core::style::MARKET_UP_CSS)
+                    .unwrap_or(Color::rgb(8, 153, 129))
+            } else {
+                Color::parse_css(nucleuscharts_core::style::MARKET_DOWN_CSS)
+                    .unwrap_or(Color::rgb(247, 82, 95))
+            };
+
+            // Layer a second translucent fill only over the traversed portion. The untouched
+            // remainder keeps the base zone opacity, while progress reads progressively stronger.
+            push_position_zone_with_alpha(
+                out,
+                PositionZone {
+                    left: position.left,
+                    right: position.right,
+                    y0: position.entry_y,
+                    y1: progress_y,
+                },
+                semantic,
+                58,
+            );
+
+            // Keep the live marker inside the position bounds. Once price has run beyond target or
+            // stop the darker fill remains complete, but a clamped line avoids pretending the
+            // boundary itself is the current market price.
+            if live_price >= lower && live_price <= upper {
+                let left = position.left.round() as i32;
+                let right = position.right.round() as i32;
+                if left != right {
+                    out.push(Prim::HLine {
+                        y: progress_y.round() as i32,
+                        x0: left,
+                        x1: right,
+                        width: 1,
+                        style: LineStyle::Dotted,
+                        color: semantic.solid(),
+                    });
+                }
+            }
+        }
+    }
+
+    fn position_live_price(&self, drawing: &Drawing) -> Option<f64> {
+        let target = match drawing.price_scale {
+            crate::DrawingPriceScale::Right => crate::PriceScaleTarget::Right,
+            crate::DrawingPriceScale::Left => crate::PriceScaleTarget::Left,
+            crate::DrawingPriceScale::Overlay => crate::PriceScaleTarget::Overlay,
+        };
+        let series = self.series.iter().find(|series| {
+            series.visible
+                && !series.removed
+                && series.pane_index == drawing.pane_index
+                && super::series_scale_target(series) == target
+        })?;
+        if series.kind == crate::SeriesKind::Custom {
+            return series
+                .custom_frame
+                .last
+                .map(|last| last.value)
+                .filter(|value| value.is_finite());
+        }
+        let plot = self.data.plot(series.id);
+        let row = plot.last_non_whitespace_row(i64::MAX)?;
+        let value = plot.value_at(row, PlotValueIndex::Close);
+        value.is_finite().then_some(value)
+    }
+
+    fn push_position_label_block(
+        &self,
+        out: &mut Vec<Prim>,
+        x: f64,
+        y: f64,
+        lines: &[String],
+        background: Color,
+        vpr: f64,
+    ) {
+        if lines.is_empty() {
+            return;
+        }
+        let layout = &self.options.get().layout;
+        let size = (layout.font_size * 0.92).max(10.0) * vpr;
+        let line_height = size * 1.25;
+        let pad_x = 6.0 * vpr;
+        let pad_y = 3.0 * vpr;
+        let width = lines
+            .iter()
+            .map(|line| self.measure_text_run(line, size, &layout.font_family, 400, false))
+            .fold(0.0_f64, f64::max)
+            + 2.0 * pad_x;
+        let height = lines.len() as f64 * line_height + 2.0 * pad_y;
+        let rect = IRect {
+            x: (x - width / 2.0).round() as i32,
+            y: (y - height / 2.0).round() as i32,
+            w: width.round().max(1.0) as i32,
+            h: height.round().max(1.0) as i32,
+        };
+        out.push(Prim::Rect {
+            rect,
+            color: Color::rgba(background.r(), background.g(), background.b(), 224),
+        });
+        let text_color = if background.luminance() > 175.0 {
+            Color::rgb(0, 0, 0)
+        } else {
+            Color::rgb(255, 255, 255)
+        };
+        let first_y = y - ((lines.len() as f64 - 1.0) * line_height) / 2.0;
+        for (index, text) in lines.iter().enumerate() {
+            out.push(Prim::Text {
+                x: x as f32,
+                y: (first_y + index as f64 * line_height) as f32,
+                text: text.clone(),
+                color: text_color,
+                size: size as f32,
+                family: layout.font_family.clone(),
+                align: TextAlign::Center,
+                weight: 400,
+                italic: false,
+            });
+        }
+    }
+
     /// The anchor-handle fill for the current theme (white on light backgrounds, black on dark —
     /// the series selection anchors' luminance rule, series_geometry.rs).
     fn anchor_fill(&self) -> Color {
@@ -648,6 +937,29 @@ impl ChartEngine {
             Color::rgb(0, 0, 0)
         }
     }
+}
+
+fn push_position_zone(out: &mut Vec<Prim>, zone: PositionZone, color: Color) {
+    push_position_zone_with_alpha(out, zone, color, 70);
+}
+
+fn push_position_zone_with_alpha(out: &mut Vec<Prim>, zone: PositionZone, color: Color, alpha: u8) {
+    let left = zone.left.round() as i32;
+    let right = zone.right.round() as i32;
+    let top = zone.y0.min(zone.y1).round() as i32;
+    let bottom = zone.y0.max(zone.y1).round() as i32;
+    let width = (right - left).abs() + 1;
+    let height = (bottom - top).abs() + 1;
+    let rect = IRect {
+        x: left,
+        y: top,
+        w: width,
+        h: height,
+    };
+    out.push(Prim::Rect {
+        rect,
+        color: Color::rgba(color.r(), color.g(), color.b(), alpha),
+    });
 }
 
 /// One handle per anchor: the border disc underneath, the fill disc on top.
@@ -669,6 +981,68 @@ fn build_anchor_handles(px: &[(f64, f64)], vpr: f64, fill: Color, out: &mut Vec<
             stroke_width: 0.0,
             stroke: fill,
         });
+    }
+}
+
+/// Long/Short Position selection controls. The controls correspond to target, entry/origin,
+/// horizontal extent, and stop; they are intentionally not generic drawing-point anchors.
+fn build_position_handles(px: &[(f64, f64)], vpr: f64, fill: Color, out: &mut Vec<Prim>) {
+    if px.len() != 3 {
+        return;
+    }
+    let entry = px[0];
+    let target = px[1];
+    let stop = px[2];
+    let controls = [
+        (entry.0, target.1, false),
+        (entry.0, entry.1, true),
+        (target.0, entry.1, false),
+        (entry.0, stop.1, false),
+    ];
+    let outer = ((ANCHOR_RADIUS + ANCHOR_BORDER_WIDTH) * vpr) as f32;
+    let inner = (ANCHOR_RADIUS * vpr) as f32;
+    for (cx, cy, circular) in controls {
+        if circular {
+            out.push(Prim::Circle {
+                cx: cx as f32,
+                cy: cy as f32,
+                radius: outer,
+                fill: ANCHOR_BORDER,
+                stroke_width: 0.0,
+                stroke: ANCHOR_BORDER,
+            });
+            out.push(Prim::Circle {
+                cx: cx as f32,
+                cy: cy as f32,
+                radius: inner,
+                fill,
+                stroke_width: 0.0,
+                stroke: fill,
+            });
+        } else {
+            let side = (2.0 * (ANCHOR_RADIUS + ANCHOR_BORDER_WIDTH) * vpr)
+                .round()
+                .max(1.0) as i32;
+            let inner_side = (2.0 * ANCHOR_RADIUS * vpr).round().max(1.0) as i32;
+            out.push(Prim::Rect {
+                rect: IRect {
+                    x: (cx - f64::from(side) / 2.0).round() as i32,
+                    y: (cy - f64::from(side) / 2.0).round() as i32,
+                    w: side,
+                    h: side,
+                },
+                color: ANCHOR_BORDER,
+            });
+            out.push(Prim::Rect {
+                rect: IRect {
+                    x: (cx - f64::from(inner_side) / 2.0).round() as i32,
+                    y: (cy - f64::from(inner_side) / 2.0).round() as i32,
+                    w: inner_side,
+                    h: inner_side,
+                },
+                color: fill,
+            });
+        }
     }
 }
 

@@ -60,6 +60,9 @@ const PRIMARY: Color = Color::rgb(
     DEFAULT_PRIMARY_RGB.1,
     DEFAULT_PRIMARY_RGB.2,
 );
+/// Neutral position-entry chrome. Position risk/reward colors stay semantic red/green instead of
+/// inheriting the drawing template's primary/accent color.
+const POSITION_ENTRY: Color = Color::rgb(0x78, 0x7b, 0x86);
 const GRID: Color = Color::rgb(
     DEFAULT_BORDER_RGB.0,
     DEFAULT_BORDER_RGB.1,
@@ -1662,6 +1665,7 @@ impl ChartEngine {
                         hpr,
                         vpr,
                     );
+                    self.build_position_progress_frame(pi, &mut cache.chrome.prims, hpr, vpr);
                     self.build_bid_ask_lines_frame(
                         pi,
                         from,

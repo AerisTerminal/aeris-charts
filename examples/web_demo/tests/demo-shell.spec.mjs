@@ -193,6 +193,8 @@ test("canonical series stay in Series while feature lab contains only composable
   await expect(page.locator("#plugin_watermark_toggle")).toHaveCount(0);
   await expect(page.locator("#watermark_group")).toHaveCount(1);
   await expect(page.locator('#drawings_group [data-tool="rectangle"]')).toHaveCount(1);
+  await expect(page.locator('#drawings_group [data-tool="long_position"]')).toHaveCount(1);
+  await expect(page.locator('#drawings_group [data-tool="short_position"]')).toHaveCount(1);
   await expect(page.locator("#volume_profile_toggle")).toHaveCount(1);
 
   await page.locator('#series_grid [data-series-id="hlc-area"]').click();

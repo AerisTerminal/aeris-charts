@@ -11,6 +11,9 @@ use super::DrawingKind;
 pub(crate) enum DrawingPlacement {
     /// Place a fixed number of anchors from ordinary click/tap activations.
     ClickAnchors { count: u8 },
+    /// One click commits a tool-specific preset geometry around that semantic origin. The preset
+    /// owns its generated defining points; the host still forwards an ordinary activation.
+    SingleClickPreset { points: u8 },
     /// Place a fixed number of anchors immediately from pointer press.  This is currently the text
     /// tool so the platform editor can open without a trailing compatibility click.
     PressAnchors { count: u8 },
@@ -23,16 +26,18 @@ pub(crate) enum DrawingPlacement {
 impl DrawingPlacement {
     pub(crate) const fn minimum_points(self) -> usize {
         match self {
-            Self::ClickAnchors { count } | Self::PressAnchors { count } => count as usize,
+            Self::ClickAnchors { count }
+            | Self::PressAnchors { count }
+            | Self::SingleClickPreset { points: count } => count as usize,
             Self::MultiClick { minimum } | Self::Freehand { minimum } => minimum as usize,
         }
     }
 
     pub(crate) const fn valid_point_count(self, count: usize) -> bool {
         match self {
-            Self::ClickAnchors { count: exact } | Self::PressAnchors { count: exact } => {
-                count == exact as usize
-            }
+            Self::ClickAnchors { count: exact }
+            | Self::PressAnchors { count: exact }
+            | Self::SingleClickPreset { points: exact } => count == exact as usize,
             Self::MultiClick { minimum } | Self::Freehand { minimum } => count >= minimum as usize,
         }
     }
@@ -56,6 +61,7 @@ pub(crate) enum DrawingHandleMode {
     Anchors,
     Endpoints,
     RectangleBounds,
+    Position,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -234,7 +240,37 @@ const PATH: DrawingToolSpec = DrawingToolSpec {
     requests_text_editor: false,
 };
 
-pub(crate) const DRAWING_TOOL_SPECS: [DrawingToolSpec; 8] = [
+const LONG_POSITION: DrawingToolSpec = DrawingToolSpec {
+    kind: DrawingKind::LongPosition,
+    wire_id: 8,
+    name: "long_position",
+    placement: DrawingPlacement::SingleClickPreset { points: 3 },
+    handles: DrawingHandleMode::Position,
+    movement_axis: DrawingMovementAxis::Both,
+    straighten: DrawingStraightenMode::None,
+    logical_extent: DrawingLogicalExtent::Finite,
+    price_extent: DrawingPriceExtent::Finite,
+    bounds_padding_ratio: 0.0,
+    default_width: 1.0,
+    requests_text_editor: false,
+};
+
+const SHORT_POSITION: DrawingToolSpec = DrawingToolSpec {
+    kind: DrawingKind::ShortPosition,
+    wire_id: 9,
+    name: "short_position",
+    placement: DrawingPlacement::SingleClickPreset { points: 3 },
+    handles: DrawingHandleMode::Position,
+    movement_axis: DrawingMovementAxis::Both,
+    straighten: DrawingStraightenMode::None,
+    logical_extent: DrawingLogicalExtent::Finite,
+    price_extent: DrawingPriceExtent::Finite,
+    bounds_padding_ratio: 0.0,
+    default_width: 1.0,
+    requests_text_editor: false,
+};
+
+pub(crate) const DRAWING_TOOL_SPECS: [DrawingToolSpec; 10] = [
     TREND_LINE,
     HORIZONTAL_LINE,
     HORIZONTAL_RAY,
@@ -243,6 +279,8 @@ pub(crate) const DRAWING_TOOL_SPECS: [DrawingToolSpec; 8] = [
     TEXT,
     BRUSH,
     PATH,
+    LONG_POSITION,
+    SHORT_POSITION,
 ];
 
 impl DrawingKind {
@@ -256,6 +294,8 @@ impl DrawingKind {
             Self::Text => &TEXT,
             Self::Brush => &BRUSH,
             Self::Path => &PATH,
+            Self::LongPosition => &LONG_POSITION,
+            Self::ShortPosition => &SHORT_POSITION,
         }
     }
 }

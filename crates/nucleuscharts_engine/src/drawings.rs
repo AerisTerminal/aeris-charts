@@ -1,4 +1,5 @@
-//! Drawing tools (trend line, horizontal line/ray, vertical line, rectangle, text, path, brush) as
+//! Drawing tools (trend line, horizontal line/ray, vertical line, rectangle, Long/Short Position,
+//! text, path, brush) as
 //! engine-owned drawing objects — TradingView's drawing tools in the spirit of the reference's
 //! plugin-examples (trend-line.ts, rectangle-drawing-tool.ts, vertical-line.ts, anchored-text.ts),
 //! but with all state, hit-testing, and anchor-dragging math living headless here: hosts only
@@ -27,7 +28,9 @@ use super::*;
 mod geometry;
 mod tools;
 
-pub(crate) use geometry::{resolve_drawing_geometry, DrawingBodyGeometry};
+pub(crate) use geometry::{
+    resolve_drawing_geometry, DrawingBodyGeometry, PositionGeometry, PositionZone,
+};
 pub(crate) use tools::{
     DrawingHandleMode, DrawingLogicalExtent, DrawingMovementAxis, DrawingPlacement,
     DrawingPriceExtent, DrawingStraightenMode, DRAWING_TOOL_SPECS,
@@ -360,6 +363,10 @@ pub enum DrawingKind {
     /// Multi-click path: a variable-length point list joined by straight segments, with every
     /// vertex exposed as an editable anchor.
     Path,
+    /// Three-anchor Long Position annotation: entry, target, stop.
+    LongPosition,
+    /// Three-anchor Short Position annotation: entry, target, stop.
+    ShortPosition,
 }
 
 impl DrawingKind {
@@ -567,8 +574,9 @@ impl Drawing {
         id: DrawingId,
         kind: DrawingKind,
         pane_index: usize,
-        points: Vec<DrawingPoint>,
+        mut points: Vec<DrawingPoint>,
     ) -> Self {
+        Self::normalize_position_points(kind, &mut points);
         Self {
             id,
             kind,
@@ -596,6 +604,33 @@ impl Drawing {
             box_color: None,
             box_border_color: None,
             box_border_width: 1.0,
+        }
+    }
+
+    /// Long/Short Position has semantic levels, not three unrelated corners. Keep the stop on the
+    /// origin edge and project target/stop to the correct side of entry while preserving each
+    /// supplied distance. This also repairs older malformed persisted/programmatic values.
+    fn normalize_position_points(kind: DrawingKind, points: &mut [DrawingPoint]) {
+        if points.len() != 3 {
+            return;
+        }
+        if !matches!(kind, DrawingKind::LongPosition | DrawingKind::ShortPosition) {
+            return;
+        }
+        let entry = points[0];
+        let reward_distance = (points[1].price - entry.price).abs();
+        let risk_distance = (points[2].price - entry.price).abs();
+        points[2].logical = entry.logical;
+        match kind {
+            DrawingKind::LongPosition => {
+                points[1].price = entry.price + reward_distance;
+                points[2].price = entry.price - risk_distance;
+            }
+            DrawingKind::ShortPosition => {
+                points[1].price = entry.price - reward_distance;
+                points[2].price = entry.price + risk_distance;
+            }
+            _ => unreachable!(),
         }
     }
 
@@ -1973,7 +2008,7 @@ impl ChartEngine {
     /// for malformed JSON, a wrong count for the kind, non-finite values, or an unknown id.
     pub fn drawing_set_points(&mut self, id: DrawingId, json: &str) -> bool {
         self.invalidate_frame_drawings();
-        let Ok(points) = serde_json::from_str::<Vec<DrawingPoint>>(json) else {
+        let Ok(mut points) = serde_json::from_str::<Vec<DrawingPoint>>(json) else {
             return false;
         };
         let Some(index) = self.drawings.iter().position(|drawing| drawing.id == id) else {
@@ -1988,6 +2023,7 @@ impl ChartEngine {
         {
             return false;
         }
+        Drawing::normalize_position_points(drawing.kind, &mut points);
         let before = drawing.clone();
         self.drawings[index].points = points;
         let after = self.drawings[index].clone();
@@ -2231,6 +2267,26 @@ impl ChartEngine {
                                     }
                                 }
                             }
+                            DrawingHandleMode::Position if px.len() == 3 => {
+                                let entry = px[0];
+                                let target = px[1];
+                                let stop = px[2];
+                                let handles = [
+                                    (entry.0, target.1, "ns-resize"),
+                                    (entry.0, entry.1, "move"),
+                                    (target.0, entry.1, "ew-resize"),
+                                    (entry.0, stop.1, "ns-resize"),
+                                ];
+                                for (index, &(ax, ay, cursor)) in handles.iter().enumerate() {
+                                    if (x - ax).hypot(y - ay) <= profile.drawing_anchor_radius {
+                                        return Some(DrawingHit {
+                                            id: selected,
+                                            part: DrawingDragPart::Anchor(index),
+                                            cursor,
+                                        });
+                                    }
+                                }
+                            }
                             DrawingHandleMode::Anchors | DrawingHandleMode::Endpoints => {
                                 for (index, &(ax, ay)) in px.iter().enumerate() {
                                     if (x - ax).hypot(y - ay) <= profile.drawing_anchor_radius {
@@ -2242,7 +2298,7 @@ impl ChartEngine {
                                     }
                                 }
                             }
-                            DrawingHandleMode::RectangleBounds => {}
+                            DrawingHandleMode::RectangleBounds | DrawingHandleMode::Position => {}
                         }
                     }
                 }
@@ -2360,6 +2416,12 @@ impl ChartEngine {
                 let near_v_edge = (x - left).abs() <= tolerance || (x - right).abs() <= tolerance;
                 let near_h_edge = (y - top).abs() <= tolerance || (y - bottom).abs() <= tolerance;
                 near_v_edge || near_h_edge
+            }
+            DrawingBodyGeometry::Position(position) => {
+                x >= position.left - tolerance
+                    && x <= position.right + tolerance
+                    && y >= position.top() - tolerance
+                    && y <= position.bottom() + tolerance
             }
             DrawingBodyGeometry::Polyline {
                 points,
@@ -2494,6 +2556,55 @@ impl ChartEngine {
         };
         match part {
             DrawingDragPart::Anchor(index) => {
+                if kind.spec().handles == DrawingHandleMode::Position
+                    && points.len() == 3
+                    && index < 4
+                {
+                    let Some(mut cursor_pt) = self.drawing_from_px_for(pane, price_scale, x, y)
+                    else {
+                        return;
+                    };
+                    if modifiers.magnet && index != 2 {
+                        cursor_pt = self.magnet_snap_point_at(pane, price_scale, x, y, cursor_pt);
+                    }
+                    match index {
+                        // Target: vertical level only.
+                        0 => {
+                            points[1].price = match kind {
+                                DrawingKind::LongPosition => cursor_pt.price.max(points[0].price),
+                                DrawingKind::ShortPosition => cursor_pt.price.min(points[0].price),
+                                _ => cursor_pt.price,
+                            };
+                        }
+                        // Entry/origin: move the entry level and the origin edge. Keep the stop
+                        // point on that edge so its x never becomes an independent corner.
+                        1 => {
+                            let low = points[1].price.min(points[2].price);
+                            let high = points[1].price.max(points[2].price);
+                            points[0] = DrawingPoint {
+                                logical: cursor_pt.logical,
+                                price: cursor_pt.price.clamp(low, high),
+                            };
+                            points[2].logical = cursor_pt.logical;
+                        }
+                        // Horizontal extent: x only.
+                        2 => points[1].logical = cursor_pt.logical,
+                        // Stop: vertical level only.
+                        3 => {
+                            points[2].price = match kind {
+                                DrawingKind::LongPosition => cursor_pt.price.min(points[0].price),
+                                DrawingKind::ShortPosition => cursor_pt.price.max(points[0].price),
+                                _ => cursor_pt.price,
+                            };
+                        }
+                        _ => unreachable!(),
+                    }
+                    if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
+                        drawing.points = points;
+                    }
+                    self.update_drawing_runtime(id);
+                    return;
+                }
                 if kind.spec().handles == DrawingHandleMode::RectangleBounds
                     && points.len() == 2
                     && index < 8
@@ -3035,7 +3146,9 @@ impl ChartEngine {
             };
         }
         match kind.spec().placement {
-            DrawingPlacement::ClickAnchors { .. } | DrawingPlacement::MultiClick { .. } => {}
+            DrawingPlacement::ClickAnchors { .. }
+            | DrawingPlacement::SingleClickPreset { .. }
+            | DrawingPlacement::MultiClick { .. } => {}
             _ => {
                 return DrawingCreationUpdate {
                     consumed: true,
@@ -3129,10 +3242,71 @@ impl ChartEngine {
         true
     }
 
-    /// Place the next anchor at pane-relative media px `(x, y)`. The first click also binds the
-    /// pending drawing to the pane under the cursor; later clicks in a different pane are
-    /// ignored. `modifiers` snaps the placed anchor (magnet always; straighten against the
-    /// already-placed anchor for two-anchor kinds — TradingView's shift-snapped second point).
+    fn single_click_position_points(
+        &self,
+        kind: DrawingKind,
+        pane: usize,
+        price_scale: DrawingPriceScale,
+        entry: DrawingPoint,
+        snap_time_to_data: bool,
+    ) -> Option<Vec<DrawingPoint>> {
+        if !matches!(kind, DrawingKind::LongPosition | DrawingKind::ShortPosition) {
+            return None;
+        }
+        let pane_geometry = self.panes.get(pane)?;
+        let (entry_x, entry_y) = self.drawing_to_px_for(pane, price_scale, entry)?;
+
+        // A position is born at a useful editable size from one click. Horizontal extent prefers
+        // the right (TradingView-style) and flips left only when the click is too close to the
+        // price scale. Seed a compact risk leg, then derive reward in PRICE space so the preset is
+        // deliberately asymmetric and keeps an exact 2:1 reward/risk ratio even on log/inverted
+        // scales.
+        let desired_width = (self.pane_w * 0.32).clamp(180.0, 270.0);
+        let edge_pad = 12.0;
+        let extent_x = if entry_x + desired_width <= self.pane_w - edge_pad {
+            entry_x + desired_width
+        } else {
+            (entry_x - desired_width).max(edge_pad)
+        };
+        let risk_pixels = (pane_geometry.height * 0.12).clamp(56.0, 90.0);
+        let upper_y = entry_y - risk_pixels;
+        let lower_y = entry_y + risk_pixels;
+
+        let upper = self.drawing_from_px_for(pane, price_scale, entry_x, upper_y)?;
+        let lower = self.drawing_from_px_for(pane, price_scale, entry_x, lower_y)?;
+        let mut extent = self.drawing_from_px_for(pane, price_scale, extent_x, entry_y)?;
+        if snap_time_to_data {
+            extent = self.snap_drawing_time_to_data(extent)?;
+        }
+        let low = upper.price.min(lower.price);
+        let high = upper.price.max(lower.price);
+        let (stop_price, reward_sign) = match kind {
+            DrawingKind::LongPosition => (low, 1.0),
+            DrawingKind::ShortPosition => (high, -1.0),
+            _ => return None,
+        };
+        let risk_distance = (entry.price - stop_price).abs();
+        if !risk_distance.is_finite() || risk_distance <= f64::EPSILON {
+            return None;
+        }
+        let target_price = entry.price + reward_sign * risk_distance * 2.0;
+        Some(vec![
+            entry,
+            DrawingPoint {
+                logical: extent.logical,
+                price: target_price,
+            },
+            DrawingPoint {
+                logical: entry.logical,
+                price: stop_price,
+            },
+        ])
+    }
+
+    /// Place the next activation at pane-relative media px `(x, y)`. Ordinary anchored tools add
+    /// one defining anchor per click. Single-click preset tools commit their complete semantic
+    /// geometry immediately around this point. The first activation also binds the pending drawing
+    /// to the pane under the cursor; later activations in a different pane are ignored.
     /// Returns 0 while no creation is armed, -1 while more anchors are needed, or the
     /// committed drawing's id (> 0) once the kind's anchor count is reached — the new drawing is
     /// left selected, TradingView-style.
@@ -3186,10 +3360,26 @@ impl ChartEngine {
                 }
             }
         }
+        let preset_points = if matches!(
+            kind.spec().placement,
+            DrawingPlacement::SingleClickPreset { .. }
+        ) {
+            self.single_click_position_points(kind, pane, price_scale, point, snap_time_to_data)
+        } else {
+            None
+        };
         let Some(pending) = self.drawing_controller.pending.as_mut() else {
             return -1;
         };
         pending.drawing.pane_index = pane;
+        if let Some(points) = preset_points {
+            pending.drawing.points = points;
+            pending.preview = None;
+            let Some(pending) = self.drawing_controller.pending.take() else {
+                return -1;
+            };
+            return i64::from(self.commit_pending_drawing(pending));
+        }
         // Native and browser double-click sequences both deliver the endpoint click twice. A
         // zero-length final segment has no semantic value, so retain one vertex before finish.
         if kind.spec().placement.is_sequence() && pending.drawing.points.last() == Some(&point) {

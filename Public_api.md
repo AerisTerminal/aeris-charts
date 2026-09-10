@@ -13,6 +13,10 @@ entry point and `./design.css` are the only npm export paths. The supported root
   `chart.price_scale()`/`pane.price_scale()`, and series scale identity/rebinding;
 - built-in series, indicators, drawing kinds, options, themes, data ingestion, interactions,
   subscriptions, screenshots, and lifecycle operations declared by those handles;
+- Long Position and Short Position drawings through the canonical `drawing_kind` values
+  `"long_position"` and `"short_position"`; each stores three editable anchors in entry, target,
+  stop order, paints target/entry/stop information, projects all three prices onto the owning Y-axis,
+  and uses the shared drawing history, persistence, hit testing, and backend frame path;
 - visible-range volume profiles through `chart.add_volume_profile(prices, volume, options)`,
   returning a distribution handle with `options()`, `apply_options()`, `snapshot()` and `remove()`;
 - first-class tick-driven footprint / numbers-bar series through `chart.add_series("footprint")`,

@@ -79,7 +79,7 @@ drawings, session highlighting, volume profile, and user-defined price lines.
 
 Heatmap-around-line and shaded-background examples are composed beneath a normal line series.
 
-Features that Nucleus already owns—drawings, bands, price lines, overlay scales, partial-last-price
+Features that Nucleus already owns—drawings (including Long Position and Short Position tools), bands, price lines, overlay scales, partial-last-price
 lines, session shading, highlighted bar slots, and time-anchored volume profiles—are thin helpers
 over those engine APIs. Accessibility is enabled by default; `chart.accessibility()` returns its
 singleton controller and `enable_accessibility(chart, options)` configures the same instance for

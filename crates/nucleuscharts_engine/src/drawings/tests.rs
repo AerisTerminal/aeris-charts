@@ -1188,6 +1188,98 @@ fn anchor_drag_reanchors_one_point() {
 }
 
 #[test]
+fn position_controls_have_dedicated_target_entry_extent_and_stop_drag_semantics() {
+    let mut chart = settled_chart();
+    let id = chart
+        .add_drawing(
+            DrawingKind::LongPosition,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 11.5,
+                },
+                DrawingPoint {
+                    logical: 7.0,
+                    price: 12.5,
+                },
+                DrawingPoint {
+                    // Stop x is deliberately different: position geometry must not turn it into
+                    // a third horizontal corner.
+                    logical: 5.0,
+                    price: 10.5,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    chart.set_selected_drawing(Some(id));
+
+    let handles = [
+        (x_at(&chart, 2.0), y_at(&chart, 12.5), 0, "ns-resize"),
+        (x_at(&chart, 2.0), y_at(&chart, 11.5), 1, "move"),
+        (x_at(&chart, 7.0), y_at(&chart, 11.5), 2, "ew-resize"),
+        (x_at(&chart, 2.0), y_at(&chart, 10.5), 3, "ns-resize"),
+    ];
+    for (x, y, index, cursor) in handles {
+        let hit = chart.hit_test_drawing(x, y).expect("position control hit");
+        assert_eq!(hit.part, DrawingDragPart::Anchor(index));
+        assert_eq!(hit.cursor, cursor);
+    }
+
+    // Target moves vertically only.
+    assert!(chart.drawing_drag_start_at(x_at(&chart, 2.0), y_at(&chart, 12.5)));
+    chart.drawing_drag_to(
+        x_at(&chart, 4.0),
+        y_at(&chart, 12.75),
+        DrawingModifiers::default(),
+    );
+    chart.drawing_drag_end();
+    let points = &chart.drawing(id).unwrap().points;
+    assert_eq!(points[1].logical, 7.0);
+    assert!((points[1].price - 12.75).abs() < 1e-9);
+
+    // Horizontal extent moves horizontally only.
+    assert!(chart.drawing_drag_start_at(x_at(&chart, 7.0), y_at(&chart, 11.5)));
+    chart.drawing_drag_to(
+        x_at(&chart, 8.0),
+        y_at(&chart, 12.0),
+        DrawingModifiers::default(),
+    );
+    chart.drawing_drag_end();
+    let points = &chart.drawing(id).unwrap().points;
+    assert!((points[1].logical - 8.0).abs() < 1e-6);
+    assert!((points[1].price - 12.75).abs() < 1e-9);
+
+    // Entry/origin moves the origin edge and entry level without moving target/stop prices.
+    assert!(chart.drawing_drag_start_at(x_at(&chart, 2.0), y_at(&chart, 11.5)));
+    chart.drawing_drag_to(
+        x_at(&chart, 3.0),
+        y_at(&chart, 11.25),
+        DrawingModifiers::default(),
+    );
+    chart.drawing_drag_end();
+    let points = &chart.drawing(id).unwrap().points;
+    assert!((points[0].logical - 3.0).abs() < 1e-6);
+    assert!((points[0].price - 11.25).abs() < 1e-9);
+    assert!((points[2].logical - 3.0).abs() < 1e-6);
+    assert!((points[1].price - 12.75).abs() < 1e-9);
+    assert!((points[2].price - 10.5).abs() < 1e-9);
+
+    // Stop moves vertically only.
+    assert!(chart.drawing_drag_start_at(x_at(&chart, 3.0), y_at(&chart, 10.5)));
+    chart.drawing_drag_to(
+        x_at(&chart, 6.0),
+        y_at(&chart, 10.25),
+        DrawingModifiers::default(),
+    );
+    chart.drawing_drag_end();
+    let points = &chart.drawing(id).unwrap().points;
+    assert!((points[2].logical - 3.0).abs() < 1e-6);
+    assert!((points[2].price - 10.25).abs() < 1e-9);
+}
+
+#[test]
 fn body_drag_moves_all_points_by_the_same_delta() {
     let mut chart = settled_chart();
     let id = add_trend(&mut chart);
@@ -1291,6 +1383,91 @@ fn creation_flow_commits_after_the_kinds_anchor_count() {
     assert_eq!(drawing.color, "#ff0000");
     assert!((drawing.points[0].logical - 2.0).abs() < 1e-6);
     assert!((drawing.points[1].price - 12.5).abs() < 1e-9);
+}
+
+#[test]
+fn position_tools_commit_complete_non_overlapping_geometry_on_one_click() {
+    let mut chart = settled_chart();
+    let click = (x_at(&chart, 4.0), y_at(&chart, 11.5));
+
+    for kind in [DrawingKind::LongPosition, DrawingKind::ShortPosition] {
+        assert!(chart.set_drawing_tool(Some(kind), None, None));
+        let update = chart.drawing_tool_activate(click.0, click.1, DrawingModifiers::default());
+        let id = update
+            .created
+            .expect("position commits on the first activation");
+        assert_eq!(chart.active_drawing_tool(), None);
+        assert!(!chart.drawing_create_active());
+
+        let drawing = chart.drawing(id).unwrap();
+        assert_eq!(drawing.kind, kind);
+        assert_eq!(drawing.points.len(), 3);
+        let entry = drawing.points[0];
+        let target = drawing.points[1];
+        let stop = drawing.points[2];
+        assert_eq!(stop.logical, entry.logical, "stop stays on the origin edge");
+        assert_ne!(
+            target.logical, entry.logical,
+            "position has an editable width"
+        );
+        match kind {
+            DrawingKind::LongPosition => {
+                assert!(target.price > entry.price);
+                assert!(stop.price < entry.price);
+            }
+            DrawingKind::ShortPosition => {
+                assert!(target.price < entry.price);
+                assert!(stop.price > entry.price);
+            }
+            _ => unreachable!(),
+        }
+        let reward_distance = (target.price - entry.price).abs();
+        let risk_distance = (entry.price - stop.price).abs();
+        assert!(risk_distance > 0.0);
+        assert!(
+            ((reward_distance / risk_distance) - 2.0).abs() < 1e-9,
+            "single-click position preset must open at an asymmetric 2:1 reward/risk ratio"
+        );
+    }
+}
+
+#[test]
+fn position_input_normalization_prevents_same_side_or_nested_regions() {
+    let mut chart = settled_chart();
+    let long = chart
+        .add_drawing(
+            DrawingKind::LongPosition,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 11.0,
+                },
+                DrawingPoint {
+                    logical: 7.0,
+                    price: 9.0,
+                },
+                DrawingPoint {
+                    logical: 5.0,
+                    price: 13.0,
+                },
+            ],
+            None,
+        )
+        .unwrap();
+    let points = &chart.drawing(long).unwrap().points;
+    assert!(points[1].price > points[0].price);
+    assert!(points[2].price < points[0].price);
+    assert_eq!(points[2].logical, points[0].logical);
+
+    assert!(chart.drawing_set_points(
+        long,
+        r#"[{"logical":3,"price":11},{"logical":8,"price":10},{"logical":6,"price":12}]"#,
+    ));
+    let points = &chart.drawing(long).unwrap().points;
+    assert!(points[1].price > points[0].price);
+    assert!(points[2].price < points[0].price);
+    assert_eq!(points[2].logical, points[0].logical);
 }
 
 #[test]
@@ -2948,6 +3125,8 @@ fn every_tool_has_conservative_viewport_inclusion_and_clear_exclusion() {
         DrawingKind::Text,
         DrawingKind::Brush,
         DrawingKind::Path,
+        DrawingKind::LongPosition,
+        DrawingKind::ShortPosition,
     ] {
         let visible = match kind {
             DrawingKind::TrendLine
@@ -2961,6 +3140,20 @@ fn every_tool_has_conservative_viewport_inclusion_and_clear_exclusion() {
                 DrawingPoint {
                     logical: 7.0,
                     price: 12.5,
+                },
+            ],
+            DrawingKind::LongPosition | DrawingKind::ShortPosition => vec![
+                DrawingPoint {
+                    logical: 2.0,
+                    price: 11.0,
+                },
+                DrawingPoint {
+                    logical: 7.0,
+                    price: 13.0,
+                },
+                DrawingPoint {
+                    logical: 7.0,
+                    price: 10.0,
                 },
             ],
             _ => vec![DrawingPoint {
@@ -2987,6 +3180,20 @@ fn every_tool_has_conservative_viewport_inclusion_and_clear_exclusion() {
                 DrawingPoint {
                     logical: 1_010.0,
                     price: 1_010.0,
+                },
+            ],
+            DrawingKind::LongPosition | DrawingKind::ShortPosition => vec![
+                DrawingPoint {
+                    logical: 1_000.0,
+                    price: 1_000.0,
+                },
+                DrawingPoint {
+                    logical: 1_010.0,
+                    price: 1_020.0,
+                },
+                DrawingPoint {
+                    logical: 1_010.0,
+                    price: 990.0,
                 },
             ],
             _ => vec![DrawingPoint {
@@ -3081,6 +3288,8 @@ fn indexed_hit_matches_bruteforce_for_randomized_catalog() {
         DrawingKind::Text,
         DrawingKind::Brush,
         DrawingKind::Path,
+        DrawingKind::LongPosition,
+        DrawingKind::ShortPosition,
     ];
     let mut state = 0x9e37_79b9_u32;
     let mut random = || {
@@ -3102,7 +3311,15 @@ fn indexed_hit_matches_bruteforce_for_randomized_catalog() {
                 | DrawingKind::Rectangle
                 | DrawingKind::Brush
                 | DrawingKind::Path
+                | DrawingKind::LongPosition
+                | DrawingKind::ShortPosition
         ) {
+            points.push(DrawingPoint {
+                logical: first.logical + random() * 8.0,
+                price: first.price + random() * 5.0 - 2.5,
+            });
+        }
+        if matches!(kind, DrawingKind::LongPosition | DrawingKind::ShortPosition) {
             points.push(DrawingPoint {
                 logical: first.logical + random() * 8.0,
                 price: first.price + random() * 5.0 - 2.5,
@@ -3140,6 +3357,8 @@ fn candidate_frame_matches_full_reference_across_viewports_and_mutations() {
         DrawingKind::Text,
         DrawingKind::Brush,
         DrawingKind::Path,
+        DrawingKind::LongPosition,
+        DrawingKind::ShortPosition,
     ];
     let mut ids = Vec::new();
     for index in 0..210 {
@@ -3155,10 +3374,18 @@ fn candidate_frame_matches_full_reference_across_viewports_and_mutations() {
                 | DrawingKind::Rectangle
                 | DrawingKind::Brush
                 | DrawingKind::Path
+                | DrawingKind::LongPosition
+                | DrawingKind::ShortPosition
         ) {
             points.push(DrawingPoint {
                 logical: logical + 4.0,
                 price: points[0].price + 1.0,
+            });
+        }
+        if matches!(kind, DrawingKind::LongPosition | DrawingKind::ShortPosition) {
+            points.push(DrawingPoint {
+                logical: logical + 4.0,
+                price: points[0].price - 1.0,
             });
         }
         ids.push(

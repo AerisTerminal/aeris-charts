@@ -309,7 +309,7 @@
       <label title="Canvas primitive (plugin platform C-e): the reference vertical-line plugin example, painted with raw Canvas2D calls on the plugin overlay"><input type="checkbox" id="vertline_toggle"> canvas v-line plugin</label>
     </div>
 
-    <div class="group" id="drawings_group" data-caption="Drawings" title="Engine-owned drawing tools (TradingView-style): click a tool, then click the chart to place its anchors (two clicks for trend/rect; Path finishes on double-click or Enter and Backspace removes its latest pending vertex). Click a drawing to select it — drag its anchor handles to re-anchor, drag the body to move it; Delete/Backspace removes the selection, Escape deselects/cancels. Hold Ctrl to magnet-snap the crosshair and drawing anchors to the nearest bar's OHLC; hold Shift to straighten a dragged anchor to 0°/45°/90° (a rectangle to a square) or a body move to one axis.">
+    <div class="group" id="drawings_group" data-caption="Drawings" title="Engine-owned drawing tools (TradingView-style): click a tool, then click the chart to place it. Long/Short Position creates its complete position on one click; trend/rect use two anchors; Path finishes on double-click or Enter and Backspace removes its latest pending vertex. Click a drawing to select it — drag its tool-specific controls or body to edit it; Delete/Backspace removes the selection, Escape deselects/cancels. Hold Ctrl to magnet-snap the crosshair and drawing controls to the nearest bar's OHLC; hold Shift to straighten supported tools or constrain a body move to one axis.">
       <h2>Drawings</h2>
       <button type="button" data-tool="trend_line" title="Trend line: two-anchor segment">trend</button>
       <button type="button" data-tool="horizontal_line" title="Horizontal line across the pane at a price">h-line</button>
@@ -319,6 +319,8 @@
       <button type="button" data-tool="text" title="Text label at a point (uses the label text below)">text</button>
       <button type="button" data-tool="path" title="Arrow-ended path: click straight-segment vertices; double-click or Enter to finish, Backspace to remove the latest vertex">path</button>
       <button type="button" data-tool="brush" title="Freehand brush: drag to draw a smooth stroke; when selected its two end anchors re-anchor, the body moves">brush</button>
+      <button type="button" data-tool="long_position" title="Long Position: one click places entry, target, stop, and width">long position</button>
+      <button type="button" data-tool="short_position" title="Short Position: one click places entry, target, stop, and width">short position</button>
       <label title="Stroke/border color — templates new drawings and applies live to the selected one">color <input type="color" id="drawing_color" value="#3e63dd"></label>
       <label title="Stroke style (solid/dotted/dashed) — templates new drawings and applies live to the selected one">style
         <select id="drawing_style">
