@@ -500,11 +500,24 @@ const runtime_test = query.get("runtimeTest");
 const requested_spacing = Number.parseFloat(query.get("spacing") ?? "");
 const requested_dpr = Number.parseFloat(query.get("dpr") ?? "");
 const theme_param = query.get("theme");
-// Runtime fixtures retain their historical light default. A normal interactive load always starts
-// from the package/engine default theme; theme changes are explicit actions for the current session.
+const THEME_STORAGE_KEY = "nucleuscharts.demo.theme";
+function stored_demo_theme() {
+  try {
+    const stored = localStorage.getItem(THEME_STORAGE_KEY);
+    return stored === "light" || stored === "dark" ? stored : null;
+  } catch {
+    return null;
+  }
+}
+function persist_demo_theme(theme) {
+  if (runtime_test !== null) return;
+  try { localStorage.setItem(THEME_STORAGE_KEY, theme); } catch { /* storage can be unavailable */ }
+}
+// Explicit fixture URLs remain deterministic. Normal demo loads restore the user's last choice,
+// falling back to the package default only when no valid preference has been saved.
 const requested_theme = theme_param === "light" || theme_param === "dark"
   ? theme_param
-  : runtime_test === null ? default_theme_name : "light";
+  : runtime_test === null ? stored_demo_theme() ?? default_theme_name : "light";
 sync_page_theme(requested_theme);
 const requested_feature = query.get("feature");
 const requested_left_scale = query.get("leftScale") === "1";
@@ -534,8 +547,9 @@ if (parity_fixture === null) {
     horzLines: { visible: false },
   };
 }
-// A query/theme used by a deterministic fixture is an explicit request, not normal demo startup.
-if (theme_param === "light" || theme_param === "dark" || runtime_test !== null) {
+// A query/theme, runtime fixture, or restored preference must seed the chart itself as well as the
+// page chrome. Omitting the option is safe only for an untouched default-theme startup.
+if (requested_theme !== default_theme_name || theme_param === "light" || theme_param === "dark" || runtime_test !== null) {
   chart_options.theme = requested_theme;
 }
 if (requested_left_scale) {
@@ -1613,6 +1627,7 @@ document.getElementById("theme_select").addEventListener("change", (e) => {
     chart.apply_options({ layout: { panes: { separatorColor: document.getElementById("pane_separator_color").value } } });
   }
   sync_page_theme(e.target.value);
+  persist_demo_theme(e.target.value);
   sync_chart_controls_from_engine();
 });
 function sync_chart_controls_from_engine() {
