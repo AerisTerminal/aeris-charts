@@ -24,7 +24,7 @@ use std::{
 };
 
 use gpui::{
-    canvas, div, prelude::*, px, relative, rgb, size, AnyElement, App, Bounds, Context,
+    canvas, div, prelude::*, px, relative, rgb, size, svg, AnyElement, App, Bounds, Context,
     CursorStyle, Entity, FocusHandle, Focusable, KeyDownEvent, KeyUpEvent, ModifiersChangedEvent,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PinchEvent, Render, ScrollDelta,
     ScrollHandle, ScrollWheelEvent, Subscription, Window, WindowBounds, WindowOptions,
@@ -2490,73 +2490,70 @@ fn attribution_outline(source: &'static [u8], dark: bool) -> &'static [u8] {
     })
 }
 
-/// Paint the host-owned Axiusflow mark after the retained chart frame. The engine owns the option
-/// and pane geometry; GPUI owns only the native SVG submission, mirroring the browser DOM seam.
-fn paint_attribution_logo(
-    probe: &Probe,
-    bounds: Bounds<gpui::Pixels>,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    if !probe.engine.options.get().layout.attribution_logo {
-        return;
-    }
-    let Some(pane) = probe.engine.panes.last() else {
-        return;
-    };
+/// Build the host-owned Axiusflow mark as retained GPUI chrome. The engine owns the option and pane
+/// geometry; the native host owns only this cached SVG element, mirroring the browser DOM seam.
+fn attribution_logo_element(probe: &Probe) -> Option<AnyElement> {
+    probe
+        .engine
+        .options
+        .get()
+        .layout
+        .attribution_logo
+        .then_some(())?;
+    let pane = probe.engine.panes.last()?;
     let background = Color::parse_css(&probe.engine.options.get().layout.background.color);
     let text = Color::parse_css(&probe.engine.options.get().layout.text_color);
     let light_background = background
         .map(|color| color.luminance() > 160.0)
         .or_else(|| text.map(|color| color.luminance() < 160.0))
         .unwrap_or(false);
-    let (data, outline, key, outline_key, fill, outline_color) = if light_background {
+    let (data, outline, fill, outline_color) = if light_background {
         (
             AXIUSFLOW_DARK_LOGO,
             attribution_outline(AXIUSFLOW_DARK_LOGO, true),
-            "nucleus-attribution-dark",
-            "nucleus-attribution-dark-outline",
-            Color::rgb(0x14, 0x14, 0x14),
-            Color::rgb(0xff, 0xff, 0xff),
+            0x141414,
+            0xffffff,
         )
     } else {
         (
             AXIUSFLOW_LIGHT_LOGO,
             attribution_outline(AXIUSFLOW_LIGHT_LOGO, false),
-            "nucleus-attribution-light",
-            "nucleus-attribution-light-outline",
-            Color::rgb(0xf0, 0xf0, 0xf0),
-            Color::rgb(0x14, 0x14, 0x14),
+            0xf0f0f0,
+            0x141414,
         )
     };
-    let origin_x: f32 = bounds.origin.x.into();
-    let origin_y: f32 = bounds.origin.y.into();
-    let logo_bounds = Bounds {
-        origin: gpui::point(
-            px(origin_x + probe.engine.pane_left as f32 + ATTRIBUTION_LOGO_INSET),
-            px(origin_y + (pane.top + pane.height) as f32
-                - ATTRIBUTION_LOGO_INSET
-                - ATTRIBUTION_LOGO_HEIGHT),
-        ),
-        size: size(px(ATTRIBUTION_LOGO_WIDTH), px(ATTRIBUTION_LOGO_HEIGHT)),
-    };
-    let transformation = gpui::TransformationMatrix::unit();
-    let _ = window.paint_svg(
-        logo_bounds,
-        outline_key.into(),
-        Some(outline),
-        transformation,
-        nucleuscharts_render_gpui::backend::to_hsla(outline_color),
-        cx,
-    );
-    let _ = window.paint_svg(
-        logo_bounds,
-        key.into(),
-        Some(data),
-        transformation,
-        nucleuscharts_render_gpui::backend::to_hsla(fill),
-        cx,
-    );
+    Some(
+        div()
+            .absolute()
+            .left(px(probe.engine.pane_left as f32))
+            .top(px(pane.top as f32))
+            .w(px(probe.engine.pane_w as f32))
+            .h(px(pane.height as f32))
+            .overflow_hidden()
+            .child(
+                div()
+                    .absolute()
+                    .left(px(ATTRIBUTION_LOGO_INSET))
+                    .bottom(px(ATTRIBUTION_LOGO_INSET))
+                    .w(px(ATTRIBUTION_LOGO_WIDTH))
+                    .h(px(ATTRIBUTION_LOGO_HEIGHT))
+                    .child(
+                        svg()
+                            .absolute()
+                            .size_full()
+                            .data(outline)
+                            .text_color(rgb(outline_color)),
+                    )
+                    .child(
+                        svg()
+                            .absolute()
+                            .size_full()
+                            .data(data)
+                            .text_color(rgb(fill)),
+                    ),
+            )
+            .into_any_element(),
+    )
 }
 
 /// Build and paint one frame. Split out so both closures can hold disjoint borrows of `Probe`.
@@ -2606,7 +2603,6 @@ fn paint_probe(probe: &mut Probe, bounds: Bounds<gpui::Pixels>, window: &mut Win
         }
         Err(e) => eprintln!("nucleuscharts probe: frame skipped: {e}"),
     }
-    paint_attribution_logo(probe, bounds, window, cx);
 }
 
 impl Render for Probe {
@@ -2637,6 +2633,7 @@ impl Render for Probe {
         let background = Color::parse_css(&self.engine.options.get().layout.background.color)
             .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2));
         let background = nucleuscharts_render_gpui::backend::to_hsla(background);
+        let attribution = attribution_logo_element(self);
 
         let focus = self
             .focus_handle
@@ -2691,6 +2688,7 @@ impl Render for Probe {
                 )
                 .size_full(),
             )
+            .children(attribution)
     }
 }
 
