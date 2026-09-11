@@ -6,6 +6,8 @@
 
 pub mod volume_profile;
 
+use std::{num::NonZeroUsize, sync::Arc};
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BollingerPoint {
     pub middle: Option<f64>,
@@ -344,7 +346,7 @@ struct Checkpoint<T> {
 
 #[derive(Clone, Debug)]
 struct RecursiveHistory<T> {
-    checkpoints: Vec<Checkpoint<T>>,
+    checkpoints: Arc<Vec<Checkpoint<T>>>,
     tail: Option<T>,
     before_tail: Option<T>,
     len: usize,
@@ -353,7 +355,7 @@ struct RecursiveHistory<T> {
 impl<T: Copy + Default> RecursiveHistory<T> {
     fn new() -> Self {
         Self {
-            checkpoints: Vec::new(),
+            checkpoints: Arc::new(Vec::new()),
             tail: None,
             before_tail: None,
             len: 0,
@@ -364,7 +366,13 @@ impl<T: Copy + Default> RecursiveHistory<T> {
         let from = from.min(n);
         if n == self.len && from + 1 == n {
             if let Some(state) = self.before_tail {
-                self.checkpoints.retain(|checkpoint| checkpoint.row < from);
+                if self
+                    .checkpoints
+                    .last()
+                    .is_some_and(|checkpoint| checkpoint.row >= from)
+                {
+                    Arc::make_mut(&mut self.checkpoints).retain(|checkpoint| checkpoint.row < from);
+                }
                 return (from, state);
             }
         }
@@ -379,10 +387,14 @@ impl<T: Copy + Default> RecursiveHistory<T> {
             .rposition(|checkpoint| checkpoint.row < from);
         if let Some(position) = checkpoint {
             let checkpoint = self.checkpoints[position];
-            self.checkpoints.truncate(position + 1);
+            if position + 1 < self.checkpoints.len() {
+                Arc::make_mut(&mut self.checkpoints).truncate(position + 1);
+            }
             (checkpoint.row + 1, checkpoint.state)
         } else {
-            self.checkpoints.clear();
+            if !self.checkpoints.is_empty() {
+                Arc::make_mut(&mut self.checkpoints).clear();
+            }
             (0, T::default())
         }
     }
@@ -395,7 +407,7 @@ impl<T: Copy + Default> RecursiveHistory<T> {
 
     fn checkpoint(&mut self, row: usize, state: T) {
         if (row + 1).is_multiple_of(CHECKPOINT_INTERVAL) {
-            self.checkpoints.push(Checkpoint { row, state });
+            Arc::make_mut(&mut self.checkpoints).push(Checkpoint { row, state });
         }
     }
 
@@ -425,6 +437,83 @@ fn ema_step(state: &mut EmaState, sample: f64, period: usize) -> Option<f64> {
         let alpha = 2.0 / (period as f64 + 1.0);
         state.value = alpha * sample + (1.0 - alpha) * state.value;
         Some(state.value)
+    }
+}
+
+/// Sparse incremental EMA state for host-owned indexed sources that may contain hard gaps.
+///
+/// `None` samples reset the recursive accumulator and emit `None`. A later non-gap run must
+/// accumulate a fresh SMA seed before EMA values resume. Historical repairs replay from the nearest
+/// sparse checkpoint before `from`, while the writer is called only for the requested suffix.
+#[derive(Clone, Debug)]
+pub struct IncrementalEmaState {
+    period: NonZeroUsize,
+    history: RecursiveHistory<EmaState>,
+    last_work_rows: usize,
+}
+
+impl IncrementalEmaState {
+    /// Creates one empty incremental EMA runtime with the supplied non-zero period.
+    #[must_use]
+    pub fn new(period: NonZeroUsize) -> Self {
+        Self {
+            period,
+            history: RecursiveHistory::new(),
+            last_work_rows: 0,
+        }
+    }
+
+    /// Rebuilds or repairs an indexed source without requiring a contiguous temporary value slice.
+    ///
+    /// `sample_at` is called for every source row that must be replayed to restore recursive state.
+    /// `write` is called only for rows in the requested `from..len` suffix. This lets a host convert
+    /// fixed-point values lazily for the rows actually visited and patch only the dirty output range.
+    pub fn rebuild_from_indexed<S, W>(
+        &mut self,
+        len: usize,
+        from: usize,
+        mut sample_at: S,
+        mut write: W,
+    ) where
+        S: FnMut(usize) -> Option<f64>,
+        W: FnMut(usize, Option<f64>),
+    {
+        let requested = from.min(len);
+        let (start, mut accumulator) = self.history.begin(len, requested);
+        self.last_work_rows = len.saturating_sub(start);
+        let mut tail = None;
+        let mut before_tail = None;
+        for row in start..len {
+            let previous = accumulator;
+            let value = match sample_at(row) {
+                Some(sample) => ema_step(&mut accumulator, sample, self.period.get()),
+                None => {
+                    accumulator = EmaState::default();
+                    None
+                }
+            };
+            self.history.checkpoint(row, accumulator);
+            if row >= requested {
+                write(row, value);
+            }
+            if row + 1 == len {
+                tail = Some(accumulator);
+                before_tail = (row > 0).then_some(previous);
+            }
+        }
+        self.history.finish(len, tail, before_tail);
+    }
+
+    /// Heap bytes retained by sparse recursive checkpoints.
+    #[must_use]
+    pub fn runtime_bytes(&self) -> usize {
+        self.history.bytes()
+    }
+
+    /// Number of source rows replayed by the most recent rebuild or repair.
+    #[must_use]
+    pub fn last_work_rows(&self) -> usize {
+        self.last_work_rows
     }
 }
 
@@ -1059,6 +1148,126 @@ mod tests {
             ema(&[1.0, 2.0, 3.0, 5.0], 3),
             vec![None, None, Some(2.0), Some(3.5)]
         );
+    }
+
+    #[test]
+    fn indexed_ema_resets_on_hard_gaps_and_requires_a_fresh_seed() {
+        let samples = [
+            Some(1.0),
+            Some(2.0),
+            Some(3.0),
+            Some(4.0),
+            None,
+            Some(10.0),
+            Some(20.0),
+            Some(30.0),
+            Some(40.0),
+        ];
+        let mut output = vec![None; samples.len()];
+        let mut state = IncrementalEmaState::new(NonZeroUsize::new(3).expect("period"));
+
+        state.rebuild_from_indexed(
+            samples.len(),
+            0,
+            |index| samples[index],
+            |index, value| output[index] = value,
+        );
+
+        assert_eq!(
+            output,
+            vec![
+                None,
+                None,
+                Some(2.0),
+                Some(3.0),
+                None,
+                None,
+                None,
+                Some(20.0),
+                Some(30.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn indexed_ema_tail_updates_are_constant_work_and_historical_repairs_are_checkpointed() {
+        let mut samples = (0..5_000)
+            .map(|index| 100.0 + index as f64 * 0.01)
+            .collect::<Vec<_>>();
+        let mut output = vec![None; samples.len()];
+        let mut state = IncrementalEmaState::new(NonZeroUsize::new(20).expect("period"));
+
+        state.rebuild_from_indexed(
+            samples.len(),
+            0,
+            |index| Some(samples[index]),
+            |index, value| output[index] = value,
+        );
+        assert_eq!(output, ema(&samples, 20));
+        assert!(state.runtime_bytes() < 4 * 1024);
+
+        let last = samples.len() - 1;
+        samples[last] += 3.0;
+        state.rebuild_from_indexed(
+            samples.len(),
+            last,
+            |index| Some(samples[index]),
+            |index, value| output[index] = value,
+        );
+        assert_eq!(state.last_work_rows(), 1);
+        assert_eq!(output, ema(&samples, 20));
+
+        samples.push(222.0);
+        output.push(None);
+        let appended = samples.len() - 1;
+        state.rebuild_from_indexed(
+            samples.len(),
+            appended,
+            |index| Some(samples[index]),
+            |index, value| output[index] = value,
+        );
+        assert_eq!(state.last_work_rows(), 1);
+        assert_eq!(output, ema(&samples, 20));
+
+        let repaired = 2_500;
+        samples[repaired] -= 7.5;
+        state.rebuild_from_indexed(
+            samples.len(),
+            repaired,
+            |index| Some(samples[index]),
+            |index, value| output[index] = value,
+        );
+        assert!(state.last_work_rows() >= samples.len() - repaired);
+        assert!(state.last_work_rows() < samples.len() - repaired + CHECKPOINT_INTERVAL);
+        assert_eq!(output, ema(&samples, 20));
+    }
+
+    #[test]
+    fn indexed_ema_transaction_clone_shares_sparse_checkpoints_for_ordinary_tail_work() {
+        let samples = (0..5_000)
+            .map(|index| 100.0 + index as f64 * 0.01)
+            .collect::<Vec<_>>();
+        let mut state = IncrementalEmaState::new(NonZeroUsize::new(20).expect("period"));
+        state.rebuild_from_indexed(samples.len(), 0, |index| Some(samples[index]), |_, _| {});
+
+        let mut candidate = state.clone();
+        assert!(Arc::ptr_eq(
+            &state.history.checkpoints,
+            &candidate.history.checkpoints
+        ));
+        let last = samples.len() - 1;
+        candidate.rebuild_from_indexed(
+            samples.len(),
+            last,
+            |index| Some(samples[index]),
+            |_, _| {},
+        );
+
+        assert_eq!(candidate.last_work_rows(), 1);
+        assert!(Arc::ptr_eq(
+            &state.history.checkpoints,
+            &candidate.history.checkpoints
+        ));
     }
 
     #[test]
