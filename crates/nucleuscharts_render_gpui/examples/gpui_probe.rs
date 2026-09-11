@@ -24,18 +24,19 @@ use std::{
 
 use gpui::{
     canvas, div, prelude::*, px, relative, rgb, size, AnyElement, App, Bounds, Context,
-    CursorStyle, Entity, FocusHandle, Focusable, KeyDownEvent, ModifiersChangedEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PinchEvent, Render, ScrollDelta, ScrollHandle,
-    ScrollWheelEvent, Subscription, Window, WindowBounds, WindowOptions,
+    CursorStyle, Entity, FocusHandle, Focusable, KeyDownEvent, KeyUpEvent, ModifiersChangedEvent,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PinchEvent, Render, ScrollDelta,
+    ScrollHandle, ScrollWheelEvent, Subscription, Window, WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
 use nucleuscharts_core::model::data_layer::SeriesId;
 use nucleuscharts_engine::{
-    crosshair_mode_from_u8, marker_pos, marker_shape, ChartEngine, ChartFrame, DrawingKind,
-    DrawingModifiers, DrawingPoint, GestureResolver, InputDevice, InputModifiers, InputTarget,
-    Marker, PointerSample, PriceLineExtent, PriceScaleTarget, PrimitiveAutoscaleContribution,
-    SeriesKind, SplitDirection, WheelBehavior, WheelDeltaMode, WheelIntent, WheelSample, Workspace,
-    WorkspaceLayout,
+    crosshair_mode_from_u8, marker_pos, marker_shape, BrushRange, BrushStyle, ChartEngine,
+    ChartFrame, DeltaTooltipActiveRange, DeltaTooltipOptions, DrawingKind, DrawingModifiers,
+    DrawingPoint, GestureResolver, InputDevice, InputModifiers, InputTarget, Marker,
+    NativePrimitiveId, PointerSample, PriceLineExtent, PriceScaleTarget,
+    PrimitiveAutoscaleContribution, SeriesKind, SplitDirection, WheelBehavior, WheelDeltaMode,
+    WheelIntent, WheelSample, Workspace, WorkspaceLayout,
 };
 use nucleuscharts_render::color::Color;
 use nucleuscharts_render::draw_list::{IRect, LineStyle, Prim, TextAlign};
@@ -327,7 +328,14 @@ enum DragMode {
     },
     Drawing,
     DrawingCreation,
+    DeltaTooltip,
     CrosshairAction,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct BrushableAreaState {
+    tooltip_id: NativePrimitiveId,
+    styled_range: Option<DeltaTooltipActiveRange>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -442,6 +450,9 @@ struct Probe {
     press_moved: bool,
     drag: Option<DragMode>,
     kinetic_active: bool,
+    keyboard_pan_direction: i8,
+    keyboard_pan_delta: f64,
+    brushable_area: Option<BrushableAreaState>,
     source_bars: Bars,
     drawing_template: DrawingTemplate,
     style_pins: StylePins,
@@ -525,6 +536,9 @@ impl Probe {
             press_moved: false,
             drag: None,
             kinetic_active: false,
+            keyboard_pan_direction: 0,
+            keyboard_pan_delta: 0.0,
+            brushable_area: None,
             source_bars: b,
             drawing_template: DrawingTemplate::default(),
             style_pins: StylePins::default(),
@@ -740,8 +754,93 @@ impl Probe {
     }
 
     fn set_series_kind(&mut self, kind: SeriesKind) {
+        self.disable_brushable_area();
         self.engine.convert_series_kind(0, kind);
         self.click_status = format!("series: {kind:?}");
+        self.dirty = true;
+    }
+
+    fn enable_brushable_area(&mut self) {
+        self.disable_brushable_area();
+        self.engine.convert_series_kind(0, SeriesKind::Area);
+        let tooltip_id = self
+            .engine
+            .add_delta_tooltip(0, DeltaTooltipOptions::default())
+            .expect("the built-in Area series accepts the delta-tooltip interaction");
+        self.brushable_area = Some(BrushableAreaState {
+            tooltip_id,
+            styled_range: None,
+        });
+        self.click_status = "series: brushable area · drag to compare".into();
+        self.dirty = true;
+    }
+
+    fn disable_brushable_area(&mut self) {
+        let Some(state) = self.brushable_area.take() else {
+            return;
+        };
+        self.engine.remove_native_primitive(state.tooltip_id);
+        self.engine.clear_area_brush_state(0);
+        if matches!(self.drag, Some(DragMode::DeltaTooltip)) {
+            self.drag = None;
+        }
+        self.dirty = true;
+    }
+
+    fn clear_brushable_area_selection(&mut self) -> bool {
+        let Some(state) = self.brushable_area else {
+            return false;
+        };
+        self.engine.clear_delta_tooltip(state.tooltip_id);
+        self.sync_brushable_area();
+        true
+    }
+
+    fn sync_brushable_area(&mut self) {
+        let Some(mut state) = self.brushable_area else {
+            return;
+        };
+        let range = self.engine.delta_tooltip_active_range(state.tooltip_id);
+        if state.styled_range == range {
+            return;
+        }
+        if let Some(range) = range {
+            let faded = BrushStyle {
+                line_color: Color::rgba(40, 98, 255, 51),
+                top_color: Color::rgba(40, 98, 255, 13),
+                bottom_color: Color::rgba(40, 98, 255, 0),
+                line_width: 2.0,
+            };
+            let selected = if range.positive {
+                BrushStyle {
+                    line_color: Color::rgb(4, 153, 129),
+                    top_color: Color::rgba(4, 153, 129, 102),
+                    bottom_color: Color::rgba(4, 153, 129, 0),
+                    line_width: 3.0,
+                }
+            } else {
+                BrushStyle {
+                    line_color: Color::rgb(239, 83, 80),
+                    top_color: Color::rgba(239, 83, 80, 102),
+                    bottom_color: Color::rgba(239, 83, 80, 0),
+                    line_width: 3.0,
+                }
+            };
+            let applied = self.engine.set_area_brush_state(
+                0,
+                faded,
+                vec![BrushRange {
+                    from: range.from as f64,
+                    to: range.to as f64,
+                    style: selected,
+                }],
+            );
+            debug_assert!(applied, "brush state belongs to the live Area series");
+        } else {
+            self.engine.clear_area_brush_state(0);
+        }
+        state.styled_range = range;
+        self.brushable_area = Some(state);
         self.dirty = true;
     }
 
@@ -1328,7 +1427,10 @@ impl Probe {
     }
 
     fn needs_animation_frame(&self) -> bool {
-        self.frame_budget.is_some() || self.kinetic_active || self.engine.scroll_animation_active()
+        self.frame_budget.is_some()
+            || self.kinetic_active
+            || self.engine.keyboard_scroll_active()
+            || self.engine.scroll_animation_active()
     }
 
     fn local_position(&self, position: gpui::Point<gpui::Pixels>) -> (f64, f64, f64) {
@@ -1405,6 +1507,28 @@ impl Probe {
             self.engine.time_scale_end_scroll();
         }
         self.kinetic_active = false;
+    }
+
+    fn begin_keyboard_pan_at(&mut self, direction: i8, step: f64, is_held: bool, now_ms: f64) {
+        debug_assert!(direction == -1 || direction == 1);
+        let delta = f64::from(direction) * step;
+        self.cancel_kinetic_scroll();
+        self.engine.cancel_scroll_animation();
+        // GPUI reports OS key repeats through `is_held`. The engine owns the repeat cadence, so
+        // an unchanged repeat must not reset velocity; only a new direction or modifier speed
+        // retunes the live session.
+        if !is_held || self.keyboard_pan_direction != direction || self.keyboard_pan_delta != delta
+        {
+            self.engine.start_keyboard_scroll(delta, now_ms);
+            self.keyboard_pan_direction = direction;
+            self.keyboard_pan_delta = delta;
+        }
+    }
+
+    fn cancel_keyboard_pan(&mut self) {
+        self.engine.cancel_keyboard_scroll();
+        self.keyboard_pan_direction = 0;
+        self.keyboard_pan_delta = 0.0;
     }
 
     fn begin_mouse_pan(&mut self, pane_x: f64) {
@@ -1553,8 +1677,13 @@ impl Probe {
                 self.engine.cancel_drawing_creation();
                 self.pending_creation_point = None;
             }
-            Some(DragMode::PaneSeparator { .. } | DragMode::CrosshairAction) | None => {}
+            Some(
+                DragMode::PaneSeparator { .. } | DragMode::DeltaTooltip | DragMode::CrosshairAction,
+            )
+            | None => {}
         }
+        self.engine.delta_tooltip_leave();
+        self.sync_brushable_area();
         self.cancel_kinetic_scroll();
         self.press_start = None;
         self.press_moved = false;
@@ -1594,6 +1723,7 @@ impl Probe {
             window.focus(focus, cx);
         }
         self.cancel_kinetic_scroll();
+        self.cancel_keyboard_pan();
         // Recover defensively from a stale scroll snapshot left by an interrupted host gesture.
         self.engine.time_scale_end_scroll();
         self.engine.cancel_scroll_animation();
@@ -1652,7 +1782,13 @@ impl Probe {
         }
 
         if event.click_count >= 2 {
-            if y > self.engine.pane_h && self.gesture_config.axis_dblclick_reset_time {
+            if chart_x >= self.engine.pane_left
+                && chart_x <= self.engine.pane_left + self.engine.pane_w
+                && (0.0..=self.engine.pane_h).contains(&y)
+                && self.clear_brushable_area_selection()
+            {
+                self.click_status = "brush selection cleared".into();
+            } else if y > self.engine.pane_h && self.gesture_config.axis_dblclick_reset_time {
                 self.engine.reset_time_scale();
             } else if self.gesture_config.axis_dblclick_reset_price
                 && self.engine.price_axis_target_at(pane, pane_x).is_some()
@@ -1714,6 +1850,12 @@ impl Probe {
             None
         } else if self.engine.drawing_drag_start_at(pane_x, y) {
             Some(DragMode::Drawing)
+        } else if self
+            .engine
+            .delta_tooltip_mouse_down_with_shift(pane_x, event.modifiers.shift)
+        {
+            self.sync_brushable_area();
+            Some(DragMode::DeltaTooltip)
         } else if self.gesture_config.pan {
             self.begin_mouse_pan(pane_x);
             let price_pan = self
@@ -1743,6 +1885,10 @@ impl Probe {
         let (chart_x, pane_x, y) = self.local_position(event.position);
         let sample = self.mouse_sample(pane_x, y, self.input_target, event.modifiers);
         self.input.pointer_move(sample);
+        if self.engine.delta_tooltip_mouse_move(pane_x) {
+            self.sync_brushable_area();
+            self.dirty = true;
+        }
         self.update_crosshair_modifier(event.modifiers.control, event.modifiers.platform);
         if event.dragging() {
             self.mark_press_moved(pane_x, y);
@@ -1788,6 +1934,7 @@ impl Probe {
                     },
                 ));
             }
+            Some(DragMode::DeltaTooltip) => {}
             Some(DragMode::CrosshairAction) => {}
             _ => {
                 if self.engine.active_drawing_tool().is_some() {
@@ -1820,6 +1967,10 @@ impl Probe {
         let (chart_x, pane_x, y) = self.local_position(event.position);
         let sample = self.mouse_sample(pane_x, y, self.input_target, event.modifiers);
         self.input.pointer_up(sample);
+        if self.engine.delta_tooltip_mouse_up() {
+            self.sync_brushable_area();
+            self.dirty = true;
+        }
         self.update_crosshair_modifier(event.modifiers.control, event.modifiers.platform);
         self.mark_press_moved(pane_x, y);
         let moved = self.press_moved;
@@ -1873,6 +2024,7 @@ impl Probe {
                 }
                 false
             }
+            Some(DragMode::DeltaTooltip) => false,
             None if committed_on_press => false,
             None if self.engine.active_drawing_tool().is_some() => {
                 if !moved {
@@ -2019,19 +2171,11 @@ impl Probe {
         let center = self.engine.pane_w / 2.0;
         let handled = match event.keystroke.key.as_str() {
             "left" => {
-                self.engine.start_scroll_animation(
-                    self.engine.scroll_position() - step,
-                    160.0,
-                    self.now_ms(),
-                );
+                self.begin_keyboard_pan_at(-1, step, event.is_held, self.now_ms());
                 true
             }
             "right" => {
-                self.engine.start_scroll_animation(
-                    self.engine.scroll_position() + step,
-                    160.0,
-                    self.now_ms(),
-                );
+                self.begin_keyboard_pan_at(1, step, event.is_held, self.now_ms());
                 true
             }
             "+" | "=" if self.gesture_config.wheel_zoom => {
@@ -2055,6 +2199,7 @@ impl Probe {
             }
             "delete" | "backspace" => self.engine.remove_selected_drawing(),
             "escape" => {
+                self.clear_brushable_area_selection();
                 self.engine.cancel_drawing_tool();
                 self.pending_creation_point = None;
                 self.creation_press_committed = false;
@@ -2067,12 +2212,27 @@ impl Probe {
         };
         if handled {
             // Browser keyboard gestures stop any wheel/mouse coast and close its saved scroll
-            // snapshot. This intentionally does not cancel the new eased Left/Right animation.
+            // snapshot. Left/Right keeps its separate engine-owned velocity session until key-up.
             self.cancel_kinetic_scroll();
             self.dirty = true;
             cx.stop_propagation();
             cx.notify();
         }
+    }
+
+    fn on_key_up(&mut self, event: &KeyUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let direction = match event.keystroke.key.as_str() {
+            "left" => -1,
+            "right" => 1,
+            _ => return,
+        };
+        if self.keyboard_pan_direction != direction {
+            return;
+        }
+        self.cancel_keyboard_pan();
+        self.dirty = true;
+        cx.stop_propagation();
+        cx.notify();
     }
 
     fn tick_animations(&mut self) {
@@ -2086,6 +2246,10 @@ impl Probe {
                 self.engine.time_scale_scroll_to(x);
                 self.dirty = true;
             }
+        }
+        if self.engine.keyboard_scroll_active() {
+            self.engine.keyboard_scroll_tick(now);
+            self.dirty = true;
         }
         if self.engine.scroll_animation_active() {
             self.engine.scroll_animation_tick(now);
@@ -2255,6 +2419,7 @@ impl Render for Probe {
             .on_pinch(cx.listener(Self::on_pinch))
             .on_modifiers_changed(cx.listener(Self::on_modifiers_changed))
             .on_key_down(cx.listener(Self::on_key_down))
+            .on_key_up(cx.listener(Self::on_key_up))
             .child(
                 canvas(
                     move |bounds: Bounds<gpui::Pixels>, window, cx| {
@@ -2380,6 +2545,7 @@ fn split_flex_ratios(ratio: f64) -> (f32, f32) {
 #[derive(Clone, Copy, Debug)]
 enum DemoAction {
     Series(SeriesKind),
+    BrushableArea,
     CandleBodyColor,
     CandleWickColor,
     CandleBorderColor,
@@ -2670,6 +2836,7 @@ impl InteractiveDemo {
         match action {
             DemoAction::Controls => self.inspector_open = !self.inspector_open,
             DemoAction::Series(kind) => self.update_active(cx, |p| p.set_series_kind(kind)),
+            DemoAction::BrushableArea => self.update_active(cx, Probe::enable_brushable_area),
             DemoAction::CandleBodyColor => self.update_active(cx, |p| {
                 let s = &mut p.engine.series[0];
                 let alternate = s.up_color.as_deref() == Some(nucleuscharts_core::style::MARKET_UP_CSS);
@@ -2945,13 +3112,17 @@ impl InteractiveDemo {
         match action {
             DemoAction::Controls => self.inspector_open,
             DemoAction::Series(kind) => active.as_ref().is_some_and(|chart| {
-                chart
-                    .read(cx)
+                let probe = chart.read(cx);
+                probe
                     .engine
                     .series
                     .first()
                     .is_some_and(|series| series.kind == kind)
+                    && (kind != SeriesKind::Area || probe.brushable_area.is_none())
             }),
+            DemoAction::BrushableArea => active
+                .as_ref()
+                .is_some_and(|chart| chart.read(cx).brushable_area.is_some()),
             DemoAction::CandleWicksVisible => active
                 .as_ref()
                 .is_some_and(|chart| chart.read(cx).engine.series[0].wick_visible.unwrap_or(true)),
@@ -3407,6 +3578,7 @@ impl Render for InteractiveDemo {
                     b("bars", DemoAction::Series(SeriesKind::Bar)),
                     b("line", DemoAction::Series(SeriesKind::Line)),
                     b("area", DemoAction::Series(SeriesKind::Area)),
+                    b("brushable area", DemoAction::BrushableArea),
                     b("histogram", DemoAction::Series(SeriesKind::Histogram)),
                     b("baseline", DemoAction::Series(SeriesKind::Baseline)),
                 ],
@@ -4447,9 +4619,53 @@ mod semantic_regressions {
         interactive.kinetic_active = true;
         assert!(interactive.needs_animation_frame());
         interactive.kinetic_active = false;
+        interactive.begin_keyboard_pan_at(-1, 10.0, false, 1_000.0);
+        assert!(interactive.needs_animation_frame());
+        interactive.cancel_keyboard_pan();
         interactive.engine.start_scroll_animation(3.0, 160.0, 0.0);
         assert!(interactive.needs_animation_frame());
         assert!(Probe::new(8, Some(2)).needs_animation_frame());
+    }
+
+    #[test]
+    fn brushable_area_uses_the_native_area_and_delta_tooltip_paths() {
+        let mut probe = Probe::new(32, None);
+        probe.enable_brushable_area();
+        let state = probe.brushable_area.expect("brush interaction is attached");
+        assert_eq!(probe.engine.series[0].kind, SeriesKind::Area);
+        assert!(probe.engine.has_delta_tooltip());
+
+        probe.engine.time_scale.set_width(probe.engine.pane_w);
+        probe.engine.set_visible_logical_range(0.0, 31.0);
+        let from = probe.engine.time_scale.index_to_coordinate(4);
+        let to = probe.engine.time_scale.index_to_coordinate(12);
+        assert!(probe
+            .engine
+            .set_delta_tooltip_points(state.tooltip_id, &[from, to]));
+        let active_range = probe.engine.delta_tooltip_active_range(state.tooltip_id);
+        assert!(
+            active_range.is_some(),
+            "expected active range for coordinates {from}..{to} in pane {}",
+            probe.engine.pane_w
+        );
+        probe.sync_brushable_area();
+        assert!(probe
+            .brushable_area
+            .is_some_and(|brush| brush.styled_range.is_some()));
+
+        assert!(probe.clear_brushable_area_selection());
+        assert_eq!(
+            probe.engine.delta_tooltip_active_range(state.tooltip_id),
+            None
+        );
+        assert!(probe
+            .brushable_area
+            .is_some_and(|brush| brush.styled_range.is_none()));
+
+        probe.set_series_kind(SeriesKind::Line);
+        assert_eq!(probe.engine.series[0].kind, SeriesKind::Line);
+        assert!(probe.brushable_area.is_none());
+        assert!(!probe.engine.has_delta_tooltip());
     }
 
     #[test]
