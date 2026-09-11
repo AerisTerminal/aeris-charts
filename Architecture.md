@@ -310,10 +310,11 @@ labels, image placement, and every specialized series frame are constructed in R
 Axiusflow attribution mark is intentionally host chrome, matching Lightweight Charts' attribution
 widget rather than becoming a second scene-graph primitive: the engine remains canonical for the
 `layout.attributionLogo` option and final-pane geometry, while the browser inlines the packaged
-dark/light SVG wordmarks at 19 CSS px tall and 10 CSS px from the final pane's left/bottom content
-edges. Background luminance chooses the wordmark and an opposite-tone non-scaling outline, so custom
-chart surfaces cannot erase it. It is excluded from engine frames, canvas-only `take_screenshot()`
-captures, persistence, and offscreen/native backends. Feature handles release their engine primitive
+dark/light SVG wordmarks and the interactive GPUI host submits those same packaged SVGs directly.
+Both keep the mark 19 CSS px tall and 10 CSS px from the final pane's left/bottom content edges.
+Background luminance chooses the wordmark and an opposite-tone non-scaling outline, so custom chart
+surfaces cannot erase it. It is excluded from engine frames, canvas-only `take_screenshot()`
+captures, persistence, and headless/offscreen renderers. Feature handles release their engine primitive
 plus any host subscription,
 timer, or DOM node exactly once; none of that runtime state enters engine persistence.
 

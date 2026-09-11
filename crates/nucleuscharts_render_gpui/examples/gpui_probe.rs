@@ -19,6 +19,7 @@
 
 use std::{
     collections::HashMap,
+    sync::OnceLock,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -31,12 +32,13 @@ use gpui::{
 use gpui_platform::application;
 use nucleuscharts_core::model::data_layer::SeriesId;
 use nucleuscharts_engine::{
-    crosshair_mode_from_u8, marker_pos, marker_shape, BrushRange, BrushStyle, ChartEngine,
-    ChartFrame, DeltaTooltipActiveRange, DeltaTooltipOptions, DrawingKind, DrawingModifiers,
-    DrawingPoint, GestureResolver, InputDevice, InputModifiers, InputTarget, Marker,
-    NativePrimitiveId, PointerSample, PriceLineExtent, PriceScaleTarget,
-    PrimitiveAutoscaleContribution, SeriesKind, SplitDirection, WheelBehavior, WheelDeltaMode,
-    WheelIntent, WheelSample, Workspace, WorkspaceLayout,
+    crosshair_mode_from_u8, marker_pos, marker_shape, AggressorSide, BrushRange, BrushStyle,
+    ChartEngine, ChartFrame, DeltaTooltipActiveRange, DeltaTooltipOptions, DrawingKind,
+    DrawingModifiers, DrawingPoint, FootprintAggregationOptions, FootprintBarAggregation,
+    FootprintImbalanceOptions, FootprintSeriesOptions, FootprintTrade, GestureResolver,
+    InputDevice, InputModifiers, InputTarget, Marker, NativePrimitiveId, PointerSample,
+    PriceLineExtent, PriceScaleTarget, PrimitiveAutoscaleContribution, SeriesKind, SplitDirection,
+    WheelBehavior, WheelDeltaMode, WheelIntent, WheelSample, Workspace, WorkspaceLayout,
 };
 use nucleuscharts_render::color::Color;
 use nucleuscharts_render::draw_list::{IRect, LineStyle, Prim, TextAlign};
@@ -153,19 +155,27 @@ fn shell_rgb(css: &str, fallback: u32) -> u32 {
 /// Stable, testable manifest for the native toolbar. Controls are intentionally compact cycle
 /// buttons rather than HTML inputs; every item maps to an engine or host-side native action.
 const TOOLBAR_FEATURE_MANIFEST: &[&str] = &[
-    "series:candlestick,bar,line,area,baseline",
+    "series:candlestick,bar,line,area,brushable-area,footprint,histogram,baseline",
     "style:candle-body,wick-colors,border-colors,wick-visible,border-visible,reset-parts,line-color,line-width,area-fill",
     "overlay:sma20,volume,rsi14",
     "workspace:split-horizontal,split-vertical,shortcuts,maximize,restore,close,cap,usage,active,resize",
     "drawing:trend,h-line,h-ray,v-line,rect,text,path,brush,clear,color,style,width,label,text-color,size,weight,italic",
     "crosshair:mode,color,width,style,label-background,labels",
-    "chart:theme,grid,grid-color,grid-style,font-family,font-size",
+    "chart:theme,grid,grid-color,grid-style,font-family,font-size,attribution",
     "series-chrome:price-line,extent,style,last-value,title-visible,title-text,countdown,bid-ask",
     "axes:border-visible,border-color,text-color,separator",
     "watermark:visible,text,color,size",
     "interaction:axis-scaling,mouse-kinetic,reset-view",
     "native-visual-approximations:day-bands,position-band,autoscale-band,markers,vertical-line",
 ];
+
+const ATTRIBUTION_LOGO_HEIGHT: f32 = 19.0;
+const ATTRIBUTION_LOGO_WIDTH: f32 = 221.0 / 48.0 * ATTRIBUTION_LOGO_HEIGHT;
+const ATTRIBUTION_LOGO_INSET: f32 = 10.0;
+const AXIUSFLOW_DARK_LOGO: &[u8] =
+    include_bytes!("../../../packages/charts/src/assets/logos/axiusflow_dark.svg");
+const AXIUSFLOW_LIGHT_LOGO: &[u8] =
+    include_bytes!("../../../packages/charts/src/assets/logos/axiusflow_light.svg");
 
 /// Column-major OHLC, in the shape `ChartEngine::set_series_data` takes.
 #[derive(Clone)]
@@ -275,6 +285,59 @@ fn web_demo_bars(
     }
 }
 
+/// Explicit synthetic tick tape used by both demos' Footprint showcase. OHLC never supplies bid,
+/// ask, or aggressor truth: the demo generates those trade fields directly, then the production
+/// footprint aggregator derives every displayed bar and price level from this tape.
+fn footprint_demo_trades(bars: &Bars) -> Vec<FootprintTrade> {
+    const TICK_SIZE: f64 = 0.25;
+    const SHAPE: [u32; 11] = [3, 6, 11, 17, 23, 28, 23, 17, 11, 6, 3];
+    const OFFSETS: [i64; 11] = [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5];
+    let first = bars.times.len().saturating_sub(12);
+    let mut trades = Vec::with_capacity((bars.times.len() - first) * SHAPE.len() * 2);
+    let mut trade_id = 1_u64;
+    for (sample_index, bar_index) in (first..bars.times.len()).enumerate() {
+        let start_seconds = bars.times[bar_index] as i64 / 3_600 * 3_600;
+        let center_level =
+            (bars.close[bar_index] / TICK_SIZE).round() as i64 + sample_index as i64 % 3 - 1;
+        let ask_dominant = sample_index % 2 == 0;
+        let mut events = Vec::with_capacity(SHAPE.len() * 2);
+        for (offset, peak) in OFFSETS.into_iter().zip(SHAPE) {
+            let smaller = (peak as f64 * 0.2).round().max(2.0);
+            let bid_volume = if ask_dominant {
+                smaller
+            } else {
+                f64::from(peak)
+            };
+            let ask_volume = if ask_dominant {
+                f64::from(peak)
+            } else {
+                smaller
+            };
+            events.push((center_level + offset, bid_volume, AggressorSide::Sell));
+            events.push((center_level + offset, ask_volume, AggressorSide::Buy));
+        }
+        if !ask_dominant {
+            events.reverse();
+        }
+        for (event_index, (level, volume, aggressor)) in events.into_iter().enumerate() {
+            trades.push(FootprintTrade {
+                timestamp_micros: start_seconds * 1_000_000 + event_index as i64 * 10_000 + 1,
+                price: level as f64 * TICK_SIZE,
+                volume,
+                aggressor,
+                bid: None,
+                ask: None,
+                sequence: Some(event_index as u64),
+                trade_id: Some(trade_id),
+                conditions: 0,
+                session_id: Some(1),
+            });
+            trade_id += 1;
+        }
+    }
+    trades
+}
+
 const CLICK_SLOP_MANHATTAN: f64 = 5.0;
 const PANE_SEPARATOR_HIT: f64 = 4.0;
 const WHEEL_LINE_HEIGHT: f32 = 32.0;
@@ -336,6 +399,13 @@ enum DragMode {
 struct BrushableAreaState {
     tooltip_id: NativePrimitiveId,
     styled_range: Option<DeltaTooltipActiveRange>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct FootprintDemoState {
+    series_id: SeriesId,
+    previous_bar_spacing: f64,
+    previous_right_offset: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -453,6 +523,7 @@ struct Probe {
     keyboard_pan_direction: i8,
     keyboard_pan_delta: f64,
     brushable_area: Option<BrushableAreaState>,
+    footprint: Option<FootprintDemoState>,
     source_bars: Bars,
     drawing_template: DrawingTemplate,
     style_pins: StylePins,
@@ -539,6 +610,7 @@ impl Probe {
             keyboard_pan_direction: 0,
             keyboard_pan_delta: 0.0,
             brushable_area: None,
+            footprint: None,
             source_bars: b,
             drawing_template: DrawingTemplate::default(),
             style_pins: StylePins::default(),
@@ -754,6 +826,7 @@ impl Probe {
     }
 
     fn set_series_kind(&mut self, kind: SeriesKind) {
+        self.disable_footprint();
         self.disable_brushable_area();
         self.engine.convert_series_kind(0, kind);
         self.click_status = format!("series: {kind:?}");
@@ -761,6 +834,7 @@ impl Probe {
     }
 
     fn enable_brushable_area(&mut self) {
+        self.disable_footprint();
         self.disable_brushable_area();
         self.engine.convert_series_kind(0, SeriesKind::Area);
         let tooltip_id = self
@@ -773,6 +847,80 @@ impl Probe {
         });
         self.click_status = "series: brushable area · drag to compare".into();
         self.dirty = true;
+    }
+
+    fn enable_footprint(&mut self) {
+        self.disable_footprint();
+        self.disable_brushable_area();
+        let previous_bar_spacing = self.engine.bar_spacing();
+        let previous_right_offset = self.engine.right_offset();
+        let options = FootprintSeriesOptions {
+            aggregation: FootprintAggregationOptions {
+                tick_size: 0.25,
+                bars: FootprintBarAggregation::Time {
+                    interval_micros: 3_600_000_000,
+                    anchor_micros: 0,
+                },
+                imbalance: FootprintImbalanceOptions {
+                    ratio: 3.0,
+                    minimum_volume: 20.0,
+                    consecutive_levels: 3,
+                },
+            },
+            visual: nucleuscharts_engine::FootprintVisualOptions {
+                font_size: 10.0,
+                show_bar_summary: true,
+                ..Default::default()
+            },
+        };
+        let series_id = self
+            .engine
+            .add_footprint_series(options)
+            .expect("the built-in GPUI footprint options are valid");
+        self.engine
+            .set_footprint_trades(series_id, footprint_demo_trades(&self.source_bars))
+            .expect("the deterministic GPUI footprint tape is valid");
+        if let Some(series) = self
+            .engine
+            .series
+            .iter_mut()
+            .find(|series| series.id == series_id && !series.removed)
+        {
+            series.price_line_visible = true;
+            series.last_value_visible = true;
+            series.countdown_visible = true;
+            series.title = "ORDER FLOW".into();
+        }
+        self.engine.set_series_visible(0, false);
+        self.engine.set_bar_spacing(72.0);
+        self.engine.scroll_to_real_time();
+        self.footprint = Some(FootprintDemoState {
+            series_id,
+            previous_bar_spacing,
+            previous_right_offset,
+        });
+        self.click_status = "series: footprint · native tick tape".into();
+        self.dirty = true;
+    }
+
+    fn disable_footprint(&mut self) {
+        let Some(state) = self.footprint.take() else {
+            return;
+        };
+        self.engine.remove_series(state.series_id);
+        self.engine.set_series_visible(0, true);
+        self.engine.set_bar_spacing(state.previous_bar_spacing);
+        self.engine.set_right_offset(state.previous_right_offset);
+        self.dirty = true;
+    }
+
+    fn displayed_series_index(&self) -> usize {
+        let displayed_id = self.footprint.map_or(0, |state| state.series_id);
+        self.engine
+            .series
+            .iter()
+            .position(|series| series.id == displayed_id && !series.removed)
+            .unwrap_or(0)
     }
 
     fn disable_brushable_area(&mut self) {
@@ -1388,6 +1536,14 @@ impl Probe {
         self.source_bars.high.push(high);
         self.source_bars.low.push(low);
         self.source_bars.close.push(c);
+        if let Some(footprint) = self.footprint {
+            self.engine
+                .set_footprint_trades(
+                    footprint.series_id,
+                    footprint_demo_trades(&self.source_bars),
+                )
+                .expect("the refreshed GPUI footprint tape is valid");
+        }
         self.appended += 1;
         self.dirty = true;
     }
@@ -2319,6 +2475,90 @@ impl Probe {
     }
 }
 
+fn attribution_outline(source: &'static [u8], dark: bool) -> &'static [u8] {
+    static DARK: OnceLock<Vec<u8>> = OnceLock::new();
+    static LIGHT: OnceLock<Vec<u8>> = OnceLock::new();
+    let outline = if dark { &DARK } else { &LIGHT };
+    outline.get_or_init(|| {
+        let fill = if dark { "#141414" } else { "#F0F0F0" };
+        String::from_utf8_lossy(source)
+            .replace(
+                &format!("fill=\"{fill}\""),
+                "fill=\"none\" stroke=\"currentColor\" stroke-width=\"1\" stroke-linejoin=\"round\" vector-effect=\"non-scaling-stroke\"",
+            )
+            .into_bytes()
+    })
+}
+
+/// Paint the host-owned Axiusflow mark after the retained chart frame. The engine owns the option
+/// and pane geometry; GPUI owns only the native SVG submission, mirroring the browser DOM seam.
+fn paint_attribution_logo(
+    probe: &Probe,
+    bounds: Bounds<gpui::Pixels>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if !probe.engine.options.get().layout.attribution_logo {
+        return;
+    }
+    let Some(pane) = probe.engine.panes.last() else {
+        return;
+    };
+    let background = Color::parse_css(&probe.engine.options.get().layout.background.color);
+    let text = Color::parse_css(&probe.engine.options.get().layout.text_color);
+    let light_background = background
+        .map(|color| color.luminance() > 160.0)
+        .or_else(|| text.map(|color| color.luminance() < 160.0))
+        .unwrap_or(false);
+    let (data, outline, key, outline_key, fill, outline_color) = if light_background {
+        (
+            AXIUSFLOW_DARK_LOGO,
+            attribution_outline(AXIUSFLOW_DARK_LOGO, true),
+            "nucleus-attribution-dark",
+            "nucleus-attribution-dark-outline",
+            Color::rgb(0x14, 0x14, 0x14),
+            Color::rgb(0xff, 0xff, 0xff),
+        )
+    } else {
+        (
+            AXIUSFLOW_LIGHT_LOGO,
+            attribution_outline(AXIUSFLOW_LIGHT_LOGO, false),
+            "nucleus-attribution-light",
+            "nucleus-attribution-light-outline",
+            Color::rgb(0xf0, 0xf0, 0xf0),
+            Color::rgb(0x14, 0x14, 0x14),
+        )
+    };
+    let origin_x: f32 = bounds.origin.x.into();
+    let origin_y: f32 = bounds.origin.y.into();
+    let logo_bounds = Bounds {
+        origin: gpui::point(
+            px(origin_x + probe.engine.pane_left as f32 + ATTRIBUTION_LOGO_INSET),
+            px(origin_y + (pane.top + pane.height) as f32
+                - ATTRIBUTION_LOGO_INSET
+                - ATTRIBUTION_LOGO_HEIGHT),
+        ),
+        size: size(px(ATTRIBUTION_LOGO_WIDTH), px(ATTRIBUTION_LOGO_HEIGHT)),
+    };
+    let transformation = gpui::TransformationMatrix::unit();
+    let _ = window.paint_svg(
+        logo_bounds,
+        outline_key.into(),
+        Some(outline),
+        transformation,
+        nucleuscharts_render_gpui::backend::to_hsla(outline_color),
+        cx,
+    );
+    let _ = window.paint_svg(
+        logo_bounds,
+        key.into(),
+        Some(data),
+        transformation,
+        nucleuscharts_render_gpui::backend::to_hsla(fill),
+        cx,
+    );
+}
+
 /// Build and paint one frame. Split out so both closures can hold disjoint borrows of `Probe`.
 fn paint_probe(probe: &mut Probe, bounds: Bounds<gpui::Pixels>, window: &mut Window, cx: &mut App) {
     if probe
@@ -2366,6 +2606,7 @@ fn paint_probe(probe: &mut Probe, bounds: Bounds<gpui::Pixels>, window: &mut Win
         }
         Err(e) => eprintln!("nucleuscharts probe: frame skipped: {e}"),
     }
+    paint_attribution_logo(probe, bounds, window, cx);
 }
 
 impl Render for Probe {
@@ -2546,6 +2787,7 @@ fn split_flex_ratios(ratio: f64) -> (f32, f32) {
 enum DemoAction {
     Series(SeriesKind),
     BrushableArea,
+    Footprint,
     CandleBodyColor,
     CandleWickColor,
     CandleBorderColor,
@@ -2584,6 +2826,7 @@ enum DemoAction {
     GridStyle,
     Font,
     FontSize,
+    Attribution,
     PriceLine,
     PriceLineExtent,
     PriceLineStyle,
@@ -2837,6 +3080,7 @@ impl InteractiveDemo {
             DemoAction::Controls => self.inspector_open = !self.inspector_open,
             DemoAction::Series(kind) => self.update_active(cx, |p| p.set_series_kind(kind)),
             DemoAction::BrushableArea => self.update_active(cx, Probe::enable_brushable_area),
+            DemoAction::Footprint => self.update_active(cx, Probe::enable_footprint),
             DemoAction::CandleBodyColor => self.update_active(cx, |p| {
                 let s = &mut p.engine.series[0];
                 let alternate = s.up_color.as_deref() == Some(nucleuscharts_core::style::MARKET_UP_CSS);
@@ -3043,19 +3287,69 @@ impl InteractiveDemo {
                 p.engine.options.apply_str(&format!(r#"{{"layout":{{"fontSize":{size}}}}}"#)).unwrap();
                 p.renderer.invalidate_caches();
             }),
-            DemoAction::PriceLine => self.update_active(cx, |p| p.engine.series[0].price_line_visible = !p.engine.series[0].price_line_visible),
+            DemoAction::Attribution => self.update_root(cx, |p| {
+                let visible = !p.engine.options.get().layout.attribution_logo;
+                p.engine
+                    .options
+                    .apply_str(&format!(
+                        r#"{{"layout":{{"attributionLogo":{visible}}}}}"#
+                    ))
+                    .expect("attribution visibility toggle is valid");
+            }),
+            DemoAction::PriceLine => self.update_active(cx, |p| {
+                let index = p.displayed_series_index();
+                p.engine.series[index].price_line_visible =
+                    !p.engine.series[index].price_line_visible;
+            }),
             DemoAction::PriceLineExtent => self.update_active(cx, |p| {
-                p.engine.series[0].price_line_extent = match p.engine.series[0].price_line_extent {
+                let index = p.displayed_series_index();
+                p.engine.series[index].price_line_extent = match p.engine.series[index].price_line_extent {
                     PriceLineExtent::Partial => PriceLineExtent::Full,
                     PriceLineExtent::Full => PriceLineExtent::Partial,
                 };
             }),
-            DemoAction::PriceLineStyle => self.update_active(cx, |p| p.engine.series[0].price_line_style = (p.engine.series[0].price_line_style + 1) % 3),
-            DemoAction::LastValue => self.update_active(cx, |p| p.engine.series[0].last_value_visible = !p.engine.series[0].last_value_visible),
-            DemoAction::TitleVisible => self.update_active(cx, |p| p.engine.series[0].title_visible = !p.engine.series[0].title_visible),
-            DemoAction::TitleText => self.update_active(cx, |p| { p.engine.series[0].title = if p.engine.series[0].title == "NUCLEUS" { "ASSET".into() } else { "NUCLEUS".into() }; }),
-            DemoAction::Countdown => self.update_active(cx, |p| p.engine.series[0].countdown_visible = !p.engine.series[0].countdown_visible),
-            DemoAction::BidAsk => self.update_active(cx, |p| { let on = !p.engine.series[0].bid_ask_visible; p.engine.series[0].bid_ask_visible = on; p.engine.set_bid_ask(0, on.then_some(107.95), on.then_some(108.05)); }),
+            DemoAction::PriceLineStyle => self.update_active(cx, |p| {
+                let index = p.displayed_series_index();
+                p.engine.series[index].price_line_style =
+                    (p.engine.series[index].price_line_style + 1) % 3;
+            }),
+            DemoAction::LastValue => self.update_active(cx, |p| {
+                let index = p.displayed_series_index();
+                p.engine.series[index].last_value_visible =
+                    !p.engine.series[index].last_value_visible;
+            }),
+            DemoAction::TitleVisible => self.update_active(cx, |p| {
+                let index = p.displayed_series_index();
+                p.engine.series[index].title_visible = !p.engine.series[index].title_visible;
+            }),
+            DemoAction::TitleText => self.update_active(cx, |p| {
+                let index = p.displayed_series_index();
+                p.engine.series[index].title = if p.engine.series[index].title == "NUCLEUS"
+                    || p.engine.series[index].title == "ORDER FLOW"
+                {
+                    "ASSET".into()
+                } else if p.footprint.is_some() {
+                    "ORDER FLOW".into()
+                } else {
+                    "NUCLEUS".into()
+                };
+            }),
+            DemoAction::Countdown => self.update_active(cx, |p| {
+                let index = p.displayed_series_index();
+                p.engine.series[index].countdown_visible =
+                    !p.engine.series[index].countdown_visible;
+            }),
+            DemoAction::BidAsk => self.update_active(cx, |p| {
+                let index = p.displayed_series_index();
+                let series_id = p.engine.series[index].id;
+                let on = !p.engine.series[index].bid_ask_visible;
+                p.engine.series[index].bid_ask_visible = on;
+                p.engine.set_bid_ask(
+                    series_id,
+                    on.then_some(107.95),
+                    on.then_some(108.05),
+                );
+            }),
             DemoAction::AxisBorders => self.update_root(cx, |p| { let on = !p.engine.options.get().time_scale.border_visible; p.engine.options.apply_str(&format!(r#"{{"leftPriceScale":{{"borderVisible":{on}}},"rightPriceScale":{{"borderVisible":{on}}},"timeScale":{{"borderVisible":{on}}}}}"#)).unwrap(); }),
             DemoAction::AxisBorderColor => {
                 let theme = self.theme;
@@ -3118,11 +3412,15 @@ impl InteractiveDemo {
                     .series
                     .first()
                     .is_some_and(|series| series.kind == kind)
+                    && probe.footprint.is_none()
                     && (kind != SeriesKind::Area || probe.brushable_area.is_none())
             }),
             DemoAction::BrushableArea => active
                 .as_ref()
                 .is_some_and(|chart| chart.read(cx).brushable_area.is_some()),
+            DemoAction::Footprint => active
+                .as_ref()
+                .is_some_and(|chart| chart.read(cx).footprint.is_some()),
             DemoAction::CandleWicksVisible => active
                 .as_ref()
                 .is_some_and(|chart| chart.read(cx).engine.series[0].wick_visible.unwrap_or(true)),
@@ -3167,24 +3465,34 @@ impl InteractiveDemo {
             DemoAction::GridColor => root
                 .as_ref()
                 .is_some_and(|chart| chart.read(cx).style_pins.grid_color.is_some()),
-            DemoAction::PriceLine => active
+            DemoAction::Attribution => root
                 .as_ref()
-                .is_some_and(|chart| chart.read(cx).engine.series[0].price_line_visible),
-            DemoAction::PriceLineExtent => active.as_ref().is_some_and(|chart| {
-                chart.read(cx).engine.series[0].price_line_extent == PriceLineExtent::Partial
+                .is_some_and(|chart| chart.read(cx).engine.options.get().layout.attribution_logo),
+            DemoAction::PriceLine => active.as_ref().is_some_and(|chart| {
+                let probe = chart.read(cx);
+                probe.engine.series[probe.displayed_series_index()].price_line_visible
             }),
-            DemoAction::LastValue => active
-                .as_ref()
-                .is_some_and(|chart| chart.read(cx).engine.series[0].last_value_visible),
-            DemoAction::TitleVisible => active
-                .as_ref()
-                .is_some_and(|chart| chart.read(cx).engine.series[0].title_visible),
-            DemoAction::Countdown => active
-                .as_ref()
-                .is_some_and(|chart| chart.read(cx).engine.series[0].countdown_visible),
-            DemoAction::BidAsk => active
-                .as_ref()
-                .is_some_and(|chart| chart.read(cx).engine.series[0].bid_ask_visible),
+            DemoAction::PriceLineExtent => active.as_ref().is_some_and(|chart| {
+                let probe = chart.read(cx);
+                probe.engine.series[probe.displayed_series_index()].price_line_extent
+                    == PriceLineExtent::Partial
+            }),
+            DemoAction::LastValue => active.as_ref().is_some_and(|chart| {
+                let probe = chart.read(cx);
+                probe.engine.series[probe.displayed_series_index()].last_value_visible
+            }),
+            DemoAction::TitleVisible => active.as_ref().is_some_and(|chart| {
+                let probe = chart.read(cx);
+                probe.engine.series[probe.displayed_series_index()].title_visible
+            }),
+            DemoAction::Countdown => active.as_ref().is_some_and(|chart| {
+                let probe = chart.read(cx);
+                probe.engine.series[probe.displayed_series_index()].countdown_visible
+            }),
+            DemoAction::BidAsk => active.as_ref().is_some_and(|chart| {
+                let probe = chart.read(cx);
+                probe.engine.series[probe.displayed_series_index()].bid_ask_visible
+            }),
             DemoAction::AxisBorders => root.as_ref().is_some_and(|chart| {
                 chart
                     .read(cx)
@@ -3229,12 +3537,12 @@ impl InteractiveDemo {
 
     fn action_enabled(&self, action: DemoAction, cx: &Context<Self>) -> bool {
         let kind = self.active_chart().and_then(|chart| {
-            chart
-                .read(cx)
-                .engine
-                .series
-                .first()
-                .map(|series| series.kind)
+            let probe = chart.read(cx);
+            if probe.footprint.is_some() {
+                Some(SeriesKind::Footprint)
+            } else {
+                probe.engine.series.first().map(|series| series.kind)
+            }
         });
         match action {
             DemoAction::CandleBodyColor
@@ -3579,6 +3887,7 @@ impl Render for InteractiveDemo {
                     b("line", DemoAction::Series(SeriesKind::Line)),
                     b("area", DemoAction::Series(SeriesKind::Area)),
                     b("brushable area", DemoAction::BrushableArea),
+                    b("footprint", DemoAction::Footprint),
                     b("histogram", DemoAction::Series(SeriesKind::Histogram)),
                     b("baseline", DemoAction::Series(SeriesKind::Baseline)),
                 ],
@@ -3677,6 +3986,7 @@ impl Render for InteractiveDemo {
                     b("grid style", DemoAction::GridStyle),
                     b("font family", DemoAction::Font),
                     b("font size", DemoAction::FontSize),
+                    b("attribution", DemoAction::Attribution),
                 ],
             ),
             self.group(
@@ -4353,6 +4663,8 @@ mod tests {
         for required in [
             "candlestick",
             "baseline",
+            "brushable-area",
+            "footprint",
             "sma20",
             "rsi14",
             "split-horizontal",
@@ -4361,6 +4673,7 @@ mod tests {
             "path",
             "text-color",
             "crosshair",
+            "attribution",
             "price-line",
             "extent",
             "bid-ask",
@@ -4666,6 +4979,56 @@ mod semantic_regressions {
         assert_eq!(probe.engine.series[0].kind, SeriesKind::Line);
         assert!(probe.brushable_area.is_none());
         assert!(!probe.engine.has_delta_tooltip());
+    }
+
+    #[test]
+    fn footprint_demo_uses_an_explicit_tick_tape_and_restores_the_base_series() {
+        let mut probe = Probe::new_interactive(32);
+        probe.engine.time_scale.set_width(probe.engine.pane_w);
+        let previous_bar_spacing = probe.engine.bar_spacing();
+        let previous_right_offset = probe.engine.right_offset();
+        probe.enable_footprint();
+
+        let state = probe.footprint.expect("footprint demo is active");
+        let series = probe
+            .engine
+            .series
+            .iter()
+            .find(|series| series.id == state.series_id && !series.removed)
+            .expect("footprint series is live");
+        assert_eq!(series.kind, SeriesKind::Footprint);
+        assert_eq!(series.title, "ORDER FLOW");
+        assert!(series.price_line_visible);
+        assert!(series.last_value_visible);
+        assert!(series.countdown_visible);
+        assert!(!probe.engine.series[0].visible);
+        assert_eq!(
+            probe.engine.footprint_bars(state.series_id).unwrap().len(),
+            12
+        );
+        assert_eq!(probe.engine.bar_spacing(), 72.0);
+        assert_eq!(probe.engine.right_offset(), 0.0);
+
+        probe.set_series_kind(SeriesKind::Candlestick);
+        assert!(probe.footprint.is_none());
+        assert!(probe.engine.series[0].visible);
+        assert_eq!(probe.engine.bar_spacing(), previous_bar_spacing);
+        assert_eq!(probe.engine.right_offset(), previous_right_offset);
+        assert!(probe
+            .engine
+            .series
+            .iter()
+            .all(|series| series.id != state.series_id || series.removed));
+    }
+
+    #[test]
+    fn attribution_logo_defaults_on_and_has_a_non_scaling_outline() {
+        let probe = Probe::new_interactive(8);
+        assert!(probe.engine.options.get().layout.attribution_logo);
+        let outline = std::str::from_utf8(attribution_outline(AXIUSFLOW_DARK_LOGO, true)).unwrap();
+        assert!(outline.contains("fill=\"none\""));
+        assert!(outline.contains("stroke-width=\"1\""));
+        assert!(outline.contains("vector-effect=\"non-scaling-stroke\""));
     }
 
     #[test]
