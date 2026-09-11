@@ -451,6 +451,30 @@ impl ChartEngine {
         };
         for (key, value) in &patch {
             match key.as_str() {
+                "color" => color_string_slot(&mut s.line_color, value),
+                "up_color" => color_string_slot(&mut s.up_color, value),
+                "down_color" => color_string_slot(&mut s.down_color, value),
+                "wick_up_color" => color_string_slot(&mut s.wick_up_color, value),
+                "wick_down_color" => color_string_slot(&mut s.wick_down_color, value),
+                "border_up_color" => color_string_slot(&mut s.border_up_color, value),
+                "border_down_color" => color_string_slot(&mut s.border_down_color, value),
+                "wick_visible" => {
+                    if let Some(v) = value.as_bool() {
+                        s.wick_visible = Some(v);
+                    }
+                }
+                "border_visible" => {
+                    if let Some(v) = value.as_bool() {
+                        s.border_visible = Some(v);
+                    }
+                }
+                "line_width" => {
+                    if let Some(v) = positive(value) {
+                        s.line_width = Some(v);
+                    }
+                }
+                "area_top_color" => color_string_slot(&mut s.area_top_color, value),
+                "area_bottom_color" => color_string_slot(&mut s.area_bottom_color, value),
                 "last_value_visible" => {
                     if let Some(v) = value.as_bool() {
                         s.last_value_visible = v;

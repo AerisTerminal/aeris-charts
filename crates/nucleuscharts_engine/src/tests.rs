@@ -4429,6 +4429,43 @@ fn color_options_round_trip_verbatim() {
 }
 
 #[test]
+fn series_apply_options_accepts_the_style_fields_returned_by_options() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    assert!(chart.series_apply_options_json(
+        0,
+        r##"{
+            "color":"#3B82F6",
+            "up_color":"#10B981",
+            "down_color":"#EF4444",
+            "wick_up_color":"#34D399",
+            "wick_down_color":"#F87171",
+            "border_up_color":"#059669",
+            "border_down_color":"#DC2626",
+            "wick_visible":false,
+            "border_visible":false,
+            "line_width":4,
+            "area_top_color":"#2563EB",
+            "area_bottom_color":"#172554"
+        }"##,
+    ));
+
+    let options: serde_json::Value =
+        serde_json::from_str(&chart.series_options_json(0).unwrap()).unwrap();
+    assert_eq!(options["color"], "#3B82F6");
+    assert_eq!(options["up_color"], "#10B981");
+    assert_eq!(options["down_color"], "#EF4444");
+    assert_eq!(options["wick_up_color"], "#34D399");
+    assert_eq!(options["wick_down_color"], "#F87171");
+    assert_eq!(options["border_up_color"], "#059669");
+    assert_eq!(options["border_down_color"], "#DC2626");
+    assert_eq!(options["wick_visible"], false);
+    assert_eq!(options["border_visible"], false);
+    assert_eq!(options["line_width"], 4.0);
+    assert_eq!(options["area_top_color"], "#2563EB");
+    assert_eq!(options["area_bottom_color"], "#172554");
+}
+
+#[test]
 fn unparseable_verbatim_colors_fall_back_at_render_time() {
     use nucleuscharts_render::draw_list::Prim;
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
