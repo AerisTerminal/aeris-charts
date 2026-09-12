@@ -167,8 +167,8 @@ test("selected anchor identities survive real wheel zoom, pan, and resize while 
   const spot = await bar_close_spot(page);
   await page.mouse.click(spot.x, spot.y);
   const selected = await selection_state(page);
-  expect(selected.identities.length).toBeGreaterThanOrEqual(2);
-  expect(selected.identities.length).toBeLessThanOrEqual(12);
+  expect(selected.identities.length).toBeGreaterThanOrEqual(24);
+  expect(selected.identities.length).toBeLessThanOrEqual(128);
 
   await page.mouse.move(spot.x, spot.y);
   await page.mouse.wheel(0, -120);

@@ -489,8 +489,10 @@ pub struct SeriesValueSnapshot {
     pub formatted_previous_value: Option<String>,
 }
 
-const SELECTION_ANCHOR_SPACING_CSS: f64 = 96.0;
-const MAX_SELECTION_ANCHORS: usize = 12;
+// TradingView keeps selected plots visibly studded with compact handles. Sample densely enough
+// that a normal-width pane shows dozens of anchors, while retaining a strict per-selection bound.
+const SELECTION_ANCHOR_SPACING_CSS: f64 = 24.0;
+const MAX_SELECTION_ANCHORS: usize = 128;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SelectionAnchorSnapshot {

@@ -1323,8 +1323,8 @@ impl ChartEngine {
         vpr: f64,
         out: &mut Vec<Prim>,
     ) {
-        const ANCHOR_RADIUS: f64 = 3.5;
-        const ANCHOR_BORDER_WIDTH: f64 = 1.5;
+        const ANCHOR_RADIUS: f64 = 3.0;
+        const ANCHOR_BORDER_WIDTH: f64 = 1.0;
         const ANCHOR_BORDER: Color = PRIMARY;
         let Some(selection) = self.selection.as_ref() else {
             return;

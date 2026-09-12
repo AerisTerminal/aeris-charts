@@ -5257,7 +5257,7 @@ fn selection_border_positions(chart: &mut ChartEngine) -> Vec<(f32, f32)> {
                 radius,
                 fill,
                 ..
-            } if *fill == PRIMARY && (*radius - 5.0 * chart.dpr as f32).abs() < 1e-4 => {
+            } if *fill == PRIMARY && (*radius - 4.0 * chart.dpr as f32).abs() < 1e-4 => {
                 Some((*cx, *cy))
             }
             _ => None,
@@ -5288,13 +5288,13 @@ fn selection_anchors_paint_theme_derived_discs_on_the_selected_series() {
     assert!(frame_discs(&mut chart).is_empty());
     chart.set_selected_series(Some(0));
     let discs = frame_discs(&mut chart);
-    // One border disc (blue, radius 3.5 + 1.5 at dpr 1) + one fill disc (radius 3.5) per bar.
+    // One compact border disc (blue, radius 3 + 1 at dpr 1) + one fill disc (radius 3) per bar.
     let borders: Vec<_> = discs.iter().copied().filter(|d| d.2 == BLUE).collect();
     let fills: Vec<_> = discs.iter().copied().filter(|d| d.2 != BLUE).collect();
     assert_eq!(borders.len(), 5);
     assert_eq!(fills.len(), 5);
-    assert!(borders.iter().all(|d| (d.1 - 5.0).abs() < 1e-4));
-    assert!(fills.iter().all(|d| (d.1 - 3.5).abs() < 1e-4));
+    assert!(borders.iter().all(|d| (d.1 - 4.0).abs() < 1e-4));
+    assert!(fills.iter().all(|d| (d.1 - 3.0).abs() < 1e-4));
     // Nucleus defaults dark: black fills, each paired with a border disc at the same x.
     assert!(fills.iter().all(|d| d.2 == Color::rgb(0, 0, 0)));
     for fill in &fills {
@@ -5446,9 +5446,9 @@ fn text_tool_selection_paints_a_focus_border_without_anchor_handles() {
 }
 
 #[test]
-fn selection_anchors_decimate_to_a_sparse_hint_at_tight_spacing() {
-    // 200 bars across an 800 css px pane (4 px/bar): TradingView-style anchors are a selection
-    // HINT, not one disc per bar — one per 96 css px, first and last always kept.
+fn selection_anchors_remain_dense_and_bounded_at_tight_spacing() {
+    // 200 bars across an 800 css px pane (4 px/bar): selected plots retain the dense TradingView
+    // visual rhythm — about one anchor per 24 css px, with the first and last always kept.
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     let n = 200;
     let times: Vec<f64> = (0..n).map(|i| (i * 60) as f64).collect();
@@ -5470,21 +5470,21 @@ fn selection_anchors_decimate_to_a_sparse_hint_at_tight_spacing() {
     let discs = frame_discs(&mut chart);
     let blue = PRIMARY;
     let borders: Vec<_> = discs.iter().copied().filter(|d| d.2 == blue).collect();
-    // 800 px at one anchor per >=96 px: far fewer than the 200 bars, first and last kept.
+    // 800 px at one anchor per roughly 24 px: dozens of handles, still well below one per bar.
     assert!(
-        borders.len() <= 11,
-        "anchors must decimate (got {})",
+        borders.len() <= 36,
+        "anchors must stay bounded (got {})",
         borders.len()
     );
     assert!(
-        borders.len() >= 7,
-        "the pane still reads selected (got {})",
+        borders.len() >= 30,
+        "the pane should read densely selected (got {})",
         borders.len()
     );
     let xs: Vec<f32> = borders.iter().map(|d| d.0).collect();
     assert!(
-        xs.windows(2).all(|w| w[1] - w[0] >= 96.0 - 1e-3),
-        "kept anchors respect the 96 px gap: {xs:?}"
+        xs.windows(2).all(|w| w[1] - w[0] >= 20.0),
+        "kept anchors preserve a compact visual gap: {xs:?}"
     );
     chart.set_selected_series(None);
 }
