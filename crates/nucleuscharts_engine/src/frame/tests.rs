@@ -874,6 +874,43 @@ fn magnet_snaps_across_all_visible_series_on_the_pane() {
 }
 
 #[test]
+fn crosshair_magnet_ignores_derived_indicator_lines() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart.crosshair_mode = CrosshairMode::Magnet;
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0, 3.0],
+            &[10.0, 20.0, 100.0],
+            &[10.0, 20.0, 100.0],
+            &[10.0, 20.0, 100.0],
+            &[10.0, 20.0, 100.0],
+        )
+        .unwrap();
+    let sma = chart.add_sma(0, 2).expect("SMA output");
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    chart.build_frame();
+
+    let (from, to) = chart.visible_range_for_frame().unwrap();
+    let scale = pane_scale(&chart.panes[0], PriceScaleTarget::Right);
+    let base = chart.series_base_value(0, from).unwrap();
+    let x = chart.time_scale.index_to_coordinate(1);
+    let indicator_plot = chart.data.plot(sma);
+    let indicator_row = indicator_plot
+        .search(1, MismatchDirection::None)
+        .expect("SMA row at logical index 1");
+    let indicator_value = indicator_plot.value_at(indicator_row, PlotValueIndex::Close);
+    assert_eq!(indicator_value, 15.0);
+    let indicator_y = scale.price_to_coordinate(indicator_value, base);
+    let source_y = scale.price_to_coordinate(20.0, base);
+
+    let (price, snapped_y) = chart.crosshair_snap(0, x, indicator_y, from, to);
+    assert_eq!(snapped_y, source_y);
+    assert!((price - 20.0).abs() < 1e-9);
+}
+
+#[test]
 fn magnet_ohlc_picks_nearest_of_open_high_low_close() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     chart.crosshair_mode = CrosshairMode::MagnetOhlc;

@@ -1046,6 +1046,46 @@ test("Ctrl magnet snaps placement to the nearest bar's OHLC", async ({ page }) =
   expect(probe.prices).not.toContainEqual(second.price);
 });
 
+test("Ctrl magnet ignores derived indicator lines", async ({ page }) => {
+  await goto_fixture(page);
+  await page.evaluate(() => {
+    window.__magnet_sma = window.__chart.add_sma(window.__main, 20);
+    window.__chart.time_scale().set_visible_logical_range({ from: 350, to: 400 });
+    window.__chart.set_drawing_tool("horizontal_line");
+  });
+  await settle_frames(page);
+
+  const probe = await page.evaluate(() => {
+    for (let index = 350; index <= 400; index += 1) {
+      const indicator = window.__magnet_sma.data_by_index(index);
+      const bar = window.__main.data_by_index(index);
+      if (!indicator || !bar) continue;
+      const prices = [bar.open, bar.high, bar.low, bar.close];
+      if (prices.every((price) => Math.abs(price - indicator.value) > 1e-6)) {
+        return {
+          index,
+          indicator: indicator.value,
+          prices,
+          x: window.__chart.time_scale().logical_to_coordinate(index),
+          y: window.__main.price_to_coordinate(indicator.value),
+        };
+      }
+    }
+    return null;
+  });
+  expect(probe).not.toBeNull();
+
+  await page.keyboard.down("Control");
+  await page.mouse.click(probe.x, probe.y);
+  await page.keyboard.up("Control");
+
+  const list = await drawings(page);
+  expect(list).toHaveLength(1);
+  expect(list[0].points[0].logical).toBeCloseTo(probe.index, 6);
+  expect(probe.prices).toContainEqual(list[0].points[0].price);
+  expect(list[0].points[0].price).not.toBeCloseTo(probe.indicator, 9);
+});
+
 test("Ctrl magnet ignores hidden OHLC fields after switching to an area series", async ({ page }) => {
   await goto_fixture(page);
   await page.evaluate(() => {

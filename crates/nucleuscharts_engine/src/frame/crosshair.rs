@@ -252,8 +252,9 @@ impl ChartEngine {
         (pane_scale(&self.panes[pane_index], target), base_value)
     }
 
-    /// Resolve the rendered series candidate nearest `(x_css, y_css)` in pixel space. Drawings
-    /// and the crosshair share this path so they choose the same bar, visible series, and field.
+    /// Resolve the rendered source-series candidate nearest `(x_css, y_css)` in pixel space.
+    /// Drawings and the crosshair share this path so they choose the same bar, visible series, and
+    /// field. Derived indicator outputs remain inspectable but never attract the magnet.
     /// OHLC mode exposes all four prices only for series that paint them; scalar-rendered series
     /// expose their close/value so hidden input columns cannot attract the magnet.
     pub(crate) fn magnet_snap_coordinate(
@@ -273,6 +274,7 @@ impl ChartEngine {
         for series in &self.series {
             if !series.visible
                 || series.removed
+                || self.indicator_binding_id(series.id).is_some()
                 || series.price_scale_target == PriceScaleTarget::Overlay
                 || series.pane_index != pane_index
             {
@@ -318,12 +320,12 @@ impl ChartEngine {
     }
 
     /// Port of reference `Magnet.align` (model/magnet.ts:30-86): in Magnet modes the horizontal
-    /// line snaps to the rendered-price candidate gathered from every visible, non-overlay series
-    /// on the pane with a bar exactly at the snapped index. OHLC-rendered series contribute all
-    /// requested fields; scalar-rendered series contribute only their close/value. The nearest
-    /// candidate wins in *pixel* space (after conversion on its own series scale), then converts
-    /// back to a price on the pane's default scale. Normal/Hidden mode, or no candidates, keeps
-    /// the raw cursor price.
+    /// line snaps to the rendered-price candidate gathered from every visible, non-overlay source
+    /// series on the pane with a bar exactly at the snapped index. Derived indicator outputs do not
+    /// participate. OHLC-rendered series contribute all requested fields; scalar-rendered source
+    /// series contribute only their close/value. The nearest candidate wins in *pixel* space
+    /// (after conversion on its own series scale), then converts back to a price on the pane's
+    /// default scale. Normal/Hidden mode, or no candidates, keeps the raw cursor price.
     pub(crate) fn crosshair_snap(
         &self,
         pane_index: usize,

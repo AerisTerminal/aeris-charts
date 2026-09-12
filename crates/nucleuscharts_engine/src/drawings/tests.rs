@@ -2300,6 +2300,41 @@ fn magnet_snaps_placement_to_nearest_bar_and_ohlc() {
 }
 
 #[test]
+fn drawing_magnet_ignores_derived_indicator_lines() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0, 3.0],
+            &[10.0, 20.0, 100.0],
+            &[10.0, 20.0, 100.0],
+            &[10.0, 20.0, 100.0],
+            &[10.0, 20.0, 100.0],
+        )
+        .unwrap();
+    let sma = chart.add_sma(0, 2).expect("SMA output");
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    chart.build_frame();
+
+    assert!(chart.drawing_create_begin(DrawingKind::HorizontalLine, None));
+    let indicator_plot = chart.data.plot(sma);
+    let indicator_row = indicator_plot
+        .search(1, MismatchDirection::None)
+        .expect("SMA row at logical index 1");
+    let indicator_value = indicator_plot.value_at(indicator_row, PlotValueIndex::Close);
+    assert_eq!(indicator_value, 15.0);
+
+    let id = chart.drawing_create_click(x_at(&chart, 1.0), y_at(&chart, indicator_value), MAGNET);
+    assert!(id > 0);
+    assert_eq!(
+        chart.drawing(id as DrawingId).unwrap().points[0].price,
+        20.0,
+        "the derived SMA at 15 must not attract a drawing intended for the source series"
+    );
+}
+
+#[test]
 fn path_magnet_snaps_every_placed_vertex() {
     let mut chart = ohlc_chart();
     assert!(chart.drawing_create_begin(DrawingKind::Path, None));
