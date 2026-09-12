@@ -726,6 +726,16 @@ pub(crate) fn verbatim_color(value: &Option<String>, fallback: Color) -> Color {
 }
 
 impl ChartEngine {
+    fn themed_candle_colors(&self) -> (Color, Color) {
+        let layout = &self.options.get().layout;
+        (
+            Color::parse_css(&layout.bullish_color).unwrap_or(UP),
+            Color::parse_css(&layout.bearish_color).unwrap_or(DOWN),
+        )
+    }
+}
+
+impl ChartEngine {
     /// The Baseline series' effective baseline price: the pinned `baseline_value` option, or
     /// the visible-range close midpoint (the engine's auto mode when the option is unset).
     /// Shared by the baseline geometry builder and the bar-color resolution so both agree on
@@ -817,12 +827,13 @@ impl ChartEngine {
             }
             // reference bar/candlestick colorer: up when open <= close.
             SeriesKind::Candlestick | SeriesKind::Bar => {
+                let (up, down) = self.themed_candle_colors();
                 let open = plot.value_at(row, PlotValueIndex::Open);
                 let close = plot.value_at(row, PlotValueIndex::Close);
                 if open <= close {
-                    verbatim_color(&series.up_color, UP)
+                    verbatim_color(&series.up_color, up)
                 } else {
-                    verbatim_color(&series.down_color, DOWN)
+                    verbatim_color(&series.down_color, down)
                 }
             }
             // reference custom-series colorer (series-bar-colorer.ts Custom arm): the series `color`
@@ -858,6 +869,7 @@ impl ChartEngine {
     /// an unpinned part inherits the same transparency and is skipped in turn; if nothing is
     /// visible at all, the body color stands.
     fn candlestick_chrome_color(&self, series: &crate::SeriesEntry, row: usize) -> Color {
+        let (up, down) = self.themed_candle_colors();
         let plot = self.data.plot(series.id);
         let rising =
             plot.value_at(row, PlotValueIndex::Open) <= plot.value_at(row, PlotValueIndex::Close);
@@ -873,7 +885,7 @@ impl ChartEngine {
             pick(
                 &series.up_color,
                 &series.down_color,
-                if rising { UP } else { DOWN },
+                if rising { up } else { down },
             )
         });
         if body.a() != 0 {
@@ -1266,6 +1278,7 @@ impl ChartEngine {
         // arbitration are untouched so promotion cannot oscillate hover. The bump is global
         // across panes (filtering per pane preserves each pane's relative order).
         let order = self.effective_series_order();
+        let (theme_up, theme_down) = self.themed_candle_colors();
         for &id in &order {
             let Some(s) = self.series_entry(id) else {
                 continue;
@@ -1273,8 +1286,14 @@ impl ChartEngine {
             let base_value = visible
                 .and_then(|(from, _)| self.series_base_value(s.id, from))
                 .unwrap_or(0.0);
-            let up = verbatim_color(&s.up_color, UP);
-            let down = verbatim_color(&s.down_color, DOWN);
+            let (fallback_up, fallback_down) =
+                if matches!(s.kind, SeriesKind::Candlestick | SeriesKind::Bar) {
+                    (theme_up, theme_down)
+                } else {
+                    (UP, DOWN)
+                };
+            let up = verbatim_color(&s.up_color, fallback_up);
+            let down = verbatim_color(&s.down_color, fallback_down);
             resolved.push(ResolvedSeries {
                 id: s.id,
                 kind: s.kind,

@@ -476,7 +476,7 @@
 <script type="module">
 // Built from the real package distribution. The demo build copies @nucleuscharts/financial' published
 // artifacts; it does not compile or wire an engine of its own.
-import { create_chart, create_chart_grid, create_series_markers, default_theme_name, theme_options, theme_palette } from "./dist/nucleuscharts_financial.js";
+import { create_chart, create_chart_grid, create_series_markers, default_theme_name, theme_options } from "./dist/nucleuscharts_financial.js";
 import { generate_fixture_data } from "./fixture_data.js";
 import { fixture_theme } from "./fixture_styles.js";
 import { marker_fixture, volume_fixture } from "./fixture_features.js";
@@ -537,10 +537,6 @@ const requested_theme = theme_param === "light" || theme_param === "dark"
   ? theme_param
   : runtime_test === null ? stored_demo_theme() ?? default_theme_name : "light";
 sync_page_theme(requested_theme);
-function market_colors(theme) {
-  const palette = theme_palette(theme);
-  return { up_color: palette.bullish, down_color: palette.bearish };
-}
 const requested_feature = query.get("feature");
 const requested_left_scale = query.get("leftScale") === "1";
 const parity_fixture = runtime_test === null
@@ -641,7 +637,6 @@ if (last_bar !== undefined) {
 }
 const main = chart.add_series("candlestick", {
   ...(requested_left_scale ? { priceScaleId: "left" } : {}),
-  ...(parity_fixture === null ? market_colors(requested_theme) : {}),
   ...(parity_fixture !== null ? {
     countdown_visible: false,
     up_color: "#089981",
@@ -652,11 +647,6 @@ const main = chart.add_series("candlestick", {
     border_down_color: "#f7525f",
   } : {}),
 });
-if (parity_fixture === null) {
-  const market = market_colors(requested_theme);
-  for (const id of ["up_color", "wick_up_color", "border_up_color"]) document.getElementById(id).value = market.up_color;
-  for (const id of ["down_color", "wick_down_color", "border_down_color"]) document.getElementById(id).value = market.down_color;
-}
 main.set_data(data);
 if (grid !== null) {
   // The root cell's primary series under the same handle the split cells get, so the toolbar's
@@ -1535,7 +1525,7 @@ function seed_split_cell(cell) {
     end_time: data_end_time(),
   });
   const selected_theme = document.getElementById("theme_select").value;
-  const series = cell.chart.add_series("candlestick", market_colors(selected_theme));
+  const series = cell.chart.add_series("candlestick");
   series.set_data(data);
   if (selected_theme !== default_theme_name) cell.chart.apply_options(theme_options(selected_theme));
   cell.chart.__seed_series = series; // debug/test handle
@@ -1692,13 +1682,9 @@ document.getElementById("theme_select").addEventListener("change", (e) => {
   if (grid !== null) {
     for (const cell of grid.cells()) {
       cell.chart.apply_options(theme_options(e.target.value));
-      cell.chart.__seed_series?.apply_options(market_colors(e.target.value));
     }
     grid.set_divider_color(null);
   }
-  const market = market_colors(e.target.value);
-  for (const id of ["up_color", "wick_up_color", "border_up_color"]) document.getElementById(id).value = market.up_color;
-  for (const id of ["down_color", "wick_down_color", "border_down_color"]) document.getElementById(id).value = market.down_color;
   if (separator_color_pinned) {
     chart.apply_options({ layout: { panes: { separatorColor: document.getElementById("pane_separator_color").value } } });
   }
@@ -1709,6 +1695,8 @@ document.getElementById("theme_select").addEventListener("change", (e) => {
 function sync_chart_controls_from_engine() {
   const options = chart.options();
   const hex = (value, fallback) => css_to_hex(value) || fallback;
+  for (const id of ["up_color", "wick_up_color", "border_up_color"]) document.getElementById(id).value = hex(options.layout.bullishColor, "#7c8db0");
+  for (const id of ["down_color", "wick_down_color", "border_down_color"]) document.getElementById(id).value = hex(options.layout.bearishColor, "#98615c");
   document.getElementById("axis_border_color").value = hex(options.rightPriceScale.borderColor, "#252525");
   document.getElementById("axis_border_visible").checked = options.rightPriceScale.borderVisible !== false;
   document.getElementById("axis_text_color").value = hex(options.layout.textColor, "#f0f0f0");

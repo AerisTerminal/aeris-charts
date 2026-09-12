@@ -26,11 +26,12 @@ use serde_json::{Map, Value};
 
 use crate::style::{
     DARK_ACCENT_CSS, DARK_BORDER_CSS, DARK_CROSSHAIR_LABEL_CSS, DARK_CROSSHAIR_LINE_CSS,
-    DARK_FOREGROUND_CSS, DARK_MUTED_FOREGROUND_CSS, DARK_SURFACE_CSS, DEFAULT_ACCENT_CSS,
-    DEFAULT_BORDER_CSS, DEFAULT_CROSSHAIR_LABEL_CSS, DEFAULT_CROSSHAIR_LINE_CSS,
-    DEFAULT_FOREGROUND_CSS, DEFAULT_MUTED_FOREGROUND_CSS, DEFAULT_SURFACE_CSS, LIGHT_ACCENT_CSS,
+    DARK_FOREGROUND_CSS, DARK_MARKET_DOWN_CSS, DARK_MARKET_UP_CSS, DARK_MUTED_FOREGROUND_CSS,
+    DARK_SURFACE_CSS, DEFAULT_ACCENT_CSS, DEFAULT_BORDER_CSS, DEFAULT_CROSSHAIR_LABEL_CSS,
+    DEFAULT_CROSSHAIR_LINE_CSS, DEFAULT_FOREGROUND_CSS, DEFAULT_MARKET_DOWN_CSS,
+    DEFAULT_MARKET_UP_CSS, DEFAULT_MUTED_FOREGROUND_CSS, DEFAULT_SURFACE_CSS, LIGHT_ACCENT_CSS,
     LIGHT_BORDER_CSS, LIGHT_CROSSHAIR_LABEL_CSS, LIGHT_CROSSHAIR_LINE_CSS, LIGHT_FOREGROUND_CSS,
-    LIGHT_MUTED_FOREGROUND_CSS, LIGHT_SURFACE_CSS,
+    LIGHT_MARKET_DOWN_CSS, LIGHT_MARKET_UP_CSS, LIGHT_MUTED_FOREGROUND_CSS, LIGHT_SURFACE_CSS,
 };
 
 /// Nucleus-owned application color mode. Hosts select a mode; Nucleus resolves every chart color
@@ -44,27 +45,40 @@ pub enum ChartTheme {
 /// Complete cosmetic patch for one canonical Nucleus theme.
 #[must_use]
 pub fn chart_theme_patch(theme: ChartTheme) -> Value {
-    let (surface, foreground, muted_foreground, border, accent, crosshair_line, crosshair_label) =
-        match theme {
-            ChartTheme::Light => (
-                LIGHT_SURFACE_CSS,
-                LIGHT_FOREGROUND_CSS,
-                LIGHT_MUTED_FOREGROUND_CSS,
-                LIGHT_BORDER_CSS,
-                LIGHT_ACCENT_CSS,
-                LIGHT_CROSSHAIR_LINE_CSS,
-                LIGHT_CROSSHAIR_LABEL_CSS,
-            ),
-            ChartTheme::Dark => (
-                DARK_SURFACE_CSS,
-                DARK_FOREGROUND_CSS,
-                DARK_MUTED_FOREGROUND_CSS,
-                DARK_BORDER_CSS,
-                DARK_ACCENT_CSS,
-                DARK_CROSSHAIR_LINE_CSS,
-                DARK_CROSSHAIR_LABEL_CSS,
-            ),
-        };
+    let (
+        surface,
+        foreground,
+        muted_foreground,
+        border,
+        accent,
+        crosshair_line,
+        crosshair_label,
+        bullish,
+        bearish,
+    ) = match theme {
+        ChartTheme::Light => (
+            LIGHT_SURFACE_CSS,
+            LIGHT_FOREGROUND_CSS,
+            LIGHT_MUTED_FOREGROUND_CSS,
+            LIGHT_BORDER_CSS,
+            LIGHT_ACCENT_CSS,
+            LIGHT_CROSSHAIR_LINE_CSS,
+            LIGHT_CROSSHAIR_LABEL_CSS,
+            LIGHT_MARKET_UP_CSS,
+            LIGHT_MARKET_DOWN_CSS,
+        ),
+        ChartTheme::Dark => (
+            DARK_SURFACE_CSS,
+            DARK_FOREGROUND_CSS,
+            DARK_MUTED_FOREGROUND_CSS,
+            DARK_BORDER_CSS,
+            DARK_ACCENT_CSS,
+            DARK_CROSSHAIR_LINE_CSS,
+            DARK_CROSSHAIR_LABEL_CSS,
+            DARK_MARKET_UP_CSS,
+            DARK_MARKET_DOWN_CSS,
+        ),
+    };
     serde_json::json!({
         "layout": {
             "background": {
@@ -75,6 +89,8 @@ pub fn chart_theme_patch(theme: ChartTheme) -> Value {
             },
             "textColor": foreground,
             "mutedTextColor": muted_foreground,
+            "bullishColor": bullish,
+            "bearishColor": bearish,
             "panes": {
                 "separatorColor": border,
                 "separatorHoverColor": accent
@@ -194,6 +210,12 @@ pub struct LayoutOptions {
     /// Secondary unboxed chart text. Live labels use the dark foreground for contrast.
     #[serde(rename = "mutedTextColor")]
     pub muted_text_color: String,
+    /// Theme-owned fallback for unpinned bullish candlestick and bar geometry.
+    #[serde(rename = "bullishColor")]
+    pub bullish_color: String,
+    /// Theme-owned fallback for unpinned bearish candlestick and bar geometry.
+    #[serde(rename = "bearishColor")]
+    pub bearish_color: String,
     #[serde(rename = "fontSize")]
     pub font_size: f64,
     #[serde(rename = "fontFamily")]
@@ -209,6 +231,8 @@ impl Default for LayoutOptions {
             background: BackgroundOptions::default(),
             text_color: text_color(),
             muted_text_color: muted_text_color(),
+            bullish_color: DEFAULT_MARKET_UP_CSS.into(),
+            bearish_color: DEFAULT_MARKET_DOWN_CSS.into(),
             font_size: 12.0,
             font_family: default_font_family(),
             attribution_logo: true,
@@ -590,6 +614,8 @@ mod tests {
         assert_eq!(light.layout.background.color, LIGHT_SURFACE_CSS);
         assert_eq!(light.layout.text_color, LIGHT_FOREGROUND_CSS);
         assert_eq!(light.layout.muted_text_color, LIGHT_MUTED_FOREGROUND_CSS);
+        assert_eq!(light.layout.bullish_color, LIGHT_MARKET_UP_CSS);
+        assert_eq!(light.layout.bearish_color, LIGHT_MARKET_DOWN_CSS);
         assert_eq!(light.grid.vert_lines.color, LIGHT_BORDER_CSS);
         assert_eq!(light.crosshair.vert_line.color, LIGHT_CROSSHAIR_LINE_CSS);
         assert_eq!(
@@ -607,6 +633,8 @@ mod tests {
         assert_eq!(dark.layout.background.color, DARK_SURFACE_CSS);
         assert_eq!(dark.layout.text_color, DARK_FOREGROUND_CSS);
         assert_eq!(dark.layout.muted_text_color, DARK_MUTED_FOREGROUND_CSS);
+        assert_eq!(dark.layout.bullish_color, DARK_MARKET_UP_CSS);
+        assert_eq!(dark.layout.bearish_color, DARK_MARKET_DOWN_CSS);
         assert_eq!(dark.grid.vert_lines.color, DARK_BORDER_CSS);
         assert_eq!(dark.crosshair.vert_line.color, DARK_CROSSHAIR_LINE_CSS);
         assert_eq!(dark.crosshair.vert_line.color, DARK_BORDER_CSS);

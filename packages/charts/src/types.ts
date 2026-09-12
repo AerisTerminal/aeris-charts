@@ -781,6 +781,10 @@ export interface chart_options {
     textColor: string;
     /** Secondary unboxed chart text. Boxed live labels derive black/white text from their fill. */
     mutedTextColor: string;
+    /** Theme fallback for candlestick and bar up geometry when the series color is unpinned. */
+    bullishColor: string;
+    /** Theme fallback for candlestick and bar down geometry when the series color is unpinned. */
+    bearishColor: string;
     fontSize: number;
     fontFamily: string;
     /**

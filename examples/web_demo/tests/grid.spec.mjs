@@ -90,8 +90,8 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
     border_control: document.getElementById("axis_border_color").value,
     crosshair_control: document.getElementById("cross_color").value,
     crosshair_label_control: document.getElementById("cross_label_bg").value,
-    bullish: window.__main.options().up_color,
-    bearish: window.__main.options().down_color,
+    bullish: window.__chart.options().layout.bullishColor,
+    bearish: window.__chart.options().layout.bearishColor,
   }));
 
   expect(await theme_state()).toEqual({

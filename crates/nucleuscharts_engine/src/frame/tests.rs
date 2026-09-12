@@ -3467,13 +3467,15 @@ fn canonical_style_reaches_the_backend_neutral_frame() {
 
     let frame = chart.build_frame();
     let prims = &frame.panes[0].main;
+    let theme_up = Color::parse_css(nucleuscharts_core::style::DEFAULT_MARKET_UP_CSS).unwrap();
+    let theme_down = Color::parse_css(nucleuscharts_core::style::DEFAULT_MARKET_DOWN_CSS).unwrap();
     assert!(prims.iter().any(|prim| matches!(
         prim,
-        Prim::Rect { color, .. } | Prim::RectFrame { color, .. } if *color == UP
+        Prim::Rect { color, .. } | Prim::RectFrame { color, .. } if *color == theme_up
     )));
     assert!(prims.iter().any(|prim| matches!(
         prim,
-        Prim::Rect { color, .. } | Prim::RectFrame { color, .. } if *color == DOWN
+        Prim::Rect { color, .. } | Prim::RectFrame { color, .. } if *color == theme_down
     )));
     assert!(prims
         .iter()
@@ -3569,8 +3571,9 @@ fn candlestick_per_point_colors_override_each_channel() {
     assert!(has(POINT_RED), "custom body color drawn");
     assert!(has(POINT_GREEN), "custom wick color drawn");
     assert!(has(POINT_BLUE), "custom border color drawn");
-    // The uncolored bars keep the reference up-color resolution.
-    assert!(has(UP.0), "series up color still drawn");
+    // The uncolored bars keep the active theme's up-color resolution.
+    let theme_up = Color::parse_css(nucleuscharts_core::style::DEFAULT_MARKET_UP_CSS).unwrap();
+    assert!(has(theme_up.0), "series up color still drawn");
 }
 
 #[test]

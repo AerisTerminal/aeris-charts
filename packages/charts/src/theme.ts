@@ -85,6 +85,8 @@ export function theme_options(theme: theme_name | chart_theme): deep_partial<cha
       background: { type: "solid", color: palette.background },
       textColor: palette.foreground,
       mutedTextColor: palette.muted_foreground,
+      bullishColor: palette.bullish,
+      bearishColor: palette.bearish,
       panes: {
         separatorColor: palette.border,
         separatorHoverColor: palette.accent,

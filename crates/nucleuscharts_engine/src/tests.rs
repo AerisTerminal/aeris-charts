@@ -4575,9 +4575,9 @@ fn unparseable_verbatim_colors_fall_back_at_render_time() {
     chart.fit_content();
     // The up bars render with Nucleus's canonical default, not the stored string.
     let up = Color::rgb(
-        nucleuscharts_core::style::MARKET_UP_RGB.0,
-        nucleuscharts_core::style::MARKET_UP_RGB.1,
-        nucleuscharts_core::style::MARKET_UP_RGB.2,
+        nucleuscharts_core::style::DEFAULT_MARKET_UP_RGB.0,
+        nucleuscharts_core::style::DEFAULT_MARKET_UP_RGB.1,
+        nucleuscharts_core::style::DEFAULT_MARKET_UP_RGB.2,
     );
     let frame = chart.build_frame();
     assert!(frame.panes[0]
@@ -5423,6 +5423,53 @@ fn theme_switch_uses_nucleus_tokens_without_replacing_market_data() {
         nucleuscharts_core::style::DARK_BORDER_CSS
     );
     assert_eq!(row_count(&chart, 0), 20);
+}
+
+#[test]
+fn unpinned_candles_follow_engine_theme_while_explicit_colors_stay_pinned() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0],
+            &[10.0, 11.0],
+            &[12.0, 12.0],
+            &[9.0, 8.0],
+            &[11.0, 9.0],
+        )
+        .unwrap();
+
+    chart.set_theme(ChartTheme::Light);
+    assert_eq!(
+        chart.series_bar_color(&chart.series[0], 0, None),
+        Color::parse_css(nucleuscharts_core::style::LIGHT_MARKET_UP_CSS).unwrap()
+    );
+    assert_eq!(
+        chart.series_bar_color(&chart.series[0], 1, None),
+        Color::parse_css(nucleuscharts_core::style::LIGHT_MARKET_DOWN_CSS).unwrap()
+    );
+
+    chart.set_theme(ChartTheme::Dark);
+    assert_eq!(
+        chart.series_bar_color(&chart.series[0], 0, None),
+        Color::parse_css(nucleuscharts_core::style::DARK_MARKET_UP_CSS).unwrap()
+    );
+    assert_eq!(
+        chart.series_bar_color(&chart.series[0], 1, None),
+        Color::parse_css(nucleuscharts_core::style::DARK_MARKET_DOWN_CSS).unwrap()
+    );
+
+    chart.series[0].up_color = Some("#010203".into());
+    chart.series[0].down_color = Some("#040506".into());
+    chart.set_theme(ChartTheme::Light);
+    assert_eq!(
+        chart.series_bar_color(&chart.series[0], 0, None),
+        Color::rgb(1, 2, 3)
+    );
+    assert_eq!(
+        chart.series_bar_color(&chart.series[0], 1, None),
+        Color::rgb(4, 5, 6)
+    );
 }
 
 // --- pane-local price scale geometry (issue #25) ------------------------------------------------

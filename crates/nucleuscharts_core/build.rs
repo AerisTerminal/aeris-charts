@@ -164,6 +164,18 @@ fn main() {
             "pub const DEFAULT_{suffix}_RGB: (u8, u8, u8) = {default_prefix}_{suffix}_RGB;\n"
         ));
     }
+    output.push_str(&format!(
+        "pub const DEFAULT_MARKET_UP_CSS: &str = {default_prefix}_MARKET_UP_CSS;\n"
+    ));
+    output.push_str(&format!(
+        "pub const DEFAULT_MARKET_UP_RGB: (u8, u8, u8) = {default_prefix}_MARKET_UP_RGB;\n"
+    ));
+    output.push_str(&format!(
+        "pub const DEFAULT_MARKET_DOWN_CSS: &str = {default_prefix}_MARKET_DOWN_CSS;\n"
+    ));
+    output.push_str(&format!(
+        "pub const DEFAULT_MARKET_DOWN_RGB: (u8, u8, u8) = {default_prefix}_MARKET_DOWN_RGB;\n"
+    ));
     output.push_str("pub const LIGHT_AXIS_TEXT_CSS: &str = LIGHT_FOREGROUND_CSS;\n");
     output.push_str("pub const LIGHT_AXIS_TEXT_RGB: (u8, u8, u8) = LIGHT_FOREGROUND_RGB;\n");
     output.push_str("pub const DARK_AXIS_TEXT_CSS: &str = DARK_FOREGROUND_CSS;\n");

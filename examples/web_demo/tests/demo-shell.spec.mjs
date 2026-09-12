@@ -22,14 +22,11 @@ for (const [backend, url] of [
       const expected_chart = structuredClone(scratch.options());
       expected_chart.grid.vertLines.visible = false;
       expected_chart.grid.horzLines.visible = false;
-      const expected_series = scratch_series.options();
-      expected_series.up_color = api.dark_theme.bullish;
-      expected_series.down_color = api.dark_theme.bearish;
       const result = {
         actual_chart: window.__chart.options(),
         expected_chart,
         actual_series: window.__main.options(),
-        expected_series,
+        expected_series: scratch_series.options(),
       };
       scratch.remove();
       host.remove();
