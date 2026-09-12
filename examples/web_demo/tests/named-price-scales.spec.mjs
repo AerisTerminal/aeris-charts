@@ -240,7 +240,7 @@ for (const backend of ["canvas2d", "webgpu"]) {
     expect(after_upper).toMatchObject({ right_auto: false, left_auto: false });
   });
 
-  test(`${backend}: one comparison axis double-click resets every price scale`, async ({ page }) => {
+  test(`${backend}: one comparison axis double-click resets only its exact price scale`, async ({ page }) => {
     await page.goto(`/?backend=${backend}&forceFallbackAdapter=1`);
     await wait_for_chart(page);
     const fixture = await install_reset_fixture(page);
@@ -250,11 +250,11 @@ for (const backend of ["canvas2d", "webgpu"]) {
     expect(await auto_scale_state(page)).toEqual({ right: false, left: false });
     await page.mouse.dblclick(box.x + fixture.right_x, box.y + fixture.y);
     await wait_for_chart(page);
-    expect(await auto_scale_state(page)).toEqual({ right: true, left: true });
+    expect(await auto_scale_state(page)).toEqual({ right: true, left: false });
   });
 }
 
-test("named comparison reset supports touch, configuration gates, and global reset", async ({ page }) => {
+test("named comparison reset supports touch, configuration gates, and explicit global reset", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   await wait_for_chart(page);
   const fixture = await install_reset_fixture(page);
@@ -265,24 +265,22 @@ test("named comparison reset supports touch, configuration gates, and global res
     const rect = overlay.getBoundingClientRect();
     const clientX = rect.left + right_x;
     const clientY = rect.top + y;
-    const send = (type) => overlay.dispatchEvent(new PointerEvent(type, {
-      pointerId: 91,
-      pointerType: "touch",
-      isPrimary: true,
-      clientX,
-      clientY,
-      button: 0,
-      buttons: type === "pointerup" ? 0 : 1,
-      bubbles: true,
-      cancelable: true,
+    const touch = () => new Touch({
+      identifier: 91, target: overlay, clientX, clientY, pageX: clientX, pageY: clientY,
+      screenX: clientX, screenY: clientY, radiusX: 1, radiusY: 1, rotationAngle: 0, force: 0.5,
+    });
+    const send = (type, touches, changedTouches) => overlay.dispatchEvent(new TouchEvent(type, {
+      touches, targetTouches: touches, changedTouches, bubbles: true, cancelable: true,
     }));
-    send("pointerdown");
-    send("pointerup");
-    send("pointerdown");
-    send("pointerup");
+    const first = touch();
+    send("touchstart", [first], [first]);
+    send("touchend", [], [first]);
+    const second = touch();
+    send("touchstart", [second], [second]);
+    send("touchend", [], [second]);
   }, fixture);
   await wait_for_chart(page);
-  expect(await auto_scale_state(page)).toEqual({ right: true, left: true });
+  expect(await auto_scale_state(page)).toEqual({ right: true, left: false });
 
   await page.evaluate(() => {
     const chart = window.__chart;
@@ -311,21 +309,21 @@ test("touch dragging a comparison candle pans only that candle's unlocked scale"
   await page.evaluate(({ x, lower_y }) => {
     const overlay = window.__chart.chart_element().querySelector("canvas:last-of-type");
     const rect = overlay.getBoundingClientRect();
-    const send = (type, y, buttons) => overlay.dispatchEvent(new PointerEvent(type, {
-      pointerId: 117,
-      pointerType: "touch",
-      isPrimary: true,
-      clientX: rect.left + x,
-      clientY: rect.top + y,
-      button: 0,
-      buttons,
-      bubbles: true,
-      cancelable: true,
+    const touch = (y) => new Touch({
+      identifier: 117, target: overlay, clientX: rect.left + x, clientY: rect.top + y,
+      pageX: rect.left + x, pageY: rect.top + y, screenX: rect.left + x, screenY: rect.top + y,
+      radiusX: 1, radiusY: 1, rotationAngle: 0, force: 0.5,
+    });
+    const send = (type, touches, changedTouches) => overlay.dispatchEvent(new TouchEvent(type, {
+      touches, targetTouches: touches, changedTouches, bubbles: true, cancelable: true,
     }));
-    send("pointerdown", lower_y, 1);
-    send("pointermove", lower_y + 18, 1);
-    send("pointermove", lower_y + 36, 1);
-    send("pointerup", lower_y + 36, 0);
+    const down = touch(lower_y);
+    send("touchstart", [down], [down]);
+    const crossing = touch(lower_y + 18);
+    send("touchmove", [crossing], [crossing]);
+    const moved = touch(lower_y + 36);
+    send("touchmove", [moved], [moved]);
+    send("touchend", [], [moved]);
   }, fixture);
   await wait_for_chart(page);
 

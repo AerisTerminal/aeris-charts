@@ -3074,9 +3074,19 @@ impl ChartEngine {
         self.invalidate_frame_all();
     }
 
+    /// Restore autoscale only on the requested pane-local scale. Axis double-click uses this
+    /// targeted reset; the explicit reset-view command deliberately retains the chart-wide reset.
+    pub fn reset_price_scale(&mut self, pane: usize, target: PriceScaleTarget) {
+        let Some(scale) = self.price_scale_for_mut(pane, target) else {
+            return;
+        };
+        scale.set_auto_scale(true);
+        self.invalidate_frame_all();
+    }
+
     /// TradingView-style "reset view" button semantics in one action: the time scale returns
     /// to its configured defaults (reference `resetTimeScale`) AND every pane's price scales
-    /// re-enable autoscale (reference pane `resetPriceScale`, the price-axis double-click).
+    /// re-enable autoscale. Axis double-click deliberately uses the targeted method above.
     /// The next frame's autoscale pass recalculates the visible ranges, so a manually
     /// contracted or over-zoomed price scale fits the data again.
     pub fn reset_view(&mut self) {

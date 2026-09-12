@@ -1801,6 +1801,11 @@ impl ChartInner {
             .begin_price_pan_at(pane, x_css, y_css)
             .map(price_scale_target_to_u32)
     }
+    pub fn price_pan_target_at(&self, pane: usize, x_css: f64, y_css: f64) -> Option<u32> {
+        self.engine
+            .price_pan_target_at(pane, x_css, y_css)
+            .map(price_scale_target_to_u32)
+    }
 
     /// Eased scroll-to-position (cubic ease-out): the engine owns the easing and applies each
     /// tick; the host schedules frames and repaints. A newer start or a user gesture

@@ -6,7 +6,7 @@ async function open_chart(page) {
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 }
 
-test("wheel behavior follows TradingView right-pin, focused Ctrl zoom, and horizontal pan semantics", async ({ page }) => {
+test("auto wheel matches Lightweight Charts cursor anchoring, modifier neutrality, and independent horizontal pan", async ({ page }) => {
   await open_chart(page);
   const box = await page.locator("#chart_container canvas:last-of-type").boundingBox();
   const geometry = await page.evaluate(() => ({
@@ -23,12 +23,12 @@ test("wheel behavior follows TradingView right-pin, focused Ctrl zoom, and horiz
   await page.mouse.move(box.x + geometry.paneLeft + paneX, box.y + box.height / 2);
 
   const beforeZoom = await state();
-  expect(beforeZoom.rightBarStays).toBe(true);
+  expect(beforeZoom.rightBarStays).toBe(false);
   await page.mouse.wheel(0, -24);
   const afterZoom = await state();
   expect(afterZoom.spacing).toBeGreaterThan(beforeZoom.spacing);
-  expect(afterZoom.offset).toBeCloseTo(beforeZoom.offset, 8);
-  expect(afterZoom.logical).not.toBeCloseTo(beforeZoom.logical, 5);
+  expect(afterZoom.logical).toBeCloseTo(beforeZoom.logical, 5);
+  expect(afterZoom.offset).not.toBeCloseTo(beforeZoom.offset, 8);
 
   const beforeFocused = await state();
   await page.keyboard.down("Control");
@@ -44,8 +44,8 @@ test("wheel behavior follows TradingView right-pin, focused Ctrl zoom, and horiz
   await page.mouse.wheel(0, -24);
   await page.keyboard.up("Shift");
   const afterShiftPan = await state();
-  expect(afterShiftPan.spacing).toBeCloseTo(beforeShiftPan.spacing, 8);
-  expect(afterShiftPan.offset).not.toBeCloseTo(beforeShiftPan.offset, 8);
+  expect(afterShiftPan.spacing).toBeGreaterThan(beforeShiftPan.spacing);
+  expect(afterShiftPan.logical).toBeCloseTo(beforeShiftPan.logical, 5);
 
   const beforePan = await state();
   await page.mouse.wheel(24, 0);
@@ -70,7 +70,8 @@ test("pointer interaction does not move focus into the accessibility application
   expect(state.outline).toBe("none");
 });
 
-test("Pointer Events pinch around the live centroid and continue with the surviving pointer", async ({ page }) => {
+test("Touch Events pinch around the starting centroid and preserve primary-touch continuation", async ({ page, browserName }) => {
+  test.skip(browserName !== "chromium", "Firefox lacks Touch constructors and WebKit forbids synthetic construction");
   await open_chart(page);
   const result = await page.evaluate(() => {
     const chart = window.__chart;
@@ -79,32 +80,52 @@ test("Pointer Events pinch around the live centroid and continue with the surviv
     const paneLeft = chart.wasm.pane_left();
     const x = rect.left + paneLeft + chart.wasm.time_scale_width() / 2;
     const y = rect.top + chart.wasm.pane_height(0) / 2;
-    const send = (type, pointerId, clientX, clientY, buttons = type === "pointerup" ? 0 : 1) => {
-      overlay.dispatchEvent(new PointerEvent(type, {
-        pointerId, pointerType: "touch", isPrimary: pointerId === 11,
-        clientX, clientY, button: 0, buttons, bubbles: true, cancelable: true,
+    const touch = (identifier, clientX, clientY) => new Touch({
+      identifier, target: overlay, clientX, clientY, pageX: clientX, pageY: clientY,
+      screenX: clientX, screenY: clientY, radiusX: 1, radiusY: 1, rotationAngle: 0, force: 0.5,
+    });
+    const send = (type, touches, changedTouches) => {
+      overlay.dispatchEvent(new TouchEvent(type, {
+        touches, targetTouches: touches, changedTouches, bubbles: true, cancelable: true,
       }));
     };
-    const before = { spacing: chart.wasm.bar_spacing(), offset: chart.wasm.scroll_position() };
-    send("pointerdown", 11, x - 50, y);
-    send("pointerdown", 12, x + 50, y);
-    send("pointermove", 12, x + 100, y + 20);
-    const pinched = { spacing: chart.wasm.bar_spacing(), offset: chart.wasm.scroll_position() };
-    send("pointerup", 12, x + 100, y + 20, 0);
+    const first = touch(11, x - 50, y);
+    const second = touch(12, x + 50, y);
+    const before = {
+      spacing: chart.wasm.bar_spacing(),
+      offset: chart.wasm.scroll_position(),
+      logical: chart.time_scale().coordinate_to_logical(chart.wasm.time_scale_width() / 2),
+    };
+    send("touchstart", [first], [first]);
+    send("touchstart", [first, second], [second]);
+    const spread = touch(12, x + 100, y + 20);
+    send("touchmove", [first, spread], [spread]);
+    const pinched = {
+      spacing: chart.wasm.bar_spacing(),
+      offset: chart.wasm.scroll_position(),
+      logical: chart.time_scale().coordinate_to_logical(chart.wasm.time_scale_width() / 2),
+    };
+    send("touchend", [first], [spread]);
     const rebased = chart.wasm.scroll_position();
-    send("pointermove", 11, x - 10, y);
+    const crossing = touch(11, x - 10, y);
+    send("touchmove", [crossing], [crossing]);
+    const atCrossing = chart.wasm.scroll_position();
+    const continuedTouch = touch(11, x + 10, y);
+    send("touchmove", [continuedTouch], [continuedTouch]);
     const continued = chart.wasm.scroll_position();
-    send("pointerup", 11, x - 10, y, 0);
-    return { before, pinched, rebased, continued, touchAction: overlay.style.touchAction };
+    send("touchend", [], [continuedTouch]);
+    return { before, pinched, rebased, atCrossing, continued, touchAction: overlay.style.touchAction };
   });
-  expect(result.touchAction).not.toBe("auto");
+  expect(result.touchAction).toBe("auto");
   expect(result.pinched.spacing).not.toBeCloseTo(result.before.spacing, 6);
-  expect(result.pinched.offset).not.toBeCloseTo(result.before.offset, 6);
+  expect(result.pinched.logical).toBeCloseTo(result.before.logical, 5);
+  expect(result.atCrossing).toBeCloseTo(result.rebased, 8);
   expect(result.continued).not.toBeCloseTo(result.rebased, 6);
-  expect(Math.abs(result.continued - result.rebased)).toBeCloseTo(40 / result.pinched.spacing, 5);
+  expect(Math.abs(result.continued - result.rebased)).toBeCloseTo(20 / result.pinched.spacing, 5);
 });
 
-test("capture loss cancels the canonical gesture and rolls back later samples", async ({ page }) => {
+test("touch cancellation ends the canonical gesture and ignores later samples", async ({ page, browserName }) => {
+  test.skip(browserName !== "chromium", "Firefox lacks Touch constructors and WebKit forbids synthetic construction");
   await open_chart(page);
   const result = await page.evaluate(() => {
     const chart = window.__chart;
@@ -112,15 +133,23 @@ test("capture loss cancels the canonical gesture and rolls back later samples", 
     const rect = overlay.getBoundingClientRect();
     const x = rect.left + chart.wasm.pane_left() + chart.wasm.time_scale_width() / 2;
     const y = rect.top + chart.wasm.pane_height(0) / 2;
-    const send = (type, clientX, buttons = 1) => overlay.dispatchEvent(new PointerEvent(type, {
-      pointerId: 31, pointerType: "touch", isPrimary: true, clientX, clientY: y,
-      button: 0, buttons, bubbles: true, cancelable: true,
+    const touch = (clientX) => new Touch({
+      identifier: 31, target: overlay, clientX, clientY: y, pageX: clientX, pageY: y,
+      screenX: clientX, screenY: y, radiusX: 1, radiusY: 1, rotationAngle: 0, force: 0.5,
+    });
+    const send = (type, touches, changedTouches) => overlay.dispatchEvent(new TouchEvent(type, {
+      touches, targetTouches: touches, changedTouches, bubbles: true, cancelable: true,
     }));
-    send("pointerdown", x);
-    send("pointermove", x - 40);
+    const down = touch(x);
+    send("touchstart", [down], [down]);
+    const crossing = touch(x - 40);
+    send("touchmove", [crossing], [crossing]);
+    const moved = touch(x - 80);
+    send("touchmove", [moved], [moved]);
     const atLoss = chart.wasm.scroll_position();
-    send("lostpointercapture", x - 40, 0);
-    send("pointermove", x - 140);
+    send("touchcancel", [], [moved]);
+    const afterCancel = touch(x - 140);
+    send("touchmove", [afterCancel], [afterCancel]);
     const after = chart.wasm.scroll_position();
     return { atLoss, after };
   });

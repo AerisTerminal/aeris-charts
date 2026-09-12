@@ -553,9 +553,8 @@ export interface time_scale_options {
   /** Keep the visible range constant across chart resizes (reference `lockVisibleTimeRangeOnResize`). */
   lock_visible_time_range_on_resize?: boolean;
   /**
-   * Keep the right-most bar pinned during ordinary time-scale zoom. Nucleus defaults this to
-   * `true`, matching TradingView's full-chart `right_bar_stays_on_scroll` interaction; set `false`
-   * for Lightweight Charts-style cursor anchoring on every wheel zoom.
+   * Keep the right-most bar pinned during ordinary time-scale zoom. Defaults to `false`, matching
+   * Lightweight Charts cursor anchoring.
    */
   right_bar_stays_on_scroll?: boolean;
   /**
@@ -711,7 +710,7 @@ export interface handle_scroll_options {
 
 /** Zoom/scale gesture toggles (reference `handleScale`). `false` disables all zooming. */
 export interface handle_scale_options {
-  /** Mouse-wheel zoom on the pane. Ctrl+wheel uses focused/cursor-anchored zoom. */
+  /** Mouse-wheel zoom on the time scale. Modifiers do not change the default routing. */
   mouse_wheel?: boolean;
   /** Two-finger touch pinch zoom. */
   pinch?: boolean;
@@ -843,7 +842,11 @@ export interface chart_options {
   handle_scale: boolean | handle_scale_options;
   /** Momentum scroll after a pan flick (reference `kineticScroll`). Default touch-only. Package-level. */
   kinetic_scroll: boolean | kinetic_scroll_options;
-  /** Wheel/trackpad policy. `auto` zooms vertical deltas and pans horizontal deltas. */
+  /**
+   * Wheel/trackpad policy. `auto` exactly follows Lightweight Charts: vertical deltas zoom time
+   * and horizontal deltas pan time independently on every chart surface, without modifier
+   * routing. `pan` and `zoom` are explicit Nucleus extensions.
+   */
   wheel_behavior: "auto" | "pan" | "zoom";
   /** Chart-owned keyboard and assistive-technology surface. Enabled by default. */
   accessibility: boolean | accessibility_options;

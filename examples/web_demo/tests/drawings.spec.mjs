@@ -1555,9 +1555,21 @@ test("trend labels rotate, reverse, template alignment, and never inherit text-t
   }));
   expect(selection_paint.background).toBe("rgba(0, 0, 0, 0)");
   expect(selection_paint.color).toBe("rgba(0, 0, 0, 0)");
-  const with_caret = PNG.sync.read(await page.locator("#chart_container").screenshot({ animations: "disabled" }));
+  const with_caret = crop_around(
+    PNG.sync.read(await page.locator("#chart_container").screenshot({ animations: "disabled" })),
+    slot.x * PR,
+    slot.y * PR,
+    300,
+    120,
+  );
   await wrap.evaluate((el) => { el.style.opacity = "0"; });
-  const frame_only = PNG.sync.read(await page.locator("#chart_container").screenshot({ animations: "disabled" }));
+  const frame_only = crop_around(
+    PNG.sync.read(await page.locator("#chart_container").screenshot({ animations: "disabled" })),
+    slot.x * PR,
+    slot.y * PR,
+    300,
+    120,
+  );
   await wrap.evaluate((el) => { el.style.opacity = "1"; });
   expect(pixel_diff(with_caret, frame_only), "editing adds only the explicit caret, never duplicate glyph or selection paint").toBeLessThan(80);
 

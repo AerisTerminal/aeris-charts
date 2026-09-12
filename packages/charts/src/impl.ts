@@ -3702,11 +3702,8 @@ export class chart_impl implements chart_api {
     this.text_press_selected = this.wasm.selected_drawing() ?? null;
   }
 
-  /** Emit a click event (called by the gesture recognizer). */
-  emit_click(x: number, y: number): void {
-    // A click/tap is a discrete, intentional action, so it is a good moment to announce the point
-    // to assistive tech (unlike mouse hover, which would flood the live region).
-    this.announce(x, y);
+  /** Apply the chart-owned selection/editing work shared by click and drawing-owned double-click. */
+  private apply_primary_click(x: number, y: number): void {
     // TradingView-style click-to-select: select the series under the click (the frame build
     // paints anchor points on it) and clear the selection on empty pane space. The hover
     // hit-test refreshes at the click point first, so a click without a preceding move still
@@ -3734,9 +3731,25 @@ export class chart_impl implements chart_api {
       }
     }
     this.repaint();
+  }
+
+  /** Emit a click event (called by the gesture recognizer). */
+  emit_click(x: number, y: number): void {
+    // A click/tap is a discrete, intentional action, so it is a good moment to announce the point
+    // to assistive tech (unlike mouse hover, which would flood the live region).
+    this.announce(x, y);
+    this.apply_primary_click(x, y);
     if (this.click_subs.size === 0) return;
     const params = this.build_params(x, y);
     for (const h of this.click_subs) h(params);
+  }
+
+  /** Let an explicitly hit Nucleus drawing consume the second click without a pane click event. */
+  activate_drawing_double_click(x: number, y: number): void {
+    const selected = this.selected_drawing();
+    if (selected === null || selected.id !== this.text_press_selected) return;
+    if (selected.kind() !== "text" && selected.kind() !== "trend_line") return;
+    this.apply_primary_click(x, y);
   }
 
   /** Emit engine-resolved context without running primary-click selection or activation paths. */
@@ -4434,9 +4447,8 @@ export class chart_impl implements chart_api {
   }
 
   private sync_touch_action(): void {
-    const cfg = this.gestures_cfg;
-    this.overlay.style.touchAction = cfg.pan_vert_touch ? "none"
-      : cfg.pan_horz_touch || cfg.pinch_zoom ? "pan-y" : "auto";
+    // Cancellable Touch Events arbitrate direction after the shared 5 px slop.
+    this.overlay.style.touchAction = "auto";
   }
 
   /** Resolve the reference `layout.panes.enableResize` toggle (separator drag + hover cursor). */

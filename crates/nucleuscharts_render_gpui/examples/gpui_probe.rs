@@ -36,9 +36,10 @@ use nucleuscharts_engine::{
     ChartEngine, ChartFrame, DeltaTooltipActiveRange, DeltaTooltipOptions, DrawingKind,
     DrawingModifiers, DrawingPoint, FootprintAggregationOptions, FootprintBarAggregation,
     FootprintImbalanceOptions, FootprintSeriesOptions, FootprintTrade, GestureResolver,
-    InputDevice, InputModifiers, InputTarget, Marker, NativePrimitiveId, PointerSample,
-    PriceLineExtent, PriceScaleTarget, PrimitiveAutoscaleContribution, SeriesKind, SplitDirection,
-    WheelBehavior, WheelDeltaMode, WheelIntent, WheelSample, Workspace, WorkspaceLayout,
+    GestureUpdateKind, InputDevice, InputModifiers, InputTarget, Marker, NativePrimitiveId,
+    PointerSample, PriceLineExtent, PriceScaleTarget, PrimitiveAutoscaleContribution, SeriesKind,
+    SplitDirection, WheelBehavior, WheelDeltaMode, WheelIntent, WheelSample, Workspace,
+    WorkspaceLayout,
 };
 use nucleuscharts_render::color::Color;
 use nucleuscharts_render::draw_list::{IRect, LineStyle, Prim, TextAlign};
@@ -519,6 +520,7 @@ struct Probe {
     press_start: Option<(f64, f64)>,
     press_moved: bool,
     drag: Option<DragMode>,
+    drag_started: bool,
     kinetic_active: bool,
     keyboard_pan_direction: i8,
     keyboard_pan_delta: f64,
@@ -606,6 +608,7 @@ impl Probe {
             press_start: None,
             press_moved: false,
             drag: None,
+            drag_started: false,
             kinetic_active: false,
             keyboard_pan_direction: 0,
             keyboard_pan_delta: 0.0,
@@ -1639,11 +1642,23 @@ impl Probe {
         } else if active_separator || separator.is_some() {
             CursorStyle::ResizeRow
         } else if y > self.engine.pane_h {
-            CursorStyle::ResizeLeftRight
+            if self.gesture_config.axis_scale_time {
+                CursorStyle::ResizeLeftRight
+            } else {
+                CursorStyle::Arrow
+            }
         } else if chart_x < self.engine.pane_left
             || chart_x > self.engine.pane_left + self.engine.pane_w
         {
-            CursorStyle::ResizeUpDown
+            let pane = self.engine.pane_index_at_y(y);
+            let target = self.engine.price_axis_target_at(pane, pane_x);
+            if self.gesture_config.axis_scale_price
+                && target.is_some_and(|target| self.engine.price_axis_scalable(pane, target))
+            {
+                CursorStyle::ResizeUpDown
+            } else {
+                CursorStyle::Arrow
+            }
         } else if let Some(cursor) = drawing_cursor {
             cursor
         } else if self.engine.hovered_series().is_some() {
@@ -1694,14 +1709,16 @@ impl Probe {
         self.engine.time_scale_start_scroll(pane_x);
         self.engine.kinetic_begin_sampling(
             self.gesture_config.kinetic_mouse,
-            pane_x,
+            self.engine.scroll_position(),
             self.now_ms(),
         );
     }
 
-    fn end_mouse_pan(&mut self, pane_x: f64) {
-        self.kinetic_active =
-            self.gesture_config.kinetic_mouse && self.engine.kinetic_release(pane_x, self.now_ms());
+    fn end_mouse_pan(&mut self) {
+        self.kinetic_active = self.gesture_config.kinetic_mouse
+            && self
+                .engine
+                .kinetic_release(self.engine.scroll_position(), self.now_ms());
         if !self.kinetic_active {
             self.engine.kinetic_stop();
             self.engine.time_scale_end_scroll();
@@ -1822,7 +1839,9 @@ impl Probe {
                 if let Some((pane, target)) = price_pan {
                     self.engine.price_axis_end_scroll(pane, target);
                 }
-                self.engine.time_scale_end_scroll();
+                if self.drag_started {
+                    self.engine.time_scale_end_scroll();
+                }
             }
             Some(DragMode::TimeAxis) => self.engine.time_axis_end_scale(),
             Some(DragMode::PriceAxis { pane, target }) => {
@@ -1841,6 +1860,7 @@ impl Probe {
         self.engine.delta_tooltip_leave();
         self.sync_brushable_area();
         self.cancel_kinetic_scroll();
+        self.drag_started = false;
         self.press_start = None;
         self.press_moved = false;
         self.engine.crosshair_ohlc_magnet = false;
@@ -1946,10 +1966,10 @@ impl Probe {
                 self.click_status = "brush selection cleared".into();
             } else if y > self.engine.pane_h && self.gesture_config.axis_dblclick_reset_time {
                 self.engine.reset_time_scale();
-            } else if self.gesture_config.axis_dblclick_reset_price
-                && self.engine.price_axis_target_at(pane, pane_x).is_some()
-            {
-                self.engine.reset_price_scales();
+            } else if self.gesture_config.axis_dblclick_reset_price {
+                if let Some(target) = self.engine.price_axis_target_at(pane, pane_x) {
+                    self.engine.reset_price_scale(pane, target);
+                }
             }
             self.press_moved = true;
             self.dirty = true;
@@ -1972,33 +1992,18 @@ impl Probe {
             } else {
                 None
             }
-        } else if chart_x < self.engine.pane_left {
-            if self.gesture_config.axis_scale_price
-                && self
-                    .engine
-                    .price_axis_scalable(pane, PriceScaleTarget::Left)
-            {
-                self.engine
-                    .price_axis_start_scale(pane, PriceScaleTarget::Left, y);
-                Some(DragMode::PriceAxis {
-                    pane,
-                    target: PriceScaleTarget::Left,
-                })
-            } else {
-                None
-            }
-        } else if chart_x > self.engine.pane_left + self.engine.pane_w {
-            if self.gesture_config.axis_scale_price
-                && self
-                    .engine
-                    .price_axis_scalable(pane, PriceScaleTarget::Right)
-            {
-                self.engine
-                    .price_axis_start_scale(pane, PriceScaleTarget::Right, y);
-                Some(DragMode::PriceAxis {
-                    pane,
-                    target: PriceScaleTarget::Right,
-                })
+        } else if chart_x < self.engine.pane_left
+            || chart_x > self.engine.pane_left + self.engine.pane_w
+        {
+            if let Some(target) = self.engine.price_axis_target_at(pane, pane_x) {
+                if self.gesture_config.axis_scale_price
+                    && self.engine.price_axis_scalable(pane, target)
+                {
+                    self.engine.price_axis_start_scale(pane, target, y);
+                    Some(DragMode::PriceAxis { pane, target })
+                } else {
+                    None
+                }
             } else {
                 None
             }
@@ -2013,10 +2018,9 @@ impl Probe {
             self.sync_brushable_area();
             Some(DragMode::DeltaTooltip)
         } else if self.gesture_config.pan {
-            self.begin_mouse_pan(pane_x);
             let price_pan = self
                 .engine
-                .begin_price_pan_at(pane, pane_x, y)
+                .price_pan_target_at(pane, pane_x, y)
                 .map(|target| (pane, target));
             Some(DragMode::Pan { price_pan })
         } else {
@@ -2040,7 +2044,7 @@ impl Probe {
     ) {
         let (chart_x, pane_x, y) = self.local_position(event.position);
         let sample = self.mouse_sample(pane_x, y, self.input_target, event.modifiers);
-        self.input.pointer_move(sample);
+        let update = self.input.pointer_move(sample);
         if self.engine.delta_tooltip_mouse_move(pane_x) {
             self.sync_brushable_area();
             self.dirty = true;
@@ -2050,22 +2054,59 @@ impl Probe {
             self.mark_press_moved(pane_x, y);
         }
         match self.drag {
-            Some(DragMode::Pan { price_pan }) if event.dragging() => {
+            Some(DragMode::Pan { price_pan })
+                if event.dragging() && update.kind == GestureUpdateKind::DragStarted =>
+            {
+                // Open at the 5 px crossing sample; movement starts on the following sample.
+                self.begin_mouse_pan(pane_x);
+                if let Some((pane, target)) = price_pan {
+                    self.engine.price_axis_start_scroll(pane, target, y);
+                }
+                self.drag = Some(DragMode::Pan { price_pan });
+                self.drag_started = true;
+            }
+            Some(DragMode::Pan { price_pan })
+                if event.dragging()
+                    && self.drag_started
+                    && update.kind == GestureUpdateKind::DragMoved =>
+            {
                 self.engine.time_scale_scroll_to(pane_x);
-                self.engine.kinetic_add_sample(pane_x, self.now_ms());
+                self.engine
+                    .kinetic_add_sample(self.engine.scroll_position(), self.now_ms());
                 if let Some((pane, target)) = price_pan {
                     self.engine.price_axis_scroll_to(pane, target, y);
                 }
             }
-            Some(DragMode::TimeAxis) if event.dragging() => {
+            Some(DragMode::TimeAxis)
+                if event.dragging()
+                    && matches!(
+                        update.kind,
+                        GestureUpdateKind::DragStarted | GestureUpdateKind::DragMoved
+                    ) =>
+            {
                 self.engine.time_axis_scale_to(pane_x);
+                self.drag_started = true;
             }
-            Some(DragMode::PriceAxis { pane, target }) if event.dragging() => {
+            Some(DragMode::PriceAxis { pane, target })
+                if event.dragging()
+                    && matches!(
+                        update.kind,
+                        GestureUpdateKind::DragStarted | GestureUpdateKind::DragMoved
+                    ) =>
+            {
                 self.engine.price_axis_scale_to(pane, target, y);
+                self.drag_started = true;
             }
-            Some(DragMode::PaneSeparator { index, last_y }) if event.dragging() => {
+            Some(DragMode::PaneSeparator { index, last_y })
+                if event.dragging()
+                    && matches!(
+                        update.kind,
+                        GestureUpdateKind::DragStarted | GestureUpdateKind::DragMoved
+                    ) =>
+            {
                 self.engine.drag_pane_separator(index, y - last_y);
                 self.drag = Some(DragMode::PaneSeparator { index, last_y: y });
+                self.drag_started = true;
                 self.dirty = true;
             }
             Some(DragMode::Drawing) if event.dragging() => {
@@ -2149,7 +2190,9 @@ impl Probe {
                 if let Some((pane, target)) = price_pan {
                     self.engine.price_axis_end_scroll(pane, target);
                 }
-                self.end_mouse_pan(pane_x);
+                if self.drag_started {
+                    self.end_mouse_pan();
+                }
                 !moved
             }
             Some(DragMode::TimeAxis) => {
@@ -2197,6 +2240,7 @@ impl Probe {
             }
             None => !moved,
         };
+        self.drag_started = false;
         if select_click {
             let selected = self.engine.hit_test_series(pane_x, y);
             self.engine.set_selected_series(selected);
@@ -2250,14 +2294,17 @@ impl Probe {
         {
             let zoom = nucleuscharts_engine::wheel_zoom_scale(normalized_y);
             let pane = self.engine.pane_index_at_y(y);
-            if chart_x < self.engine.pane_left {
+            let price_target = self.engine.price_axis_target_at(pane, pane_x);
+            if self.gesture_config.wheel_behavior == WheelBehavior::Zoom && price_target.is_some() {
                 self.engine
-                    .price_axis_wheel_zoom(pane, PriceScaleTarget::Left, y, zoom);
-            } else if chart_x > self.engine.pane_left + self.engine.pane_w {
-                self.engine
-                    .price_axis_wheel_zoom(pane, PriceScaleTarget::Right, y, zoom);
+                    .price_axis_wheel_zoom(pane, price_target.unwrap(), y, zoom);
             } else {
-                if event.modifiers.control {
+                // Auto mode mirrors Lightweight Charts: every surface targets the time scale and
+                // modifiers do not change routing. Focused Ctrl zoom remains an explicit-mode
+                // Nucleus extension.
+                if self.gesture_config.wheel_behavior == WheelBehavior::Zoom
+                    && event.modifiers.control
+                {
                     self.engine.time_scale_zoom_focused(pane_x, zoom);
                 } else {
                     self.engine.time_scale_zoom(pane_x, zoom);
@@ -2265,15 +2312,7 @@ impl Probe {
             }
         }
         let pan_delta = if self.gesture_config.wheel_behavior == WheelBehavior::Auto {
-            if event.modifiers.shift {
-                if normalized_x != 0.0 {
-                    normalized_x
-                } else {
-                    -normalized_y
-                }
-            } else {
-                normalized_x
-            }
+            normalized_x
         } else if normalized_x.abs() >= normalized_y.abs() {
             normalized_x
         } else {
@@ -2398,8 +2437,8 @@ impl Probe {
                 self.engine.time_scale_end_scroll();
                 self.engine.kinetic_stop();
                 self.kinetic_active = false;
-            } else if let Some(x) = self.engine.kinetic_position(now) {
-                self.engine.time_scale_scroll_to(x);
+            } else if let Some(position) = self.engine.kinetic_position(now) {
+                self.engine.scroll_to_position(position);
                 self.dirty = true;
             }
         }
@@ -4588,7 +4627,7 @@ mod tests {
 
         probe.begin_mouse_pan(200.0);
         probe.engine.time_scale_scroll_to(160.0);
-        probe.end_mouse_pan(160.0);
+        probe.end_mouse_pan();
         let after_first_pan = probe.engine.scroll_position();
         let first_delta = after_first_pan - initial;
         assert!(first_delta > 0.0);
@@ -4597,7 +4636,7 @@ mod tests {
         // snapshot without restoring the position reached by the previous drag.
         probe.cancel_kinetic_scroll();
         probe.begin_mouse_pan(120.0);
-        probe.end_mouse_pan(120.0);
+        probe.end_mouse_pan();
         let after_click = probe.engine.scroll_position();
         assert!((after_click - after_first_pan).abs() < 1e-12);
 
@@ -4605,7 +4644,7 @@ mod tests {
         // state. It therefore moves half as far as the first 40px drag at unchanged bar spacing.
         probe.begin_mouse_pan(120.0);
         probe.engine.time_scale_scroll_to(100.0);
-        probe.end_mouse_pan(100.0);
+        probe.end_mouse_pan();
         let after_second_pan = probe.engine.scroll_position();
         let expected = after_click + first_delta / 2.0;
         assert!((after_second_pan - expected).abs() < 1e-12);

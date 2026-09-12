@@ -64,6 +64,11 @@ for (const requested_backend of ["auto", "canvas2d"]) {
     await page.mouse.down();
     for (const delta of [35, 70, 105]) {
       await page.mouse.move(center.x - delta, center.y);
+      if (delta === 35) {
+        // The threshold-crossing sample opens the LWC-compatible pan; movement starts on the
+        // following sample.
+        await page.mouse.move(center.x - delta - 1, center.y);
+      }
       await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
       const offset = await page.evaluate(() => window.__chart.wasm.scroll_position());
       const current = await snapshot(page);

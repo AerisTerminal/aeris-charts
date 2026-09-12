@@ -985,6 +985,7 @@ test("brushable area guides reproject and Escape or double click clears", async 
   const initial_probes = await probes();
   await expect_handles(initial_probes, { width: 1280, height: 720 });
 
+  await page.locator("#chart_container canvas:last-of-type").focus();
   await page.keyboard.press("Control+ArrowLeft");
   await page.waitForTimeout(220);
   expect(await page.evaluate(() => window.__reproject_interaction.active_range())).toEqual(committed);

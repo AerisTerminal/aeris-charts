@@ -82,16 +82,8 @@ impl WheelSample {
             WheelBehavior::Pan => WheelIntent::Pan,
             WheelBehavior::Zoom => WheelIntent::Zoom,
             WheelBehavior::Auto => {
-                // TradingView maps Shift+wheel to horizontal chart movement instead of zooming.
-                // Browsers often remap that gesture into deltaX themselves, but keeping the rule
-                // here makes native/worker hosts deterministic too.
-                if self.modifiers.shift {
-                    return if self.delta_x != 0.0 || self.delta_y != 0.0 {
-                        WheelIntent::Pan
-                    } else {
-                        WheelIntent::Ignore
-                    };
-                }
+                // Lightweight Charts does not reinterpret modifiers: browsers remain free to
+                // expose Shift+wheel as deltaX, and the two non-zero axes execute independently.
                 match (self.delta_x != 0.0, self.delta_y != 0.0) {
                     (true, true) => WheelIntent::PanAndZoom,
                     (true, false) => WheelIntent::Pan,
@@ -224,8 +216,11 @@ pub struct GestureResolver {
     state: GestureState,
     primary_id: Option<u32>,
     pinch_ids: Option<(u32, u32)>,
-    pinch_centroid: (f64, f64),
-    pinch_distance: f64,
+    pinch_start_centroid: (f64, f64),
+    pinch_start_distance: f64,
+    pinch_previous_scale: f64,
+    pinch_primary_id: Option<u32>,
+    pinch_allowed: bool,
 }
 
 impl Default for GestureResolver {
@@ -235,8 +230,11 @@ impl Default for GestureResolver {
             state: GestureState::Idle,
             primary_id: None,
             pinch_ids: None,
-            pinch_centroid: (0.0, 0.0),
-            pinch_distance: 0.0,
+            pinch_start_centroid: (0.0, 0.0),
+            pinch_start_distance: 0.0,
+            pinch_previous_scale: 1.0,
+            pinch_primary_id: None,
+            pinch_allowed: true,
         }
     }
 }
@@ -276,11 +274,23 @@ impl GestureResolver {
         let second_touch = touch_ids.next();
         let third_touch = touch_ids.next();
         if let (Some(first), Some(second), None) = (first_touch, second_touch, third_touch) {
+            let pane_owned = [first, second].into_iter().all(|id| {
+                self.find(id).is_some_and(|index| {
+                    self.pointers[index]
+                        .is_some_and(|pointer| pointer.current.target == InputTarget::Pane)
+                })
+            });
+            if !self.pinch_allowed || self.state == GestureState::Inspecting || !pane_owned {
+                self.pointers[slot_index] = None;
+                return self.update(GestureUpdateKind::Rejected, sample, sample.x, sample.y, 0.0);
+            }
             let (centroid, distance) = self.pinch_geometry(first, second).unwrap_or_default();
+            self.pinch_primary_id = self.primary_id.or(Some(first));
             self.primary_id = None;
             self.pinch_ids = Some((first, second));
-            self.pinch_centroid = centroid;
-            self.pinch_distance = distance;
+            self.pinch_start_centroid = centroid;
+            self.pinch_start_distance = distance;
+            self.pinch_previous_scale = 1.0;
             self.state = GestureState::Pinching;
             let mut update = self.update(
                 GestureUpdateKind::PinchStarted,
@@ -297,6 +307,7 @@ impl GestureResolver {
         }
         if self.active_pointer_count() == 1 {
             self.primary_id = Some(sample.id);
+            self.pinch_allowed = true;
             self.state = GestureState::PendingSinglePointer;
             return self.update(GestureUpdateKind::Pressed, sample, sample.x, sample.y, 0.0);
         }
@@ -316,27 +327,26 @@ impl GestureResolver {
             .current = sample;
 
         if let Some((first, second)) = self.pinch_ids {
-            let Some((centroid, distance)) = self.pinch_geometry(first, second) else {
+            let Some((_, distance)) = self.pinch_geometry(first, second) else {
                 return self.update(GestureUpdateKind::None, sample, previous.x, previous.y, 0.0);
             };
-            let scale_delta = if self.pinch_distance > f64::EPSILON {
-                distance / self.pinch_distance - 1.0
+            let scale = if self.pinch_start_distance > f64::EPSILON {
+                distance / self.pinch_start_distance
             } else {
-                0.0
+                1.0
             };
-            let previous_centroid = self.pinch_centroid;
-            self.pinch_centroid = centroid;
-            self.pinch_distance = distance;
+            let scale_delta = scale - self.pinch_previous_scale;
+            self.pinch_previous_scale = scale;
             self.state = GestureState::Pinching;
             let mut update = self.update(
                 GestureUpdateKind::PinchMoved,
                 sample,
-                previous_centroid.0,
-                previous_centroid.1,
+                self.pinch_start_centroid.0,
+                self.pinch_start_centroid.1,
                 scale_delta,
             );
-            update.x = centroid.0;
-            update.y = centroid.1;
+            update.x = self.pinch_start_centroid.0;
+            update.y = self.pinch_start_centroid.1;
             return update;
         }
 
@@ -356,6 +366,7 @@ impl GestureResolver {
                 InputTarget::PriceAxis | InputTarget::TimeAxis => GestureState::ScalingAxis,
                 InputTarget::Separator => GestureState::ResizingPane,
             };
+            self.pinch_allowed = false;
             return self.update(
                 GestureUpdateKind::DragStarted,
                 sample,
@@ -380,21 +391,30 @@ impl GestureResolver {
         self.pointers[index] = None;
         if self.pinch_ids.is_some() {
             self.pinch_ids = None;
+            let pinch_primary_id = self.pinch_primary_id.take();
             if let Some(remaining) = self.pointers.iter_mut().flatten().next() {
-                remaining.start = remaining.current;
                 let current = remaining.current;
-                self.primary_id = Some(current.id);
-                self.state = GestureState::Panning;
-                return self.update(
-                    GestureUpdateKind::RebasedSinglePointer,
-                    current,
-                    current.x,
-                    current.y,
-                    0.0,
-                );
+                if pinch_primary_id == Some(current.id) {
+                    self.primary_id = Some(current.id);
+                    self.state = GestureState::PendingSinglePointer;
+                    self.pinch_allowed = false;
+                    return self.update(
+                        GestureUpdateKind::RebasedSinglePointer,
+                        current,
+                        current.x,
+                        current.y,
+                        0.0,
+                    );
+                }
+                self.primary_id = None;
+                self.state = GestureState::Idle;
+                self.pinch_allowed = false;
+                return self.update(GestureUpdateKind::Released, sample, sample.x, sample.y, 0.0);
             }
         }
         self.primary_id = None;
+        self.pinch_primary_id = None;
+        self.pinch_allowed = true;
         self.state = GestureState::Idle;
         self.update(GestureUpdateKind::Released, sample, sample.x, sample.y, 0.0)
     }
@@ -407,6 +427,7 @@ impl GestureResolver {
             return GestureUpdate::default();
         }
         self.state = GestureState::Inspecting;
+        self.pinch_allowed = false;
         self.update(
             GestureUpdateKind::LongPress,
             pointer.current,
@@ -427,6 +448,8 @@ impl GestureResolver {
         self.pointers.fill(None);
         self.primary_id = None;
         self.pinch_ids = None;
+        self.pinch_primary_id = None;
+        self.pinch_allowed = true;
         self.state = GestureState::Idle;
         self.update(
             GestureUpdateKind::Cancelled,
@@ -538,16 +561,10 @@ pub const PINCH_ZOOM_INTENSITY: f64 = 5.0;
 /// coefficient, and minus is for the 'natural' scroll".
 pub const WHEEL_SCROLL_PX_PER_DELTA: f64 = -80.0;
 
-/// Nucleus wheel zoom sensitivity. A value of 1.5 makes one saturated mouse-wheel step change bar
-/// spacing by 15% instead of the 10% Lightweight Charts baseline, keeping the interaction faster
-/// without making each wheel step overly aggressive. Trackpad deltas remain proportional.
-pub const WHEEL_ZOOM_INTENSITY: f64 = 1.5;
-
-/// Convert a host-normalized wheel delta to the engine zoom increment. The input still saturates at
-/// one normalized wheel step so unusually large OS/browser deltas cannot create an unbounded jump;
-/// sensitivity is applied after that clamp and the time scale remains cursor-anchored.
+/// Convert a host-normalized wheel delta to Lightweight Charts' exact zoom increment. The input
+/// saturates at one normalized wheel step so unusually large OS/browser deltas stay bounded.
 pub fn wheel_zoom_scale(delta_y: f64) -> f64 {
-    delta_y.signum() * delta_y.abs().min(1.0) * WHEEL_ZOOM_INTENSITY
+    delta_y.signum() * delta_y.abs().min(1.0)
 }
 
 /// reference pane-widget.ts `pinchEvent`: the scale ratio delta since the previous step, times
@@ -635,8 +652,8 @@ impl ChartEngine {
         self.time_scale.zoom(x, scale);
     }
 
-    /// TradingView Ctrl+wheel focused-area zoom: keep the logical point under `x` fixed even when
-    /// normal wheel zoom is configured to keep the right-most bar pinned.
+    /// Explicit Nucleus focused-area zoom: keep the logical point under `x` fixed even when normal
+    /// wheel zoom is configured to keep the right-most bar pinned.
     pub fn time_scale_zoom_focused(&mut self, x: f64, scale: f64) {
         self.time_scale.zoom_focused(x, scale);
     }
@@ -851,8 +868,13 @@ impl ChartEngine {
     /// Resolve a pane drag to the scale owned by the series the user intended to grab.
     /// A selected series wins when it is itself under the pointer; otherwise the canonical series
     /// hit arbitration chooses the target. Empty pane space may continue dragging an explicitly
-    /// selected visible series, but never falls back to an arbitrary scale.
-    fn price_pan_target_at(&self, pane: usize, x_css: f64, y_css: f64) -> Option<PriceScaleTarget> {
+    /// selected visible series, then falls back to the pane's canonical default price scale.
+    pub fn price_pan_target_at(
+        &self,
+        pane: usize,
+        x_css: f64,
+        y_css: f64,
+    ) -> Option<PriceScaleTarget> {
         if self.pane_at_y(y_css)? != pane {
             return None;
         }
@@ -863,12 +885,15 @@ impl ChartEngine {
         let series = selected
             .filter(|id| self.hit_test_one_series(*id, x_css, y_css).is_some())
             .or_else(|| self.hit_test_series(x_css, y_css))
-            .or(selected)?;
-        let (series_pane, target) = self.series_price_scale(series)?;
-        if series_pane != pane {
-            return None;
+            .or(selected);
+        if let Some(series) = series {
+            if let Some((series_pane, target)) = self.series_price_scale(series) {
+                if series_pane == pane {
+                    return Some(target);
+                }
+            }
         }
-        Some(target)
+        Some(self.pane_default_scale_target(pane))
     }
 
     /// Resolve and begin one pane price-pan session on the intended series' already-manual scale.
@@ -995,7 +1020,7 @@ mod tests {
     }
 
     #[test]
-    fn pinch_moves_about_the_live_centroid_and_rebases_the_survivor() {
+    fn pinch_uses_the_start_centroid_and_cumulative_scale_differences() {
         let mut input = GestureResolver::default();
         assert_eq!(
             input.pointer_down(pointer(1, 100.0, 100.0)).kind,
@@ -1008,16 +1033,92 @@ mod tests {
         let moved = input.pointer_move(pointer(2, 230.0, 120.0));
         assert_eq!(moved.kind, GestureUpdateKind::PinchMoved);
         assert_eq!((moved.previous_x, moved.previous_y), (150.0, 100.0));
-        assert_eq!((moved.x, moved.y), (165.0, 110.0));
+        assert_eq!((moved.x, moved.y), (150.0, 100.0));
         assert!(moved.scale_delta > 0.0);
 
-        let rebased = input.pointer_up(pointer(2, 230.0, 120.0));
+        let first_delta = moved.scale_delta;
+        let moved_again = input.pointer_move(pointer(2, 260.0, 100.0));
+        assert_eq!(moved_again.kind, GestureUpdateKind::PinchMoved);
+        assert_eq!((moved_again.x, moved_again.y), (150.0, 100.0));
+        assert!(moved_again.scale_delta > 0.0);
+        assert!(moved_again.scale_delta < first_delta);
+
+        let rebased = input.pointer_up(pointer(2, 260.0, 100.0));
         assert_eq!(rebased.kind, GestureUpdateKind::RebasedSinglePointer);
         assert_eq!(rebased.pointer_id, 1);
         assert_eq!((rebased.x, rebased.y), (100.0, 100.0));
         let continued = input.pointer_move(pointer(1, 110.0, 100.0));
-        assert_eq!(continued.kind, GestureUpdateKind::DragMoved);
+        assert_eq!(continued.kind, GestureUpdateKind::DragStarted);
         assert_eq!((continued.previous_x, continued.previous_y), (100.0, 100.0));
+    }
+
+    #[test]
+    fn five_pixel_manhattan_threshold_opens_drag_on_the_crossing_sample() {
+        let mut input = GestureResolver::default();
+        let mut down = pointer(1, 10.0, 10.0);
+        down.device = InputDevice::Mouse;
+        assert_eq!(input.pointer_down(down).kind, GestureUpdateKind::Pressed);
+        let mut four = down;
+        four.x = 12.0;
+        four.y = 12.0;
+        assert_eq!(input.pointer_move(four).kind, GestureUpdateKind::None);
+        let mut five = four;
+        five.x = 13.0;
+        assert_eq!(
+            input.pointer_move(five).kind,
+            GestureUpdateKind::DragStarted
+        );
+        let mut six = five;
+        six.x = 14.0;
+        assert_eq!(input.pointer_move(six).kind, GestureUpdateKind::DragMoved);
+    }
+
+    #[test]
+    fn pinch_is_rejected_after_single_touch_move_or_long_press() {
+        let mut moved = GestureResolver::default();
+        moved.pointer_down(pointer(1, 0.0, 0.0));
+        moved.pointer_move(pointer(1, 5.0, 0.0));
+        assert_eq!(
+            moved.pointer_down(pointer(2, 20.0, 0.0)).kind,
+            GestureUpdateKind::Rejected
+        );
+
+        let mut inspected = GestureResolver::default();
+        inspected.pointer_down(pointer(1, 0.0, 0.0));
+        assert_eq!(inspected.long_press(1).kind, GestureUpdateKind::LongPress);
+        assert_eq!(
+            inspected.pointer_down(pointer(2, 20.0, 0.0)).kind,
+            GestureUpdateKind::Rejected
+        );
+    }
+
+    #[test]
+    fn extension_owned_touch_rejects_competing_pinch() {
+        let mut input = GestureResolver::default();
+        let mut drawing = pointer(1, 0.0, 0.0);
+        drawing.target = InputTarget::Drawing;
+        input.pointer_down(drawing);
+        assert_eq!(
+            input.pointer_down(pointer(2, 20.0, 0.0)).kind,
+            GestureUpdateKind::Rejected
+        );
+        assert_eq!(input.state(), GestureState::PendingSinglePointer);
+        assert_eq!(input.active_pointer_count(), 1);
+    }
+
+    #[test]
+    fn lifting_primary_touch_ends_pinch_without_rebasing_secondary() {
+        let mut input = GestureResolver::default();
+        input.pointer_down(pointer(1, 0.0, 0.0));
+        input.pointer_down(pointer(2, 20.0, 0.0));
+        assert_eq!(
+            input.pointer_up(pointer(1, 0.0, 0.0)).kind,
+            GestureUpdateKind::Released
+        );
+        assert_eq!(
+            input.pointer_move(pointer(2, 30.0, 0.0)).kind,
+            GestureUpdateKind::None
+        );
     }
 
     #[test]
@@ -1069,7 +1170,7 @@ mod tests {
     }
 
     #[test]
-    fn wheel_auto_matches_tradingview_axis_and_modifier_semantics() {
+    fn wheel_auto_matches_lightweight_charts_axis_and_modifier_semantics() {
         let mut sample = WheelSample {
             delta_y: -0.125,
             ..WheelSample::default()
@@ -1086,7 +1187,7 @@ mod tests {
         sample.delta_x = 0.0;
         sample.delta_y = -0.25;
         sample.modifiers.shift = true;
-        assert_eq!(sample.intent(WheelBehavior::Auto), WheelIntent::Pan);
+        assert_eq!(sample.intent(WheelBehavior::Auto), WheelIntent::Zoom);
         assert_eq!(sample.intent(WheelBehavior::Zoom), WheelIntent::Zoom);
     }
 
@@ -1279,7 +1380,10 @@ mod tests {
             })
             .find(|(x, y)| chart.hit_test_series(*x, *y).is_none())
             .expect("pane has empty space");
-        assert_eq!(chart.price_pan_target_at(0, empty.0, empty.1), None);
+        assert_eq!(
+            chart.price_pan_target_at(0, empty.0, empty.1),
+            Some(PriceScaleTarget::Right)
+        );
 
         chart.set_selected_series(Some(comparison_series));
         assert_eq!(
@@ -1373,7 +1477,10 @@ mod tests {
         assert!(chart.remove_series(twin));
         chart.price_axis_scroll_to(0, twin_scale, y + 20.0);
         chart.price_axis_end_scroll(0, twin_scale);
-        assert_eq!(chart.price_pan_target_at(0, x, y), None);
+        assert_eq!(
+            chart.price_pan_target_at(0, x, y),
+            Some(PriceScaleTarget::Right)
+        );
     }
 
     #[test]
@@ -1438,12 +1545,14 @@ mod tests {
             Some(PriceScaleTarget::Right)
         );
 
-        // Any price-axis reset restores the complete comparison group.
-        chart.reset_price_scales();
+        // Axis reset is local to the exact strip under the pointer.
+        chart.set_price_scale_auto_scale_for(0, PriceScaleTarget::Right, false);
+        chart.set_price_scale_auto_scale_for(0, comparison, false);
+        chart.reset_price_scale(0, comparison);
         assert_eq!(chart.price_scale_auto_scale_for(0, comparison), Some(true));
         assert_eq!(
             chart.price_scale_auto_scale_for(0, PriceScaleTarget::Right),
-            Some(true)
+            Some(false)
         );
         chart.set_price_scale_visible_range_for(0, PriceScaleTarget::Right, 5.0, 25.0);
         chart.set_price_scale_visible_range_for(0, comparison, 990.0, 1_040.0);
@@ -1479,13 +1588,12 @@ mod tests {
     }
 
     #[test]
-    fn wheel_zoom_is_high_sensitivity_while_pinch_and_scroll_keep_their_reference_coefficients() {
-        assert_eq!(wheel_zoom_scale(0.42), 0.63);
-        assert_eq!(wheel_zoom_scale(-3.7), -1.5);
+    fn wheel_pinch_and_scroll_use_reference_coefficients() {
+        assert_eq!(wheel_zoom_scale(0.42), 0.42);
+        assert_eq!(wheel_zoom_scale(-3.7), -1.0);
         assert_eq!(wheel_zoom_scale(0.0), 0.0);
         assert_eq!(pinch_zoom_scale(0.1), 0.5);
         assert_eq!(WHEEL_SCROLL_PX_PER_DELTA, -80.0);
-        assert_eq!(WHEEL_ZOOM_INTENSITY, 1.5);
         assert_eq!(PINCH_ZOOM_INTENSITY, 5.0);
     }
 

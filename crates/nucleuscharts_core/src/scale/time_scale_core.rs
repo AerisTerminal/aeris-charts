@@ -47,11 +47,9 @@ impl Default for TimeScaleOptions {
             fix_left_edge: false,
             fix_right_edge: false,
             lock_visible_time_range_on_resize: false,
-            // TradingView's full chart keeps the right-most bar pinned during ordinary wheel zoom
-            // by default. Lightweight Charts exposes the same switch but defaults it to false.
-            // Nucleus follows the full-chart interaction default while preserving the explicit
-            // option for cursor-anchored zoom.
-            right_bar_stays_on_scroll: true,
+            // Lightweight Charts' default: ordinary wheel zoom keeps the logical point under the
+            // cursor fixed. Hosts may explicitly enable right-edge pinning through the option.
+            right_bar_stays_on_scroll: false,
             // reference defaults (time-scale-options-defaults.ts:17-18).
             shift_visible_range_on_new_bar: true,
             allow_shift_visible_range_on_whitespace_replacement: false,
@@ -584,8 +582,8 @@ impl TimeScaleCore {
         self.zoom_impl(zoom_point, scale, !self.options.right_bar_stays_on_scroll);
     }
 
-    /// Focused-area zoom always keeps the logical point under `zoom_point` fixed. TradingView uses
-    /// this interaction for Ctrl+wheel even when its normal wheel zoom keeps the right bar pinned.
+    /// Nucleus explicit-mode focused-area zoom always keeps the logical point under `zoom_point`
+    /// fixed.
     pub fn zoom_focused(&mut self, zoom_point: Coordinate, scale: f64) {
         self.zoom_impl(zoom_point, scale, true);
     }
@@ -828,8 +826,9 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_zoom_keeps_right_offset_with_tradingview_default() {
+    fn ordinary_zoom_keeps_right_offset_with_explicit_right_pin() {
         let mut s = scale(400.0, 6.0, 7.0, 500, 300);
+        s.set_right_bar_stays_on_scroll(true);
         let cursor = 250.0;
         let before_index = s.coordinate_to_float_index(cursor);
         let before_offset = s.right_offset();
@@ -840,9 +839,9 @@ mod tests {
     }
 
     #[test]
-    fn cursor_anchored_zoom_remains_available_when_right_bar_pin_is_disabled() {
+    fn ordinary_zoom_is_cursor_anchored_by_default() {
         let mut s = scale(400.0, 6.0, 0.0, 500, 300);
-        s.set_right_bar_stays_on_scroll(false);
+        assert!(!s.options().right_bar_stays_on_scroll);
         let cursor = 250.0;
         let before = s.coordinate_to_float_index(cursor);
         s.zoom(cursor, 1.0); // zoom in 10%

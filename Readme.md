@@ -88,10 +88,13 @@ queries, focus geometry, drawing edits, and rendering primitives use the shared 
 market updates are silent unless `announce_data_updates` is enabled. Every returned feature handle
 with `detach()` releases its engine and host state.
 
-Browser input uses Pointer Events for mouse, touch, and pen. The engine owns the bounded gesture
-state, live-centroid pinch behavior, cancellation, and device-aware hit tolerances. Wheel policy is
-configurable with `wheel_behavior: "auto" | "pan" | "zoom"`; matching Lightweight Charts, auto
-zooms from vertical deltas and pans from horizontal deltas without requiring a modifier key.
+Browser input uses Pointer Events for mouse and pen, plus cancellable Touch Events for dynamic
+page-scroll arbitration. The engine owns the bounded gesture state, 5 px drag threshold,
+fixed-start-centroid cumulative pinch behavior, primary-touch continuation, cancellation, and
+device-aware hit tolerances. Wheel policy is configurable with
+`wheel_behavior: "auto" | "pan" | "zoom"`; matching Lightweight Charts 5.2.1, auto zooms time from
+vertical deltas and pans time from horizontal deltas independently on the pane or either axis, with
+no Ctrl/Shift special case. The explicit `pan` and `zoom` values retain Nucleus extension routing.
 
 ## Trading and order management
 

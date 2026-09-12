@@ -2,9 +2,10 @@
  * Pointer/wheel/keyboard gesture recognizer wired onto the axis/input overlay canvas.
  *
  * Browser events are normalized here, while pointer membership, gesture transitions, pinch
- * centroid/distance, and rebasing live in `nucleuscharts_engine::interaction` through the WASM
+ * centroid/distance, and primary-touch continuation live in `nucleuscharts_engine::interaction` through the WASM
  * input methods. Scale, drawing, trading, kinetic, and animation math remains engine-owned.
- * - touch: Pointer Events + pointer capture, long-press inspection, centroid pan/zoom pinch,
+ * - touch: cancellable Touch Events, long-press inspection, fixed-centroid zoom-only pinch,
+ * - mouse/pen: Pointer Events + pointer capture,
  * - keyboard: arrows pan, +/- zoom, Home fit-content, Escape clear crosshair.
  * All behavior is gated by the resolved gesture config (`chart.gesture_config()`).
  */
@@ -17,6 +18,7 @@ const LONGPRESS_MS = 240; // touch hold before entering crosshair tracking (refe
 const TRADING_TOOLTIP_MS = 450; // hover dwell before a trading control reveals its action tooltip
 const TAP_RESET_MS = 500; // window for a second tap to count as a double-tap (reference Delay.ResetClick)
 const DBL_TAP_MANHATTAN = 30; // max distance between the taps of a double-tap (reference DoubleTapManhattanDistance)
+const DBL_CLICK_MANHATTAN = 5; // max distance between mouse clicks (reference CancelClickManhattanDistance)
 const INPUT_UPDATE_LEN = 12;
 
 const enum InputDeviceCode { Mouse = 0, Touch = 1, Pen = 2 }
@@ -90,7 +92,13 @@ export function install_gestures(chart: chart_impl): () => void {
   let tap_count = 0;
   let tap_timer: ReturnType<typeof setTimeout> | null = null;
   let tap_position = { x: 0, y: 0 }; // client coords of the first tap
+  let mouse_click_timer: ReturnType<typeof setTimeout> | null = null;
+  let mouse_click_position = { x: 0, y: 0 };
   let suppress_compatibility_click = false;
+
+  // Touch Events can arbitrate chart manipulation against native page scrolling at runtime.
+  let touch_direction: "pending" | "chart" | "page" = "pending";
+  let touch_origin = { x: 0, y: 0 };
 
   // Crosshair tracking mode (reference _startTrackPoint !== null).
   let touch_tracking = false;
@@ -98,9 +106,6 @@ export function install_gestures(chart: chart_impl): () => void {
   let init_crosshair: { x: number; y: number } | null = null;
   let exit_tracking_on_next_try = false; // reference _exitTrackingModeOnNextTry
   let last_crosshair: { x: number; y: number } | null = null;
-
-  // Pinch geometry is engine-owned; these fields only track the host scroll/price sessions.
-  let pinch_active = false;
 
   let kinetic_raf: number | null = null; // RAF id while the engine's coast is being driven
 
@@ -159,9 +164,9 @@ export function install_gestures(chart: chart_impl): () => void {
     return read_input_update();
   };
   const set_touch_action = () => {
-    const cfg = chart.gesture_config();
-    overlay.style.touchAction = cfg.pan_vert_touch ? "none"
-      : cfg.pan_horz_touch || cfg.pinch_zoom ? "pan-y" : "auto";
+    // Static `touch-action` cannot express the reference's direction-dependent arbitration.
+    // Cancellable Touch Events below decide after the 5 px slop instead.
+    overlay.style.touchAction = "auto";
   };
 
   const separator_at = (y: number, touch = false): number => {
@@ -257,6 +262,16 @@ export function install_gestures(chart: chart_impl): () => void {
     }
     tap_count = 0;
   };
+  const reset_mouse_click = () => {
+    if (mouse_click_timer !== null) {
+      clearTimeout(mouse_click_timer);
+      mouse_click_timer = null;
+    }
+  };
+  const arm_mouse_click = (e: MouseEvent) => {
+    mouse_click_position = { x: e.clientX, y: e.clientY };
+    mouse_click_timer = setTimeout(reset_mouse_click, TAP_RESET_MS);
+  };
 
   const stop_kinetic = () => {
     wasm.kinetic_stop();
@@ -297,12 +312,21 @@ export function install_gestures(chart: chart_impl): () => void {
     const enabled = kind === "touch" ? cfg.kinetic_touch : cfg.kinetic_mouse;
     wasm.kinetic_begin_sampling(enabled, wasm.scroll_position(), performance.now());
   };
-  /** Resolve and arm the exact already-manual scale owned by the selected/hit series. */
-  const arm_price_pan = (pane: number, start_x: number, start_y: number) => {
+  /** Resolve the exact scale owned by the selected/hit series without opening a drag snapshot. */
+  const resolve_price_pan = (pane: number, x: number, y: number) => {
     disarm_price_pan();
-    const target = wasm.begin_price_pan_at(pane, start_x, start_y) ?? null;
+    const target = wasm.price_pan_target_at(pane, x, y) ?? null;
     if (target === null) return;
     price_pan = { pane, target };
+  };
+  /** Open the already-resolved price scale at the resolver's threshold-crossing sample. */
+  const start_price_pan = (y: number) => {
+    if (price_pan === null) return;
+    if (wasm.price_scale_auto_scale(price_pan.pane, price_pan.target) !== false) {
+      price_pan = null;
+      return;
+    }
+    wasm.price_axis_start_scroll(price_pan.pane, price_pan.target, y);
   };
   /** Close the engine's price-pan session (a no-op arm leaves nothing to close). */
   const disarm_price_pan = () => {
@@ -312,7 +336,10 @@ export function install_gestures(chart: chart_impl): () => void {
   };
   /** End a pan drag: coast when the flick qualifies, otherwise just close the session. */
   const end_drag = (kind: "mouse" | "touch") => {
-    if (!dragging) return;
+    if (!dragging) {
+      disarm_price_pan();
+      return;
+    }
     dragging = false;
     touch_scrolling = false;
     trading_press = false;
@@ -446,32 +473,30 @@ export function install_gestures(chart: chart_impl): () => void {
       e.shiftKey,
     );
     const pan_delta = cfg.wheel_behavior === "auto"
-      ? (e.shiftKey ? (delta_x !== 0 ? delta_x : -delta_y) : delta_x)
+      ? delta_x
       : Math.abs(delta_x) >= Math.abs(delta_y) ? delta_x : -delta_y;
     const do_zoom = (intent & 2) !== 0 && delta_y !== 0 && cfg.wheel_zoom;
     const do_scroll = (intent & 1) !== 0 && pan_delta !== 0 && cfg.wheel_scroll;
     if (!do_zoom && !do_scroll) return; // let the page scroll
     if (e.cancelable) e.preventDefault();
     if (do_zoom) {
-      const pane_left = wasm.pane_left();
-      const x = e.offsetX;
-      const pane = wasm.pane_index_at_y(e.offsetY);
-      const target = wasm.price_axis_target_at(pane, x - pane_left) ?? null;
-      if (target !== null) {
-        // TradingView-style price-axis wheel zoom (the reference has no price wheel; the time
-        // axis wheel is `_onMousewheel` → `zoomTime`): anchored at the cursor's price.
+      const point = local_xy(e);
+      const pane = wasm.pane_index_at_y(point.y);
+      const target = wasm.price_axis_target_at(pane, point.x) ?? null;
+      const zoom = wasm.wheel_zoom_scale(delta_y);
+      if (cfg.wheel_behavior === "zoom" && target !== null) {
+        // Explicit Nucleus `zoom` mode retains price-axis wheel zoom as an extension.
         wasm.price_axis_wheel_zoom(
           pane,
           target,
-          e.offsetY,
-          wasm.wheel_zoom_scale(delta_y),
+          point.y,
+          zoom,
         );
       } else {
-        const zoom = wasm.wheel_zoom_scale(delta_y);
-        // TradingView's normal wheel zoom follows the time-scale right-bar pin policy. Ctrl+wheel
-        // is its documented focused-area gesture and always keeps the bar under the pointer fixed.
-        if (e.ctrlKey) wasm.zoom_focused(x - pane_left, zoom);
-        else wasm.zoom(x - pane_left, zoom);
+        // Auto mode is the Lightweight Charts chart-level handler: every surface zooms time,
+        // modifiers are ignored, and the engine clamps the pane-relative anchor into the plot.
+        if (cfg.wheel_behavior === "zoom" && e.ctrlKey) wasm.zoom_focused(point.x, zoom);
+        else wasm.zoom(point.x, zoom);
       }
     }
     if (do_scroll) {
@@ -489,7 +514,7 @@ export function install_gestures(chart: chart_impl): () => void {
   // ---------------------------------------------------------------------------------------------
 
   const on_down = (e: PointerEvent) => {
-    if (e.pointerType === "touch") return on_touch_pointer_down(e);
+    if (e.pointerType === "touch") return;
     if (e.button !== 0) return; // primary button only (reference _mouseDownHandler)
     // Any mouse activity cancels touch tracking mode (reference `_onMouseEvent`).
     touch_tracking = false;
@@ -564,10 +589,10 @@ export function install_gestures(chart: chart_impl): () => void {
     // A Delta Tooltip gets first refusal on the pane gesture. Brushable Area intentionally uses
     // that capture so primary dragging compares instead of starting a competing canvas pan.
     delta_tooltip_dragging = chart.native_delta_tooltip_mouse_down(p.x, e.shiftKey);
-    // pane press: pan (time + price in one drag, like reference).
     if (!delta_tooltip_dragging && chart.gesture_config().pan) {
-      begin_scroll(p.x, "mouse");
-      arm_price_pan(pane_of(p.y), p.x, p.y);
+      // Resolve the directly hit/selected scale at press time while the pointer is still on its
+      // geometry. This snapshots only; no scale mutates before the resolver opens the drag.
+      resolve_price_pan(pane_of(p.y), p.x, p.y);
     }
     pointer_targets.set(e.pointerId, InputTargetCode.Pane);
     feed_pointer("down", e, InputTargetCode.Pane);
@@ -577,7 +602,7 @@ export function install_gestures(chart: chart_impl): () => void {
   };
 
   const on_move = (e: PointerEvent) => {
-    if (e.pointerType === "touch") return on_touch_pointer_move(e);
+    if (e.pointerType === "touch") return;
     // Any mouse activity cancels touch tracking mode (reference `_onMouseEvent`).
     touch_tracking = false;
     track_point = null;
@@ -585,18 +610,30 @@ export function install_gestures(chart: chart_impl): () => void {
     // hover (buttons === 0) or a left-drag (bit 0 set) passes.
     if (e.buttons !== 0 && (e.buttons & 1) === 0) return;
     const p = local_xy(e);
-    feed_pointer("move", e);
+    const update = feed_pointer("move", e);
     chart.native_delta_tooltip_mouse_move(p.x);
     apply_crosshair_magnet(e);
 
-    // active axis drag-to-scale
+    if (pointers.has(e.pointerId)) pointers.set(e.pointerId, p);
+    if (pointers.size > 0 && press_start !== null && !moved) {
+      // reference CancelClickManhattanDistance = 5 (Manhattan).
+      moved = Math.abs(p.x - press_start.x) + Math.abs(p.y - press_start.y) >= SLOP_MANHATTAN;
+      if (moved) reset_mouse_click();
+    }
+
+    // Axis and separator sessions may snapshot on press, but cannot mutate until the resolver
+    // reaches the shared 5 px threshold. The crossing sample applies their upstream formula.
     if (axis_drag !== null) {
-      apply_axis_drag(p);
+      if (update.kind === GestureUpdateCode.DragStarted || update.kind === GestureUpdateCode.DragMoved) {
+        apply_axis_drag(p);
+      }
       chart.repaint();
       return;
     }
     if (sep_drag !== null) {
-      apply_sep_drag(p);
+      if (update.kind === GestureUpdateCode.DragStarted || update.kind === GestureUpdateCode.DragMoved) {
+        apply_sep_drag(p);
+      }
       // The separator is chrome (reference pane-separator.ts): the crosshair hides during the
       // resize drag instead of freezing mid-pane at the grab point.
       if (last_crosshair !== null) {
@@ -616,12 +653,6 @@ export function install_gestures(chart: chart_impl): () => void {
       set_sep_hover(chart.gesture_config().panes_resize ? separator_at(p.y) : -1);
     }
 
-    if (pointers.has(e.pointerId)) pointers.set(e.pointerId, p);
-    if (pointers.size > 0 && press_start !== null && !moved) {
-      // reference CancelClickManhattanDistance = 5 (Manhattan).
-      moved = Math.abs(p.x - press_start.x) + Math.abs(p.y - press_start.y) >= SLOP_MANHATTAN;
-    }
-
     if (trading_dragging) {
       chart.trading_drag_to(p.y);
     } else if (chart.creation_armed()) {
@@ -639,7 +670,14 @@ export function install_gestures(chart: chart_impl): () => void {
       // magnet (snap anchors to the nearest rendered bar price), Shift = straighten
       // (0°/45°/90° anchor constraint, dominant-axis body move). Ctrl never straightens.
       wasm.drawing_drag_to(p.x, p.y, e.ctrlKey || e.metaKey, e.shiftKey);
-    } else if (dragging) {
+    } else if (delta_tooltip_dragging) {
+      // The native comparison interaction explicitly owns this pane drag.
+    } else if (update.kind === GestureUpdateCode.DragStarted && chart.gesture_config().pan) {
+      // Pane panning opens on the threshold sample; like Lightweight Charts, movement begins on
+      // the following sample. Kinetic sampling starts only after this transition.
+      begin_scroll(p.x, "mouse");
+      start_price_pan(p.y);
+    } else if (update.kind === GestureUpdateCode.DragMoved && dragging) {
       wasm.scroll_move(p.x);
       wasm.kinetic_add_sample(wasm.scroll_position(), performance.now());
       apply_price_pan(p.y);
@@ -666,9 +704,10 @@ export function install_gestures(chart: chart_impl): () => void {
         separator_at(p.y) >= 0 && chart.gesture_config().panes_resize
           ? "row-resize"
           : price_axis_target_at(p) !== null
-            ? "ns-resize"
+            ? (chart.gesture_config().axis_scale_price &&
+                wasm.price_axis_scalable(pane_of(p.y), price_axis_target_at(p)!) ? "ns-resize" : "default")
             : is_time_axis(p)
-              ? "ew-resize"
+              ? (chart.gesture_config().axis_scale_time ? "ew-resize" : "default")
               : "crosshair";
       // A primitive's cursor overrides the region cursor while its hit holds — but only over
       // the pane (the hover state is not refreshed over the axis strips). A series hit shows
@@ -684,7 +723,7 @@ export function install_gestures(chart: chart_impl): () => void {
   };
 
   const end_pointer = (e: PointerEvent) => {
-    if (e.pointerType === "touch") return on_touch_pointer_up(e);
+    if (e.pointerType === "touch") return;
     if (e.button !== 0) return; // primary button only (reference _mouseUpHandler)
     // Any mouse activity cancels touch tracking mode (reference `_onMouseEvent`).
     touch_tracking = false;
@@ -735,7 +774,7 @@ export function install_gestures(chart: chart_impl): () => void {
   };
 
   const on_cancel = (e: PointerEvent) => {
-    if (e.pointerType === "touch") return on_touch_pointer_cancel(e);
+    if (e.pointerType === "touch") return;
     cancel_active_input();
   };
 
@@ -755,45 +794,38 @@ export function install_gestures(chart: chart_impl): () => void {
   };
 
   const run_dblclick = (x: number, y: number) => {
-    if (chart.creation_finish()) {
-      chart.repaint();
-      return;
-    }
-    chart.emit_dbl_click(x, y);
     const cfg = chart.gesture_config();
-    const rect = overlay.getBoundingClientRect();
-    if (y > rect.height - wasm.time_scale_height()) {
+    const region = region_of({ x, y });
+    if (region === "time_axis") {
       // reference time-axis-widget mouseDoubleClickEvent (handleScale.axisDoubleClickReset.time).
       if (cfg.axis_dblclick_reset_time) {
         wasm.reset_time_scale();
         chart.repaint();
       }
-    } else {
+      return;
+    }
+    if (region === "price_axis") {
       // reference price-axis-widget mouseDoubleClickEvent (handleScale.axisDoubleClickReset.price).
       const target = price_axis_target_at({ x, y });
       if (cfg.axis_dblclick_reset_price && target !== null) {
-        wasm.reset_price_scales();
+        wasm.reset_price_scale(pane_of(y), target);
         chart.repaint();
       }
-    }
-  };
-
-  const on_dblclick = (e: MouseEvent) => {
-    if (moved) return;
-    if (suppress_compatibility_click) return;
-    const p = local_xy(e);
-    run_dblclick(p.x, p.y);
-  };
-
-  const on_click = (e: MouseEvent) => {
-    const pressed_alert = alert_press;
-    alert_press = false;
-    if (moved) return;
-    if (suppress_compatibility_click) {
-      suppress_compatibility_click = false;
       return;
     }
-    const p = local_xy(e);
+    if (region === "separator") return;
+    if (chart.creation_finish()) {
+      chart.repaint();
+      return;
+    }
+    chart.emit_dbl_click(x, y);
+  };
+
+  const run_single_click = (e: MouseEvent, p: { x: number; y: number }) => {
+    const pressed_alert = alert_press;
+    alert_press = false;
+    // Axis widgets own their clicks and never emit pane click callbacks.
+    if (region_of(p) !== "pane") return;
     // A placement that committed on pointer-down swallows its trailing compatibility click.
     if (creation_press_committed) {
       creation_press_committed = false;
@@ -819,6 +851,53 @@ export function install_gestures(chart: chart_impl): () => void {
     chart.emit_click(p.x, p.y);
   };
 
+  const on_click = (e: MouseEvent) => {
+    if (moved) return;
+    if (suppress_compatibility_click) {
+      suppress_compatibility_click = false;
+      return;
+    }
+    const p = local_xy(e);
+    // A newly armed Nucleus drawing tool explicitly owns its first placement click. It cannot be
+    // paired with a click from the interaction that armed or preceded the tool.
+    if (chart.creation_armed() && !chart.creation_sequence_active()) {
+      reset_mouse_click();
+      run_single_click(e, p);
+      if (chart.creation_sequence_active()) arm_mouse_click(e);
+      return;
+    }
+    if (mouse_click_timer === null) {
+      arm_mouse_click(e);
+      // Lightweight Charts emits the first single click immediately.
+      run_single_click(e, p);
+      return;
+    }
+
+    const distance = Math.abs(e.clientX - mouse_click_position.x)
+      + Math.abs(e.clientY - mouse_click_position.y);
+    reset_mouse_click();
+    // A qualifying second click emits only double-click. Variable drawing sequences still need
+    // the second terminal anchor before the shared finish action. An already-hit Nucleus drawing
+    // may consume the click internally (for example, opening its text editor), but pane click
+    // subscribers still receive only the first single click.
+    if (distance < DBL_CLICK_MANHATTAN) {
+      if (chart.creation_sequence_active()) {
+        chart.creation_click(p.x, p.y, e.ctrlKey || e.metaKey, e.shiftKey);
+      } else if (region_of(p) === "pane") {
+        chart.activate_drawing_double_click(p.x, p.y);
+      }
+      run_dblclick(p.x, p.y);
+      return;
+    }
+    // A click outside the double-click radius starts a fresh recognition window and is still
+    // emitted immediately. This is essential for rapid multi-anchor drawing placement and is
+    // the reference handler's ordinary-click path, not a cancelled second click.
+    const was_creation = chart.creation_armed();
+    arm_mouse_click(e);
+    run_single_click(e, p);
+    if (was_creation && !chart.creation_armed()) reset_mouse_click();
+  };
+
   const on_contextmenu = (e: MouseEvent) => {
     const p = local_xy(e);
     if (chart.emit_chart_context(p.x, p.y)) e.preventDefault();
@@ -832,7 +911,7 @@ export function install_gestures(chart: chart_impl): () => void {
   const is_chrome = (window as unknown as { chrome?: unknown }).chrome !== undefined;
 
   // ---------------------------------------------------------------------------------------------
-  // Touch / pen direct manipulation (Pointer Events; gesture transitions live in Rust)
+  // Touch direct manipulation (Touch Events normalized into the shared Rust resolver)
   // ---------------------------------------------------------------------------------------------
 
   const finish_scroll_without_coast = () => {
@@ -851,7 +930,6 @@ export function install_gestures(chart: chart_impl): () => void {
     finish_scroll_without_coast();
     end_axis_drag();
     sep_drag = null;
-    pinch_active = false;
     if (chart.creation_capture_active()) chart.cancel_active_drawing_creation();
     if (trading_dragging) {
       trading_dragging = false;
@@ -913,11 +991,6 @@ export function install_gestures(chart: chart_impl): () => void {
       end_axis_drag();
       sep_drag = null;
       if (update.kind === GestureUpdateCode.PinchStarted) {
-        pinch_active = true;
-        dragging = true;
-        touch_scrolling = true;
-        wasm.scroll_start(update.x);
-        arm_price_pan(pane_of(update.y), update.x, update.y);
         if (e.cancelable && update.prevent_default) e.preventDefault();
       }
       return;
@@ -966,6 +1039,10 @@ export function install_gestures(chart: chart_impl): () => void {
       cancel_active_input();
       return;
     }
+    if (target === InputTargetCode.Pane) {
+      const cfg = chart.gesture_config();
+      if (cfg.pan_horz_touch || cfg.pan_vert_touch) resolve_price_pan(pane_of(p.y), p.x, p.y);
+    }
 
     clear_longpress();
     if (target === InputTargetCode.Pane) {
@@ -1005,16 +1082,9 @@ export function install_gestures(chart: chart_impl): () => void {
     const update = feed_pointer("move", e);
     if (update.kind === GestureUpdateCode.PinchMoved) {
       if (e.cancelable && update.prevent_default) e.preventDefault();
-      if (!pinch_active) {
-        pinch_active = true;
-        dragging = true;
-        touch_scrolling = true;
-        wasm.scroll_start(update.previous_x);
-        arm_price_pan(pane_of(update.previous_y), update.previous_x, update.previous_y);
-      }
-      wasm.scroll_move(update.x);
-      apply_price_pan(update.y);
       if (chart.gesture_config().pinch_zoom && update.scale_delta !== 0) {
+        // The resolver reports the fixed starting centroid and cumulative-scale difference.
+        // Centroid drift never pans either scale.
         wasm.zoom(update.x, wasm.pinch_zoom_scale(update.scale_delta));
       }
       chart.repaint();
@@ -1046,14 +1116,15 @@ export function install_gestures(chart: chart_impl): () => void {
     } else if (sep_drag !== null) {
       apply_sep_drag(p);
     } else if (touch_region === "pane") {
-      if (!touch_scrolling) {
+      if (update.kind === GestureUpdateCode.DragStarted && !touch_scrolling) {
         touch_scrolling = true;
-        begin_scroll(update.previous_x, "touch");
-        arm_price_pan(pane_of(update.previous_y), update.previous_x, update.previous_y);
+        begin_scroll(p.x, "touch");
+        start_price_pan(p.y);
+      } else if (update.kind === GestureUpdateCode.DragMoved && touch_scrolling) {
+        wasm.scroll_move(p.x);
+        wasm.kinetic_add_sample(wasm.scroll_position(), performance.now());
+        apply_price_pan(p.y);
       }
-      wasm.scroll_move(p.x);
-      wasm.kinetic_add_sample(wasm.scroll_position(), performance.now());
-      apply_price_pan(p.y);
     }
     chart.repaint();
   };
@@ -1068,20 +1139,15 @@ export function install_gestures(chart: chart_impl): () => void {
 
     if (update.kind === GestureUpdateCode.RebasedSinglePointer) {
       finish_scroll_without_coast();
-      pinch_active = false;
       active_touch_id = update.pointer_id;
       pointer_targets.set(update.pointer_id, InputTargetCode.Pane);
-      dragging = true;
-      touch_scrolling = true;
       touch_moved = true;
-      wasm.scroll_start(update.x);
-      arm_price_pan(pane_of(update.y), update.x, update.y);
+      resolve_price_pan(pane_of(update.y), update.x, update.y);
       suppress_compatibility_click = true;
       chart.repaint();
       return;
     }
 
-    pinch_active = false;
     if (pointers.size === 0) chart.set_interacting(false);
     if (chart.creation_capture_active()) {
       chart.creation_pointer_up(p.x, p.y, false, false);
@@ -1144,6 +1210,87 @@ export function install_gestures(chart: chart_impl): () => void {
     if (e.pointerType !== "touch") return;
     suppress_compatibility_click = true;
     cancel_active_input();
+  };
+
+  /** Adapt one browser Touch to the normalized pointer-shaped sample consumed by the shared path. */
+  const touch_as_pointer = (event: TouchEvent, touch: Touch): PointerEvent => ({
+    pointerId: touch.identifier,
+    pointerType: "touch",
+    clientX: touch.clientX,
+    clientY: touch.clientY,
+    timeStamp: event.timeStamp,
+    pressure: touch.force,
+    tiltX: 0,
+    tiltY: 0,
+    button: 0,
+    buttons: event.type === "touchend" || event.type === "touchcancel" ? 0 : 1,
+    shiftKey: event.shiftKey,
+    ctrlKey: event.ctrlKey,
+    altKey: event.altKey,
+    metaKey: event.metaKey,
+    cancelable: event.cancelable,
+    preventDefault: () => event.preventDefault(),
+  } as unknown as PointerEvent);
+
+  const on_touch_start = (event: TouchEvent) => {
+    if (event.touches.length === 1) {
+      const primary = event.touches[0]!;
+      touch_origin = { x: primary.clientX, y: primary.clientY };
+      touch_direction = "pending";
+    } else {
+      touch_direction = "chart";
+    }
+    for (const touch of Array.from(event.changedTouches)) {
+      on_touch_pointer_down(touch_as_pointer(event, touch));
+    }
+    if (event.touches.length > 1 && event.cancelable) event.preventDefault();
+  };
+
+  const on_touch_move = (event: TouchEvent) => {
+    if (event.touches.length > 1) {
+      touch_direction = "chart";
+    } else if (touch_direction === "pending" && event.touches.length === 1) {
+      const primary = event.touches[0]!;
+      const x_offset = Math.abs(primary.clientX - touch_origin.x);
+      const y_offset = Math.abs(primary.clientY - touch_origin.y);
+      if (x_offset + y_offset < SLOP_MANHATTAN) return;
+      const target = pointer_targets.get(primary.identifier) ?? InputTargetCode.Pane;
+      if (target !== InputTargetCode.Pane) {
+        touch_direction = "chart";
+      } else {
+        // Lightweight Charts gives vertical movement priority by halving horizontal distance.
+        const vertical = y_offset >= x_offset * 0.5;
+        const cfg = chart.gesture_config();
+        touch_direction = (vertical ? cfg.pan_vert_touch : cfg.pan_horz_touch) ? "chart" : "page";
+      }
+    }
+    if (touch_direction !== "chart") return;
+    if (event.cancelable) event.preventDefault();
+    for (const touch of Array.from(event.changedTouches)) {
+      on_touch_pointer_move(touch_as_pointer(event, touch));
+    }
+  };
+
+  const on_touch_end = (event: TouchEvent) => {
+    if (touch_direction === "page") {
+      if (event.touches.length === 0) {
+        cancel_active_input();
+        touch_direction = "pending";
+      }
+      return;
+    }
+    if (event.cancelable) event.preventDefault();
+    for (const touch of Array.from(event.changedTouches)) {
+      on_touch_pointer_up(touch_as_pointer(event, touch));
+    }
+    if (event.touches.length === 0) touch_direction = "pending";
+  };
+
+  const on_touch_cancel = (event: TouchEvent) => {
+    const touch = event.changedTouches[0];
+    if (touch !== undefined) on_touch_pointer_cancel(touch_as_pointer(event, touch));
+    else cancel_active_input();
+    touch_direction = "pending";
   };
 
   // ---------------------------------------------------------------------------------------------
@@ -1296,8 +1443,11 @@ export function install_gestures(chart: chart_impl): () => void {
   overlay.addEventListener("pointercancel", on_cancel);
   overlay.addEventListener("lostpointercapture", on_lost_pointer_capture);
   overlay.addEventListener("pointerleave", on_leave);
-  overlay.addEventListener("dblclick", on_dblclick);
   overlay.addEventListener("click", on_click);
+  overlay.addEventListener("touchstart", on_touch_start, { passive: false });
+  overlay.addEventListener("touchmove", on_touch_move, { passive: false });
+  overlay.addEventListener("touchend", on_touch_end, { passive: false });
+  overlay.addEventListener("touchcancel", on_touch_cancel, { passive: false });
   overlay.addEventListener("contextmenu", on_contextmenu);
   overlay.addEventListener("keydown", on_keydown);
   if (is_chrome) {
@@ -1317,6 +1467,7 @@ export function install_gestures(chart: chart_impl): () => void {
     clear_longpress();
     clear_tooltip_dwell();
     reset_tap();
+    reset_mouse_click();
     overlay.removeEventListener("wheel", on_wheel);
     overlay.removeEventListener("pointerdown", on_down);
     overlay.removeEventListener("pointermove", on_move);
@@ -1324,8 +1475,11 @@ export function install_gestures(chart: chart_impl): () => void {
     overlay.removeEventListener("pointercancel", on_cancel);
     overlay.removeEventListener("lostpointercapture", on_lost_pointer_capture);
     overlay.removeEventListener("pointerleave", on_leave);
-    overlay.removeEventListener("dblclick", on_dblclick);
     overlay.removeEventListener("click", on_click);
+    overlay.removeEventListener("touchstart", on_touch_start);
+    overlay.removeEventListener("touchmove", on_touch_move);
+    overlay.removeEventListener("touchend", on_touch_end);
+    overlay.removeEventListener("touchcancel", on_touch_cancel);
     overlay.removeEventListener("contextmenu", on_contextmenu);
     overlay.removeEventListener("keydown", on_keydown);
     overlay.removeEventListener("mousedown", on_mousedown);

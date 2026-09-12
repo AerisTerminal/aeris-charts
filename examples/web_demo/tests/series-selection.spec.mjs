@@ -180,6 +180,7 @@ test("selected anchor identities survive real wheel zoom, pan, and resize while 
   await page.mouse.move(spot.x, spot.y);
   await page.mouse.down();
   await page.mouse.move(spot.x - 120, spot.y);
+  await page.mouse.move(spot.x - 121, spot.y);
   await page.mouse.up();
   await next_frame(page);
   const panned = await selection_state(page);
