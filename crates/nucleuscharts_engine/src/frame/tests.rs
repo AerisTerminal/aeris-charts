@@ -1452,7 +1452,7 @@ fn do_not_snap_to_hidden_series_indices_moves_to_a_visible_bar() {
 fn two_identical_line_series() -> ChartEngine {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     chart.series[0].kind = SeriesKind::Line;
-    let times = [1.0, 2.0, 3.0, 4.0, 5.0];
+    let times = [0.0, 60.0, 120.0, 180.0, 240.0];
     let values = [10.0, 11.0, 12.0, 11.5, 12.5];
     chart
         .set_series_data(0, &times, &values, &values, &values, &values)
@@ -5354,6 +5354,29 @@ fn selection_anchors_paint_theme_derived_discs_on_the_selected_series() {
     // Deselecting (an empty-pane click) removes the anchors.
     chart.set_selected_series(None);
     assert!(frame_discs(&mut chart).is_empty());
+}
+
+#[test]
+fn host_selection_group_paints_anchors_on_every_output() {
+    let mut chart = anchor_chart();
+    let second = chart.add_series(SeriesKind::Line);
+    let times = [0.0, 60.0, 120.0, 180.0, 240.0];
+    let values = [11.0, 12.0, 11.5, 12.5, 12.8];
+    chart
+        .set_series_data(second, &times, &values, &values, &values, &values)
+        .unwrap();
+    assert!(chart.set_selected_series_group(second, &[0, second]));
+    assert_eq!(
+        chart.selected_series_members().collect::<Vec<_>>(),
+        vec![0, second]
+    );
+    assert_eq!(chart.selected_series(), Some(second));
+    let discs = frame_discs(&mut chart);
+    let borders = discs.iter().filter(|disc| disc.2 == PRIMARY).count();
+    assert_eq!(
+        borders, 10,
+        "five anchors must paint on both outputs: {discs:?}"
+    );
 }
 
 #[test]

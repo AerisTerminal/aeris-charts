@@ -493,11 +493,20 @@ pub struct SeriesValueSnapshot {
 // that a normal-width pane shows dozens of anchors, while retaining a strict per-selection bound.
 const SELECTION_ANCHOR_SPACING_CSS: f64 = 24.0;
 const MAX_SELECTION_ANCHORS: usize = 128;
+// A selection group is host-authored interaction metadata, not an open-ended data store. Keep the
+// retained member snapshots strictly bounded even if a hostile adapter supplies arbitrary ids.
+const MAX_SELECTION_MEMBERS: usize = 64;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SelectionAnchorMemberSnapshot {
+    series: SeriesId,
+    times: Vec<i64>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SelectionAnchorSnapshot {
     series: SeriesId,
-    times: Vec<i64>,
+    members: Vec<SelectionAnchorMemberSnapshot>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1798,7 +1807,8 @@ impl ChartEngine {
         {
             self.hovered_series = None;
         }
-        // A selected series leaving the chart drops its anchor points with it.
+        // Removing the primary selection clears the group. Removing another member leaves the
+        // remaining indicator outputs selected; sync_time_points prunes its retired snapshot.
         if self
             .selection
             .as_ref()

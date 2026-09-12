@@ -53,7 +53,7 @@ impl ChartEngine {
     /// Active priority for one series (0 idle, 1 selected, 2 hovered).
     /// Hover promotion respects `hoveredSeriesOnTop`; a disabled option treats hovered as idle.
     pub(crate) fn series_active_priority(&self, id: SeriesId) -> u8 {
-        if self.selected_series() == Some(id) {
+        if self.series_is_selected(id) {
             // A series both hovered and selected takes the higher (hovered) slot below.
             if self.hover_promotion_enabled() && self.hovered_series() == Some(id) {
                 return PRIORITY_HOVERED;

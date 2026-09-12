@@ -1329,10 +1329,16 @@ impl ChartEngine {
         let Some(selection) = self.selection.as_ref() else {
             return;
         };
-        let selected = selection.series;
         let pane = &self.panes[pane_index];
         for series in &self.series {
-            if series.id != selected || !series.visible || series.pane_index != pane_index {
+            let Some(member) = selection
+                .members
+                .iter()
+                .find(|member| member.series == series.id)
+            else {
+                continue;
+            };
+            if !series.visible || series.pane_index != pane_index {
                 continue;
             }
             let scale = pane_scale(pane, series_scale_target(series));
@@ -1353,10 +1359,10 @@ impl ChartEngine {
             } else {
                 Color::rgb(0, 0, 0)
             };
-            let Some((times, _)) = self.data.series_data(selected) else {
+            let Some((times, _)) = self.data.series_data(series.id) else {
                 continue;
             };
-            for time in &selection.times {
+            for time in &member.times {
                 let Ok(row) = times.binary_search(time) else {
                     continue;
                 };

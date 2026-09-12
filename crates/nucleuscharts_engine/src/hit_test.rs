@@ -28,8 +28,8 @@ use nucleuscharts_render::draw_list::LineType;
 use crate::feature_series::FeatureSeriesKind;
 use crate::frame::{pane_scale, series_scale_target};
 use crate::{
-    ChartEngine, SelectionAnchorSnapshot, SeriesKind, MAX_SELECTION_ANCHORS,
-    SELECTION_ANCHOR_SPACING_CSS,
+    ChartEngine, SelectionAnchorMemberSnapshot, SelectionAnchorSnapshot, SeriesKind,
+    MAX_SELECTION_ANCHORS, MAX_SELECTION_MEMBERS, SELECTION_ANCHOR_SPACING_CSS,
 };
 
 /// reference `SeriesOptionsCommon.hitTestTolerance` default (series-options-defaults.ts:15).
@@ -512,22 +512,88 @@ impl ChartEngine {
         self.hovered_series
     }
 
-    /// The selected series the frame build paints anchor points on (TradingView-style
-    /// click-to-select). The unselected -> selected transition samples canonical timestamps once;
-    /// empty-space clicks discard that snapshot and a removed id never sticks.
+    /// Select one series, expanding engine-owned indicator outputs into one interaction group.
+    /// The primary id remains the hit-tested series for compatibility with commands that need a
+    /// single target.
     pub fn set_selected_series(&mut self, id: Option<SeriesId>) {
         let next = id.filter(|&sid| self.series.iter().any(|s| s.id == sid && !s.removed));
-        if self.selected_series() != next {
-            self.selection = next.map(|series| SelectionAnchorSnapshot {
-                series,
-                times: self.sample_selection_anchor_times(series),
-            });
-            self.invalidate_frame_overlay();
+        let Some(series) = next else {
+            if self.selection.take().is_some() {
+                self.invalidate_frame_overlay();
+            }
+            return;
+        };
+        let binding = self.indicator_binding_id(series);
+        let members = binding.map_or_else(|| vec![series], |id| self.indicator_group_outputs(id));
+        let _ = self.set_selected_series_group(series, &members);
+    }
+
+    /// Select a host-defined group of related output series while retaining `primary` as the
+    /// command target. Invalid, duplicate, empty, or oversized groups are rejected atomically.
+    /// This is the integration boundary for multi-output studies whose ownership lives outside
+    /// the engine's built-in indicator registry.
+    pub fn set_selected_series_group(&mut self, primary: SeriesId, members: &[SeriesId]) -> bool {
+        if members.is_empty()
+            || members.len() > MAX_SELECTION_MEMBERS
+            || !members.contains(&primary)
+        {
+            return false;
         }
+        let mut unique = std::collections::HashSet::with_capacity(members.len());
+        if members.iter().any(|series| {
+            !unique.insert(*series)
+                || !self
+                    .series
+                    .iter()
+                    .any(|entry| entry.id == *series && !entry.removed)
+        }) {
+            return false;
+        }
+        if self.selected_series() == Some(primary)
+            && self.selection.as_ref().is_some_and(|selection| {
+                selection.members.len() == members.len()
+                    && selection
+                        .members
+                        .iter()
+                        .map(|member| member.series)
+                        .eq(members.iter().copied())
+            })
+        {
+            return true;
+        }
+        self.selection = Some(SelectionAnchorSnapshot {
+            series: primary,
+            members: members
+                .iter()
+                .copied()
+                .map(|series| SelectionAnchorMemberSnapshot {
+                    series,
+                    times: self.sample_selection_anchor_times(series),
+                })
+                .collect(),
+        });
+        self.invalidate_frame_overlay();
+        true
     }
 
     pub fn selected_series(&self) -> Option<SeriesId> {
         self.selection.as_ref().map(|selection| selection.series)
+    }
+
+    /// Series participating in the current selection, in the host-provided output order.
+    pub fn selected_series_members(&self) -> impl Iterator<Item = SeriesId> + '_ {
+        self.selection
+            .iter()
+            .flat_map(|selection| selection.members.iter().map(|member| member.series))
+    }
+
+    pub(crate) fn series_is_selected(&self, series: SeriesId) -> bool {
+        self.selection.as_ref().is_some_and(|selection| {
+            selection
+                .members
+                .iter()
+                .any(|member| member.series == series)
+        })
     }
 
     /// Canonical timestamp identities retained for the current series/indicator selection.
@@ -536,7 +602,13 @@ impl ChartEngine {
     pub fn selection_anchor_identities(&self) -> &[i64] {
         self.selection
             .as_ref()
-            .map_or(&[], |selection| selection.times.as_slice())
+            .and_then(|selection| {
+                selection
+                    .members
+                    .iter()
+                    .find(|member| member.series == selection.series)
+            })
+            .map_or(&[], |member| member.times.as_slice())
     }
 
     fn sample_selection_anchor_times(&self, series: SeriesId) -> Vec<i64> {
@@ -617,35 +689,58 @@ impl ChartEngine {
     }
 
     pub(crate) fn prune_selection_anchor_snapshot(&mut self) {
-        let data = &self.data;
         let Some(selection) = self.selection.as_mut() else {
             return;
         };
-        let Some((times, _)) = data.series_data(selection.series) else {
+        if self.data.series_data(selection.series).is_none() {
             self.selection = None;
             return;
-        };
-        selection
-            .times
-            .retain(|time| times.binary_search(time).is_ok());
+        }
+        let data = &self.data;
+        selection.members.retain_mut(|member| {
+            let Some((times, _)) = data.series_data(member.series) else {
+                return false;
+            };
+            member
+                .times
+                .retain(|time| times.binary_search(time).is_ok());
+            true
+        });
     }
 
     pub(crate) fn restart_selection_anchor_snapshot_after_replacement(
         &mut self,
         replaced: SeriesId,
     ) {
-        let Some(selected) = self.selected_series() else {
+        let Some(selection) = self.selection.as_ref() else {
             return;
         };
-        if selected == replaced
-            || self
-                .indicator_changes
-                .iter()
-                .any(|&(series, _)| series == selected)
+        if selection
+            .members
+            .iter()
+            .any(|member| member.series == replaced)
+            || self.indicator_changes.iter().any(|&(series, _)| {
+                selection
+                    .members
+                    .iter()
+                    .any(|member| member.series == series)
+            })
         {
+            let selected = selection.series;
+            let members = selection
+                .members
+                .iter()
+                .map(|member| member.series)
+                .collect::<Vec<_>>();
             self.selection = Some(SelectionAnchorSnapshot {
                 series: selected,
-                times: self.sample_selection_anchor_times(selected),
+                members: members
+                    .into_iter()
+                    .map(|series| SelectionAnchorMemberSnapshot {
+                        series,
+                        times: self.sample_selection_anchor_times(series),
+                    })
+                    .collect(),
             });
             self.invalidate_frame_overlay();
         }

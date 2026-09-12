@@ -1979,7 +1979,7 @@ impl ChartEngine {
                     // primary there too, so it stays filled as well. Only a secondary source
                     // sharing someone else's scale outlines, and only once its value goes stale.
                     hollow: stale && !primary,
-                    selected: self.selected_series() == Some(series.id),
+                    selected: self.series_is_selected(series.id),
                 });
                 // TradingView-style bid/ask chips (`bid_ask_visible`, default off): one
                 // title+price cluster per side with a live quote, centered on the quote's
