@@ -106,6 +106,51 @@ fn area_brush_style_for(brush: &crate::AreaBrushState, logical: i64) -> crate::B
         .map_or(brush.outside, |range| range.style)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn push_area_brush_fill(
+    out: &mut Vec<Prim>,
+    points: &mut Vec<[f32; 2]>,
+    run: &[[f32; 2]],
+    style: crate::BrushStyle,
+    base_y: f64,
+    global_top: f64,
+    global_span: f64,
+    vpr: f64,
+    line_type: LineType,
+) {
+    if run.len() < 2 {
+        return;
+    }
+    let run_top = run
+        .iter()
+        .map(|point| point[1] as f64 / vpr)
+        .fold(base_y, f64::min);
+    let run_bottom = run
+        .iter()
+        .map(|point| point[1] as f64 / vpr)
+        .fold(base_y, f64::max);
+    let first_point = points.len() as u32;
+    points.extend_from_slice(run);
+    out.push(Prim::AreaFill {
+        first_point,
+        point_count: run.len() as u32,
+        base_y: (base_y * vpr) as f32,
+        line_type,
+        gradient: Gradient {
+            top: mix_area_brush_color(
+                style.top_color,
+                style.bottom_color,
+                (run_top - global_top) / global_span,
+            ),
+            bottom: mix_area_brush_color(
+                style.top_color,
+                style.bottom_color,
+                (run_bottom - global_top) / global_span,
+            ),
+        },
+    });
+}
+
 impl ChartEngine {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn build_grid_frame(
@@ -539,7 +584,9 @@ impl ChartEngine {
             };
             if let Some(brush) = area_brush {
                 // Brush styling is transient presentation state on the ordinary Area series. Split
-                // only the fill into styled adjacent segments; canonical rows, LOD selection, scale
+                // the fill only at actual style boundaries. Emitting every adjacent pair as a
+                // separate translucent mesh makes their antialiased shared edges blend twice and
+                // produces dark vertical seams at every bar. Canonical rows, LOD selection, scale
                 // math, and the normal Area hit-test remain untouched.
                 let global_top = row_points
                     .iter()
@@ -550,35 +597,45 @@ impl ChartEngine {
                     .map(|point| point[1] as f64 / vpr)
                     .fold(base_y, f64::max);
                 let global_span = (global_bottom - global_top).max(1.0);
+                let mut run_style: Option<crate::BrushStyle> = None;
+                let mut run = Vec::<[f32; 2]>::new();
                 for (segment_index, pair) in row_points.windows(2).enumerate() {
                     let Some(logical) = plot.index_at(rows[segment_index + 1]) else {
                         continue;
                     };
                     let style = area_brush_style_for(brush, logical);
-                    let left_y = pair[0][1] as f64 / vpr;
-                    let right_y = pair[1][1] as f64 / vpr;
-                    let segment_top = left_y.min(right_y).min(base_y);
-                    let segment_bottom = left_y.max(right_y).max(base_y);
-                    let segment_first = points.len() as u32;
-                    points.extend_from_slice(pair);
-                    out.push(Prim::AreaFill {
-                        first_point: segment_first,
-                        point_count: 2,
-                        base_y: (base_y * vpr) as f32,
-                        line_type: rs.line_type,
-                        gradient: Gradient {
-                            top: mix_area_brush_color(
-                                style.top_color,
-                                style.bottom_color,
-                                (segment_top - global_top) / global_span,
-                            ),
-                            bottom: mix_area_brush_color(
-                                style.top_color,
-                                style.bottom_color,
-                                (segment_bottom - global_top) / global_span,
-                            ),
-                        },
-                    });
+                    if run_style.is_some_and(|current| current != style) {
+                        push_area_brush_fill(
+                            out,
+                            points,
+                            &run,
+                            run_style.expect("brush fill run style"),
+                            base_y,
+                            global_top,
+                            global_span,
+                            vpr,
+                            rs.line_type,
+                        );
+                        run.clear();
+                    }
+                    if run.is_empty() {
+                        run.push(pair[0]);
+                    }
+                    run.push(pair[1]);
+                    run_style = Some(style);
+                }
+                if let Some(style) = run_style {
+                    push_area_brush_fill(
+                        out,
+                        points,
+                        &run,
+                        style,
+                        base_y,
+                        global_top,
+                        global_span,
+                        vpr,
+                        rs.line_type,
+                    );
                 }
             } else {
                 // Deviation: the area fill keeps the series-level gradient even with per-point

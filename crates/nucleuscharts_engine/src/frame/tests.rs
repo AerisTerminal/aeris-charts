@@ -3766,14 +3766,18 @@ fn area_brush_is_transient_presentation_on_the_builtin_area_series() {
     );
 
     let frame = chart.build_frame();
+    let fill_point_counts = frame.panes[0]
+        .main
+        .iter()
+        .filter_map(|primitive| match primitive {
+            Prim::AreaFill { point_count, .. } => Some(*point_count),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
-        frame.panes[0]
-            .main
-            .iter()
-            .filter(|primitive| matches!(primitive, Prim::AreaFill { .. }))
-            .count(),
-        4,
-        "range styling splits only the Area presentation into adjacent fill segments",
+        fill_point_counts,
+        vec![3, 3],
+        "equal-style intervals stay in continuous meshes instead of double-blending every edge",
     );
     let stroke_colors: Vec<Color> = frame.panes[0]
         .main
@@ -3784,6 +3788,22 @@ fn area_brush_is_transient_presentation_on_the_builtin_area_series() {
         })
         .collect();
     assert_eq!(stroke_colors, vec![selected.line_color, faded.line_color]);
+
+    assert!(chart.set_area_brush_state(0, selected, Vec::new()));
+    let frame = chart.build_frame();
+    assert!(frame.panes[0]
+        .main
+        .iter()
+        .any(|primitive| matches!(primitive, Prim::AreaFill { point_count: 5, .. })));
+    assert_eq!(
+        frame.panes[0]
+            .main
+            .iter()
+            .filter(|primitive| matches!(primitive, Prim::AreaFill { .. }))
+            .count(),
+        1,
+        "a uniform brush style must preserve one seam-free Area fill",
+    );
 
     assert!(chart.clear_area_brush_state(0));
     let frame = chart.build_frame();
