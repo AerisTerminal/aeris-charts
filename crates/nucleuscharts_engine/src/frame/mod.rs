@@ -4,6 +4,7 @@
 //! returned primitives into any raster backend, or inspect them in tests.
 
 use crate::drawings::DrawingKind;
+use crate::SeriesThresholdRegion;
 use crate::{
     ChartEngine, PriceFormatKind, PriceScaleSide, PriceScaleTarget, SeriesKind, SeriesPriceFormat,
     PANE_SEPARATOR,
@@ -32,6 +33,9 @@ use nucleuscharts_render::draw_list::{
 };
 use nucleuscharts_render::histogram::{build_histogram, HistogramItem, HistogramParams};
 use nucleuscharts_render::line::{dash_split, expand_line, LinePoint};
+
+const THRESHOLD_REGION_LINE_COLOR: Color = Color::rgb(0x78, 0x7B, 0x86);
+const THRESHOLD_REGION_FILL_COLOR: Color = Color::rgba(0x78, 0x7B, 0x86, 0x33);
 
 pub(crate) mod alert_geometry;
 mod axis;
@@ -672,6 +676,7 @@ struct ResolvedSeries {
     line_visible: bool,
     area_top: Color,
     area_bottom: Color,
+    threshold_region: Option<SeriesThresholdRegion>,
     invert_filled_area: bool,
     point_markers: bool,
     point_markers_radius: Option<f64>,
@@ -1288,6 +1293,7 @@ impl ChartEngine {
                 line_visible: s.line_visible,
                 area_top: verbatim_color(&s.area_top_color, AREA_TOP),
                 area_bottom: verbatim_color(&s.area_bottom_color, AREA_BOTTOM),
+                threshold_region: s.threshold_region,
                 invert_filled_area: s.invert_filled_area,
                 point_markers: s.point_markers,
                 point_markers_radius: s.point_markers_radius,
@@ -1520,14 +1526,12 @@ impl ChartEngine {
                                 scale,
                             ),
                             SeriesKind::Line | SeriesKind::Area => {
-                                if let Some((lower_level, upper_level)) =
-                                    self.oscillator_channel(rs.id)
-                                {
+                                if let Some(region) = rs.threshold_region {
                                     let y_upper =
-                                        (scale.price_to_coordinate(upper_level, rs.base_value)
+                                        (scale.price_to_coordinate(region.upper, rs.base_value)
                                             * vpr) as f32;
                                     let y_lower =
-                                        (scale.price_to_coordinate(lower_level, rs.base_value)
+                                        (scale.price_to_coordinate(region.lower, rs.base_value)
                                             * vpr) as f32;
                                     let top = y_upper.min(y_lower);
                                     let height = (y_lower - y_upper).abs();
@@ -1539,7 +1543,7 @@ impl ChartEngine {
                                                 w: pane_w_px as i32,
                                                 h: height.round() as i32,
                                             },
-                                            color: Color::rgba(0x78, 0x7B, 0x86, 0x33),
+                                            color: THRESHOLD_REGION_FILL_COLOR,
                                         });
                                     }
                                 }
@@ -1657,6 +1661,26 @@ impl ChartEngine {
                         pane_w_px as i32,
                         vpr,
                     );
+                    for rs in &resolved {
+                        if rs.pane != Some(pi) || !rs.visible {
+                            continue;
+                        }
+                        let Some(region) = rs.threshold_region else {
+                            continue;
+                        };
+                        let scale = pane_scale(pane, rs.scale_target);
+                        for price in [region.upper, region.lower] {
+                            let y = (scale.price_to_coordinate(price, rs.base_value) * vpr) as f32;
+                            cache.chrome.prims.push(Prim::HLine {
+                                y: y.round() as i32,
+                                x0: 0,
+                                x1: pane_w_px as i32,
+                                width: vpr.floor().max(1.0) as i32,
+                                style: LineStyle::Dotted,
+                                color: THRESHOLD_REGION_LINE_COLOR,
+                            });
+                        }
+                    }
                     self.build_last_value_line_frame(
                         pi,
                         from,

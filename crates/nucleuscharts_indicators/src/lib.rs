@@ -620,6 +620,322 @@ impl Default for IncrementalVwapState {
     }
 }
 
+/// Sparse incremental RSI state for host-owned indexed numeric sources that may contain hard gaps.
+#[derive(Clone, Debug)]
+pub struct IncrementalRsiState {
+    period: NonZeroUsize,
+    history: RecursiveHistory<IndexedRsiState>,
+    last_work_rows: usize,
+}
+
+impl IncrementalRsiState {
+    #[must_use]
+    pub fn new(period: NonZeroUsize) -> Self {
+        Self {
+            period,
+            history: RecursiveHistory::new(),
+            last_work_rows: 0,
+        }
+    }
+
+    pub fn rebuild_from_indexed<S, W>(
+        &mut self,
+        len: usize,
+        from: usize,
+        mut sample_at: S,
+        mut write: W,
+    ) where
+        S: FnMut(usize) -> Option<f64>,
+        W: FnMut(usize, Option<f64>),
+    {
+        let requested = from.min(len);
+        let (start, mut accumulator) = self.history.begin(len, requested);
+        self.last_work_rows = len.saturating_sub(start);
+        let mut tail = None;
+        let mut before_tail = None;
+        for row in start..len {
+            let previous = accumulator;
+            let value = match sample_at(row) {
+                Some(sample) => indexed_rsi_step(&mut accumulator, sample, self.period.get()),
+                None => {
+                    accumulator = IndexedRsiState::default();
+                    None
+                }
+            };
+            self.history.checkpoint(row, accumulator);
+            if row >= requested {
+                write(row, value);
+            }
+            if row + 1 == len {
+                tail = Some(accumulator);
+                before_tail = (row > 0).then_some(previous);
+            }
+        }
+        self.history.finish(len, tail, before_tail);
+    }
+
+    #[must_use]
+    pub fn runtime_bytes(&self) -> usize {
+        self.history.bytes()
+    }
+
+    #[must_use]
+    pub fn last_work_rows(&self) -> usize {
+        self.last_work_rows
+    }
+}
+
+/// Sparse incremental MACD state for host-owned indexed numeric sources that may contain hard gaps.
+#[derive(Clone, Debug)]
+pub struct IncrementalMacdState {
+    fast_period: NonZeroUsize,
+    slow_period: NonZeroUsize,
+    signal_period: NonZeroUsize,
+    history: RecursiveHistory<MacdState>,
+    last_work_rows: usize,
+}
+
+/// One indexed HLC sample consumed by [`IncrementalStochasticState`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StochasticSample {
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct IndexedStochasticState {
+    previous_k: f64,
+    has_k: bool,
+    contiguous_samples: usize,
+}
+
+/// Sparse incremental Stochastic state with bounded `%D` tail retention.
+#[derive(Clone, Debug)]
+pub struct IncrementalStochasticState {
+    k_period: NonZeroUsize,
+    d_period: NonZeroUsize,
+    history: RecursiveHistory<IndexedStochasticState>,
+    tail_k: Vec<f64>,
+    before_tail_k: Vec<f64>,
+    source_len: usize,
+    last_work_rows: usize,
+}
+
+impl IncrementalStochasticState {
+    #[must_use]
+    pub fn new(k_period: NonZeroUsize, d_period: NonZeroUsize) -> Self {
+        Self {
+            k_period,
+            d_period,
+            history: RecursiveHistory::new(),
+            tail_k: Vec::new(),
+            before_tail_k: Vec::new(),
+            source_len: 0,
+            last_work_rows: 0,
+        }
+    }
+
+    pub fn rebuild_from_indexed<S, W>(
+        &mut self,
+        len: usize,
+        from: usize,
+        mut sample_at: S,
+        mut write: W,
+    ) where
+        S: FnMut(usize) -> Option<StochasticSample>,
+        W: FnMut(usize, StochasticPoint),
+    {
+        let requested = from.min(len);
+        let k_period = self.k_period.get();
+        let d_period = self.d_period.get();
+        let realtime = requested >= self.source_len.saturating_sub(1) && len >= self.source_len;
+        let state_from = if realtime {
+            requested
+        } else {
+            requested.saturating_sub(d_period.saturating_sub(1))
+        };
+        let (start, mut state) = self.history.begin(len, state_from);
+        self.last_work_rows = len.saturating_sub(start);
+        let mut recent = std::collections::VecDeque::with_capacity(d_period.min(len));
+        if realtime {
+            if len == self.source_len && requested + 1 == len {
+                recent.extend(self.before_tail_k.iter().copied());
+            } else {
+                recent.extend(self.tail_k.iter().copied());
+            }
+        }
+        let mut before_tail_recent = Vec::new();
+        let mut tail = None;
+        let mut before_tail = None;
+        for row in start..len {
+            if row + 1 == len {
+                before_tail_recent.clear();
+                before_tail_recent.extend(recent.iter().copied());
+            }
+            let previous = state;
+            let Some(current) = sample_at(row) else {
+                state = IndexedStochasticState::default();
+                recent.clear();
+                self.history.checkpoint(row, state);
+                if row >= requested {
+                    write(row, StochasticPoint { k: None, d: None });
+                }
+                if row + 1 == len {
+                    tail = Some(state);
+                    before_tail = (row > 0).then_some(previous);
+                }
+                continue;
+            };
+            state.contiguous_samples = state.contiguous_samples.saturating_add(1);
+            let k = if state.contiguous_samples < k_period {
+                None
+            } else {
+                let window_start = row + 1 - k_period;
+                let mut high = f64::NEG_INFINITY;
+                let mut low = f64::INFINITY;
+                let mut valid = true;
+                for index in window_start..=row {
+                    let sample = if index == row {
+                        Some(current)
+                    } else {
+                        sample_at(index)
+                    };
+                    let Some(sample) = sample else {
+                        valid = false;
+                        break;
+                    };
+                    high = high.max(sample.high);
+                    low = low.min(sample.low);
+                }
+                if valid {
+                    let next = if high > low {
+                        100.0 * (current.close - low) / (high - low)
+                    } else if state.has_k {
+                        state.previous_k
+                    } else {
+                        50.0
+                    };
+                    state.previous_k = next;
+                    state.has_k = true;
+                    Some(next)
+                } else {
+                    None
+                }
+            };
+            let d = if let Some(k) = k {
+                recent.push_back(k);
+                if recent.len() > d_period {
+                    recent.pop_front();
+                }
+                (recent.len() == d_period).then(|| recent.iter().sum::<f64>() / d_period as f64)
+            } else {
+                None
+            };
+            self.history.checkpoint(row, state);
+            if row >= requested {
+                write(row, StochasticPoint { k, d });
+            }
+            if row + 1 == len {
+                tail = Some(state);
+                before_tail = (row > 0).then_some(previous);
+            }
+        }
+        self.history.finish(len, tail, before_tail);
+        self.tail_k.clear();
+        self.tail_k.extend(recent);
+        self.before_tail_k.clear();
+        self.before_tail_k.extend(before_tail_recent);
+        self.source_len = len;
+    }
+
+    #[must_use]
+    pub fn runtime_bytes(&self) -> usize {
+        self.history
+            .bytes()
+            .saturating_add(self.tail_k.capacity() * std::mem::size_of::<f64>())
+            .saturating_add(self.before_tail_k.capacity() * std::mem::size_of::<f64>())
+    }
+
+    #[must_use]
+    pub fn last_work_rows(&self) -> usize {
+        self.last_work_rows
+    }
+}
+
+impl IncrementalMacdState {
+    #[must_use]
+    pub fn new(
+        fast_period: NonZeroUsize,
+        slow_period: NonZeroUsize,
+        signal_period: NonZeroUsize,
+    ) -> Self {
+        Self {
+            fast_period,
+            slow_period,
+            signal_period,
+            history: RecursiveHistory::new(),
+            last_work_rows: 0,
+        }
+    }
+
+    pub fn rebuild_from_indexed<S, W>(
+        &mut self,
+        len: usize,
+        from: usize,
+        mut sample_at: S,
+        mut write: W,
+    ) where
+        S: FnMut(usize) -> Option<f64>,
+        W: FnMut(usize, MacdPoint),
+    {
+        let requested = from.min(len);
+        let (start, mut accumulator) = self.history.begin(len, requested);
+        self.last_work_rows = len.saturating_sub(start);
+        let mut tail = None;
+        let mut before_tail = None;
+        for row in start..len {
+            let previous = accumulator;
+            let value = match sample_at(row) {
+                Some(sample) => macd_step(
+                    &mut accumulator,
+                    sample,
+                    self.fast_period.get(),
+                    self.slow_period.get(),
+                    self.signal_period.get(),
+                ),
+                None => {
+                    accumulator = MacdState::default();
+                    MacdPoint {
+                        macd: None,
+                        signal: None,
+                        histogram: None,
+                    }
+                }
+            };
+            self.history.checkpoint(row, accumulator);
+            if row >= requested {
+                write(row, value);
+            }
+            if row + 1 == len {
+                tail = Some(accumulator);
+                before_tail = (row > 0).then_some(previous);
+            }
+        }
+        self.history.finish(len, tail, before_tail);
+    }
+
+    #[must_use]
+    pub fn runtime_bytes(&self) -> usize {
+        self.history.bytes()
+    }
+
+    #[must_use]
+    pub fn last_work_rows(&self) -> usize {
+        self.last_work_rows
+    }
+}
+
 impl IncrementalEmaState {
     /// Creates one empty incremental EMA runtime with the supplied non-zero period.
     #[must_use]
@@ -695,6 +1011,13 @@ struct RsiState {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+struct IndexedRsiState {
+    previous_close: Option<f64>,
+    seen_changes: usize,
+    rsi: RsiState,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
 struct AtrState {
     previous_close: Option<f64>,
     seen: usize,
@@ -707,6 +1030,54 @@ struct MacdState {
     fast: EmaState,
     slow: EmaState,
     signal: EmaState,
+}
+
+fn indexed_rsi_step(state: &mut IndexedRsiState, sample: f64, period: usize) -> Option<f64> {
+    let previous_close = state.previous_close.replace(sample)?;
+    let change = sample - previous_close;
+    state.seen_changes = state.seen_changes.saturating_add(1);
+    rsi_change_step(&mut state.rsi, change, period, state.seen_changes)
+}
+
+fn rsi_change_step(
+    state: &mut RsiState,
+    change: f64,
+    period: usize,
+    seen_changes: usize,
+) -> Option<f64> {
+    if seen_changes <= period {
+        state.gain += change.max(0.0);
+        state.loss += (-change).max(0.0);
+        if seen_changes == period {
+            state.gain /= period as f64;
+            state.loss /= period as f64;
+            Some(rsi_value(state.gain, state.loss))
+        } else {
+            None
+        }
+    } else {
+        state.gain = (state.gain * (period as f64 - 1.0) + change.max(0.0)) / period as f64;
+        state.loss = (state.loss * (period as f64 - 1.0) + (-change).max(0.0)) / period as f64;
+        Some(rsi_value(state.gain, state.loss))
+    }
+}
+
+fn macd_step(
+    state: &mut MacdState,
+    sample: f64,
+    fast_period: usize,
+    slow_period: usize,
+    signal_period: usize,
+) -> MacdPoint {
+    let fast = ema_step(&mut state.fast, sample, fast_period);
+    let slow = ema_step(&mut state.slow, sample, slow_period);
+    let line = fast.zip(slow).map(|(fast, slow)| fast - slow);
+    let signal = line.and_then(|line| ema_step(&mut state.signal, line, signal_period));
+    MacdPoint {
+        macd: line,
+        signal,
+        histogram: line.zip(signal).map(|(line, signal)| line - signal),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -1078,26 +1449,12 @@ impl IncrementalState {
                     let value = if row == 0 {
                         None
                     } else {
-                        let change = input.close[row] - input.close[row - 1];
-                        if row <= *period {
-                            accumulator.gain += change.max(0.0);
-                            accumulator.loss += (-change).max(0.0);
-                            if row == *period {
-                                accumulator.gain /= *period as f64;
-                                accumulator.loss /= *period as f64;
-                                Some(rsi_value(accumulator.gain, accumulator.loss))
-                            } else {
-                                None
-                            }
-                        } else {
-                            accumulator.gain = (accumulator.gain * (*period as f64 - 1.0)
-                                + change.max(0.0))
-                                / *period as f64;
-                            accumulator.loss = (accumulator.loss * (*period as f64 - 1.0)
-                                + (-change).max(0.0))
-                                / *period as f64;
-                            Some(rsi_value(accumulator.gain, accumulator.loss))
-                        }
+                        rsi_change_step(
+                            &mut accumulator,
+                            input.close[row] - input.close[row - 1],
+                            *period,
+                            row,
+                        )
                     };
                     state.checkpoint(row, accumulator);
                     if row >= self.output_from[0] {
@@ -1122,19 +1479,20 @@ impl IncrementalState {
                 let mut before_tail = None;
                 for row in start..n {
                     let previous = accumulator;
-                    let fast = ema_step(&mut accumulator.fast, input.close[row], *fast_period);
-                    let slow = ema_step(&mut accumulator.slow, input.close[row], *slow_period);
-                    let line = fast.zip(slow).map(|(fast, slow)| fast - slow);
-                    let signal = line
-                        .and_then(|line| ema_step(&mut accumulator.signal, line, *signal_period));
+                    let point = macd_step(
+                        &mut accumulator,
+                        input.close[row],
+                        *fast_period,
+                        *slow_period,
+                        *signal_period,
+                    );
                     state.checkpoint(row, accumulator);
                     if row >= self.output_from[0] {
-                        self.outputs[0].push(line.expect("MACD line after warmup"));
+                        self.outputs[0].push(point.macd.expect("MACD line after warmup"));
                     }
                     if row >= self.output_from[1] {
-                        let signal = signal.expect("MACD signal after warmup");
-                        self.outputs[1].push(signal);
-                        self.outputs[2].push(line.expect("MACD line after warmup") - signal);
+                        self.outputs[1].push(point.signal.expect("MACD signal after warmup"));
+                        self.outputs[2].push(point.histogram.expect("MACD histogram after warmup"));
                     }
                     if row + 1 == n {
                         tail = Some(accumulator);
@@ -1653,6 +2011,325 @@ mod tests {
             |index, value| output[index] = value,
         );
         assert_eq!(output, vec![Some(10.0), None, Some(20.0), Some(30.0)]);
+    }
+
+    #[test]
+    fn indexed_rsi_matches_dense_formula_resets_on_gaps_and_repairs_from_checkpoints() {
+        let period = NonZeroUsize::new(14).expect("period");
+        let mut samples = (0..5_000)
+            .map(|index| Some(100.0 + (index as f64 * 0.03).sin() * 4.0))
+            .collect::<Vec<_>>();
+        let dense = samples
+            .iter()
+            .map(|sample| sample.expect("dense"))
+            .collect::<Vec<_>>();
+        let expected = rsi(&dense, period.get());
+        let mut output = vec![None; samples.len()];
+        let mut state = IncrementalRsiState::new(period);
+        state.rebuild_from_indexed(
+            samples.len(),
+            0,
+            |index| samples[index],
+            |index, value| output[index] = value,
+        );
+        assert_eq!(output, expected);
+
+        let tail = samples.len() - 1;
+        samples[tail] = Some(samples[tail].expect("tail") + 5.0);
+        state.rebuild_from_indexed(
+            samples.len(),
+            tail,
+            |index| samples[index],
+            |index, value| output[index] = value,
+        );
+        assert_eq!(state.last_work_rows(), 1);
+        let dense = samples
+            .iter()
+            .map(|sample| sample.expect("dense after tail repair"))
+            .collect::<Vec<_>>();
+        assert_eq!(output, rsi(&dense, period.get()));
+
+        let repaired = 2_500;
+        samples[repaired] = Some(samples[repaired].expect("repair") - 7.0);
+        state.rebuild_from_indexed(
+            samples.len(),
+            repaired,
+            |index| samples[index],
+            |index, value| output[index] = value,
+        );
+        assert!(state.last_work_rows() >= samples.len() - repaired);
+        assert!(state.last_work_rows() < samples.len() - repaired + CHECKPOINT_INTERVAL);
+        let dense = samples
+            .iter()
+            .map(|sample| sample.expect("dense after historical repair"))
+            .collect::<Vec<_>>();
+        assert_eq!(output, rsi(&dense, period.get()));
+
+        let short = [
+            Some(1.0),
+            Some(2.0),
+            Some(3.0),
+            None,
+            Some(10.0),
+            Some(11.0),
+            Some(12.0),
+        ];
+        let mut output = vec![None; short.len()];
+        let mut state = IncrementalRsiState::new(NonZeroUsize::new(2).expect("period"));
+        state.rebuild_from_indexed(
+            short.len(),
+            0,
+            |index| short[index],
+            |index, value| output[index] = value,
+        );
+        assert_eq!(output[3], None);
+        assert_eq!(output[4], None);
+        assert_eq!(output[5], None);
+        assert!(output[6].is_some());
+    }
+
+    #[test]
+    fn indexed_macd_matches_dense_formula_resets_on_gaps_and_keeps_tail_work_constant() {
+        let fast = NonZeroUsize::new(12).expect("fast");
+        let slow = NonZeroUsize::new(26).expect("slow");
+        let signal = NonZeroUsize::new(9).expect("signal");
+        let mut samples = (0..5_000)
+            .map(|index| Some(100.0 + (index as f64 * 0.02).sin() * 8.0))
+            .collect::<Vec<_>>();
+        let dense = samples
+            .iter()
+            .map(|sample| sample.expect("dense"))
+            .collect::<Vec<_>>();
+        let expected = macd(&dense, fast.get(), slow.get(), signal.get());
+        let mut output = vec![
+            MacdPoint {
+                macd: None,
+                signal: None,
+                histogram: None,
+            };
+            samples.len()
+        ];
+        let mut state = IncrementalMacdState::new(fast, slow, signal);
+        state.rebuild_from_indexed(
+            samples.len(),
+            0,
+            |index| samples[index],
+            |index, value| output[index] = value,
+        );
+        assert_eq!(output, expected);
+
+        let tail = samples.len() - 1;
+        samples[tail] = Some(samples[tail].expect("tail") + 5.0);
+        state.rebuild_from_indexed(
+            samples.len(),
+            tail,
+            |index| samples[index],
+            |index, value| output[index] = value,
+        );
+        assert_eq!(state.last_work_rows(), 1);
+        let dense = samples
+            .iter()
+            .map(|sample| sample.expect("dense after tail repair"))
+            .collect::<Vec<_>>();
+        assert_eq!(output, macd(&dense, fast.get(), slow.get(), signal.get()));
+
+        let repaired = 2_500;
+        samples[repaired] = Some(samples[repaired].expect("repair") - 7.0);
+        state.rebuild_from_indexed(
+            samples.len(),
+            repaired,
+            |index| samples[index],
+            |index, value| output[index] = value,
+        );
+        assert!(state.last_work_rows() >= samples.len() - repaired);
+        assert!(state.last_work_rows() < samples.len() - repaired + CHECKPOINT_INTERVAL);
+        let dense = samples
+            .iter()
+            .map(|sample| sample.expect("dense after historical repair"))
+            .collect::<Vec<_>>();
+        assert_eq!(output, macd(&dense, fast.get(), slow.get(), signal.get()));
+
+        let mut gap_output = Vec::new();
+        let gap = [
+            Some(1.0),
+            Some(2.0),
+            Some(3.0),
+            None,
+            Some(10.0),
+            Some(11.0),
+        ];
+        let mut state = IncrementalMacdState::new(
+            NonZeroUsize::new(2).expect("fast"),
+            NonZeroUsize::new(3).expect("slow"),
+            NonZeroUsize::new(2).expect("signal"),
+        );
+        state.rebuild_from_indexed(
+            gap.len(),
+            0,
+            |index| gap[index],
+            |_, point| gap_output.push(point),
+        );
+        assert_eq!(gap_output[3].macd, None);
+        assert_eq!(gap_output[4].macd, None);
+        assert_eq!(gap_output[5].macd, None);
+    }
+
+    #[test]
+    fn indexed_stochastic_matches_dense_formula_resets_gaps_and_bounds_repairs() {
+        let k_period = NonZeroUsize::new(14).expect("k");
+        let d_period = NonZeroUsize::new(3).expect("d");
+        let mut samples = (0..5_000)
+            .map(|index| {
+                let close = 100.0 + (index as f64 * 0.04).sin() * 5.0;
+                Some(StochasticSample {
+                    high: close + 1.0,
+                    low: close - 1.0,
+                    close,
+                })
+            })
+            .collect::<Vec<_>>();
+        let highs = samples
+            .iter()
+            .map(|sample| sample.expect("dense").high)
+            .collect::<Vec<_>>();
+        let lows = samples
+            .iter()
+            .map(|sample| sample.expect("dense").low)
+            .collect::<Vec<_>>();
+        let closes = samples
+            .iter()
+            .map(|sample| sample.expect("dense").close)
+            .collect::<Vec<_>>();
+        let expected = stochastic(&highs, &lows, &closes, k_period.get(), d_period.get());
+        let mut output = vec![StochasticPoint { k: None, d: None }; samples.len()];
+        let mut state = IncrementalStochasticState::new(k_period, d_period);
+        state.rebuild_from_indexed(
+            samples.len(),
+            0,
+            |index| samples[index],
+            |index, value| output[index] = value,
+        );
+        assert_eq!(output, expected);
+
+        let tail = samples.len() - 1;
+        let mut changed = samples[tail].expect("tail");
+        changed.close += 2.0;
+        samples[tail] = Some(changed);
+        state.rebuild_from_indexed(
+            samples.len(),
+            tail,
+            |index| samples[index],
+            |index, value| output[index] = value,
+        );
+        assert_eq!(state.last_work_rows(), 1);
+        let highs = samples
+            .iter()
+            .map(|sample| sample.expect("dense tail").high)
+            .collect::<Vec<_>>();
+        let lows = samples
+            .iter()
+            .map(|sample| sample.expect("dense tail").low)
+            .collect::<Vec<_>>();
+        let closes = samples
+            .iter()
+            .map(|sample| sample.expect("dense tail").close)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            output,
+            stochastic(&highs, &lows, &closes, k_period.get(), d_period.get())
+        );
+
+        let repaired = 2_500;
+        samples[repaired] = None;
+        state.rebuild_from_indexed(
+            samples.len(),
+            repaired,
+            |index| samples[index],
+            |index, value| output[index] = value,
+        );
+        assert!(state.last_work_rows() >= samples.len() - repaired);
+        assert!(
+            state.last_work_rows()
+                < samples.len() - repaired + CHECKPOINT_INTERVAL + d_period.get()
+        );
+        let mut expected = vec![StochasticPoint { k: None, d: None }; samples.len()];
+        let mut fresh = IncrementalStochasticState::new(k_period, d_period);
+        fresh.rebuild_from_indexed(
+            samples.len(),
+            0,
+            |index| samples[index],
+            |index, value| expected[index] = value,
+        );
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn indexed_stochastic_tail_gap_repair_restores_the_pre_gap_d_window() {
+        let k_period = NonZeroUsize::new(2).expect("k");
+        let d_period = NonZeroUsize::new(3).expect("d");
+        let dense = (0..8)
+            .map(|index| {
+                let close = 10.0 + index as f64;
+                StochasticSample {
+                    high: close + 1.0,
+                    low: close - 1.0,
+                    close,
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut samples = dense.iter().copied().map(Some).collect::<Vec<_>>();
+        let tail = samples.len() - 1;
+        samples[tail] = None;
+        let mut output = vec![StochasticPoint { k: None, d: None }; samples.len()];
+        let mut state = IncrementalStochasticState::new(k_period, d_period);
+        state.rebuild_from_indexed(
+            samples.len(),
+            0,
+            |index| samples[index],
+            |index, value| output[index] = value,
+        );
+        assert_eq!(output[tail], StochasticPoint { k: None, d: None });
+
+        samples[tail] = Some(dense[tail]);
+        state.rebuild_from_indexed(
+            samples.len(),
+            tail,
+            |index| samples[index],
+            |index, value| output[index] = value,
+        );
+        assert_eq!(state.last_work_rows(), 1);
+
+        let highs = dense.iter().map(|sample| sample.high).collect::<Vec<_>>();
+        let lows = dense.iter().map(|sample| sample.low).collect::<Vec<_>>();
+        let closes = dense.iter().map(|sample| sample.close).collect::<Vec<_>>();
+        let expected = stochastic(&highs, &lows, &closes, k_period.get(), d_period.get());
+        assert_eq!(output[tail], expected[tail]);
+    }
+
+    #[test]
+    fn indexed_stochastic_d_period_does_not_preallocate_unbounded_memory() {
+        let k_period = NonZeroUsize::new(2).expect("k");
+        let d_period = NonZeroUsize::new(usize::MAX).expect("d");
+        let samples = (0..4)
+            .map(|index| {
+                let close = 10.0 + index as f64;
+                Some(StochasticSample {
+                    high: close + 1.0,
+                    low: close - 1.0,
+                    close,
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut state = IncrementalStochasticState::new(k_period, d_period);
+        let mut output = vec![StochasticPoint { k: None, d: None }; samples.len()];
+        state.rebuild_from_indexed(
+            samples.len(),
+            0,
+            |index| samples[index],
+            |index, point| output[index] = point,
+        );
+        assert!(output.iter().all(|point| point.d.is_none()));
+        assert!(state.runtime_bytes() < 1_024);
     }
 
     #[test]

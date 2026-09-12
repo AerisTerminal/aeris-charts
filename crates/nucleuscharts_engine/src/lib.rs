@@ -637,6 +637,17 @@ pub struct BrushRange {
     pub style: BrushStyle,
 }
 
+/// One fixed-value oscillator channel owned by a scalar series.
+///
+/// Hosts describe the semantic lower/upper levels only. Nucleus owns scale conversion, the
+/// translucent fill, and the canonical dotted boundary lines, so callers never receive or retain
+/// renderer primitives.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SeriesThresholdRegion {
+    pub lower: f64,
+    pub upper: f64,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AreaBrushState {
     pub outside: BrushStyle,
@@ -673,6 +684,8 @@ pub struct SeriesEntry {
     /// Optional transient range styling for an ordinary Area series. This is interaction/presentation
     /// state only; canonical rows, hit testing, ingestion, LOD, and scale ownership remain unchanged.
     pub(crate) area_brush: Option<AreaBrushState>,
+    /// Optional fixed-value channel painted behind this line/area series.
+    pub threshold_region: Option<SeriesThresholdRegion>,
     pub histogram_updown: bool,
     pub price_scale_target: PriceScaleTarget,
     pub pane_index: usize,
@@ -830,6 +843,7 @@ impl SeriesEntry {
             area_top_color: None,
             area_bottom_color: None,
             area_brush: None,
+            threshold_region: None,
             histogram_updown: false,
             price_scale_target: PriceScaleTarget::Right,
             pane_index: 0,
@@ -2492,6 +2506,38 @@ impl ChartEngine {
             self.invalidate_frame_series(id);
         }
         changed
+    }
+
+    /// Sets or clears one fixed-value background channel for a scalar line/area series.
+    ///
+    /// Invalid/non-finite bounds, reversed bounds, unknown series, and non-line/area series are
+    /// rejected without mutating the current presentation.
+    pub fn set_series_threshold_region(
+        &mut self,
+        id: SeriesId,
+        region: Option<SeriesThresholdRegion>,
+    ) -> bool {
+        let Some(series) = self
+            .series
+            .iter_mut()
+            .find(|series| series.id == id && !series.removed)
+        else {
+            return false;
+        };
+        if !matches!(series.kind, SeriesKind::Line | SeriesKind::Area) {
+            return false;
+        }
+        if region.is_some_and(|region| {
+            !region.lower.is_finite() || !region.upper.is_finite() || region.lower >= region.upper
+        }) {
+            return false;
+        }
+        if series.threshold_region == region {
+            return false;
+        }
+        series.threshold_region = region;
+        self.invalidate_frame_series(id);
+        true
     }
 
     /// Full (re)assignment with per-row color channels run through the same repair pipeline as

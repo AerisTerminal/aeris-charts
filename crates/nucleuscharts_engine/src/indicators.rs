@@ -86,9 +86,6 @@ pub const EMA_RIBBON_DEFAULT_PERIODS: [usize; nucleuscharts_indicators::MAX_OUTP
 pub const EMA_RIBBON_DEFAULT_COLORS: [&str; nucleuscharts_indicators::MAX_OUTPUTS] =
     ["#335cff", "#FF9800", "#7d52f4", "#fb4ba3", "#fb3748"];
 
-/// TradingView oscillator band-line color (RSI 30/70, Stochastic 20/80).
-const BAND_LEVEL_COLOR: Color = Color::rgb(0x78, 0x7B, 0x86);
-
 /// MACD histogram four-state palette: strong when moving away from zero, weak when falling
 /// back toward it (TradingView-style). Packed `0xRRGGBBAA`.
 const MACD_UP: u32 = rgb_u32(nucleuscharts_core::style::MARKET_UP_RGB, 0xff);
@@ -139,6 +136,27 @@ pub struct IndicatorParameters {
 }
 
 impl ChartEngine {
+    /// Applies Nucleus's canonical four-state momentum palette to an existing histogram series.
+    ///
+    /// Colors are derived from each value's sign and whether it moved toward or away from zero.
+    /// The caller owns only the semantic request; Nucleus retains palette and row-style ownership.
+    pub fn apply_momentum_histogram_colors(&mut self, id: SeriesId) -> bool {
+        if self
+            .series_entry(id)
+            .is_none_or(|series| series.kind != SeriesKind::Histogram)
+        {
+            return false;
+        }
+        let Some(colors) = self
+            .data
+            .series_data(id)
+            .map(|(_, values)| momentum_histogram_colors(values[3]))
+        else {
+            return false;
+        };
+        self.set_series_point_colors(id, Some(colors), None, None)
+    }
+
     pub(crate) fn indicator_memory_usage(&self) -> (usize, usize) {
         self.indicators.iter().fold((0, 0), |usage, binding| {
             (
@@ -433,9 +451,8 @@ impl ChartEngine {
         let ids = self.add_indicator(source, kind.clone(), volume_source);
         match kind {
             IndicatorKind::Rsi { .. } => {
-                if let Some(&id) = ids.first() {
+                if !ids.is_empty() {
                     self.place_outputs_in_oscillator_pane(&ids);
-                    self.add_band_levels(id, &[30.0, 70.0]);
                 }
             }
             IndicatorKind::Macd { .. } => {
@@ -445,9 +462,8 @@ impl ChartEngine {
                 }
             }
             IndicatorKind::Stochastic { .. } => {
-                if let Some(&k) = ids.first() {
+                if !ids.is_empty() {
                     self.place_outputs_in_oscillator_pane(&ids);
-                    self.add_band_levels(k, &[20.0, 80.0]);
                 }
             }
             IndicatorKind::Atr { .. } => {
@@ -479,20 +495,6 @@ impl ChartEngine {
         }
     }
 
-    /// Dotted muted band lines (RSI 30/70, Stochastic 20/80) without axis labels — default
-    /// oscillator chrome; platforms restyle or replace via their own primitives.
-    fn add_band_levels(&mut self, id: SeriesId, levels: &[f64]) {
-        for &price in levels {
-            let line_id =
-                self.create_price_line(id, price, BAND_LEVEL_COLOR, 1, LineStyle::Dotted, "");
-            if let Some(s) = self.series.iter_mut().find(|s| s.id == id) {
-                if let Some(line) = s.price_lines.iter_mut().find(|l| l.id == line_id) {
-                    line.axis_label_visible = false;
-                }
-            }
-        }
-    }
-
     /// The bollinger band-fill companion for an output series: when `id` is a bollinger UPPER
     /// (output slot 0), the LOWER series (slot 2) the fill closes toward, else `None`. The
     /// frame builder paints the fill between them under the band strokes (TradingView's
@@ -505,22 +507,6 @@ impl ChartEngine {
                 binding.outputs.get(2).copied()
             } else {
                 None
-            }
-        })
-    }
-
-    /// The oscillator channel band `(lower, upper)` in price units when `id` is the primary
-    /// output (slot 0) of an RSI (30/70) or Stochastic (20/80) binding — the frame builder
-    /// paints a translucent band between them across the pane.
-    pub(crate) fn oscillator_channel(&self, id: SeriesId) -> Option<(f64, f64)> {
-        self.indicators.iter().find_map(|binding| {
-            if binding.outputs.first() != Some(&id) {
-                return None;
-            }
-            match binding.kind {
-                IndicatorKind::Rsi { .. } => Some((30.0, 70.0)),
-                IndicatorKind::Stochastic { .. } => Some((20.0, 80.0)),
-                _ => None,
             }
         })
     }
@@ -603,6 +589,19 @@ impl ChartEngine {
                 s.title_visible = true;
                 s.title = indicator_output_title(&kind, output_index);
                 s.line_width = Some(2.0);
+                if output_index == 0 {
+                    s.threshold_region = match kind {
+                        IndicatorKind::Rsi { .. } => Some(SeriesThresholdRegion {
+                            lower: 30.0,
+                            upper: 70.0,
+                        }),
+                        IndicatorKind::Stochastic { .. } => Some(SeriesThresholdRegion {
+                            lower: 20.0,
+                            upper: 80.0,
+                        }),
+                        _ => None,
+                    };
+                }
                 if let Some(color) = indicator_output_color(&kind, output_index) {
                     s.line_color = Some(color.to_string());
                 }
@@ -731,7 +730,7 @@ impl ChartEngine {
                 if output_index == 2
                     && matches!(self.indicators[index].kind, IndicatorKind::Macd { .. })
                 {
-                    full_histogram_colors = Some(macd_histogram_colors(&values));
+                    full_histogram_colors = Some(momentum_histogram_colors(&values));
                 }
                 self.data
                     .set_single_data_aligned(output, source, source_from, values);
@@ -770,7 +769,7 @@ impl ChartEngine {
                         .and_then(|(_, values)| values[3].get(row).copied())
                 });
                 for (offset, &value) in histogram.iter().enumerate() {
-                    let color = macd_histogram_color(value, previous);
+                    let color = momentum_histogram_color(value, previous);
                     self.data.set_point_color(
                         histogram_id,
                         PointColorChannel::Body,
@@ -786,12 +785,17 @@ impl ChartEngine {
     }
 }
 
-fn macd_histogram_colors(values: &[f64]) -> Vec<u32> {
+fn momentum_histogram_colors(values: &[f64]) -> Vec<u32> {
     let mut colors = Vec::with_capacity(values.len());
     let mut previous = None;
     for &value in values {
-        colors.push(macd_histogram_color(value, previous));
-        previous = Some(value);
+        if value.is_finite() {
+            colors.push(momentum_histogram_color(value, previous));
+            previous = Some(value);
+        } else {
+            colors.push(nucleuscharts_core::model::data_layer::POINT_COLOR_ABSENT);
+            previous = None;
+        }
     }
     colors
 }
@@ -819,7 +823,7 @@ fn incremental_state(kind: &IndicatorKind) -> nucleuscharts_indicators::Incremen
     }
 }
 
-fn macd_histogram_color(value: f64, previous: Option<f64>) -> u32 {
+fn momentum_histogram_color(value: f64, previous: Option<f64>) -> u32 {
     let rising = previous.is_none_or(|previous| value >= previous);
     if value >= 0.0 {
         if rising {

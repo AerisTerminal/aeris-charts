@@ -1986,14 +1986,14 @@ fn oscillator_indicators_get_their_own_pane_and_band_levels() {
     assert!((chart.panes[1].stretch_factor - 0.3).abs() < 1e-9);
     let entry = chart.series.iter().find(|s| s.id == rsi).unwrap();
     assert_eq!(entry.pane_index, 1);
-    // Dotted muted 30/70 band lines without axis labels.
-    let mut prices: Vec<f64> = entry.price_lines.iter().map(|l| l.price).collect();
-    prices.sort_by(|a, b| a.total_cmp(b));
-    assert_eq!(prices, vec![30.0, 70.0]);
-    assert!(entry
-        .price_lines
-        .iter()
-        .all(|l| !l.axis_label_visible && l.style == LineStyle::Dotted));
+    assert_eq!(
+        entry.threshold_region,
+        Some(SeriesThresholdRegion {
+            lower: 30.0,
+            upper: 70.0,
+        })
+    );
+    assert!(entry.price_lines.is_empty());
     assert_eq!(chart.indicator_info(rsi).unwrap().kind, "rsi");
 }
 
@@ -2046,6 +2046,104 @@ fn macd_outputs_are_line_line_histogram_with_four_state_colors() {
             "color {color:#x} is in the palette"
         );
     }
+}
+
+#[test]
+fn generic_threshold_region_is_series_owned_and_validated() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let line = chart.add_series(SeriesKind::Line);
+    let times = [1.0, 2.0, 3.0];
+    let values = [20.0, 50.0, 80.0];
+    chart
+        .set_series_data(line, &times, &values, &values, &values, &values)
+        .unwrap();
+    let region = SeriesThresholdRegion {
+        lower: 30.0,
+        upper: 70.0,
+    };
+    assert!(chart.set_series_threshold_region(line, Some(region)));
+    assert_eq!(
+        chart.series_entry(line).unwrap().threshold_region,
+        Some(region)
+    );
+    chart.time_scale.set_width(800.0);
+    chart.fit_content();
+    let frame = chart.build_frame();
+    let boundary_lines = frame.panes[0]
+        .main
+        .iter()
+        .filter(|prim| {
+            matches!(
+                prim,
+                nucleuscharts_render::draw_list::Prim::HLine {
+                    style: LineStyle::Dotted,
+                    color,
+                    ..
+                } if *color == Color::rgb(0x78, 0x7B, 0x86)
+            )
+        })
+        .count();
+    assert_eq!(boundary_lines, 2);
+    assert!(!chart.set_series_threshold_region(line, Some(region)));
+    assert!(!chart.set_series_threshold_region(
+        line,
+        Some(SeriesThresholdRegion {
+            lower: 70.0,
+            upper: 30.0,
+        })
+    ));
+    assert_eq!(
+        chart.series_entry(line).unwrap().threshold_region,
+        Some(region)
+    );
+
+    let histogram = chart.add_series(SeriesKind::Histogram);
+    assert!(!chart.set_series_threshold_region(histogram, Some(region)));
+    assert!(chart.set_series_threshold_region(line, None));
+    assert_eq!(chart.series_entry(line).unwrap().threshold_region, None);
+}
+
+#[test]
+fn generic_momentum_histogram_style_uses_the_canonical_four_state_palette() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let histogram = chart.add_series(SeriesKind::Histogram);
+    let times = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let values = [1.0, 2.0, 1.0, -1.0, -2.0, -1.0];
+    chart
+        .set_series_data(histogram, &times, &values, &values, &values, &values)
+        .unwrap();
+    assert!(chart.apply_momentum_histogram_colors(histogram));
+    const PALETTE: [u32; 4] = [0x089981ff, 0x08998180, 0xf7525fff, 0xf7525f80];
+    for row in 0..values.len() {
+        let color = chart
+            .data
+            .point_color(
+                histogram,
+                nucleuscharts_core::model::data_layer::PointColorChannel::Body,
+                row,
+            )
+            .expect("every histogram row is colored");
+        assert!(PALETTE.contains(&color));
+    }
+
+    let values = [f64::NAN, 1.0, 2.0, f64::NAN, -1.0, -2.0];
+    chart
+        .set_series_data(histogram, &times, &values, &values, &values, &values)
+        .unwrap();
+    assert!(chart.apply_momentum_histogram_colors(histogram));
+    let color = |row| {
+        chart.data.point_color(
+            histogram,
+            nucleuscharts_core::model::data_layer::PointColorChannel::Body,
+            row,
+        )
+    };
+    assert_eq!(color(0), None);
+    assert_eq!(color(1), Some(0x089981ff));
+    assert_eq!(color(2), Some(0x089981ff));
+    assert_eq!(color(3), None);
+    assert_eq!(color(4), Some(0xf7525f80));
+    assert_eq!(color(5), Some(0xf7525fff));
 }
 
 #[test]
@@ -2138,18 +2236,20 @@ fn wma_atr_and_stochastic_place_and_report() {
         ("stochastic", 2, Some(2.0))
     );
     assert_eq!(chart.indicator_info(stoch[1]).unwrap().output_index, 1);
-    // 20/80 band levels on the %K output.
-    let mut prices: Vec<f64> = chart
-        .series
-        .iter()
-        .find(|s| s.id == stoch[0])
-        .unwrap()
-        .price_lines
-        .iter()
-        .map(|l| l.price)
-        .collect();
-    prices.sort_by(|a, b| a.total_cmp(b));
-    assert_eq!(prices, vec![20.0, 80.0]);
+    // 20/80 oscillator channel on the %K output; boundary geometry is engine-owned rather than
+    // exposed as mutable price-line state.
+    assert_eq!(
+        chart
+            .series
+            .iter()
+            .find(|s| s.id == stoch[0])
+            .unwrap()
+            .threshold_region,
+        Some(SeriesThresholdRegion {
+            lower: 20.0,
+            upper: 80.0,
+        })
+    );
 }
 
 #[test]
