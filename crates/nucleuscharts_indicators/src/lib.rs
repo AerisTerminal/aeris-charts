@@ -452,6 +452,174 @@ pub struct IncrementalEmaState {
     last_work_rows: usize,
 }
 
+/// One indexed OHLC sample consumed by [`IncrementalAtrState`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AtrSample {
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+}
+
+/// Sparse incremental Wilder ATR state for host-owned indexed sources that may contain hard gaps.
+///
+/// `None` samples reset the previous-close/seed state and emit `None`. Historical repairs replay
+/// from the nearest sparse checkpoint before `from`, while the writer is called only for the
+/// requested suffix.
+#[derive(Clone, Debug)]
+pub struct IncrementalAtrState {
+    period: NonZeroUsize,
+    history: RecursiveHistory<AtrState>,
+    last_work_rows: usize,
+}
+
+impl IncrementalAtrState {
+    /// Creates one empty incremental ATR runtime with the supplied non-zero period.
+    #[must_use]
+    pub fn new(period: NonZeroUsize) -> Self {
+        Self {
+            period,
+            history: RecursiveHistory::new(),
+            last_work_rows: 0,
+        }
+    }
+
+    /// Rebuilds or repairs an indexed OHLC source without requiring contiguous temporary columns.
+    pub fn rebuild_from_indexed<S, W>(
+        &mut self,
+        len: usize,
+        from: usize,
+        mut sample_at: S,
+        mut write: W,
+    ) where
+        S: FnMut(usize) -> Option<AtrSample>,
+        W: FnMut(usize, Option<f64>),
+    {
+        let requested = from.min(len);
+        let (start, mut accumulator) = self.history.begin(len, requested);
+        self.last_work_rows = len.saturating_sub(start);
+        let mut tail = None;
+        let mut before_tail = None;
+        for row in start..len {
+            let previous = accumulator;
+            let value = match sample_at(row) {
+                Some(sample) => atr_step(&mut accumulator, sample, self.period.get()),
+                None => {
+                    accumulator = AtrState::default();
+                    None
+                }
+            };
+            self.history.checkpoint(row, accumulator);
+            if row >= requested {
+                write(row, value);
+            }
+            if row + 1 == len {
+                tail = Some(accumulator);
+                before_tail = (row > 0).then_some(previous);
+            }
+        }
+        self.history.finish(len, tail, before_tail);
+    }
+
+    /// Heap bytes retained by sparse recursive checkpoints.
+    #[must_use]
+    pub fn runtime_bytes(&self) -> usize {
+        self.history.bytes()
+    }
+
+    /// Number of source rows replayed by the most recent rebuild or repair.
+    #[must_use]
+    pub fn last_work_rows(&self) -> usize {
+        self.last_work_rows
+    }
+}
+
+/// One indexed HLCV sample consumed by [`IncrementalVwapState`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VwapSample {
+    pub time_unix_seconds: i64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    /// Missing volume follows the full-recomputation API and falls back to unit weight.
+    pub volume: Option<f64>,
+}
+
+/// Sparse incremental session VWAP state for host-owned indexed sources that may contain hard gaps.
+///
+/// A hard gap resets cumulative session state. UTC day changes reset the session exactly as the
+/// full [`vwap`] calculation does.
+#[derive(Clone, Debug)]
+pub struct IncrementalVwapState {
+    history: RecursiveHistory<VwapState>,
+    last_work_rows: usize,
+}
+
+impl IncrementalVwapState {
+    /// Creates one empty incremental session VWAP runtime.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            history: RecursiveHistory::new(),
+            last_work_rows: 0,
+        }
+    }
+
+    /// Rebuilds or repairs an indexed HLCV source without requiring contiguous temporary columns.
+    pub fn rebuild_from_indexed<S, W>(
+        &mut self,
+        len: usize,
+        from: usize,
+        mut sample_at: S,
+        mut write: W,
+    ) where
+        S: FnMut(usize) -> Option<VwapSample>,
+        W: FnMut(usize, Option<f64>),
+    {
+        let requested = from.min(len);
+        let (start, mut accumulator) = self.history.begin(len, requested);
+        self.last_work_rows = len.saturating_sub(start);
+        let mut tail = None;
+        let mut before_tail = None;
+        for row in start..len {
+            let previous = accumulator;
+            let value = match sample_at(row) {
+                Some(sample) => Some(vwap_step(&mut accumulator, sample)),
+                None => {
+                    accumulator = VwapState::default();
+                    None
+                }
+            };
+            self.history.checkpoint(row, accumulator);
+            if row >= requested {
+                write(row, value);
+            }
+            if row + 1 == len {
+                tail = Some(accumulator);
+                before_tail = (row > 0).then_some(previous);
+            }
+        }
+        self.history.finish(len, tail, before_tail);
+    }
+
+    /// Heap bytes retained by sparse recursive checkpoints.
+    #[must_use]
+    pub fn runtime_bytes(&self) -> usize {
+        self.history.bytes()
+    }
+
+    /// Number of source rows replayed by the most recent rebuild or repair.
+    #[must_use]
+    pub fn last_work_rows(&self) -> usize {
+        self.last_work_rows
+    }
+}
+
+impl Default for IncrementalVwapState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IncrementalEmaState {
     /// Creates one empty incremental EMA runtime with the supplied non-zero period.
     #[must_use]
@@ -528,6 +696,9 @@ struct RsiState {
 
 #[derive(Clone, Copy, Debug, Default)]
 struct AtrState {
+    previous_close: Option<f64>,
+    seen: usize,
+    seed_sum: f64,
     value: f64,
 }
 
@@ -544,6 +715,46 @@ struct VwapState {
     cumulative_pv: f64,
     cumulative_volume: f64,
     initialized: bool,
+}
+
+fn atr_step(state: &mut AtrState, sample: AtrSample, period: usize) -> Option<f64> {
+    let previous_close = state.previous_close.replace(sample.close)?;
+    let tr = (sample.high - sample.low)
+        .max((sample.high - previous_close).abs())
+        .max((sample.low - previous_close).abs());
+    state.seen += 1;
+    if state.seen <= period {
+        state.seed_sum += tr;
+        if state.seen == period {
+            state.value = state.seed_sum / period as f64;
+            Some(state.value)
+        } else {
+            None
+        }
+    } else {
+        state.value = (state.value * (period as f64 - 1.0) + tr) / period as f64;
+        Some(state.value)
+    }
+}
+
+fn vwap_step(state: &mut VwapState, sample: VwapSample) -> f64 {
+    let day = sample.time_unix_seconds.div_euclid(86_400);
+    if !state.initialized || state.day != day {
+        *state = VwapState {
+            day,
+            initialized: true,
+            ..VwapState::default()
+        };
+    }
+    let typical = (sample.high + sample.low + sample.close) / 3.0;
+    let volume = sample.volume.unwrap_or(1.0).max(0.0);
+    state.cumulative_pv += typical * volume;
+    state.cumulative_volume += volume;
+    if state.cumulative_volume > 0.0 {
+        state.cumulative_pv / state.cumulative_volume
+    } else {
+        typical
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1007,22 +1218,15 @@ impl IncrementalState {
                 let mut before_tail = None;
                 for row in start..n {
                     let previous = accumulator;
-                    let value = if row == 0 {
-                        None
-                    } else if row <= *period {
-                        accumulator.value += true_range(input, row);
-                        if row == *period {
-                            accumulator.value /= *period as f64;
-                            Some(accumulator.value)
-                        } else {
-                            None
-                        }
-                    } else {
-                        accumulator.value = (accumulator.value * (*period as f64 - 1.0)
-                            + true_range(input, row))
-                            / *period as f64;
-                        Some(accumulator.value)
-                    };
+                    let value = atr_step(
+                        &mut accumulator,
+                        AtrSample {
+                            high: input.high[row],
+                            low: input.low[row],
+                            close: input.close[row],
+                        },
+                        *period,
+                    );
                     state.checkpoint(row, accumulator);
                     if row >= self.output_from[0] {
                         self.outputs[0].push(value.expect("ATR after warmup"));
@@ -1041,23 +1245,16 @@ impl IncrementalState {
                 let mut before_tail = None;
                 for row in start..n {
                     let previous = accumulator;
-                    let day = input.times[row].div_euclid(86_400);
-                    if !accumulator.initialized || accumulator.day != day {
-                        accumulator = VwapState {
-                            day,
-                            initialized: true,
-                            ..VwapState::default()
-                        };
-                    }
-                    let typical = (input.high[row] + input.low[row] + input.close[row]) / 3.0;
-                    let volume = input.volume.get(row).copied().unwrap_or(1.0).max(0.0);
-                    accumulator.cumulative_pv += typical * volume;
-                    accumulator.cumulative_volume += volume;
-                    let value = if accumulator.cumulative_volume > 0.0 {
-                        accumulator.cumulative_pv / accumulator.cumulative_volume
-                    } else {
-                        typical
-                    };
+                    let value = vwap_step(
+                        &mut accumulator,
+                        VwapSample {
+                            time_unix_seconds: input.times[row],
+                            high: input.high[row],
+                            low: input.low[row],
+                            close: input.close[row],
+                            volume: input.volume.get(row).copied(),
+                        },
+                    );
                     state.checkpoint(row, accumulator);
                     if row >= self.output_from[0] {
                         self.outputs[0].push(value);
@@ -1122,12 +1319,6 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
         ],
         IncrementalKind::Vwap { .. } => [0; MAX_OUTPUTS],
     }
-}
-
-fn true_range(input: IndicatorInput<'_>, index: usize) -> f64 {
-    (input.high[index] - input.low[index])
-        .max((input.high[index] - input.close[index - 1]).abs())
-        .max((input.low[index] - input.close[index - 1]).abs())
 }
 
 #[cfg(test)]
@@ -1268,6 +1459,200 @@ mod tests {
             &state.history.checkpoints,
             &candidate.history.checkpoints
         ));
+    }
+
+    #[test]
+    fn indexed_atr_matches_dense_formula_resets_on_gaps_and_repairs_from_checkpoints() {
+        let period = NonZeroUsize::new(14).expect("period");
+        let mut samples = (0..5_000)
+            .map(|index| {
+                let close = 100.0 + index as f64 * 0.02;
+                Some(AtrSample {
+                    high: close + 1.0,
+                    low: close - 0.75,
+                    close,
+                })
+            })
+            .collect::<Vec<_>>();
+        let highs = samples
+            .iter()
+            .map(|sample| sample.expect("dense").high)
+            .collect::<Vec<_>>();
+        let lows = samples
+            .iter()
+            .map(|sample| sample.expect("dense").low)
+            .collect::<Vec<_>>();
+        let closes = samples
+            .iter()
+            .map(|sample| sample.expect("dense").close)
+            .collect::<Vec<_>>();
+        let expected = atr(&highs, &lows, &closes, period.get());
+        let mut output = vec![None; samples.len()];
+        let mut state = IncrementalAtrState::new(period);
+        state.rebuild_from_indexed(
+            samples.len(),
+            0,
+            |index| samples[index],
+            |index, value| output[index] = value,
+        );
+        assert_eq!(output, expected);
+
+        let tail = samples.len() - 1;
+        let mut changed = samples[tail].expect("tail");
+        changed.high += 2.0;
+        samples[tail] = Some(changed);
+        state.rebuild_from_indexed(samples.len(), tail, |index| samples[index], |_, _| {});
+        assert_eq!(state.last_work_rows(), 1);
+
+        let repaired = 2_500;
+        let mut changed = samples[repaired].expect("repair");
+        changed.low -= 3.0;
+        samples[repaired] = Some(changed);
+        state.rebuild_from_indexed(samples.len(), repaired, |index| samples[index], |_, _| {});
+        assert!(state.last_work_rows() >= samples.len() - repaired);
+        assert!(state.last_work_rows() < samples.len() - repaired + CHECKPOINT_INTERVAL);
+        assert!(state.runtime_bytes() < samples.len() * std::mem::size_of::<AtrState>());
+
+        let short = [
+            Some(AtrSample {
+                high: 2.0,
+                low: 1.0,
+                close: 1.5,
+            }),
+            Some(AtrSample {
+                high: 3.0,
+                low: 2.0,
+                close: 2.5,
+            }),
+            Some(AtrSample {
+                high: 4.0,
+                low: 3.0,
+                close: 3.5,
+            }),
+            None,
+            Some(AtrSample {
+                high: 11.0,
+                low: 10.0,
+                close: 10.5,
+            }),
+            Some(AtrSample {
+                high: 12.0,
+                low: 11.0,
+                close: 11.5,
+            }),
+            Some(AtrSample {
+                high: 13.0,
+                low: 12.0,
+                close: 12.5,
+            }),
+        ];
+        let mut output = vec![None; short.len()];
+        let mut state = IncrementalAtrState::new(NonZeroUsize::new(2).expect("period"));
+        state.rebuild_from_indexed(
+            short.len(),
+            0,
+            |index| short[index],
+            |index, value| output[index] = value,
+        );
+        assert!(output[2].is_some());
+        assert_eq!(output[3], None);
+        assert_eq!(output[4], None);
+        assert_eq!(output[5], None);
+        assert!(output[6].is_some());
+    }
+
+    #[test]
+    fn indexed_vwap_matches_dense_formula_tracks_sessions_and_keeps_tail_work_bounded() {
+        let mut samples = (0..5_000)
+            .map(|index| {
+                let close = 100.0 + index as f64 * 0.01;
+                Some(VwapSample {
+                    time_unix_seconds: 1_700_000_000 + index as i64 * 60,
+                    high: close + 0.5,
+                    low: close - 0.5,
+                    close,
+                    volume: Some(10.0 + (index % 7) as f64),
+                })
+            })
+            .collect::<Vec<_>>();
+        let times = samples
+            .iter()
+            .map(|sample| sample.expect("dense").time_unix_seconds)
+            .collect::<Vec<_>>();
+        let highs = samples
+            .iter()
+            .map(|sample| sample.expect("dense").high)
+            .collect::<Vec<_>>();
+        let lows = samples
+            .iter()
+            .map(|sample| sample.expect("dense").low)
+            .collect::<Vec<_>>();
+        let closes = samples
+            .iter()
+            .map(|sample| sample.expect("dense").close)
+            .collect::<Vec<_>>();
+        let volumes = samples
+            .iter()
+            .map(|sample| sample.expect("dense").volume.expect("volume"))
+            .collect::<Vec<_>>();
+        let expected = vwap(&times, &highs, &lows, &closes, &volumes);
+        let mut output = vec![None; samples.len()];
+        let mut state = IncrementalVwapState::new();
+        state.rebuild_from_indexed(
+            samples.len(),
+            0,
+            |index| samples[index],
+            |index, value| output[index] = value,
+        );
+        assert_eq!(output, expected);
+
+        let tail = samples.len() - 1;
+        let mut changed = samples[tail].expect("tail");
+        changed.volume = Some(100.0);
+        samples[tail] = Some(changed);
+        state.rebuild_from_indexed(samples.len(), tail, |index| samples[index], |_, _| {});
+        assert_eq!(state.last_work_rows(), 1);
+
+        let repaired = 2_500;
+        samples[repaired] = None;
+        state.rebuild_from_indexed(samples.len(), repaired, |index| samples[index], |_, _| {});
+        assert!(state.last_work_rows() >= samples.len() - repaired);
+        assert!(state.last_work_rows() < samples.len() - repaired + CHECKPOINT_INTERVAL);
+        assert!(state.runtime_bytes() < samples.len() * std::mem::size_of::<VwapState>());
+
+        let short = [
+            Some(VwapSample {
+                time_unix_seconds: 86_400,
+                high: 11.0,
+                low: 9.0,
+                close: 10.0,
+                volume: Some(2.0),
+            }),
+            None,
+            Some(VwapSample {
+                time_unix_seconds: 86_460,
+                high: 21.0,
+                low: 19.0,
+                close: 20.0,
+                volume: Some(1.0),
+            }),
+            Some(VwapSample {
+                time_unix_seconds: 172_800,
+                high: 31.0,
+                low: 29.0,
+                close: 30.0,
+                volume: None,
+            }),
+        ];
+        let mut output = vec![None; short.len()];
+        let mut state = IncrementalVwapState::new();
+        state.rebuild_from_indexed(
+            short.len(),
+            0,
+            |index| short[index],
+            |index, value| output[index] = value,
+        );
+        assert_eq!(output, vec![Some(10.0), None, Some(20.0), Some(30.0)]);
     }
 
     #[test]
