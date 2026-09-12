@@ -2,7 +2,7 @@
   "default_theme": "dark",
   "radius": {
     "small": 4,
-    "default": 6,
+    "default": 8,
     "large": 999
   },
   "light": {
@@ -18,7 +18,9 @@
     "muted_border": "#f1f1f1",
     "ring": "#d0d0d0",
     "crosshair_line": "#141414",
-    "crosshair_label": "#141414"
+    "crosshair_label": "#141414",
+    "bullish": "#089981",
+    "bearish": "#f7525f"
   },
   "dark": {
     "surface": "#141414",
@@ -28,12 +30,14 @@
     "primary_hover": "#4e76f2",
     "muted": "#181818",
     "muted_foreground": "#b7b7b7",
-    "accent": "#262626",
-    "border": "#262626",
-    "muted_border": "#262626",
+    "accent": "#252525",
+    "border": "#252525",
+    "muted_border": "#252525",
     "ring": "#353535",
-    "crosshair_line": "#262626",
-    "crosshair_label": "#262626"
+    "crosshair_line": "#252525",
+    "crosshair_label": "#252525",
+    "bullish": "#7c8db0",
+    "bearish": "#98615c"
   },
   "market": {
     "up": "#089981",

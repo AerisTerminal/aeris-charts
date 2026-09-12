@@ -90,6 +90,8 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
     border_control: document.getElementById("axis_border_color").value,
     crosshair_control: document.getElementById("cross_color").value,
     crosshair_label_control: document.getElementById("cross_label_bg").value,
+    bullish: window.__main.options().up_color,
+    bearish: window.__main.options().down_color,
   }));
 
   expect(await theme_state()).toEqual({
@@ -99,11 +101,13 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
     header: "rgb(20, 20, 20)",
     chart: "#141414",
     axis_text: "#f0f0f0",
-    axis_border: "#262626",
-    grid: "#262626",
-    border_control: "#262626",
-    crosshair_control: "#262626",
-    crosshair_label_control: "#262626",
+    axis_border: "#252525",
+    grid: "#252525",
+    border_control: "#252525",
+    crosshair_control: "#252525",
+    crosshair_label_control: "#252525",
+    bullish: "#7c8db0",
+    bearish: "#98615c",
   });
 
   await page.selectOption("#theme_select", "light");
@@ -120,6 +124,8 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
     border_control: "#f1f1f1",
     crosshair_control: "#141414",
     crosshair_label_control: "#141414",
+    bullish: "#089981",
+    bearish: "#f7525f",
   });
 });
 
@@ -161,25 +167,25 @@ test("portable design tokens and disabled controls match the brand contract", as
     "font-sans": '-apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif',
     surface: "#141414",
     "surface-secondary": "#181818",
-    border: "color-mix(in srgb, #f0f0f0 8%, transparent)",
-    "border-secondary": "color-mix(in srgb, #f0f0f0 8%, transparent)",
+    border: "#f0f0f014",
+    "border-secondary": "#f0f0f014",
     "input-fill": "#181818",
-    "input-border": "color-mix(in srgb, #f0f0f0 8%, transparent)",
+    "input-border": "#f0f0f014",
     "text-primary": "#f0f0f0",
-    "text-secondary": "color-mix(in srgb, #f0f0f0 74%, transparent)",
-    "text-muted": "color-mix(in srgb, #f0f0f0 36%, transparent)",
-    "hover-bg": "color-mix(in srgb, #f0f0f0 8%, transparent)",
-    "active-bg": "color-mix(in srgb, #f0f0f0 14%, transparent)",
-    icon: "color-mix(in srgb, #f0f0f0 66%, transparent)",
+    "text-secondary": "#f0f0f0bd",
+    "text-muted": "#f0f0f05c",
+    "hover-bg": "#f0f0f014",
+    "active-bg": "#f0f0f024",
+    icon: "#f0f0f0a8",
     "icon-active": "#f0f0f0",
     primary: "#3e63dd",
-    "primary-foreground": "oklch(0.97 0.014 254.604)",
-    danger: "oklch(0.6471 0.2288 22.47)",
+    "primary-foreground": "#eff6ff",
+    danger: "#fb3748",
     "danger-foreground": "#ffffff",
-    ring: "color-mix(in srgb, #f0f0f0 15%, transparent)",
-    bullish: "#089981",
-    bearish: "#f7525f",
-    "radius-default": "6px",
+    ring: "#f0f0f026",
+    bullish: "#7c8db0",
+    bearish: "#98615c",
+    "radius-default": "8px",
     "radius-small": "4px",
     "radius-large": "999px",
   });
@@ -189,25 +195,25 @@ test("portable design tokens and disabled controls match the brand contract", as
     "font-sans": '-apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif',
     surface: "#ffffff",
     "surface-secondary": "#fafafa",
-    border: "color-mix(in srgb, #141414 6%, transparent)",
-    "border-secondary": "color-mix(in srgb, #141414 6%, transparent)",
+    border: "#1414140f",
+    "border-secondary": "#1414140f",
     "input-fill": "#fafafa",
-    "input-border": "color-mix(in srgb, #141414 6%, transparent)",
+    "input-border": "#1414140f",
     "text-primary": "#141414",
-    "text-secondary": "color-mix(in srgb, #141414 74%, transparent)",
-    "text-muted": "color-mix(in srgb, #141414 36%, transparent)",
-    "hover-bg": "color-mix(in srgb, #141414 3.5%, transparent)",
-    "active-bg": "color-mix(in srgb, #141414 5%, transparent)",
-    icon: "color-mix(in srgb, #141414 50%, transparent)",
+    "text-secondary": "#141414bd",
+    "text-muted": "#1414145c",
+    "hover-bg": "#14141409",
+    "active-bg": "#1414140d",
+    icon: "#14141480",
     "icon-active": "#141414",
     primary: "#3e63dd",
-    "primary-foreground": "oklch(0.97 0.014 254.604)",
-    danger: "oklch(0.6471 0.2288 22.47)",
+    "primary-foreground": "#eff6ff",
+    danger: "#fb3748",
     "danger-foreground": "#ffffff",
-    ring: "color-mix(in srgb, #141414 20%, transparent)",
+    ring: "#14141433",
     bullish: "#089981",
     bearish: "#f7525f",
-    "radius-default": "6px",
+    "radius-default": "8px",
     "radius-small": "4px",
     "radius-large": "999px",
   });
@@ -277,9 +283,9 @@ test("main demo splits into independent charts, drags dividers, meters, caps, an
   await wait_cell_charts(page);
   let shots = await cell_shots(page);
   for (const shot of shots) {
-    const green = count_color(shot, [38, 166, 154]);
-    const red = count_color(shot, [239, 83, 80]);
-    expect(green + red, "each cell renders its own candles").toBeGreaterThan(200);
+    const bullish = count_color(shot, [124, 141, 176]);
+    const bearish = count_color(shot, [152, 97, 92]);
+    expect(bullish + bearish, "each cell renders its own candles").toBeGreaterThan(200);
   }
 
   // The divider is visible and draggable (col-resize), and the drag resizes the cells.
@@ -578,9 +584,9 @@ test("shortcut splits come up seeded (the on_cell_added hook fires)", async ({ p
   // Both cells render candles � the shortcut path runs the same seeding hook as the button.
   const shots = await cell_shots(page);
   for (const shot of shots) {
-    const green = count_color(shot, [38, 166, 154]);
-    const red = count_color(shot, [239, 83, 80]);
-    expect(green + red, "shortcut-created cell renders its seeded candles").toBeGreaterThan(200);
+    const bullish = count_color(shot, [124, 141, 176]);
+    const bearish = count_color(shot, [152, 97, 92]);
+    expect(bullish + bearish, "shortcut-created cell renders its seeded candles").toBeGreaterThan(200);
   }
 });
 

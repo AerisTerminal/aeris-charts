@@ -111,6 +111,8 @@ fn main() {
             ("ring", "RING"),
             ("crosshair_line", "CROSSHAIR_LINE"),
             ("crosshair_label", "CROSSHAIR_LABEL"),
+            ("bullish", "MARKET_UP"),
+            ("bearish", "MARKET_DOWN"),
         ] {
             emit_color(
                 &mut output,

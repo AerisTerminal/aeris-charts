@@ -7,7 +7,7 @@ import { PNG } from "pngjs";
 
 const LABEL = [247, 82, 95]; // #f7525f — the deterministic final DOWN bar's label color
 const CHIP = LABEL; // the title chip shares the main label color by default
-const BORDER = [38, 38, 38]; // #262626 - dark axis border composited over the surface
+const BORDER = [37, 37, 37]; // #252525 - dark axis border composited over the surface
 const ROW = 15; // 11px axis text + 2*2 padding (compact price row)
 const ROW_CD = 14; // 10px countdown text + 2*2 padding
 
@@ -614,7 +614,7 @@ test("price and countdown chips share an exact edge at any DPR (no attachment ga
   for (const dpr of [1, 1.35, 2]) {
     const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: dpr, colorScheme: "light" });
     const page = await context.newPage();
-    await page.goto(`${test_base_url}/`);
+    await page.goto(`${test_base_url}/?theme=light`);
     await wait_for_chart(page);
     await page.evaluate(() => {
       const now = Math.floor(Date.now() / 1000);

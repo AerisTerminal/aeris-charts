@@ -34,14 +34,14 @@
   .market-price { min-width: 48px; color: var(--bullish); font-weight: 600; font-variant-numeric: tabular-nums; }
   .market-price[data-direction="down"] { color: var(--bearish); }
   #comparison_controls { display: flex; gap: 6px; align-items: center; margin-left: auto; }
-  #comparison_controls select, #comparison_controls button { height: 40px; color: var(--text-primary); background: var(--input-fill); border: 1px solid var(--input-border); border-radius: 6px; }
+  #comparison_controls select, #comparison_controls button { height: 40px; color: var(--text-primary); background: var(--input-fill); border: 1px solid var(--input-border); border-radius: var(--radius-default); }
   #comparison_controls select { max-width: 148px; padding: 0 8px; font-size: 12px; }
   #comparison_controls button { padding: 0 10px; font-size: 12px; font-weight: 600; }
   #comparison_controls button:hover:not(:disabled) { background: var(--hover-bg); }
   #comparison_clear:disabled { color: var(--text-muted); }
   #quick_actions { display: flex; gap: 2px; align-items: center; }
   .icon-button, #quick_actions button, #tool_rail button { display: inline-grid; place-items: center; border: 1px solid transparent; background: transparent; color: var(--icon); }
-  .icon-button, #quick_actions button { flex-shrink: 0; width: 40px; height: 40px; padding: 0; border-radius: 6px; }
+  .icon-button, #quick_actions button { flex-shrink: 0; width: 40px; height: 40px; padding: 0; border-radius: var(--radius-default); }
   .icon-button:hover, #quick_actions button:hover, #tool_rail button:hover { color: var(--icon-active); background: var(--hover-bg); }
   .icon-button:active, #quick_actions button:active, #tool_rail button:active { background: var(--active-bg); }
   .icon-button svg, #quick_actions svg, #tool_rail svg { width: 20px; height: 20px; }
@@ -54,7 +54,7 @@
   #workspace { display: grid; grid-template-columns: 76px minmax(0, 1fr) 360px; min-width: 0; min-height: 0; }
   #workspace[data-inspector-open="false"] { grid-template-columns: 76px minmax(0, 1fr); }
   #tool_rail { z-index: 12; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 8px; background: var(--surface); border-right: 1px solid var(--border); }
-  #tool_rail button { width: 60px; min-height: 56px; gap: 4px; padding: 8px 2px; border-radius: 8px; font-size: 10px; }
+  #tool_rail button { width: 60px; min-height: 56px; gap: 4px; padding: 8px 2px; border-radius: var(--radius-default); font-size: 10px; }
   #tool_rail button[aria-current="true"] { color: var(--primary); background: color-mix(in srgb, var(--primary) 10%, transparent); border-color: color-mix(in srgb, var(--primary) 25%, transparent); }
   #tool_rail .rail-spacer { flex: 1; }
   #inspector { z-index: 11; display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; background: var(--surface); border-left: 1px solid var(--border); }
@@ -73,7 +73,7 @@
   #inspector label:has(input[type="checkbox"]), #inspector label:has(input[type="radio"]) { flex: 1 1 44%; cursor: pointer; color: var(--text-primary); }
   #inspector label > select, #inspector label > input:not([type="checkbox"]):not([type="radio"]), #inspector label > span:last-child { margin-left: auto; }
   #inspector label > input[type="range"] + span { margin-left: 0; min-width: 20px; text-align: right; }
-  #inspector button, #inspector select, #inspector input:not([type="checkbox"]):not([type="radio"]):not([type="range"]) { min-height: 40px; max-width: 100%; background: var(--input-fill); color: var(--text-primary); border: 1px solid var(--input-border); border-radius: 6px; }
+  #inspector button, #inspector select, #inspector input:not([type="checkbox"]):not([type="radio"]):not([type="range"]) { min-height: 40px; max-width: 100%; background: var(--input-fill); color: var(--text-primary); border: 1px solid var(--input-border); border-radius: var(--radius-default); }
   #inspector select, #inspector input[type="text"], #inspector input[type="number"] { width: 160px; padding: 6px 8px; }
   #inspector button { min-width: 40px; padding: 8px 12px; font-size: 12px; }
   #inspector button:hover { background: var(--hover-bg); }
@@ -93,7 +93,7 @@
   #feature_filters button { flex: 1; min-width: 0; padding: 6px; font-size: 11px; border-color: transparent; background: transparent; }
   #feature_filters button[aria-pressed="true"] { color: var(--primary); background: var(--surface); border-color: var(--border-secondary); }
   .scenario-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; width: 100%; }
-  .scenario-grid .feature-card { display: grid; grid-template-columns: 32px minmax(0, 1fr); grid-template-rows: auto auto; gap: 3px 12px; min-height: 64px; padding: 10px 8px; text-align: left; background: transparent; border-color: transparent; border-radius: 8px; }
+  .scenario-grid .feature-card { display: grid; grid-template-columns: 32px minmax(0, 1fr); grid-template-rows: auto auto; gap: 3px 12px; min-height: 64px; padding: 10px 8px; text-align: left; background: transparent; border-color: transparent; border-radius: var(--radius-default); }
   .scenario-grid .feature-card:hover { background: var(--hover-bg); }
   .feature-card .feature-icon { grid-row: 1 / 3; display: grid; place-items: center; width: 32px; height: 32px; margin-top: 2px; color: var(--icon); }
   .feature-card svg { width: 20px; height: 20px; }
@@ -476,7 +476,7 @@
 <script type="module">
 // Built from the real package distribution. The demo build copies @nucleuscharts/financial' published
 // artifacts; it does not compile or wire an engine of its own.
-import { create_chart, create_chart_grid, create_series_markers, default_theme_name, theme_options } from "./dist/nucleuscharts_financial.js";
+import { create_chart, create_chart_grid, create_series_markers, default_theme_name, theme_options, theme_palette } from "./dist/nucleuscharts_financial.js";
 import { generate_fixture_data } from "./fixture_data.js";
 import { fixture_theme } from "./fixture_styles.js";
 import { marker_fixture, volume_fixture } from "./fixture_features.js";
@@ -537,6 +537,10 @@ const requested_theme = theme_param === "light" || theme_param === "dark"
   ? theme_param
   : runtime_test === null ? stored_demo_theme() ?? default_theme_name : "light";
 sync_page_theme(requested_theme);
+function market_colors(theme) {
+  const palette = theme_palette(theme);
+  return { up_color: palette.bullish, down_color: palette.bearish };
+}
 const requested_feature = query.get("feature");
 const requested_left_scale = query.get("leftScale") === "1";
 const parity_fixture = runtime_test === null
@@ -637,6 +641,7 @@ if (last_bar !== undefined) {
 }
 const main = chart.add_series("candlestick", {
   ...(requested_left_scale ? { priceScaleId: "left" } : {}),
+  ...(parity_fixture === null ? market_colors(requested_theme) : {}),
   ...(parity_fixture !== null ? {
     countdown_visible: false,
     up_color: "#089981",
@@ -647,6 +652,11 @@ const main = chart.add_series("candlestick", {
     border_down_color: "#f7525f",
   } : {}),
 });
+if (parity_fixture === null) {
+  const market = market_colors(requested_theme);
+  for (const id of ["up_color", "wick_up_color", "border_up_color"]) document.getElementById(id).value = market.up_color;
+  for (const id of ["down_color", "wick_down_color", "border_down_color"]) document.getElementById(id).value = market.down_color;
+}
 main.set_data(data);
 if (grid !== null) {
   // The root cell's primary series under the same handle the split cells get, so the toolbar's
@@ -1524,9 +1534,9 @@ function seed_split_cell(cell) {
     wick_span: 0.9,
     end_time: data_end_time(),
   });
-  const series = cell.chart.add_series("candlestick");
-  series.set_data(data);
   const selected_theme = document.getElementById("theme_select").value;
+  const series = cell.chart.add_series("candlestick", market_colors(selected_theme));
+  series.set_data(data);
   if (selected_theme !== default_theme_name) cell.chart.apply_options(theme_options(selected_theme));
   cell.chart.__seed_series = series; // debug/test handle
 }
@@ -1680,9 +1690,15 @@ document.getElementById("theme_select").addEventListener("change", (e) => {
   // values happen to be sitting in demo controls on top of it.
   chart.apply_options(theme_options(e.target.value));
   if (grid !== null) {
-    for (const cell of grid.cells()) cell.chart.apply_options(theme_options(e.target.value));
+    for (const cell of grid.cells()) {
+      cell.chart.apply_options(theme_options(e.target.value));
+      cell.chart.__seed_series?.apply_options(market_colors(e.target.value));
+    }
     grid.set_divider_color(null);
   }
+  const market = market_colors(e.target.value);
+  for (const id of ["up_color", "wick_up_color", "border_up_color"]) document.getElementById(id).value = market.up_color;
+  for (const id of ["down_color", "wick_down_color", "border_down_color"]) document.getElementById(id).value = market.down_color;
   if (separator_color_pinned) {
     chart.apply_options({ layout: { panes: { separatorColor: document.getElementById("pane_separator_color").value } } });
   }
@@ -1693,19 +1709,19 @@ document.getElementById("theme_select").addEventListener("change", (e) => {
 function sync_chart_controls_from_engine() {
   const options = chart.options();
   const hex = (value, fallback) => css_to_hex(value) || fallback;
-  document.getElementById("axis_border_color").value = hex(options.rightPriceScale.borderColor, "#262626");
+  document.getElementById("axis_border_color").value = hex(options.rightPriceScale.borderColor, "#252525");
   document.getElementById("axis_border_visible").checked = options.rightPriceScale.borderVisible !== false;
   document.getElementById("axis_text_color").value = hex(options.layout.textColor, "#f0f0f0");
-  document.getElementById("pane_separator_color").value = hex(options.layout.panes.separatorColor, "#262626");
+  document.getElementById("pane_separator_color").value = hex(options.layout.panes.separatorColor, "#252525");
   document.getElementById("grid_toggle").checked = options.grid.vertLines.visible === true && options.grid.horzLines.visible === true;
-  document.getElementById("grid_color").value = hex(options.grid.vertLines.color, "#262626");
+  document.getElementById("grid_color").value = hex(options.grid.vertLines.color, "#252525");
   document.getElementById("grid_style").value = String(options.grid.vertLines.style);
   document.getElementById("cross_mode").value = String(options.crosshair.mode);
-  document.getElementById("cross_color").value = hex(options.crosshair.vertLine.color, "#262626");
+  document.getElementById("cross_color").value = hex(options.crosshair.vertLine.color, "#252525");
   document.getElementById("cross_width").value = String(options.crosshair.vertLine.width);
   document.getElementById("cross_width_val").textContent = String(options.crosshair.vertLine.width);
   document.getElementById("cross_style").value = String(options.crosshair.vertLine.style);
-  document.getElementById("cross_label_bg").value = hex(options.crosshair.vertLine.labelBackgroundColor, "#262626");
+  document.getElementById("cross_label_bg").value = hex(options.crosshair.vertLine.labelBackgroundColor, "#252525");
   document.getElementById("cross_label_visible").checked = options.crosshair.vertLine.labelVisible !== false;
   document.getElementById("font_family").value = options.layout.fontFamily;
   document.getElementById("font_size").value = String(options.layout.fontSize);

@@ -47,8 +47,8 @@ export const light_theme: chart_theme = {
   ring: style_tokens.light.ring,
   crosshair_line: style_tokens.light.crosshair_line,
   crosshair_label: style_tokens.light.crosshair_label,
-  bullish: style_tokens.market.up,
-  bearish: style_tokens.market.down,
+  bullish: style_tokens.light.bullish,
+  bearish: style_tokens.light.bearish,
 };
 
 export const dark_theme: chart_theme = {
@@ -65,8 +65,8 @@ export const dark_theme: chart_theme = {
   ring: style_tokens.dark.ring,
   crosshair_line: style_tokens.dark.crosshair_line,
   crosshair_label: style_tokens.dark.crosshair_label,
-  bullish: style_tokens.market.up,
-  bearish: style_tokens.market.down,
+  bullish: style_tokens.dark.bullish,
+  bearish: style_tokens.dark.bearish,
 };
 
 export type theme_name = "light" | "dark";

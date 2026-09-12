@@ -22,11 +22,14 @@ for (const [backend, url] of [
       const expected_chart = structuredClone(scratch.options());
       expected_chart.grid.vertLines.visible = false;
       expected_chart.grid.horzLines.visible = false;
+      const expected_series = scratch_series.options();
+      expected_series.up_color = api.dark_theme.bullish;
+      expected_series.down_color = api.dark_theme.bearish;
       const result = {
         actual_chart: window.__chart.options(),
         expected_chart,
         actual_series: window.__main.options(),
-        expected_series: scratch_series.options(),
+        expected_series,
       };
       scratch.remove();
       host.remove();
@@ -352,7 +355,7 @@ test("hollow candles are a Series choice backed by the canonical candlestick ser
     kind: window.__main.series_type(),
     up: window.__main.options().up_color,
     down: window.__main.options().down_color,
-  }))).toEqual({ kind: "candlestick", up: "#089981", down: "#f7525f" });
+  }))).toEqual({ kind: "candlestick", up: "#7c8db0", down: "#98615c" });
 
   await page.locator('input[name="series"][value="histogram"]').check();
   expect(await page.evaluate(() => window.__main.series_type())).toBe("histogram");
