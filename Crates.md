@@ -20,19 +20,20 @@ cargo add nucleuscharts_render_wgpu
 cargo add nucleuscharts_native
 ```
 
-All published `nucleuscharts_*` crates in a coordinated release use the same version.
+The current release is `0.1.0`. All published `nucleuscharts_*` crates in a coordinated release use
+the same version.
 
 ## Crates
 
 | Crate | Purpose |
 | --- | --- |
-| `nucleuscharts_engine` | Chart state, interactions, drawings, indicators, and frame construction |
-| `nucleuscharts_core` | Platform-free data, scales, options, validation, and formatting |
-| `nucleuscharts_indicators` | Pure Rust technical-indicator calculations |
-| `nucleuscharts_render` | Backend-neutral draw-list contract and rendering math |
-| `nucleuscharts_render_wgpu` | WebGPU executor |
-| `nucleuscharts_native` | Native tiny-skia rasterizer and server-side PNG rendering |
-| `nucleuscharts_wasm` | WebAssembly browser host |
+| [`nucleuscharts_engine`](https://crates.io/crates/nucleuscharts_engine) | Chart state, interactions, drawings, indicators, and frame construction |
+| [`nucleuscharts_core`](https://crates.io/crates/nucleuscharts_core) | Platform-free data, scales, options, validation, and formatting |
+| [`nucleuscharts_indicators`](https://crates.io/crates/nucleuscharts_indicators) | Pure Rust technical-indicator calculations |
+| [`nucleuscharts_render`](https://crates.io/crates/nucleuscharts_render) | Backend-neutral draw-list contract and rendering math |
+| [`nucleuscharts_render_wgpu`](https://crates.io/crates/nucleuscharts_render_wgpu) | WebGPU executor |
+| [`nucleuscharts_native`](https://crates.io/crates/nucleuscharts_native) | Native tiny-skia rasterizer and server-side PNG rendering |
+| [`nucleuscharts_wasm`](https://crates.io/crates/nucleuscharts_wasm) | WebAssembly browser host |
 
 The optional GPUI executor is available from the repository but is not published to crates.io. It
 tracks a reviewed Zed commit whose API differs from the registry `gpui` release.

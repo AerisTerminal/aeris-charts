@@ -238,13 +238,20 @@ support follows the separately documented persistence window and is a major comp
 
 ## Rust distribution
 
-Workspace Rust crates are internal implementation components. They are not published to crates.io,
-do not share the npm package version, and carry no standalone semver compatibility promise. Repository
-components and licensed integrators may consume an exact Git revision; floating Git dependencies are
-unsupported. Public Rust visibility currently supports cross-crate repository boundaries and is
-experimental, not a separately distributed product API. The GPUI backend is experimental. Official
-Rust publication would require a separate product decision, crate/version finalization, packaging
-tests, and release coordination; this repository does not reserve or publish crate names.
+The Rust crates are published to crates.io as one coordinated release family. Version `0.1.0`
+publishes `nucleuscharts_core`, `nucleuscharts_indicators`, `nucleuscharts_render`,
+`nucleuscharts_engine`, `nucleuscharts_render_wgpu`, `nucleuscharts_native`, and
+`nucleuscharts_wasm`. Workspace manifests retain local path dependencies with the same explicit
+version, so repository builds exercise the same dependency boundaries used by registry consumers.
+
+The Rust API is below 1.0 and may evolve between minor releases. Patch releases preserve the public
+API within their minor line except where a correctness or security repair cannot do so safely; minor
+releases may add, change, or remove pre-1.0 Rust APIs. All published Nucleus crates in one release use
+the same version, and consumers should keep direct Nucleus dependencies aligned.
+
+`nucleuscharts_render_gpui` remains repository-only and experimental because it tracks a reviewed
+Zed Git revision whose API differs from the crates.io `gpui` release. Exact Git revisions are
+required for that backend; floating Git dependencies are unsupported.
 
 ## Release policy
 

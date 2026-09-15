@@ -99,6 +99,28 @@ npm run test:pack
 
 Run Playwright for browser-facing changes and GPUI parity/replay checks for GPUI executor changes. Documentation-only changes may skip code gates, but still require diff, link/path, architecture-consistency, and documentation-hygiene checks.
 
+### crates.io releases
+
+Keep every publishable Nucleus crate on one coordinated version and keep each internal dependency's
+`path` plus `version` fields aligned. `nucleuscharts_render_gpui` is repository-only and must retain
+`publish = false` while it depends on the reviewed Zed Git revision.
+
+After the complete gates pass, publish with `--locked` in dependency order and wait for each crate to
+be indexed before publishing its consumers:
+
+```text
+nucleuscharts_indicators
+nucleuscharts_core
+nucleuscharts_render
+nucleuscharts_engine
+nucleuscharts_render_wgpu
+nucleuscharts_native
+nucleuscharts_wasm
+```
+
+Run a package or publish dry run at each layer before its irreversible upload. Never place a crates.io
+token in repository files, shell history, logs, or task messages.
+
 When complete, review the diff, commit once with a structured message describing the outcome and verification, push `main` to `github` without force, and report remaining manual verification honestly.
 
 Do not stop at a plan when implementation is authorized and safe. Do not claim completion while a required check is failing.

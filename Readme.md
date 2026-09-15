@@ -12,17 +12,17 @@ Rust consumers can use the engine and backends directly:
 cargo add nucleuscharts_engine
 ```
 
-The coordinated crates.io release contains:
+The current coordinated Rust release is `0.1.0` and is available on crates.io:
 
 | Crate | Purpose |
 | --- | --- |
-| `nucleuscharts_engine` | Headless chart state, interactions, drawings, indicators, and frame construction |
-| `nucleuscharts_core` | Platform-free data, scales, options, validation, and formatting |
-| `nucleuscharts_indicators` | Pure Rust technical-indicator calculations |
-| `nucleuscharts_render` | Backend-neutral draw-list contract and rendering math |
-| `nucleuscharts_render_wgpu` | WebGPU executor |
-| `nucleuscharts_native` | Native tiny-skia rasterizer and server-side PNG rendering |
-| `nucleuscharts_wasm` | WebAssembly browser host |
+| [`nucleuscharts_engine`](https://crates.io/crates/nucleuscharts_engine) | Headless chart state, interactions, drawings, indicators, and frame construction |
+| [`nucleuscharts_core`](https://crates.io/crates/nucleuscharts_core) | Platform-free data, scales, options, validation, and formatting |
+| [`nucleuscharts_indicators`](https://crates.io/crates/nucleuscharts_indicators) | Pure Rust technical-indicator calculations |
+| [`nucleuscharts_render`](https://crates.io/crates/nucleuscharts_render) | Backend-neutral draw-list contract and rendering math |
+| [`nucleuscharts_render_wgpu`](https://crates.io/crates/nucleuscharts_render_wgpu) | WebGPU executor |
+| [`nucleuscharts_native`](https://crates.io/crates/nucleuscharts_native) | Native tiny-skia rasterizer and server-side PNG rendering |
+| [`nucleuscharts_wasm`](https://crates.io/crates/nucleuscharts_wasm) | WebAssembly browser host |
 
 The GPUI executor remains available from this repository because it relies on a reviewed Zed commit
 whose API differs from the crates.io `gpui` release. It is deliberately not published as a broken
@@ -192,7 +192,8 @@ for crosshair lines, and muted for crosshair-label surfaces.
 
 See [Architecture.md](Architecture.md) for ownership, data flow, and backend boundaries.
 See [Public_api.md](Public_api.md) for supported/experimental surfaces, persistence, errors, and
-version policy. Workspace Rust crates are internal exact-revision components, not crates.io products.
+version policy. Published Rust crates use coordinated versions and retain matching local path
+dependencies inside this workspace.
 
 ## Development
 
