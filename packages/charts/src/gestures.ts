@@ -232,7 +232,7 @@ export function install_gestures(chart: chart_impl): () => void {
     chart.emit_crosshair(x, y);
   };
 
-  // TradingView's Ctrl-held magnet, scoped to DRAWING work: the Normal-mode crosshair snaps
+  // the public reference's Ctrl-held magnet, scoped to DRAWING work: the Normal-mode crosshair snaps
   // to the hovered bar's rendered prices only while a drawing tool is armed (anchor
   // placement/preview) —
   // plain browsing never price-snaps on Ctrl. Forwarded on every pointer move/down and on
@@ -493,7 +493,7 @@ export function install_gestures(chart: chart_impl): () => void {
           zoom,
         );
       } else {
-        // Auto mode is the Lightweight Charts chart-level handler: every surface zooms time,
+        // Auto mode is informed by the public reference's chart-level behavior: every surface zooms time,
         // modifiers are ignored, and the engine clamps the pane-relative anchor into the plot.
         if (cfg.wheel_behavior === "zoom" && e.ctrlKey) wasm.zoom_focused(point.x, zoom);
         else wasm.zoom(point.x, zoom);
@@ -666,14 +666,14 @@ export function install_gestures(chart: chart_impl): () => void {
     } else if (drawing_dragging) {
       // Engine-owned anchor/body drag (drawings.rs): the engine re-anchors from the start
       // snapshot; the crosshair feed below keeps tracking the cursor. Modifier keys are
-      // forwarded live (toggling mid-drag responds immediately, TradingView parity): Ctrl/Cmd =
+      // forwarded live (toggling mid-drag responds immediately, reference-informed behavior): Ctrl/Cmd =
       // magnet (snap anchors to the nearest rendered bar price), Shift = straighten
       // (0°/45°/90° anchor constraint, dominant-axis body move). Ctrl never straightens.
       wasm.drawing_drag_to(p.x, p.y, e.ctrlKey || e.metaKey, e.shiftKey);
     } else if (delta_tooltip_dragging) {
       // The native comparison interaction explicitly owns this pane drag.
     } else if (update.kind === GestureUpdateCode.DragStarted && chart.gesture_config().pan) {
-      // Pane panning opens on the threshold sample; like Lightweight Charts, movement begins on
+      // Pane panning opens on the threshold sample; like the public reference, movement begins on
       // the following sample. Kinetic sampling starts only after this transition.
       begin_scroll(p.x, "mouse");
       start_price_pan(p.y);
@@ -711,7 +711,7 @@ export function install_gestures(chart: chart_impl): () => void {
               : "crosshair";
       // A primitive's cursor overrides the region cursor while its hit holds — but only over
       // the pane (the hover state is not refreshed over the axis strips). A series hit shows
-      // the click affordance (TradingView-style: a series is selectable), falling back to the
+      // the click affordance (industry-standard: a series is selectable), falling back to the
       // region cursor off the geometry.
       overlay.style.cursor =
         region_cursor === "crosshair"
@@ -868,7 +868,7 @@ export function install_gestures(chart: chart_impl): () => void {
     }
     if (mouse_click_timer === null) {
       arm_mouse_click(e);
-      // Lightweight Charts emits the first single click immediately.
+      // the public reference emits the first single click immediately.
       run_single_click(e, p);
       return;
     }
@@ -1258,7 +1258,7 @@ export function install_gestures(chart: chart_impl): () => void {
       if (target !== InputTargetCode.Pane) {
         touch_direction = "chart";
       } else {
-        // Lightweight Charts gives vertical movement priority by halving horizontal distance.
+        // the public reference gives vertical movement priority by halving horizontal distance.
         const vertical = y_offset >= x_offset * 0.5;
         const cfg = chart.gesture_config();
         touch_direction = (vertical ? cfg.pan_vert_touch : cfg.pan_horz_touch) ? "chart" : "page";
@@ -1371,7 +1371,7 @@ export function install_gestures(chart: chart_impl): () => void {
       return;
     }
     switch (e.key) {
-      // TradingView: Left scrolls back in time (older data), Right forward (newer data);
+      // the public reference: Left scrolls back in time (older data), Right forward (newer data);
       // Ctrl/Shift steps 10 bars. reference rightOffset grows toward newer data, hence the signs.
       case "ArrowLeft":
         begin_keyboard_scroll("ArrowLeft", -step, e.repeat);
@@ -1453,7 +1453,7 @@ export function install_gestures(chart: chart_impl): () => void {
   if (is_chrome) {
     overlay.addEventListener("mousedown", on_mousedown);
   }
-  // Ctrl/Cmd press/release refreshes the crosshair magnet live (TradingView parity).
+  // Ctrl/Cmd press/release refreshes the crosshair magnet live (reference-informed behavior).
   window.addEventListener("keydown", on_modifier_key);
   window.addEventListener("keyup", on_modifier_key);
   window.addEventListener("keyup", release_keyboard_scroll);

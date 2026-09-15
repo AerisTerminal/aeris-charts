@@ -128,14 +128,14 @@ impl Color {
 
     /// Same hue at full opacity: RGB preserved, alpha forced to 0xFF. Used for the last-value
     /// cluster's chip backgrounds (title/price/countdown), which follow the series color but
-    /// must never turn translucent when that color carries alpha (TradingView-style).
+    /// must never turn translucent when that color carries alpha (industry-standard).
     pub fn solid(&self) -> Color {
         Color::rgba(self.r(), self.g(), self.b(), 0xFF)
     }
 
     /// Darker shade of this color: every sRGB channel scaled by `factor` (clamped to 0..=1),
     /// alpha preserved. Used for the title chip of the last-value label cluster, which renders
-    /// in a darker shade of the label color (TradingView-style).
+    /// in a darker shade of the label color (industry-standard).
     pub fn darken(&self, factor: f64) -> Color {
         let f = factor.clamp(0.0, 1.0);
         Color::rgba(

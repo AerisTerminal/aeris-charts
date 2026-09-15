@@ -303,7 +303,7 @@ impl ChartEngine {
             price_scale,
             price,
             condition: AlertCondition::Crossing,
-            // TradingView regular-price alerts offer Only Once and Every Time. A host may change
+            // the public reference regular-price alerts offer Only Once and Every Time. A host may change
             // this default in its dialog, or use the interval-dependent modes represented above.
             frequency: AlertFrequency::OnlyOnce,
         };

@@ -363,7 +363,7 @@ impl ChartEngine {
         } else {
             HISTOGRAM
         };
-        // TradingView volume tint: the primary series' up/down direction per bar. The primary
+        // the public reference volume tint: the primary series' up/down direction per bar. The primary
         // is the first visible, non-removed series (id 0 may be tombstoned).
         let main = self.primary_series().map(|s| self.data.plot(s.id));
         let point_colors = self.data.point_colors(rs.id);
@@ -499,7 +499,7 @@ impl ChartEngine {
         };
         let point_colors = self.data.point_colors(rs.id);
         // Bollinger background fill: the band between this UPPER output and its LOWER
-        // companion, in the band color at TradingView's 0.2 background alpha, painted under
+        // companion, in the band color at the public reference's 0.2 background alpha, painted under
         // the band strokes. Both outputs share bar times, so the rows (and x's) align
         // point-for-point; a count mismatch skips the fill rather than drawing a wrong one.
         if let Some(lower_id) = self.bollinger_fill_companion(rs.id) {
@@ -1258,7 +1258,7 @@ impl ChartEngine {
         }
     }
 
-    /// TradingView-style bid/ask lines (default OFF, `bid_ask_visible`): one horizontal line
+    /// industry-standard bid/ask lines (default OFF, `bid_ask_visible`): one horizontal line
     /// per side with a live value, on the series' own price scale, colored by the side's
     /// pinned CSS color (semantic primary / market-loss defaults).
     pub(super) fn build_bid_ask_lines_frame(
@@ -1369,9 +1369,9 @@ impl ChartEngine {
         });
     }
 
-    /// TradingView-style SELECTION ANCHORS: canonical timestamps sampled when the series was
+    /// industry-standard SELECTION ANCHORS: canonical timestamps sampled when the series was
     /// selected are resolved against current values and coordinates, then clipped to the pane.
-    /// Each carries a theme-derived fill with the TradingView accent-blue border.
+    /// Each carries a theme-derived fill with the product's accent-blue border.
     pub(super) fn build_selection_anchors_frame(
         &self,
         pane_index: usize,

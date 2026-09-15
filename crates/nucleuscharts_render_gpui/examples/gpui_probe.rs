@@ -2299,7 +2299,7 @@ impl Probe {
                 self.engine
                     .price_axis_wheel_zoom(pane, price_target.unwrap(), y, zoom);
             } else {
-                // Auto mode mirrors Lightweight Charts: every surface targets the time scale and
+                // Auto mode implements the reference-informed behavior: every surface targets the time scale and
                 // modifiers do not change routing. Focused Ctrl zoom remains an explicit-mode
                 // Nucleus extension.
                 if self.gesture_config.wheel_behavior == WheelBehavior::Zoom

@@ -65,7 +65,7 @@ for (const requested_backend of ["auto", "canvas2d"]) {
     for (const delta of [35, 70, 105]) {
       await page.mouse.move(center.x - delta, center.y);
       if (delta === 35) {
-        // The threshold-crossing sample opens the LWC-compatible pan; movement starts on the
+        // The threshold-crossing sample opens the reference-informed pan; movement starts on the
         // following sample.
         await page.mouse.move(center.x - delta - 1, center.y);
       }

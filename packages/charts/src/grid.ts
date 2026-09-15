@@ -133,7 +133,7 @@ export interface chart_grid {
   /** Compose layout and each cell's existing chart persistence V1 for host-owned storage. */
   export_state(): chart_workspace_state_v1;
   /** Maximize a cell to the full container (the others + dividers hide), or pass `null` to
-   *  restore. Ctrl/Cmd+click on a cell toggles this (TradingView's maximize pane). */
+   *  restore. Ctrl/Cmd+click on a cell toggles this (the public reference's maximize pane). */
   maximize(cell: grid_cell | null): void;
   /** The maximized cell, or `null` when the grid is in its normal layout. */
   maximized_cell(): grid_cell | null;

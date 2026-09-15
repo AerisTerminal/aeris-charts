@@ -337,7 +337,7 @@ impl ChartEngine {
         let (default_scale, default_base) = self.pane_default_scale(pane_index, from);
         let price = default_scale.coordinate_to_price(y_css, default_base);
         // The snapped price source: the configured magnet mode, or the Ctrl-held OHLC magnet
-        // (`crosshair_ohlc_magnet`, TradingView's temporary Ctrl magnet) which upgrades a
+        // (`crosshair_ohlc_magnet`, the public reference's temporary Ctrl magnet) which upgrades a
         // Normal-mode crosshair to the MagnetOhlc candidate set without touching the
         // configured mode.
         let include_ohlc = match self.crosshair_mode {

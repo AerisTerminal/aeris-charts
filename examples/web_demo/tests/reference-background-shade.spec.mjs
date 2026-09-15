@@ -78,16 +78,16 @@ async function assert_scanline_parity(page) {
     expect_color(
       pixel(nucleus, Math.round(state.nucleus.pane.left * nucleus_scale) + x, nucleus_y),
       pixel(reference, Math.round(state.reference.pane.left * reference_scale) + x, reference_y),
-      `full LWC shade scanline at x=${x}`,
+      `full public-reference shade scanline at x=${x}`,
     );
   }
 }
 
-test("background shade matches the exact LWC example data and per-bar renderer", async ({ browser }) => {
+test("background shade retains behavior learned from the public example", async ({ browser }) => {
   for (const dpr of [1, 2]) {
     const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: dpr });
     const page = await context.newPage();
-    await page.goto("/background-shade-parity.html");
+    await page.goto("/reference-background-shade.html");
     await page.waitForFunction(() => document.getElementById("nucleus")?.__shade_parity?.metrics !== undefined);
 
     const initial = await fixture(page);

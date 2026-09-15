@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { PNG } from "pngjs";
 
-// TradingView-style last-value cluster: title chip + price text + candle-close countdown row,
+// industry-standard last-value cluster: title chip + price text + candle-close countdown row,
 // held together with side-specific corner radius. These specs drive the live demo page (hourly
 // bars ending at the current hour) through the public API only.
 
@@ -75,7 +75,7 @@ function near(a, b, tol = 12) {
 
 const is_box = (c) => near(c, LABEL) || near(c, CHIP);
 
-// Locate the OUTSIDE title chip (TradingView geometry: it ends at the pane-side edge of the axis
+// Locate the OUTSIDE title chip (the public reference geometry: it ends at the pane-side edge of the axis
 // border). Since the chip shares the label color (candle bodies/wicks match
 // too), detection is by box coverage: a chip is a solid rectangle (≥ 70% LABEL pixels over a
 // 20px window on the row band); wicks/bodies never fill a window like that.

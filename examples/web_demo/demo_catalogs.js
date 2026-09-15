@@ -260,7 +260,7 @@ function series_features(bars, primary_series) {
       data: () => sampled.map((bar) => ({ time: bar.time, value: bar.close, color: bar.close >= bar.open ? "#089981" : "#f7525f" })),
     },
     {
-      id: "shaded-background", label: "Shaded backdrop", detail: "LWC shade field + line", icon: "chart",
+      id: "shaded-background", label: "Shaded backdrop", detail: "Per-bar shade field + line", icon: "chart",
       series_kind: "background_shade", options: { low_value: 0, high_value: 1000 },
       data: () => shade_data,
       compose: (chart) => add_line_companion(

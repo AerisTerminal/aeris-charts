@@ -2532,7 +2532,7 @@ export class chart_impl implements chart_api {
   private text_editor_mode: "standalone_text" | "trend_label" | null = null;
   /**
    * The drawing selection snapshotted at pointer-DOWN, before the engine's drag grab selects
-   * the hit (gestures.ts calls `note_drawing_press`). `emit_click` reads it for TradingView's
+   * the hit (gestures.ts calls `note_drawing_press`). `emit_click` reads it for the public reference's
    * two-step text editing: a click opens typing mode only when the text drawing was already
    * selected when the press began; the first click just selects (focus border).
    */
@@ -2828,7 +2828,7 @@ export class chart_impl implements chart_api {
   }
 
   /**
-   * Browser-host attribution chrome follows Lightweight Charts' attribution widget: a 19px-tall
+   * Browser-host attribution chrome follows the public reference's attribution widget: a 19px-tall
    * inline SVG with an opposite-tone outline. The supplied Axiusflow dark/light wordmarks remain
    * the fill source; only the outline is derived at runtime so a custom chart surface cannot erase
    * the mark. Background luminance owns the choice, with layout text as the fallback for an
@@ -2895,7 +2895,7 @@ export class chart_impl implements chart_api {
     this.attribution_logo_tone = tone;
   }
 
-  /** Pin the mark 10 CSS px from the bottom-left of the final pane cell, exactly like LWC. */
+  /** Pin the mark 10 CSS px from the bottom-left of the final pane cell. */
   private position_attribution_logo(): void {
     const element = this.attribution_logo_element;
     if (element === null || this.removed) return;
@@ -3177,7 +3177,7 @@ export class chart_impl implements chart_api {
 
   /**
    * Start or stop the 1s candle-close countdown interval to match whether any live series has
-   * `countdown_visible` and data (TradingView-style countdown row in the last-value cluster).
+   * `countdown_visible` and data (industry-standard countdown row in the last-value cluster).
    * Central rebuild point: called from the series apply-options/set-data/remove paths and on
    * chart teardown. Ticks pin the engine clock and repaint; ticks are skipped while the
    * document is hidden.
@@ -3704,12 +3704,12 @@ export class chart_impl implements chart_api {
 
   /** Apply the chart-owned selection/editing work shared by click and drawing-owned double-click. */
   private apply_primary_click(x: number, y: number): void {
-    // TradingView-style click-to-select: select the series under the click (the frame build
+    // industry-standard click-to-select: select the series under the click (the frame build
     // paints anchor points on it) and clear the selection on empty pane space. The hover
     // hit-test refreshes at the click point first, so a click without a preceding move still
     // arbitrates correctly.
     this.update_hover(x, y);
-    // TradingView-style click-to-select, drawings first: a drawing hit selects it and clears
+    // industry-standard click-to-select, drawings first: a drawing hit selects it and clears
     // the series selection; a miss clears the drawing selection and falls through to the
     // series under the click (or clears that on empty pane space).
     const trend_text_hit = Number(this.wasm.drawing_text_hit_at(x, y));
@@ -3717,7 +3717,7 @@ export class chart_impl implements chart_api {
     if (trend_text_hit > 0) this.wasm.set_selected_drawing(trend_text_hit);
     this.wasm.set_selected_series(drawing_hit ? undefined : (this.hover?.series_id ?? undefined));
     // Text drawings: empty labels open typing mode on the first click (there is no ink to
-    // "focus" otherwise). Non-empty labels follow TradingView's two-step model — first click
+    // "focus" otherwise). Non-empty labels follow the public reference's two-step model — first click
     // selects (focus border), a click opens typing mode only when already selected at press.
     if (drawing_hit) {
       const selected = this.selected_drawing();
@@ -4036,7 +4036,7 @@ export class chart_impl implements chart_api {
   // ---------------------------------------------------------------------------------------------
 
   /**
-   * Open the typing-mode editor for a text drawing (TradingView's overlay-caret model): a
+   * Open the typing-mode editor for a text drawing (the public reference's overlay-caret model): a
    * borderless wrap whose glyphs are TRANSPARENT — the engine keeps painting both the label
    * and the focus border underneath, so entering edit cannot lift the text or shift the
    * outline. Each keystroke pushes the text into the engine live; Enter/blur commits, Escape

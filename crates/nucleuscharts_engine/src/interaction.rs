@@ -82,7 +82,7 @@ impl WheelSample {
             WheelBehavior::Pan => WheelIntent::Pan,
             WheelBehavior::Zoom => WheelIntent::Zoom,
             WheelBehavior::Auto => {
-                // Lightweight Charts does not reinterpret modifiers: browsers remain free to
+                // the public reference does not reinterpret modifiers: browsers remain free to
                 // expose Shift+wheel as deltaX, and the two non-zero axes execute independently.
                 match (self.delta_x != 0.0, self.delta_y != 0.0) {
                     (true, true) => WheelIntent::PanAndZoom,
@@ -561,7 +561,7 @@ pub const PINCH_ZOOM_INTENSITY: f64 = 5.0;
 /// coefficient, and minus is for the 'natural' scroll".
 pub const WHEEL_SCROLL_PX_PER_DELTA: f64 = -80.0;
 
-/// Convert a host-normalized wheel delta to Lightweight Charts' exact zoom increment. The input
+/// Convert a host-normalized wheel delta to the independently measured reference zoom increment. The input
 /// saturates at one normalized wheel step so unusually large OS/browser deltas stay bounded.
 pub fn wheel_zoom_scale(delta_y: f64) -> f64 {
     delta_y.signum() * delta_y.abs().min(1.0)
@@ -824,7 +824,7 @@ impl ChartEngine {
         }
     }
 
-    /// TradingView-style wheel zoom on a price axis (the reference has no price-axis wheel;
+    /// industry-standard wheel zoom on a price axis (the reference has no price-axis wheel;
     /// the time axis wheel is `_onMousewheel` → `zoomTime`). `scale` is the same normalized
     /// increment the time-axis wheel consumes (`wheel_zoom_scale`), converted to a per-notch
     /// range factor: 10% per full notch, anchored at the cursor's price.

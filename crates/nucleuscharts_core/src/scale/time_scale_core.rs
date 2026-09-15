@@ -47,7 +47,7 @@ impl Default for TimeScaleOptions {
             fix_left_edge: false,
             fix_right_edge: false,
             lock_visible_time_range_on_resize: false,
-            // Lightweight Charts' default: ordinary wheel zoom keeps the logical point under the
+            // the public reference's default: ordinary wheel zoom keeps the logical point under the
             // cursor fixed. Hosts may explicitly enable right-edge pinning through the option.
             right_bar_stays_on_scroll: false,
             // reference defaults (time-scale-options-defaults.ts:17-18).

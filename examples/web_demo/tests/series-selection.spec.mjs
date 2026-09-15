@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { PNG } from "pngjs";
 
-// TradingView-style series selection: hovering a series shows the pointer (click affordance)
+// industry-standard series selection: hovering a series shows the pointer (click affordance)
 // cursor; clicking selects it and paints anchor points on its drawn data points — theme-derived
 // fill (white on light backgrounds, black on dark) with the accent-blue border.
 

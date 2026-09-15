@@ -5,13 +5,13 @@ async function open_pair(page) {
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
   await page.evaluate(() => {
     const iframe = document.createElement("iframe");
-    iframe.id = "lwc-oracle";
+    iframe.id = "reference-oracle";
     iframe.src = "/reference.html?spacing=6";
     iframe.style.cssText =
       "position:fixed;left:0;top:0;width:960px;height:540px;z-index:1000;border:0";
     document.body.append(iframe);
   });
-  const oracle = page.frameLocator("#lwc-oracle");
+  const oracle = page.frameLocator("#reference-oracle");
   await oracle.locator("html[data-ready=true]").waitFor();
   await page.evaluate(() => {
     window.__chart.time_scale().apply_options({
@@ -90,7 +90,7 @@ async function dispatch_wheel_pair(page, trace, axis = false) {
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
 }
 
-test("normalized wheel traces match Lightweight Charts 5.2.1 on every surface and modifier", async ({ page, browserName }) => {
+test("normalized wheel traces retain behavior learned from the public reference fixture", async ({ page, browserName }) => {
   test.skip(browserName !== "chromium", "synthetic line/page WheelEvent scaling differs across browser test drivers");
   await open_pair(page);
   for (const trace of [
@@ -146,15 +146,15 @@ test("pane drag slop and click/double-click callback counts match the oracle", a
     width: window.__chart.wasm.time_scale_width(),
     y: window.__chart.wasm.pane_height(0) / 2,
   }));
-  const iframe_box = await page.locator("#lwc-oracle").boundingBox();
-  const oracle_root = page.frameLocator("#lwc-oracle").locator("#chart > div");
+  const iframe_box = await page.locator("#reference-oracle").boundingBox();
+  const oracle_root = page.frameLocator("#reference-oracle").locator("#chart > div");
   const oracle_box = await oracle_root.boundingBox();
   const nucleus_x = nucleus_box.x + nucleus_geometry.left + nucleus_geometry.width / 2;
   const nucleus_y = nucleus_box.y + nucleus_geometry.y;
   const oracle_x = iframe_box.x + oracle_box.x + oracle_box.width / 2;
   const oracle_y = iframe_box.y + oracle_box.y + oracle_box.height / 2;
 
-  await page.locator("#lwc-oracle").evaluate((node) => { node.style.pointerEvents = "none"; });
+  await page.locator("#reference-oracle").evaluate((node) => { node.style.pointerEvents = "none"; });
   const nucleus_offsets = [];
   await page.mouse.move(nucleus_x, nucleus_y);
   await page.mouse.down();
@@ -164,7 +164,7 @@ test("pane drag slop and click/double-click callback counts match the oracle", a
   }
   await page.mouse.up();
 
-  await page.locator("#lwc-oracle").evaluate((node) => { node.style.pointerEvents = "auto"; });
+  await page.locator("#reference-oracle").evaluate((node) => { node.style.pointerEvents = "auto"; });
   const oracle_offsets = [];
   await page.mouse.move(oracle_x, oracle_y);
   await page.mouse.down();
@@ -178,9 +178,9 @@ test("pane drag slop and click/double-click callback counts match the oracle", a
   expect(nucleus_offsets[4]).not.toBeCloseTo(nucleus_offsets[0], 8);
   expect(oracle_offsets[4]).not.toBeCloseTo(oracle_offsets[0], 8);
 
-  await page.locator("#lwc-oracle").evaluate((node) => { node.style.pointerEvents = "none"; });
+  await page.locator("#reference-oracle").evaluate((node) => { node.style.pointerEvents = "none"; });
   await page.mouse.dblclick(nucleus_x, nucleus_y);
-  await page.locator("#lwc-oracle").evaluate((node) => { node.style.pointerEvents = "auto"; });
+  await page.locator("#reference-oracle").evaluate((node) => { node.style.pointerEvents = "auto"; });
   await page.mouse.dblclick(oracle_x, oracle_y);
   const counts = {
     nucleus: await page.evaluate(() => window.__nucleusClicks),

@@ -115,8 +115,8 @@ Grid lines are engine-owned and default to visible dashed lines. Demo hosts may 
 visibility without replacing the canonical grid style/color; that presentation choice is not a
 library default.
 
-Default mouse-wheel behavior matches Lightweight Charts 5.2.1: a saturated vertical step uses the
-upstream 1.0 zoom increment, smaller trackpad deltas stay proportional, and the logical point under
+Default mouse-wheel behavior is informed by measurements from the pinned public reference fixture:
+a saturated vertical step uses a 1.0 zoom increment, smaller trackpad deltas stay proportional, and the logical point under
 the cursor remains anchored because `right_bar_stays_on_scroll` defaults to `false`. Vertical and
 horizontal deltas independently zoom and pan the time scale on the pane, time axis, or price axis;
 Ctrl and Shift do not change routing. `wheel_behavior: "pan"` and `"zoom"` are explicit Nucleus
@@ -130,7 +130,7 @@ series. `create_partial_price_line()` remains only as a compatibility controller
 series options, not a separate primitive or rendering implementation.
 
 `layout.attributionLogo` defaults to `true` and, in browser charts, renders the supplied Axiusflow
-wordmark at the Lightweight Charts attribution position: 10 CSS px from the left and bottom edges of
+wordmark at a conventional attribution position: 10 CSS px from the left and bottom edges of
 the final pane's content cell, at 19 CSS px tall. The host selects the dark or light asset from the
 resolved chart-background luminance and adds the opposite-tone outline used by attribution marks so
 custom light or dark canvas colors cannot erase the logo. Setting `attributionLogo: false` removes

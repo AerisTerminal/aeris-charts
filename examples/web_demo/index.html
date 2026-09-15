@@ -309,7 +309,7 @@
       <label title="Canvas primitive (plugin platform C-e): the reference vertical-line plugin example, painted with raw Canvas2D calls on the plugin overlay"><input type="checkbox" id="vertline_toggle"> canvas v-line plugin</label>
     </div>
 
-    <div class="group" id="drawings_group" data-caption="Drawings" title="Engine-owned drawing tools (TradingView-style): click a tool, then click the chart to place it. Long/Short Position creates its complete position on one click; trend/rect use two anchors; Path finishes on double-click or Enter and Backspace removes its latest pending vertex. Click a drawing to select it — drag its tool-specific controls or body to edit it; Delete/Backspace removes the selection, Escape deselects/cancels. Hold Ctrl to magnet-snap the crosshair and drawing controls to the nearest bar's OHLC; hold Shift to straighten supported tools or constrain a body move to one axis.">
+    <div class="group" id="drawings_group" data-caption="Drawings" title="Engine-owned drawing tools (industry-standard): click a tool, then click the chart to place it. Long/Short Position creates its complete position on one click; trend/rect use two anchors; Path finishes on double-click or Enter and Backspace removes its latest pending vertex. Click a drawing to select it — drag its tool-specific controls or body to edit it; Delete/Backspace removes the selection, Escape deselects/cancels. Hold Ctrl to magnet-snap the crosshair and drawing controls to the nearest bar's OHLC; hold Shift to straighten supported tools or constrain a body move to one axis.">
       <h2>Drawings</h2>
       <button type="button" data-tool="trend_line" title="Trend line: two-anchor segment">trend</button>
       <button type="button" data-tool="horizontal_line" title="Horizontal line across the pane at a price">h-line</button>
@@ -432,10 +432,10 @@
         </select>
       </label>
       <label><input type="checkbox" id="last_value_toggle" checked> last value</label>
-      <label title="TradingView-style title chip in the last-value cluster (darker shade of the label color, left of the price)"><input type="checkbox" id="title_chip_toggle" checked> title chip</label>
+      <label title="industry-standard title chip in the last-value cluster (darker shade of the label color, left of the price)"><input type="checkbox" id="title_chip_toggle" checked> title chip</label>
       <label>title <input type="text" id="series_title" value="" size="6"></label>
-      <label title="TradingView-style candle-close countdown stacked below the price in the last-value cluster"><input type="checkbox" id="countdown_toggle" checked> countdown</label>
-      <label title="TradingView-style bid/ask lines + Bid/Ask axis chips (default off). Enable to stream synthetic quotes around the last price so the lines and chips move live"><input type="checkbox" id="bid_ask_toggle"> bid/ask</label>
+      <label title="industry-standard candle-close countdown stacked below the price in the last-value cluster"><input type="checkbox" id="countdown_toggle" checked> countdown</label>
+      <label title="industry-standard bid/ask lines + Bid/Ask axis chips (default off). Enable to stream synthetic quotes around the last price so the lines and chips move live"><input type="checkbox" id="bid_ask_toggle"> bid/ask</label>
     </div>
 
     <!-- price/time axis cosmetics: border (reference borderColor/borderVisible) + text (textColor) -->
@@ -667,7 +667,7 @@ window.__data = data;
 
 
 // volume: single-value histogram on the SAME pane, pinned to the bottom band via the overlay
-// price scale (TradingView-style — no separate pane / divider), colored green/red by bar direction.
+// price scale (industry-standard — no separate pane / divider), colored green/red by bar direction.
 const volume_data = volume_fixture(data);
 let vol_series = null;
 window.__demo_catalogs = install_demo_catalogs({ chart, series: main, data, on_series_change: sync_style_visibility });
@@ -1047,7 +1047,7 @@ function sync_drawing_tool_buttons(tool) {
   }
 }
 // The customization inputs template newly created drawings AND apply live to the selected one
-// (TradingView's floating settings, toolbar form).
+// (the public reference's floating settings, toolbar form).
 // A false value means trend-label ink follows the line color. The color input still displays the
 // resolved color, but it is serialized only after the user explicitly changes that control.
 let drawing_text_color_explicit = false;
@@ -1076,7 +1076,7 @@ for (const button of drawing_tool_buttons) {
   button.addEventListener("click", () => arm_drawing_tool(button.dataset.tool));
 }
 active_chart_router.set_drawing_tool_listener(sync_drawing_tool_buttons);
-// The toolbar mirrors the SELECTION (TradingView's settings panel): clicking a drawing loads
+// The toolbar follows the common selection-settings model: clicking a drawing loads
 // its style into the inputs, so a later change applies on top of the drawing's current style
 // instead of resetting the rest. (#rrggbb needed for the color inputs; other CSS forms skip.)
 function css_to_hex(css) {
@@ -1207,7 +1207,7 @@ function sync_style_visibility(kind) {
 const candle_part_touched = { wick_up: false, wick_down: false, border_up: false, border_down: false };
 
 // ---- hollow candles ---------------------------------------------------------------------------
-// TradingView needs no dedicated hollow-candle series: the body is just a separate channel from the
+// A conventional hollow candle needs no dedicated series: the body is just a separate channel from the
 // border frame, so a transparent body leaves the outline and wick behind. Ours works the same way.
 // The catch is the follow-or-pin default above — an unpinned wick/border tracks its direction's BODY
 // color, so a transparent body would take the whole candle with it. A hollow direction therefore
@@ -1342,7 +1342,7 @@ document.getElementById("price_line_extent").addEventListener("change", (e) => a
 document.getElementById("price_line_style").addEventListener("change", (e) => active_series().apply_options({ price_line_style: Number(e.target.value) }));
 document.getElementById("reset_view_btn").addEventListener("click", () => active_chart_router.reset_view());
 document.getElementById("last_value_toggle").addEventListener("change", (e) => active_series().apply_options({ last_value_visible: e.target.checked }));
-// TradingView-style last-value cluster: title chip (darker shade, left of the price) and a
+// industry-standard last-value cluster: title chip (darker shade, left of the price) and a
 // candle-close countdown row below. Typing a title or toggling either control applies the trio;
 // nothing is applied on load so the fidelity fixtures stay untouched.
 function apply_series_chrome() {
@@ -1356,7 +1356,7 @@ document.getElementById("title_chip_toggle").addEventListener("change", apply_se
 document.getElementById("series_title").addEventListener("input", apply_series_chrome);
 document.getElementById("countdown_toggle").addEventListener("change", apply_series_chrome);
 
-// TradingView-style bid/ask (engine default off): enabling streams synthetic quotes around the
+// industry-standard bid/ask (engine default off): enabling streams synthetic quotes around the
 // last price (a small random-walk mid with a fixed spread) so the Bid/Ask chips and lines move.
 let bid_ask_timer = null;
 let bid_ask_mid = null;
@@ -1424,7 +1424,7 @@ document.getElementById("area_top").addEventListener("input", (e) => {
 
 document.getElementById("vol_toggle").addEventListener("change", (e) => {
   if (e.target.checked && vol_series === null) {
-    // TradingView volume: overlay on the price pane's bottom band, green/red by bar direction,
+    // Reference-informed volume presentation: overlay on the price pane's bottom band, green/red by bar direction,
     // with the title chip + volume-formatted last value (581.54K) on the axis — no countdown.
     vol_series = chart.add_series("histogram", {
       overlay: true,
@@ -1653,7 +1653,7 @@ document.getElementById("wm_size").addEventListener("input", (e) => {
   apply_watermark();
 });
 
-// ---- interaction toggles: axis drag-to-scale + mouse kinetic. reference/TradingView defaults:
+// ---- interaction toggles: axis drag-to-scale + mouse kinetic. Reference-informed defaults:
 // coasting is a touch behavior (kineticScroll.mouse = false), so mouse kinetic is OFF here by
 // default; the checkbox exists to demo it. Touch kinetic stays on regardless (reference parity).
 function apply_interaction() {

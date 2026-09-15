@@ -1697,7 +1697,7 @@ test("text tool: first click selects (focus border), a second click opens typing
   const p = await spot(page, s.l0, s.p_mid);
   const editor = page.locator("#chart_container #nucleuscharts-text-input");
 
-  // TradingView's two-step model: the first click only SELECTS — no editor, the drawing
+  // the public reference's two-step model: the first click only SELECTS — no editor, the drawing
   // becomes selected, and the engine's focus border (primary blue ring) paints around the
   // label. No anchor discs exist for text (covered engine-side in frame/tests.rs).
   const before_select = await capture(page);
@@ -2109,7 +2109,7 @@ test("rectangle: middle pans unselected, drags selected, 8 anchors from the firs
   await page.keyboard.press("Escape");
 });
 
-test("a vertical line body-drag with Ctrl snaps to the bar center (TradingView magnet)", async ({ page }) => {
+test("a vertical line body-drag with Ctrl snaps to the bar center (the public reference magnet)", async ({ page }) => {
   await goto_fixture(page);
   const s = await anchor_spots(page);
   await page.evaluate(({ l1 }) => {

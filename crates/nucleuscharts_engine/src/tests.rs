@@ -694,10 +694,10 @@ fn reset_view_restores_time_defaults_and_reenables_autoscale() {
     );
 
     chart.reset_view();
-    // Time scale back to the configured defaults (LWC resetTimeScale)…
+    // Time scale back to the configured defaults (the public resetTimeScale behavior)…
     assert_eq!(chart.bar_spacing(), 6.0);
     // …except that a view reset leaves a right margin worth 10% of the plot width instead of
-    // pinning the newest bar to the axis under its own live-price cluster (TradingView-style).
+    // pinning the newest bar to the axis under its own live-price cluster (industry-standard).
     // 300px plot / 6px bars => 5 empty bars.
     assert_eq!(chart.right_offset(), 5.0);
     assert!(
@@ -707,7 +707,7 @@ fn reset_view_restores_time_defaults_and_reenables_autoscale() {
     // The reference `resetTimeScale` itself keeps its zero-offset semantics for direct callers.
     chart.reset_time_scale();
     assert_eq!(chart.right_offset(), 0.0);
-    // …and every pane's price scales autoscale again (LWC pane resetPriceScale); the next
+    // …and every pane's price scales autoscale again (the public pane resetPriceScale behavior); the next
     // frame recalculates the range, so the contracted data fits the pane once more.
     assert_eq!(chart.price_scale_auto_scale(0, false), Some(true));
     assert_eq!(
@@ -3230,7 +3230,7 @@ fn series_options_json_covers_the_ts_field_set() {
     assert_eq!(options["visible"], true);
     assert_eq!(options["price_scale_id"], "right");
     assert_eq!(options["pane"], 0);
-    // TradingView-style last-value cluster options: LWC-parity defaults.
+    // industry-standard last-value cluster options: reference-informed defaults.
     assert_eq!(options["title"], "");
     assert_eq!(options["title_visible"], true);
     assert_eq!(options["countdown_visible"], true);

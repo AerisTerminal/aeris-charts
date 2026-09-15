@@ -278,7 +278,7 @@ fn broadcast_gpu_loss() {
 
 // the reference charting library default palette
 // Axis palette (as CSS color strings for the 2D overlay)
-// TradingView-style volume: translucent green on up bars, red on down bars.
+// industry-standard volume: translucent green on up bars, red on down bars.
 
 // Crosshair marker (line/area) — line-series.ts defaults.
 
@@ -2295,7 +2295,7 @@ impl NucleusChart {
     }
 
     /// Color a histogram (volume) by the main price series' up/down direction per bar
-    /// (TradingView-style volume).
+    /// (industry-standard volume).
     pub fn set_series_histogram_updown(&mut self, id: u32, enabled: bool) {
         self.inner
             .borrow_mut()
@@ -3071,7 +3071,7 @@ impl NucleusChart {
     pub fn price_axis_end_scale(&mut self, pane: usize, target: u32) {
         self.inner.borrow_mut().price_axis_end_scale(pane, target);
     }
-    /// TradingView-style bid/ask quotes: push the current values for a series (NaN clears that
+    /// industry-standard bid/ask quotes: push the current values for a series (NaN clears that
     /// side). Lines and chips render while the series' `bid_ask_visible` option holds. Call
     /// `render()` after.
     pub fn set_series_bid_ask(&mut self, id: usize, bid: f64, ask: f64) {
@@ -3081,7 +3081,7 @@ impl NucleusChart {
             (ask.is_finite()).then_some(ask),
         );
     }
-    /// TradingView-style wheel zoom on the price axis: `scale` is the normalized wheel
+    /// industry-standard wheel zoom on the price axis: `scale` is the normalized wheel
     /// increment (`wheel_zoom_scale`); anchored at the cursor's price. Call `render()` after.
     pub fn price_axis_wheel_zoom(&mut self, pane: usize, target: u32, y_css: f64, scale: f64) {
         self.inner.borrow_mut().engine.price_axis_wheel_zoom(
@@ -3153,7 +3153,7 @@ impl NucleusChart {
     pub fn set_crosshair(&mut self, x_css: f64, y_css: f64) {
         self.inner.borrow_mut().set_crosshair(x_css, y_css);
     }
-    /// TradingView's Ctrl-held magnet: the gesture layer forwards the live modifier state; a
+    /// the public reference's Ctrl-held magnet: the gesture layer forwards the live modifier state; a
     /// Normal-mode crosshair then snaps to the hovered bar's rendered prices on the next
     /// `render()` (OHLC for candles/bars, close/value for scalar series).
     pub fn set_crosshair_ohlc_magnet(&mut self, enabled: bool) {
@@ -3184,7 +3184,7 @@ impl NucleusChart {
         inner.engine.set_hovered_text(None);
         inner.engine.set_hovered_drawing(None);
     }
-    /// TradingView-style click-to-select: the host's click pipeline sets the series under the
+    /// industry-standard click-to-select: the host's click pipeline sets the series under the
     /// click (`None` on empty pane space); the engine snapshots sparse canonical anchor identities
     /// and reprojects them until deselection. Call `render()` afterwards.
     pub fn set_selected_series(&mut self, id: Option<u32>) {
@@ -3296,7 +3296,7 @@ impl NucleusChart {
     }
     /// Press routing for the gesture layer: opens an anchor/body drag on the drawing under the
     /// point (false = the host falls through to pan/scroll). A successful grab selects the
-    /// drawing (TradingView parity).
+    /// drawing (reference-informed behavior).
     pub fn drawing_drag_start_at(&mut self, x_css: f64, y_css: f64) -> bool {
         self.inner.borrow_mut().drawing_drag_start_at(x_css, y_css)
     }
@@ -3441,7 +3441,7 @@ impl NucleusChart {
             .drawing_create_apply_options(options_json)
     }
     /// Place the next creation anchor: 0 unarmed, -1 pending more anchors, > 0 the committed
-    /// drawing's id (left selected, TradingView-style). `magnet` snaps the anchor to the nearest
+    /// drawing's id (left selected, industry-standard). `magnet` snaps the anchor to the nearest
     /// rendered bar price (OHLC for candles/bars, close/value for scalar series); `straighten`
     /// constrains a second anchor to 0°/45°/90° (a rectangle to a square).
     pub fn drawing_create_click(
@@ -3501,7 +3501,7 @@ impl NucleusChart {
     pub fn brush_create_active(&self) -> bool {
         self.inner.borrow().brush_create_active()
     }
-    /// TradingView-style reset view: default bar spacing/right offset plus autoscale restored
+    /// industry-standard reset view: default bar spacing/right offset plus autoscale restored
     /// on every pane's price scales; the next `render()` recalculates the visible ranges.
     pub fn reset_view(&mut self) {
         self.inner.borrow_mut().engine.reset_view();

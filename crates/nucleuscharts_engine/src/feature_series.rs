@@ -1670,7 +1670,7 @@ mod tests {
     }
 
     #[test]
-    fn background_shade_extrapolates_channels_like_the_lwc_css_color() {
+    fn background_shade_extrapolates_channels_like_the_reference_css_color() {
         let mut chart = ChartEngine::new(200.0, 100.0, 1.0);
         chart.configure_feature_series(
             0,

@@ -842,9 +842,9 @@ fn the_creation_preview_shows_all_eight_rectangle_anchors() {
     let mut chart = settled_chart();
     assert!(chart.drawing_create_begin(DrawingKind::Rectangle, None));
     // First corner committed; the preview follows the cursor — all eight handles paint
-    // immediately (TradingView), not only after the second click commits.
+    // immediately (the public reference), not only after the second click commits.
     // First corner committed (the -1 "awaiting more anchors" result), the preview follows the
-    // cursor — all eight handles paint immediately (TradingView), not only after the commit.
+    // cursor — all eight handles paint immediately (the public reference), not only after the commit.
     chart.drawing_create_click(
         x_at(&chart, 2.0),
         y_at(&chart, 10.0),
@@ -963,7 +963,7 @@ fn rectangle_body_hits_the_frame_band_not_the_middle() {
         .unwrap();
     let (left, right) = (x_at(&chart, 2.0), x_at(&chart, 6.0));
     let (bottom, top) = (y_at(&chart, 10.0), y_at(&chart, 12.0));
-    // TradingView: the fill is not a drag surface while UNSELECTED — the middle misses (the
+    // the public reference: the fill is not a drag surface while UNSELECTED — the middle misses (the
     // chart pans there); once selected (a border click), the middle moves the drawing.
     assert!(chart
         .hit_test_drawing((left + right) / 2.0, (top + bottom) / 2.0)
@@ -2607,7 +2607,7 @@ fn ctrl_magnet_snaps_the_crosshair_to_ohlc() {
     chart.crosshair = Some((x, y_free));
     // Normal mode without the flag: the horizontal line follows the raw cursor y.
     assert_eq!(crosshair_hline_y(&mut chart), Some(y_free.round() as i32));
-    // Ctrl held (TradingView's temporary magnet): the line snaps to the bar's high.
+    // Ctrl held (the public reference's temporary magnet): the line snaps to the bar's high.
     chart.crosshair_ohlc_magnet = true;
     assert_eq!(
         crosshair_hline_y(&mut chart),
@@ -2885,7 +2885,7 @@ fn brush_capture_decimates_input_and_commits_the_live_path() {
         let px_y = chart.series_price_to_coordinate(0, anchor.price).unwrap();
         assert!((px_x - x).abs() < 1e-6 && (px_y - y).abs() < 1e-6);
     }
-    // The stroke is left selected (TradingView parity).
+    // The stroke is left selected (reference-informed behavior).
     assert_eq!(chart.selected_drawing(), Some(id));
 }
 

@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { PNG } from "pngjs";
 
-// The demo's price-line style select and TradingView-style "reset view" button.
+// The demo's price-line style select and industry-standard "reset view" button.
 
 async function wait_for_chart(page) {
   await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);

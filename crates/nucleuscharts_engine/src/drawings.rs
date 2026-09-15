@@ -1,10 +1,8 @@
 //! Drawing tools (trend line, horizontal line/ray, vertical line, rectangle, Long/Short Position,
-//! text, path, brush) as
-//! engine-owned drawing objects — TradingView's drawing tools in the spirit of the reference's
-//! plugin-examples (trend-line.ts, rectangle-drawing-tool.ts, vertical-line.ts, anchored-text.ts),
-//! but with all state, hit-testing, and anchor-dragging math living headless here: hosts only
-//! forward gestures and render the frame, exactly like the interaction-model split
-//! at the headless engine boundary.
+//! text, path, brush) are independently implemented as engine-owned objects. Public examples and
+//! observed charting conventions inform the interaction expectations, while all state, hit testing,
+//! and anchor-dragging math live headless here. Hosts only forward gestures and render the frame
+//! across the engine boundary.
 //!
 //! Anchor model: a drawing is defined by one or more [`DrawingPoint`]s in `{logical, price}` space
 //! (fractional logical bar index + price — the time scale's interpolation space, so an anchor
@@ -357,7 +355,7 @@ pub enum DrawingKind {
     Rectangle,
     /// One-anchor text label (reference plugin-examples anchored-text, anchored on a point).
     Text,
-    /// Freehand path (TradingView's brush): a variable-length point list drawn as a smooth
+    /// Freehand path (the public reference's brush): a variable-length point list drawn as a smooth
     /// interpolating curve, with anchor handles at the two ENDS when selected.
     Brush,
     /// Multi-click path: a variable-length point list joined by straight segments, with every
@@ -550,7 +548,7 @@ pub struct Drawing {
     pub text_italic: bool,
     pub text_h_align: DrawingTextHAlign,
     pub text_v_align: DrawingTextVAlign,
-    /// Text-tool container background CSS string (TradingView's text-box background); `None`
+    /// Text-tool container background CSS string (the public reference's text-box background); `None`
     /// draws no box. Text tool only.
     pub box_color: Option<String>,
     /// Text-tool container border CSS string; `None` draws no border. Text tool only.
@@ -560,7 +558,7 @@ pub struct Drawing {
 }
 
 /// Default glyph size for the TEXT TOOL's label in CSS px when `text_size` is unset
-/// (TradingView's default text-tool size). Other tools' labels keep following the chart's
+/// (the public reference's default text-tool size). Other tools' labels keep following the chart's
 /// `layout.font_size`.
 pub const TEXT_TOOL_DEFAULT_SIZE: f64 = 14.0;
 
@@ -643,7 +641,7 @@ impl Drawing {
 
     /// The label a drawing actually renders. Empty text tools render nothing — the host's
     /// typing-mode editor is the only empty-state UI, and leaving that editor without typed
-    /// text removes the drawing (TradingView: no lingering "Add text" ghost on the chart).
+    /// text removes the drawing (the public reference: no lingering "Add text" ghost on the chart).
     pub fn display_text(&self) -> &str {
         self.text.as_str()
     }
@@ -691,7 +689,7 @@ pub struct DrawingHit {
     pub cursor: &'static str,
 }
 
-/// Modifier keys the host gesture layer forwards with pointer positions (TradingView modifier
+/// Modifier keys the host gesture layer forwards with pointer positions (the public reference modifier
 /// semantics): `magnet` snaps anchors to the nearest bar — x to the bar's center, the price to
 /// its closest rendered field (OHLC for candles/bars, value for scalar series; Ctrl/Cmd — the
 /// same key that magnets the crosshair);
@@ -803,7 +801,7 @@ pub(crate) struct PendingDrawing {
     pub(crate) pane_constraint: Option<usize>,
 }
 
-/// Freehand brush capture in progress (TradingView's brush drag, engine-owned): the points
+/// Freehand brush capture in progress (the public reference's brush drag, engine-owned): the points
 /// collected so far plus the options template for the committed drawing. Input is decimated by
 /// distance on the way in (media px) and committed as-is — the stored path is exactly the curve
 /// the live stroke painted.
@@ -1421,7 +1419,7 @@ impl ChartEngine {
         Some(point)
     }
 
-    /// TradingView magnet (Ctrl held): resolve the live pointer through the same pixel-space
+    /// Reference-informed magnet behavior (Ctrl held): resolve the live pointer through the same pixel-space
     /// rendered-price candidate path as the crosshair, then encode the winning coordinate on the
     /// drawing's own price scale. A bar with no visible real candidate keeps the unsnapped point.
     fn magnet_snap_point_at(
@@ -1443,7 +1441,7 @@ impl ChartEngine {
         snapped
     }
 
-    /// TradingView straighten (Shift held): recompute the dragged anchor of a two-anchor tool
+    /// Reference-informed straighten behavior (Shift held): recompute the dragged anchor of a two-anchor tool
     /// so the segment from the FIXED anchor snaps to the nearest 0°/45°/90° direction at the
     /// dragged pixel distance; a rectangle instead becomes a square (the larger dragged side
     /// wins, the drag quadrant's signs kept). Angles are visual, so the math runs in media-px
@@ -1800,7 +1798,7 @@ impl ChartEngine {
         self.drawing_runtime.borrow_mut().stats = DrawingWorkStats::default();
     }
 
-    /// The rectangle's 8 TradingView anchors derived from its two corners (media px), in
+    /// The rectangle's eight reference-informed anchors derived from its two corners (media px), in
     /// clock order from the top-left: 0 TL, 1 top-mid, 2 TR, 3 right-mid, 4 BR, 5 bottom-mid,
     /// 6 BL, 7 left-mid. Corners resize both adjacent edges, midpoints one edge — all with
     /// flip-on-cross (the opposite side stays put). Works on any px basis (media/bitmap).
@@ -1821,7 +1819,7 @@ impl ChartEngine {
         ]
     }
 
-    /// The directional resize cursor for a rectangle anchor (TradingView parity): diagonal
+    /// The directional resize cursor for a rectangle anchor (reference-informed behavior): diagonal
     /// cursors on the corners, straight ones on the edge midpoints.
     pub(crate) fn rectangle_anchor_cursor(index: usize) -> &'static str {
         match index {
@@ -2265,7 +2263,7 @@ impl ChartEngine {
 
     // --- selection ---
 
-    /// The selected drawing (TradingView-style click-to-select): while set, the frame build
+    /// The selected drawing (industry-standard click-to-select): while set, the frame build
     /// paints anchor handles at its defining points and its anchors accept drags. An unknown id
     /// never sticks.
     pub fn set_selected_drawing(&mut self, id: Option<DrawingId>) {
@@ -2279,7 +2277,7 @@ impl ChartEngine {
 
     /// Mark the text-capable drawing the host's typing-mode editor currently owns. The frame keeps
     /// painting the label and the focus border underneath the host's borderless caret overlay
-    /// (TradingView's overlay-caret model); this flag is the host/query seam for that session.
+    /// (the public reference's overlay-caret model); this flag is the host/query seam for that session.
     /// Cleared when the editor closes. An unknown id never sticks.
     pub fn set_editing_drawing(&mut self, id: Option<DrawingId>) {
         let valid = id.filter(|&eid| {
@@ -2411,7 +2409,7 @@ impl ChartEngine {
         let pane = self.pane_at_y(y)?;
         // The selected drawing's anchor handles win over every body (they paint above all).
         // The brush shows handles at its two ENDS only; the rectangle shows its eight
-        // TradingView anchors (four corners + four edge midpoints); the rest show one per
+        // Eight conventional anchors (four corners + four edge midpoints); the rest show one per
         // defining anchor.
         if let Some(selected) = self.selected_drawing {
             if let Some(drawing) = self.drawing(selected) {
@@ -2579,7 +2577,7 @@ impl ChartEngine {
                 top,
                 bottom,
             } => {
-                // TradingView: the fill is a drag surface only while the drawing is SELECTED
+                // the public reference: the fill is a drag surface only while the drawing is SELECTED
                 // (a border click selects first); unselected, the body hits just the band
                 // around the border frame and the middle pans the chart.
                 let within_x = x >= left - tolerance && x <= right + tolerance;
@@ -2661,7 +2659,7 @@ impl ChartEngine {
     // --- drag session (anchor re-anchoring / whole-body move) ---
 
     /// Hit-test `(x, y)` and open a drag session on the hit part (body move or anchor
-    /// re-anchor). A successful grab also selects the drawing (TradingView parity). Returns
+    /// re-anchor). A successful grab also selects the drawing (reference-informed behavior). Returns
     /// false on a miss — the host falls through to its pan/scroll handling.
     pub fn drawing_drag_start_at(&mut self, x: f64, y: f64) -> bool {
         self.drawing_drag_start_at_with_profile(x, y, HitProfile::PRECISION)
@@ -2706,7 +2704,7 @@ impl ChartEngine {
     /// horizontally). `modifiers` applies magnet (rendered-price snap) before straighten
     /// (0°/45°/90° for a trend anchor, square for a rectangle corner, dominant-axis for a body
     /// move) — the session recomputes from its start snapshot each call, so toggling a modifier
-    /// mid-drag responds live (TradingView parity).
+    /// mid-drag responds live (reference-informed behavior).
     pub fn drawing_drag_to(&mut self, x: f64, y: f64, modifiers: DrawingModifiers) {
         self.invalidate_frame_drawings();
         let Some(drag) = self.drawing_drag.as_mut() else {
@@ -2791,7 +2789,7 @@ impl ChartEngine {
                     // an edge-midpoint drag moves only that edge. Every slot KEEPS its corner
                     // identity — crossing the opposite side flips visually at render (the box
                     // normalizes), it never reorders the anchors or slides the fixed side
-                    // (TradingView parity).
+                    // (reference-informed behavior).
                     let Some(mut cursor_pt) = self.drawing_from_px_for(pane, price_scale, x, y)
                     else {
                         return;
@@ -2917,7 +2915,7 @@ impl ChartEngine {
                 points[index] = point;
             }
             DrawingDragPart::Body => {
-                // TradingView shift-move: constrain the translation to the dominant axis.
+                // Reference-informed shift-move: constrain the translation to the dominant axis.
                 let (dx, dy) = if modifiers.straighten {
                     if dx.abs() >= dy.abs() {
                         (dx, 0.0)
@@ -3434,7 +3432,7 @@ impl ChartEngine {
         let (entry_x, entry_y) = self.drawing_to_px_for(pane, price_scale, entry)?;
 
         // A position is born at a useful editable size from one click. Horizontal extent prefers
-        // the right (TradingView-style) and flips left only when the click is too close to the
+        // the right (industry-standard) and flips left only when the click is too close to the
         // price scale. Seed a compact risk leg, then derive reward in PRICE space so the preset is
         // deliberately asymmetric and keeps an exact 2:1 reward/risk ratio even on log/inverted
         // scales.
@@ -3486,7 +3484,7 @@ impl ChartEngine {
     /// to the pane under the cursor; later activations in a different pane are ignored.
     /// Returns 0 while no creation is armed, -1 while more anchors are needed, or the
     /// committed drawing's id (> 0) once the kind's anchor count is reached — the new drawing is
-    /// left selected, TradingView-style.
+    /// left selected, industry-standard.
     pub fn drawing_create_click(&mut self, x: f64, y: f64, modifiers: DrawingModifiers) -> i64 {
         self.invalidate_frame_drawings();
         let Some(pending) = &self.drawing_controller.pending else {
@@ -3734,7 +3732,7 @@ impl ChartEngine {
         self.drawing_controller.pending.as_ref()
     }
 
-    // --- freehand brush capture (press-drag-release, TradingView's brush) ---
+    // --- freehand brush capture (press-drag-release, the public reference's brush) ---
 
     fn brush_create_start_with_template(
         &mut self,

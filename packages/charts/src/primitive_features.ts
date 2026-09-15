@@ -469,7 +469,7 @@ export function create_session_highlighting(
   options?: session_highlighting_options,
 ): detachable_feature;
 /**
- * Engine-owned source-bar shading. The callback overload matches TradingView's official plugin:
+ * Engine-owned source-bar shading. The callback overload is informed by a public example's API shape:
  * the host evaluates the user callback when source data changes, then Rust retains the aligned
  * `{time,color}` records and owns coordinate conversion, clipping, merging, and rendering.
  */

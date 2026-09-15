@@ -6,7 +6,7 @@ async function open_chart(page) {
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 }
 
-test("auto wheel matches Lightweight Charts cursor anchoring, modifier neutrality, and independent horizontal pan", async ({ page }) => {
+test("auto wheel retains reference-informed cursor anchoring, modifier neutrality, and independent horizontal pan", async ({ page }) => {
   await open_chart(page);
   const box = await page.locator("#chart_container canvas:last-of-type").boundingBox();
   const geometry = await page.evaluate(() => ({

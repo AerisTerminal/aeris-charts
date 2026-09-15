@@ -489,7 +489,7 @@ pub struct SeriesValueSnapshot {
     pub formatted_previous_value: Option<String>,
 }
 
-// TradingView keeps selected plots visibly studded with compact handles. Sample densely enough
+// the public reference keeps selected plots visibly studded with compact handles. Sample densely enough
 // that a normal-width pane shows dozens of anchors, while retaining a strict per-selection bound.
 const SELECTION_ANCHOR_SPACING_CSS: f64 = 24.0;
 const MAX_SELECTION_ANCHORS: usize = 128;
@@ -710,13 +710,13 @@ pub struct SeriesEntry {
     pub last_value_visible: bool,
     /// reference `title` (series-options-defaults.ts: `''`): the series' display name. Shown as a
     /// chip in a darker shade of the label color at the front of the last-value label cluster
-    /// when `title_visible` holds (TradingView-style).
+    /// when `title_visible` holds (industry-standard).
     pub title: String,
-    /// TradingView-style title-chip toggle (default true): include the series' `title` as the
+    /// industry-standard title-chip toggle (default true): include the series' `title` as the
     /// darker chip of the last-value cluster. The chip renders even when the price label itself
     /// is off (`last_value_visible: false`).
     pub title_visible: bool,
-    /// TradingView-style candle-close countdown (default true): stack a countdown row below the
+    /// industry-standard candle-close countdown (default true): stack a countdown row below the
     /// price inside the last-value cluster. Hidden when the series has no usable bar interval
     /// or the host installed no clock (`now_override`).
     pub countdown_visible: bool,
@@ -736,7 +736,7 @@ pub struct SeriesEntry {
     pub price_line_color: Option<String>,
     /// reference `priceLineStyle` (default 1 = Dotted; the reference LineStyle numbering).
     pub price_line_style: u8,
-    /// TradingView-style bid/ask lines + axis chips (default OFF — platforms opt in). Values
+    /// industry-standard bid/ask lines + axis chips (default OFF — platforms opt in). Values
     /// are pushed by the host via `set_bid_ask`; when visible, each side with a value draws a
     /// horizontal line across the pane and a "Bid"/"Ask"-titled chip on the series' scale.
     pub bid_ask_visible: bool,
@@ -1313,7 +1313,7 @@ pub struct ChartEngine {
     next_persistent_pane_id: u32,
     pub options: ChartOptionsStore,
     pub crosshair_mode: CrosshairMode,
-    /// TradingView's Ctrl-held magnet: while set, a Normal-mode crosshair snaps to the hovered
+    /// the public reference's Ctrl-held magnet: while set, a Normal-mode crosshair snaps to the hovered
     /// bar's rendered prices exactly like `CrosshairMode::MagnetOhlc` (OHLC for candles/bars,
     /// close/value for scalar series; frame/crosshair.rs `crosshair_snap`). The gesture layer
     /// forwards the live modifier state; the configured `crosshair_mode` is untouched
@@ -1349,7 +1349,7 @@ pub struct ChartEngine {
     pub css_height: f64,
     pub dpr: f64,
     /// Host-installed clock (UTC seconds) for the candle-close countdown rows of the last-value
-    /// label clusters (TradingView-style extension). The engine is headless: countdown rows stay
+    /// label clusters (industry-standard extension). The engine is headless: countdown rows stay
     /// hidden until a host supplies the time — the wasm render path feeds the browser's system
     /// time every frame unless a value is pinned; tests pin one here for determinism.
     pub now_override: Option<f64>,
@@ -1405,7 +1405,7 @@ pub struct ChartEngine {
     drawing_runtime: RefCell<DrawingRuntime>,
     /// Next chart-unique drawing id (never reused; starts at 1 — 0 is the "no drawing" sentinel).
     next_drawing_id: DrawingId,
-    /// The drawing the host last clicked (TradingView-style selection): while set, the frame
+    /// The drawing the host last clicked (industry-standard selection): while set, the frame
     /// build paints anchor handles at its defining points and its anchors accept drags.
     selected_drawing: Option<DrawingId>,
     /// Active anchor/body drag session on a drawing (drawings.rs; the interaction.rs session
@@ -1425,7 +1425,7 @@ pub struct ChartEngine {
     /// keeps an empty trend label's measured middle gap while its editor is open.
     editing_drawing: Option<DrawingId>,
     /// The text drawing under the host's pointer (drawings.rs): the overlay frame paints its
-    /// focus border at hover opacity (TradingView's hover ring). Only the text tool has hover
+    /// focus border at hover opacity (the public reference's hover ring). Only the text tool has hover
     /// chrome — other kinds show nothing until selected.
     hovered_text: Option<DrawingId>,
     /// The drawing of any kind under the host's pointer (ordering seam): drives temporary
@@ -2911,7 +2911,7 @@ impl ChartEngine {
         self.invalidate_frame_scene();
     }
 
-    /// TradingView-style bid/ask: push the current quotes for a series. `None` hides that
+    /// industry-standard bid/ask: push the current quotes for a series. `None` hides that
     /// side. Lines and chips render only while the series' `bid_ask_visible` option holds.
     pub fn set_bid_ask(&mut self, id: SeriesId, bid: Option<f64>, ask: Option<f64>) {
         if let Some(series) = self.series.iter_mut().find(|s| s.id == id && !s.removed) {
@@ -3096,7 +3096,7 @@ impl ChartEngine {
         self.invalidate_frame_all();
     }
 
-    /// TradingView-style "reset view" button semantics in one action: the time scale returns
+    /// industry-standard "reset view" button semantics in one action: the time scale returns
     /// to its configured defaults (reference `resetTimeScale`) AND every pane's price scales
     /// re-enable autoscale. Axis double-click deliberately uses the targeted method above.
     /// The next frame's autoscale pass recalculates the visible ranges, so a manually
@@ -3110,7 +3110,7 @@ impl ChartEngine {
     /// Leave breathing room after the last bar on a view reset.
     ///
     /// `reset_time_scale` restores the reference default right offset (0), which pins the newest
-    /// bar against the price axis and puts the live-price cluster on top of the data. TradingView
+    /// bar against the price axis and puts the live-price cluster on top of the data. The public reference
     /// resets to a visible right margin instead, so the product-level reset adds one worth
     /// [`RESET_RIGHT_MARGIN_FRACTION`] of the plot width — a fraction rather than a bar count, so
     /// the gap looks the same at any window size or zoom. The reference `resetTimeScale`

@@ -1526,7 +1526,7 @@ fn last_value_labels_cover_every_visible_series_and_resolve_overlap() {
     assert_eq!(boxed(&mut chart).len(), 1);
 }
 
-/// TradingView marks a last-value chip hollow only when its value is no longer live — i.e. the
+/// the public reference marks a last-value chip hollow only when its value is no longer live — i.e. the
 /// series' final bar has been scrolled out of view (what a negative right offset produces).
 #[test]
 fn last_value_chips_hollow_only_once_the_final_bar_leaves_the_view() {
@@ -4102,7 +4102,7 @@ fn bold_round_labels_decile_rule() {
     for (v, b) in marks.iter().zip(&bold) {
         assert_eq!(*b, matches!(*v as i64, 100 | 120), "value {v}");
     }
-    // Uniform step 1000: multiples of 10000 are round (TradingView's screenshot behavior).
+    // Uniform step 1000: multiples of 10000 are round (the public reference's screenshot behavior).
     let marks: Vec<f64> = (16_000..=40_000).step_by(1_000).map(|v| v as f64).collect();
     let bold = ChartEngine::bold_round_decisions(&marks, true);
     for (v, b) in marks.iter().zip(&bold) {
@@ -4195,7 +4195,7 @@ fn allow_bold_labels_gates_major_time_ticks() {
     );
 }
 
-// ---- TradingView-style last-value cluster: title chip + price + candle-close countdown ----
+// ---- industry-standard last-value cluster: title chip + price + candle-close countdown ----
 
 #[test]
 fn countdown_interval_is_the_median_of_recent_deltas() {
@@ -5491,7 +5491,7 @@ fn text_tool_selection_paints_a_focus_border_without_anchor_handles() {
     assert_eq!(hover[0].1, 2);
 
     // Selection upgrades the same box to full strength — and paints NO anchor discs
-    // (TradingView: text has no drag-point handles).
+    // (the public reference: text has no drag-point handles).
     chart.set_selected_drawing(Some(text));
     let selected = border_frames(&mut chart);
     assert_eq!(selected.len(), 1);
@@ -5530,7 +5530,7 @@ fn text_tool_selection_paints_a_focus_border_without_anchor_handles() {
 
 #[test]
 fn selection_anchors_remain_dense_and_bounded_at_tight_spacing() {
-    // 200 bars across an 800 css px pane (4 px/bar): selected plots retain the dense TradingView
+    // 200 bars across an 800 css px pane (4 px/bar): selected plots retain the dense reference-informed
     // visual rhythm — about one anchor per 24 css px, with the first and last always kept.
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     let n = 200;
@@ -6641,7 +6641,7 @@ fn indicator_tick_rebuilds_only_source_and_dependent_output_layers() {
     assert!(chart.data.series_generation(rsi).unwrap() > 0);
 }
 
-/// The selected series' chip carries TradingView's active-state accent on its axis-facing edge.
+/// The selected series' chip carries the public reference's active-state accent on its axis-facing edge.
 #[test]
 fn selecting_a_series_accents_its_last_value_chip() {
     let mut chart = two_identical_line_series();

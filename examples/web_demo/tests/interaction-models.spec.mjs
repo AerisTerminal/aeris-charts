@@ -4,7 +4,7 @@ import { test, expect } from "@playwright/test";
 // recognizer only classifies events and forwards samples — the axis drag-to-scale, vertical
 // price pan, wheel/pinch zoom increments, kinetic coast, and eased scroll animations all
 // compute in Rust. These specs drive the real gestures in the browser and assert the same
-// behavior the headless engine tests pin down, including Lightweight Charts wheel sensitivity.
+// behavior the headless engine tests pin down, including the public reference wheel sensitivity.
 
 async function wait_grid(page) {
   await page.waitForFunction(() => window.__grid !== undefined && window.__chart?.backend?.() !== undefined);

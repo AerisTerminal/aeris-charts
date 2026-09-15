@@ -860,7 +860,7 @@ impl ChartEngine {
     /// The visible color of one candlestick, for chrome that represents the bar itself — the
     /// live price line, its last-value axis chip, and the crosshair marker.
     ///
-    /// Normally that is the body color. A hollow candle (TradingView-style: a transparent body,
+    /// Normally that is the body color. A hollow candle (industry-standard: a transparent body,
     /// leaving the border frame and wick) has no body color to show, and following it anyway
     /// would paint the chip with a fully transparent fill — it would read as the bare chart
     /// surface rather than as the bar's bullish/bearish color. So a transparent body falls

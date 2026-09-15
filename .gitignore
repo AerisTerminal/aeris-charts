@@ -11,7 +11,7 @@ test-results/
 /benchmarks/results/
 /graphify-out/
 
-# vendored study copy of the reference charting library (not part of the product)
+# installed development-only public reference dependency (not part of the product)
 /tmp/
 
 # editor/os noise

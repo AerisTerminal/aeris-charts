@@ -92,7 +92,8 @@ Browser input uses Pointer Events for mouse and pen, plus cancellable Touch Even
 page-scroll arbitration. The engine owns the bounded gesture state, 5 px drag threshold,
 fixed-start-centroid cumulative pinch behavior, primary-touch continuation, cancellation, and
 device-aware hit tolerances. Wheel policy is configurable with
-`wheel_behavior: "auto" | "pan" | "zoom"`; matching Lightweight Charts 5.2.1, auto zooms time from
+`wheel_behavior: "auto" | "pan" | "zoom"`; informed by measured behavior from the pinned public
+reference fixture, auto zooms time from
 vertical deltas and pans time from horizontal deltas independently on the pane or either axis, with
 no Ctrl/Shift special case. The explicit `pan` and `zoom` values retain Nucleus extension routing.
 
@@ -191,3 +192,15 @@ Reproducible release-package benchmarks live in [`benchmarks/`](benchmarks/READM
 ## License
 
 Nucleus Charts is proprietary software. See [LICENSE](LICENSE) for the permitted use and distribution terms.
+
+## Independent development and third-party references
+
+Nucleus Charts is independently designed and implemented. Public documentation, public examples,
+and observed behavior from established charting products are used to learn common user expectations
+and to build development-only compatibility comparisons. Those references do not share Nucleus's
+engine, rendering, or state-management implementation.
+
+Development tests use Lightweight Charts as a pinned Apache-2.0 dependency through its public API.
+That dependency is not included in the published `@nucleuscharts/financial` package. TradingView and
+Lightweight Charts are trademarks of their respective owners; Nucleus Charts is not affiliated with
+or endorsed by TradingView. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -77,7 +77,7 @@ pub(crate) struct IndicatorChange {
     pub(crate) full_replace: bool,
 }
 
-/// Stretch factor of the pane a separate-pane indicator creates for itself (TradingView
+/// Stretch factor of the pane a separate-pane indicator creates for itself (the public reference
 /// oscillators stack as a shorter strip under the price pane).
 pub(crate) const OSCILLATOR_PANE_STRETCH: f64 = 0.3;
 
@@ -87,7 +87,7 @@ pub const EMA_RIBBON_DEFAULT_COLORS: [&str; nucleuscharts_indicators::MAX_OUTPUT
     ["#335cff", "#FF9800", "#7d52f4", "#fb4ba3", "#fb3748"];
 
 /// MACD histogram four-state palette: strong when moving away from zero, weak when falling
-/// back toward it (TradingView-style). Packed `0xRRGGBBAA`.
+/// back toward it (industry-standard). Packed `0xRRGGBBAA`.
 const MACD_UP: u32 = rgb_u32(nucleuscharts_core::style::MARKET_UP_RGB, 0xff);
 const MACD_UP_WEAK: u32 = rgb_u32(
     nucleuscharts_core::style::MARKET_UP_RGB,
@@ -386,7 +386,7 @@ impl ChartEngine {
 
     /// Add MACD line, signal line, and histogram series in that order, in their own
     /// oscillator pane. The histogram is a Histogram-kind series whose per-bar color follows
-    /// the four TradingView states (strong/weak × above/below zero).
+    /// four conventional states (strong/weak × above/below zero).
     pub fn add_macd(
         &mut self,
         source: SeriesId,
@@ -481,7 +481,7 @@ impl ChartEngine {
         ids
     }
 
-    /// Move output series into a fresh oscillator pane below everything (TradingView
+    /// Move output series into a fresh oscillator pane below everything (the public reference
     /// separate-pane default, reduced stretch).
     fn place_outputs_in_oscillator_pane(&mut self, ids: &[SeriesId]) {
         let Some(pane) = self.add_pane(false) else {
@@ -497,7 +497,7 @@ impl ChartEngine {
 
     /// The bollinger band-fill companion for an output series: when `id` is a bollinger UPPER
     /// (output slot 0), the LOWER series (slot 2) the fill closes toward, else `None`. The
-    /// frame builder paints the fill between them under the band strokes (TradingView's
+    /// frame builder paints the fill between them under the band strokes (the public reference's
     /// background fill).
     pub(crate) fn bollinger_fill_companion(&self, id: SeriesId) -> Option<SeriesId> {
         self.indicators.iter().find_map(|binding| {
@@ -839,7 +839,7 @@ fn momentum_histogram_color(value: f64, previous: Option<f64>) -> u32 {
 }
 
 /// The auto-generated indicator name behind the (hidden-by-default) name chip — what
-/// TradingView shows in its indicator legend ("SMA 20", "MACD 12 26 9"). Platforms can read it
+/// the public reference shows in its indicator legend ("SMA 20", "MACD 12 26 9"). Platforms can read it
 /// via the series options or override it with their own `title`.
 fn indicator_title(kind: &IndicatorKind) -> String {
     let params = |d: f64| {

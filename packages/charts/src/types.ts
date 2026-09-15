@@ -475,7 +475,7 @@ export interface pane_geometry {
 /**
  * An indicator output series' lineage (engine `IndicatorInfo`): which binding it belongs to
  * (kind + params), the source series it derives from, and which output slot it is — everything
- * a platform needs to render its own TradingView-style indicator chip (title, params, source,
+ * a platform needs to render its own industry-standard indicator chip (title, params, source,
  * hide/remove actions) without the engine owning any UI. Bollinger slots: 0 = upper,
  * 1 = middle, 2 = lower; EMA ribbon slots follow its five configured periods; SMA/EMA: always 0.
  */
@@ -554,7 +554,7 @@ export interface time_scale_options {
   lock_visible_time_range_on_resize?: boolean;
   /**
    * Keep the right-most bar pinned during ordinary time-scale zoom. Defaults to `false`, matching
-   * Lightweight Charts cursor anchoring.
+   * reference-informed cursor anchoring.
    */
   right_bar_stays_on_scroll?: boolean;
   /**
@@ -619,7 +619,7 @@ export interface price_scale_options {
    */
   text_color?: string;
   /**
-   * Nucleus extension (TradingView-style, default true): draw round-figure tick labels in the bold
+   * Nucleus extension (industry-standard, default true): draw round-figure tick labels in the bold
    * font — multiples of step×10 on uniform ticks, exact powers of ten on log ticks.
    */
   bold_round_labels?: boolean;
@@ -760,7 +760,7 @@ export interface chart_price_scale_options {
   minimumWidth?: number;
   /** Price scale text color (reference `textColor`); when unset, the scale follows `layout.textColor`. */
   textColor?: string;
-  /** Bold round-figure tick labels (Nucleus extension, TradingView-style, default `true`). */
+  /** Bold round-figure tick labels (Nucleus extension, industry-standard, default `true`). */
   boldRoundLabels?: boolean;
 }
 
@@ -847,7 +847,8 @@ export interface chart_options {
   /** Momentum scroll after a pan flick (reference `kineticScroll`). Default touch-only. Package-level. */
   kinetic_scroll: boolean | kinetic_scroll_options;
   /**
-   * Wheel/trackpad policy. `auto` exactly follows Lightweight Charts: vertical deltas zoom time
+   * Wheel/trackpad policy. `auto` uses behavior measured from the pinned public reference fixture:
+   * vertical deltas zoom time
    * and horizontal deltas pan time independently on every chart surface, without modifier
    * routing. `pan` and `zoom` are explicit Nucleus extensions.
    */
@@ -916,7 +917,7 @@ export interface series_options {
   area_bottom_color: string;
   /**
    * Histogram only: color each bar by the main price series' up/down direction at that time
-   * (translucent green/red), matching TradingView-style volume. Default false (solid `color`).
+   * (translucent green/red), matching industry-standard volume. Default false (solid `color`).
    */
   histogram_updown: boolean;
   /**
@@ -949,14 +950,14 @@ export interface series_options {
   /**
    * reference `title` (default `""`): the series' display name, shown as a chip in a darker
    * shade of the label color at the front of the last-value label cluster when `title_visible`
-   * holds (TradingView-style).
+   * holds (industry-standard).
    */
   title?: string;
-  /** Show the `title` chip in the last-value cluster (TradingView-style; default `true`). */
+  /** Show the `title` chip in the last-value cluster (industry-standard; default `true`). */
   title_visible?: boolean;
   /**
    * Stack a candle-close countdown row below the price inside the last-value cluster
-   * (TradingView-style; default `true`). The package ticks a 1s timer while any visible
+   * (industry-standard; default `true`). The package ticks a 1s timer while any visible
    * series with data has this on.
    */
   countdown_visible?: boolean;
@@ -979,7 +980,7 @@ export interface series_options {
   /** Price line style, a `LINE_STYLE_TO_U8` value (reference `priceLineStyle`, default 1 Dotted). */
   price_line_style?: number;
   /**
-   * TradingView-style bid/ask lines + "Bid"/"Ask" axis chips (default `false` — platforms opt
+   * industry-standard bid/ask lines + "Bid"/"Ask" axis chips (default `false` — platforms opt
    * in). Push the live quotes with {@link series_api.set_bid_ask}; each side with a value
    * draws a line across the pane and a title chip on the scale.
    */
@@ -1333,7 +1334,7 @@ export interface drawing_options {
   text_bold: boolean;
   text_h_align: drawing_text_h_align;
   text_v_align: drawing_text_v_align;
-  /** Text-tool container background (TradingView's text-box background; default `""` = none). */
+  /** Text-tool container background (the public reference's text-box background; default `""` = none). */
   box_color: string;
   /** Text-tool container border color (default `""` = none). */
   box_border_color: string;
@@ -1528,7 +1529,7 @@ export interface series_api {
    */
   set_ring_source(buffer: SharedArrayBuffer | null, layout?: ring_source_layout): void;
   /**
-   * Push the current bid/ask quotes (TradingView-style; render with `bid_ask_visible: true`).
+   * Push the current bid/ask quotes (industry-standard; render with `bid_ask_visible: true`).
    * Pass `null` to hide a side.
    */
   set_bid_ask(bid: number | null, ask: number | null): void;
@@ -1674,7 +1675,7 @@ export interface pane_api {
   /**
    * This pane's content-area geometry in CSS px relative to the chart container's top-left
    * (from the last layout pass). Absolutely-position platform chrome against it — e.g. a
-   * TradingView-style indicator chip pinned at `{ left, top }` of the pane. Operations on a
+   * industry-standard indicator chip pinned at `{ left, top }` of the pane. Operations on a
    * removed pane handle throw instead of silently targeting a replacement pane.
    */
   get_geometry(): pane_geometry;
@@ -2101,14 +2102,14 @@ export interface chart_api {
   /** Atomically update all EMA ribbon periods without replacing its five series handles.
    *  `indicator` may be any output returned by {@link add_ema_ribbon}. */
   set_ema_ribbon_periods(indicator: series_api, periods: ema_ribbon_periods): boolean;
-  /** Add upper, middle, and lower Rust-native Bollinger-band lines (with the TradingView-style
+  /** Add upper, middle, and lower Rust-native Bollinger-band lines (with the industry-standard
    *  background fill between the bands). */
   add_bollinger(source: series_api, period: number, deviation?: number, options?: Partial<series_options>): [series_api, series_api, series_api];
   /** Add a Rust-native Wilder RSI line in its own oscillator pane (dotted 30/70 band lines and
    *  the translucent channel strip between them). */
   add_rsi(source: series_api, period: number, options?: Partial<series_options>): series_api;
   /** Add MACD line, signal line, and histogram in their own oscillator pane; the histogram's
-   *  per-bar color follows the four TradingView states (strong/weak × above/below zero). */
+   *  per-bar color follows four conventional states (strong/weak × above/below zero). */
   add_macd(source: series_api, fast: number, slow: number, signal: number, options?: Partial<series_options>): [series_api, series_api, series_api];
   /** Add Stochastic %K and %D lines in their own oscillator pane (dotted 20/80 band lines and
    *  the translucent channel strip between them). */
@@ -2155,7 +2156,7 @@ export interface chart_api {
    */
   swap_panes(first: number, second: number): boolean;
   /**
-   * TradingView-style "reset view" in one action: the time scale returns to its configured
+   * industry-standard "reset view" in one action: the time scale returns to its configured
    * defaults (reference `resetTimeScale`) and every pane's price scales re-enable autoscale
    * (reference pane `resetPriceScale`, the price-axis double-click). A manually contracted or
    * over-zoomed scale fits the data again on the next frame.
@@ -2230,7 +2231,7 @@ export interface chart_api {
   /** Whether this chart currently has a drawing operation to redo. */
   can_redo_drawing(): boolean;
   /**
-   * Arm an interactive drawing tool (TradingView-style), or disarm with `null`. While armed,
+   * Arm an interactive drawing tool (industry-standard), or disarm with `null`. While armed,
    * pane clicks place the tool's anchors through the engine's creation flow — one click for the
    * single-anchor kinds, two for `trend_line`/`rectangle`, and repeated clicks for `path` until
    * double-click or Enter — the mouse previews the pending anchor, Backspace removes the latest

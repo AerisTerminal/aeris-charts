@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Background Shade parity fixture</title>
+<title>Public reference background-shade fixture</title>
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; background: white; font: 12px sans-serif; }
@@ -16,7 +16,7 @@
 <body>
 <main>
   <section><h1>Nucleus</h1><div class="chart" id="nucleus"></div></section>
-  <section><h1>Lightweight Charts 5.2.0</h1><div class="chart" id="reference"></div></section>
+  <section><h1>Public reference fixture</h1><div class="chart" id="reference"></div></section>
 </main>
 <script type="module">
 import { create_chart } from "./dist/nucleuscharts_financial.js";
@@ -35,7 +35,7 @@ const low_color = "rgb(50, 50, 255)";
 const high_color = "rgb(255, 50, 50)";
 const line_color = "#000000";
 const start = 1_700_000_000;
-// Exact upstream sample formula with randomFactor pinned to the midpoint of its 25..50 range.
+// Deterministic test data informed by the public example's waveform, with randomness removed.
 const values = Array.from({ length: 500 }, (_, index) => index * (
   0.5
   + Math.sin(index / 10) * 0.2
@@ -46,8 +46,9 @@ const values = Array.from({ length: 500 }, (_, index) => index * (
 const line_data = values.map((value, index) => ({ time: start + index * 86_400, value }));
 const shade_data = line_data;
 
-// Behavioral copy of the Apache-2.0 upstream example renderer. Product code does not import or
-// transliterate this class; it exists only as the pinned 5.2.0 side-by-side oracle.
+// Test-only adapter informed by the Apache-2.0 public background-shade example. It is isolated
+// from product code and exercises only the dependency's documented custom-series API. See
+// THIRD_PARTY_NOTICES.md and third_party_licenses/Apache-2.0.txt at the repository root.
 class ReferenceShadeRenderer {
   data = null;
   options = null;

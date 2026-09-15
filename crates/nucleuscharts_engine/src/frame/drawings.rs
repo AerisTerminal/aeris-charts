@@ -21,7 +21,7 @@ use crate::drawings::{
 use crate::ChartEngine;
 use nucleuscharts_core::model::plot_list::PlotValueIndex;
 
-/// TradingView-style drawing anchor handle: a theme-derived disc with the primary-token border
+/// industry-standard drawing anchor handle: a theme-derived disc with the primary-token border
 /// (the crosshair-marks disc idiom — the border is a larger filled disc underneath). Slightly
 /// larger than the series selection anchors (2.5/1.5, series_geometry.rs) since these are
 /// drag targets.
@@ -34,7 +34,7 @@ const POSITION_ZONE_ALPHA: u8 = 70;
 /// above the base-zone alpha instead of relying on a second lower-alpha pass to become visible
 /// only through accidental compositing.
 const POSITION_PROGRESS_ALPHA: u8 = 96;
-/// The hover ring's dimmed variant of the focus border (TradingView shows the same border at
+/// The hover ring's dimmed variant of the focus border (the public reference shows the same border at
 /// roughly half strength until the drawing is actually selected).
 const HOVER_BORDER: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0x73);
 const TREND_TEXT_PLACEHOLDER_ALPHA: u8 = 0x99;
@@ -358,7 +358,7 @@ impl ChartEngine {
                         );
                         if pending.drawing.kind.spec().handles == DrawingHandleMode::RectangleBounds
                         {
-                            // TradingView shows all eight anchors while the rectangle is being
+                            // the public reference shows all eight anchors while the rectangle is being
                             // drawn (committed corner + live preview corner), not only after
                             // the commit.
                             build_rectangle_handles(&px, vpr, self.anchor_fill(), out);
@@ -405,7 +405,7 @@ impl ChartEngine {
 
     /// Selection chrome is retained with the overlay, so selection-only changes do not
     /// invalidate or reconstruct unrelated drawing geometry. The text tool gets no anchor
-    /// handles (TradingView: text has no drag points) — its selection affordance is the focus
+    /// handles (the public reference: text has no drag points) — its selection affordance is the focus
     /// border alone. That border STAYS painted while the host typing-mode editor is open
     /// (the wrap is borderless; only the caret overlays), so entering/leaving edit cannot
     /// shift the outline.
@@ -451,7 +451,7 @@ impl ChartEngine {
         }
     }
 
-    /// The hovered text drawing's focus border at hover opacity (TradingView's hover ring):
+    /// The hovered text drawing's focus border at hover opacity (the public reference's hover ring):
     /// the same chrome box as selection, dimmed. Suppressed while the drawing is selected
     /// (the full-strength border already paints, including during typing mode).
     pub(super) fn build_hovered_text_frame(
@@ -793,7 +793,7 @@ impl ChartEngine {
     /// standalone text paints nothing; an empty hovered trend label paints its dedicated
     /// prompt at the canonical label transform. A text tool
     /// with a `box_color`/`box_border_color` gets its container (crisp integer-snapped
-    /// `Rect`/`RectFrame` prims behind the run — TradingView's text-box background/border).
+    /// `Rect`/`RectFrame` prims behind the run — the public reference's text-box background/border).
     fn build_drawing_text(
         &self,
         drawing: &Drawing,
@@ -804,7 +804,7 @@ impl ChartEngine {
     ) {
         // Empty text paints nothing. While the host typing-mode editor is open the LABEL and
         // the focus border still paint — the editor wrap is borderless with transparent glyphs,
-        // so entering edit cannot lift the text or shift the outline (TradingView's
+        // so entering edit cannot lift the text or shift the outline (the public reference's
         // overlay-caret model).
         let Some((text, placeholder)) = self.drawing_frame_text(drawing) else {
             return;
@@ -838,7 +838,7 @@ impl ChartEngine {
         // The container (text tool with a background/border): a box wrapping the run, emitted
         // as the rectangle tool's crisp integer-snapped prims (`Rect` fill + `RectFrame`
         // border) — strong-color thin geometry at fractional positions AA-phases differently
-        // between the backends, so the box snaps to whole device px (TradingView's boxes are
+        // between the backends, so the box snaps to whole device px (the public reference's boxes are
         // crisp the same way).
         let box_fill = drawing.box_color.as_deref().and_then(Color::parse_css);
         let box_border = drawing
@@ -1525,7 +1525,7 @@ fn build_position_handles(px: &[(f64, f64)], vpr: f64, fill: Color, out: &mut Ve
     }
 }
 
-/// The rectangle's eight TradingView handles: fully-rounded discs on the four corners and
+/// The rectangle's eight reference-informed handles: fully-rounded discs on the four corners and
 /// slightly-rounded square handles on the four edge midpoints (the midpoint drags resize one
 /// edge independently).
 fn build_rectangle_handles(px: &[(f64, f64)], vpr: f64, fill: Color, out: &mut Vec<Prim>) {

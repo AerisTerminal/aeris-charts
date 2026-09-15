@@ -40,7 +40,7 @@ for (const [backend, url] of [
   });
 }
 
-test("attribution logo matches the LWC final-pane placement and surface contrast", async ({ page }) => {
+test("attribution logo uses the intended final-pane placement and surface contrast", async ({ page }) => {
   await open_demo(page);
   const result = await page.evaluate(() => {
     const chart = window.__chart;

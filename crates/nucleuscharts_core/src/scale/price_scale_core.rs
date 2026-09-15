@@ -47,7 +47,7 @@ pub struct PriceScaleCoreOptions {
     /// reference `textColor` (default `None` = follow `layout.textColor`). Stored verbatim as a
     /// CSS string; parsed at render time.
     pub text_color: Option<String>,
-    /// Nucleus extension (TradingView-style, default true): draw round-figure tick labels in the
+    /// Nucleus extension (industry-standard, default true): draw round-figure tick labels in the
     /// bold font — multiples of `step × 10` on uniform ticks, exact powers of ten on
     /// non-uniform (log) ticks.
     pub bold_round_labels: bool,
@@ -245,7 +245,7 @@ impl PriceScaleCore {
         }
     }
 
-    /// Nucleus extension (TradingView-style, default true): bold round-figure tick labels.
+    /// Nucleus extension (industry-standard, default true): bold round-figure tick labels.
     pub fn set_bold_round_labels(&mut self, bold: bool) {
         if self.options.bold_round_labels != bold {
             self.options.bold_round_labels = bold;
@@ -614,7 +614,7 @@ impl PriceScaleCore {
         self.price_range_snapshot = None;
     }
 
-    // --- wheel zoom (TradingView-style; the reference has no price-axis wheel) ---
+    // --- wheel zoom (industry-standard; the reference has no price-axis wheel) ---
 
     /// Zoom the range by `factor` anchored at the price under chart-content coordinate `y`
     /// (that price stays fixed on screen). Mirrors the drag-to-scale guards: percentage and

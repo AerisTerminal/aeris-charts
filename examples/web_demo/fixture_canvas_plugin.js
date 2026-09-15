@@ -8,7 +8,7 @@
  * character-for-character the reference's — the proof that a reference plugin painting with raw
  * canvas calls through `CanvasRenderingTarget2D` drops onto Nucleus's `canvas_render_target`
  * unchanged. The view/primitive classes keep the reference structure 1:1; the only adaptations
- * are the host seams the reference leaves to lightweight-charts:
+ * are the host seams exposed by the development-only public reference fixture:
  * - `chart.timeScale().timeToCoordinate(t)` → Nucleus's `chart.time_scale().time_to_coordinate(t)`
  *   (safe to call from the canvas hooks: the pass runs after the engine frame, not mid-render);
  * - the reference's `paneViews()` returns views whose `renderer()` hands an

@@ -14,7 +14,7 @@ use crate::axis_metrics::{AxisMetrics, AXIS_FONT_SCALE, COUNTDOWN_FONT_SCALE};
 /// is the owning scale's `alignLabels` — a scale with it off leaves its labels at their raw
 /// coordinates (price-axis-widget.ts:633 early-return).
 ///
-/// The candidate is a TradingView-style CLUSTER of up to three independently-toggleable parts:
+/// The candidate is an industry-standard CLUSTER of up to three independently-toggleable parts:
 /// the title chip (a darker shade of the label color, left of the price text), the price text,
 /// and a candle-close countdown row stacked below. `y`/`height` describe the whole cluster
 /// (center + total height), which is what the overlap pass spaces; `top_height` is the title +
@@ -52,7 +52,7 @@ struct LivePriceRegion {
     primary: bool,
 }
 
-/// TradingView's active-chip indication: a bar in a lighter shade of the series color pinned to
+/// the public reference's active-chip indication: a bar in a lighter shade of the series color pinned to
 /// the axis-facing edge of that series' last-value chip, painted over the chip it marks. Emitted
 /// after the chip so it lands on top, and with no attach group so it cannot join the
 /// price/countdown shared-edge chain.
@@ -112,7 +112,7 @@ pub(crate) fn median_bar_interval(times: &[i64]) -> Option<f64> {
     })
 }
 
-/// TradingView countdown format by remaining magnitude: `mm:ss` zero-padded below an hour,
+/// the public reference countdown format by remaining magnitude: `mm:ss` zero-padded below an hour,
 /// `hh:mm:ss` below a day, `"Xd Xh"` at a day and beyond.
 pub(crate) fn format_countdown_remaining(remaining: f64) -> String {
     let secs = remaining.max(0.0).floor() as u64;
@@ -499,7 +499,7 @@ impl ChartEngine {
         )
     }
 
-    /// Nucleus extension: bold round-figure price tick labels (TradingView decile rule). Uniform
+    /// Nucleus extension: bold round-figure price tick labels (the public reference decile rule). Uniform
     /// ticks: the value is a multiple of `step × 10`. Non-uniform (log-style) ticks: the value
     /// is an exact power of ten.
     pub(crate) fn bold_round_decisions(logicals: &[f64], enabled: bool) -> Vec<bool> {
@@ -1714,7 +1714,7 @@ impl ChartEngine {
         }
     }
 
-    /// TradingView's horizontal-line/ray axis label: the drawing's price boxed on the price
+    /// the public reference's horizontal-line/ray axis label: the drawing's price boxed on the price
     /// axis in the LINE's own color (the label is part of the drawing — recoloring the line
     /// recolors the label on the next frame), with automatic contrasting text unless explicitly
     /// configured. Formatted
@@ -1797,7 +1797,7 @@ impl ChartEngine {
     /// Labels sharing an axis side are pushed apart with the reference's overlap resolution
     /// (price-axis-widget.ts `_fixLabelOverlap`).
     ///
-    /// TradingView-style cluster extension: the label is one connected box of up to three
+    /// industry-standard cluster extension: the label is one connected box of up to three
     /// independently-toggleable parts — a title chip (the series' `title` in a darker shade of
     /// the label color, left of the price text), the price text itself, and a candle-close
     /// countdown row stacked below, spanning the cluster's full width. The cluster renders while
@@ -1909,7 +1909,7 @@ impl ChartEngine {
                     );
                     // reference `lastValueData(false)` anchors on the last VISIBLE bar. When the
                     // series' real final bar is scrolled out of view — what a negative right
-                    // offset produces — the chip is showing a stale value, and TradingView marks
+                    // offset produces — the chip is showing a stale value, and the public reference marks
                     // that by outlining the chip instead of filling it.
                     let stale = plot
                         .last_non_whitespace_row_before(plot.size())
@@ -1981,7 +1981,7 @@ impl ChartEngine {
                     hollow: stale && !primary,
                     selected: self.series_is_selected(series.id),
                 });
-                // TradingView-style bid/ask chips (`bid_ask_visible`, default off): one
+                // industry-standard bid/ask chips (`bid_ask_visible`, default off): one
                 // title+price cluster per side with a live quote, centered on the quote's
                 // coordinate. Their attach groups are offset far from any series id so the
                 // chips never chain into the main cluster (or each other) when adjacent.
@@ -2126,7 +2126,7 @@ impl ChartEngine {
         live_price_regions
     }
 
-    /// Emit one TradingView-style last-value cluster (see `append_last_value_label`): one
+    /// Emit one industry-standard last-value cluster (see `append_last_value_label`): one
     /// connected box whose top row holds the title chip (darker shade, left) + price area and
     /// whose optional countdown row spans the full width below. Box width covers the widest row;
     /// each row's text is centered in its area. Axis-facing outer corners are rounded (right
@@ -2182,7 +2182,7 @@ impl ChartEngine {
             .as_deref()
             .map(|text| countdown_text_width(text, countdown_measure))
             .unwrap_or(0.0);
-        // TradingView geometry: the title chip sits outside the strip and the price/countdown
+        // the public reference geometry: the title chip sits outside the strip and the price/countdown
         // box sits inside it. Their logical bounds meet at the border; the primitive encoder
         // excludes the border's exact device pixels from both axis-side boxes.
         // Inside rows share one width, stack flush, and start text at the tick-label inset from
@@ -2332,7 +2332,7 @@ impl ChartEngine {
                 border,
             });
         }
-        // Selected-series accent (TradingView's active-chip indication): a bar in a lighter shade
+        // Selected-series accent (the public reference's active-chip indication): a bar in a lighter shade
         // of the series color, pinned to the cluster's axis-facing edge and painted over the
         // chips it marks. Pushed last so it lands on top; it carries no attach group so it cannot
         // disturb the price/countdown shared-edge chain.
@@ -2349,7 +2349,7 @@ impl ChartEngine {
         }
     }
 
-    /// The series' candle-close countdown text (TradingView-style `countdown_visible`): the time
+    /// The series' candle-close countdown text (industry-standard `countdown_visible`): the time
     /// until the inferred next bar close. After a quiet interval with no new point, the deadline
     /// continues from the last point's interval grid instead of freezing at zero until data
     /// resumes. The interval is the median of the last up-to-10

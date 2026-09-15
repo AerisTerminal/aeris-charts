@@ -645,7 +645,7 @@ impl ChartInner {
         }
     }
 
-    /// Color a histogram by the main price series' up/down direction per bar (TradingView volume).
+    /// Color a histogram by the main price series' up/down direction per bar (reference-informed volume).
     pub fn set_series_histogram_updown(&mut self, id: u32, enabled: bool) {
         if let Some(s) = self.series.iter_mut().find(|s| s.id == id as SeriesId) {
             s.histogram_updown = enabled;
@@ -901,7 +901,7 @@ impl ChartInner {
 
     /// JSON `{left, top, width, height}` of pane `i`'s content area in CSS px relative to the
     /// chart container's top-left (`{}` for a stale index). This is the anchor a platform
-    /// absolutely-positions per-pane chrome against (e.g. a TradingView-style indicator chip
+    /// absolutely-positions per-pane chrome against (e.g. an industry-standard indicator chip
     /// at the pane's top-left). Reflects the last layout pass.
     pub fn pane_geometry_json(&self, i: usize) -> String {
         match self.panes.get(i) {
