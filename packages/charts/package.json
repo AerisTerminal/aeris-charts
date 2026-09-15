@@ -3,7 +3,7 @@
   "version": "0.9.12",
   "type": "module",
   "description": "Financial charting SDK powered by Rust, WebAssembly, and WebGPU.",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "author": "NucleusCharts",
   "repository": {
     "type": "git",

@@ -191,9 +191,15 @@ Reproducible release-package benchmarks live in [`benchmarks/`](benchmarks/READM
 
 ## License
 
+Nucleus Charts is **source-available** under the
+[PolyForm Noncommercial License 1.0.0](LICENSE). Individuals may use, study, modify, and share it
+for personal and other noncommercial purposes. Charitable, educational, public-research,
+public-safety, environmental-protection, and government organizations also receive the
+noncommercial license permissions described in the license.
+
 **Business or commercial use requires a paid Commercial License.** This includes use by companies,
-organizations, sole proprietors, consultants working for clients, revenue-generating products, and
-internal business systems.
+commercial organizations, sole proprietors, consultants working for clients, revenue-generating
+products, and internal business systems.
 
 Commercial terms are available for per-seat, per-product, OEM/embedded, and white-label use.
 NucleusCharts also offers custom engineering for integrations, indicators, chart features,
@@ -201,7 +207,8 @@ rendering backends, performance work, and product-specific implementations. Cont
 through the [project repository](https://github.com/NucleusCharts/financial-charts) for licensing,
 pricing, or custom-development enquiries.
 
-See [LICENSE](LICENSE) for the controlling legal terms.
+This is not an OSI-approved open-source license because it restricts commercial use. See
+[LICENSE](LICENSE) for the controlling legal terms.
 
 ## Independent development and third-party references
 

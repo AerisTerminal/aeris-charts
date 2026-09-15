@@ -14,7 +14,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "LicenseRef-Proprietary"
+license = "PolyForm-Noncommercial-1.0.0"
 authors = ["NucleusCharts"]
 repository = "https://github.com/NucleusCharts/financial-charts"
 

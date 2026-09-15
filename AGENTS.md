@@ -76,7 +76,7 @@ A passing unit test that bypasses the real host or executor path is not sufficie
 - Inspect `git status` before and after work. Preserve unrelated changes and stage only task-owned files.
 - Never force-push, use destructive Git commands, or delete broad paths without explicit authorization and resolved targets.
 - Never commit credentials, tokens, proprietary provider data, generated packages, build outputs, browser reports, or local fixtures accidentally.
-- Check the proprietary license before copying external implementation code or assets.
+- Check the project and third-party licenses before copying external implementation code or assets.
 
 ## Verification and delivery
 

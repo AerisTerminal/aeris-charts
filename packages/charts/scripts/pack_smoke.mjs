@@ -71,7 +71,7 @@ try {
   const pkg = JSON.parse(
     readFileSync(join(scratch, "node_modules", "@nucleuscharts", "financial", "package.json"), "utf8"),
   );
-  assert.equal(pkg.license, "SEE LICENSE IN LICENSE");
+  assert.equal(pkg.license, "PolyForm-Noncommercial-1.0.0");
 
   console.log(`pack smoke OK: ${tgz} (${files.length} files, wasm ${(wasm.size / 1024).toFixed(0)} kB)`);
   rmSync(join(pkg_dir, tgz), { force: true });

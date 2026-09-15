@@ -1,81 +1,153 @@
-NUCLEUS CHARTS PROPRIETARY LICENSE
+# PolyForm Noncommercial License 1.0.0
 
-Copyright (c) 2026 NucleusCharts. All rights reserved.
+<https://polyformproject.org/licenses/noncommercial/1.0.0>
 
-This license governs the Nucleus Charts charting engine and all associated
-source code, compiled artifacts (including JavaScript, WebAssembly, and
-Rust crates), documentation, and example code (collectively, the
-"Software") distributed in this repository and in the @nucleuscharts/financial
-package.
+## Acceptance
 
-1. NO FREE USE. The Software is commercial, proprietary software. No
-   rights are granted to you except those explicitly stated in this
-   license. Any use, reproduction, modification, adaptation, public
-   display, public performance, sublicensing, distribution, or creation
-   of derivative works of the Software, in whole or in part, requires a
-   separate written commercial license agreement with NucleusCharts
-   ("Commercial License").
+In order to get any license under these terms, you must agree
+to them as both strict obligations and conditions to all
+your licenses.
 
-2. LIMITED EVALUATION RIGHT. Solely for the purpose of evaluating whether
-   to purchase a Commercial License, you may view the Software and run it
-   internally, in a non-production environment, for up to thirty (30)
-   days from first access. This evaluation right does not permit: (a) use
-   in any production system or product; (b) use to provide any service to
-   third parties; (c) redistribution or public disclosure of the Software
-   or benchmarks derived from it; (d) modification or derivative works;
-   or (e) removal of any proprietary notices.
+## Copyright License
 
-3. NO OPEN SOURCE GRANT. Nothing in this license grants any right under
-   any open source, free software, or similar licensing model. The
-   Software is not "open source." You may not represent otherwise.
+The licensor grants you a copyright license for the
+software to do everything you might do with the software
+that would otherwise infringe the licensor's copyright
+in it for any permitted purpose.  However, you may
+only distribute the software according to [Distribution
+License](#distribution-license) and make changes or new works
+based on the software according to [Changes and New Works
+License](#changes-and-new-works-license).
 
-4. NO COMPETING USE. Without a Commercial License explicitly permitting
-   it, you may not use the Software, or knowledge gained from it, to
-   design, develop, benchmark publicly, or distribute any charting
-   library, charting engine, or product that competes with the Software.
+## Distribution License
 
-5. NO REVERSE ENGINEERING. You may not decompile, disassemble, or reverse
-   engineer any compiled or minified form of the Software, except to the
-   extent this restriction is prohibited by applicable law.
+The licensor grants you an additional copyright license
+to distribute copies of the software.  Your license
+to distribute covers distributing the software with
+changes and new works permitted by [Changes and New Works
+License](#changes-and-new-works-license).
 
-6. PATENT DEFENSIVE TERMINATION. If you or any entity you control
-   institute, or actively participate in, patent litigation against
-   NucleusCharts alleging that the Software infringes any patent, any and all
-   rights granted to you under this license and under any Commercial
-   License terminate immediately.
+## Notices
 
-7. TRADEMARKS. This license does not grant any right to use the names
-   "NucleusCharts", "Nucleus Charts", "Nucleus", or any associated logos or
-   marks, except as required for truthful attribution in notices
-   permitted by a Commercial License.
+You must ensure that anyone who gets a copy of any part of
+the software from you also gets a copy of these terms or the
+URL for them above, as well as copies of any plain-text lines
+beginning with `Required Notice:` that the licensor provided
+with the software.  For example:
 
-8. RESERVATION OF RIGHTS. NucleusCharts retains all right, title, and
-   interest in and to the Software, including all copyrights, patents,
-   trade secrets, and other intellectual property rights. Any rights not
-   expressly granted are reserved.
+> Required Notice: Copyright Yoyodyne, Inc. (http://example.com)
 
-9. TERMINATION. Any breach of this license automatically terminates all
-   rights granted here. On termination you must immediately cease all use
-   and destroy all copies of the Software in your possession or control.
+## Changes and New Works License
 
-10. NO WARRANTY. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-    ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
-    WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND
-    NONINFRINGEMENT.
+The licensor grants you an additional copyright license to
+make changes and new works based on the software for any
+permitted purpose.
 
-11. LIMITATION OF LIABILITY. IN NO EVENT SHALL NUCLEUSCHARTS BE LIABLE FOR
-    ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF
-    CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION
-    WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+## Patent License
 
-COMMERCIAL LICENSING
+The licensor grants you a patent license for the software that
+covers patent claims the licensor can license, or becomes able
+to license, that you would infringe by using the software.
 
-Business or commercial use requires a paid Commercial License. Commercial
-terms are available for per-seat, per-product, OEM/embedded, and
-white-label use.
+## Noncommercial Purposes
 
-NucleusCharts also offers custom engineering, including integrations,
-indicators, chart features, rendering backends, performance work, and
+Any noncommercial purpose is a permitted purpose.
+
+## Personal Uses
+
+Personal use for research, experiment, and testing for
+the benefit of public knowledge, personal study, private
+entertainment, hobby projects, amateur pursuits, or religious
+observance, without any anticipated commercial application,
+is use for a permitted purpose.
+
+## Noncommercial Organizations
+
+Use by any charitable organization, educational institution,
+public research organization, public safety or health
+organization, environmental protection organization,
+or government institution is use for a permitted purpose
+regardless of the source of funding or obligations resulting
+from the funding.
+
+## Fair Use
+
+You may have "fair use" rights for the software under the
+law. These terms do not limit them.
+
+## No Other Rights
+
+These terms do not allow you to sublicense or transfer any of
+your licenses to anyone else, or prevent the licensor from
+granting licenses to anyone else.  These terms do not imply
+any other licenses.
+
+## Patent Defense
+
+If you make any written claim that the software infringes or
+contributes to infringement of any patent, your patent license
+for the software granted under these terms ends immediately. If
+your company makes such a claim, your patent license ends
+immediately for work on behalf of your company.
+
+## Violations
+
+The first time you are notified in writing that you have
+violated any of these terms, or done anything with the software
+not covered by your licenses, your licenses can nonetheless
+continue if you come into full compliance with these terms,
+and take practical steps to correct past violations, within
+32 days of receiving notice.  Otherwise, all your licenses
+end immediately.
+
+## No Liability
+
+***As far as the law allows, the software comes as is, without
+any warranty or condition, and the licensor will not be liable
+to you for any damages arising out of these terms or the use
+or nature of the software, under any kind of legal claim.***
+
+## Definitions
+
+The **licensor** is the individual or entity offering these
+terms, and the **software** is the software the licensor makes
+available under these terms.
+
+**You** refers to the individual or entity agreeing to these
+terms.
+
+**Your company** is any legal entity, sole proprietorship,
+or other kind of organization that you work for, plus all
+organizations that have control over, are under the control of,
+or are under common control with that organization.  **Control**
+means ownership of substantially all the assets of an entity,
+or the power to direct its management and policies by vote,
+contract, or otherwise.  Control can be direct or indirect.
+
+**Your licenses** are all the licenses granted to you for the
+software under these terms.
+
+**Use** means anything you do with the software requiring one
+of your licenses.
+
+Required Notice: Copyright (c) 2026 NucleusCharts.
+
+---
+
+## Alternative Commercial License
+
+The following commercial-licensing information is separate from, and does
+not modify, the PolyForm Noncommercial License terms above.
+
+The PolyForm Noncommercial License does not permit business or
+commercial use. A paid Commercial License is required for use by
+a business, in client work, in a revenue-generating product or
+service, or in an internal business system.
+
+Commercial terms are available for per-seat, per-product,
+OEM/embedded, and white-label use. NucleusCharts also offers
+custom engineering, including integrations, indicators, chart
+features, rendering backends, performance work, and
 product-specific implementations.
 
 For licensing, pricing, or custom-development enquiries, contact
