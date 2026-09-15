@@ -1,7 +1,7 @@
 //! Draw-list IR consumed by rendering backends.
 //!
-//! Two coordinate flavors, mirroring the Canvas2D split the reference charting library relies on
-//! shared by every executor:
+//! Two coordinate flavors, based on the media-space/device-space distinction shared by every
+//! executor:
 //! - integer **bitmap** rects (`Rect`, `RectFrame`, `HLine`, `VLine`) — crisp, no AA;
 //! - float bitmap-space geometry (`Polyline`, `AreaFill`, `RoundRect`, `Circle`, `Text`) — AA'd.
 

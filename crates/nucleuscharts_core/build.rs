@@ -70,7 +70,7 @@ fn emit_color(output: &mut String, name: &str, css: &str) {
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest dir"));
-    let tokens_path = manifest_dir.join("../../packages/charts/src/style_tokens.json");
+    let tokens_path = manifest_dir.join("style_tokens.json");
     println!("cargo:rerun-if-changed={}", tokens_path.display());
 
     let source = fs::read_to_string(&tokens_path)
@@ -83,7 +83,7 @@ fn main() {
         "default_theme must be light or dark"
     );
 
-    let mut output = String::from("// Generated from packages/charts/src/style_tokens.json.\n");
+    let mut output = String::from("// Generated from nucleuscharts_core/style_tokens.json.\n");
     output.push_str(&format!(
         "pub const DEFAULT_THEME_NAME: &str = \"{default_theme}\";\n"
     ));

@@ -17,8 +17,8 @@ dependency. Tests call its public API in an isolated reference fixture and compa
 or interaction behavior with Nucleus Charts. The dependency is not bundled into the published
 `@nucleuscharts/financial` package.
 
-One development-only background-shade adapter is informed by the project's public plugin example.
-It remains isolated from product code and is covered by the upstream Apache License 2.0. The
+Some development-only comparison fixtures are derived from public plugin examples. They remain
+isolated from product code and are covered by the upstream Apache License 2.0. The
 applicable license text is included at
 [`third_party_licenses/Apache-2.0.txt`](third_party_licenses/Apache-2.0.txt).
 

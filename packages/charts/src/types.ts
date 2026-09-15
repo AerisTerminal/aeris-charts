@@ -1165,7 +1165,7 @@ export interface price_line_api {
   readonly id: number;
 }
 
-/** A per-bar marker on a series (roadmap Phase B4). Mirrors the reference charting library `SeriesMarker`. */
+/** A per-bar marker on a series (roadmap Phase B4), informed by common public chart APIs. */
 export interface series_marker {
   /** Bar time (must match a data point's time). Accepts the same forms as data `time`. */
   time: time;
@@ -1666,7 +1666,7 @@ export interface price_scale_api {
   set_auto_scale(on: boolean): void;
 }
 
-/** A stacked pane (roadmap Phase B1). Mirrors the reference charting library `IPaneApi`. */
+/** A stacked pane (roadmap Phase B1), informed by common public chart APIs. */
 export interface pane_api {
   /** This pane's current index (0 = top/price pane). Throws after this pane is removed. */
   pane_index(): number;

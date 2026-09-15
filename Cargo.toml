@@ -17,6 +17,10 @@ edition = "2021"
 license = "PolyForm-Noncommercial-1.0.0"
 authors = ["NucleusCharts"]
 repository = "https://github.com/NucleusCharts/financial-charts"
+readme = "Crates.md"
+keywords = ["finance", "charts", "trading", "webgpu", "wasm"]
+categories = ["visualization", "graphics", "wasm"]
+publish = ["crates-io"]
 
 # Shared lint policy; every crate opts in via `[lints] workspace = true`.
 # CI enforces clippy with `-D warnings` on top of this.

@@ -3,7 +3,7 @@
 
 use crate::TimePointIndex;
 
-/// Inclusive integer range of time-point indices ("strict range" in the reference charting library).
+/// Inclusive integer range of time-point indices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StrictRange {
     left: TimePointIndex,
@@ -11,7 +11,7 @@ pub struct StrictRange {
 }
 
 impl StrictRange {
-    /// Panics if `left > right` (mirrors the reference's assertion).
+    /// Panics if `left > right`.
     pub fn new(left: TimePointIndex, right: TimePointIndex) -> Self {
         assert!(left <= right, "right should be >= left");
         Self { left, right }

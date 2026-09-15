@@ -1,14 +1,14 @@
 //! Chart option structs, reference-matching defaults, and `apply_options` deep-merge (roadmap Phase A2).
 //!
-//! the reference charting library exposes deeply-nested option objects and an `applyOptions(partial)` that
-//! **deep-merges** a partial patch into the current options (`helpers/merge.ts`): nested objects
+//! Financial-chart APIs commonly expose deeply nested option objects and an `applyOptions(partial)`
+//! operation that **deep-merges** a partial patch into the current options: nested objects
 //! are merged key-by-key so an update to `grid.vertLines.color` leaves every sibling untouched,
 //! while scalars and arrays replace wholesale. We reproduce that contract exactly.
 //!
 //! Rather than hand-roll a merge per struct, options are held as a canonical `serde_json::Value`
 //! seeded from the typed defaults; a patch (also JSON, straight from the JS boundary) is
-//! deep-merged into it, and typed views are produced by deserializing on demand. This mirrors
-//! the reference's runtime object merge 1:1 and makes partial updates and round-tripping free.
+//! deep-merged into it, and typed views are produced by deserializing on demand. This independently
+//! implements the public deep-merge behavior and makes partial updates and round-tripping free.
 //!
 //! Colors are kept as CSS strings (as in reference); the render layer parses them. `LineStyle` is the
 //! numeric wire form (0 Solid, 1 Dotted, 2 Dashed). The reference's 3 LargeDashed/4 SparseDotted

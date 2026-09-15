@@ -1,7 +1,8 @@
 //! nucleuscharts_core — platform-free chart model.
 //!
-//! Faithful port of the reference charting library model layer. All model math is `f64` (matching
-//! JavaScript semantics); conversion to backend coordinate formats happens at render encoding.
+//! Independent chart-model implementation informed by public financial-chart APIs and observed
+//! behavior. All model math is `f64`; conversion to backend coordinate formats happens at render
+//! encoding.
 
 pub mod format;
 pub mod helpers;
@@ -14,5 +15,5 @@ pub mod style;
 pub type Coordinate = f64;
 
 /// Integer index into the merged time-scale point list. May be negative in logical space
-/// (positions left of the first bar) — matches the reference charting library's `TimePointIndex`/`Logical`.
+/// (positions left of the first bar).
 pub type TimePointIndex = i64;

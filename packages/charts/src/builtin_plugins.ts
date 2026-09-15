@@ -1,9 +1,9 @@
 /**
- * Built-in plugins matching the reference charting library v5 surface.
+ * Independently implemented built-in plugins informed by established public chart-plugin APIs.
  *
- * - {@link create_series_markers} mirrors the reference's `createSeriesMarkers` (plugins/series-markers):
+ * - {@link create_series_markers} provides familiar series-marker behavior:
  *   it delegates directly to the engine's canonical marker state and frame builder.
- * - {@link create_text_watermark} mirrors the reference's `createTextWatermark` (plugins/text-watermark):
+ * - {@link create_text_watermark} provides familiar text-watermark behavior:
  *   state, zoom-to-fit layout, and text primitives are produced by the shared Rust engine.
  */
 

@@ -52,7 +52,8 @@ export function init_wasm(wasm_url?: string | URL): Promise<unknown> {
 
 /**
  * Create a chart inside `container`. Resolves once the rendering backend is ready and the first
- * frame is drawn. Mirrors the reference charting library's `createChart`, but async (backend acquisition).
+ * frame is drawn. It provides a familiar `createChart`-style entry point and is asynchronous because
+ * backend acquisition must complete first.
  */
 export async function create_chart(
   container: HTMLElement,

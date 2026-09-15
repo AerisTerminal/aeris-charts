@@ -6,9 +6,9 @@
 //! guard is a `debug_assert!` that is compiled out of the release wasm build, so bad data there
 //! would silently corrupt indices or panic in `reindex_all`.
 //!
-//! This module is the single choke point that makes that assumption safe to hold. Unlike
-//! the reference charting library's `data-validators.ts` (which only `assert`s in dev builds and throws in
-//! prod), we *repair* what we can and *report* what we changed, so a production embedder gets a
+//! This module is the single choke point that makes that assumption safe to hold. It independently
+//! implements stricter production behavior: we *repair* what we can and *report* what we changed,
+//! so a production embedder gets a
 //! rendered chart plus a diagnostic instead of a thrown error or a dead canvas.
 //!
 //! Repair policy, in order:

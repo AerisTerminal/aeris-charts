@@ -1,7 +1,7 @@
 /**
  * OHLC custom-series fixture for the Nucleus plugin contract (plugin platform Phase C-c).
  *
- * The draw body mirrors the reference's `_drawImpl` 1:1: the same up/down rule (close vs the PREVIOUS
+ * This development-only comparison fixture retains the public example's up/down rule (close vs the PREVIOUS
  * close), the same crisp-position math, and the same media-px `radius`. The only adaptation is
  * the coordinate space: Nucleus's render context
  * carries absolute BITMAP px (item x and `price_to_y` outputs), where the reference's renderer receives

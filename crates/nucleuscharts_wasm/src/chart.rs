@@ -276,7 +276,7 @@ fn broadcast_gpu_loss() {
     notify_nucleuscharts_backend_loss(generation);
 }
 
-// the reference charting library default palette
+// Nucleus's canonical default palette
 // Axis palette (as CSS color strings for the 2D overlay)
 // industry-standard volume: translucent green on up bars, red on down bars.
 

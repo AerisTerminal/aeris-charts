@@ -1,6 +1,6 @@
 /**
- * Custom series (plugin platform Phase C-c) — Nucleus's take on the reference charting library v5's
- * `addCustomSeries`/`ICustomSeriesPaneView` (reference api/chart-api.ts, model/icustom-series.ts).
+ * Custom series (plugin platform Phase C-c), independently designed after studying public custom
+ * series APIs and observable behavior in established financial-chart libraries.
  *
  * A custom series is a user-defined series TYPE: the engine owns its time mapping (its data
  * rows carry times only, so the merged time scale, logical ranges, and coordinate math work
@@ -11,7 +11,7 @@
  * paint-order position** — a custom series z-orders between built-in series exactly like a
  * built-in kind, and its output is pixel-identical on the WebGPU and Canvas2D backends.
  *
- * Data flow mirrors reference: `series.set_data(items)` / `series.update(item)` take the raw plugin
+ * Data flow follows the public API contract: `series.set_data(items)` / `series.update(item)` take the raw plugin
  * items (ascending unique times required — out-of-order input is stably sorted and duplicates
  * collapse last-wins, the same repair the built-ins get); `series.data()` returns the aligned
  * raw items. Item `time` values go through the same UTC-seconds conversion as built-in data.

@@ -17,7 +17,7 @@
 //!   horizontal segment. The area/baseline fills carry no hit test, exactly like reference
 //!   (no renderer implements `hitTest` in v5.2).
 //!
-//! Cross-series arbitration ports the reference's `isBetterHit`: point-style hits beat strokes/ranges,
+//! Cross-series arbitration follows behavior learned from public hit-test semantics: point-style hits beat strokes/ranges,
 //! otherwise the smaller distance wins, and equal-distance non-point ties keep the paint
 //! order (the caller walks topmost-first, so ties resolve to the topmost series).
 

@@ -1,6 +1,6 @@
 /**
- * Port of the reference's plugin-examples `vertical-line` plugin to the Nucleus canvas-primitive
- * contract (plugin platform Phase C-e — the Canvas2D escape hatch). Source:
+ * Development-only Apache-2.0 compatibility fixture derived from the public `vertical-line` plugin
+ * example and adapted to the Nucleus canvas-primitive contract. Source:
  * tmp/refsrc/plugin-examples/src/plugins/vertical-line/vertical-line.ts plus
  * src/helpers/dimensions/positions.ts.
  *

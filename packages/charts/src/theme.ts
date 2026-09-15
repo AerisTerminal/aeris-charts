@@ -1,14 +1,14 @@
 /**
  * Nucleus's public theme mapping.
  *
- * `style_tokens.json` is the backend-consumed projection of the complete host design system in
+ * The core crate's `style_tokens.json` is the backend-consumed projection of the complete host design system in
  * `nucleuscharts.css`. The Rust engine compiles its opaque colors and shared radii into defaults,
  * so WebGPU, Canvas2D, GPUI, and the TypeScript package cannot drift while host-only CSS stays out
  * of Rust.
  */
 
 import type { chart_options, deep_partial } from "./types.js";
-import style_tokens from "./style_tokens.json";
+import style_tokens from "../../../crates/nucleuscharts_core/style_tokens.json";
 
 export interface chart_theme {
   /** Chart main background. */

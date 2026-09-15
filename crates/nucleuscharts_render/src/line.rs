@@ -190,7 +190,7 @@ fn catmull_rom(p0: f64, p1: f64, p2: f64, p3: f64, t: f64) -> f64 {
 
 /// Expand a polyline according to its [`LineType`] into `out` (cleared first, allocation reused):
 /// `Simple` is unchanged; `WithSteps` inserts a horizontal-then-vertical corner at each interval
-/// (the value holds until the next point, as in the reference charting library); `Curved`
+/// (the value holds until the next point); `Curved`
 /// tessellates a Catmull-Rom spline through the points with a per-interval segment count adapted
 /// to the interval's device-px length (`hpr`/`vpr` convert media to device px).
 pub fn expand_line_into(
@@ -243,8 +243,8 @@ pub fn expand_line_into(
 }
 
 /// Expand a polyline according to its [`LineType`]: `Simple` is unchanged; `WithSteps` inserts a
-/// horizontal-then-vertical corner at each interval (the value holds until the next point, as in
-/// the reference charting library); `Curved` tessellates a Catmull-Rom spline through the points.
+/// horizontal-then-vertical corner at each interval (the value holds until the next point);
+/// `Curved` tessellates a Catmull-Rom spline through the points.
 ///
 /// Allocating convenience wrapper over [`expand_line_into`] for callers whose points are already
 /// in device px.

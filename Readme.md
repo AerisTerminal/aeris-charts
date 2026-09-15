@@ -4,6 +4,32 @@ Nucleus Charts is a financial chart engine built in Rust. One deterministic char
 
 The project includes professional chart interactions, drawings, technical indicators, multiple panes and scales, custom series, primitives, shared-memory market-data input, and backend parity tooling.
 
+## Rust crates
+
+Rust consumers can use the engine and backends directly:
+
+```sh
+cargo add nucleuscharts_engine
+```
+
+The coordinated crates.io release contains:
+
+| Crate | Purpose |
+| --- | --- |
+| `nucleuscharts_engine` | Headless chart state, interactions, drawings, indicators, and frame construction |
+| `nucleuscharts_core` | Platform-free data, scales, options, validation, and formatting |
+| `nucleuscharts_indicators` | Pure Rust technical-indicator calculations |
+| `nucleuscharts_render` | Backend-neutral draw-list contract and rendering math |
+| `nucleuscharts_render_wgpu` | WebGPU executor |
+| `nucleuscharts_native` | Native tiny-skia rasterizer and server-side PNG rendering |
+| `nucleuscharts_wasm` | WebAssembly browser host |
+
+The GPUI executor remains available from this repository because it relies on a reviewed Zed commit
+whose API differs from the crates.io `gpui` release. It is deliberately not published as a broken
+registry fallback. All published Nucleus crates in a release use the same version. The
+[license terms](#license) apply equally to crates.io downloads: personal and noncommercial use is
+free, while business or commercial use requires a paid Commercial License.
+
 ## Browser package
 
 The browser SDK is published as `@nucleuscharts/financial` on GitHub Packages. Configure the

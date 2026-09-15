@@ -1,6 +1,6 @@
 /**
- * Pane primitives (plugin platform Phase C-a) — Nucleus's take on the reference charting library v5's
- * `IPanePrimitive` (reference model/ipane-primitive.ts, api/pane-api.ts `PaneApi.attachPrimitive`).
+ * Pane primitives (plugin platform Phase C-a), independently designed after studying the public
+ * primitive APIs and observable behavior of established financial-chart libraries.
  *
  * Locked design divergence: a primitive
  * never touches a canvas. Its view renderers record backend-neutral draw commands through the

@@ -12,7 +12,7 @@
  *
  * Translucent eight-digit hex tokens stay in CSS for host chrome. Shared radii and the
  * opaque sRGB equivalents of chart surfaces, axis text, axis borders, and market
- * colors live in style_tokens.json so every backend matches.
+ * colors live in nucleuscharts_core/style_tokens.json so every backend matches.
  */
 
 :root,

@@ -1,4 +1,4 @@
-//! Crosshair magnet, ported from `src/model/magnet.ts`.
+//! Independently implemented crosshair magnet behavior.
 //!
 //! In Magnet mode the crosshair's horizontal line snaps to the close/value of the bar under
 //! the cursor; in MagnetOHLC it considers open/high/low/close for OHLC-rendered series and only
@@ -35,8 +35,8 @@ pub fn magnet_snap(cursor_coord: f64, candidates: &[(f64, f64)]) -> Option<f64> 
 /// Port of the candidate pick in `Magnet.align` (model/magnet.ts:80-83): candidates are y
 /// coordinates, each converted on its own series' price scale; the one nearest the cursor
 /// coordinate wins and is returned as a *coordinate* (the caller converts it back to a price
-/// on the pane's default scale). Ties resolve to the earliest candidate, matching the reference's stable
-/// sort. Returns `None` when there are no candidates (caller keeps the raw cursor price).
+/// on the pane's default scale). Ties resolve to the earliest candidate through a stable sort.
+/// Returns `None` when there are no candidates (caller keeps the raw cursor price).
 pub fn magnet_snap_coordinate(cursor_coord: f64, candidates: &[f64]) -> Option<f64> {
     let mut best: Option<f64> = None;
     for &candidate in candidates {

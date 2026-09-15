@@ -1,12 +1,12 @@
-//! Kinetic (momentum) scroll model. Faithful port of `src/model/kinetic-animation.ts`:
-//! the release speed is the distance-weighted average of up to three consecutive
+//! Independently implemented kinetic (momentum) scroll behavior, informed by observable public
+//! interaction semantics. The release speed is the distance-weighted average of up to three consecutive
 //! same-direction segments, and the coast follows `start + speed * (c^t - 1) / ln(c)`.
 //!
 //! The model is platform-free: the host feeds pointer samples (`add_position`) during a drag,
 //! engages the coast on release (`start`), and drives it from its own frame scheduler
 //! (`position`/`finished`). All times are milliseconds in the host's clock.
 
-/// reference `Constants.MaxStartDelay`: the last sample may lag the release by at most this.
+/// The last sample may lag the release by at most this.
 const MAX_START_DELAY_MS: f64 = 50.0;
 
 #[derive(Clone, Copy, Debug)]

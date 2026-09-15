@@ -6,8 +6,8 @@
 //! scene -- crates/nucleuscharts_native/tests/goldens/scene.png`).
 //!
 //! The golden is currently our own deterministic render of geometry (no text). When a
-//! headless-Chromium reference pipeline exists, the reference charting library's PNGs drop in as
-//! additional goldens with the same diff.
+//! headless-Chromium comparison pipeline exists, independently captured public-library output can
+//! be evaluated as additional goldens with the same diff.
 
 use nucleuscharts_native::{
     diff_pixmaps,
