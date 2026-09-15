@@ -70,7 +70,15 @@ package.
 
 COMMERCIAL LICENSING
 
-To purchase a Commercial License (per-seat, per-product, OEM/embedded,
-or white-label), contact NucleusCharts through the project repository:
+Business or commercial use requires a paid Commercial License. Commercial
+terms are available for per-seat, per-product, OEM/embedded, and
+white-label use.
+
+NucleusCharts also offers custom engineering, including integrations,
+indicators, chart features, rendering backends, performance work, and
+product-specific implementations.
+
+For licensing, pricing, or custom-development enquiries, contact
+NucleusCharts through the project repository:
 
     https://github.com/NucleusCharts/financial-charts
