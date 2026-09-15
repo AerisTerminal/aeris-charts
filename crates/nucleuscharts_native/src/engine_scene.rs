@@ -96,7 +96,7 @@ pub fn install_trading_fixture(chart: &mut ChartEngine) {
         .unwrap();
 }
 
-#[derive(Clone, Debug, serde::Deserialize)]
+#[derive(Clone, Debug)]
 pub struct ParityFixture {
     pub schema: u32,
     pub name: String,
@@ -114,12 +114,21 @@ pub struct ParityFixture {
 }
 
 pub fn parity_fixture() -> ParityFixture {
-    let fixture: ParityFixture = serde_json::from_str(include_str!(
-        "../../../examples/web_demo/fixtures/d1/candles.json"
-    ))
-    .expect("D1 parity fixture JSON must remain valid");
-    assert_eq!(fixture.schema, 1, "unsupported D1 parity fixture schema");
-    fixture
+    ParityFixture {
+        schema: 1,
+        name: "candles-1000-default-light".to_string(),
+        css_width: 1280.0,
+        css_height: 720.0,
+        pixel_ratio: 1.5,
+        price_axis_width: 46.0,
+        time_axis_height: 22.0,
+        bar_count: 1000,
+        end_time: 1_767_225_600,
+        seed: 42,
+        start_price: 100.0,
+        close_span: 2.4,
+        wick_span: 1.2,
+    }
 }
 
 pub fn parity_engine() -> ChartEngine {
