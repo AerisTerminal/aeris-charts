@@ -22,14 +22,14 @@ async function wait_for_chart(page) {
 }
 
 // Geometry probes default to DPR 1; alignment coverage overrides it when needed.
-async function open_cluster_page(browser, options, deviceScaleFactor = 1) {
+async function open_cluster_page(browser, options, deviceScaleFactor = 1, query = "") {
   const context = await browser.newContext({
     viewport: { width: 1280, height: 720 },
     deviceScaleFactor,
     colorScheme: "light",
   });
   const page = await context.newPage();
-  await page.goto(`${test_base_url}/`);
+  await page.goto(`${test_base_url}/${query}`);
   await wait_for_chart(page);
   await page.evaluate((opts) => {
     // A deterministic final DOWN bar at the current second: the label color is pinned to
@@ -669,11 +669,14 @@ test("price and countdown chips share an exact edge at any DPR (no attachment ga
 });
 
 test("cluster rounds its axis-facing corners and keeps the chart-facing side sharp", async ({ browser }) => {
+  // Probe the shared engine geometry through Canvas2D. At a 1 CSS px canonical radius, WebGPU
+  // MSAA may legitimately fully cover the single extreme DPR-1 sample on different GPUs; the
+  // renderer parity suite separately verifies RoundRect lowering across the WebGPU path.
   const { context, page } = await open_cluster_page(browser, {
     title: "NUCLEUS",
     title_visible: true,
     countdown_visible: true,
-  });
+  }, 1, "?backend=canvas2d");
   const anchor = await cluster_anchor(page);
   const shot = await capture(page);
   const box = find_cluster(shot, anchor.pane_w);
@@ -681,7 +684,7 @@ test("cluster rounds its axis-facing corners and keeps the chart-facing side sha
   expect(box.left).toBe(anchor.pane_w + 1);
   expect(near(px(shot, anchor.pane_w, box.top + 3), BORDER)).toBe(true);
   expect(near(px(shot, box.left, box.top + 3), LABEL)).toBe(true);
-  // Axis-facing top-right corner (2px radius): the extreme corner pixel is clipped (blended
+  // Axis-facing top-right corner: the extreme corner pixel is clipped (blended
   // away from the fill), while the same column a few px down is fully filled.
   const corner_tr = px(shot, box.right - 1, box.top);
   const inside_tr = px(shot, box.right - 1, box.top + 3);
@@ -697,7 +700,7 @@ test("cluster rounds its axis-facing corners and keeps the chart-facing side sha
   // Chart-facing bottom-left corner: sharp.
   expect(near(px(shot, box.left, box.bottom - 1), LABEL)).toBe(true);
   // The OUTSIDE title chip rounds only its OUTER side: the corner pixel itself is clipped
-  // (white, not chip), while the interior and the axis-facing edge are fully filled (sharp).
+  // (surface, not chip), while the interior and the axis-facing edge are fully filled (sharp).
   const extent = chip_extent(shot, anchor.pane_w, anchor.y);
   expect(extent.found).toBe(true);
   expect(dist(px(shot, extent.left - 1, extent.top), CHIP)).toBeGreaterThan(12); // clipped corner

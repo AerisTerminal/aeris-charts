@@ -38,6 +38,16 @@ async function reset_pair(page) {
       rightBarStaysOnScroll: false,
     });
   });
+  // Both implementations invalidate asynchronously. Do not let a pending reset from the previous
+  // trace land after the next trace's `before` snapshot on slower CI runners.
+  await page.waitForFunction(() =>
+    Math.abs(window.__chart.wasm.bar_spacing() - 6) < 1e-9
+    && Math.abs(window.__chart.wasm.scroll_position()) < 1e-9,
+  );
+  await oracle.waitForFunction(() =>
+    Math.abs(window.__reference.chart.timeScale().options().barSpacing - 6) < 1e-9
+    && Math.abs(window.__reference.chart.timeScale().scrollPosition()) < 1e-9,
+  );
 }
 
 async function states(page) {
