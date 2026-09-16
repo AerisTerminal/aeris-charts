@@ -111,18 +111,19 @@ function chip_boxes_at(png, y, x0, x1, row_h = ROW) {
   return boxes.filter((b) => b.e - b.s + 1 >= 12 && b.filled / ((b.e - b.s + 1) * row_h) >= 0.5);
 }
 
-function chip_run_near(png, pane_w, anchor_y) {
-  const y = Math.round(anchor_y) - Math.floor(ROW / 2);
+function chip_run_near(png, pane_w, anchor_y, scale = 1) {
+  const row_h = Math.round(ROW * scale);
+  const y = Math.round(anchor_y) - Math.floor(row_h / 2);
   // `x1` is exclusive. Include `pane_w - 1`, the final chart-side pixel before the border, so
   // this probe can distinguish a flush title chip from a one-pixel surface gap.
-  const boxes = chip_boxes_at(png, y, Math.max(0, pane_w - 120), pane_w);
+  const boxes = chip_boxes_at(png, y, Math.max(0, pane_w - Math.round(120 * scale)), pane_w, row_h);
   if (boxes.length === 0) return { left: -1, right: -1, top: -1, bottom: -1, found: false };
   const last = boxes[boxes.length - 1]; // the border-most box
-  return { left: last.s, right: last.e, top: y, bottom: y + ROW, found: true };
+  return { left: last.s, right: last.e, top: y, bottom: y + row_h, found: true };
 }
 
-function chip_extent(png, pane_w, anchor_y) {
-  const run = chip_run_near(png, pane_w, anchor_y);
+function chip_extent(png, pane_w, anchor_y, scale = 1) {
+  const run = chip_run_near(png, pane_w, anchor_y, scale);
   return { left: run.left, right: run.right, top: run.top, bottom: run.bottom, found: run.found };
 }
 
@@ -179,6 +180,17 @@ function rightmost_where(png, box, predicate) {
     }
   }
   return right;
+}
+
+function row_span_where(png, y, x0, x1, predicate) {
+  let left = -1;
+  let right = -1;
+  for (let x = x0; x < x1; x += 1) {
+    if (!predicate(px(png, x, y))) continue;
+    if (left === -1) left = x;
+    right = x;
+  }
+  return { left, right };
 }
 
 const count_color = (png, box, color) => count_where(png, box, (c) => near(c, color));
@@ -669,43 +681,60 @@ test("price and countdown chips share an exact edge at any DPR (no attachment ga
 });
 
 test("cluster rounds its axis-facing corners and keeps the chart-facing side sharp", async ({ browser }) => {
-  // Probe the shared engine geometry through Canvas2D. At a 1 CSS px canonical radius, WebGPU
-  // MSAA may legitimately fully cover the single extreme DPR-1 sample on different GPUs; the
-  // renderer parity suite separately verifies RoundRect lowering across the WebGPU path.
+  // The canonical radius is 1 CSS px. At DPR 1 a correct arc can fully cover the one extreme
+  // sample depending on rasterizer/MSAA rules, so probe at DPR 2 and compare painted row extents.
   const { context, page } = await open_cluster_page(browser, {
     title: "NUCLEUS",
     title_visible: true,
     countdown_visible: true,
-  }, 1, "?backend=canvas2d");
-  const anchor = await cluster_anchor(page);
+  }, 2, "?backend=canvas2d");
+  const anchor_css = await cluster_anchor(page);
+  const dpr = await page.evaluate(() => window.devicePixelRatio);
+  const anchor = {
+    pane_w: Math.round(anchor_css.pane_w * dpr),
+    y: anchor_css.y * dpr,
+  };
   const shot = await capture(page);
   const box = find_cluster(shot, anchor.pane_w);
   expect(box.top).toBeGreaterThanOrEqual(0);
   expect(box.left).toBe(anchor.pane_w + 1);
-  expect(near(px(shot, anchor.pane_w, box.top + 3), BORDER)).toBe(true);
-  expect(near(px(shot, box.left, box.top + 3), LABEL)).toBe(true);
-  // Axis-facing top-right corner: the extreme corner pixel is clipped (blended
-  // away from the fill), while the same column a few px down is fully filled.
-  const corner_tr = px(shot, box.right - 1, box.top);
-  const inside_tr = px(shot, box.right - 1, box.top + 3);
-  expect(dist(corner_tr, LABEL)).toBeGreaterThan(dist(inside_tr, LABEL));
-  expect(near(inside_tr, LABEL)).toBe(true);
-  // Chart-facing top-left corner of the inside price chip: sharp, fully filled.
-  expect(near(px(shot, box.left, box.top), LABEL)).toBe(true);
-  // Axis-facing bottom-right corner of the countdown row: clipped the same way.
-  const corner_br = px(shot, box.right - 1, box.bottom - 1);
-  const inside_br = px(shot, box.right - 1, box.bottom - 4);
-  expect(dist(corner_br, LABEL)).toBeGreaterThan(dist(inside_br, LABEL));
-  expect(near(inside_br, LABEL)).toBe(true);
-  // Chart-facing bottom-left corner: sharp.
-  expect(near(px(shot, box.left, box.bottom - 1), LABEL)).toBe(true);
-  // The OUTSIDE title chip rounds only its OUTER side: the corner pixel itself is clipped
-  // (surface, not chip), while the interior and the axis-facing edge are fully filled (sharp).
-  const extent = chip_extent(shot, anchor.pane_w, anchor.y);
+
+  const top_outer = row_span_where(shot, box.top, box.left, box.right, is_label);
+  const top_inner = row_span_where(
+    shot,
+    box.top + Math.round(3 * dpr),
+    box.left,
+    box.right,
+    is_label,
+  );
+  expect(top_outer.left).toBe(top_inner.left); // chart-facing edge stays sharp
+  expect(top_outer.right).toBeLessThan(top_inner.right); // axis-facing corner rounds inward
+
+  const bottom_outer = row_span_where(shot, box.bottom - 1, box.left, box.right, is_label);
+  const bottom_inner = row_span_where(
+    shot,
+    box.bottom - Math.round(4 * dpr),
+    box.left,
+    box.right,
+    is_label,
+  );
+  expect(bottom_outer.left).toBe(bottom_inner.left); // chart-facing edge stays sharp
+  expect(bottom_outer.right).toBeLessThan(bottom_inner.right); // axis-facing corner rounds inward
+
+  // The outside title chip has the inverse ownership: its outer chart-facing side rounds, while
+  // the side attached to the axis border remains square.
+  const extent = chip_extent(shot, anchor.pane_w, anchor.y, dpr);
   expect(extent.found).toBe(true);
-  expect(dist(px(shot, extent.left - 1, extent.top), CHIP)).toBeGreaterThan(12); // clipped corner
-  expect(near(px(shot, extent.left + 2, extent.top + 2), CHIP)).toBe(true); // interior is full
-  expect(near(px(shot, extent.right, extent.top), CHIP)).toBe(true); // axis-facing corner: sharp
+  const chip_outer = row_span_where(shot, extent.top, extent.left, extent.right + 1, is_label);
+  const chip_inner = row_span_where(
+    shot,
+    extent.top + Math.round(2 * dpr),
+    extent.left,
+    extent.right + 1,
+    is_label,
+  );
+  expect(chip_outer.left).toBeGreaterThan(chip_inner.left); // outer corner rounds inward
+  expect(chip_outer.right).toBe(chip_inner.right); // attached axis-facing edge stays sharp
   await context.close();
 });
 
