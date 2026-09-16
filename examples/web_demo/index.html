@@ -20,7 +20,7 @@
   h1, h2 { text-wrap: balance; }
   p, .hint { text-wrap: pretty; }
   #wrap { height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr); }
-  #bar { z-index: 20; background: var(--surface); border-bottom: 1px solid var(--border); }
+  #bar { z-index: 20; background: var(--surface); border-bottom: var(--border-width) solid var(--border); }
   #app_bar { min-height: 64px; padding: 8px 16px; display: flex; gap: 12px; align-items: center; min-width: 0; }
   .brand-lockup { display: flex; align-items: center; gap: 10px; min-width: 176px; }
   .brand-mark { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 10px; background: var(--primary); color: var(--primary-foreground); }
@@ -28,19 +28,19 @@
   .brand-copy { display: grid; line-height: 1.25; }
   .brand { font-size: 13px; font-weight: 650; }
   .lab-title { margin-top: 2px; color: var(--text-secondary); font-size: 11px; }
-  .market-summary { display: flex; align-items: center; gap: 10px; min-width: 0; padding-left: 16px; border-left: 1px solid var(--border); }
+  .market-summary { display: flex; align-items: center; gap: 10px; min-width: 0; padding-left: 16px; border-left: var(--border-width) solid var(--border); }
   .market-symbol { font-size: 13px; font-weight: 600; white-space: nowrap; }
   .market-meta { color: var(--text-secondary); font-size: 11px; white-space: nowrap; }
   .market-price { min-width: 48px; color: var(--bullish); font-weight: 600; font-variant-numeric: tabular-nums; }
   .market-price[data-direction="down"] { color: var(--bearish); }
   #comparison_controls { display: flex; gap: 6px; align-items: center; margin-left: auto; }
-  #comparison_controls select, #comparison_controls button { height: 40px; color: var(--text-primary); background: var(--input-fill); border: 1px solid var(--input-border); border-radius: var(--radius-default); }
+  #comparison_controls select, #comparison_controls button { height: 40px; color: var(--text-primary); background: var(--input-fill); border: var(--border-width) solid var(--input-border); border-radius: var(--radius-default); }
   #comparison_controls select { max-width: 148px; padding: 0 8px; font-size: 12px; }
   #comparison_controls button { padding: 0 10px; font-size: 12px; font-weight: 600; }
   #comparison_controls button:hover:not(:disabled) { background: var(--hover-bg); }
   #comparison_clear:disabled { color: var(--text-muted); }
   #quick_actions { display: flex; gap: 2px; align-items: center; }
-  .icon-button, #quick_actions button, #tool_rail button { display: inline-grid; place-items: center; border: 1px solid transparent; background: transparent; color: var(--icon); }
+  .icon-button, #quick_actions button, #tool_rail button { display: inline-grid; place-items: center; border: var(--border-width) solid transparent; background: transparent; color: var(--icon); }
   .icon-button, #quick_actions button { flex-shrink: 0; width: 40px; height: 40px; padding: 0; border-radius: var(--radius-default); }
   .icon-button:hover, #quick_actions button:hover, #tool_rail button:hover { color: var(--icon-active); background: var(--hover-bg); }
   .icon-button:active, #quick_actions button:active, #tool_rail button:active { background: var(--active-bg); }
@@ -53,19 +53,19 @@
 
   #workspace { display: grid; grid-template-columns: 76px minmax(0, 1fr) 360px; min-width: 0; min-height: 0; }
   #workspace[data-inspector-open="false"] { grid-template-columns: 76px minmax(0, 1fr); }
-  #tool_rail { z-index: 12; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 8px; background: var(--surface); border-right: 1px solid var(--border); }
+  #tool_rail { z-index: 12; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 8px; background: var(--surface); border-right: var(--border-width) solid var(--border); }
   #tool_rail button { width: 60px; min-height: 56px; gap: 4px; padding: 8px 2px; border-radius: var(--radius-default); font-size: 10px; }
   #tool_rail button[aria-current="true"] { color: var(--primary); background: color-mix(in srgb, var(--primary) 10%, transparent); border-color: color-mix(in srgb, var(--primary) 25%, transparent); }
   #tool_rail .rail-spacer { flex: 1; }
-  #inspector { z-index: 11; display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; background: var(--surface); border-left: 1px solid var(--border); }
+  #inspector { z-index: 11; display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; background: var(--surface); border-left: var(--border-width) solid var(--border); }
   #inspector[data-open="false"] { display: none; }
-  #inspector_header { padding: 18px 20px 16px; border-bottom: 1px solid var(--border); }
+  #inspector_header { padding: 18px 20px 16px; border-bottom: var(--border-width) solid var(--border); }
   #inspector_header h1 { margin: 0; font-size: 16px; font-weight: 600; }
   #inspector_header p { margin: 6px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
   #control_jump_label { display: flex; gap: 12px; align-items: center; margin-top: 16px; color: var(--text-secondary); font-size: 12px; }
   #control_jump { flex: 1; width: 0; }
   #controls_strip { min-width: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; padding: 0 20px; scrollbar-width: thin; scrollbar-color: var(--border-secondary) transparent; }
-  #inspector .group { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0; padding: 20px 0; border-bottom: 1px solid var(--border); scroll-margin-top: 0; }
+  #inspector .group { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0; padding: 20px 0; border-bottom: var(--border-width) solid var(--border); scroll-margin-top: 0; }
   #inspector .group[hidden] { display: none; }
   #inspector .group h2 { flex-basis: 100%; margin: 0 0 6px; font-size: 13px; font-weight: 600; line-height: 1.4; }
   #inspector label { display: flex; flex: 1 1 100%; gap: 8px; align-items: center; min-width: 0; min-height: 40px; color: var(--text-secondary); font-size: 12px; }
@@ -73,7 +73,7 @@
   #inspector label:has(input[type="checkbox"]), #inspector label:has(input[type="radio"]) { flex: 1 1 44%; cursor: pointer; color: var(--text-primary); }
   #inspector label > select, #inspector label > input:not([type="checkbox"]):not([type="radio"]), #inspector label > span:last-child { margin-left: auto; }
   #inspector label > input[type="range"] + span { margin-left: 0; min-width: 20px; text-align: right; }
-  #inspector button, #inspector select, #inspector input:not([type="checkbox"]):not([type="radio"]):not([type="range"]) { min-height: 40px; max-width: 100%; background: var(--input-fill); color: var(--text-primary); border: 1px solid var(--input-border); border-radius: var(--radius-default); }
+  #inspector button, #inspector select, #inspector input:not([type="checkbox"]):not([type="radio"]):not([type="range"]) { min-height: 40px; max-width: 100%; background: var(--input-fill); color: var(--text-primary); border: var(--border-width) solid var(--input-border); border-radius: var(--radius-default); }
   #inspector select, #inspector input[type="text"], #inspector input[type="number"] { width: 160px; padding: 6px 8px; }
   #inspector button { min-width: 40px; padding: 8px 12px; font-size: 12px; }
   #inspector button:hover { background: var(--hover-bg); }
@@ -104,7 +104,7 @@
   .scenario-grid .feature-card[hidden] { display: none; }
   #feature_empty { display: none; padding: 24px 8px; color: var(--text-secondary); font-size: 12px; text-align: center; }
   #feature_empty[data-visible="true"] { display: block; }
-  #feature_lab_status { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--text-secondary); font-size: 11px; }
+  #feature_lab_status { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: var(--border-width) solid var(--border); color: var(--text-secondary); font-size: 11px; }
 
   #chart_wrap { grid-column: 2; grid-row: 1; position: relative; min-width: 0; min-height: 0; background: var(--surface); }
   #chart_container { position: absolute; inset: 0; touch-action: none; overscroll-behavior: none; }
@@ -142,7 +142,7 @@
   }
   @media (max-width: 600px) {
     #app_bar { flex-wrap: wrap; }
-    #comparison_controls { order: 2; flex-basis: 100%; padding-top: 6px; border-top: 1px solid var(--border); }
+    #comparison_controls { order: 2; flex-basis: 100%; padding-top: 6px; border-top: var(--border-width) solid var(--border); }
     #comparison_controls select { max-width: none; flex: 1; }
     #comparison_clear { margin-left: auto; }
   }
@@ -323,7 +323,7 @@
       <button type="button" data-tool="short_position" title="Short Position: one click places entry, target, stop, and width">short position</button>
       <label title="Host-supplied quantity for placing the selected Long/Short Position drawing">order qty <input type="number" id="position_order_quantity" min="0.00000001" step="any" value="1"></label>
       <button id="place_position_order" type="button" disabled title="Place one host-authoritative bracket order from the selected Long/Short Position drawing">place order</button>
-      <label title="Stroke/border color — templates new drawings and applies live to the selected one">color <input type="color" id="drawing_color" value="#3e63dd"></label>
+      <label title="Stroke/border color — templates new drawings and applies live to the selected one">color <input type="color" id="drawing_color" value="#168ef7"></label>
       <label title="Stroke style (solid/dotted/dashed) — templates new drawings and applies live to the selected one">style
         <select id="drawing_style">
           <option value="solid" selected>solid</option>
@@ -443,7 +443,7 @@
       <h2>Axes</h2>
       <label>border <input type="color" id="axis_border_color" value="#f1f1f1"></label>
       <label><input type="checkbox" id="axis_border_visible" checked> borders</label>
-      <label>text <input type="color" id="axis_text_color" value="#141414"></label>
+      <label>text <input type="color" id="axis_text_color" value="#333333"></label>
       <label>separator <input type="color" id="pane_separator_color" value="#f1f1f1" title="Pane divider color — follows the axis border color (theme-aware) until you pin an explicit one"></label>
     </div>
 
@@ -476,7 +476,7 @@
 <script type="module">
 // Built from the real package distribution. The demo build copies @nucleuscharts/financial' published
 // artifacts; it does not compile or wire an engine of its own.
-import { create_chart, create_chart_grid, create_series_markers, default_theme_name, theme_options } from "./dist/nucleuscharts_financial.js";
+import { create_chart, create_chart_grid, create_series_markers, default_theme_name } from "./dist/nucleuscharts_financial.js";
 import { generate_fixture_data } from "./fixture_data.js";
 import { fixture_theme } from "./fixture_styles.js";
 import { marker_fixture, volume_fixture } from "./fixture_features.js";
@@ -1527,7 +1527,7 @@ function seed_split_cell(cell) {
   const selected_theme = document.getElementById("theme_select").value;
   const series = cell.chart.add_series("candlestick");
   series.set_data(data);
-  if (selected_theme !== default_theme_name) cell.chart.apply_options(theme_options(selected_theme));
+  if (selected_theme !== default_theme_name) cell.chart.apply_options({ theme: selected_theme });
   cell.chart.__seed_series = series; // debug/test handle
 }
 function data_end_time() {
@@ -1678,10 +1678,10 @@ let separator_color_pinned = false;
 document.getElementById("theme_select").addEventListener("change", (e) => {
   // Theme changes are explicit user actions. Apply only the theme itself; do not re-apply whatever
   // values happen to be sitting in demo controls on top of it.
-  chart.apply_options(theme_options(e.target.value));
+  chart.apply_options({ theme: e.target.value });
   if (grid !== null) {
     for (const cell of grid.cells()) {
-      cell.chart.apply_options(theme_options(e.target.value));
+      cell.chart.apply_options({ theme: e.target.value });
     }
     grid.set_divider_color(null);
   }

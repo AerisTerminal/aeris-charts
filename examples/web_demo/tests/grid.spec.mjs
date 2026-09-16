@@ -118,7 +118,7 @@ test("demo chrome and controls follow the chart theme", async ({ page }) => {
     surface: "#ffffff",
     header: "rgb(255, 255, 255)",
     chart: "#ffffff",
-    axis_text: "#141414",
+    axis_text: "#333333",
     axis_border: "#f1f1f1",
     grid: "#f1f1f1",
     border_control: "#f1f1f1",
@@ -141,6 +141,7 @@ test("portable design tokens and disabled controls match the brand contract", as
       "surface-secondary",
       "border",
       "border-secondary",
+      "border-width",
       "input-fill",
       "input-border",
       "text-primary",
@@ -152,6 +153,7 @@ test("portable design tokens and disabled controls match the brand contract", as
       "icon-active",
       "primary",
       "primary-foreground",
+      "button-fill",
       "danger",
       "danger-foreground",
       "ring",
@@ -169,6 +171,7 @@ test("portable design tokens and disabled controls match the brand contract", as
     "surface-secondary": "#181818",
     border: "#f0f0f014",
     "border-secondary": "#f0f0f014",
+    "border-width": "0.5px",
     "input-fill": "#181818",
     "input-border": "#f0f0f014",
     "text-primary": "#f0f0f0",
@@ -178,8 +181,9 @@ test("portable design tokens and disabled controls match the brand contract", as
     "active-bg": "#f0f0f024",
     icon: "#f0f0f0a8",
     "icon-active": "#f0f0f0",
-    primary: "#3e63dd",
-    "primary-foreground": "#eff6ff",
+    primary: "#168ef7",
+    "primary-foreground": "#fff",
+    "button-fill": "#F7F7F7",
     danger: "#fb3748",
     "danger-foreground": "#ffffff",
     ring: "#f0f0f026",
@@ -197,17 +201,19 @@ test("portable design tokens and disabled controls match the brand contract", as
     "surface-secondary": "#fafafa",
     border: "#1414140f",
     "border-secondary": "#1414140f",
+    "border-width": "0.5px",
     "input-fill": "#fafafa",
     "input-border": "#1414140f",
-    "text-primary": "#141414",
-    "text-secondary": "#141414bd",
-    "text-muted": "#1414145c",
+    "text-primary": "#333333",
+    "text-secondary": "#7B7B7B",
+    "text-muted": "#D1D1D1",
     "hover-bg": "#14141409",
     "active-bg": "#1414140d",
     icon: "#14141480",
     "icon-active": "#141414",
-    primary: "#3e63dd",
-    "primary-foreground": "#eff6ff",
+    primary: "#168ef7",
+    "primary-foreground": "#fff",
+    "button-fill": "#333333",
     danger: "#fb3748",
     "danger-foreground": "#ffffff",
     ring: "#14141433",
@@ -471,7 +477,7 @@ test("divider drags never disturb a cell's candle spacing (even with interaction
   expect(left_after.right, "shrinking cell keeps its right range edge").toBe(left_before.right);
 });
 
-test("the divider keeps its 1px line under a global border-box reset", async ({ page }) => {
+test("the divider keeps its canonical border line under a global border-box reset", async ({ page }) => {
   await page.goto("/");
   await wait_grid(page);
   // Platform pages commonly reset `box-sizing: border-box` globally (even `!important`); the
@@ -485,7 +491,16 @@ test("the divider keeps its 1px line under a global border-box reset", async ({ 
   const box = await divider.boundingBox();
   expect(box.width).toBeGreaterThanOrEqual(5); // the full hit area
 
-  // The 1px line actually paints: screenshot the divider strip and count border-color pixels.
+  const projected = await divider.evaluate((el) => ({
+    dpr: window.devicePixelRatio,
+    width: Number.parseFloat(el.firstElementChild.style.width),
+  }));
+  expect(projected.width).toBeCloseTo(
+    Math.max(1, Math.round(0.5 * projected.dpr)) / projected.dpr,
+    6,
+  );
+
+  // The canonical line actually paints: screenshot the divider strip and count border-color pixels.
   const png = PNG.sync.read(await page.screenshot({ clip: box }));
   const border_hex = await page.evaluate(() => window.__chart.options().rightPriceScale.borderColor);
   const target = [1, 3, 5].map((i) => parseInt(border_hex.slice(i, i + 2), 16));

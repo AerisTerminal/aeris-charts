@@ -12,7 +12,7 @@ Rust consumers can use the engine and backends directly:
 cargo add nucleuscharts_engine
 ```
 
-The current coordinated Rust release is `0.1.0` and is available on crates.io:
+The current coordinated Rust release is `0.2.0` and is available on crates.io:
 
 | Crate | Purpose |
 | --- | --- |

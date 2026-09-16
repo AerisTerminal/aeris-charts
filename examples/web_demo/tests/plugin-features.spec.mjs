@@ -428,7 +428,7 @@ test("rectangle tool uses official two-click preview, data-time snapping, and en
     let band_pixels = 0;
     const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
     for (let index = 0; index < pixels.length; index += 4) {
-      if (Math.abs(pixels[index] - 207) <= 3 && Math.abs(pixels[index + 1] - 216) <= 3 && Math.abs(pixels[index + 2] - 246) <= 3 && pixels[index + 3] === 255) {
+      if (Math.abs(pixels[index] - 197) <= 3 && Math.abs(pixels[index + 1] - 227) <= 3 && Math.abs(pixels[index + 2] - 253) <= 3 && pixels[index + 3] === 255) {
         band_pixels += 1;
       }
     }
@@ -457,10 +457,10 @@ test("rectangle tool uses official two-click preview, data-time snapping, and en
     let band_pixels = 0;
     const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
     for (let index = 0; index < pixels.length; index += 4) {
-      if (Math.abs(pixels[index] - 62) <= 3 && Math.abs(pixels[index + 1] - 99) <= 3 && Math.abs(pixels[index + 2] - 221) <= 3 && pixels[index + 3] === 255) {
+      if (Math.abs(pixels[index] - 22) <= 3 && Math.abs(pixels[index + 1] - 142) <= 3 && Math.abs(pixels[index + 2] - 247) <= 3 && pixels[index + 3] === 255) {
         label_pixels += 1;
       }
-      if (Math.abs(pixels[index] - 207) <= 3 && Math.abs(pixels[index + 1] - 216) <= 3 && Math.abs(pixels[index + 2] - 246) <= 3 && pixels[index + 3] === 255) {
+      if (Math.abs(pixels[index] - 197) <= 3 && Math.abs(pixels[index + 1] - 227) <= 3 && Math.abs(pixels[index + 2] - 253) <= 3 && pixels[index + 3] === 255) {
         band_pixels += 1;
       }
     }
@@ -714,7 +714,7 @@ test("tooltip presents themed OHLC market data with explicit volume", async ({ p
     window.__chart.apply_options(api.theme_options("light"));
   });
   await expect.poll(() => page.locator(".nucleuscharts-tooltip").evaluate((element) => getComputedStyle(element).backgroundColor)).toBe("rgb(255, 255, 255)");
-  expect(await page.locator(".nucleuscharts-tooltip").evaluate((element) => getComputedStyle(element).color)).toBe("rgb(20, 20, 20)");
+  expect(await page.locator(".nucleuscharts-tooltip").evaluate((element) => getComputedStyle(element).color)).toBe("rgb(51, 51, 51)");
 
   const after = await page.screenshot();
   expect(after.equals(before)).toBe(false);
@@ -986,8 +986,14 @@ test("brushable area guides reproject and Escape or double click clears", async 
   await expect_handles(initial_probes, { width: 1280, height: 720 });
 
   await page.locator("#chart_container canvas:last-of-type").focus();
-  await page.keyboard.press("Control+ArrowLeft");
-  await page.waitForTimeout(220);
+  const initial_scroll = await page.evaluate(() => window.__chart.wasm.scroll_position());
+  await page.keyboard.down("Control");
+  await page.keyboard.down("ArrowLeft");
+  await expect.poll(() => page.evaluate(() => window.__chart.wasm.scroll_position()))
+    .not.toBeCloseTo(initial_scroll, 8);
+  await page.keyboard.up("ArrowLeft");
+  await page.keyboard.up("Control");
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   expect(await page.evaluate(() => window.__reproject_interaction.active_range())).toEqual(committed);
   const panned_probes = await probes();
   expect(panned_probes.map((point) => point.x)).not.toEqual(initial_probes.map((point) => point.x));

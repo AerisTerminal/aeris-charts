@@ -48,6 +48,11 @@ entry point and `./design.css` are the only npm export paths. The supported root
   names remain compatible;
 - `nucleuscharts_error` and its machine-readable error codes;
 - chart-state persistence V1 through `chart.export_state()` and `chart.import_state()`.
+- canonical presentation reset through `chart.reset_style_to_defaults()`. It restores Nucleus-owned
+  chart and series visual defaults for the chart's selected theme, including semantic unset/follow
+  states, while preserving data, panes, drawings, indicators, series visibility/metadata, price
+  formatting, scale bindings and scale/view state. It is deliberately separate from
+  `chart.reset_view()`, which changes time/price scale view state.
 - read-only backend diagnostics through `chart.backend_status()`, including the requested and active
   backend, stable fallback stage/reason, secure-context and `navigator.gpu` exposure, and optional
   unstable platform detail. `chart.backend()` retains its existing active-backend return value.
@@ -114,6 +119,12 @@ declaration file. CI runs `npm run check:api`; after deliberate review, update i
 Grid lines are engine-owned and default to visible dashed lines. Demo hosts may hide grid
 visibility without replacing the canonical grid style/color; that presentation choice is not a
 library default.
+
+`chart.reset_style_to_defaults()` is the canonical host action for returning presentation to shipped
+Nucleus defaults. It does not reconstruct defaults from `options()` output: the engine restores
+semantic follow states such as unpinned series colors and price-scale text. Watermark content and
+visibility, scale modes/ranges/margins/layout constraints, viewport zoom/scroll, and indicator/data
+semantics survive the reset; only their engine-owned visual styling is restored.
 
 Default mouse-wheel behavior is informed by measurements from the pinned public reference fixture:
 a saturated vertical step uses a 1.0 zoom increment, smaller trackpad deltas stay proportional, and the logical point under
@@ -238,7 +249,7 @@ support follows the separately documented persistence window and is a major comp
 
 ## Rust distribution
 
-The Rust crates are published to crates.io as one coordinated release family. Version `0.1.0`
+The Rust crates are published to crates.io as one coordinated release family. Version `0.2.0`
 publishes `nucleuscharts_core`, `nucleuscharts_indicators`, `nucleuscharts_render`,
 `nucleuscharts_engine`, `nucleuscharts_render_wgpu`, `nucleuscharts_native`, and
 `nucleuscharts_wasm`. Workspace manifests retain local path dependencies with the same explicit

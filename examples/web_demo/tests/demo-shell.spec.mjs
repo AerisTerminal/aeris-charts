@@ -40,6 +40,140 @@ for (const [backend, url] of [
   });
 }
 
+test("design tokens and chart theme projections match the supplied light/dark palette", async ({ page }) => {
+  const read = async (theme) => {
+    await open_demo(page, `/?theme=${theme}&backend=canvas2d&forceFallbackAdapter=1`);
+    return page.evaluate(async (name) => {
+      const { theme_palette } = await import("../dist/nucleuscharts_financial.js");
+      const css = getComputedStyle(document.documentElement);
+      const token = (name) => css.getPropertyValue(name).trim().toLowerCase();
+      const options = window.__chart.options();
+      return {
+        css: {
+          surface: token("--surface"),
+          text_primary: token("--text-primary"),
+          text_secondary: token("--text-secondary"),
+          text_muted: token("--text-muted"),
+          primary: token("--primary"),
+          primary_foreground: token("--primary-foreground"),
+          button_fill: token("--button-fill"),
+          border_width: token("--border-width"),
+        },
+        palette: theme_palette(name),
+        chart: {
+          background: options.layout.background.color,
+          text: options.layout.textColor,
+          muted_text: options.layout.mutedTextColor,
+          border: options.rightPriceScale.borderColor,
+          crosshair: options.crosshair.vertLine.color,
+          bullish: options.layout.bullishColor,
+          bearish: options.layout.bearishColor,
+        },
+      };
+    }, theme);
+  };
+
+  const light = await read("light");
+  expect(light.css).toEqual({
+    surface: "#ffffff",
+    text_primary: "#333333",
+    text_secondary: "#7b7b7b",
+    text_muted: "#d1d1d1",
+    primary: "#168ef7",
+    primary_foreground: "#fff",
+    button_fill: "#333333",
+    border_width: "0.5px",
+  });
+  expect(light.palette).toMatchObject({
+    background: "#ffffff",
+    foreground: "#333333",
+    muted_foreground: "#7b7b7b",
+    primary: "#168ef7",
+    primary_foreground: "#ffffff",
+    primary_hover: "#168ef7",
+    border: "#f1f1f1",
+    bullish: "#089981",
+    bearish: "#f7525f",
+  });
+  expect(light.chart).toEqual({
+    background: "#ffffff",
+    text: "#333333",
+    muted_text: "#7b7b7b",
+    border: "#f1f1f1",
+    crosshair: "#141414",
+    bullish: "#089981",
+    bearish: "#f7525f",
+  });
+
+  const dark = await read("dark");
+  expect(dark.css).toEqual({
+    surface: "#141414",
+    text_primary: "#f0f0f0",
+    text_secondary: "#f0f0f0bd",
+    text_muted: "#f0f0f05c",
+    primary: "#168ef7",
+    primary_foreground: "#fff",
+    button_fill: "#f7f7f7",
+    border_width: "0.5px",
+  });
+  expect(dark.palette).toMatchObject({
+    background: "#141414",
+    foreground: "#f0f0f0",
+    muted_foreground: "#b7b7b7",
+    primary: "#168ef7",
+    primary_foreground: "#ffffff",
+    primary_hover: "#168ef7",
+    border: "#252525",
+    bullish: "#7c8db0",
+    bearish: "#98615c",
+  });
+  expect(dark.chart).toEqual({
+    background: "#141414",
+    text: "#f0f0f0",
+    muted_text: "#b7b7b7",
+    border: "#252525",
+    crosshair: "#252525",
+    bullish: "#7c8db0",
+    bearish: "#98615c",
+  });
+});
+
+test("style reset follows a live theme switch and restores semantic series defaults", async ({ page }) => {
+  await open_demo(page, "/?theme=dark&backend=canvas2d&forceFallbackAdapter=1");
+  const state = await page.evaluate(async () => {
+    const api = await import("../dist/nucleuscharts_financial.js");
+    const chart = window.__chart;
+    const series = window.__main;
+
+    chart.apply_options(api.theme_options("light"));
+    chart.apply_options({
+      layout: { background: { type: "solid", color: "#123456" }, fontSize: 19 },
+      grid: { vertLines: { color: "#abcdef", visible: false } },
+      rightPriceScale: { borderColor: "#abcdef", textColor: "#abcdef" },
+    });
+    series.apply_options({ up_color: "#ff00ff", down_color: "#00ffff", line_width: 7 });
+
+    chart.reset_style_to_defaults();
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+    return {
+      palette: api.theme_palette("light"),
+      chart: chart.options(),
+      series: series.options(),
+    };
+  });
+
+  expect(state.chart.layout.background.color).toBe(state.palette.background);
+  expect(state.chart.layout.textColor).toBe(state.palette.foreground);
+  expect(state.chart.layout.fontSize).toBe(12);
+  expect(state.chart.grid.vertLines).toMatchObject({ color: state.palette.border, visible: true, style: 2 });
+  expect(state.chart.rightPriceScale.borderColor).toBe(state.palette.border);
+  expect(state.chart.rightPriceScale.textColor).toBeNull();
+  expect(state.series.up_color).toBe("");
+  expect(state.series.down_color).toBe("");
+  expect(state.series.line_width).toBe(3);
+});
+
 test("attribution logo uses the intended final-pane placement and surface contrast", async ({ page }) => {
   await open_demo(page);
   const result = await page.evaluate(() => {

@@ -253,6 +253,15 @@ impl PriceScaleCore {
         }
     }
 
+    /// Restore only axis presentation fields to their canonical defaults. Scale mode, inversion,
+    /// autoscale/manual range, margins, label-layout behavior, and gesture state are preserved.
+    pub fn reset_style_to_defaults(&mut self) {
+        let defaults = PriceScaleCoreOptions::default();
+        self.set_ticks_visible(defaults.ticks_visible);
+        self.set_text_color(defaults.text_color);
+        self.set_bold_round_labels(defaults.bold_round_labels);
+    }
+
     pub fn is_auto_scale(&self) -> bool {
         self.options.auto_scale
     }

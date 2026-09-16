@@ -728,6 +728,238 @@ fn reset_view_restores_time_defaults_and_reenables_autoscale() {
 }
 
 #[test]
+fn reset_style_to_defaults_preserves_runtime_view_and_semantic_state() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0, 3.0, 4.0, 5.0],
+            &[100.0, 101.0, 102.0, 103.0, 104.0],
+            &[101.0, 102.0, 103.0, 104.0, 105.0],
+            &[99.0, 100.0, 101.0, 102.0, 103.0],
+            &[100.5, 101.5, 102.5, 103.5, 104.5],
+        )
+        .unwrap();
+    chart.set_theme(ChartTheme::Light);
+    chart
+        .apply_options(
+            r##"{
+                "layout":{"background":{"color":"#123456"},"fontSize":20},
+                "grid":{"vertLines":{"visible":false,"color":"#abcdef"}},
+                "crosshair":{"vertLine":{"color":"#abcdef","width":4}},
+                "rightPriceScale":{"borderColor":"#abcdef","textColor":"#abcdef"},
+                "timeScale":{"borderColor":"#abcdef"},
+                "watermark":{"visible":true,"text":"KEEP","color":"#abcdef","fontSize":70}
+            }"##,
+        )
+        .unwrap();
+
+    chart.set_series_visible(0, false);
+    assert!(chart.series_apply_options_json(
+        0,
+        r##"{
+            "color":"#ff00ff",
+            "up_color":"#00ff00",
+            "line_width":7,
+            "line_style":2,
+            "price_line_color":"#ff00ff",
+            "title":"Primary",
+            "title_visible":false,
+            "countdown_visible":false
+        }"##,
+    ));
+    assert!(chart
+        .series_apply_price_format_json(0, r#"{"type":"price","precision":4,"min_move":0.0001}"#,));
+
+    let rsi = chart.add_rsi(0, 2).expect("valid RSI");
+    assert!(chart.series_apply_options_json(
+        rsi,
+        r##"{
+            "color":"#ff0000",
+            "line_width":9,
+            "countdown_visible":true,
+            "title":"Custom RSI",
+            "title_visible":false
+        }"##,
+    ));
+
+    let feature = chart.add_feature_series(
+        FeatureSeriesKind::PrettyHistogram,
+        FeatureSeriesOptionsPatch {
+            color: Some(Color::rgb(1, 2, 3)),
+            line_width: Some(8.0),
+            base_price: Some(42.0),
+            width_percent: Some(37.0),
+            low_value: Some(-10.0),
+            high_value: Some(250.0),
+            ..FeatureSeriesOptionsPatch::default()
+        },
+    );
+
+    let mut footprint_options = FootprintSeriesOptions::default();
+    footprint_options.aggregation.tick_size = 0.5;
+    footprint_options.visual.cell_mode = FootprintCellMode::Delta;
+    footprint_options.visual.font_size = 19.0;
+    footprint_options.visual.text_color = Some(Color::rgb(1, 2, 3));
+    footprint_options.visual.show_bar_summary = false;
+    let footprint = chart
+        .add_footprint_series(footprint_options)
+        .expect("valid footprint options");
+
+    let drawing = chart
+        .add_drawing(
+            DrawingKind::TrendLine,
+            0,
+            vec![
+                DrawingPoint {
+                    logical: 0.0,
+                    price: 100.0,
+                },
+                DrawingPoint {
+                    logical: 3.0,
+                    price: 103.0,
+                },
+            ],
+            Some(r##"{"color":"#ff0000","width":4}"##),
+        )
+        .expect("valid drawing");
+    let drawing_before = chart.drawing_options_json(drawing).unwrap();
+
+    let named = chart
+        .add_price_scale(0, "custom", PriceScaleSide::Left, Some(0), true)
+        .unwrap();
+    assert!(chart.price_scale_apply_options_json(
+        0,
+        named,
+        r##"{
+            "mode":1,
+            "auto_scale":false,
+            "invert_scale":true,
+            "scale_margins":{"top":0.3,"bottom":0.2},
+            "align_labels":false,
+            "ticks_visible":true,
+            "entire_text_only":true,
+            "minimum_width":91,
+            "text_color":"#ff0000",
+            "bold_round_labels":false
+        }"##,
+    ));
+    chart.set_price_scale_visible_range_for(0, named, 90.0, 110.0);
+    let named_range = chart
+        .price_scale_visible_range_for(0, named)
+        .expect("named range");
+
+    chart.time_scale.set_width(640.0);
+    chart.set_bar_spacing(17.0);
+    chart.set_right_offset(4.25);
+
+    let panes_before = chart.panes.len();
+    let indicators_before = chart.indicators.len();
+    let data_before = chart.series_data(0);
+
+    chart.reset_style_to_defaults();
+
+    assert_eq!(chart.bar_spacing(), 17.0);
+    assert_eq!(chart.right_offset(), 4.25);
+    assert_eq!(chart.panes.len(), panes_before);
+    assert_eq!(chart.indicators.len(), indicators_before);
+    assert_eq!(chart.drawings().len(), 1);
+    assert_eq!(
+        chart.drawing_options_json(drawing).as_deref(),
+        Some(drawing_before.as_str())
+    );
+    assert_eq!(chart.series_data(0), data_before);
+
+    let options = chart.options.get();
+    assert_eq!(
+        options.layout.background.color,
+        nucleuscharts_core::style::LIGHT_SURFACE_CSS
+    );
+    assert_eq!(options.layout.font_size, 12.0);
+    assert!(options.grid.vert_lines.visible);
+    assert_eq!(
+        options.grid.vert_lines.color,
+        nucleuscharts_core::style::LIGHT_BORDER_CSS
+    );
+    assert!(options.watermark.visible);
+    assert_eq!(options.watermark.text, "KEEP");
+    assert_eq!(options.watermark.color, "rgba(0, 0, 0, 0)");
+    assert_eq!(options.watermark.font_size, 48.0);
+    assert_eq!(options.right_price_scale.text_color, None);
+
+    let primary: serde_json::Value =
+        serde_json::from_str(&chart.series_options_json(0).unwrap()).unwrap();
+    assert_eq!(primary["up_color"], "");
+    assert_eq!(primary["line_width"], crate::frame::LINE_WIDTH);
+    assert_eq!(primary["line_style"], 0);
+    assert_eq!(primary["price_line_color"], "");
+    assert_eq!(primary["title"], "Primary");
+    assert_eq!(primary["visible"], false);
+    assert_eq!(primary["price_format"]["precision"], 4);
+    assert_eq!(primary["price_format"]["min_move"], 0.0001);
+
+    let rsi_entry = chart.series_entry(rsi).unwrap();
+    assert_eq!(rsi_entry.line_color, None);
+    assert_eq!(rsi_entry.line_width, Some(2.0));
+    assert!(!rsi_entry.countdown_visible);
+    assert_eq!(rsi_entry.title, "Custom RSI");
+    assert!(rsi_entry.title_visible);
+    assert_eq!(
+        rsi_entry.threshold_region,
+        Some(SeriesThresholdRegion {
+            lower: 30.0,
+            upper: 70.0
+        })
+    );
+
+    let feature_options: serde_json::Value =
+        serde_json::from_str(&chart.feature_series_options_json(feature).unwrap()).unwrap();
+    assert_eq!(feature_options["line_width"], 2.0);
+    assert_ne!(feature_options["color"], "rgb(1, 2, 3)");
+    assert_eq!(feature_options["base_price"], 42.0);
+    assert_eq!(feature_options["width_percent"], 37.0);
+    assert_eq!(feature_options["low_value"], -10.0);
+    assert_eq!(feature_options["high_value"], 250.0);
+
+    let footprint_options = chart.footprint_series_options(footprint).unwrap();
+    assert_eq!(footprint_options.aggregation.tick_size, 0.5);
+    assert_eq!(footprint_options.visual.cell_mode, FootprintCellMode::Delta);
+    assert!(!footprint_options.visual.show_bar_summary);
+    assert_eq!(footprint_options.visual.font_size, 11.0);
+    assert_eq!(footprint_options.visual.text_color, None);
+    assert_eq!(
+        footprint_options.visual.bid_color,
+        FootprintVisualOptions::default().bid_color
+    );
+    assert_eq!(
+        chart.series_entry(footprint).unwrap().price_format.min_move,
+        0.5
+    );
+
+    let named_options: serde_json::Value = serde_json::from_str(
+        &chart
+            .price_scale_options_json(0, named)
+            .expect("named scale options"),
+    )
+    .unwrap();
+    assert_eq!(named_options["mode"], 1);
+    assert_eq!(named_options["auto_scale"], false);
+    assert_eq!(named_options["invert_scale"], true);
+    assert_eq!(named_options["scale_margins"]["top"], 0.3);
+    assert_eq!(named_options["scale_margins"]["bottom"], 0.2);
+    assert_eq!(named_options["align_labels"], false);
+    assert_eq!(named_options["entire_text_only"], true);
+    assert_eq!(named_options["minimum_width"], 91.0);
+    assert_eq!(named_options["ticks_visible"], false);
+    assert_eq!(named_options["text_color"], serde_json::Value::Null);
+    assert_eq!(named_options["bold_round_labels"], true);
+    assert_eq!(
+        chart.price_scale_visible_range_for(0, named),
+        Some(named_range)
+    );
+}
+
+#[test]
 fn price_reset_restores_every_scale_across_panes_without_resetting_time() {
     let mut chart = ChartEngine::new(300.0, 240.0, 1.0);
     chart
@@ -5791,6 +6023,72 @@ fn pane_separators_span_the_full_chart_width_at_rest_and_on_hover() {
     assert_eq!(hover.x, 0);
     assert_eq!(hover.w, bitmap_w, "the hover band matches the resting line");
     assert_eq!(hover.y, separator_y - 4);
+}
+
+#[test]
+fn axis_and_pane_borders_project_the_canonical_half_pixel_width() {
+    use nucleuscharts_render::draw_list::Prim;
+
+    for dpr in [1.0_f64, 1.5, 2.0, 3.0] {
+        let mut chart = chart_with_indicator_pane();
+        chart.dpr = dpr;
+        chart.recompute_layout_with_measure(
+            true,
+            |text, _bold| text.len() as f64 * 6.0,
+            |text, _bold| text.len() as f64 * 5.0,
+        );
+        chart.build_frame();
+
+        let axis = chart.build_axis_frame(
+            80.0,
+            |text, _bold| text.len() as f64 * 6.0,
+            |text, _bold| text.len() as f64 * 5.0,
+        );
+        let mut prims = Vec::new();
+        chart.build_axis_primitives_into(&axis, &mut prims, |_| 0.0);
+
+        let expected = (nucleuscharts_core::style::BORDER_WIDTH * dpr)
+            .round()
+            .max(1.0) as i32;
+        let right_x = ((chart.pane_left + chart.pane_w) * dpr).round() as i32;
+        let pane_bottom = (chart.pane_h * dpr).round() as i32;
+        let bitmap_w = (chart.css_width * dpr).round().max(1.0) as i32;
+        let separator_y = (axis.separators[0] * dpr).round() as i32;
+
+        assert!(
+            prims.iter().any(|p| matches!(
+                p,
+                Prim::Rect { rect, .. }
+                    if rect.x == right_x
+                        && rect.y == 0
+                        && rect.w == expected
+                        && rect.h == pane_bottom
+            )),
+            "right price-axis border must use {expected} device px at dpr {dpr}"
+        );
+        assert!(
+            prims.iter().any(|p| matches!(
+                p,
+                Prim::Rect { rect, .. }
+                    if rect.x == 0
+                        && rect.y == pane_bottom
+                        && rect.w == bitmap_w
+                        && rect.h == expected
+            )),
+            "time-axis border must use {expected} device px at dpr {dpr}"
+        );
+        assert!(
+            prims.iter().any(|p| matches!(
+                p,
+                Prim::Rect { rect, .. }
+                    if rect.x == 0
+                        && rect.y == separator_y
+                        && rect.w == bitmap_w
+                        && rect.h == expected
+            )),
+            "pane separator must use {expected} device px at dpr {dpr}"
+        );
+    }
 }
 
 /// A hollow candle's chrome follows what is painted, not the invisible body.

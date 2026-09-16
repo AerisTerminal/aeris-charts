@@ -29,9 +29,9 @@ function changed_pixels(before, after) {
 function primary_pixels(png) {
   let count = 0;
   for (let i = 0; i < png.data.length; i += 4) {
-    if (Math.abs(png.data[i] - 62) <= 30
-      && Math.abs(png.data[i + 1] - 99) <= 30
-      && Math.abs(png.data[i + 2] - 221) <= 30) count += 1;
+    if (Math.abs(png.data[i] - 22) <= 30
+      && Math.abs(png.data[i + 1] - 142) <= 30
+      && Math.abs(png.data[i + 2] - 247) <= 30) count += 1;
   }
   return count;
 }

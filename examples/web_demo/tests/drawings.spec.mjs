@@ -10,7 +10,7 @@ import { PNG } from "pngjs";
 
 const fixture = JSON.parse(readFileSync(new URL("../fixtures/d1/candles.json", import.meta.url), "utf8"));
 const PR = fixture.pixel_ratio;
-const BLUE = [62, 99, 221]; // semantic primary #3e63dd — anchor border and drawing default
+const BLUE = [22, 142, 247]; // semantic primary #168ef7 — anchor border and drawing default
 const PURPLE = [123, 31, 162]; // #7b1fa2 — text label color (collides with no fixture pixel)
 
 test.beforeEach(async ({ page }) => {

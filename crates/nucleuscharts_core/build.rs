@@ -87,6 +87,10 @@ fn main() {
     output.push_str(&format!(
         "pub const DEFAULT_THEME_NAME: &str = \"{default_theme}\";\n"
     ));
+    let border_width = required_f64(&tokens, &["border_width"]);
+    output.push_str(&format!(
+        "pub const BORDER_WIDTH: f64 = {border_width:?};\n"
+    ));
     for (field, suffix) in [
         ("small", "SMALL"),
         ("default", "DEFAULT"),

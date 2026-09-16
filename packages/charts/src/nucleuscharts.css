@@ -25,12 +25,13 @@
 
   --border: #1414140f;
   --border-secondary: var(--border);
+  --border-width: 0.5px;
   --input-fill: var(--surface-secondary);
   --input-border: var(--border-secondary);
 
-  --text-primary: #141414;
-  --text-secondary: #141414bd;
-  --text-muted: #1414145c;
+  --text-primary: #333333;
+  --text-secondary: #7B7B7B;
+  --text-muted: #D1D1D1;
 
   --hover-bg: #14141409;
   --active-bg: #1414140d;
@@ -38,11 +39,13 @@
   --icon: #14141480;
   --icon-active: #141414;
 
-  --primary: #3e63dd;
-  --primary-foreground: #eff6ff;
-  --primary-hover: #2f50c8;
+  --primary: #168ef7;
+  --primary-foreground: #fff;
+  --primary-hover: var(--primary);
   --danger: #fb3748;
   --danger-foreground: #ffffff;
+
+  --button-fill: #333333;
 
   --ring: #14141433;
 
@@ -82,6 +85,7 @@
 
   --border: #f0f0f014;
   --border-secondary: var(--border);
+  --border-width: 0.5px;
   --input-fill: var(--surface-secondary);
   --input-border: var(--border-secondary);
 
@@ -95,11 +99,13 @@
   --icon: #f0f0f0a8;
   --icon-active: #f0f0f0;
 
-  --primary: #3e63dd;
-  --primary-foreground: #eff6ff;
-  --primary-hover: #4e76f2;
+  --primary: #168ef7;
+  --primary-foreground: #fff;
+  --primary-hover: var(--primary);
   --danger: #fb3748;
   --danger-foreground: #ffffff;
+
+  --button-fill: #F7F7F7;
 
   --ring: #f0f0f026;
 
@@ -180,12 +186,12 @@ button:not(:disabled):not([aria-disabled="true"]),
 
 ::-webkit-scrollbar-track {
   background: var(--surface);
-  border-left: 1px solid var(--border);
+  border-left: var(--border-width) solid var(--border);
 }
 
 ::-webkit-scrollbar-thumb {
   background: var(--text-secondary);
-  border: 1px solid var(--border);
+  border: var(--border-width) solid var(--border);
   border-radius: var(--radius-default);
   opacity: 0.25;
 }
@@ -211,14 +217,14 @@ input[type="number"] {
 
 .nc-surface {
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: var(--border-width) solid var(--border);
   border-radius: var(--radius-default);
   color: var(--text-primary);
 }
 
 .nc-muted-surface {
   background: var(--surface-secondary);
-  border: 1px solid var(--border-secondary);
+  border: var(--border-width) solid var(--border-secondary);
   border-radius: var(--radius-default);
   color: var(--text-primary);
 }
@@ -239,7 +245,7 @@ input[type="number"] {
   justify-content: center;
   gap: 6px;
   padding: 0 12px;
-  border: 1px solid transparent;
+  border: var(--border-width) solid transparent;
   border-radius: var(--radius-default);
   font-size: 14px;
   line-height: 1;
@@ -270,7 +276,7 @@ input[type="number"] {
   min-height: 36px;
   padding: 0 12px;
   background: var(--input-fill);
-  border: 1px solid var(--input-border);
+  border: var(--border-width) solid var(--input-border);
   border-radius: var(--radius-default);
   color: var(--text-primary);
   outline: none;
@@ -299,7 +305,7 @@ input[type="number"] {
   min-width: 156px;
   overflow: hidden;
   background: var(--nc-tooltip-surface, var(--surface));
-  border: 1px solid var(--nc-tooltip-border, var(--border));
+  border: var(--border-width) solid var(--nc-tooltip-border, var(--border));
   border-radius: var(--radius-default);
   color: var(--nc-tooltip-foreground, var(--text-primary));
   font-family: var(--nc-tooltip-font-family, var(--font-sans));
@@ -317,7 +323,7 @@ input[type="number"] {
     var(--nc-tooltip-foreground, var(--text-primary)) 4%,
     var(--nc-tooltip-surface, var(--surface))
   );
-  border-bottom: 1px solid var(--nc-tooltip-border, var(--border));
+  border-bottom: var(--border-width) solid var(--nc-tooltip-border, var(--border));
 }
 
 .nucleuscharts-tooltip__timestamp {

@@ -69,6 +69,55 @@ impl DemoTheme {
         }
     }
 
+    fn primary(self) -> &'static str {
+        match self {
+            Self::Light => nucleuscharts_core::style::LIGHT_PRIMARY_CSS,
+            Self::Dark => nucleuscharts_core::style::DARK_PRIMARY_CSS,
+        }
+    }
+
+    fn primary_foreground(self) -> &'static str {
+        match self {
+            Self::Light => nucleuscharts_core::style::LIGHT_PRIMARY_FOREGROUND_CSS,
+            Self::Dark => nucleuscharts_core::style::DARK_PRIMARY_FOREGROUND_CSS,
+        }
+    }
+
+    fn primary_hover(self) -> &'static str {
+        match self {
+            Self::Light => nucleuscharts_core::style::LIGHT_PRIMARY_HOVER_CSS,
+            Self::Dark => nucleuscharts_core::style::DARK_PRIMARY_HOVER_CSS,
+        }
+    }
+
+    fn muted(self) -> &'static str {
+        match self {
+            Self::Light => nucleuscharts_core::style::LIGHT_MUTED_CSS,
+            Self::Dark => nucleuscharts_core::style::DARK_MUTED_CSS,
+        }
+    }
+
+    fn muted_foreground(self) -> &'static str {
+        match self {
+            Self::Light => nucleuscharts_core::style::LIGHT_MUTED_FOREGROUND_CSS,
+            Self::Dark => nucleuscharts_core::style::DARK_MUTED_FOREGROUND_CSS,
+        }
+    }
+
+    fn accent(self) -> &'static str {
+        match self {
+            Self::Light => nucleuscharts_core::style::LIGHT_ACCENT_CSS,
+            Self::Dark => nucleuscharts_core::style::DARK_ACCENT_CSS,
+        }
+    }
+
+    fn ring(self) -> &'static str {
+        match self {
+            Self::Light => nucleuscharts_core::style::LIGHT_RING_CSS,
+            Self::Dark => nucleuscharts_core::style::DARK_RING_CSS,
+        }
+    }
+
     fn patch(self) -> String {
         let surface = self.surface();
         let border = theme_border(self);
@@ -3608,24 +3657,23 @@ impl InteractiveDemo {
         let entity = cx.entity();
         let selected = self.action_selected(action, cx);
         let enabled = self.action_enabled(action, cx);
-        let background = if selected {
-            0x2962ff
-        } else if self.theme == DemoTheme::Dark {
-            0x16191f
+        let primary = shell_rgb(self.theme.primary(), 0x168ef7);
+        let primary_foreground = shell_rgb(self.theme.primary_foreground(), 0xffffff);
+        let primary_hover = shell_rgb(self.theme.primary_hover(), primary);
+        let muted = shell_rgb(self.theme.muted(), 0x181818);
+        let foreground = shell_rgb(theme_text(self.theme), 0xf0f0f0);
+        let accent = shell_rgb(self.theme.accent(), 0x252525);
+        let ring = shell_rgb(self.theme.ring(), 0x353535);
+        let background = if selected { primary } else { muted };
+        let foreground = if selected {
+            primary_foreground
         } else {
-            0xffffff
-        };
-        let foreground = if selected || self.theme == DemoTheme::Dark {
-            0xfafafa
-        } else {
-            0x191919
+            foreground
         };
         let border = if selected {
-            0x2962ff
-        } else if self.theme == DemoTheme::Dark {
-            0x2b2f38
+            primary
         } else {
-            0xd0d3da
+            shell_rgb(theme_border(self.theme), 0x252525)
         };
         let control = div()
             .id(label)
@@ -3648,18 +3696,14 @@ impl InteractiveDemo {
         }
         control
             .cursor(CursorStyle::PointingHand)
-            .hover(move |style| {
-                style.bg(rgb(if selected {
-                    0x2459e6
-                } else if background == 0xffffff {
-                    0xf1f3f7
-                } else {
-                    0x252932
-                }))
+            .hover(move |style| style.bg(rgb(if selected { primary_hover } else { accent })))
+            .active(move |style| {
+                style
+                    .bg(rgb(primary_hover))
+                    .text_color(rgb(primary_foreground))
             })
-            .active(|style| style.bg(rgb(0x1849b8)).text_color(rgb(0xffffff)))
             .tab_index(0)
-            .focus(|style| style.border_color(rgb(0xff9800)))
+            .focus(move |style| style.border_color(rgb(ring)))
             .on_click(move |_, _, app| {
                 entity.update(app, |demo, cx| demo.apply_action(action, cx));
             })
@@ -4105,7 +4149,10 @@ impl Render for InteractiveDemo {
             },
         );
         let dpr = window.scale_factor();
-        let divider_line_width = dpr.floor().max(1.0) / dpr;
+        let divider_line_width = (nucleuscharts_core::style::BORDER_WIDTH as f32 * dpr)
+            .round()
+            .max(1.0)
+            / dpr;
         let chart = if let Some(id) = self.maximized {
             self.render_node(
                 &WorkspaceLayout::Cell { id },
@@ -4126,16 +4173,8 @@ impl Render for InteractiveDemo {
             .flex()
             .flex_col()
             .size_full()
-            .bg(rgb(if self.theme == DemoTheme::Dark {
-                0x0a0a0a
-            } else {
-                0xffffff
-            }))
-            .text_color(rgb(if self.theme == DemoTheme::Dark {
-                0xfafafa
-            } else {
-                0x191919
-            }))
+            .bg(rgb(shell_rgb(self.theme.surface(), 0x141414)))
+            .text_color(rgb(shell_rgb(theme_text(self.theme), 0xf0f0f0)))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_move(move |event, _, app| {
                 if event.dragging() {
@@ -4188,7 +4227,10 @@ impl Render for InteractiveDemo {
                             .child(
                                 div()
                                     .text_size(px(11.0))
-                                    .text_color(rgb(0x787b86))
+                                    .text_color(rgb(shell_rgb(
+                                        self.theme.muted_foreground(),
+                                        0xb7b7b7,
+                                    )))
                                     .child("Market lab · Native"),
                             ),
                     )
@@ -4222,11 +4264,7 @@ impl Render for InteractiveDemo {
                                     .px_2()
                                     .py_1()
                                     .rounded_md()
-                                    .bg(rgb(if self.theme == DemoTheme::Dark {
-                                        0x0a0a0a
-                                    } else {
-                                        0xffffff
-                                    }))
+                                    .bg(rgb(shell_rgb(self.theme.surface(), 0x141414)))
                                     .text_size(px(12.0))
                                     .child(legend),
                             ),
@@ -4263,7 +4301,10 @@ impl Render for InteractiveDemo {
                                         .child(
                                             div()
                                                 .text_size(px(12.0))
-                                                .text_color(rgb(0x787b86))
+                                                .text_color(rgb(shell_rgb(
+                                                    self.theme.muted_foreground(),
+                                                    0xb7b7b7,
+                                                )))
                                                 .child("Style your chart or explore a section."),
                                         )
                                         .child(
@@ -4279,6 +4320,14 @@ impl Render for InteractiveDemo {
                                                 .into_iter()
                                                 .map(|(label, index)| {
                                                     let scroll = self.inspector_scroll.clone();
+                                                    let primary =
+                                                        shell_rgb(self.theme.primary(), 0x168ef7);
+                                                    let primary_foreground = shell_rgb(
+                                                        self.theme.primary_foreground(),
+                                                        0xffffff,
+                                                    );
+                                                    let ring =
+                                                        shell_rgb(self.theme.ring(), 0x353535);
                                                     div()
                                                         .id(("section", index))
                                                         .flex()
@@ -4295,13 +4344,13 @@ impl Render for InteractiveDemo {
                                                             theme_border(self.theme),
                                                             0xe5e5e5,
                                                         )))
-                                                        .hover(|style| {
+                                                        .hover(move |style| {
                                                             style
-                                                                .bg(rgb(0x2962ff))
-                                                                .text_color(rgb(0xffffff))
+                                                                .bg(rgb(primary))
+                                                                .text_color(rgb(primary_foreground))
                                                         })
-                                                        .focus(|style| {
-                                                            style.border_color(rgb(0x2962ff))
+                                                        .focus(move |style| {
+                                                            style.border_color(rgb(ring))
                                                         })
                                                         .on_click(move |_, _, cx| {
                                                             scroll.scroll_to_top_of_item(index);
@@ -4340,7 +4389,7 @@ impl Render for InteractiveDemo {
                     .border_t_1()
                     .border_color(rgb(shell_rgb(theme_border(self.theme), 0xe5e5e5)))
                     .text_size(px(11.0))
-                    .text_color(rgb(0x787b86))
+                    .text_color(rgb(shell_rgb(self.theme.muted_foreground(), 0xb7b7b7)))
                     .child(format!(
                         "{} · active {} · cap {}{}",
                         self.status,

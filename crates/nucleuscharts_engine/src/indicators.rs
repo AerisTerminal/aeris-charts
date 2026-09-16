@@ -136,6 +136,25 @@ pub struct IndicatorParameters {
 }
 
 impl ChartEngine {
+    pub(crate) fn reset_indicator_output_styles_to_defaults(&mut self) {
+        let outputs = self
+            .indicators
+            .iter()
+            .map(|binding| (binding.kind.clone(), binding.outputs.clone()))
+            .collect::<Vec<_>>();
+        for (kind, ids) in outputs {
+            for (output_index, id) in ids.into_iter().enumerate() {
+                let Some(series) = self.series_entry_mut(id) else {
+                    continue;
+                };
+                series.countdown_visible = false;
+                series.title_visible = true;
+                series.line_width = Some(2.0);
+                series.line_color = indicator_output_color(&kind, output_index).map(str::to_string);
+            }
+        }
+    }
+
     /// Applies Nucleus's canonical four-state momentum palette to an existing histogram series.
     ///
     /// Colors are derived from each value's sign and whether it moved toward or away from zero.

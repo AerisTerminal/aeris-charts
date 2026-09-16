@@ -45,7 +45,8 @@ impl AxisMetrics {
         }
     }
 
-    /// Price-strip border thickness.
+    /// Price-strip layout reservation at the pane edge. The visible rule itself uses the
+    /// canonical design-system border width when the axis frame is lowered to device pixels.
     pub const PRICE_BORDER: f64 = 1.0;
     /// Tick allowance plus inner padding between the border and tag text.
     pub const PRICE_TEXT_GAP: f64 = 3.0 + 4.0;
@@ -75,8 +76,8 @@ impl AxisMetrics {
         self.countdown + 2.0 * 2.0
     }
 
-    /// Time-strip height: axis text plus 1 px border, 3 px tick allowance, and 3 px vertical
-    /// padding on each side, snapped to an even CSS-pixel height (22 CSS px by default).
+    /// Time-strip height: axis text plus the stable 1 px border slot, 3 px tick allowance, and 3 px
+    /// vertical padding on each side, snapped to an even CSS-pixel height (22 CSS px by default).
     pub fn time_strip_height(&self) -> f64 {
         even_css_px(self.axis + 1.0 + 3.0 + 3.0 + 3.0)
     }
@@ -167,7 +168,8 @@ mod tests {
         let metrics = AxisMetrics::new(12.0);
         assert_eq!(metrics.axis, 11.0);
         assert_eq!(metrics.countdown, 10.0);
-        // Price strip chrome: 1 border + 3 tick + 4 + 4 padding.
+        // Price strip chrome keeps its 1 px border slot + 3 tick + 4 + 4 padding. Visible border
+        // thickness is a paint token and does not perturb the chart's established layout geometry.
         assert_eq!(AxisMetrics::PRICE_CHROME, 12.0);
         assert_eq!(AxisMetrics::PRICE_TEXT_INSET, 8.0);
         // Price tags: 11 + 2 + 2. Crosshair price tags add 2 px per side.

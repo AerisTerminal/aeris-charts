@@ -1717,7 +1717,8 @@ fn bid_ask_lines_and_chips_render_only_when_enabled_with_values() {
     // Default OFF: pushing quotes alone renders nothing. (Quotes are inside the fixture's
     // 10-12.5 scale range; out-of-range quotes are clipped by design.)
     chart.set_bid_ask(0, Some(11.0), Some(12.0));
-    let blue = Color::rgb(0x3e, 0x63, 0xdd);
+    let primary = nucleuscharts_core::style::DEFAULT_PRIMARY_RGB;
+    let blue = Color::rgb(primary.0, primary.1, primary.2);
     let red = Color::rgb(0xf7, 0x52, 0x5f);
     assert!(!hlines(&mut chart)
         .iter()
@@ -1790,7 +1791,10 @@ fn bid_ask_lines_and_chips_render_only_when_enabled_with_values() {
     let options: serde_json::Value =
         serde_json::from_str(&chart.series_options_json(0).unwrap()).unwrap();
     assert_eq!(options["bid_ask_visible"], false);
-    assert_eq!(options["bid_color"], "#3e63dd");
+    assert_eq!(
+        options["bid_color"],
+        nucleuscharts_core::style::DEFAULT_PRIMARY_CSS
+    );
     assert_eq!(options["ask_color"], "#112233");
     assert_eq!(options["bid"], serde_json::Value::Null);
     assert_eq!(options["ask"], 12.0);
@@ -4609,7 +4613,9 @@ fn boxed_labels_begin_beyond_the_axis_border_at_every_dpr() {
         let mut primitives = Vec::new();
         chart.build_axis_primitives_into(&axis, &mut primitives, |_| 0.0);
 
-        let border_w = 1f64.max(dpr.floor()) as i32;
+        let border_w = (nucleuscharts_core::style::BORDER_WIDTH * dpr)
+            .round()
+            .max(1.0) as i32;
         let price_border = ((chart.pane_left + chart.pane_w) * dpr).round() as i32;
         let title_box = primitives.iter().find_map(|primitive| match primitive {
             Prim::RoundRect {

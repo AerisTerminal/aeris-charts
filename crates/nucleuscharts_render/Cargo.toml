@@ -12,7 +12,7 @@ publish.workspace = true
 description = "Draw-list IR and rendering math (bar widths, primitives) — backend-agnostic"
 
 [dependencies]
-nucleuscharts_core = { path = "../nucleuscharts_core", version = "0.1.0" }
+nucleuscharts_core = { path = "../nucleuscharts_core", version = "0.2.0" }
 
 [lints]
 workspace = true

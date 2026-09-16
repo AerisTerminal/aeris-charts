@@ -45,7 +45,7 @@ import {
   DRAWING_KIND_TO_U8, FEATURE_KIND_TO_U8, KIND_TO_U8, LINE_STYLE_TO_U8, LINE_TYPE_TO_U8,
   is_feature_series_kind, is_footprint_series_kind,
 } from "./types.js";
-import { default_theme_name, theme_palette } from "./theme.js";
+import { default_theme_name, theme_options, theme_palette, type theme_name } from "./theme.js";
 import axiusflow_dark_logo from "./assets/logos/axiusflow_dark.svg";
 import axiusflow_light_logo from "./assets/logos/axiusflow_light.svg";
 
@@ -2792,6 +2792,7 @@ export class chart_impl implements chart_api {
     private readonly plugin_canvas: HTMLCanvasElement,
     private readonly overlay: HTMLCanvasElement,
     auto_size: boolean,
+    private selected_theme: theme_name = default_theme_name,
   ) {
     this.wasm_instance = wasm;
     const plugin_ctx = plugin_canvas.getContext("2d");
@@ -4321,8 +4322,9 @@ export class chart_impl implements chart_api {
     // handle_scroll / handle_scale / kinetic_scroll / tracking_mode (gestures), the pane-resize
     // toggle, and localization (JS callbacks) are package-level; intercept and strip them so only
     // engine-owned, JSON-serializable options reach the wasm store.
-    const { handle_scroll, handle_scale, kinetic_scroll, wheel_behavior, tracking_mode, localization, accessibility, ...rest } =
+    const { theme, handle_scroll, handle_scale, kinetic_scroll, wheel_behavior, tracking_mode, localization, accessibility, ...rest } =
       options as deep_partial<chart_options> & {
+        theme?: theme_name;
         handle_scroll?: boolean | handle_scroll_options;
         handle_scale?: boolean | handle_scale_options;
         kinetic_scroll?: boolean | kinetic_scroll_options;
@@ -4339,6 +4341,14 @@ export class chart_impl implements chart_api {
       const { enableResize, ...panes_rest } = panes;
       engine_options = { ...rest, layout: { ...(rest.layout as object), panes: panes_rest } };
       this.gestures_cfg.panes_resize = enableResize;
+    }
+    // Theme selection is package-owned state. Apply its canonical projection first so explicit
+    // engine options in the same patch can still override individual visual fields, matching
+    // create_chart() ordering. Retaining the identity lets reset_style_to_defaults() return to
+    // the selected theme even after arbitrary color customizations.
+    if (theme !== undefined) {
+      this.selected_theme = theme;
+      this.wasm.apply_options(JSON.stringify(theme_options(theme_palette(theme))));
     }
     if (
       handle_scroll !== undefined || handle_scale !== undefined || kinetic_scroll !== undefined ||
@@ -4602,6 +4612,13 @@ export class chart_impl implements chart_api {
     if (!this.wasm.swap_panes(first, second)) return false;
     this.repaint();
     return true;
+  }
+
+  reset_style_to_defaults(): void {
+    this.wasm.reset_style_to_defaults(this.selected_theme === "light");
+    this.sync_attribution_logo_style();
+    this.sync_countdown_timer();
+    this.repaint();
   }
 
   reset_view(): void {

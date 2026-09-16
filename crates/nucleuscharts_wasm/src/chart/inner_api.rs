@@ -1615,6 +1615,12 @@ impl ChartInner {
         self.recompute_layout(true);
     }
 
+    pub fn reset_style_to_defaults(&mut self, theme: ChartTheme) {
+        self.engine.reset_style_to_theme_defaults(theme);
+        // Font and axis cosmetics can shrink as well as grow, exactly like a full options update.
+        self.recompute_layout(true);
+    }
+
     /// Current options as a JSON string (round-trips the deep-merged state back to JS).
     pub fn options_json(&self) -> String {
         self.options.value().to_string()

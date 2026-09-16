@@ -918,6 +918,71 @@ impl SeriesEntry {
             max_points: None,
         }
     }
+
+    /// Restore engine-owned visual styling without replacing the live series or its semantic/runtime
+    /// state. Data, visibility, title metadata, pane/scale binding, price formatting, quotes,
+    /// marker payloads, indicator semantics, retention, and transient interaction state survive.
+    fn reset_style_to_defaults(&mut self) {
+        let defaults = Self::new(self.id, self.kind);
+        self.line_color = defaults.line_color;
+        self.up_color = defaults.up_color;
+        self.down_color = defaults.down_color;
+        self.wick_up_color = defaults.wick_up_color;
+        self.wick_down_color = defaults.wick_down_color;
+        self.border_up_color = defaults.border_up_color;
+        self.border_down_color = defaults.border_down_color;
+        self.wick_visible = defaults.wick_visible;
+        self.border_visible = defaults.border_visible;
+        self.line_width = defaults.line_width;
+        self.area_top_color = defaults.area_top_color;
+        self.area_bottom_color = defaults.area_bottom_color;
+        self.histogram_updown = defaults.histogram_updown;
+        self.line_type = defaults.line_type;
+        self.point_markers = defaults.point_markers;
+        self.last_price_animation = defaults.last_price_animation;
+        self.last_value_visible = defaults.last_value_visible;
+        self.title_visible = defaults.title_visible;
+        self.countdown_visible = defaults.countdown_visible;
+        self.price_line_visible = defaults.price_line_visible;
+        self.price_line_source = defaults.price_line_source;
+        self.price_line_extent = defaults.price_line_extent;
+        self.price_line_width = defaults.price_line_width;
+        self.price_line_color = defaults.price_line_color;
+        self.price_line_style = defaults.price_line_style;
+        self.bid_ask_visible = defaults.bid_ask_visible;
+        self.bid_color = defaults.bid_color;
+        self.ask_color = defaults.ask_color;
+        self.bid_ask_line_width = defaults.bid_ask_line_width;
+        self.bid_ask_line_style = defaults.bid_ask_line_style;
+        self.line_style = defaults.line_style;
+        self.line_visible = defaults.line_visible;
+        self.point_markers_radius = defaults.point_markers_radius;
+        self.crosshair_marker_visible = defaults.crosshair_marker_visible;
+        self.crosshair_marker_radius = defaults.crosshair_marker_radius;
+        self.crosshair_marker_border_color = defaults.crosshair_marker_border_color;
+        self.crosshair_marker_background_color = defaults.crosshair_marker_background_color;
+        self.crosshair_marker_border_width = defaults.crosshair_marker_border_width;
+        self.top_fill_color1 = defaults.top_fill_color1;
+        self.top_fill_color2 = defaults.top_fill_color2;
+        self.top_line_color = defaults.top_line_color;
+        self.top_line_width = defaults.top_line_width;
+        self.top_line_style = defaults.top_line_style;
+        self.bottom_fill_color1 = defaults.bottom_fill_color1;
+        self.bottom_fill_color2 = defaults.bottom_fill_color2;
+        self.bottom_line_color = defaults.bottom_line_color;
+        self.bottom_line_width = defaults.bottom_line_width;
+        self.bottom_line_style = defaults.bottom_line_style;
+        self.invert_filled_area = defaults.invert_filled_area;
+        self.open_visible = defaults.open_visible;
+        self.thin_bars = defaults.thin_bars;
+
+        if let Some(feature) = self.feature.as_mut() {
+            feature.options.reset_style_to_defaults();
+        }
+        if let Some(footprint) = self.footprint.as_mut() {
+            footprint.visual.reset_style_to_defaults();
+        }
+    }
 }
 
 /// Canonical owner of series presentation state.
@@ -983,6 +1048,9 @@ impl<'a> IntoIterator for &'a mut SeriesStore {
     }
 }
 
+/// Stable pane-boundary layout slot in CSS pixels. The visible separator rule is thinner and uses
+/// the canonical design-system border width during axis-frame lowering; hover/hit geometry is also
+/// independently expanded for usability.
 pub const PANE_SEPARATOR: f64 = 1.0;
 
 /// `pane_index` sentinel for a series whose pane was removed (reference `removePane` orphans the
@@ -1312,6 +1380,7 @@ pub struct ChartEngine {
     next_pane_id: u32,
     next_persistent_pane_id: u32,
     pub options: ChartOptionsStore,
+    theme: ChartTheme,
     pub crosshair_mode: CrosshairMode,
     /// the public reference's Ctrl-held magnet: while set, a Normal-mode crosshair snaps to the hovered
     /// bar's rendered prices exactly like `CrosshairMode::MagnetOhlc` (OHLC for candles/bars,
@@ -1474,6 +1543,7 @@ impl ChartEngine {
             next_pane_id: 2,
             next_persistent_pane_id: 2,
             options: ChartOptionsStore::new(),
+            theme: ChartTheme::default(),
             crosshair_mode: CrosshairMode::Normal,
             crosshair_ohlc_magnet: false,
             animation_time: 0.0,
@@ -3146,9 +3216,40 @@ impl ChartEngine {
 
     /// Switch all chart cosmetics using Nucleus's canonical style-token source.
     pub fn set_theme(&mut self, theme: ChartTheme) {
+        self.theme = theme;
         let patch = chart_theme_patch(theme);
         self.options.apply(&patch);
         self.route_price_scale_patch(&patch);
+        self.invalidate_frame_all();
+    }
+
+    /// Restore Nucleus-owned chart and series styling without touching view/runtime state.
+    ///
+    /// This is deliberately distinct from [`Self::reset_view`]: live time/price ranges, scale
+    /// modes/margins/autoscale state, data, panes, drawings, indicators, series visibility/title,
+    /// pane/scale bindings, price formatting, quotes, and footprint aggregation all survive. Visual
+    /// defaults come from the current canonical theme and semantic follow/unset states are restored.
+    pub fn reset_style_to_defaults(&mut self) {
+        self.reset_style_to_theme_defaults(self.theme);
+    }
+
+    /// Theme-aware form used by hosts whose selected theme lives outside the headless engine.
+    pub fn reset_style_to_theme_defaults(&mut self, theme: ChartTheme) {
+        self.theme = theme;
+        self.options.reset_style_to_defaults(theme);
+
+        for pane in &mut self.panes {
+            for scale in pane.scales_mut() {
+                scale.reset_style_to_defaults();
+            }
+        }
+        for series in &mut self.series {
+            if !series.removed {
+                series.reset_style_to_defaults();
+            }
+        }
+        self.reset_indicator_output_styles_to_defaults();
+
         self.invalidate_frame_all();
     }
 

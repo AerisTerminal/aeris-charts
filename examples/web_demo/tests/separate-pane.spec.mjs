@@ -6,7 +6,7 @@ import { PNG } from "pngjs";
 // affordances work there, and removing the series prunes the empty pane.
 
 const PURPLE = [171, 71, 188]; // #ab47bc — the demo's RSI stroke
-const BLUE = [62, 99, 221]; // semantic primary #3e63dd — selection anchor border
+const BLUE = [22, 142, 247]; // semantic primary #168ef7 — selection anchor border
 
 async function wait_for_chart(page) {
   await page.waitForFunction(() => window.__chart?.backend?.() !== undefined);

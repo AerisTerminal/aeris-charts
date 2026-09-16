@@ -148,6 +148,21 @@ impl Default for FootprintVisualOptions {
     }
 }
 
+impl FootprintVisualOptions {
+    pub(crate) fn reset_style_to_defaults(&mut self) {
+        let defaults = Self::default();
+        self.font_size = defaults.font_size;
+        self.bid_color = defaults.bid_color;
+        self.ask_color = defaults.ask_color;
+        self.positive_delta_color = defaults.positive_delta_color;
+        self.negative_delta_color = defaults.negative_delta_color;
+        self.text_color = defaults.text_color;
+        self.poc_color = defaults.poc_color;
+        self.stacked_bid_color = defaults.stacked_bid_color;
+        self.stacked_ask_color = defaults.stacked_ask_color;
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct FootprintSeriesOptions {
     pub aggregation: FootprintAggregationOptions,

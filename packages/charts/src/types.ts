@@ -860,10 +860,11 @@ export interface chart_options {
   /** Backend override for capability testing; defaults to automatic WebGPU → Canvas2D fallback. */
   backend: "auto" | "canvas2d";
   /**
-   * Default style preset from `theme.ts` (the package's style settings file), applied at
-   * creation *under* any explicit options. The default comes from Nucleus's canonical style
-   * tokens. Package-level only — never
-   * forwarded to the engine.
+   * Style preset from `theme.ts` (the package's style settings file). At creation it is applied
+   * under explicit options; later `apply_options({ theme })` switches the selected preset live.
+   * The selected identity is retained so {@link chart_api.reset_style_to_defaults} can restore the
+   * correct light/dark canonical defaults after further customization. Package-level only — the
+   * raw `theme` key is never forwarded to the engine.
    */
   theme: "light" | "dark";
 }
@@ -2155,6 +2156,14 @@ export interface chart_api {
    * live handles follow their pane identities across the swap.
    */
   swap_panes(first: number, second: number): boolean;
+  /**
+   * Restore Nucleus-owned chart and series styling to the canonical defaults for this chart's
+   * selected theme. This does not reset the view: data, panes, drawings, indicators, series
+   * visibility/metadata, price formatting, scale bindings/ranges/modes/margins, zoom, and scroll
+   * position are preserved. Semantic follow/unset states are restored instead of pinning effective
+   * theme colors.
+   */
+  reset_style_to_defaults(): void;
   /**
    * industry-standard "reset view" in one action: the time scale returns to its configured
    * defaults (reference `resetTimeScale`) and every pane's price scales re-enable autoscale

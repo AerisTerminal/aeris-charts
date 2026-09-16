@@ -1669,7 +1669,7 @@ mod tests {
     fn pane_index_at_y_uses_engine_pane_bounds() {
         let mut chart = chart_with_data(400.0, 300.0);
         chart.add_pane(true);
-        chart.panes[1].stretch_factor = 0.5; // 2:1 split of 299 usable px (1px separator)
+        chart.panes[1].stretch_factor = 0.5; // 2:1 split after the canonical separator slot
         chart.layout_panes(300.0);
         let first_h = chart.panes[0].height;
         assert_eq!(chart.pane_index_at_y(0.0), 0);

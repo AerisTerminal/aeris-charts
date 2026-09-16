@@ -1854,7 +1854,10 @@ mod tests {
         assert_eq!(labels, 13);
 
         chart
-            .apply_options(r##"{"layout":{"textColor":"#141414"}}"##)
+            .apply_options(&format!(
+                r##"{{"layout":{{"textColor":"{}"}}}}"##,
+                nucleuscharts_core::style::LIGHT_FOREGROUND_CSS
+            ))
             .unwrap();
         let light_text = Color::parse_css(nucleuscharts_core::style::LIGHT_FOREGROUND_CSS).unwrap();
         assert_eq!(

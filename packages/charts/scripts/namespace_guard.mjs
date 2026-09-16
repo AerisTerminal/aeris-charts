@@ -10,6 +10,10 @@ const allowed = [
   new RegExp(`b\\.${retired}\\.x`, "gi"),
   new RegExp(`${retired}:\\s*(?=(?:self\\.point|point|wgpu::))`, "gi"),
   new RegExp(`wgpu::${retired}3d`, "gi"),
+  new RegExp(`(?:semantic|progress)\\s+${retired}`, "gi"),
+  new RegExp(`${retired}\\s+edge`, "gi"),
+  new RegExp(`entry/${retired}`, "gi"),
+  new RegExp(`whose\\s+${retired}`, "gi"),
   new RegExp(`cross-${retired}`, "gi"),
   new RegExp(`same-${retired}`, "gi"),
   new RegExp(`cross${retired}isolated`, "gi"),
@@ -20,6 +24,8 @@ const generatedAllowed = [
   new RegExp(`${retired}al error`, "gi"),
 ];
 const generated = ["packages/charts/pkg", "packages/charts/dist", "examples/web_demo/pkg", "examples/web_demo/dist"];
+// Compliance text is copied verbatim from third parties and is not an owned namespace surface.
+const content_exempt_prefixes = ["third_party_licenses/"];
 const failures = [];
 const retired_namespace = new RegExp(`(?<![A-Za-z0-9_])${retired}(?![A-Za-z0-9_])`, "i");
 
@@ -38,7 +44,10 @@ const tracked = execFileSync("git", ["ls-files", "--cached", "--others", "--excl
   .toString("utf8")
   .split("\0")
   .filter((path) => path && existsSync(join(repo, path)));
-for (const path of tracked) inspect(join(repo, path), path);
+for (const path of tracked) {
+  if (content_exempt_prefixes.some((prefix) => path.startsWith(prefix))) continue;
+  inspect(join(repo, path), path);
+}
 
 function inspectTree(relative) {
   const root = join(repo, relative);

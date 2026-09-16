@@ -8,8 +8,8 @@
     },
     {
       "path": "builtin_plugins.d.ts",
-      "bytes": 3925,
-      "sha256": "21a203b90ab3d694bd28d9447c15b25e88632a8d336ef8333df8d04fa62f992c"
+      "bytes": 3890,
+      "sha256": "ebad686d5252b75fe28ceb13485ff222af023a38f0d83339815a4dfe60870404"
     },
     {
       "path": "canvas_plugins.d.ts",
@@ -18,8 +18,8 @@
     },
     {
       "path": "custom_series.d.ts",
-      "bytes": 5953,
-      "sha256": "d382ba0b1d5ac20089bc4369399969a1d9331c996bf1e46f34f643c55a08870f"
+      "bytes": 5943,
+      "sha256": "b6424993b43b70c0b8c20364fcc190c4f6664c80d5be999ffb74d7f4bb987804"
     },
     {
       "path": "errors.d.ts",
@@ -33,18 +33,18 @@
     },
     {
       "path": "grid.d.ts",
-      "bytes": 6457,
-      "sha256": "27b75b2fb65390cac45905fca522b6105fe5d6157315f93f1602ed820c957149"
+      "bytes": 6466,
+      "sha256": "3ba25f48269f04380ee3e95324d89fc0b049a9fde8ff15ad8ed79a827c7814b3"
     },
     {
       "path": "index.d.ts",
-      "bytes": 1966,
-      "sha256": "f6338b0fc1f2e5c2a4acd4002800f37f597e1c92b86b758227b0178fd958cd31"
+      "bytes": 2004,
+      "sha256": "f00b6221b6cc3ae5916ada5032195ed0f7a65f2be017bdfc8709bcbaba7b7b32"
     },
     {
       "path": "offscreen.d.ts",
-      "bytes": 6503,
-      "sha256": "6bb8523213e8931e00980c5cfca99e53d5a9428f0b047aacd8e66724c73f9fd7"
+      "bytes": 6808,
+      "sha256": "5b6fe847b46fb47b7c5ff803e1c4e19a4a230b319ad709d4bb4173fe0f6d7e25"
     },
     {
       "path": "primitive_features.d.ts",
@@ -53,8 +53,8 @@
     },
     {
       "path": "primitives.d.ts",
-      "bytes": 16615,
-      "sha256": "7c020053af411152918ef66815822ef168cbddf108399b5e704aea564bdd4704"
+      "bytes": 16590,
+      "sha256": "bf6a09b59dbb8390d03c39383545aa3ac6022817106daf664de22cc26ec76859"
     },
     {
       "path": "shortcuts.d.ts",
@@ -63,13 +63,13 @@
     },
     {
       "path": "theme.d.ts",
-      "bytes": 1557,
-      "sha256": "7f595214e1355cd158f608c01a6a8ddad13eb5c01b5afe03ed4511e478d35c8f"
+      "bytes": 1836,
+      "sha256": "10dbc2ed1405f07ed1c747f36b3ae683aef708acb6ea1cc532e0c872217c77a9"
     },
     {
       "path": "types.d.ts",
-      "bytes": 106560,
-      "sha256": "02a54dd83eace62bf93a17f526873f875d72495f2fb15cd5b1ef5aae3b5917a5"
+      "bytes": 107235,
+      "sha256": "723e53d86aa558bd219ce76170327728563ac6946f0f38588a4ea3d3d4d92ed2"
     }
   ]
 }

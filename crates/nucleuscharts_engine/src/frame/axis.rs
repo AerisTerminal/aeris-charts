@@ -1230,7 +1230,7 @@ impl ChartEngine {
     }
 
     /// Measure one visible side independently. Overlay scales deliberately share no axis strip.
-    /// Chrome follows the shared metrics (1 px border, 3 px tick allowance, 4 px padding per
+    /// Chrome follows the shared metrics (canonical border width, 3 px tick allowance, 4 px padding per
     /// side) instead of the reference's wider `optimalWidth` paddings.
     pub fn optimal_price_axis_width_for<F, G>(
         &mut self,

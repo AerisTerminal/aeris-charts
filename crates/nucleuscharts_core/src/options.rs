@@ -42,6 +42,15 @@ pub enum ChartTheme {
     Dark,
 }
 
+impl Default for ChartTheme {
+    fn default() -> Self {
+        match crate::style::DEFAULT_THEME_NAME {
+            "light" => Self::Light,
+            _ => Self::Dark,
+        }
+    }
+}
+
 /// Complete cosmetic patch for one canonical Nucleus theme.
 #[must_use]
 pub fn chart_theme_patch(theme: ChartTheme) -> Value {
@@ -554,6 +563,110 @@ impl ChartOptionsStore {
     pub fn generation(&self) -> u64 {
         self.generation
     }
+
+    /// Restore engine-owned chart styling to the canonical defaults for `theme` while preserving
+    /// behavioral/runtime options stored beside those visual groups. In particular, time-scale
+    /// spacing/offset options, auto-size, crosshair snapping mode, and other unknown host keys are
+    /// retained. Semantic follow states are restored rather than pinning their effective colors:
+    /// pane separators follow the axis border and price-scale text follows layout text.
+    pub fn reset_style_to_defaults(&mut self, theme: ChartTheme) {
+        let mut defaults =
+            serde_json::to_value(ChartOptions::default()).expect("options serialize");
+        deep_merge(&mut defaults, &chart_theme_patch(theme));
+
+        // A theme patch supplies effective colors for creation/theme switching. A style reset must
+        // restore the canonical follow semantics instead of pinning those effective values.
+        if let Some(layout) = defaults.get_mut("layout").and_then(Value::as_object_mut) {
+            if let Some(panes) = layout.get_mut("panes").and_then(Value::as_object_mut) {
+                panes.insert("separatorColor".into(), Value::String(String::new()));
+            }
+        }
+        for key in ["leftPriceScale", "rightPriceScale"] {
+            if let Some(scale) = defaults.get_mut(key).and_then(Value::as_object_mut) {
+                scale.insert("textColor".into(), Value::Null);
+            }
+        }
+
+        let merge_group = |dst: &mut Value, source: &Value, key: &str| {
+            let Some(source_group) = source.get(key) else {
+                return;
+            };
+            let Some(dst_object) = dst.as_object_mut() else {
+                return;
+            };
+            match dst_object.get_mut(key) {
+                Some(existing) => deep_merge(existing, source_group),
+                None => {
+                    dst_object.insert(key.to_string(), source_group.clone());
+                }
+            }
+        };
+
+        for key in ["layout", "grid", "timeScale"] {
+            merge_group(&mut self.value, &defaults, key);
+        }
+
+        // Watermark content/visibility are host state; reset only its appearance.
+        if let (Some(current), Some(default)) = (
+            self.value
+                .get_mut("watermark")
+                .and_then(Value::as_object_mut),
+            defaults.get("watermark").and_then(Value::as_object),
+        ) {
+            for key in [
+                "color",
+                "fontSize",
+                "fontFamily",
+                "fontStyle",
+                "horzAlign",
+                "vertAlign",
+            ] {
+                if let Some(value) = default.get(key) {
+                    current.insert(key.to_string(), value.clone());
+                }
+            }
+        }
+
+        // Built-in scale strip visibility and layout/label behavior are state, not style. Keep
+        // those exact settings while restoring border/text cosmetics and semantic text following.
+        for group_key in ["leftPriceScale", "rightPriceScale"] {
+            if let (Some(current), Some(default)) = (
+                self.value.get_mut(group_key).and_then(Value::as_object_mut),
+                defaults.get(group_key).and_then(Value::as_object),
+            ) {
+                for key in ["borderVisible", "borderColor", "textColor", "ticksVisible"] {
+                    if let Some(value) = default.get(key) {
+                        current.insert(key.to_string(), value.clone());
+                    }
+                }
+                // This scale-core visual default is not represented by ChartOptions' typed shape,
+                // but chart-level patches may still carry it in the raw options object.
+                current.insert("boldRoundLabels".into(), Value::Bool(true));
+            }
+        }
+
+        // Crosshair mode/snapping are interaction behavior; only the two visual line groups reset.
+        if let (Some(current), Some(default)) = (
+            self.value
+                .get_mut("crosshair")
+                .and_then(Value::as_object_mut),
+            defaults.get("crosshair").and_then(Value::as_object),
+        ) {
+            for key in ["vertLine", "horzLine"] {
+                if let Some(default_line) = default.get(key) {
+                    match current.get_mut(key) {
+                        Some(existing) => deep_merge(existing, default_line),
+                        None => {
+                            current.insert(key.to_string(), default_line.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        self.typed = serde_json::from_value(self.value.clone()).unwrap_or_default();
+        self.generation = self.generation.wrapping_add(1);
+    }
 }
 
 /// Convenience: build a one-key patch object `{ key: value }` for tests/host glue.
@@ -651,6 +764,80 @@ mod tests {
             dark.right_price_scale.text_color.as_deref(),
             Some(DARK_FOREGROUND_CSS)
         );
+    }
+
+    #[test]
+    fn style_reset_is_theme_aware_and_preserves_behavioral_options() {
+        let mut store = ChartOptionsStore::new();
+        store.apply(&json!({
+            "layout": {
+                "background": { "color": "#123456" },
+                "fontSize": 27,
+                "panes": { "separatorColor": "#654321" }
+            },
+            "grid": { "vertLines": { "visible": false, "color": "#abcdef" } },
+            "crosshair": {
+                "mode": crosshair_mode::HIDDEN,
+                "doNotSnapToHiddenSeriesIndices": true,
+                "vertLine": { "color": "#abcdef", "width": 4 }
+            },
+            "rightPriceScale": {
+                "visible": false,
+                "textColor": "#abcdef",
+                "borderColor": "#abcdef",
+                "alignLabels": false,
+                "ticksVisible": true,
+                "entireTextOnly": true,
+                "minimumWidth": 88,
+                "boldRoundLabels": false
+            },
+            "timeScale": { "borderColor": "#abcdef", "barSpacing": 17, "rightOffset": 9 },
+            "watermark": {
+                "visible": true,
+                "text": "KEEP ME",
+                "color": "#abcdef",
+                "fontSize": 77,
+                "horzAlign": "left"
+            },
+            "autoSize": true,
+            "hoveredSeriesOnTop": false,
+            "hostExtension": { "keep": 42 }
+        }));
+
+        store.reset_style_to_defaults(ChartTheme::Light);
+
+        let options = store.get();
+        assert_eq!(options.layout.background.color, LIGHT_SURFACE_CSS);
+        assert_eq!(options.layout.text_color, LIGHT_FOREGROUND_CSS);
+        assert_eq!(options.layout.font_size, 12.0);
+        assert_eq!(options.layout.panes.separator_color, "");
+        assert_eq!(options.grid.vert_lines.color, LIGHT_BORDER_CSS);
+        assert!(options.grid.vert_lines.visible);
+        assert_eq!(options.crosshair.vert_line.color, LIGHT_CROSSHAIR_LINE_CSS);
+        assert_eq!(options.crosshair.vert_line.width, 1.0);
+        assert_eq!(options.crosshair.mode, crosshair_mode::HIDDEN);
+        assert!(options.crosshair.do_not_snap_to_hidden_series_indices);
+        assert_eq!(options.right_price_scale.border_color, LIGHT_BORDER_CSS);
+        assert_eq!(options.right_price_scale.text_color, None);
+        assert!(!options.right_price_scale.visible);
+        assert!(!options.right_price_scale.align_labels);
+        assert!(options.right_price_scale.entire_text_only);
+        assert_eq!(options.right_price_scale.minimum_width, 88.0);
+        assert_eq!(options.time_scale.border_color, LIGHT_BORDER_CSS);
+        assert!(options.watermark.visible);
+        assert_eq!(options.watermark.text, "KEEP ME");
+        assert_eq!(options.watermark.color, "rgba(0, 0, 0, 0)");
+        assert_eq!(options.watermark.font_size, 48.0);
+        assert_eq!(options.watermark.horz_align, "center");
+        assert!(options.auto_size);
+        assert!(!options.hovered_series_on_top);
+
+        let raw = store.value();
+        assert_eq!(raw["timeScale"]["barSpacing"], 17);
+        assert_eq!(raw["timeScale"]["rightOffset"], 9);
+        assert_eq!(raw["rightPriceScale"]["ticksVisible"], false);
+        assert_eq!(raw["rightPriceScale"]["boldRoundLabels"], true);
+        assert_eq!(raw["hostExtension"]["keep"], 42);
     }
 
     #[test]

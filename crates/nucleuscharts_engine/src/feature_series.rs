@@ -346,6 +346,35 @@ impl Default for FeatureSeriesOptions {
 }
 
 impl FeatureSeriesOptions {
+    pub(crate) fn reset_style_to_defaults(&mut self) {
+        let defaults = Self::default();
+        self.color = defaults.color;
+        self.colors = defaults.colors;
+        self.stacked_area_colors = defaults.stacked_area_colors;
+        self.line_color = defaults.line_color;
+        self.top_color = defaults.top_color;
+        self.bottom_color = defaults.bottom_color;
+        self.line_width = defaults.line_width;
+        self.cell_border_width = defaults.cell_border_width;
+        self.cell_border_color = defaults.cell_border_color;
+        self.high_line_color = defaults.high_line_color;
+        self.low_line_color = defaults.low_line_color;
+        self.close_line_color = defaults.close_line_color;
+        self.area_top_color = defaults.area_top_color;
+        self.area_bottom_color = defaults.area_bottom_color;
+        self.high_line_width = defaults.high_line_width;
+        self.low_line_width = defaults.low_line_width;
+        self.close_line_width = defaults.close_line_width;
+        self.radius = defaults.radius;
+        self.low_color = defaults.low_color;
+        self.high_color = defaults.high_color;
+        self.opacity = defaults.opacity;
+        self.whisker_color = defaults.whisker_color;
+        self.lower_quartile_fill = defaults.lower_quartile_fill;
+        self.upper_quartile_fill = defaults.upper_quartile_fill;
+        self.outlier_color = defaults.outlier_color;
+    }
+
     fn apply(&mut self, patch: FeatureSeriesOptionsPatch) {
         macro_rules! set {
             ($field:ident) => {

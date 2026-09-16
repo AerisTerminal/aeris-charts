@@ -237,7 +237,7 @@ test("trading lines use dedicated hits and render semantic colors through the sh
 
   const url = await page.evaluate(() => window.__chart.take_screenshot().toDataURL("image/png"));
   const image = PNG.sync.read(Buffer.from(url.split(",")[1], "base64"));
-  expect(count_near(image, [247, 82, 95]), "sell order line/label pixels").toBeGreaterThan(100);
+  expect(count_near(image, [245, 158, 10]), "stop-loss order line/label pixels").toBeGreaterThan(100);
   expect(count_near(image, [8, 153, 129]), "long position and buy order pixels").toBeGreaterThan(100);
 });
 
@@ -501,9 +501,9 @@ test("confirmed bracket connector deactivates on an empty-canvas click without r
       for (let dx = -2; dx <= 2; dx += 1) {
         const offset = (y * image.width + x + dx) * 4;
         if (
-          Math.abs(image.data[offset] - 62) <= 12
-          && Math.abs(image.data[offset + 1] - 99) <= 12
-          && Math.abs(image.data[offset + 2] - 221) <= 12
+          Math.abs(image.data[offset] - 22) <= 12
+          && Math.abs(image.data[offset + 1] - 142) <= 12
+          && Math.abs(image.data[offset + 2] - 247) <= 12
           && image.data[offset + 3] > 200
         ) count += 1;
       }

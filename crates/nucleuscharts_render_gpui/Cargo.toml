@@ -20,9 +20,9 @@ default = []
 gpui-backend = ["dep:gpui", "dep:image", "dep:smallvec"]
 
 [dependencies]
-nucleuscharts_core = { path = "../nucleuscharts_core", version = "0.1.0" }
-nucleuscharts_engine = { path = "../nucleuscharts_engine", version = "0.1.0" }
-nucleuscharts_render = { path = "../nucleuscharts_render", version = "0.1.0" }
+nucleuscharts_core = { path = "../nucleuscharts_core", version = "0.2.0" }
+nucleuscharts_engine = { path = "../nucleuscharts_engine", version = "0.2.0" }
+nucleuscharts_render = { path = "../nucleuscharts_render", version = "0.2.0" }
 
 # GPUI is sourced from Zed because Nucleus and Axiusflow intentionally track the current pre-1.0
 # API. Both dependencies pin the same reviewed immutable commit; upgrades are explicit manifest and
@@ -47,7 +47,7 @@ gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1057c2cf
     "wayland",
     "x11",
 ] }
-nucleuscharts_native = { path = "../nucleuscharts_native", version = "0.1.0" }
+nucleuscharts_native = { path = "../nucleuscharts_native", version = "0.2.0" }
 sha2 = "0.11"
 tiny-skia = "0.12"
 

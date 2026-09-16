@@ -50,7 +50,7 @@ use crate::telemetry::{FrameTelemetry, FRAME_STATS_LEN};
 use nucleuscharts_core::model::data_layer::SeriesId;
 use nucleuscharts_core::model::data_validation::sanitize_ohlc;
 use nucleuscharts_core::model::plot_list::MismatchDirection;
-use nucleuscharts_core::options::ChartOptions;
+use nucleuscharts_core::options::{ChartOptions, ChartTheme};
 use nucleuscharts_core::scale::price_scale_core::PriceScaleMode;
 use nucleuscharts_engine::{
     crosshair_mode_from_u8, line_style_from_u8, marker_pos, marker_shape, AlertId, AlertLine,
@@ -2804,6 +2804,17 @@ impl NucleusChart {
     /// Malformed JSON is ignored with a console warning. Call `render()` after (roadmap Phase A2).
     pub fn apply_options(&mut self, patch_json: &str) {
         self.inner.borrow_mut().apply_options(patch_json);
+    }
+
+    /// Restore Nucleus-owned visual defaults without changing the live view or chart contents.
+    /// The browser host supplies its selected light/dark theme because theme choice is package state.
+    pub fn reset_style_to_defaults(&mut self, light_theme: bool) {
+        let theme = if light_theme {
+            ChartTheme::Light
+        } else {
+            ChartTheme::Dark
+        };
+        self.inner.borrow_mut().reset_style_to_defaults(theme);
     }
 
     /// Current (deep-merged) chart options as a JSON string.

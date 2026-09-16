@@ -336,7 +336,7 @@ test("crosshair price and time glyphs stay centered in their label boxes", async
     pane_w: window.__chart.time_scale().width(),
     pane_h: window.__chart.wasm.pane_height(0),
   }));
-  const border_w = Math.max(1, Math.floor(geometry.dpr));
+  const border_w = Math.max(1, Math.round(0.5 * geometry.dpr));
   const price_text_left = Math.round(geometry.pane_w * geometry.dpr) + border_w;
   // The neutral crosshair action chip is attached to the chart-facing edge and deliberately
   // shares the configured label fill. Isolate the price-text portion when checking centering.

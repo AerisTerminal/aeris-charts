@@ -11,7 +11,6 @@ use nucleuscharts_render::draw_list::{IRect, Prim, TextAlign};
 
 use crate::{
     axis_metrics::AxisMetrics, AxisFrame, AxisLabel, AxisTextAlign, AxisTextMidpoint, ChartEngine,
-    PANE_SEPARATOR,
 };
 
 impl ChartEngine {
@@ -39,7 +38,12 @@ impl ChartEngine {
         let right_scale = &options.right_price_scale;
         let time_scale = &options.time_scale;
         let watermark = &options.watermark;
-        let border_w = 1f64.max(dpr.floor()) as i32;
+        // Project the canonical CSS border width onto the integer device-pixel draw list. A CSS
+        // half-pixel still gets one fully covered device pixel at low DPR, while higher DPRs
+        // converge on the requested 0.5 CSS px instead of retaining the old 1 CSS px rule.
+        let border_w = (nucleuscharts_core::style::BORDER_WIDTH * dpr)
+            .round()
+            .max(1.0) as i32;
         let parse = |css: &str, fallback: Color| Color::parse_css(css).unwrap_or(fallback);
         let fallback = Color::rgb(
             nucleuscharts_core::style::DEFAULT_BORDER_RGB.0,
@@ -180,7 +184,7 @@ impl ChartEngine {
                     0.0,
                     (separator * dpr).round(),
                     bitmap_w,
-                    (PANE_SEPARATOR * dpr).max(f64::from(border_w)),
+                    f64::from(border_w),
                     separator_color,
                 );
             }
@@ -267,9 +271,8 @@ impl ChartEngine {
                 let bw = right - bx;
                 let bh = bottom - by;
                 last_attach = label.attach_group.map(|group| (group, by + bh));
-                // A hollow chip's outline is a hairline, resolved the same way the axis border
-                // itself is (`border_w` above): rounding 1 CSS px UP at fractional DPRs made it
-                // read as a heavy 2px frame instead of a rule.
+                // A hollow chip's outline remains its own explicit semantic width; axis chrome
+                // above independently uses the canonical design-system border token.
                 let border = label
                     .border
                     .map(|(width, color)| ((width * dpr).floor().max(1.0), color));

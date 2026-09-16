@@ -17,6 +17,7 @@ import { nucleuscharts_error } from "./errors.js";
 import { DEFAULT_SHORTCUTS, install_shortcuts } from "./shortcuts.js";
 import type { shortcut_action } from "./shortcuts.js";
 import { default_theme_name, theme_palette } from "./theme.js";
+import style_tokens from "../../../crates/nucleuscharts_core/style_tokens.json";
 import type {
   chart_api,
   chart_options,
@@ -268,8 +269,8 @@ export async function create_chart_grid(
    *  chart's options change (the axis border token is live, not sampled once). */
   const dividers = new Set<{ el: HTMLDivElement; horizontal: boolean }>();
   /** Paint a divider's line as a solid strip snapped to the ABSOLUTE device-pixel grid:
-   *  exactly `max(1, floor(dpr))` device pixels at full coverage — the same hairline the
-   *  canvas axis border draws (inner_render border_w). A CSS gradient band can't do this
+   *  the canonical border width projected to at least one full device pixel — the same rule the
+   *  engine axis and pane borders use. A CSS gradient band can't do this
    *  (its stop edges anti-alias at fractional positions into a washed-out 2px line), and a
    *  fractional transform re-samples the same way — so the strip is POSITIONED (never
    *  transformed) on an integer device boundary, re-measured at paint time and on restyle. */
@@ -277,7 +278,7 @@ export async function create_chart_grid(
     requestAnimationFrame(() => {
       if (!el.isConnected) return;
       const dpr = window.devicePixelRatio || 1;
-      const device_w = Math.max(1, Math.floor(dpr));
+      const device_w = Math.max(1, Math.round(style_tokens.border_width * dpr));
       const w = device_w / dpr; // css px per full-coverage device pixel(s)
       const rect = el.getBoundingClientRect();
       const edge = horizontal ? rect.left : rect.top;
@@ -305,7 +306,7 @@ export async function create_chart_grid(
     return edge_ids((side === "last" ? node.b : node.a) as layout_node, side);
   };
 
-  /** The draggable split divider: a 5px hit area consuming 1px of layout (negative margins),
+  /** The draggable split divider: a 5px hit area with a canonical-width visible rule,
    *  col/row cursor per direction. The visible line is a solid inner strip snapped to the
    *  device-pixel grid (see `paint_divider`), so it matches the canvas axis border's hairline
    *  under any DPR and any host-page `box-sizing` reset. Dragging adjusts the two sides' flex

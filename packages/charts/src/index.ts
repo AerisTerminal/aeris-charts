@@ -33,7 +33,7 @@ import { chart_impl } from "./impl.js";
 import { ensure_init } from "./impl.js";
 import { enable_accessibility } from "./accessibility.js";
 import type { accessibility_options } from "./accessibility.js";
-import { default_theme_name, theme_options } from "./theme.js";
+import { default_theme_name, theme_options, theme_palette, type theme_name } from "./theme.js";
 import type { chart_api, chart_options, deep_partial, localization_options, tracking_mode_options } from "./types.js";
 
 // ---------------------------------------------------------------------------------------------
@@ -144,12 +144,24 @@ export async function create_chart(
     engine_options = { ...rest, layout: { ...(rest.layout as object), panes: panes_rest } };
     panes_resize = enableResize;
   }
-  wasm.apply_options(JSON.stringify(theme_options(theme ?? default_theme_name)));
+  const selected_theme = (theme ?? default_theme_name) as theme_name;
+  // Named theme helpers carry package-level identity for live apply_options/reset semantics. The
+  // engine only receives the palette projection, never the package-only `theme` key.
+  wasm.apply_options(JSON.stringify(theme_options(theme_palette(selected_theme))));
   if (Object.keys(engine_options).length > 0) {
     wasm.apply_options(JSON.stringify(engine_options));
   }
   const auto_size = options?.autoSize === true;
-  const chart = new chart_impl(wasm, container, gpu_pane, fallback_pane, plugin_canvas, overlay, auto_size);
+  const chart = new chart_impl(
+    wasm,
+    container,
+    gpu_pane,
+    fallback_pane,
+    plugin_canvas,
+    overlay,
+    auto_size,
+    selected_theme,
+  );
   if (
     handle_scroll !== undefined || handle_scale !== undefined || kinetic_scroll !== undefined ||
     tracking_mode !== undefined

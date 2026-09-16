@@ -77,10 +77,16 @@ export function theme_palette(name: theme_name): chart_theme {
   return name === "dark" ? dark_theme : light_theme;
 }
 
-/** Map a theme (name or explicit palette) onto the chart-options tree. */
+/**
+ * Map a theme (name or explicit palette) onto the chart-options tree. Named themes retain their
+ * package-level identity so `chart.apply_options(theme_options(name))` remains compatible with
+ * `reset_style_to_defaults()`. Passing an explicit palette is style-only because it has no
+ * canonical light/dark identity to retain.
+ */
 export function theme_options(theme: theme_name | chart_theme): deep_partial<chart_options> {
   const palette = typeof theme === "string" ? theme_palette(theme) : theme;
   return {
+    ...(typeof theme === "string" ? { theme } : {}),
     layout: {
       background: { type: "solid", color: palette.background },
       textColor: palette.foreground,

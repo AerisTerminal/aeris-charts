@@ -20,7 +20,7 @@ cargo add nucleuscharts_render_wgpu
 cargo add nucleuscharts_native
 ```
 
-The current release is `0.1.0`. All published `nucleuscharts_*` crates in a coordinated release use
+The current release is `0.2.0`. All published `nucleuscharts_*` crates in a coordinated release use
 the same version.
 
 ## Crates

@@ -6,7 +6,7 @@ import { create_offscreen_chart as wasm_create_offscreen_chart, NucleusChart } f
 
 import { ensure_init, time_to_utc_seconds } from "./impl.js";
 import { nucleuscharts_error } from "./errors.js";
-import { default_theme_name, theme_options } from "./theme.js";
+import { default_theme_name, theme_options, theme_palette, type theme_name } from "./theme.js";
 import { FEATURE_KIND_TO_U8, KIND_TO_U8, is_feature_series_kind, is_footprint_series_kind } from "./types.js";
 import type {
   any_series_options,
@@ -165,6 +165,7 @@ export class offscreen_chart {
     height: number,
     dpr: number,
     private wheel_behavior: "auto" | "pan" | "zoom",
+    private selected_theme: theme_name = default_theme_name,
   ) {
     this.width = width;
     this.height = height;
@@ -374,8 +375,19 @@ export class offscreen_chart {
     this.assert_live();
     const { theme, wheel_behavior, engine } = split_offscreen_options(options);
     if (wheel_behavior !== undefined) this.wheel_behavior = wheel_behavior;
-    if (theme !== undefined) this.wasm.apply_options(JSON.stringify(theme_options(theme)));
+    if (theme !== undefined) {
+      this.selected_theme = theme;
+      this.wasm.apply_options(JSON.stringify(theme_options(theme_palette(theme))));
+    }
     if (Object.keys(engine).length > 0) this.wasm.apply_options(JSON.stringify(engine));
+    this.render();
+  }
+
+  /** Restore canonical Nucleus visual defaults for the currently selected theme without resetting
+   * data, scale/view state, or advanced-series semantics. */
+  reset_style_to_defaults(): void {
+    this.assert_live();
+    this.wasm.reset_style_to_defaults(this.selected_theme === "light");
     this.render();
   }
 
@@ -673,7 +685,8 @@ export async function create_offscreen_chart(
     false,
     init.force_fallback_adapter === true,
   );
-  wasm.apply_options(JSON.stringify(theme_options(theme ?? default_theme_name)));
+  const selected_theme = theme ?? default_theme_name;
+  wasm.apply_options(JSON.stringify(theme_options(theme_palette(selected_theme))));
   if (Object.keys(engine_options).length > 0) {
     wasm.apply_options(JSON.stringify(engine_options));
   }
@@ -686,7 +699,7 @@ export async function create_offscreen_chart(
     wasm.set_series_type(KIND_TO_U8[initial_kind]);
   }
   const chart = new offscreen_chart(
-    wasm, gpu_canvas, fallback_canvas, width, height, dpr, wheel_behavior ?? "auto",
+    wasm, gpu_canvas, fallback_canvas, width, height, dpr, wheel_behavior ?? "auto", selected_theme,
   );
   chart.render();
   return chart;
