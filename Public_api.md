@@ -2,7 +2,7 @@
 
 ## Supported product surface
 
-The supported product is the pre-1.0 browser package `@nucleuscharts/financial`. Its root ESM
+The supported product is the pre-1.0 browser package `@axiusflowhq/financial`. Its root ESM
 entry point and `./design.css` are the only npm export paths. The supported root surface is:
 
 - chart creation and initialization;

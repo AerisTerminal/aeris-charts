@@ -1,6 +1,6 @@
 # Nucleus Charts evidence benchmarks
 
-This subsystem is the source of truth for Nucleus Charts performance, artifact-size, and memory claims. It measures the production `@nucleuscharts/financial` package through its public browser API and keeps every number tied to source, environment, scenario, dataset, and raw samples. It does not optimize the product and it does not manufacture unsupported values.
+This subsystem is the source of truth for Nucleus Charts performance, artifact-size, and memory claims. It measures the production `@axiusflowhq/financial` package through its public browser API and keeps every number tied to source, environment, scenario, dataset, and raw samples. It does not optimize the product and it does not manufacture unsupported values.
 
 ## Requirements
 

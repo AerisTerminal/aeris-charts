@@ -1,5 +1,5 @@
 /**
- * Public data, option, and handle types for `@nucleuscharts/financial` (snake_case). Extracted from
+ * Public data, option, and handle types for `@axiusflowhq/financial` (snake_case). Extracted from
  * `index.ts`.
  */
 

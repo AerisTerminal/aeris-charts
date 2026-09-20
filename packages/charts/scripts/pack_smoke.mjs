@@ -57,19 +57,19 @@ try {
   run("npm", ["install", "--silent", "--no-audit", "--no-fund", join(pkg_dir, tgz)], scratch);
 
   // 3. Import the installed module (must be side-effect-free) and check the API surface.
-  const entry = join(scratch, "node_modules", "@nucleuscharts", "financial", "dist", "index.js");
+  const entry = join(scratch, "node_modules", "@axiusflowhq", "financial", "dist", "index.js");
   const mod = await import(pathToFileURL(entry).href);
   assert.equal(typeof mod.create_chart, "function", "create_chart not exported");
   assert.equal(typeof mod.init_wasm, "function", "init_wasm not exported");
 
   // 4. The wasm binary shipped with real content.
   const wasm = statSync(
-    join(scratch, "node_modules", "@nucleuscharts", "financial", "dist", "nucleuscharts_wasm_bg.wasm"),
+    join(scratch, "node_modules", "@axiusflowhq", "financial", "dist", "nucleuscharts_wasm_bg.wasm"),
   );
   assert.ok(wasm.size > 100_000, `wasm binary suspiciously small (${wasm.size} bytes)`);
 
   const pkg = JSON.parse(
-    readFileSync(join(scratch, "node_modules", "@nucleuscharts", "financial", "package.json"), "utf8"),
+    readFileSync(join(scratch, "node_modules", "@axiusflowhq", "financial", "package.json"), "utf8"),
   );
   assert.equal(pkg.license, "PolyForm-Noncommercial-1.0.0");
 

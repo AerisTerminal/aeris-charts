@@ -38,8 +38,8 @@
     },
     {
       "path": "index.d.ts",
-      "bytes": 2004,
-      "sha256": "f00b6221b6cc3ae5916ada5032195ed0f7a65f2be017bdfc8709bcbaba7b7b32"
+      "bytes": 2000,
+      "sha256": "ca1875e9dd8e2c073b7dbdc460295989462965fffe94448db356cb59d2da3f92"
     },
     {
       "path": "offscreen.d.ts",
@@ -68,8 +68,8 @@
     },
     {
       "path": "types.d.ts",
-      "bytes": 107235,
-      "sha256": "723e53d86aa558bd219ce76170327728563ac6946f0f38588a4ea3d3d4d92ed2"
+      "bytes": 107233,
+      "sha256": "07b8b676fac4ec8009243a6bd223df2033c3897b32a2b83a602a241f61b9a573"
     }
   ]
 }

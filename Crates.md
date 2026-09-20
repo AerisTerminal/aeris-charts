@@ -41,7 +41,7 @@ tracks a reviewed Zed commit whose API differs from the registry `gpui` release.
 ## License
 
 Nucleus Charts is source-available under the
-[PolyForm Noncommercial License 1.0.0](https://github.com/NucleusCharts/financial-charts/blob/main/LICENSE).
+[PolyForm Noncommercial License 1.0.0](https://github.com/Axiusflowhq/financial-charts/blob/main/LICENSE).
 Personal and noncommercial use is free. Business or commercial use requires a paid Commercial
 License. Commercial licensing and custom engineering are available through the
-[project repository](https://github.com/NucleusCharts/financial-charts).
+[project repository](https://github.com/Axiusflowhq/financial-charts).

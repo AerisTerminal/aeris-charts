@@ -3456,7 +3456,7 @@ impl InteractiveDemo {
                 let color = if watermark.color == "rgba(0, 0, 0, 0)" { "#b0b8c480" } else { &watermark.color };
                 p.engine.options.apply_str(&format!(r#"{{"watermark":{{"visible":{on},"text":"{text}","color":"{color}"}}}}"#)).unwrap();
             }),
-            DemoAction::WatermarkText => self.update_root(cx, |p| { let current = &p.engine.options.get().watermark.text; let text = if current == "NUCLEUS" { "@nucleuscharts/financial" } else { "NUCLEUS" }; p.engine.options.apply_str(&format!(r#"{{"watermark":{{"text":"{text}"}}}}"#)).unwrap(); }),
+            DemoAction::WatermarkText => self.update_root(cx, |p| { let current = &p.engine.options.get().watermark.text; let text = if current == "NUCLEUS" { "@axiusflowhq/financial" } else { "NUCLEUS" }; p.engine.options.apply_str(&format!(r#"{{"watermark":{{"text":"{text}"}}}}"#)).unwrap(); }),
             DemoAction::WatermarkColor => self.update_root(cx, |p| { let current = &p.engine.options.get().watermark.color; let color = if current == "#b0b8c480" { "#2962ff80" } else { "#b0b8c480" }; p.engine.options.apply_str(&format!(r#"{{"watermark":{{"color":"{color}"}}}}"#)).unwrap(); }),
             DemoAction::WatermarkSize => self.update_root(cx, |p| { let current = p.engine.options.get().watermark.font_size; let size = if current >= 160.0 { 16.0 } else { current + 4.0 }; p.engine.options.apply_str(&format!(r#"{{"watermark":{{"fontSize":{size}}}}}"#)).unwrap(); }),
             DemoAction::AxisScaling => self.update_root(cx, |p| { p.gesture_config.axis_scale_price = !p.gesture_config.axis_scale_price; p.gesture_config.axis_scale_time = p.gesture_config.axis_scale_price; }),

@@ -1,19 +1,19 @@
 {
-  "name": "@nucleuscharts/financial",
-  "version": "0.10.0",
+  "name": "@axiusflowhq/financial",
+  "version": "0.10.1",
   "type": "module",
   "description": "Financial charting SDK powered by Rust, WebAssembly, and WebGPU.",
   "license": "PolyForm-Noncommercial-1.0.0",
-  "author": "NucleusCharts",
+  "author": "Axiusflow",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/NucleusCharts/financial-charts.git",
+    "url": "git+https://github.com/Axiusflowhq/financial-charts.git",
     "directory": "packages/charts"
   },
   "bugs": {
-    "url": "https://github.com/NucleusCharts/financial-charts/issues"
+    "url": "https://github.com/Axiusflowhq/financial-charts/issues"
   },
-  "homepage": "https://github.com/NucleusCharts/financial-charts#readme",
+  "homepage": "https://github.com/Axiusflowhq/financial-charts#readme",
   "keywords": [
     "nucleuscharts",
     "charts",

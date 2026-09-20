@@ -32,16 +32,16 @@ free, while business or commercial use requires a paid Commercial License.
 
 ## Browser package
 
-The browser SDK is published as `@nucleuscharts/financial` on GitHub Packages. Configure the
+The browser SDK is published as `@axiusflowhq/financial` on GitHub Packages. Configure the
 registry and authenticate with a GitHub token that can read packages before installing:
 
 ```ini
-@nucleuscharts:registry=https://npm.pkg.github.com
+@axiusflowhq:registry=https://npm.pkg.github.com
 //npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
 ```
 
 ```sh
-npm install @nucleuscharts/financial
+npm install @axiusflowhq/financial
 ```
 
 Version tags publish automatically when the tag matches `packages/charts/package.json` exactly
@@ -50,7 +50,7 @@ Version tags publish automatically when the tag matches `packages/charts/package
 Create a chart with the asynchronous, snake-case API:
 
 ```ts
-import { create_chart } from "@nucleuscharts/financial";
+import { create_chart } from "@axiusflowhq/financial";
 
 const container = document.querySelector<HTMLElement>("#chart");
 if (!container) throw new Error("missing chart container");
@@ -79,7 +79,7 @@ geometry, lifecycle, and rendering are shared by every backend; the browser pack
 public data and options at the WASM boundary:
 
 ```ts
-import { create_volume_profile } from "@nucleuscharts/financial";
+import { create_volume_profile } from "@axiusflowhq/financial";
 
 const heatmap = chart.add_series("heatmap", {
   cell_border_width: 1,
@@ -167,7 +167,7 @@ Give the container an explicit size; the chart canvases fill it.
 Import the portable design system once in browser hosts:
 
 ```ts
-import "@nucleuscharts/financial/design.css";
+import "@axiusflowhq/financial/design.css";
 ```
 
 Light is the CSS default. Set `data-theme="dark"` (or class `dark`) on a root element for dark
@@ -231,7 +231,7 @@ products, and internal business systems.
 Commercial terms are available for per-seat, per-product, OEM/embedded, and white-label use.
 NucleusCharts also offers custom engineering for integrations, indicators, chart features,
 rendering backends, performance work, and product-specific implementations. Contact NucleusCharts
-through the [project repository](https://github.com/NucleusCharts/financial-charts) for licensing,
+through the [project repository](https://github.com/Axiusflowhq/financial-charts) for licensing,
 pricing, or custom-development enquiries.
 
 This is not an OSI-approved open-source license because it restricts commercial use. See
@@ -245,6 +245,6 @@ and to build development-only compatibility comparisons. Those references do not
 engine, rendering, or state-management implementation.
 
 Development tests use Lightweight Charts as a pinned Apache-2.0 dependency through its public API.
-That dependency is not included in the published `@nucleuscharts/financial` package. TradingView and
+That dependency is not included in the published `@axiusflowhq/financial` package. TradingView and
 Lightweight Charts are trademarks of their respective owners; Nucleus Charts is not affiliated with
 or endorsed by TradingView. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
