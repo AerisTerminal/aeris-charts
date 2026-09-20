@@ -3388,7 +3388,7 @@ dependencies = [
 
 [[package]]
 name = "nucleuscharts_core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3396,7 +3396,7 @@ dependencies = [
 
 [[package]]
 name = "nucleuscharts_engine"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "nucleuscharts_core",
  "nucleuscharts_indicators",
@@ -3407,11 +3407,11 @@ dependencies = [
 
 [[package]]
 name = "nucleuscharts_indicators"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "nucleuscharts_native"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ab_glyph",
  "fontdb 0.24.0",
@@ -3425,14 +3425,14 @@ dependencies = [
 
 [[package]]
 name = "nucleuscharts_render"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "nucleuscharts_core",
 ]
 
 [[package]]
 name = "nucleuscharts_render_gpui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "gpui",
  "gpui_platform",
@@ -3448,7 +3448,7 @@ dependencies = [
 
 [[package]]
 name = "nucleuscharts_render_wgpu"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bytemuck",
  "nucleuscharts_engine",
@@ -3458,7 +3458,7 @@ dependencies = [
 
 [[package]]
 name = "nucleuscharts_wasm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "console_error_panic_hook",
  "futures-channel",

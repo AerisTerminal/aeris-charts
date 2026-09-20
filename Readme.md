@@ -12,7 +12,8 @@ Rust consumers can use the engine and backends directly:
 cargo add nucleuscharts_engine
 ```
 
-The current coordinated Rust release is `0.2.0` and is available on crates.io:
+The current coordinated Rust release is `0.2.0` and is available on crates.io. Repository source
+is preparing the AGPL-licensed `0.3.0` release:
 
 | Crate | Purpose |
 | --- | --- |
@@ -26,9 +27,9 @@ The current coordinated Rust release is `0.2.0` and is available on crates.io:
 
 The GPUI executor remains available from this repository because it relies on a reviewed Zed commit
 whose API differs from the crates.io `gpui` release. It is deliberately not published as a broken
-registry fallback. All published Nucleus crates in a release use the same version. The
-[license terms](#license) apply equally to crates.io downloads: personal and noncommercial use is
-free, while business or commercial use requires a paid Commercial License.
+registry fallback. All published Nucleus crates in a release use the same version. Existing
+registry artifacts remain under the license bundled with their release; repository source and
+future releases use the [AGPL and commercial dual-license model](#license).
 
 ## Browser package
 
@@ -218,24 +219,15 @@ Reproducible release-package benchmarks live in [`benchmarks/`](benchmarks/READM
 
 ## License
 
-Nucleus Charts is **source-available** under the
-[PolyForm Noncommercial License 1.0.0](LICENSE). Individuals may use, study, modify, and share it
-for personal and other noncommercial purposes. Charitable, educational, public-research,
-public-safety, environmental-protection, and government organizations also receive the
-noncommercial license permissions described in the license.
+Nucleus Charts is open-source software licensed under the
+[GNU Affero General Public License v3.0](LICENSE), identified by the SPDX expression
+`AGPL-3.0-only`. The AGPL permits commercial use, modification, and redistribution subject to its
+copyleft and corresponding-source requirements, including its network-interaction provisions.
 
-**Business or commercial use requires a paid Commercial License.** This includes use by companies,
-commercial organizations, sole proprietors, consultants working for clients, revenue-generating
-products, and internal business systems.
-
-Commercial terms are available for per-seat, per-product, OEM/embedded, and white-label use.
-NucleusCharts also offers custom engineering for integrations, indicators, chart features,
-rendering backends, performance work, and product-specific implementations. Contact NucleusCharts
-through the [project repository](https://github.com/Axiusflowhq/financial-charts) for licensing,
-pricing, or custom-development enquiries.
-
-This is not an OSI-approved open-source license because it restricts commercial use. See
-[LICENSE](LICENSE) for the controlling legal terms.
+Organizations that cannot comply with the AGPL may obtain a separate Axiusflow Commercial License
+for proprietary integration, redistribution, OEM/embedded use, white-label use, support, and custom
+engineering. The commercial option is a separate agreement; it does not add restrictions to the
+public AGPL grant. See [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md).
 
 ## Independent development and third-party references
 

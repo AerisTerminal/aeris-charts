@@ -20,8 +20,9 @@ cargo add nucleuscharts_render_wgpu
 cargo add nucleuscharts_native
 ```
 
-The current release is `0.2.0`. All published `nucleuscharts_*` crates in a coordinated release use
-the same version.
+The repository is preparing coordinated release `0.3.0`. All published `nucleuscharts_*` crates in
+a coordinated release use the same version. Previously published artifacts retain the license
+bundled with their release.
 
 ## Crates
 
@@ -40,8 +41,8 @@ tracks a reviewed Zed commit whose API differs from the registry `gpui` release.
 
 ## License
 
-Nucleus Charts is source-available under the
-[PolyForm Noncommercial License 1.0.0](https://github.com/Axiusflowhq/financial-charts/blob/main/LICENSE).
-Personal and noncommercial use is free. Business or commercial use requires a paid Commercial
-License. Commercial licensing and custom engineering are available through the
-[project repository](https://github.com/Axiusflowhq/financial-charts).
+Nucleus Charts is open-source software under the
+[GNU Affero General Public License v3.0](https://github.com/Axiusflowhq/financial-charts/blob/main/LICENSE),
+identified by `AGPL-3.0-only`. A separate commercial license is available for proprietary,
+OEM/embedded, and white-label use; see the
+[commercial licensing notice](https://github.com/Axiusflowhq/financial-charts/blob/main/COMMERCIAL_LICENSE.md).

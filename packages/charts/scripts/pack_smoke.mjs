@@ -71,7 +71,7 @@ try {
   const pkg = JSON.parse(
     readFileSync(join(scratch, "node_modules", "@axiusflowhq", "financial", "package.json"), "utf8"),
   );
-  assert.equal(pkg.license, "PolyForm-Noncommercial-1.0.0");
+  assert.equal(pkg.license, "AGPL-3.0-only");
 
   console.log(`pack smoke OK: ${tgz} (${files.length} files, wasm ${(wasm.size / 1024).toFixed(0)} kB)`);
   rmSync(join(pkg_dir, tgz), { force: true });
