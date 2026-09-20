@@ -26,6 +26,7 @@ const generatedAllowed = [
 const generated = ["packages/charts/pkg", "packages/charts/dist", "examples/web_demo/pkg", "examples/web_demo/dist"];
 // Compliance text is copied verbatim from third parties and is not an owned namespace surface.
 const content_exempt_prefixes = ["third_party_licenses/"];
+const content_exempt_names = new Set(["LICENSE"]);
 const failures = [];
 const retired_namespace = new RegExp(`(?<![A-Za-z0-9_])${retired}(?![A-Za-z0-9_])`, "i");
 
@@ -45,7 +46,8 @@ const tracked = execFileSync("git", ["ls-files", "--cached", "--others", "--excl
   .split("\0")
   .filter((path) => path && existsSync(join(repo, path)));
 for (const path of tracked) {
-  if (content_exempt_prefixes.some((prefix) => path.startsWith(prefix))) continue;
+  const name = path.split("/").at(-1);
+  if (content_exempt_names.has(name) || content_exempt_prefixes.some((prefix) => path.startsWith(prefix))) continue;
   inspect(join(repo, path), path);
 }
 
@@ -53,6 +55,7 @@ function inspectTree(relative) {
   const root = join(repo, relative);
   if (!existsSync(root)) return;
   for (const entry of readdirSync(root)) {
+    if (content_exempt_names.has(entry)) continue;
     const path = join(root, entry);
     const label = join(relative, entry).replaceAll("\\", "/");
     if (statSync(path).isDirectory()) inspectTree(label);
