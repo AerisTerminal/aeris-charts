@@ -300,8 +300,10 @@ Before architectural implementation:
 2. Convert the relevant benchmark observations into enforced budgets.
 3. Add a compact compatibility fixture covering every existing financial series, pane, named scale,
    drawing, indicator, and interaction path affected by domain-aware panes.
-4. Define the public general-series data shapes and axis vocabulary in an API proposal.
-5. Define which chart combinations may share a pane and which require separate plot regions.
+4. Define the public general-series data shapes and axis vocabulary in an API proposal. The
+   concrete proposal is maintained in [`General_charts_api.md`](General_charts_api.md).
+5. Define which chart combinations may share a pane and which require separate plot regions. The
+   compatibility matrix and rejection rules live in that same proposal.
 
 Exit gate: the project can prove that later work has not regressed the existing financial product.
 
