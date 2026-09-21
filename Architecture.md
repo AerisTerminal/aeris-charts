@@ -74,12 +74,34 @@ multiple axes stack in insertion order, vertical widths use the existing grow-fa
 policy, and the resulting rules, titles, and collision-filtered ticks are emitted through the common
 `AxisFrame`. Each side may reserve at most 45% of the space remaining after financial axes; complete
 strips that do not fit are omitted, preserving a nonzero plot and keeping unscissored axis chrome inside
-the chart. Category selection and numeric tick generation are capped at 512 candidates. Automatic,
-temporal, logarithmic, symmetric-log, and polar tick execution remains deferred until their owning data
-or transform slice is implemented; their validated state is not silently rendered as linear. Grid policy
-is likewise retained for the series/grid increment rather than painting grid rules above data in the
-axis layer. Financial panes allocate no general axis storage and retain their established price/time axis
-output unchanged.
+the chart. Category selection and numeric tick generation are capped at 512 candidates. Automatic band
+and linear domains now resolve from visible bound general series without rewriting configured axis
+options; hidden series stop contributing immediately. Temporal, logarithmic, symmetric-log, and polar
+tick execution remains deferred until their owning transform slices are implemented; their validated
+state is not silently rendered as linear. Grid policy is likewise retained for the series/grid increment
+rather than painting grid rules above data in the axis layer. Financial panes allocate no general axis
+storage and retain their established price/time axis output unchanged.
+
+General Cartesian data has a separate engine-owned typed-column store beside `DataLayer`. The first
+storage slice accepts numeric, epoch-millisecond temporal, and interned-category X columns plus numeric Y
+values, explicit validity, and stable generated or caller-provided row identities. Installation and
+replacement validate the complete batch before mutation; NaN/infinity, duplicate explicit IDs, invalid
+category indices, mismatched columns, and over-limit dictionaries are rejected atomically. Dataset and
+row counts, category bytes, and ID bytes are bounded, and retained capacity is attributed separately in
+engine memory evidence. A financial-only chart keeps the store absent and therefore retains zero general
+dataset capacity.
+
+The first concrete general-series binding is a category-band column series. General series have monotonic
+chart-local identities, stable pane/axis/dataset ownership, bounded title/color state, and lazy registry
+allocation. Populated axes and datasets cannot be removed out from under a series, and a pane containing a
+general series cannot be removed until that series is detached. Visible column series contribute their
+category union and finite valid Y values to automatic domains; the zero baseline participates in the Y
+domain. Missing rows remain queryable and accessible but emit no mark. Column geometry is computed once
+in shared CSS-space semantics, reused by frame painting and exact/nearest hit testing, then lowered to
+ordinary ordered `Rect` primitives. Bounded tooltip and accessibility snapshots come from the same rows.
+Canvas2D, retained WebGPU, GPUI, and the native tiny-skia rasterizer all have chart-level parity coverage
+for this slice. The engine seam remains hidden from the browser package until the remaining column
+acceptance work (data labels/selection and boundary ingestion) is complete.
 
 `ChartOptionsStore` keeps typed options canonical for engine and frame reads and retains the raw JSON
 object only for boundary-compatible deep merges and serialization. An option patch is merged and

@@ -4,7 +4,11 @@
 //! both adapter translators, including the marker/round-rect primitives that previously had a
 //! silent WebGPU hole.
 
-use nucleuscharts_engine::{marker_pos, marker_shape, ChartEngine, Marker, PriceLine, SeriesKind};
+use nucleuscharts_engine::{
+    marker_pos, marker_shape, AxisDimension, CategoryScaleType, ChartEngine, GeneralAxisOptions,
+    GeneralScaleType, GeneralSeriesOptions, GeneralXyInput, HorizontalDomain, Marker, PriceLine,
+    SeriesKind,
+};
 use nucleuscharts_render::canvas2d::{execute, Canvas2d, Viewport};
 use nucleuscharts_render::color::Color;
 use nucleuscharts_render::draw_list::{LineStyle, Prim, RasterImage};
@@ -249,6 +253,93 @@ fn one_engine_frame_is_consumable_by_canvas2d_and_webgpu_adapters() {
             canvas_color.a() as f32 / 255.0,
         ];
         assert_eq!(gpu.color, expected, "Canvas2D/WebGPU rect color diverged");
+    }
+}
+
+#[test]
+fn category_column_segment_is_identical_for_canvas2d_and_webgpu_quads() {
+    let mut chart = ChartEngine::new(320.0, 220.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Band,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Band,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: None,
+            categories: vec!["A".into(), "B".into(), "C".into()],
+            category_indices: vec![0, 1, 2],
+            y: vec![-2.0, 5.0, 99.0],
+            y_valid: Some(vec![1, 1, 0]),
+        })
+        .unwrap();
+    let mut options = GeneralSeriesOptions::column(pane, dataset, "x", "y");
+    options.color = Some("#345678".into());
+    chart.add_general_series(options).unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+    let frame = chart.build_frame();
+    let pane_frame = &frame.panes[pane];
+    let expected = Color::parse_css("#345678").unwrap();
+    let segment = chart
+        .frame_series_segments(pane)
+        .iter()
+        .find(|segment| {
+            pane_frame.main
+                [segment.start.min(pane_frame.main.len())..segment.end.min(pane_frame.main.len())]
+                .iter()
+                .any(
+                    |primitive| matches!(primitive, Prim::Rect { color, .. } if *color == expected),
+                )
+        })
+        .expect("general series segment must reach retained backends");
+    let prims = &pane_frame.main[segment.start..segment.end];
+
+    let mut canvas = CountingCanvas::default();
+    execute(
+        prims,
+        &pane_frame.points,
+        &mut canvas,
+        Viewport {
+            width: frame.width as f32,
+            height: frame.height as f32,
+        },
+    );
+    let mut quads = Vec::new();
+    prims_to_instances(prims, &mut quads);
+    assert_eq!(canvas.rects.len(), 2);
+    assert_eq!(quads.len(), 2);
+    for ((canvas_rect, canvas_color), gpu) in canvas.rects.iter().zip(&quads) {
+        assert_eq!(canvas_rect, &gpu.rect);
+        assert_eq!(*canvas_color, expected);
+        assert_eq!(
+            gpu.color,
+            [
+                expected.r() as f32 / 255.0,
+                expected.g() as f32 / 255.0,
+                expected.b() as f32 / 255.0,
+                expected.a() as f32 / 255.0,
+            ]
+        );
     }
 }
 

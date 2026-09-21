@@ -644,7 +644,10 @@ pub fn load_png(path: &str) -> Result<Pixmap, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nucleuscharts_engine::SeriesKind;
+    use nucleuscharts_engine::{
+        AxisDimension, CategoryScaleType, GeneralAxisOptions, GeneralScaleType,
+        GeneralSeriesOptions, GeneralXyInput, HorizontalDomain, SeriesKind,
+    };
     use nucleuscharts_render::draw_list::{Gradient, IRect};
     use std::sync::Arc;
 
@@ -843,6 +846,63 @@ mod tests {
             .filter(|px| px[0..3] != [0xff, 0xff, 0xff])
             .count();
         assert!(non_background > 0);
+    }
+
+    #[test]
+    fn renders_category_columns_from_the_shared_engine_frame() {
+        let mut chart = ChartEngine::new(240.0, 160.0, 1.0);
+        let pane = chart
+            .add_pane_with_domain(
+                true,
+                HorizontalDomain::Category {
+                    scale: CategoryScaleType::Band,
+                },
+            )
+            .unwrap();
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                "x",
+                pane,
+                AxisDimension::X,
+                GeneralScaleType::Band,
+            ))
+            .unwrap();
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                "y",
+                pane,
+                AxisDimension::Y,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        let dataset = chart
+            .create_general_xy_dataset(GeneralXyInput::Category {
+                ids: None,
+                categories: vec!["A".into(), "B".into()],
+                category_indices: vec![0, 1],
+                y: vec![-3.0, 7.0],
+                y_valid: None,
+            })
+            .unwrap();
+        let mut options = GeneralSeriesOptions::column(pane, dataset, "x", "y");
+        options.color = Some("#6a4c93".into());
+        chart.add_general_series(options).unwrap();
+        chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+        let canvas = render_engine(&mut chart);
+        let target = [0x6a, 0x4c, 0x93];
+        let painted = canvas
+            .pixmap()
+            .data()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel| pixel[0..3] == target)
+            .count();
+        assert!(
+            painted > 20,
+            "expected native category-column pixels, got {painted}"
+        );
     }
 
     #[test]

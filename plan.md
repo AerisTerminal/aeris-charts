@@ -321,6 +321,18 @@ Vertical slices:
 - a true XY scatter chart, which validates independent continuous X/Y domains, point hit testing,
   zoom, and dense geometry.
 
+Current implementation progress (2026-09-21):
+
+- the linear/category scale, pane-domain, explicit-axis, shared-layout, and axis-frame foundations are in
+  place without adding general dispatch to the financial row path;
+- the category-column engine slice now owns bounded typed category/Y storage, stable row identity,
+  automatic category/linear domains, positive/negative baseline geometry, missing-row semantics,
+  exact/nearest hit testing, tooltip/accessibility snapshots, lifecycle guards, and chart-level
+  Canvas2D/WebGPU/GPUI/native parity evidence;
+- the category-column slice is not yet an exposed browser feature: boundary object/typed-array ingestion,
+  data-label/selection behavior, and the remaining public API contract must land before it is complete;
+- the true XY scatter vertical slice remains the next major Phase 1 implementation target.
+
 Exit gate: both slices render equivalently in every backend and a financial-only chart shows no
 material regression in output, work, memory, or package size.
 

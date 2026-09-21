@@ -575,7 +575,12 @@ impl ChartEngine {
         state: ValidatedStateV1,
         #[cfg(not(target_arch = "wasm32"))] mut profile: Option<&mut InstallProfile>,
     ) -> Result<PersistenceRestoreResult, ChartError> {
-        if self.panes.len() != 1 || !self.drawings.is_empty() || self.next_drawing_id != 1 {
+        if self.panes.len() != 1
+            || !self.drawings.is_empty()
+            || self.next_drawing_id != 1
+            || self.general_dataset_count() != 0
+            || self.general_series_count() != 0
+        {
             return Err(ChartError::new(
                 ErrorCode::UnsupportedOperation,
                 "state import requires a fresh chart before drawing handles have been issued",
@@ -605,6 +610,8 @@ impl ChartEngine {
         self.panes = panes;
         self.general_horizontal_domains = crate::domains::HorizontalDomainRegistry::new();
         self.general_axes = crate::general_axes::GeneralAxisRegistry::new();
+        self.general_data = None;
+        self.general_series = None;
         self.drawings = state.drawings;
         self.next_pane_id = next_runtime;
         self.next_persistent_pane_id = state.max_persistent_pane_id + 1;

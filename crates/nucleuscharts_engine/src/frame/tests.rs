@@ -7,7 +7,7 @@ use super::conflation::{
 use super::*;
 use crate::{
     AxisDimension, CategoryScaleType, GeneralAxisDomain, GeneralAxisOptions, GeneralScaleType,
-    HorizontalDomain,
+    GeneralSeriesOptions, GeneralXyInput, HorizontalDomain,
 };
 use nucleuscharts_core::model::data_layer::DataLayer;
 use nucleuscharts_core::model::plot_list::{PlotList, PlotValues};
@@ -143,6 +143,171 @@ fn excessive_general_axes_preserve_a_bounded_plot_and_chart_space_chrome() {
             && band.x + band.width <= chart.css_width
             && band.y + band.height <= pane_state.top + pane_state.height
     }));
+}
+
+#[test]
+fn category_column_series_owns_auto_domains_geometry_and_lifecycle() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Band,
+            },
+        )
+        .unwrap();
+    let mut x = GeneralAxisOptions::new("month", pane, AxisDimension::X, GeneralScaleType::Band);
+    x.band_padding_inner = 0.2;
+    chart.add_general_axis(x).unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "revenue",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: None,
+            categories: vec!["Jan".into(), "Feb".into(), "Mar".into()],
+            category_indices: vec![0, 1, 2],
+            y: vec![-5.0, 10.0, 99.0],
+            y_valid: Some(vec![1, 1, 0]),
+        })
+        .unwrap();
+    let mut options = GeneralSeriesOptions::column(pane, dataset, "month", "revenue");
+    options.color = Some("#123456".into());
+    options.title = "Revenue".into();
+    let series = chart.add_general_series(options).unwrap();
+
+    assert_eq!(
+        chart.general_axis_effective_domain("month"),
+        Some(GeneralAxisDomain::Category(vec![
+            "Jan".into(),
+            "Feb".into(),
+            "Mar".into()
+        ]))
+    );
+    assert_eq!(
+        chart.general_axis_effective_domain("revenue"),
+        Some(GeneralAxisDomain::Numeric([-5.0, 10.0]))
+    );
+    assert!(chart.memory_usage().general_series_capacity_bytes > 0);
+
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let axis = chart.build_axis_frame(80.0, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    for category in ["Jan", "Feb", "Mar"] {
+        assert!(axis.labels.iter().any(|label| label.text == category));
+    }
+
+    let plot = chart.general_plot_rect(pane).unwrap();
+    let baseline = nucleuscharts_core::scale::general_scale::LinearScale::new(
+        -5.0,
+        10.0,
+        plot.y + plot.height,
+        plot.y,
+    )
+    .unwrap()
+    .coordinate(0.0)
+    .unwrap()
+    .round() as i32;
+    let expected_color = Color::parse_css("#123456").unwrap();
+    let frame = chart.build_frame();
+    let rects: Vec<_> = frame.panes[pane]
+        .main
+        .iter()
+        .filter_map(|primitive| match primitive {
+            Prim::Rect { rect, color } if *color == expected_color => Some(*rect),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(rects.len(), 2, "missing rows must emit no column geometry");
+    assert!(rects.iter().any(|rect| rect.y == baseline));
+    assert!(rects.iter().any(|rect| rect.y + rect.h == baseline));
+    assert!(chart
+        .frame_series_segments(pane)
+        .iter()
+        .any(|segment| segment.series_id.is_none() && segment.end - segment.start >= rects.len()));
+
+    let mut geometry = Vec::new();
+    chart.visit_general_columns(chart.general_series(series).unwrap(), |item| {
+        geometry.push(item)
+    });
+    assert_eq!(geometry.len(), 2);
+    let first = geometry[0];
+    let hit = chart
+        .general_hit_test(
+            pane,
+            (first.left + first.right) / 2.0,
+            (first.top + first.bottom) / 2.0,
+            crate::GeneralHitMode::Exact,
+        )
+        .unwrap();
+    assert_eq!(hit.series, series);
+    assert_eq!(hit.row, 0);
+    assert_eq!(hit.distance, 0.0);
+
+    let nearest = chart
+        .general_hit_test(
+            pane,
+            first.left - 2.0,
+            (first.top + first.bottom) / 2.0,
+            crate::GeneralHitMode::Nearest { max_distance: 3.0 },
+        )
+        .unwrap();
+    assert_eq!(nearest.row, 0);
+    assert!((nearest.distance - 2.0).abs() < 1e-9);
+
+    let tooltip = chart.general_tooltip_snapshot(series, 0).unwrap();
+    assert_eq!(tooltip.x_label, "Jan");
+    assert_eq!(tooltip.value, Some(-5.0));
+    assert_eq!(tooltip.title, "Revenue");
+    let accessibility = chart
+        .general_accessibility_snapshot(series, 0, usize::MAX)
+        .unwrap();
+    assert_eq!(accessibility.total_rows, 3);
+    assert_eq!(accessibility.items.len(), 3);
+    assert_eq!(accessibility.items[2].x_label, "Mar");
+    assert_eq!(accessibility.items[2].value, None);
+
+    assert!(chart.set_general_series_visible(series, false));
+    assert_eq!(chart.general_axis_effective_domain("month"), None);
+    assert_eq!(chart.general_axis_effective_domain("revenue"), None);
+    assert!(!chart.build_frame().panes[pane].main.iter().any(
+        |primitive| matches!(primitive, Prim::Rect { color, .. } if *color == expected_color)
+    ));
+    assert!(chart.set_general_series_visible(series, true));
+
+    chart
+        .replace_general_xy_dataset(
+            dataset,
+            GeneralXyInput::Category {
+                ids: None,
+                categories: vec!["Jan".into(), "Feb".into(), "Mar".into()],
+                category_indices: vec![0, 1, 2],
+                y: vec![-20.0, 5.0, 99.0],
+                y_valid: Some(vec![1, 1, 0]),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        chart.general_axis_effective_domain("revenue"),
+        Some(GeneralAxisDomain::Numeric([-20.0, 5.0]))
+    );
+    let replaced_axis = chart.build_axis_frame(80.0, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    assert!(replaced_axis.labels.iter().any(|label| label.text == "-20"));
+
+    assert!(!chart.remove_general_axis("month"));
+    assert!(!chart.remove_general_dataset(dataset));
+    assert!(!chart.remove_pane(pane));
+    assert!(chart.remove_general_series(series));
+    assert_eq!(chart.memory_usage().general_series_capacity_bytes, 0);
+    assert!(chart.remove_general_axis("month"));
+    assert!(chart.remove_general_axis("revenue"));
+    assert!(chart.remove_general_dataset(dataset));
+    assert_eq!(chart.memory_usage().general_data_capacity_bytes, 0);
+    assert!(chart.remove_pane(pane));
 }
 
 #[test]

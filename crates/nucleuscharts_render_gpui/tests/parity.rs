@@ -19,8 +19,10 @@
 //! records a bounded residual for.
 
 use nucleuscharts_engine::{
-    ChartEngine, OrderId, OrderKind, OrderRole, OrderSide, OrderStatus, PositionId, PositionSide,
-    SeriesKind, TradingPosition, TradingPriceScale, WorkingOrder,
+    AxisDimension, CategoryScaleType, ChartEngine, GeneralAxisOptions, GeneralScaleType,
+    GeneralSeriesOptions, GeneralXyInput, HorizontalDomain, OrderId, OrderKind, OrderRole,
+    OrderSide, OrderStatus, PositionId, PositionSide, SeriesKind, TradingPosition,
+    TradingPriceScale, WorkingOrder,
 };
 use nucleuscharts_render::canvas2d::{execute as canvas_execute, Canvas2d, Viewport};
 use nucleuscharts_render::color::Color;
@@ -800,6 +802,62 @@ fn a_real_engine_frame_has_draw_call_identical_quads_on_both_backends() {
         assert!(
             total > 50,
             "DPR {dpr}: expected a substantial quad stream, got {total}"
+        );
+    }
+}
+
+#[test]
+fn category_column_engine_frame_has_identical_canvas_and_gpui_quads() {
+    for dpr in [1.0f64, 1.5, 2.0] {
+        let mut engine = ChartEngine::new(420.0, 260.0, dpr);
+        let pane = engine
+            .add_pane_with_domain(
+                true,
+                HorizontalDomain::Category {
+                    scale: CategoryScaleType::Band,
+                },
+            )
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "x",
+                pane,
+                AxisDimension::X,
+                GeneralScaleType::Band,
+            ))
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "y",
+                pane,
+                AxisDimension::Y,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        let dataset = engine
+            .create_general_xy_dataset(GeneralXyInput::Category {
+                ids: None,
+                categories: vec!["A".into(), "B".into(), "C".into()],
+                category_indices: vec![0, 1, 2],
+                y: vec![-4.0, 8.0, 99.0],
+                y_valid: Some(vec![1, 1, 0]),
+            })
+            .unwrap();
+        let mut options = GeneralSeriesOptions::column(pane, dataset, "x", "y");
+        options.color = Some("#4f6b8a".into());
+        engine.add_general_series(options).unwrap();
+        engine.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+        let frame = engine.build_frame();
+        let pane_frame = &frame.panes[pane];
+        let canvas = canvas_rects(&pane_frame.main, &pane_frame.points);
+        let (plan, metrics) = gpui_plan(&pane_frame.main, &pane_frame.points);
+        assert_eq!(canvas.rects.len(), 2, "DPR {dpr}: two columns expected");
+        assert_eq!(metrics.dropped_prims, 0, "DPR {dpr}: no column may drop");
+        assert_eq!(
+            gpui_quads(&plan),
+            canvas.rects,
+            "DPR {dpr}: category-column quads diverged"
         );
     }
 }

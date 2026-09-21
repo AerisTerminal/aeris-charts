@@ -7,8 +7,8 @@ use nucleuscharts_render::color::Color;
 use crate::{
     axis_metrics::{AxisMetrics, AXIS_FONT_SCALE},
     AxisBand, AxisFrame, AxisLabel, AxisLabelCorners, AxisTextAlign, AxisTextMidpoint,
-    CategoryScaleType, ChartEngine, ChartError, ContinuousScaleType, ErrorCode, HorizontalDomain,
-    PaneId, PriceScaleSide,
+    CategoryScaleType, ChartEngine, ChartError, ContinuousScaleType, ErrorCode, GeneralDataset,
+    HorizontalDomain, PaneId, PriceScaleSide,
 };
 
 pub const MAX_GENERAL_AXES: usize = 128;
@@ -329,12 +329,24 @@ impl ChartEngine {
         F: Fn(&str, bool) -> f64,
     {
         let fallback = AxisMetrics::price_strip_width(AxisMetrics::DEFAULT_TEXT_WIDTH, 0.0);
+        let effective_domains: Vec<_> = self
+            .general_axes
+            .iter()
+            .filter_map(|axis| {
+                self.effective_general_axis_domain(axis)
+                    .map(|domain| (axis.handle, domain))
+            })
+            .collect();
         for axis in self.general_axes.iter_mut() {
             if !axis.visible || !matches!(axis.dimension, AxisDimension::Y) {
                 axis.layout_thickness = 0.0;
                 continue;
             }
-            let widest_tick = explicit_tick_labels(axis)
+            let widest_tick = effective_domains
+                .iter()
+                .find(|(handle, _)| *handle == axis.handle)
+                .map(|(_, domain)| tick_labels_for_domain(axis, domain))
+                .unwrap_or_default()
                 .into_iter()
                 .map(|label| measure(&label, false))
                 .fold(0.0_f64, f64::max);
@@ -542,7 +554,10 @@ impl ChartEngine {
                     }
                     AxisDimension::Angle | AxisDimension::Radius => continue,
                 };
-                let ticks = axis_ticks(axis, range.0, range.1, metrics);
+                let Some(domain) = self.effective_general_axis_domain(axis) else {
+                    continue;
+                };
+                let ticks = axis_ticks(axis, &domain, range.0, range.1, metrics);
                 let ticks = collision_filtered_ticks(axis, ticks, measure, metrics);
                 for tick in ticks {
                     if axis.dimension == AxisDimension::Y
@@ -588,6 +603,118 @@ impl ChartEngine {
             + self.financial_axis_side_width(pane_index, PriceScaleSide::Right);
         (self.css_width - financial - 1.0).max(0.0) * 0.45
     }
+
+    pub(crate) fn effective_general_axis_domain(
+        &self,
+        axis: &GeneralAxis,
+    ) -> Option<GeneralAxisDomain> {
+        if axis.domain != GeneralAxisDomain::Auto {
+            return Some(axis.domain.clone());
+        }
+
+        match (axis.dimension, axis.scale) {
+            (AxisDimension::X, GeneralScaleType::Band | GeneralScaleType::Point) => {
+                let mut categories = Vec::new();
+                let mut seen = HashSet::new();
+                for series in self.general_series_iter().filter(|series| {
+                    series.visible()
+                        && series.pane_id() == axis.pane_id
+                        && series.x_axis_id() == axis.id
+                }) {
+                    let Some(dataset) = self.general_dataset(series.dataset()) else {
+                        continue;
+                    };
+                    let Some(values) = dataset.categories() else {
+                        continue;
+                    };
+                    for value in values {
+                        if seen.insert(value.clone()) {
+                            categories.push(value.clone());
+                        }
+                    }
+                }
+                (!categories.is_empty()).then_some(GeneralAxisDomain::Category(categories))
+            }
+            (AxisDimension::X, GeneralScaleType::Temporal) => {
+                let mut bounds: Option<(i64, i64)> = None;
+                for series in self.general_series_iter().filter(|series| {
+                    series.visible()
+                        && series.pane_id() == axis.pane_id
+                        && series.x_axis_id() == axis.id
+                }) {
+                    let Some(values) = self
+                        .general_dataset(series.dataset())
+                        .and_then(GeneralDataset::temporal_x_epoch_ms)
+                    else {
+                        continue;
+                    };
+                    for &value in values {
+                        bounds = Some(match bounds {
+                            Some((low, high)) => (low.min(value), high.max(value)),
+                            None => (value, value),
+                        });
+                    }
+                }
+                bounds.and_then(|(low, high)| expanded_temporal_domain(low, high))
+            }
+            (
+                AxisDimension::X | AxisDimension::Y,
+                GeneralScaleType::Linear
+                | GeneralScaleType::Logarithmic
+                | GeneralScaleType::SymmetricLog,
+            ) => {
+                let mut bounds: Option<(f64, f64)> = None;
+                let mut include_zero = false;
+                for series in self.general_series_iter().filter(|series| {
+                    series.visible()
+                        && series.pane_id() == axis.pane_id
+                        && if axis.dimension == AxisDimension::X {
+                            series.x_axis_id() == axis.id
+                        } else {
+                            series.y_axis_id() == axis.id
+                        }
+                }) {
+                    let Some(dataset) = self.general_dataset(series.dataset()) else {
+                        continue;
+                    };
+                    if axis.dimension == AxisDimension::Y {
+                        if series.kind() == crate::GeneralSeriesKind::Column {
+                            include_zero = true;
+                        }
+                        for (index, &value) in dataset.y().iter().enumerate() {
+                            if !dataset.y_is_valid(index)
+                                || (axis.scale == GeneralScaleType::Logarithmic && value <= 0.0)
+                            {
+                                continue;
+                            }
+                            extend_numeric_bounds(&mut bounds, value);
+                        }
+                    } else if let Some(values) = dataset.numeric_x() {
+                        for &value in values {
+                            if axis.scale == GeneralScaleType::Logarithmic && value <= 0.0 {
+                                continue;
+                            }
+                            extend_numeric_bounds(&mut bounds, value);
+                        }
+                    }
+                }
+                if include_zero && axis.scale != GeneralScaleType::Logarithmic {
+                    extend_numeric_bounds(&mut bounds, 0.0);
+                }
+                bounds.map(|(low, high)| {
+                    let [low, high] = expanded_numeric_domain(low, high);
+                    GeneralAxisDomain::Numeric([low, high])
+                })
+            }
+            _ => None,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn general_axis_effective_domain(&self, id: &str) -> Option<GeneralAxisDomain> {
+        let axis = self.general_axis(id)?;
+        self.effective_general_axis_domain(axis)
+    }
 }
 
 fn fitting_thickness<I>(thicknesses: I, budget: f64) -> f64
@@ -619,8 +746,8 @@ fn horizontal_axis_thickness(axis: &GeneralAxis, metrics: AxisMetrics) -> f64 {
     (1.0 + AxisMetrics::TICK_LENGTH + 4.0 + rows * (metrics.axis + 4.0)).ceil()
 }
 
-fn explicit_tick_labels(axis: &GeneralAxis) -> Vec<String> {
-    match (&axis.scale, &axis.domain) {
+fn tick_labels_for_domain(axis: &GeneralAxis, domain: &GeneralAxisDomain) -> Vec<String> {
+    match (&axis.scale, domain) {
         (GeneralScaleType::Linear, GeneralAxisDomain::Numeric([from, to])) => {
             let Ok(scale) = LinearScale::new(*from, *to, 0.0, 1.0) else {
                 return Vec::new();
@@ -644,11 +771,12 @@ fn explicit_tick_labels(axis: &GeneralAxis) -> Vec<String> {
 
 fn axis_ticks(
     axis: &GeneralAxis,
+    domain: &GeneralAxisDomain,
     range_from: f64,
     range_to: f64,
     metrics: AxisMetrics,
 ) -> Vec<GeneralAxisTick> {
-    match (&axis.scale, &axis.domain) {
+    match (&axis.scale, domain) {
         (GeneralScaleType::Linear, GeneralAxisDomain::Numeric([from, to])) => {
             let Ok(scale) = LinearScale::new(*from, *to, range_from, range_to) else {
                 return Vec::new();
@@ -699,6 +827,34 @@ fn axis_ticks(
             sampled_category_ticks(axis, values, |index| scale.coordinate(index))
         }
         _ => Vec::new(),
+    }
+}
+
+fn extend_numeric_bounds(bounds: &mut Option<(f64, f64)>, value: f64) {
+    *bounds = Some(match *bounds {
+        Some((low, high)) => (low.min(value), high.max(value)),
+        None => (value, value),
+    });
+}
+
+fn expanded_numeric_domain(low: f64, high: f64) -> [f64; 2] {
+    if low < high {
+        return [low, high];
+    }
+    let delta = low.abs().max(1.0) * 0.01;
+    [low - delta, high + delta]
+}
+
+fn expanded_temporal_domain(low: i64, high: i64) -> Option<GeneralAxisDomain> {
+    if low < high {
+        return Some(GeneralAxisDomain::Temporal([low, high]));
+    }
+    if low < MAX_GENERAL_TEMPORAL_MILLISECONDS {
+        Some(GeneralAxisDomain::Temporal([low, low + 1]))
+    } else if low > -MAX_GENERAL_TEMPORAL_MILLISECONDS {
+        Some(GeneralAxisDomain::Temporal([low - 1, low]))
+    } else {
+        None
     }
 }
 
@@ -827,6 +983,9 @@ impl ChartEngine {
     /// Remove an unpopulated general axis. General-series ownership will add the populated-axis
     /// guard at the same registry boundary when those series are introduced.
     pub fn remove_general_axis(&mut self, id: &str) -> bool {
+        if self.general_series_uses_axis(id) {
+            return false;
+        }
         let removed = self.general_axes.remove(id);
         if removed {
             self.invalidate_frame_all();

@@ -44,6 +44,7 @@ mod crosshair;
 mod drawings;
 mod feature_geometry;
 mod footprint_geometry;
+mod general_series_geometry;
 mod native_primitive_geometry;
 mod series_geometry;
 #[cfg(test)]
@@ -2085,6 +2086,23 @@ impl ChartEngine {
             }
             for id in active_p3_drawings {
                 emit_drawing(id, cache, out, &mut retained.drawing_segments[pi]);
+            }
+            // General-domain panes cannot contain financial series. Their engine-owned geometry
+            // still enters the same ordered `main` primitive stream and receives a retained-group
+            // segment so the WebGPU path consumes exactly what Canvas2D/GPUI/native consume.
+            let general_start = out.main.len();
+            self.build_general_series_frame(pi, hpr, vpr, &mut out.main);
+            if out.main.len() != general_start {
+                retained.series_segments[pi].push(FrameSeriesSegment {
+                    series_id: None,
+                    start: general_start,
+                    end: out.main.len(),
+                    revision: self
+                        .frame_invalidation
+                        .scene
+                        .max(self.frame_invalidation.coordinate),
+                    coordinate_revision: self.frame_invalidation.coordinate,
+                });
             }
             // Trailing creation previews (brush + pending) from retained, topmost among chart
             // content but still below chrome/trading (protected layers) and clipped to the pane.

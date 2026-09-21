@@ -14,6 +14,8 @@ mod feature_series;
 mod footprint;
 mod frame;
 mod general_axes;
+mod general_data;
+mod general_series;
 mod hit_test;
 mod host_layout;
 mod indicators;
@@ -70,6 +72,20 @@ pub use general_axes::{
     GeneralScaleType, MAX_GENERAL_AXES, MAX_GENERAL_AXIS_CATEGORIES,
     MAX_GENERAL_AXIS_CATEGORY_BYTES, MAX_GENERAL_AXIS_ID_BYTES, MAX_GENERAL_AXIS_TICKS,
     MAX_GENERAL_AXIS_TITLE_BYTES, MAX_GENERAL_TEMPORAL_MILLISECONDS,
+};
+#[doc(hidden)]
+pub use general_data::{
+    GeneralDataset, GeneralDatasetId, GeneralRowId, GeneralRowIdentity, GeneralXKind,
+    GeneralXyInput, MAX_GENERAL_DATASETS, MAX_GENERAL_DATASET_CATEGORIES,
+    MAX_GENERAL_DATASET_CATEGORY_BYTES, MAX_GENERAL_DATASET_ROWS, MAX_GENERAL_ROW_ID_BYTES,
+    MAX_GENERAL_ROW_ID_BYTES_TOTAL,
+};
+#[doc(hidden)]
+pub use general_series::{
+    GeneralAccessibilityItem, GeneralAccessibilitySnapshot, GeneralHitMode, GeneralSeries,
+    GeneralSeriesHit, GeneralSeriesId, GeneralSeriesKind, GeneralSeriesOptions,
+    GeneralTooltipSnapshot, MAX_GENERAL_ACCESSIBILITY_ITEMS, MAX_GENERAL_SERIES,
+    MAX_GENERAL_SERIES_COLOR_BYTES, MAX_GENERAL_SERIES_TITLE_BYTES,
 };
 pub use hit_test::{SeriesHit, SeriesHitKind};
 pub(crate) use indicators::{IndicatorBinding, IndicatorChange};
@@ -153,6 +169,8 @@ pub struct EngineMemoryUsage {
     pub alert_capacity_bytes: usize,
     pub general_domain_capacity_bytes: usize,
     pub general_axis_bytes: usize,
+    pub general_data_capacity_bytes: usize,
+    pub general_series_capacity_bytes: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -178,6 +196,8 @@ impl EngineMemoryUsage {
             + self.alert_capacity_bytes
             + self.general_domain_capacity_bytes
             + self.general_axis_bytes
+            + self.general_data_capacity_bytes
+            + self.general_series_capacity_bytes
     }
 }
 
@@ -1400,6 +1420,8 @@ pub struct ChartEngine {
     next_persistent_pane_id: u32,
     general_horizontal_domains: domains::HorizontalDomainRegistry,
     general_axes: general_axes::GeneralAxisRegistry,
+    general_data: Option<general_data::GeneralDataStore>,
+    general_series: Option<general_series::GeneralSeriesRegistry>,
     pub options: ChartOptionsStore,
     theme: ChartTheme,
     pub crosshair_mode: CrosshairMode,
@@ -1565,6 +1587,8 @@ impl ChartEngine {
             next_persistent_pane_id: 2,
             general_horizontal_domains: domains::HorizontalDomainRegistry::new(),
             general_axes: general_axes::GeneralAxisRegistry::new(),
+            general_data: None,
+            general_series: None,
             options: ChartOptionsStore::new(),
             theme: ChartTheme::default(),
             crosshair_mode: CrosshairMode::Normal,
@@ -1682,7 +1706,83 @@ impl ChartEngine {
             alert_capacity_bytes: self.alert_state.estimated_bytes(),
             general_domain_capacity_bytes: self.general_horizontal_domains.capacity_bytes(),
             general_axis_bytes: self.general_axes.estimated_bytes(),
+            general_data_capacity_bytes: self
+                .general_data
+                .as_ref()
+                .map_or(0, general_data::GeneralDataStore::estimated_bytes),
+            general_series_capacity_bytes: self
+                .general_series
+                .as_ref()
+                .map_or(0, general_series::GeneralSeriesRegistry::estimated_bytes),
         }
+    }
+
+    /// Staging seam for the engine-owned general column store. Browser support is not exposed until
+    /// a concrete general series owns the dataset and the public package manifest includes it.
+    #[doc(hidden)]
+    pub fn create_general_xy_dataset(
+        &mut self,
+        input: GeneralXyInput,
+    ) -> Result<GeneralDatasetId, ChartError> {
+        let id = if let Some(store) = self.general_data.as_mut() {
+            store.insert(input)?
+        } else {
+            let mut store = general_data::GeneralDataStore::new();
+            let id = store.insert(input)?;
+            self.general_data = Some(store);
+            id
+        };
+        self.invalidate_frame_scene();
+        Ok(id)
+    }
+
+    #[doc(hidden)]
+    pub fn replace_general_xy_dataset(
+        &mut self,
+        id: GeneralDatasetId,
+        input: GeneralXyInput,
+    ) -> Result<(), ChartError> {
+        let bound = self.general_series_uses_dataset(id);
+        let store = self.general_data.as_mut().ok_or_else(|| {
+            ChartError::new(ErrorCode::InvalidHandle, "general dataset handle is stale")
+        })?;
+        store.replace(id, input)?;
+        if bound {
+            self.invalidate_frame_all();
+        } else {
+            self.invalidate_frame_scene();
+        }
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn general_dataset(&self, id: GeneralDatasetId) -> Option<&GeneralDataset> {
+        self.general_data.as_ref()?.get(id)
+    }
+
+    #[doc(hidden)]
+    pub fn general_dataset_count(&self) -> usize {
+        self.general_data
+            .as_ref()
+            .map_or(0, general_data::GeneralDataStore::len)
+    }
+
+    #[doc(hidden)]
+    pub fn remove_general_dataset(&mut self, id: GeneralDatasetId) -> bool {
+        if self.general_series_uses_dataset(id) {
+            return false;
+        }
+        let Some(store) = self.general_data.as_mut() else {
+            return false;
+        };
+        if !store.remove(id) {
+            return false;
+        }
+        if store.is_empty() {
+            self.general_data = None;
+        }
+        self.invalidate_frame_scene();
+        true
     }
 
     /// Read-only time tick state derived from the canonical timestamp sequence.
@@ -2028,6 +2128,9 @@ impl ChartEngine {
             return false;
         }
         let removed_id = self.panes[index].stable_id();
+        if removed_id.is_some_and(|pane_id| self.general_series_uses_pane(pane_id)) {
+            return false;
+        }
         let removed = self.panes.remove(index);
         self.general_horizontal_domains
             .remove(removed.general_horizontal_domain);
@@ -2289,6 +2392,12 @@ impl ChartEngine {
             return false;
         }
         if self.panes[pane_index].preserve_empty {
+            return false;
+        }
+        if self.panes[pane_index]
+            .stable_id()
+            .is_some_and(|pane_id| self.general_series_uses_pane(pane_id))
+        {
             return false;
         }
         if !self.panes[pane_index].named_scales.is_empty() {

@@ -5169,6 +5169,46 @@ fn pane_domains_default_to_financial_time_and_follow_pane_identity() {
 }
 
 #[test]
+fn general_data_is_lazy_atomic_and_releases_capacity_when_empty() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    assert_eq!(chart.general_dataset_count(), 0);
+    assert_eq!(chart.memory_usage().general_data_capacity_bytes, 0);
+
+    let err = chart
+        .create_general_xy_dataset(GeneralXyInput::Numeric {
+            ids: None,
+            x: vec![f64::NAN],
+            y: vec![1.0],
+            y_valid: None,
+        })
+        .unwrap_err();
+    assert_eq!(err.code(), ErrorCode::InvalidData);
+    assert_eq!(chart.general_dataset_count(), 0);
+    assert_eq!(chart.memory_usage().general_data_capacity_bytes, 0);
+
+    let id = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: None,
+            categories: vec!["Jan".into(), "Feb".into()],
+            category_indices: vec![0, 1],
+            y: vec![42.0, 57.0],
+            y_valid: None,
+        })
+        .unwrap();
+    assert_eq!(chart.general_dataset_count(), 1);
+    assert!(chart.memory_usage().general_data_capacity_bytes > 0);
+    assert_eq!(
+        chart.general_dataset(id).unwrap().categories().unwrap(),
+        &["Jan", "Feb"]
+    );
+
+    assert!(chart.remove_general_dataset(id));
+    assert_eq!(chart.general_dataset_count(), 0);
+    assert_eq!(chart.memory_usage().general_data_capacity_bytes, 0);
+    assert!(chart.general_dataset(id).is_none());
+}
+
+#[test]
 fn every_general_domain_variant_is_explicit_and_financial_series_cannot_enter() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     let main_series = chart.series_entries()[0].id;
