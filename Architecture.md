@@ -42,6 +42,13 @@ state. Shared-ring drains may reject individual rows because producer drains can
 
 Platform-free chart fundamentals: validated canonical columnar data, compact plot index/view storage, ranges, options, formatting, price scales, time scales, tick marks, and shared math. It also exposes structure-level payload and capacity attribution for memory evidence; these counters are not allocator, WASM-page, or browser-memory measurements. Media-space calculations remain `f64`; conversion to backend coordinate formats happens at rendering boundaries.
 
+General Cartesian scale foundations live beside, rather than inside, the financial scales. `LinearScale`
+maps continuous numeric domains and emits bounded deterministic ticks; `BandScale` and `PointScale`
+map caller-owned category indices without retaining labels or allocating category state. All three keep
+their math in `f64`, accept reversed ranges, and have no host or renderer dependency. They are not yet
+bound to panes or frames, so existing financial charts continue to instantiate only `TimeScaleCore`
+and `PriceScaleCore` and pay no per-chart runtime or retained-memory cost for these foundations.
+
 `ChartOptionsStore` keeps typed options canonical for engine and frame reads and retains the raw JSON
 object only for boundary-compatible deep merges and serialization. An option patch is merged and
 validated once at mutation time; frame construction borrows the typed value without cloning or
