@@ -13,6 +13,7 @@ mod drawings;
 mod feature_series;
 mod footprint;
 mod frame;
+mod general_axes;
 mod hit_test;
 mod host_layout;
 mod indicators;
@@ -63,6 +64,12 @@ pub use frame::{
     AxisBand, AxisFrame, AxisIcon, AxisLabel, AxisLabelCorners, AxisTextAlign, AxisTextMidpoint,
     ChartFrame, FrameBuildStats, FrameDrawingSegment, FramePane, FramePaneSegments,
     FrameSeriesSegment,
+};
+pub use general_axes::{
+    AxisDimension, AxisPosition, GeneralAxis, GeneralAxisDomain, GeneralAxisOptions,
+    GeneralScaleType, MAX_GENERAL_AXES, MAX_GENERAL_AXIS_CATEGORIES,
+    MAX_GENERAL_AXIS_CATEGORY_BYTES, MAX_GENERAL_AXIS_ID_BYTES, MAX_GENERAL_AXIS_TICKS,
+    MAX_GENERAL_AXIS_TITLE_BYTES, MAX_GENERAL_TEMPORAL_MILLISECONDS,
 };
 pub use hit_test::{SeriesHit, SeriesHitKind};
 pub(crate) use indicators::{IndicatorBinding, IndicatorChange};
@@ -145,6 +152,7 @@ pub struct EngineMemoryUsage {
     pub trading_capacity_bytes: usize,
     pub alert_capacity_bytes: usize,
     pub general_domain_capacity_bytes: usize,
+    pub general_axis_bytes: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -169,6 +177,7 @@ impl EngineMemoryUsage {
             + self.trading_capacity_bytes
             + self.alert_capacity_bytes
             + self.general_domain_capacity_bytes
+            + self.general_axis_bytes
     }
 }
 
@@ -1390,6 +1399,7 @@ pub struct ChartEngine {
     next_pane_id: u32,
     next_persistent_pane_id: u32,
     general_horizontal_domains: domains::HorizontalDomainRegistry,
+    general_axes: general_axes::GeneralAxisRegistry,
     pub options: ChartOptionsStore,
     theme: ChartTheme,
     pub crosshair_mode: CrosshairMode,
@@ -1554,6 +1564,7 @@ impl ChartEngine {
             next_pane_id: 2,
             next_persistent_pane_id: 2,
             general_horizontal_domains: domains::HorizontalDomainRegistry::new(),
+            general_axes: general_axes::GeneralAxisRegistry::new(),
             options: ChartOptionsStore::new(),
             theme: ChartTheme::default(),
             crosshair_mode: CrosshairMode::Normal,
@@ -1670,6 +1681,7 @@ impl ChartEngine {
             trading_capacity_bytes: self.trading_state.estimated_bytes(),
             alert_capacity_bytes: self.alert_state.estimated_bytes(),
             general_domain_capacity_bytes: self.general_horizontal_domains.capacity_bytes(),
+            general_axis_bytes: self.general_axes.estimated_bytes(),
         }
     }
 
@@ -2019,6 +2031,7 @@ impl ChartEngine {
         let removed = self.panes.remove(index);
         self.general_horizontal_domains
             .remove(removed.general_horizontal_domain);
+        self.general_axes.remove_pane(removed_id);
         self.native_pane_primitives
             .retain(|primitive| Some(primitive.pane_id) != removed_id);
         for s in &mut self.series {
@@ -2293,6 +2306,7 @@ impl ChartEngine {
         let removed = self.panes.remove(pane_index);
         self.general_horizontal_domains
             .remove(removed.general_horizontal_domain);
+        self.general_axes.remove_pane(removed.stable_id());
         for s in &mut self.series {
             if s.pane_index != PANELESS && s.pane_index > pane_index {
                 s.pane_index -= 1;

@@ -58,6 +58,18 @@ swaps carry the binding. Until compatible general series and axes are installed,
 cannot move into a general pane, and V1 persistence rejects rather than silently reinterprets a
 general pane. The existing financial frame path never dispatches through the registry.
 
+General axes are chart-owned objects with unique case-sensitive UTF-8 IDs and monotonic internal
+handles. Their options retain dimension, resolved placement, scale type, automatic or explicit
+domain, direction, visibility, title, bounded tick policy, band padding, zero-line policy, and grid
+policy. Validation is atomic: Cartesian X axes must match the pane domain; Cartesian Y axes are
+numeric; polar panes accept only angular-category and radial-linear axes; explicit domains must
+match the scale and category labels must be unique. Axis count, identity/title bytes, tick count,
+category count, and category bytes are bounded and included in engine memory attribution. Pane
+moves preserve axis ownership through stable pane IDs. Explicit temporal bounds are ascending epoch
+milliseconds within JavaScript's exactly representable integer range. Pane removal releases its
+axes. Axis layout and frame emission remain the next shared-engine step; financial panes allocate
+no general axis storage and retain their established price/time axis path unchanged.
+
 `ChartOptionsStore` keeps typed options canonical for engine and frame reads and retains the raw JSON
 object only for boundary-compatible deep merges and serialization. An option patch is merged and
 validated once at mutation time; frame construction borrows the typed value without cloning or

@@ -5254,6 +5254,135 @@ fn v1_persistence_rejects_general_panes_instead_of_reinterpreting_them() {
 }
 
 #[test]
+fn general_axes_are_validated_owned_and_follow_their_pane() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    assert_eq!(chart.memory_usage().general_axis_bytes, 0);
+    let financial_error = chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "financial-y",
+            0,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap_err();
+    assert_eq!(financial_error.code(), ErrorCode::InvalidOptions);
+    assert_eq!(chart.memory_usage().general_axis_bytes, 0);
+
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Band,
+            },
+        )
+        .unwrap();
+    let mut x =
+        GeneralAxisOptions::new("category-x", pane, AxisDimension::X, GeneralScaleType::Band);
+    x.domain = GeneralAxisDomain::Category(vec!["Jan".into(), "Feb".into()]);
+    x.title = Some("Month".into());
+    chart.add_general_axis(x).unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "value-y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+
+    let x_handle = chart.general_axis("category-x").unwrap().handle();
+    let x_axis = chart.general_axis("category-x").unwrap();
+    assert_eq!(x_axis.position(), Some(AxisPosition::Bottom));
+    assert_eq!(x_axis.title(), Some("Month"));
+    assert_eq!(chart.general_axis_pane_index("category-x"), Some(pane));
+    assert_eq!(chart.general_axes(Some(pane)).len(), 2);
+    assert_eq!(chart.general_axes(None).len(), 2);
+    assert!(chart.memory_usage().general_axis_bytes > 0);
+
+    assert!(chart.move_pane(pane, 0));
+    assert_eq!(chart.general_axis_pane_index("category-x"), Some(0));
+    assert_eq!(chart.general_axes(Some(0)).len(), 2);
+
+    assert!(chart.remove_general_axis("category-x"));
+    assert!(chart.general_axis("category-x").is_none());
+    let mut replacement =
+        GeneralAxisOptions::new("category-x", 0, AxisDimension::X, GeneralScaleType::Band);
+    replacement.domain = GeneralAxisDomain::Category(vec!["Mar".into()]);
+    chart.add_general_axis(replacement).unwrap();
+    assert_ne!(chart.general_axis("category-x").unwrap().handle(), x_handle);
+}
+
+#[test]
+fn general_axis_failures_are_atomic_and_pane_removal_releases_axes() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(true, HorizontalDomain::Temporal)
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "time-x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Temporal,
+        ))
+        .unwrap();
+
+    let mut duplicate =
+        GeneralAxisOptions::new("time-x", pane, AxisDimension::Y, GeneralScaleType::Linear);
+    duplicate.domain = GeneralAxisDomain::Numeric([10.0, 0.0]);
+    assert_eq!(
+        chart.add_general_axis(duplicate).unwrap_err().code(),
+        ErrorCode::InvalidOptions
+    );
+    assert_eq!(chart.general_axes(None).len(), 1);
+
+    let mismatch =
+        GeneralAxisOptions::new("bad-x", pane, AxisDimension::X, GeneralScaleType::Linear);
+    assert_eq!(
+        chart.add_general_axis(mismatch).unwrap_err().code(),
+        ErrorCode::InvalidOptions
+    );
+    assert_eq!(chart.general_axes(None).len(), 1);
+
+    assert!(chart.remove_pane(pane));
+    assert_eq!(chart.general_axes.len(), 0);
+    assert!(chart.general_axis("time-x").is_none());
+}
+
+#[test]
+fn general_axis_count_is_bounded_without_mutating_on_overflow() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    for index in 0..MAX_GENERAL_AXES {
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                format!("y-{index}"),
+                pane,
+                AxisDimension::Y,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+    }
+    let error = chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "overflow",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ResourceLimit);
+    assert_eq!(chart.general_axes(None).len(), MAX_GENERAL_AXES);
+}
+
+#[test]
 fn pane_identity_exhaustion_is_recoverable_and_does_not_mutate_topology() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     chart.next_pane_id = u32::MAX;

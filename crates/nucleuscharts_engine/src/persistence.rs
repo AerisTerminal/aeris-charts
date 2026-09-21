@@ -604,6 +604,7 @@ impl ChartEngine {
         let points = state.points;
         self.panes = panes;
         self.general_horizontal_domains = crate::domains::HorizontalDomainRegistry::new();
+        self.general_axes = crate::general_axes::GeneralAxisRegistry::new();
         self.drawings = state.drawings;
         self.next_pane_id = next_runtime;
         self.next_persistent_pane_id = state.max_persistent_pane_id + 1;
