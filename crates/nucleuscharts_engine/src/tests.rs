@@ -5112,6 +5112,148 @@ fn pane_identity_survives_moves_and_never_retargets_after_removal() {
 }
 
 #[test]
+fn pane_domains_default_to_financial_time_and_follow_pane_identity() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    assert_eq!(
+        chart.pane_horizontal_domain(0),
+        Some(HorizontalDomain::FinancialTime)
+    );
+    assert_eq!(chart.memory_usage().general_domain_capacity_bytes, 0);
+
+    let legacy = chart.add_pane(true).unwrap();
+    assert_eq!(
+        chart.pane_horizontal_domain(legacy),
+        Some(HorizontalDomain::FinancialTime)
+    );
+    assert_eq!(chart.memory_usage().general_domain_capacity_bytes, 0);
+
+    let category = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Band,
+            },
+        )
+        .unwrap();
+    let category_id = chart.pane_stable_id(category).unwrap();
+    assert_eq!(
+        chart.pane_horizontal_domain(category),
+        Some(HorizontalDomain::Category {
+            scale: CategoryScaleType::Band
+        })
+    );
+    assert_eq!(chart.general_horizontal_domains.len(), 1);
+    assert!(chart.memory_usage().general_domain_capacity_bytes > 0);
+
+    assert!(chart.move_pane(category, 0));
+    assert_eq!(chart.pane_index_for_id(category_id), Some(0));
+    assert_eq!(
+        chart.pane_horizontal_domain(0),
+        Some(HorizontalDomain::Category {
+            scale: CategoryScaleType::Band
+        })
+    );
+    assert!(chart.swap_panes(0, 1));
+    assert_eq!(chart.pane_index_for_id(category_id), Some(1));
+    assert_eq!(
+        chart.pane_horizontal_domain(1),
+        Some(HorizontalDomain::Category {
+            scale: CategoryScaleType::Band
+        })
+    );
+
+    assert!(chart.remove_pane(1));
+    assert_eq!(chart.pane_index_for_id(category_id), None);
+    assert_eq!(chart.general_horizontal_domains.len(), 0);
+    assert_eq!(chart.pane_horizontal_domain(99), None);
+}
+
+#[test]
+fn every_general_domain_variant_is_explicit_and_financial_series_cannot_enter() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let main_series = chart.series_entries()[0].id;
+    let domains = [
+        HorizontalDomain::Continuous {
+            scale: ContinuousScaleType::Linear,
+        },
+        HorizontalDomain::Continuous {
+            scale: ContinuousScaleType::Logarithmic,
+        },
+        HorizontalDomain::Continuous {
+            scale: ContinuousScaleType::SymmetricLog,
+        },
+        HorizontalDomain::Temporal,
+        HorizontalDomain::Category {
+            scale: CategoryScaleType::Band,
+        },
+        HorizontalDomain::Category {
+            scale: CategoryScaleType::Point,
+        },
+        HorizontalDomain::Polar,
+    ];
+
+    for domain in domains {
+        let pane = chart.add_pane_with_domain(true, domain).unwrap();
+        assert_eq!(chart.pane_horizontal_domain(pane), Some(domain));
+        assert!(!chart.try_set_series_pane(main_series, pane, 1.0));
+        assert_eq!(chart.series_entry(main_series).unwrap().pane_index, 0);
+        assert!(chart.pane_series_ids(pane).is_empty());
+        assert_eq!(
+            chart.add_drawing(
+                DrawingKind::Text,
+                pane,
+                vec![DrawingPoint {
+                    logical: 1.0,
+                    price: 2.0,
+                }],
+                None,
+            ),
+            None
+        );
+    }
+}
+
+#[test]
+fn general_domain_capacity_failure_is_atomic_and_removal_releases_a_slot() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    for _ in 0..MAX_GENERAL_HORIZONTAL_DOMAINS {
+        chart
+            .add_pane_with_domain(true, HorizontalDomain::Temporal)
+            .unwrap();
+    }
+    let pane_count = chart.panes.len();
+    let next_pane_id = chart.next_pane_id;
+    let next_persistent_pane_id = chart.next_persistent_pane_id;
+    let error = chart
+        .add_pane_with_domain(true, HorizontalDomain::Polar)
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ResourceLimit);
+    assert_eq!(chart.panes.len(), pane_count);
+    assert_eq!(chart.next_pane_id, next_pane_id);
+    assert_eq!(chart.next_persistent_pane_id, next_persistent_pane_id);
+
+    assert!(chart.remove_pane(1));
+    let replacement = chart
+        .add_pane_with_domain(true, HorizontalDomain::Polar)
+        .unwrap();
+    assert_eq!(
+        chart.pane_horizontal_domain(replacement),
+        Some(HorizontalDomain::Polar)
+    );
+}
+
+#[test]
+fn v1_persistence_rejects_general_panes_instead_of_reinterpreting_them() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    chart
+        .add_pane_with_domain(true, HorizontalDomain::Temporal)
+        .unwrap();
+    let error = chart.export_state_json().unwrap_err();
+    assert_eq!(error.code(), ErrorCode::UnsupportedOperation);
+    assert!(error.message().contains("financial-time panes"));
+}
+
+#[test]
 fn pane_identity_exhaustion_is_recoverable_and_does_not_mutate_topology() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     chart.next_pane_id = u32::MAX;

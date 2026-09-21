@@ -49,6 +49,15 @@ their math in `f64`, accept reversed ranges, and have no host or renderer depend
 bound to panes or frames, so existing financial charts continue to instantiate only `TimeScaleCore`
 and `PriceScaleCore` and pay no per-chart runtime or retained-memory cost for these foundations.
 
+Each pane has one immutable horizontal-domain binding. Absence of a general binding means
+`financial_time` and continues to use the chart's established `TimeScaleCore`; this is the initial
+pane and every legacy `add_pane` call. Non-financial continuous, temporal, category, and polar
+declarations live in a chart-owned registry that allocates only on first use, is capped at 64 live
+entries, uses monotonic internal identities, and releases entries with their panes. Pane moves and
+swaps carry the binding. Until compatible general series and axes are installed, financial series
+cannot move into a general pane, and V1 persistence rejects rather than silently reinterprets a
+general pane. The existing financial frame path never dispatches through the registry.
+
 `ChartOptionsStore` keeps typed options canonical for engine and frame reads and retains the raw JSON
 object only for boundary-compatible deep merges and serialization. An option patch is merged and
 validated once at mutation time; frame construction borrows the typed value without cloning or

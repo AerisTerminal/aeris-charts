@@ -8,6 +8,7 @@
 mod alerts;
 mod axis_metrics;
 mod axis_primitives;
+mod domains;
 mod drawings;
 mod feature_series;
 mod footprint;
@@ -38,6 +39,9 @@ use std::ops::{Deref, DerefMut};
 pub use alerts::{
     AlertCondition, AlertCreateRequest, AlertFrequency, AlertId, AlertLine, AlertLineStatus,
     AlertPriceScale, AlertSnapshot, MAX_ALERT_LINES,
+};
+pub use domains::{
+    CategoryScaleType, ContinuousScaleType, HorizontalDomain, MAX_GENERAL_HORIZONTAL_DOMAINS,
 };
 pub use drawings::{
     Drawing, DrawingCreationUpdate, DrawingDragPart, DrawingHit, DrawingId, DrawingKind,
@@ -140,6 +144,7 @@ pub struct EngineMemoryUsage {
     pub native_primitive_capacity_bytes: usize,
     pub trading_capacity_bytes: usize,
     pub alert_capacity_bytes: usize,
+    pub general_domain_capacity_bytes: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -163,6 +168,7 @@ impl EngineMemoryUsage {
             + self.native_primitive_capacity_bytes
             + self.trading_capacity_bytes
             + self.alert_capacity_bytes
+            + self.general_domain_capacity_bytes
     }
 }
 
@@ -1066,6 +1072,9 @@ pub struct Pane {
     /// value while issuing fresh live IDs, so pre-import handles become stale rather than
     /// retargeting restored panes.
     persistent_id: Option<u32>,
+    /// `None` is the allocation-free binding to the chart's established financial-time domain.
+    /// General panes resolve this opaque identity through the chart-owned domain registry.
+    general_horizontal_domain: Option<domains::GeneralHorizontalDomainId>,
     pub price_scale: PriceScaleCore,
     pub left_scale: PriceScaleCore,
     pub overlay_scale: PriceScaleCore,
@@ -1111,6 +1120,7 @@ impl Pane {
         Self {
             stable_id,
             persistent_id,
+            general_horizontal_domain: None,
             price_scale: main_scale,
             left_scale: PriceScaleCore::new(PriceScaleCoreOptions::default()),
             overlay_scale,
@@ -1379,6 +1389,7 @@ pub struct ChartEngine {
     tick_marks: TimeTickMarks,
     next_pane_id: u32,
     next_persistent_pane_id: u32,
+    general_horizontal_domains: domains::HorizontalDomainRegistry,
     pub options: ChartOptionsStore,
     theme: ChartTheme,
     pub crosshair_mode: CrosshairMode,
@@ -1542,6 +1553,7 @@ impl ChartEngine {
             tick_marks: TimeTickMarks::new(),
             next_pane_id: 2,
             next_persistent_pane_id: 2,
+            general_horizontal_domains: domains::HorizontalDomainRegistry::new(),
             options: ChartOptionsStore::new(),
             theme: ChartTheme::default(),
             crosshair_mode: CrosshairMode::Normal,
@@ -1657,6 +1669,7 @@ impl ChartEngine {
             native_primitive_capacity_bytes: self.native_primitive_capacity_bytes(),
             trading_capacity_bytes: self.trading_state.estimated_bytes(),
             alert_capacity_bytes: self.alert_state.estimated_bytes(),
+            general_domain_capacity_bytes: self.general_horizontal_domains.capacity_bytes(),
         }
     }
 
@@ -1920,8 +1933,33 @@ impl ChartEngine {
     /// pane and return its index. The new pane's scales inherit the chart-level
     /// `leftPriceScale`/`rightPriceScale` cosmetics, exactly like the reference's `Pane` constructor.
     pub fn add_pane(&mut self, preserve_empty: bool) -> Option<usize> {
-        let (stable_id, persistent_id) = self.take_pane_ids()?;
+        self.add_pane_with_domain(preserve_empty, HorizontalDomain::FinancialTime)
+            .ok()
+    }
+
+    /// Append a pane with explicit horizontal coordinate semantics. Existing `add_pane` callers
+    /// continue to use financial time. General-domain state is allocated only for a non-financial
+    /// pane and remains outside frame construction until a compatible general series is installed.
+    pub fn add_pane_with_domain(
+        &mut self,
+        preserve_empty: bool,
+        domain: HorizontalDomain,
+    ) -> Result<usize, ChartError> {
+        let (stable_id, persistent_id) = self.take_pane_ids().ok_or_else(|| {
+            ChartError::new(ErrorCode::ResourceLimit, "pane identity space is exhausted")
+        })?;
+        let general_horizontal_domain = match self.general_horizontal_domains.register(domain) {
+            Ok(binding) => binding,
+            Err(error) => {
+                // No observable handle was issued. Restore the adjacent counters so failure is an
+                // atomic topology mutation and repeated capacity failures cannot consume pane IDs.
+                self.next_pane_id = stable_id.get();
+                self.next_persistent_pane_id = persistent_id;
+                return Err(error);
+            }
+        };
         let mut pane = Pane::with_chart_ids(stable_id, persistent_id);
+        pane.general_horizontal_domain = general_horizontal_domain;
         pane.preserve_empty = preserve_empty;
         self.apply_chart_scale_options(&mut pane);
         self.panes.push(pane);
@@ -1929,7 +1967,7 @@ impl ChartEngine {
             .borrow_mut()
             .rebuild_panes(&self.drawings, self.panes.len());
         self.invalidate_frame_all();
-        Some(self.panes.len() - 1)
+        Ok(self.panes.len() - 1)
     }
 
     fn take_pane_ids(&mut self) -> Option<(PaneId, u32)> {
@@ -1954,6 +1992,21 @@ impl ChartEngine {
             .position(|pane| pane.stable_id() == Some(stable_id))
     }
 
+    /// Horizontal coordinate semantics bound to the live pane at `index`.
+    pub fn pane_horizontal_domain(&self, index: usize) -> Option<HorizontalDomain> {
+        let binding = self.panes.get(index)?.general_horizontal_domain;
+        let domain = self.general_horizontal_domains.resolve(binding);
+        debug_assert!(
+            domain.is_some(),
+            "live pane must resolve its domain binding"
+        );
+        domain
+    }
+
+    pub(crate) fn pane_uses_financial_time(&self, index: usize) -> bool {
+        self.pane_horizontal_domain(index) == Some(HorizontalDomain::FinancialTime)
+    }
+
     /// reference chart-model.ts `removePane`: refuses the last remaining pane and out-of-range
     /// indices (false). The removed pane's series are NOT moved or removed — they become
     /// pane-less (reference leaves them with `paneForSource` → null): they keep their data but
@@ -1963,7 +2016,9 @@ impl ChartEngine {
             return false;
         }
         let removed_id = self.panes[index].stable_id();
-        self.panes.remove(index);
+        let removed = self.panes.remove(index);
+        self.general_horizontal_domains
+            .remove(removed.general_horizontal_domain);
         self.native_pane_primitives
             .retain(|primitive| Some(primitive.pane_id) != removed_id);
         for s in &mut self.series {
@@ -2117,6 +2172,9 @@ impl ChartEngine {
         pane_index: usize,
         stretch_factor: f64,
     ) -> bool {
+        if pane_index < self.panes.len() && !self.pane_uses_financial_time(pane_index) {
+            return false;
+        }
         let Some((from, current_target)) = self
             .series_entry(id)
             .map(|series| (series.pane_index, series.price_scale_target))
@@ -2176,6 +2234,9 @@ impl ChartEngine {
         stretch_factor: f64,
         price_scale_id: &str,
     ) -> bool {
+        if pane_index < self.panes.len() && !self.pane_uses_financial_time(pane_index) {
+            return false;
+        }
         let Some(from) = self.series_entry(id).map(|series| series.pane_index) else {
             return false;
         };
@@ -2229,7 +2290,9 @@ impl ChartEngine {
         {
             return false;
         }
-        self.panes.remove(pane_index);
+        let removed = self.panes.remove(pane_index);
+        self.general_horizontal_domains
+            .remove(removed.general_horizontal_domain);
         for s in &mut self.series {
             if s.pane_index != PANELESS && s.pane_index > pane_index {
                 s.pane_index -= 1;

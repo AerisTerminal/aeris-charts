@@ -2005,9 +2005,9 @@ impl ChartEngine {
 
     // --- CRUD ---
 
-    /// Add a drawing to a pane; returns its chart-unique id, or `None` for a stale pane index,
-    /// a wrong anchor count for the kind, or non-finite anchors. `options_json` is a
-    /// [`DrawingPatch`] — absent keys take the documented defaults.
+    /// Add a drawing to a financial-time pane; returns its chart-unique id, or `None` for a stale
+    /// or incompatible pane, a wrong anchor count for the kind, or non-finite anchors.
+    /// `options_json` is a [`DrawingPatch`] — absent keys take the documented defaults.
     pub fn add_drawing(
         &mut self,
         kind: DrawingKind,
@@ -2017,6 +2017,7 @@ impl ChartEngine {
     ) -> Option<DrawingId> {
         self.invalidate_frame_drawings();
         if pane_index >= self.panes.len()
+            || !self.pane_uses_financial_time(pane_index)
             || points.len() > MAX_DRAWING_POINTS
             || !kind.valid_point_count(points.len())
         {

@@ -214,6 +214,12 @@ impl ChartEngine {
             .panes
             .iter()
             .map(|pane| {
+                if pane.general_horizontal_domain.is_some() {
+                    return Err(ChartError::new(
+                        ErrorCode::UnsupportedOperation,
+                        "V1 persistence supports only financial-time panes",
+                    ));
+                }
                 let id = pane.persistent_id().ok_or_else(|| {
                     ChartError::new(
                         ErrorCode::SerializationError,
@@ -597,6 +603,7 @@ impl ChartEngine {
         let drawing_count = state.drawings.len();
         let points = state.points;
         self.panes = panes;
+        self.general_horizontal_domains = crate::domains::HorizontalDomainRegistry::new();
         self.drawings = state.drawings;
         self.next_pane_id = next_runtime;
         self.next_persistent_pane_id = state.max_persistent_pane_id + 1;
