@@ -5,11 +5,145 @@ use super::conflation::{
     visible_ohlc_raw_reference, DensityWork, VisibleHistogramRow, VisibleOhlc,
 };
 use super::*;
+use crate::{
+    AxisDimension, CategoryScaleType, GeneralAxisDomain, GeneralAxisOptions, GeneralScaleType,
+    HorizontalDomain,
+};
 use nucleuscharts_core::model::data_layer::DataLayer;
 use nucleuscharts_core::model::plot_list::{PlotList, PlotValues};
 
 const LIVE_TEXT: Color = Color::rgb(0xff, 0xff, 0xff);
 const LIVE_COUNTDOWN: Color = Color::rgba(0xff, 0xff, 0xff, 0xb3);
+
+#[test]
+fn explicit_general_axes_reserve_layout_and_emit_shared_axis_frame() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Band,
+            },
+        )
+        .unwrap();
+    let mut x = GeneralAxisOptions::new("month", pane, AxisDimension::X, GeneralScaleType::Band);
+    x.domain = GeneralAxisDomain::Category(vec!["Jan".into(), "Feb".into(), "Mar".into()]);
+    x.title = Some("Month".into());
+    chart.add_general_axis(x).unwrap();
+    let mut y =
+        GeneralAxisOptions::new("revenue", pane, AxisDimension::Y, GeneralScaleType::Linear);
+    y.domain = GeneralAxisDomain::Numeric([0.0, 100.0]);
+    y.title = Some("Revenue".into());
+    chart.add_general_axis(y).unwrap();
+
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let plot = chart.general_plot_rect(pane).unwrap();
+    let pane_state = &chart.panes[pane];
+    assert!(plot.y >= pane_state.top);
+    assert!(plot.y + plot.height < pane_state.top + pane_state.height);
+    assert!(
+        chart.left_axis_w >= 62.0,
+        "general Y labels reserve a side strip"
+    );
+
+    let frame = chart.build_axis_frame(80.0, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    for expected in ["Jan", "Feb", "Mar", "Month", "Revenue", "0", "100"] {
+        assert!(
+            frame.labels.iter().any(|label| label.text == expected),
+            "missing general-axis label {expected:?}"
+        );
+    }
+    assert!(
+        frame.bands.len() >= 2,
+        "both general axes emit shared chrome"
+    );
+    let mut primitives = Vec::new();
+    chart.build_axis_primitives_into(&frame, &mut primitives, |_| 0.0);
+    assert!(primitives
+        .iter()
+        .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "Jan")));
+    assert!(primitives
+        .iter()
+        .any(|primitive| matches!(primitive, Prim::Rect { .. })));
+}
+
+#[test]
+fn dense_category_axis_collision_work_and_output_are_bounded() {
+    let mut chart = ChartEngine::new(160.0, 240.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Point,
+            },
+        )
+        .unwrap();
+    let mut x = GeneralAxisOptions::new("dense", pane, AxisDimension::X, GeneralScaleType::Point);
+    x.domain = GeneralAxisDomain::Category(
+        (0..2_000)
+            .map(|index| format!("category-{index}"))
+            .collect(),
+    );
+    chart.add_general_axis(x).unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+    let frame = chart.build_axis_frame(80.0, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let category_labels = frame
+        .labels
+        .iter()
+        .filter(|label| label.text.starts_with("category-"))
+        .count();
+    assert!(category_labels > 0);
+    assert!(
+        category_labels < 20,
+        "collision selection must scale with pixels"
+    );
+    assert!(category_labels <= usize::from(crate::MAX_GENERAL_AXIS_TICKS));
+}
+
+#[test]
+fn excessive_general_axes_preserve_a_bounded_plot_and_chart_space_chrome() {
+    let mut chart = ChartEngine::new(240.0, 180.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: crate::ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    for index in 0..20 {
+        let mut x = GeneralAxisOptions::new(
+            format!("x-{index}"),
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Linear,
+        );
+        x.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+        chart.add_general_axis(x).unwrap();
+        let mut y = GeneralAxisOptions::new(
+            format!("y-{index}"),
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        );
+        y.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+        chart.add_general_axis(y).unwrap();
+    }
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let plot = chart.general_plot_rect(pane).unwrap();
+    assert!(plot.width >= 1.0 && plot.height >= 1.0);
+    assert!(chart.pane_left + chart.pane_w + chart.axis_w <= chart.css_width + f64::EPSILON);
+
+    let frame = chart.build_axis_frame(80.0, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let pane_state = &chart.panes[pane];
+    assert!(frame.bands.iter().all(|band| {
+        band.x >= 0.0
+            && band.y >= pane_state.top
+            && band.x + band.width <= chart.css_width
+            && band.y + band.height <= pane_state.top + pane_state.height
+    }));
+}
 
 #[test]
 fn marker_geometry_tracks_reference_spacing_buckets() {

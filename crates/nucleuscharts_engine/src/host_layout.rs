@@ -136,14 +136,16 @@ impl ChartEngine {
             }
         };
         measure_named(self);
+        self.measure_general_axis_widths(&measure, allow_axis_shrink);
 
         let side_total = |engine: &ChartEngine, pane_index: usize, side: PriceScaleSide| {
-            engine.panes[pane_index]
+            let financial = engine.panes[pane_index]
                 .ordered_side_targets(side)
                 .into_iter()
                 .filter(|target| engine.price_scale_visible_for(pane_index, *target))
                 .filter_map(|target| engine.price_scale_axis_width(pane_index, target))
-                .sum::<f64>()
+                .sum::<f64>();
+            financial + engine.general_axis_side_width(pane_index, side)
         };
         let mut axis_w = (0..self.panes.len())
             .map(|pane| side_total(self, pane, PriceScaleSide::Right))

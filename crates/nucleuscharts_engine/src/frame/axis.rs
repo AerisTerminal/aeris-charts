@@ -330,7 +330,7 @@ impl ChartEngine {
             .solid()
     }
 
-    pub(super) fn primary_text_color(&self) -> Color {
+    pub(crate) fn primary_text_color(&self) -> Color {
         let fallback = nucleuscharts_core::style::DEFAULT_FOREGROUND_RGB;
         Color::parse_css(&self.options.get().layout.text_color)
             .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2))
@@ -764,6 +764,7 @@ impl ChartEngine {
             self.append_crosshair_labels(&mut out.labels, &measure);
             self.append_alert_create_chip(&mut out);
         }
+        self.append_general_axis_frame(&mut out, &measure);
         out.separators = self
             .panes
             .iter()

@@ -1,9 +1,14 @@
 use std::collections::HashSet;
 use std::num::NonZeroU32;
 
+use nucleuscharts_core::scale::general_scale::{BandScale, LinearScale, PointScale};
+use nucleuscharts_render::color::Color;
+
 use crate::{
+    axis_metrics::{AxisMetrics, AXIS_FONT_SCALE},
+    AxisBand, AxisFrame, AxisLabel, AxisLabelCorners, AxisTextAlign, AxisTextMidpoint,
     CategoryScaleType, ChartEngine, ChartError, ContinuousScaleType, ErrorCode, HorizontalDomain,
-    PaneId,
+    PaneId, PriceScaleSide,
 };
 
 pub const MAX_GENERAL_AXES: usize = 128;
@@ -118,6 +123,9 @@ pub struct GeneralAxis {
     band_padding_outer: f64,
     zero_line: bool,
     grid_visible: bool,
+    /// Negotiated strip width for vertical axes. Horizontal strip heights are derived from the
+    /// shared font metrics because they do not depend on glyph advance.
+    layout_thickness: f64,
 }
 
 impl GeneralAxis {
@@ -254,6 +262,7 @@ impl GeneralAxisRegistry {
             band_padding_outer: options.band_padding_outer,
             zero_line: options.zero_line,
             grid_visible: options.grid_visible,
+            layout_thickness: 0.0,
         });
         Ok(handle)
     }
@@ -277,8 +286,12 @@ impl GeneralAxisRegistry {
         self.axes.retain(|axis| axis.pane_id != pane_id);
     }
 
-    fn iter(&self) -> impl Iterator<Item = &GeneralAxis> {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &GeneralAxis> {
         self.axes.iter()
+    }
+
+    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut GeneralAxis> {
+        self.axes.iter_mut()
     }
 
     pub(crate) fn estimated_bytes(&self) -> usize {
@@ -293,6 +306,478 @@ impl GeneralAxisRegistry {
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.axes.len()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct GeneralPlotRect {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct GeneralAxisTick {
+    coordinate: f64,
+    label: String,
+}
+
+impl ChartEngine {
+    pub(crate) fn measure_general_axis_widths<F>(&mut self, measure: &F, allow_shrink: bool)
+    where
+        F: Fn(&str, bool) -> f64,
+    {
+        let fallback = AxisMetrics::price_strip_width(AxisMetrics::DEFAULT_TEXT_WIDTH, 0.0);
+        for axis in self.general_axes.iter_mut() {
+            if !axis.visible || !matches!(axis.dimension, AxisDimension::Y) {
+                axis.layout_thickness = 0.0;
+                continue;
+            }
+            let widest_tick = explicit_tick_labels(axis)
+                .into_iter()
+                .map(|label| measure(&label, false))
+                .fold(0.0_f64, f64::max);
+            let title_width = axis
+                .title
+                .as_deref()
+                .map_or(0.0, |title| measure(title, false));
+            let measured = AxisMetrics::price_strip_width(
+                widest_tick
+                    .max(title_width)
+                    .max(AxisMetrics::DEFAULT_TEXT_WIDTH),
+                0.0,
+            )
+            .max(fallback);
+            axis.layout_thickness = if allow_shrink || axis.layout_thickness <= 0.0 {
+                measured
+            } else {
+                axis.layout_thickness.max(measured)
+            };
+        }
+    }
+
+    pub(crate) fn general_axis_side_width(&self, pane_index: usize, side: PriceScaleSide) -> f64 {
+        let Some(pane_id) = self.pane_stable_id(pane_index) else {
+            return 0.0;
+        };
+        let position = match side {
+            PriceScaleSide::Left => AxisPosition::Left,
+            PriceScaleSide::Right => AxisPosition::Right,
+        };
+        let budget = self.general_vertical_axis_budget(pane_index);
+        fitting_thickness(
+            self.general_axes
+                .iter()
+                .filter(|axis| axis.pane_id == pane_id && axis.visible)
+                .filter(|axis| axis.position == Some(position))
+                .map(vertical_axis_thickness),
+            budget,
+        )
+    }
+
+    pub(crate) fn general_plot_rect(&self, pane_index: usize) -> Option<GeneralPlotRect> {
+        let pane = self.panes.get(pane_index)?;
+        let pane_id = pane.stable_id?;
+        let metrics = self.axis_metrics();
+        let side_height = |position| {
+            fitting_thickness(
+                self.general_axes
+                    .iter()
+                    .filter(|axis| axis.pane_id == pane_id && axis.visible)
+                    .filter(|axis| axis.position == Some(position))
+                    .map(|axis| horizontal_axis_thickness(axis, metrics)),
+                (pane.height - 1.0).max(0.0) * 0.45,
+            )
+        };
+        let top = side_height(AxisPosition::Top);
+        let bottom = side_height(AxisPosition::Bottom);
+        Some(GeneralPlotRect {
+            x: self.pane_left,
+            y: pane.top + top,
+            width: self.pane_w,
+            height: (pane.height - top - bottom).max(1.0),
+        })
+    }
+
+    pub(crate) fn append_general_axis_frame<F>(&self, out: &mut AxisFrame, measure: &F)
+    where
+        F: Fn(&str, bool) -> f64,
+    {
+        if self.general_axes.iter().next().is_none() {
+            return;
+        }
+        let metrics = self.axis_metrics();
+        let text_color = self.primary_text_color();
+        let border_color = Color::parse_css(&self.options.get().right_price_scale.border_color)
+            .unwrap_or_else(|| Color::rgb(54, 58, 69));
+
+        for (pane_index, pane) in self.panes.iter().enumerate() {
+            let Some(pane_id) = pane.stable_id else {
+                continue;
+            };
+            let Some(plot) = self.general_plot_rect(pane_index) else {
+                continue;
+            };
+            let financial_left = self.financial_axis_side_width(pane_index, PriceScaleSide::Left);
+            let financial_right = self.financial_axis_side_width(pane_index, PriceScaleSide::Right);
+            let vertical_budget = self.general_vertical_axis_budget(pane_index);
+            let horizontal_budget = (pane.height - 1.0).max(0.0) * 0.45;
+            let mut top_offset = 0.0;
+            let mut bottom_offset = 0.0;
+            let mut left_offset = 0.0;
+            let mut right_offset = 0.0;
+
+            for axis in self
+                .general_axes
+                .iter()
+                .filter(|axis| axis.pane_id == pane_id && axis.visible)
+            {
+                let Some(position) = axis.position else {
+                    continue;
+                };
+                let (strip_x, strip_y, strip_w, strip_h, label_x, label_y, align) = match position {
+                    AxisPosition::Top => {
+                        let thickness = horizontal_axis_thickness(axis, metrics);
+                        if top_offset + thickness > horizontal_budget {
+                            continue;
+                        }
+                        let y = pane.top + top_offset;
+                        top_offset += thickness;
+                        (
+                            plot.x,
+                            y,
+                            plot.width,
+                            thickness,
+                            plot.x + plot.width / 2.0,
+                            y + thickness - metrics.axis / 2.0 - 2.0,
+                            AxisTextAlign::Center,
+                        )
+                    }
+                    AxisPosition::Bottom => {
+                        let thickness = horizontal_axis_thickness(axis, metrics);
+                        if bottom_offset + thickness > horizontal_budget {
+                            continue;
+                        }
+                        let y = plot.y + plot.height + bottom_offset;
+                        bottom_offset += thickness;
+                        (
+                            plot.x,
+                            y,
+                            plot.width,
+                            thickness,
+                            plot.x + plot.width / 2.0,
+                            y + 1.0 + AxisMetrics::TICK_LENGTH + 4.0 + metrics.axis / 2.0,
+                            AxisTextAlign::Center,
+                        )
+                    }
+                    AxisPosition::Left => {
+                        let thickness = vertical_axis_thickness(axis);
+                        if left_offset + thickness > vertical_budget {
+                            continue;
+                        }
+                        let x = self.pane_left - financial_left - left_offset - thickness;
+                        left_offset += thickness;
+                        (
+                            x,
+                            plot.y,
+                            thickness,
+                            plot.height,
+                            x + thickness - AxisMetrics::PRICE_TEXT_INSET,
+                            plot.y + plot.height / 2.0,
+                            AxisTextAlign::Right,
+                        )
+                    }
+                    AxisPosition::Right => {
+                        let thickness = vertical_axis_thickness(axis);
+                        if right_offset + thickness > vertical_budget {
+                            continue;
+                        }
+                        let x = self.pane_left + self.pane_w + financial_right + right_offset;
+                        right_offset += thickness;
+                        (
+                            x,
+                            plot.y,
+                            thickness,
+                            plot.height,
+                            x + AxisMetrics::PRICE_TEXT_INSET,
+                            plot.y + plot.height / 2.0,
+                            AxisTextAlign::Left,
+                        )
+                    }
+                };
+
+                let (line_x, line_y, line_w, line_h) = match position {
+                    AxisPosition::Top => (strip_x, strip_y + strip_h - 1.0, strip_w, 1.0),
+                    AxisPosition::Bottom => (strip_x, strip_y, strip_w, 1.0),
+                    AxisPosition::Left => (strip_x + strip_w - 1.0, strip_y, 1.0, strip_h),
+                    AxisPosition::Right => (strip_x, strip_y, 1.0, strip_h),
+                };
+                out.bands.push(AxisBand {
+                    x: line_x,
+                    y: line_y,
+                    width: line_w,
+                    height: line_h,
+                    color: border_color,
+                });
+
+                let range = match axis.dimension {
+                    AxisDimension::X => {
+                        let from = plot.x;
+                        let to = plot.x + plot.width;
+                        if axis.reverse {
+                            (to, from)
+                        } else {
+                            (from, to)
+                        }
+                    }
+                    AxisDimension::Y => {
+                        let from = plot.y + plot.height;
+                        let to = plot.y;
+                        if axis.reverse {
+                            (to, from)
+                        } else {
+                            (from, to)
+                        }
+                    }
+                    AxisDimension::Angle | AxisDimension::Radius => continue,
+                };
+                let ticks = axis_ticks(axis, range.0, range.1, metrics);
+                let ticks = collision_filtered_ticks(axis, ticks, measure, metrics);
+                for tick in ticks {
+                    if axis.dimension == AxisDimension::Y
+                        && axis.title.is_some()
+                        && (tick.coordinate - label_y).abs() < metrics.axis + axis.min_tick_gap
+                    {
+                        continue;
+                    }
+                    let (x, y) = match axis.dimension {
+                        AxisDimension::X => (tick.coordinate, label_y),
+                        AxisDimension::Y => (label_x, tick.coordinate),
+                        AxisDimension::Angle | AxisDimension::Radius => unreachable!(),
+                    };
+                    out.labels
+                        .push(plain_axis_label(tick.label, x, y, text_color, align));
+                }
+                if let Some(title) = axis.title.as_ref() {
+                    let (x, y) = match position {
+                        AxisPosition::Top => (label_x, strip_y + metrics.axis / 2.0 + 2.0),
+                        AxisPosition::Bottom => {
+                            (label_x, strip_y + strip_h - metrics.axis / 2.0 - 2.0)
+                        }
+                        AxisPosition::Left | AxisPosition::Right => (label_x, label_y),
+                    };
+                    out.labels
+                        .push(plain_axis_label(title.clone(), x, y, text_color, align));
+                }
+            }
+        }
+    }
+
+    fn financial_axis_side_width(&self, pane_index: usize, side: PriceScaleSide) -> f64 {
+        self.panes[pane_index]
+            .ordered_side_targets(side)
+            .into_iter()
+            .filter(|target| self.price_scale_visible_for(pane_index, *target))
+            .filter_map(|target| self.price_scale_axis_width(pane_index, target))
+            .sum()
+    }
+
+    fn general_vertical_axis_budget(&self, pane_index: usize) -> f64 {
+        let financial = self.financial_axis_side_width(pane_index, PriceScaleSide::Left)
+            + self.financial_axis_side_width(pane_index, PriceScaleSide::Right);
+        (self.css_width - financial - 1.0).max(0.0) * 0.45
+    }
+}
+
+fn fitting_thickness<I>(thicknesses: I, budget: f64) -> f64
+where
+    I: Iterator<Item = f64>,
+{
+    thicknesses
+        .scan(0.0, |used, thickness| {
+            if *used + thickness <= budget {
+                *used += thickness;
+                Some(Some(thickness))
+            } else {
+                Some(None)
+            }
+        })
+        .flatten()
+        .sum()
+}
+
+fn vertical_axis_thickness(axis: &GeneralAxis) -> f64 {
+    axis.layout_thickness.max(AxisMetrics::price_strip_width(
+        AxisMetrics::DEFAULT_TEXT_WIDTH,
+        0.0,
+    ))
+}
+
+fn horizontal_axis_thickness(axis: &GeneralAxis, metrics: AxisMetrics) -> f64 {
+    let rows = if axis.title.is_some() { 2.0 } else { 1.0 };
+    (1.0 + AxisMetrics::TICK_LENGTH + 4.0 + rows * (metrics.axis + 4.0)).ceil()
+}
+
+fn explicit_tick_labels(axis: &GeneralAxis) -> Vec<String> {
+    match (&axis.scale, &axis.domain) {
+        (GeneralScaleType::Linear, GeneralAxisDomain::Numeric([from, to])) => {
+            let Ok(scale) = LinearScale::new(*from, *to, 0.0, 1.0) else {
+                return Vec::new();
+            };
+            scale
+                .ticks(axis.tick_count.unwrap_or(6) as usize)
+                .into_iter()
+                .map(format_numeric_tick)
+                .collect()
+        }
+        (GeneralScaleType::Band | GeneralScaleType::Point, GeneralAxisDomain::Category(values)) => {
+            values
+                .iter()
+                .take(MAX_GENERAL_AXIS_TICKS as usize)
+                .cloned()
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn axis_ticks(
+    axis: &GeneralAxis,
+    range_from: f64,
+    range_to: f64,
+    metrics: AxisMetrics,
+) -> Vec<GeneralAxisTick> {
+    match (&axis.scale, &axis.domain) {
+        (GeneralScaleType::Linear, GeneralAxisDomain::Numeric([from, to])) => {
+            let Ok(scale) = LinearScale::new(*from, *to, range_from, range_to) else {
+                return Vec::new();
+            };
+            let span = (range_to - range_from).abs();
+            let target = axis.tick_count.map_or_else(
+                || {
+                    (span / (metrics.axis + axis.min_tick_gap + 8.0))
+                        .floor()
+                        .clamp(2.0, 10.0) as usize
+                },
+                usize::from,
+            );
+            scale
+                .ticks(target)
+                .into_iter()
+                .filter_map(|value| {
+                    scale.coordinate(value).map(|coordinate| GeneralAxisTick {
+                        coordinate,
+                        label: format_numeric_tick(value),
+                    })
+                })
+                .collect()
+        }
+        (GeneralScaleType::Band, GeneralAxisDomain::Category(values)) => {
+            let Ok(scale) = BandScale::new(
+                values.len(),
+                range_from,
+                range_to,
+                axis.band_padding_inner,
+                axis.band_padding_outer,
+                0.5,
+            ) else {
+                return Vec::new();
+            };
+            sampled_category_ticks(axis, values, |index| scale.center(index))
+        }
+        (GeneralScaleType::Point, GeneralAxisDomain::Category(values)) => {
+            let Ok(scale) = PointScale::new(
+                values.len(),
+                range_from,
+                range_to,
+                axis.band_padding_outer,
+                0.5,
+            ) else {
+                return Vec::new();
+            };
+            sampled_category_ticks(axis, values, |index| scale.coordinate(index))
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn sampled_category_ticks<F>(
+    axis: &GeneralAxis,
+    values: &[String],
+    coordinate: F,
+) -> Vec<GeneralAxisTick>
+where
+    F: Fn(usize) -> Option<f64>,
+{
+    let limit = axis
+        .tick_count
+        .map(usize::from)
+        .unwrap_or(MAX_GENERAL_AXIS_TICKS as usize)
+        .min(MAX_GENERAL_AXIS_TICKS as usize);
+    if values.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+    let stride = values.len().div_ceil(limit).max(1);
+    values
+        .iter()
+        .enumerate()
+        .step_by(stride)
+        .filter_map(|(index, label)| {
+            coordinate(index).map(|coordinate| GeneralAxisTick {
+                coordinate,
+                label: label.clone(),
+            })
+        })
+        .collect()
+}
+
+fn collision_filtered_ticks<F>(
+    axis: &GeneralAxis,
+    mut ticks: Vec<GeneralAxisTick>,
+    measure: &F,
+    metrics: AxisMetrics,
+) -> Vec<GeneralAxisTick>
+where
+    F: Fn(&str, bool) -> f64,
+{
+    ticks.sort_by(|left, right| left.coordinate.total_cmp(&right.coordinate));
+    let mut previous_end = f64::NEG_INFINITY;
+    ticks.retain(|tick| {
+        let extent = if axis.dimension == AxisDimension::X {
+            measure(&tick.label, false) / 2.0
+        } else {
+            metrics.axis / 2.0
+        };
+        let start = tick.coordinate - extent;
+        let keep = start >= previous_end + axis.min_tick_gap;
+        if keep {
+            previous_end = tick.coordinate + extent;
+        }
+        keep
+    });
+    ticks
+}
+
+fn format_numeric_tick(value: f64) -> String {
+    value.to_string()
+}
+
+fn plain_axis_label(text: String, x: f64, y: f64, color: Color, align: AxisTextAlign) -> AxisLabel {
+    AxisLabel {
+        text,
+        x,
+        y,
+        color,
+        align,
+        midpoint: AxisTextMidpoint::Label,
+        font_scale: AXIS_FONT_SCALE,
+        bold: false,
+        background: None,
+        background_corners: AxisLabelCorners::NONE,
+        measure_extra: 0.0,
+        attach_group: None,
+        border: None,
     }
 }
 

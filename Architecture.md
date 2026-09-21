@@ -45,9 +45,11 @@ Platform-free chart fundamentals: validated canonical columnar data, compact plo
 General Cartesian scale foundations live beside, rather than inside, the financial scales. `LinearScale`
 maps continuous numeric domains and emits bounded deterministic ticks; `BandScale` and `PointScale`
 map caller-owned category indices without retaining labels or allocating category state. All three keep
-their math in `f64`, accept reversed ranges, and have no host or renderer dependency. They are not yet
-bound to panes or frames, so existing financial charts continue to instantiate only `TimeScaleCore`
-and `PriceScaleCore` and pay no per-chart runtime or retained-memory cost for these foundations.
+their math in `f64`, accept reversed ranges, and have no host or renderer dependency. General axes with
+explicit linear, band, or point domains use these scales during shared layout and axis-frame construction;
+the financial coordinate path does not dispatch through them. Existing financial charts therefore
+continue to instantiate only `TimeScaleCore` and `PriceScaleCore` and pay no retained-memory cost for
+these foundations.
 
 Each pane has one immutable horizontal-domain binding. Absence of a general binding means
 `financial_time` and continues to use the chart's established `TimeScaleCore`; this is the initial
@@ -67,8 +69,17 @@ match the scale and category labels must be unique. Axis count, identity/title b
 category count, and category bytes are bounded and included in engine memory attribution. Pane
 moves preserve axis ownership through stable pane IDs. Explicit temporal bounds are ascending epoch
 milliseconds within JavaScript's exactly representable integer range. Pane removal releases its
-axes. Axis layout and frame emission remain the next shared-engine step; financial panes allocate
-no general axis storage and retain their established price/time axis path unchanged.
+axes. Visible Cartesian axes reserve engine-owned top/bottom plot space and measured left/right strips;
+multiple axes stack in insertion order, vertical widths use the existing grow-fast/shrink-on-full-layout
+policy, and the resulting rules, titles, and collision-filtered ticks are emitted through the common
+`AxisFrame`. Each side may reserve at most 45% of the space remaining after financial axes; complete
+strips that do not fit are omitted, preserving a nonzero plot and keeping unscissored axis chrome inside
+the chart. Category selection and numeric tick generation are capped at 512 candidates. Automatic,
+temporal, logarithmic, symmetric-log, and polar tick execution remains deferred until their owning data
+or transform slice is implemented; their validated state is not silently rendered as linear. Grid policy
+is likewise retained for the series/grid increment rather than painting grid rules above data in the
+axis layer. Financial panes allocate no general axis storage and retain their established price/time axis
+output unchanged.
 
 `ChartOptionsStore` keeps typed options canonical for engine and frame reads and retains the raw JSON
 object only for boundary-compatible deep merges and serialization. An option patch is merged and
