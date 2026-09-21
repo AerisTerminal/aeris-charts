@@ -13,6 +13,10 @@ function verify(ciSource, publishSource) {
     "portable Playwright cannot continue on error");
   assert.match(ciSource, /NUCLEUSCHARTS_PERF_STRICT: "1"/,
     "the configured release perf budget must block CI");
+  assert.match(ciSource, /Enforce production artifact size budgets[\s\S]{0,180}node benchmarks\/benchmark\.mjs size/,
+    "deterministic package and WASM size budgets must block CI");
+  assert.doesNotMatch(ciSource, /Enforce production artifact size budgets[\s\S]{0,180}continue-on-error: true/,
+    "artifact size budgets cannot continue on error");
   assert.match(ciSource, /machine-sensitive[\s\S]{0,220}continue-on-error: true/,
     "machine-calibrated evidence must remain non-authoritative");
   assert.match(publishSource, /tags: \["v\*"\]/,
@@ -28,6 +32,7 @@ function verify(ciSource, publishSource) {
 verify(ci, publish);
 for (const [brokenCi, brokenPublish] of [
   [ci.replace("NUCLEUSCHARTS_PERF_STRICT: \"1\"", "NUCLEUSCHARTS_PERF_STRICT: \"0\""), publish],
+  [ci.replace("node benchmarks/benchmark.mjs size", "node benchmarks/benchmark.mjs test"), publish],
   [ci.replace("id: portable-browser-suite", "id: portable-browser-suite\n        continue-on-error: true"), publish],
   [ci, publish.replace("actions/workflows/ci.yml/runs", "actions/workflows/missing.yml/runs")],
   [ci, publish.replace("npm publish --tag latest", "npm publish")],

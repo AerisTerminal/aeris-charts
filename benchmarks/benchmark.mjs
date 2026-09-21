@@ -7,6 +7,7 @@ import {
   benchmark_root,
   build_provenance,
   compare_runs,
+  evaluate_absolute_budgets,
   load_manifest,
   markdown_report,
   product_version,
@@ -105,6 +106,14 @@ async function build_run(profile, scenarios, execution_command) {
   });
   const filename = await write_run(run_result);
   console.log(filename);
+  const absolute_budgets = evaluate_absolute_budgets(
+    run_result,
+    await read_json(path.join(benchmark_root, "budgets.json")),
+  );
+  if (absolute_budgets.budget_policy.status === "ENFORCED") {
+    console.log(JSON.stringify(absolute_budgets, null, 2));
+  }
+  if (absolute_budgets.evaluations.some(({ status }) => status === "fail")) process.exitCode = 1;
   if (measured.some(({ status }) => status === "failed")) process.exitCode = 1;
   return filename;
 }

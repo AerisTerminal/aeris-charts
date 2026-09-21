@@ -92,7 +92,25 @@ The versioned JSON contract is `schema/result-v1.schema.json`. Runtime validatio
 
 Local raw results are immutable files under `benchmarks/results/v<version>/<environment-id>/` and are gitignored. CI uploads them as artifacts. Release results should be attached immutably to the matching release. `baseline` copies only a clean official release result into `benchmarks/baselines/v<version>/<environment-id>.json` and refuses overwrite. The selected policy is an explicit previous-release baseline; it never rolls silently.
 
-Comparison requires the same scenario version, generator version, seed, dataset configuration, point/series/pane counts, stable environment ID, OS, architecture, CPU, runtime/browser version, GPU identity, viewport, DPR, and refresh-rate metadata. Output includes baseline, current, absolute difference, percentage difference, direction, scenario/environment compatibility, and status. Budgets live only in `budgets.json`. Thresholds are intentionally empty until controlled baseline evidence exists; adding one requires both warning and failure percentages keyed as `<scenario>.<metric>.p50`.
+Comparison requires the same scenario version, generator version, seed, dataset configuration, point/series/pane counts, stable environment ID, OS, architecture, CPU, runtime/browser version, GPU identity, viewport, DPR, and refresh-rate metadata. Output includes baseline, current, absolute difference, percentage difference, direction, scenario/environment compatibility, and status. Budgets live only in `budgets.json`. Relative timing thresholds remain empty until controlled baseline evidence exists; adding one requires both warning and failure percentages keyed as `<scenario>.<metric>.p50`.
+
+Deterministic artifact metrics use blocking `absolute_maximums` under the same key convention and do
+not require a machine baseline. Every benchmark run containing the named scenario evaluates them;
+an exceeded, unavailable, or failed metric exits non-zero. The initial package ceilings were set
+from a clean production build at commit `813230b` and rounded above its measured output:
+
+| Metric | Observed bytes | Blocking maximum |
+| --- | ---: | ---: |
+| npm tarball | 960,989 | 1,050,000 |
+| npm unpacked | 2,811,610 | 3,000,000 |
+| JavaScript raw | 577,227 | 620,000 |
+| JavaScript Brotli | 87,948 | 95,000 |
+| WASM raw | 1,975,672 | 2,100,000 |
+| WASM Brotli | 583,569 | 625,000 |
+
+These byte counts are reproducible filesystem/compression evidence, not an official wall-clock
+benchmark or a public performance claim. A deliberate size increase must explain the product
+tradeoff and update the central ceiling; it must not bypass the evaluator.
 
 `report` generates a human-readable Markdown artifact beside the raw result. `public` generates a stable `benchmark-public.json` containing only measured `public_candidate` metrics from a clean official release. The trace is: website field → public summary → immutable raw result → raw samples → versioned scenario → deterministic dataset/environment → commit.
 

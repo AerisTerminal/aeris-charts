@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
-import { base_environment, benchmark_root, compare_runs, load_manifest, public_summary, validate_run } from "../core.mjs";
+import { base_environment, benchmark_root, compare_runs, evaluate_absolute_budgets, load_manifest, public_summary, validate_run } from "../core.mjs";
 import { parse_pack_manifest } from "../size.mjs";
 import { dataset_metadata, generate_ohlcv, metric, percentile, summarize } from "../shared.mjs";
 
@@ -99,6 +99,42 @@ test("comparison enforces scenario, dataset, and environment compatibility", () 
   assert.equal(compare_runs(baseline, current).comparisons[0].build_compatible, false);
   assert.throws(() => compare_runs(baseline, baseline, { thresholds: { "historical-candlestick-10k.set_data_api_ms.p50": { warning_percent: 20, fail_percent: 10 } } }), /invalid warning\/failure budget/);
   assert.throws(() => compare_runs(baseline, baseline, { thresholds: { "misspelled.metric.p50": { warning_percent: 20, fail_percent: 50 } } }), /matched no comparable metric/);
+});
+
+test("absolute budgets enforce deterministic metrics without an environment baseline", () => {
+  const run = fixture();
+  const key = "historical-candlestick-10k.set_data_api_ms.p50";
+  const passing = evaluate_absolute_budgets(run, { policy_version: 2, absolute_maximums: { [key]: 2 } });
+  assert.deepEqual(passing.budget_policy, { status: "ENFORCED", threshold_count: 1 });
+  assert.deepEqual(passing.evaluations[0], {
+    key,
+    scenario: "historical-candlestick-10k",
+    metric: "set_data_api_ms",
+    statistic: "p50",
+    maximum: 2,
+    current: 2,
+    status: "pass",
+    reason: null,
+  });
+
+  const failing = evaluate_absolute_budgets(run, { absolute_maximums: { [key]: 1 } });
+  assert.equal(failing.evaluations[0].status, "fail");
+  assert.deepEqual(
+    evaluate_absolute_budgets(run, { absolute_maximums: { "package-release-artifacts.wasm_raw_bytes.p50": 1 } }).budget_policy,
+    { status: "NOT APPLICABLE", threshold_count: 0 },
+  );
+  assert.throws(
+    () => evaluate_absolute_budgets(run, { absolute_maximums: { "historical-candlestick-10k.missing.p50": 1 } }),
+    /no metric/,
+  );
+  assert.throws(
+    () => evaluate_absolute_budgets(run, { absolute_maximums: { "malformed": 1 } }),
+    /<scenario>\.<metric>\.p50/,
+  );
+  assert.throws(
+    () => evaluate_absolute_budgets(run, { absolute_maximums: { [key]: -1 } }),
+    /finite non-negative/,
+  );
 });
 
 test("public summary includes only measured public candidates from official clean releases", () => {

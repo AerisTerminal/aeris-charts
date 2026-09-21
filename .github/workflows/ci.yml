@@ -90,6 +90,8 @@ jobs:
       - name: Build (wasm + bundle + types)
         working-directory: packages/charts
         run: npm run build
+      - name: Enforce production artifact size budgets
+        run: node benchmarks/benchmark.mjs size
       - name: Typecheck
         working-directory: packages/charts
         run: npm run typecheck

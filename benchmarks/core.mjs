@@ -238,6 +238,48 @@ export function compare_runs(baseline, current, budgets = { thresholds: {} }) {
   };
 }
 
+export function evaluate_absolute_budgets(run, budgets = { absolute_maximums: {} }) {
+  validate_run(run);
+  assert_record(budgets, "budgets");
+  assert_record(budgets.absolute_maximums, "budgets.absolute_maximums");
+  const scenarios = new Map(run.scenarios.map((scenario) => [scenario.id, scenario]));
+  const evaluations = [];
+  for (const [key, maximum] of Object.entries(budgets.absolute_maximums)) {
+    if (!Number.isFinite(maximum) || maximum < 0) {
+      throw new Error(`${key}: absolute maximum must be a finite non-negative number`);
+    }
+    const first_separator = key.indexOf(".");
+    const last_separator = key.lastIndexOf(".");
+    if (first_separator <= 0 || last_separator <= first_separator || key.slice(last_separator + 1) !== "p50") {
+      throw new Error(`${key}: absolute budget key must be <scenario>.<metric>.p50`);
+    }
+    const scenario_id = key.slice(0, first_separator);
+    const metric_name = key.slice(first_separator + 1, last_separator);
+    const scenario = scenarios.get(scenario_id);
+    if (!scenario) continue;
+    if (scenario.status !== "passed") {
+      evaluations.push({ key, scenario: scenario_id, metric: metric_name, statistic: "p50", maximum, current: null, status: "fail", reason: `scenario_${scenario.status}` });
+      continue;
+    }
+    const metric = scenario.metrics[metric_name];
+    if (!metric) throw new Error(`${key}: absolute budget matched a scenario but no metric`);
+    if (metric.availability !== "measured" || !Number.isFinite(metric.summary?.p50)) {
+      evaluations.push({ key, scenario: scenario_id, metric: metric_name, statistic: "p50", maximum, current: null, status: "fail", reason: `metric_${metric.availability}` });
+      continue;
+    }
+    const current = metric.summary.p50;
+    evaluations.push({ key, scenario: scenario_id, metric: metric_name, statistic: "p50", maximum, current, status: current <= maximum ? "pass" : "fail", reason: null });
+  }
+  return {
+    policy_version: budgets.policy_version ?? null,
+    budget_policy: {
+      status: evaluations.length === 0 ? "NOT APPLICABLE" : "ENFORCED",
+      threshold_count: evaluations.length,
+    },
+    evaluations,
+  };
+}
+
 function render_value(value) {
   return value === null ? "n/a" : Number.isInteger(value) ? String(value) : value.toFixed(3);
 }
