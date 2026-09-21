@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 use std::num::NonZeroU32;
 
-use nucleuscharts_core::scale::general_scale::{BandScale, LinearScale, PointScale};
+use nucleuscharts_core::scale::general_scale::{
+    BandScale, LinearScale, LogScale, PointScale, SymLogScale, DEFAULT_SYMLOG_CONSTANT,
+};
 use nucleuscharts_render::color::Color;
 
 use crate::{
@@ -123,9 +125,72 @@ pub struct GeneralAxis {
     band_padding_outer: f64,
     zero_line: bool,
     grid_visible: bool,
+    /// Runtime viewport for continuous axes. Configured/auto domain remains canonical and this is
+    /// reset independently, matching the financial distinction between data range and visible range.
+    view_domain: Option<[f64; 2]>,
     /// Negotiated strip width for vertical axes. Horizontal strip heights are derived from the
     /// shared font metrics because they do not depend on glyph advance.
     layout_thickness: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum NumericAxisScale {
+    Linear(LinearScale),
+    Logarithmic(LogScale),
+    SymmetricLog(SymLogScale),
+}
+
+impl NumericAxisScale {
+    pub(crate) fn new(
+        scale: GeneralScaleType,
+        domain: [f64; 2],
+        range_from: f64,
+        range_to: f64,
+    ) -> Option<Self> {
+        Some(match scale {
+            GeneralScaleType::Linear => {
+                Self::Linear(LinearScale::new(domain[0], domain[1], range_from, range_to).ok()?)
+            }
+            GeneralScaleType::Logarithmic => {
+                Self::Logarithmic(LogScale::new(domain[0], domain[1], range_from, range_to).ok()?)
+            }
+            GeneralScaleType::SymmetricLog => Self::SymmetricLog(
+                SymLogScale::new(
+                    domain[0],
+                    domain[1],
+                    range_from,
+                    range_to,
+                    DEFAULT_SYMLOG_CONSTANT,
+                )
+                .ok()?,
+            ),
+            _ => return None,
+        })
+    }
+
+    pub(crate) fn coordinate(self, value: f64) -> Option<f64> {
+        match self {
+            Self::Linear(scale) => scale.coordinate(value),
+            Self::Logarithmic(scale) => scale.coordinate(value),
+            Self::SymmetricLog(scale) => scale.coordinate(value),
+        }
+    }
+
+    pub(crate) fn invert(self, coordinate: f64) -> Option<f64> {
+        match self {
+            Self::Linear(scale) => scale.invert(coordinate),
+            Self::Logarithmic(scale) => scale.invert(coordinate),
+            Self::SymmetricLog(scale) => scale.invert(coordinate),
+        }
+    }
+
+    fn ticks(self, target_count: usize) -> Vec<f64> {
+        match self {
+            Self::Linear(scale) => scale.ticks(target_count),
+            Self::Logarithmic(scale) => scale.ticks(target_count),
+            Self::SymmetricLog(scale) => scale.ticks(target_count),
+        }
+    }
 }
 
 impl GeneralAxis {
@@ -262,6 +327,7 @@ impl GeneralAxisRegistry {
             band_padding_outer: options.band_padding_outer,
             zero_line: options.zero_line,
             grid_visible: options.grid_visible,
+            view_domain: None,
             layout_thickness: 0.0,
         });
         Ok(handle)
@@ -269,6 +335,10 @@ impl GeneralAxisRegistry {
 
     fn get(&self, id: &str) -> Option<&GeneralAxis> {
         self.axes.iter().find(|axis| axis.id == id)
+    }
+
+    fn get_mut(&mut self, id: &str) -> Option<&mut GeneralAxis> {
+        self.axes.iter_mut().find(|axis| axis.id == id)
     }
 
     fn remove(&mut self, id: &str) -> bool {
@@ -608,6 +678,13 @@ impl ChartEngine {
         &self,
         axis: &GeneralAxis,
     ) -> Option<GeneralAxisDomain> {
+        if let Some(view) = axis.view_domain {
+            return Some(GeneralAxisDomain::Numeric(view));
+        }
+        self.base_general_axis_domain(axis)
+    }
+
+    fn base_general_axis_domain(&self, axis: &GeneralAxis) -> Option<GeneralAxisDomain> {
         if axis.domain != GeneralAxisDomain::Auto {
             return Some(axis.domain.clone());
         }
@@ -701,9 +778,9 @@ impl ChartEngine {
                 if include_zero && axis.scale != GeneralScaleType::Logarithmic {
                     extend_numeric_bounds(&mut bounds, 0.0);
                 }
-                bounds.map(|(low, high)| {
-                    let [low, high] = expanded_numeric_domain(low, high);
-                    GeneralAxisDomain::Numeric([low, high])
+                bounds.and_then(|(low, high)| {
+                    expanded_numeric_domain_for_scale(axis.scale, low, high)
+                        .map(GeneralAxisDomain::Numeric)
                 })
             }
             _ => None,
@@ -714,6 +791,98 @@ impl ChartEngine {
     pub fn general_axis_effective_domain(&self, id: &str) -> Option<GeneralAxisDomain> {
         let axis = self.general_axis(id)?;
         self.effective_general_axis_domain(axis)
+    }
+
+    #[doc(hidden)]
+    pub fn pan_general_axis(&mut self, id: &str, fraction: f64) -> Result<(), ChartError> {
+        if !fraction.is_finite() {
+            return Err(invalid("general axis pan fraction must be finite"));
+        }
+        let (scale_type, domain) = {
+            let axis = self.general_axis(id).ok_or_else(|| {
+                ChartError::new(ErrorCode::InvalidHandle, "general axis is stale")
+            })?;
+            let GeneralAxisDomain::Numeric(domain) = self
+                .effective_general_axis_domain(axis)
+                .ok_or_else(|| invalid("general axis has no numeric domain to pan"))?
+            else {
+                return Err(invalid("only numeric general axes can pan"));
+            };
+            (axis.scale, domain)
+        };
+        let scale = NumericAxisScale::new(scale_type, domain, 0.0, 1.0)
+            .ok_or_else(|| invalid("general axis numeric transform is invalid"))?;
+        let from = scale
+            .invert(fraction)
+            .ok_or_else(|| invalid("general axis pan exceeds the numeric transform"))?;
+        let to = scale
+            .invert(1.0 + fraction)
+            .ok_or_else(|| invalid("general axis pan exceeds the numeric transform"))?;
+        let axis = self
+            .general_axes
+            .get_mut(id)
+            .ok_or_else(|| ChartError::new(ErrorCode::InvalidHandle, "general axis is stale"))?;
+        axis.view_domain = Some([from.min(to), from.max(to)]);
+        self.invalidate_frame_all();
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn zoom_general_axis(
+        &mut self,
+        id: &str,
+        factor: f64,
+        anchor_value: f64,
+    ) -> Result<(), ChartError> {
+        if !factor.is_finite() || factor <= 0.0 || !anchor_value.is_finite() {
+            return Err(invalid(
+                "general axis zoom requires a positive finite factor and finite anchor",
+            ));
+        }
+        let (scale_type, domain) = {
+            let axis = self.general_axis(id).ok_or_else(|| {
+                ChartError::new(ErrorCode::InvalidHandle, "general axis is stale")
+            })?;
+            let GeneralAxisDomain::Numeric(domain) = self
+                .effective_general_axis_domain(axis)
+                .ok_or_else(|| invalid("general axis has no numeric domain to zoom"))?
+            else {
+                return Err(invalid("only numeric general axes can zoom"));
+            };
+            (axis.scale, domain)
+        };
+        let scale = NumericAxisScale::new(scale_type, domain, 0.0, 1.0)
+            .ok_or_else(|| invalid("general axis numeric transform is invalid"))?;
+        let anchor = scale
+            .coordinate(anchor_value)
+            .filter(|value| (0.0..=1.0).contains(value))
+            .ok_or_else(|| invalid("general axis zoom anchor must be inside the visible domain"))?;
+        let from_unit = anchor + (0.0 - anchor) / factor;
+        let to_unit = anchor + (1.0 - anchor) / factor;
+        let from = scale
+            .invert(from_unit)
+            .ok_or_else(|| invalid("general axis zoom exceeds the numeric transform"))?;
+        let to = scale
+            .invert(to_unit)
+            .ok_or_else(|| invalid("general axis zoom exceeds the numeric transform"))?;
+        let axis = self
+            .general_axes
+            .get_mut(id)
+            .ok_or_else(|| ChartError::new(ErrorCode::InvalidHandle, "general axis is stale"))?;
+        axis.view_domain = Some([from.min(to), from.max(to)]);
+        self.invalidate_frame_all();
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn reset_general_axis_view(&mut self, id: &str) -> bool {
+        let Some(axis) = self.general_axes.get_mut(id) else {
+            return false;
+        };
+        if axis.view_domain.take().is_some() {
+            self.invalidate_frame_all();
+        }
+        true
     }
 }
 
@@ -748,8 +917,13 @@ fn horizontal_axis_thickness(axis: &GeneralAxis, metrics: AxisMetrics) -> f64 {
 
 fn tick_labels_for_domain(axis: &GeneralAxis, domain: &GeneralAxisDomain) -> Vec<String> {
     match (&axis.scale, domain) {
-        (GeneralScaleType::Linear, GeneralAxisDomain::Numeric([from, to])) => {
-            let Ok(scale) = LinearScale::new(*from, *to, 0.0, 1.0) else {
+        (
+            GeneralScaleType::Linear
+            | GeneralScaleType::Logarithmic
+            | GeneralScaleType::SymmetricLog,
+            GeneralAxisDomain::Numeric(domain),
+        ) => {
+            let Some(scale) = NumericAxisScale::new(axis.scale, *domain, 0.0, 1.0) else {
                 return Vec::new();
             };
             scale
@@ -777,8 +951,14 @@ fn axis_ticks(
     metrics: AxisMetrics,
 ) -> Vec<GeneralAxisTick> {
     match (&axis.scale, domain) {
-        (GeneralScaleType::Linear, GeneralAxisDomain::Numeric([from, to])) => {
-            let Ok(scale) = LinearScale::new(*from, *to, range_from, range_to) else {
+        (
+            GeneralScaleType::Linear
+            | GeneralScaleType::Logarithmic
+            | GeneralScaleType::SymmetricLog,
+            GeneralAxisDomain::Numeric(domain),
+        ) => {
+            let Some(scale) = NumericAxisScale::new(axis.scale, *domain, range_from, range_to)
+            else {
                 return Vec::new();
             };
             let span = (range_to - range_from).abs();
@@ -843,6 +1023,29 @@ fn expanded_numeric_domain(low: f64, high: f64) -> [f64; 2] {
     }
     let delta = low.abs().max(1.0) * 0.01;
     [low - delta, high + delta]
+}
+
+fn expanded_numeric_domain_for_scale(
+    scale: GeneralScaleType,
+    low: f64,
+    high: f64,
+) -> Option<[f64; 2]> {
+    if low < high {
+        return Some([low, high]);
+    }
+    match scale {
+        GeneralScaleType::Logarithmic => {
+            if low <= 0.0 {
+                return None;
+            }
+            let factor = 1.01;
+            Some([low / factor, high * factor])
+        }
+        GeneralScaleType::Linear | GeneralScaleType::SymmetricLog => {
+            Some(expanded_numeric_domain(low, high))
+        }
+        _ => None,
+    }
 }
 
 fn expanded_temporal_domain(low: i64, high: i64) -> Option<GeneralAxisDomain> {

@@ -6,6 +6,7 @@
 
 /// Hard limit for one linear-axis tick calculation.
 pub const MAX_GENERAL_TICKS: usize = 512;
+pub const DEFAULT_SYMLOG_CONSTANT: f64 = 1.0;
 
 const MAX_EXACT_INTEGER: u128 = 9_007_199_254_740_991;
 
@@ -13,9 +14,191 @@ const MAX_EXACT_INTEGER: u128 = 9_007_199_254_740_991;
 pub enum ScaleError {
     NonFinite,
     DegenerateDomain,
+    NonPositiveDomain,
+    InvalidConstant,
     InvalidPadding,
     InvalidAlign,
     CategoryCountTooLarge,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LogScale {
+    domain_from: f64,
+    domain_to: f64,
+    range_from: f64,
+    range_to: f64,
+}
+
+impl LogScale {
+    pub fn new(
+        domain_from: f64,
+        domain_to: f64,
+        range_from: f64,
+        range_to: f64,
+    ) -> Result<Self, ScaleError> {
+        validate_domain(domain_from, domain_to)?;
+        validate_range(range_from, range_to)?;
+        if domain_from <= 0.0 || domain_to <= 0.0 {
+            return Err(ScaleError::NonPositiveDomain);
+        }
+        Ok(Self {
+            domain_from,
+            domain_to,
+            range_from,
+            range_to,
+        })
+    }
+
+    pub fn coordinate(&self, value: f64) -> Option<f64> {
+        if !value.is_finite() || value <= 0.0 {
+            return None;
+        }
+        let from = self.domain_from.ln();
+        let to = self.domain_to.ln();
+        let unit = (value.ln() - from) / (to - from);
+        let coordinate = self.range_from + unit * (self.range_to - self.range_from);
+        coordinate.is_finite().then_some(normalize_zero(coordinate))
+    }
+
+    pub fn invert(&self, coordinate: f64) -> Option<f64> {
+        if !coordinate.is_finite() || self.range_from == self.range_to {
+            return None;
+        }
+        let unit = (coordinate - self.range_from) / (self.range_to - self.range_from);
+        let from = self.domain_from.ln();
+        let to = self.domain_to.ln();
+        let value = (from + unit * (to - from)).exp();
+        (value.is_finite() && value > 0.0).then_some(value)
+    }
+
+    pub fn ticks(&self, target_count: usize) -> Vec<f64> {
+        if target_count == 0 {
+            return Vec::new();
+        }
+        let low = self.domain_from.min(self.domain_to);
+        let high = self.domain_from.max(self.domain_to);
+        let first_exp = low.log10().floor() as i32;
+        let last_exp = high.log10().ceil() as i32;
+        let candidates = (last_exp - first_exp + 1).max(1) as usize * 3;
+        let stride = candidates
+            .div_ceil(target_count.min(MAX_GENERAL_TICKS))
+            .max(1);
+        let mut ticks = Vec::with_capacity(target_count.min(MAX_GENERAL_TICKS));
+        let mut candidate_index = 0usize;
+        for exp in first_exp..=last_exp {
+            let power = 10.0_f64.powi(exp);
+            if !power.is_finite() || power <= 0.0 {
+                continue;
+            }
+            for factor in [1.0, 2.0, 5.0] {
+                let value = factor * power;
+                if value >= low
+                    && value <= high
+                    && candidate_index.is_multiple_of(stride)
+                    && ticks.len() < MAX_GENERAL_TICKS
+                {
+                    ticks.push(value);
+                }
+                candidate_index = candidate_index.saturating_add(1);
+            }
+        }
+        if ticks.is_empty() {
+            ticks.push(low);
+            if high != low && ticks.len() < target_count.min(MAX_GENERAL_TICKS) {
+                ticks.push(high);
+            }
+        }
+        if self.domain_from > self.domain_to {
+            ticks.reverse();
+        }
+        ticks
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SymLogScale {
+    domain_from: f64,
+    domain_to: f64,
+    range_from: f64,
+    range_to: f64,
+    constant: f64,
+}
+
+impl SymLogScale {
+    pub fn new(
+        domain_from: f64,
+        domain_to: f64,
+        range_from: f64,
+        range_to: f64,
+        constant: f64,
+    ) -> Result<Self, ScaleError> {
+        validate_domain(domain_from, domain_to)?;
+        validate_range(range_from, range_to)?;
+        if !constant.is_finite() || constant <= 0.0 {
+            return Err(ScaleError::InvalidConstant);
+        }
+        Ok(Self {
+            domain_from,
+            domain_to,
+            range_from,
+            range_to,
+            constant,
+        })
+    }
+
+    fn transform(&self, value: f64) -> Option<f64> {
+        if !value.is_finite() {
+            return None;
+        }
+        Some(value.signum() * (1.0 + value.abs() / self.constant).ln())
+    }
+
+    fn untransform(&self, value: f64) -> Option<f64> {
+        if !value.is_finite() {
+            return None;
+        }
+        let result = value.signum() * self.constant * (value.abs().exp() - 1.0);
+        result.is_finite().then_some(normalize_zero(result))
+    }
+
+    pub fn coordinate(&self, value: f64) -> Option<f64> {
+        let from = self.transform(self.domain_from)?;
+        let to = self.transform(self.domain_to)?;
+        let transformed = self.transform(value)?;
+        let unit = (transformed - from) / (to - from);
+        let coordinate = self.range_from + unit * (self.range_to - self.range_from);
+        coordinate.is_finite().then_some(normalize_zero(coordinate))
+    }
+
+    pub fn invert(&self, coordinate: f64) -> Option<f64> {
+        if !coordinate.is_finite() || self.range_from == self.range_to {
+            return None;
+        }
+        let from = self.transform(self.domain_from)?;
+        let to = self.transform(self.domain_to)?;
+        let unit = (coordinate - self.range_from) / (self.range_to - self.range_from);
+        self.untransform(from + unit * (to - from))
+    }
+
+    pub fn ticks(&self, target_count: usize) -> Vec<f64> {
+        if target_count == 0 {
+            return Vec::new();
+        }
+        let Some(from) = self.transform(self.domain_from) else {
+            return Vec::new();
+        };
+        let Some(to) = self.transform(self.domain_to) else {
+            return Vec::new();
+        };
+        let Ok(linear) = LinearScale::new(from, to, 0.0, 1.0) else {
+            return Vec::new();
+        };
+        linear
+            .ticks(target_count)
+            .into_iter()
+            .filter_map(|tick| self.untransform(tick))
+            .collect()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -406,6 +589,43 @@ mod tests {
         let reversed = LinearScale::new(9.3, -0.7, 0.0, 100.0).unwrap();
         assert_eq!(reversed.ticks(5), vec![8.0, 6.0, 4.0, 2.0, 0.0]);
         assert!(reversed.ticks(0).is_empty());
+    }
+
+    #[test]
+    fn log_scale_maps_inverts_and_emits_bounded_decade_ticks() {
+        let scale = LogScale::new(1.0, 1_000.0, 0.0, 300.0).unwrap();
+        close(scale.coordinate(10.0).unwrap(), 100.0);
+        close(scale.coordinate(100.0).unwrap(), 200.0);
+        close(scale.invert(150.0).unwrap(), 10.0_f64.powf(1.5));
+        let ticks = scale.ticks(8);
+        assert!(ticks.contains(&1.0));
+        assert!(ticks.iter().all(|value| *value > 0.0));
+        assert!(ticks.len() <= MAX_GENERAL_TICKS);
+        assert_eq!(
+            LogScale::new(3.0, 4.0, 0.0, 1.0).unwrap().ticks(6),
+            vec![3.0, 4.0]
+        );
+        assert_eq!(
+            LogScale::new(0.0, 10.0, 0.0, 1.0),
+            Err(ScaleError::NonPositiveDomain)
+        );
+    }
+
+    #[test]
+    fn symlog_scale_round_trips_through_zero_and_validates_constant() {
+        let scale = SymLogScale::new(-100.0, 100.0, 0.0, 200.0, 1.0).unwrap();
+        close(scale.coordinate(0.0).unwrap(), 100.0);
+        for value in [-100.0, -4.0, 0.0, 3.5, 100.0] {
+            close(
+                scale.invert(scale.coordinate(value).unwrap()).unwrap(),
+                value,
+            );
+        }
+        assert!(scale.ticks(7).len() <= MAX_GENERAL_TICKS);
+        assert_eq!(
+            SymLogScale::new(-1.0, 1.0, 0.0, 1.0, 0.0),
+            Err(ScaleError::InvalidConstant)
+        );
     }
 
     #[test]

@@ -19,9 +19,9 @@
 //! records a bounded residual for.
 
 use nucleuscharts_engine::{
-    AxisDimension, CategoryScaleType, ChartEngine, GeneralAxisOptions, GeneralScaleType,
-    GeneralSeriesOptions, GeneralXyInput, HorizontalDomain, OrderId, OrderKind, OrderRole,
-    OrderSide, OrderStatus, PositionId, PositionSide, SeriesKind, TradingPosition,
+    AxisDimension, CategoryScaleType, ChartEngine, ContinuousScaleType, GeneralAxisOptions,
+    GeneralScaleType, GeneralSeriesOptions, GeneralXyInput, HorizontalDomain, OrderId, OrderKind,
+    OrderRole, OrderSide, OrderStatus, PositionId, PositionSide, SeriesKind, TradingPosition,
     TradingPriceScale, WorkingOrder,
 };
 use nucleuscharts_render::canvas2d::{execute as canvas_execute, Canvas2d, Viewport};
@@ -858,6 +858,72 @@ fn category_column_engine_frame_has_identical_canvas_and_gpui_quads() {
             gpui_quads(&plan),
             canvas.rects,
             "DPR {dpr}: category-column quads diverged"
+        );
+    }
+}
+
+#[test]
+fn xy_scatter_engine_frame_reaches_canvas_and_gpui_path_routes() {
+    for dpr in [1.0f64, 1.5, 2.0] {
+        let mut engine = ChartEngine::new(420.0, 260.0, dpr);
+        let pane = engine
+            .add_pane_with_domain(
+                true,
+                HorizontalDomain::Continuous {
+                    scale: ContinuousScaleType::Linear,
+                },
+            )
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "x",
+                pane,
+                AxisDimension::X,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "y",
+                pane,
+                AxisDimension::Y,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        let dataset = engine
+            .create_general_xy_dataset(GeneralXyInput::Numeric {
+                ids: None,
+                x: vec![1.0, 2.0, 3.0, 4.0],
+                y: vec![-2.0, 1.0, 5.0, 99.0],
+                y_valid: Some(vec![1, 1, 1, 0]),
+            })
+            .unwrap();
+        let mut options = GeneralSeriesOptions::scatter(pane, dataset, "x", "y");
+        options.color = Some("#725c9f".into());
+        engine.add_general_series(options).unwrap();
+        engine.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+        let frame = engine.build_frame();
+        let pane_frame = &frame.panes[pane];
+        let circles = pane_frame
+            .main
+            .iter()
+            .filter(|primitive| matches!(primitive, Prim::Circle { .. }))
+            .count();
+        assert_eq!(circles, 3, "DPR {dpr}: three scatter circles expected");
+        let canvas = canvas_rects(&pane_frame.main, &pane_frame.points);
+        let (_plan, metrics) = gpui_plan(&pane_frame.main, &pane_frame.points);
+        assert_eq!(
+            canvas.path_fills, 3,
+            "DPR {dpr}: Canvas must fill each point"
+        );
+        assert_eq!(
+            metrics.dropped_prims, 0,
+            "DPR {dpr}: no scatter point may drop"
+        );
+        assert!(
+            metrics.paths >= 3,
+            "DPR {dpr}: GPUI must lower scatter circles to paths ({metrics:?})"
         );
     }
 }

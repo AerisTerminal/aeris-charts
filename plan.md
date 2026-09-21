@@ -331,7 +331,13 @@ Current implementation progress (2026-09-21):
   Canvas2D/WebGPU/GPUI/native parity evidence;
 - the category-column slice is not yet an exposed browser feature: boundary object/typed-array ingestion,
   data-label/selection behavior, and the remaining public API contract must land before it is complete;
-- the true XY scatter vertical slice remains the next major Phase 1 implementation target.
+- the true XY scatter engine slice now owns numeric X/Y storage, independent linear/log/symlog domains,
+  runtime pan/zoom views, bounded point sizing, missing-row semantics, ordered circle geometry,
+  generation-keyed screen-space hit indexing, exact/nearest hits, tooltip/accessibility snapshots, and
+  Canvas2D/WebGPU/GPUI/native parity evidence;
+- like category columns, scatter is not yet an exposed browser feature: boundary ingestion,
+  selection/hover presentation, persistence under the future general-chart schema, and public API work
+  remain before either general series is release-complete.
 
 Exit gate: both slices render equivalently in every backend and a financial-only chart shows no
 material regression in output, work, memory, or package size.

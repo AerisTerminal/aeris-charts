@@ -45,6 +45,22 @@ impl ChartEngine {
                         });
                     });
                 }
+                GeneralSeriesKind::Scatter => {
+                    let color = series
+                        .color()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(DEFAULT_LINE_COLOR);
+                    self.visit_general_scatter_points(series, |geometry| {
+                        out.push(Prim::Circle {
+                            cx: (geometry.x * hpr) as f32,
+                            cy: (geometry.y * vpr) as f32,
+                            radius: (geometry.radius * vpr) as f32,
+                            fill: color,
+                            stroke_width: 0.0,
+                            stroke: color,
+                        });
+                    });
+                }
             }
         }
     }

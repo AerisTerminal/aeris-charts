@@ -42,14 +42,14 @@ state. Shared-ring drains may reject individual rows because producer drains can
 
 Platform-free chart fundamentals: validated canonical columnar data, compact plot index/view storage, ranges, options, formatting, price scales, time scales, tick marks, and shared math. It also exposes structure-level payload and capacity attribution for memory evidence; these counters are not allocator, WASM-page, or browser-memory measurements. Media-space calculations remain `f64`; conversion to backend coordinate formats happens at rendering boundaries.
 
-General Cartesian scale foundations live beside, rather than inside, the financial scales. `LinearScale`
-maps continuous numeric domains and emits bounded deterministic ticks; `BandScale` and `PointScale`
-map caller-owned category indices without retaining labels or allocating category state. All three keep
-their math in `f64`, accept reversed ranges, and have no host or renderer dependency. General axes with
-explicit linear, band, or point domains use these scales during shared layout and axis-frame construction;
-the financial coordinate path does not dispatch through them. Existing financial charts therefore
-continue to instantiate only `TimeScaleCore` and `PriceScaleCore` and pay no retained-memory cost for
-these foundations.
+General Cartesian scale foundations live beside, rather than inside, the financial scales. `LinearScale`,
+`LogScale`, and `SymLogScale` map continuous numeric domains and emit bounded deterministic ticks;
+`BandScale` and `PointScale` map caller-owned category indices without retaining labels or allocating
+category state. All five keep their math in `f64`, accept reversed ranges, and have no host or renderer
+dependency. General axes with explicit numeric, band, or point domains use these scales during shared
+layout and axis-frame construction; the financial coordinate path does not dispatch through them.
+Existing financial charts therefore continue to instantiate only `TimeScaleCore` and `PriceScaleCore`
+and pay no retained-memory cost for these foundations.
 
 Each pane has one immutable horizontal-domain binding. Absence of a general binding means
 `financial_time` and continues to use the chart's established `TimeScaleCore`; this is the initial
@@ -75,12 +75,14 @@ policy, and the resulting rules, titles, and collision-filtered ticks are emitte
 `AxisFrame`. Each side may reserve at most 45% of the space remaining after financial axes; complete
 strips that do not fit are omitted, preserving a nonzero plot and keeping unscissored axis chrome inside
 the chart. Category selection and numeric tick generation are capped at 512 candidates. Automatic band
-and linear domains now resolve from visible bound general series without rewriting configured axis
-options; hidden series stop contributing immediately. Temporal, logarithmic, symmetric-log, and polar
-tick execution remains deferred until their owning transform slices are implemented; their validated
-state is not silently rendered as linear. Grid policy is likewise retained for the series/grid increment
-rather than painting grid rules above data in the axis layer. Financial panes allocate no general axis
-storage and retain their established price/time axis output unchanged.
+and numeric domains now resolve from visible bound general series without rewriting configured axis
+options; hidden series stop contributing immediately. Continuous X/Y axes execute linear, logarithmic,
+or symmetric-log transforms consistently for ticks, geometry, hit testing, and runtime pan/zoom; a
+runtime view is independent of the configured/automatic base domain and can be reset without rewriting
+axis options. Temporal and polar tick execution remains deferred until their owning transform slices are
+implemented; their validated state is not silently rendered as linear. Grid policy is likewise retained
+for the series/grid increment rather than painting grid rules above data in the axis layer. Financial
+panes allocate no general axis storage and retain their established price/time axis output unchanged.
 
 General Cartesian data has a separate engine-owned typed-column store beside `DataLayer`. The first
 storage slice accepts numeric, epoch-millisecond temporal, and interned-category X columns plus numeric Y
@@ -91,17 +93,22 @@ row counts, category bytes, and ID bytes are bounded, and retained capacity is a
 engine memory evidence. A financial-only chart keeps the store absent and therefore retains zero general
 dataset capacity.
 
-The first concrete general-series binding is a category-band column series. General series have monotonic
-chart-local identities, stable pane/axis/dataset ownership, bounded title/color state, and lazy registry
-allocation. Populated axes and datasets cannot be removed out from under a series, and a pane containing a
-general series cannot be removed until that series is detached. Visible column series contribute their
-category union and finite valid Y values to automatic domains; the zero baseline participates in the Y
+The first concrete general-series bindings are category-band columns and numeric XY scatter. General
+series have monotonic chart-local identities, stable pane/axis/dataset ownership, bounded title/color
+state, and lazy registry allocation. Populated axes and datasets cannot be removed out from under a
+series, and a pane containing a general series cannot be removed until that series is detached. Visible
+column series contribute their category union and finite valid Y values to automatic domains; the zero baseline participates in the Y
 domain. Missing rows remain queryable and accessible but emit no mark. Column geometry is computed once
 in shared CSS-space semantics, reused by frame painting and exact/nearest hit testing, then lowered to
 ordinary ordered `Rect` primitives. Bounded tooltip and accessibility snapshots come from the same rows.
-Canvas2D, retained WebGPU, GPUI, and the native tiny-skia rasterizer all have chart-level parity coverage
-for this slice. The engine seam remains hidden from the browser package until the remaining column
-acceptance work (data labels/selection and boundary ingestion) is complete.
+Scatter binds independent continuous numeric axes, validates logarithmic positivity, clips geometry to
+the runtime view, and lowers points to ordered `Circle` primitives. Its lazily rebuilt screen-space grid
+is keyed by dataset generation, plot geometry, axis domains/transforms, direction, and point radius; grid
+cell count is capped, retained capacity is attributed to engine memory, and exact/nearest hits inspect
+only intersecting cells while preserving stable series/row tie-breaking. Dataset replacement remains
+atomic against every bound series. Canvas2D, retained WebGPU, GPUI, and the native tiny-skia rasterizer
+all have chart-level parity coverage for both slices. The engine seam remains hidden from the browser
+package until boundary ingestion and the remaining public behavior such as labels/selection are complete.
 
 `ChartOptionsStore` keeps typed options canonical for engine and frame reads and retains the raw JSON
 object only for boundary-compatible deep merges and serialization. An option patch is merged and

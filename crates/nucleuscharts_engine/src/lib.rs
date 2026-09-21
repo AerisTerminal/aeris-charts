@@ -84,8 +84,9 @@ pub use general_data::{
 pub use general_series::{
     GeneralAccessibilityItem, GeneralAccessibilitySnapshot, GeneralHitMode, GeneralSeries,
     GeneralSeriesHit, GeneralSeriesId, GeneralSeriesKind, GeneralSeriesOptions,
-    GeneralTooltipSnapshot, MAX_GENERAL_ACCESSIBILITY_ITEMS, MAX_GENERAL_SERIES,
-    MAX_GENERAL_SERIES_COLOR_BYTES, MAX_GENERAL_SERIES_TITLE_BYTES,
+    GeneralTooltipSnapshot, MAX_GENERAL_ACCESSIBILITY_ITEMS, MAX_GENERAL_POINT_RADIUS,
+    MAX_GENERAL_SERIES, MAX_GENERAL_SERIES_COLOR_BYTES, MAX_GENERAL_SERIES_TITLE_BYTES,
+    MIN_GENERAL_POINT_RADIUS,
 };
 pub use hit_test::{SeriesHit, SeriesHitKind};
 pub(crate) use indicators::{IndicatorBinding, IndicatorChange};
@@ -1743,6 +1744,9 @@ impl ChartEngine {
         input: GeneralXyInput,
     ) -> Result<(), ChartError> {
         let bound = self.general_series_uses_dataset(id);
+        if bound {
+            self.validate_general_dataset_replacement(id, &input)?;
+        }
         let store = self.general_data.as_mut().ok_or_else(|| {
             ChartError::new(ErrorCode::InvalidHandle, "general dataset handle is stale")
         })?;

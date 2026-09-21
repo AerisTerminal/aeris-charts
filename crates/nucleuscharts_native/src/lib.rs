@@ -645,8 +645,8 @@ pub fn load_png(path: &str) -> Result<Pixmap, String> {
 mod tests {
     use super::*;
     use nucleuscharts_engine::{
-        AxisDimension, CategoryScaleType, GeneralAxisOptions, GeneralScaleType,
-        GeneralSeriesOptions, GeneralXyInput, HorizontalDomain, SeriesKind,
+        AxisDimension, CategoryScaleType, ContinuousScaleType, GeneralAxisOptions,
+        GeneralScaleType, GeneralSeriesOptions, GeneralXyInput, HorizontalDomain, SeriesKind,
     };
     use nucleuscharts_render::draw_list::{Gradient, IRect};
     use std::sync::Arc;
@@ -902,6 +902,63 @@ mod tests {
         assert!(
             painted > 20,
             "expected native category-column pixels, got {painted}"
+        );
+    }
+
+    #[test]
+    fn renders_xy_scatter_from_the_shared_engine_frame() {
+        let mut chart = ChartEngine::new(260.0, 180.0, 1.0);
+        let pane = chart
+            .add_pane_with_domain(
+                true,
+                HorizontalDomain::Continuous {
+                    scale: ContinuousScaleType::Linear,
+                },
+            )
+            .unwrap();
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                "x",
+                pane,
+                AxisDimension::X,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        chart
+            .add_general_axis(GeneralAxisOptions::new(
+                "y",
+                pane,
+                AxisDimension::Y,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        let dataset = chart
+            .create_general_xy_dataset(GeneralXyInput::Numeric {
+                ids: None,
+                x: vec![1.0, 2.0, 3.0],
+                y: vec![-3.0, 2.0, 7.0],
+                y_valid: None,
+            })
+            .unwrap();
+        let mut options = GeneralSeriesOptions::scatter(pane, dataset, "x", "y");
+        options.color = Some("#2f7d8c".into());
+        options.point_radius = 5.0;
+        chart.add_general_series(options).unwrap();
+        chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+        let canvas = render_engine(&mut chart);
+        let target = [0x2f, 0x7d, 0x8c];
+        let painted = canvas
+            .pixmap()
+            .data()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel| pixel[0..3] == target)
+            .count();
+        assert!(
+            painted > 30,
+            "expected native scatter pixels, got {painted}"
         );
     }
 

@@ -6,8 +6,8 @@ use super::conflation::{
 };
 use super::*;
 use crate::{
-    AxisDimension, CategoryScaleType, GeneralAxisDomain, GeneralAxisOptions, GeneralScaleType,
-    GeneralSeriesOptions, GeneralXyInput, HorizontalDomain,
+    AxisDimension, CategoryScaleType, ContinuousScaleType, GeneralAxisDomain, GeneralAxisOptions,
+    GeneralScaleType, GeneralSeriesOptions, GeneralXyInput, HorizontalDomain,
 };
 use nucleuscharts_core::model::data_layer::DataLayer;
 use nucleuscharts_core::model::plot_list::{PlotList, PlotValues};
@@ -308,6 +308,347 @@ fn category_column_series_owns_auto_domains_geometry_and_lifecycle() {
     assert!(chart.remove_general_dataset(dataset));
     assert_eq!(chart.memory_usage().general_data_capacity_bytes, 0);
     assert!(chart.remove_pane(pane));
+}
+
+#[test]
+fn xy_scatter_owns_independent_domains_hits_and_runtime_view() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Numeric {
+            ids: None,
+            x: vec![-10.0, 0.0, 10.0, 20.0],
+            y: vec![-5.0, 0.0, 5.0, 99.0],
+            y_valid: Some(vec![1, 1, 1, 0]),
+        })
+        .unwrap();
+    let mut options = GeneralSeriesOptions::scatter(pane, dataset, "x", "y");
+    options.color = Some("#654321".into());
+    options.title = "Samples".into();
+    options.point_radius = 4.0;
+    let series = chart.add_general_series(options).unwrap();
+
+    assert_eq!(
+        chart.general_axis_effective_domain("x"),
+        Some(GeneralAxisDomain::Numeric([-10.0, 20.0]))
+    );
+    assert_eq!(
+        chart.general_axis_effective_domain("y"),
+        Some(GeneralAxisDomain::Numeric([-5.0, 5.0]))
+    );
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+    let expected_color = Color::parse_css("#654321").unwrap();
+    let frame = chart.build_frame();
+    assert_eq!(
+        frame.panes[pane]
+            .main
+            .iter()
+            .filter(|primitive| matches!(primitive, Prim::Circle { fill, .. } if *fill == expected_color))
+            .count(),
+        3
+    );
+
+    let mut geometry = Vec::new();
+    chart.visit_general_scatter_points(chart.general_series(series).unwrap(), |point| {
+        geometry.push(point)
+    });
+    assert_eq!(geometry.len(), 3, "missing Y rows emit no scatter mark");
+    let first = geometry[0];
+    let hit = chart
+        .general_hit_test(pane, first.x, first.y, crate::GeneralHitMode::Exact)
+        .unwrap();
+    assert_eq!(hit.series, series);
+    assert_eq!(hit.row, 0);
+    assert_eq!(hit.distance, 0.0);
+    let nearest = chart
+        .general_hit_test(
+            pane,
+            first.x + first.radius + 2.0,
+            first.y,
+            crate::GeneralHitMode::Nearest { max_distance: 3.0 },
+        )
+        .unwrap();
+    assert_eq!(nearest.row, 0);
+    assert!((nearest.distance - 2.0).abs() < 1e-9);
+
+    let tooltip = chart.general_tooltip_snapshot(series, 0).unwrap();
+    assert_eq!(tooltip.x_label, "-10");
+    assert_eq!(tooltip.value, Some(-5.0));
+    assert_eq!(tooltip.title, "Samples");
+    let accessibility = chart
+        .general_accessibility_snapshot(series, 0, usize::MAX)
+        .unwrap();
+    assert_eq!(accessibility.items.len(), 4);
+    assert_eq!(accessibility.items[3].x_label, "20");
+    assert_eq!(accessibility.items[3].value, None);
+
+    chart.zoom_general_axis("x", 2.0, 5.0).unwrap();
+    assert_eq!(
+        chart.general_axis_effective_domain("x"),
+        Some(GeneralAxisDomain::Numeric([-2.5, 12.5]))
+    );
+    geometry.clear();
+    chart.visit_general_scatter_points(chart.general_series(series).unwrap(), |point| {
+        geometry.push(point)
+    });
+    assert_eq!(
+        geometry.iter().map(|point| point.row).collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+
+    chart.pan_general_axis("x", 0.5).unwrap();
+    assert_eq!(
+        chart.general_axis_effective_domain("x"),
+        Some(GeneralAxisDomain::Numeric([5.0, 20.0]))
+    );
+    geometry.clear();
+    chart.visit_general_scatter_points(chart.general_series(series).unwrap(), |point| {
+        geometry.push(point)
+    });
+    assert_eq!(
+        geometry.iter().map(|point| point.row).collect::<Vec<_>>(),
+        vec![2]
+    );
+    assert!(chart.reset_general_axis_view("x"));
+    assert_eq!(
+        chart.general_axis_effective_domain("x"),
+        Some(GeneralAxisDomain::Numeric([-10.0, 20.0]))
+    );
+
+    let mut invalid_radius = GeneralSeriesOptions::scatter(pane, dataset, "x", "y");
+    invalid_radius.point_radius = 0.5;
+    assert_eq!(
+        chart.add_general_series(invalid_radius).unwrap_err().code(),
+        crate::ErrorCode::InvalidOptions
+    );
+    assert_eq!(chart.general_series_count(), 1);
+
+    let replacement = chart.replace_general_xy_dataset(
+        dataset,
+        GeneralXyInput::Category {
+            ids: None,
+            categories: vec!["bad".into()],
+            category_indices: vec![0],
+            y: vec![1.0],
+            y_valid: None,
+        },
+    );
+    assert_eq!(
+        replacement.unwrap_err().code(),
+        crate::ErrorCode::InvalidOptions
+    );
+    assert_eq!(
+        chart.general_dataset(dataset).unwrap().numeric_x(),
+        Some(&[-10.0, 0.0, 10.0, 20.0][..])
+    );
+
+    chart
+        .replace_general_xy_dataset(
+            dataset,
+            GeneralXyInput::Numeric {
+                ids: None,
+                x: vec![100.0, 200.0],
+                y: vec![25.0, 50.0],
+                y_valid: None,
+            },
+        )
+        .unwrap();
+    geometry.clear();
+    chart.visit_general_scatter_points(chart.general_series(series).unwrap(), |point| {
+        geometry.push(point)
+    });
+    assert_eq!(geometry.len(), 2);
+    assert_eq!(
+        chart.general_axis_effective_domain("x"),
+        Some(GeneralAxisDomain::Numeric([100.0, 200.0]))
+    );
+    assert_eq!(
+        chart.general_tooltip_snapshot(series, 0).unwrap().x_label,
+        "100"
+    );
+}
+
+#[test]
+fn scatter_log_and_symlog_axes_validate_and_emit_transformed_ticks() {
+    let mut chart = ChartEngine::new(500.0, 320.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Logarithmic,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "x-log",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Logarithmic,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "y-symlog",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::SymmetricLog,
+        ))
+        .unwrap();
+    let invalid_dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Numeric {
+            ids: None,
+            x: vec![0.0, 10.0],
+            y: vec![-1.0, 1.0],
+            y_valid: None,
+        })
+        .unwrap();
+    assert_eq!(
+        chart
+            .add_general_series(GeneralSeriesOptions::scatter(
+                pane,
+                invalid_dataset,
+                "x-log",
+                "y-symlog",
+            ))
+            .unwrap_err()
+            .code(),
+        crate::ErrorCode::InvalidOptions
+    );
+
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Numeric {
+            ids: None,
+            x: vec![1.0, 10.0, 100.0],
+            y: vec![-10.0, 0.0, 10.0],
+            y_valid: None,
+        })
+        .unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::scatter(
+            pane, dataset, "x-log", "y-symlog",
+        ))
+        .unwrap();
+    assert_eq!(
+        chart.general_axis_effective_domain("x-log"),
+        Some(GeneralAxisDomain::Numeric([1.0, 100.0]))
+    );
+    assert_eq!(
+        chart.general_axis_effective_domain("y-symlog"),
+        Some(GeneralAxisDomain::Numeric([-10.0, 10.0]))
+    );
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let axis = chart.build_axis_frame(80.0, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    assert!(axis.labels.iter().any(|label| label.text == "1"));
+    assert!(axis.labels.iter().any(|label| label.text == "10"));
+    assert!(axis.labels.iter().any(|label| label.text == "0"));
+
+    let before = chart.general_dataset(dataset).unwrap().clone();
+    let err = chart
+        .replace_general_xy_dataset(
+            dataset,
+            GeneralXyInput::Numeric {
+                ids: None,
+                x: vec![-1.0, 10.0],
+                y: vec![1.0, 2.0],
+                y_valid: None,
+            },
+        )
+        .unwrap_err();
+    assert_eq!(err.code(), crate::ErrorCode::InvalidOptions);
+    assert_eq!(chart.general_dataset(dataset), Some(&before));
+    assert!(chart.general_series(series).is_some());
+}
+
+#[test]
+fn dense_scatter_hit_testing_uses_bounded_screen_space_candidates() {
+    const POINTS: usize = 100_000;
+    let mut chart = ChartEngine::new(1_000.0, 600.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "dense-x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "dense-y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let x: Vec<_> = (0..POINTS).map(|index| (index % 1_000) as f64).collect();
+    let y: Vec<_> = (0..POINTS).map(|index| (index / 1_000) as f64).collect();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Numeric {
+            ids: None,
+            x,
+            y,
+            y_valid: None,
+        })
+        .unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::scatter(
+            pane, dataset, "dense-x", "dense-y",
+        ))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+    let plot = chart.general_plot_rect(pane).unwrap();
+    let x_css = plot.width * 0.5;
+    let y_css = plot.y + plot.height * 0.5;
+    let candidates = chart
+        .general_scatter_hit_candidate_count(series, x_css, y_css, 3.0)
+        .unwrap();
+    assert!(candidates > 0);
+    assert!(
+        candidates < POINTS / 20,
+        "dense hit query inspected {candidates} of {POINTS} points"
+    );
+    assert!(chart
+        .general_hit_test(
+            pane,
+            x_css,
+            y_css,
+            crate::GeneralHitMode::Nearest { max_distance: 8.0 },
+        )
+        .is_some());
+    assert!(chart.memory_usage().general_series_capacity_bytes > 0);
 }
 
 #[test]

@@ -120,6 +120,7 @@ enum GeneralXColumn {
 #[derive(Clone, Debug, PartialEq)]
 pub struct GeneralDataset {
     id: GeneralDatasetId,
+    generation: u64,
     identities: Vec<GeneralRowIdentity>,
     x: GeneralXColumn,
     y: Vec<f64>,
@@ -129,6 +130,10 @@ pub struct GeneralDataset {
 impl GeneralDataset {
     pub fn id(&self) -> GeneralDatasetId {
         self.id
+    }
+
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
     }
 
     pub fn len(&self) -> usize {
@@ -228,6 +233,35 @@ struct ValidatedGeneralXy {
 }
 
 impl GeneralXyInput {
+    pub(crate) fn x_kind(&self) -> GeneralXKind {
+        match self {
+            Self::Numeric { .. } => GeneralXKind::Numeric,
+            Self::Temporal { .. } => GeneralXKind::Temporal,
+            Self::Category { .. } => GeneralXKind::Category,
+        }
+    }
+
+    pub(crate) fn numeric_x_values(&self) -> Option<&[f64]> {
+        match self {
+            Self::Numeric { x, .. } => Some(x),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn y_values(&self) -> &[f64] {
+        match self {
+            Self::Numeric { y, .. } | Self::Temporal { y, .. } | Self::Category { y, .. } => y,
+        }
+    }
+
+    pub(crate) fn y_valid_values(&self) -> Option<&[u8]> {
+        match self {
+            Self::Numeric { y_valid, .. }
+            | Self::Temporal { y_valid, .. }
+            | Self::Category { y_valid, .. } => y_valid.as_deref(),
+        }
+    }
+
     fn validate(self) -> Result<ValidatedGeneralXy, ChartError> {
         match self {
             Self::Numeric { ids, x, y, y_valid } => {
@@ -453,6 +487,7 @@ impl GeneralDataStore {
         let id = GeneralDatasetId(raw_id);
         self.datasets.push(GeneralDataset {
             id,
+            generation: 1,
             identities,
             x: validated.x,
             y: validated.y,
@@ -475,10 +510,15 @@ impl GeneralDataStore {
             ));
         };
         let validated = input.validate()?;
+        let generation = self.datasets[slot]
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| resource("general dataset generation is exhausted"))?;
         let (identities, next_generated_row_id) =
             identities_for(validated.ids, validated.y.len(), self.next_generated_row_id)?;
         self.datasets[slot] = GeneralDataset {
             id,
+            generation,
             identities,
             x: validated.x,
             y: validated.y,

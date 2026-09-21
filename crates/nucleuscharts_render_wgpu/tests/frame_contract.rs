@@ -5,9 +5,9 @@
 //! silent WebGPU hole.
 
 use nucleuscharts_engine::{
-    marker_pos, marker_shape, AxisDimension, CategoryScaleType, ChartEngine, GeneralAxisOptions,
-    GeneralScaleType, GeneralSeriesOptions, GeneralXyInput, HorizontalDomain, Marker, PriceLine,
-    SeriesKind,
+    marker_pos, marker_shape, AxisDimension, CategoryScaleType, ChartEngine, ContinuousScaleType,
+    GeneralAxisOptions, GeneralScaleType, GeneralSeriesOptions, GeneralXyInput, HorizontalDomain,
+    Marker, PriceLine, SeriesKind,
 };
 use nucleuscharts_render::canvas2d::{execute, Canvas2d, Viewport};
 use nucleuscharts_render::color::Color;
@@ -53,6 +53,8 @@ struct CountingCanvas {
     calls: usize,
     fill_color: Option<Color>,
     rects: Vec<([f32; 4], Color)>,
+    arcs: usize,
+    fills: usize,
 }
 
 impl Canvas2d for CountingCanvas {
@@ -105,12 +107,14 @@ impl Canvas2d for CountingCanvas {
     }
     fn arc(&mut self, _: f32, _: f32, _: f32, _: f32, _: f32) {
         self.calls += 1;
+        self.arcs += 1;
     }
     fn stroke(&mut self) {
         self.calls += 1;
     }
     fn fill(&mut self) {
         self.calls += 1;
+        self.fills += 1;
     }
 }
 
@@ -341,6 +345,96 @@ fn category_column_segment_is_identical_for_canvas2d_and_webgpu_quads() {
             ]
         );
     }
+}
+
+#[test]
+fn xy_scatter_segment_reaches_canvas2d_and_webgpu_circle_paths() {
+    let mut chart = ChartEngine::new(360.0, 240.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Numeric {
+            ids: None,
+            x: vec![1.0, 2.0, 3.0, 4.0],
+            y: vec![-2.0, 1.0, 5.0, 99.0],
+            y_valid: Some(vec![1, 1, 1, 0]),
+        })
+        .unwrap();
+    let mut options = GeneralSeriesOptions::scatter(pane, dataset, "x", "y");
+    options.color = Some("#267f99".into());
+    chart.add_general_series(options).unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+    let frame = chart.build_frame();
+    let pane_frame = &frame.panes[pane];
+    let expected = Color::parse_css("#267f99").unwrap();
+    let segment = chart
+        .frame_series_segments(pane)
+        .iter()
+        .find(|segment| {
+            pane_frame.main
+                [segment.start.min(pane_frame.main.len())..segment.end.min(pane_frame.main.len())]
+                .iter()
+                .any(
+                    |primitive| matches!(primitive, Prim::Circle { fill, .. } if *fill == expected),
+                )
+        })
+        .expect("scatter segment must reach retained backends");
+    let prims = &pane_frame.main[segment.start..segment.end];
+    assert_eq!(
+        prims
+            .iter()
+            .filter(|primitive| matches!(primitive, Prim::Circle { fill, .. } if *fill == expected))
+            .count(),
+        3
+    );
+
+    let mut canvas = CountingCanvas::default();
+    execute(
+        prims,
+        &pane_frame.points,
+        &mut canvas,
+        Viewport {
+            width: frame.width as f32,
+            height: frame.height as f32,
+        },
+    );
+    assert_eq!(canvas.arcs, 3);
+    assert_eq!(canvas.fills, 3);
+
+    let mut fill_tris = Vec::new();
+    let mut stroke_tris = Vec::new();
+    geom_prims_to_tris(prims, &pane_frame.points, &mut fill_tris, &mut stroke_tris);
+    assert!(
+        fill_tris.is_empty(),
+        "filled discs use the ordered geometry bucket, not the area-fill bucket"
+    );
+    assert!(
+        !stroke_tris.is_empty(),
+        "WebGPU must tessellate scatter circles into ordered geometry"
+    );
 }
 
 /// Runs must tile their pipeline's buffer contiguously, in ascending order, covering it exactly.

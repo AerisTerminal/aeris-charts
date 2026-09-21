@@ -1,22 +1,29 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 
 use nucleuscharts_core::scale::general_scale::{BandScale, LinearScale};
 use nucleuscharts_render::color::Color;
 
+use crate::general_axes::NumericAxisScale;
 use crate::{
     AxisDimension, ChartEngine, ChartError, ErrorCode, GeneralAxisDomain, GeneralDatasetId,
-    GeneralRowIdentity, GeneralScaleType, GeneralXKind, HorizontalDomain, PaneId,
+    GeneralRowIdentity, GeneralScaleType, GeneralXKind, GeneralXyInput, HorizontalDomain, PaneId,
 };
 
 pub const MAX_GENERAL_SERIES: usize = 1_024;
 pub const MAX_GENERAL_SERIES_TITLE_BYTES: usize = 4_096;
 pub const MAX_GENERAL_SERIES_COLOR_BYTES: usize = 256;
 pub const MAX_GENERAL_ACCESSIBILITY_ITEMS: usize = 512;
+pub const MIN_GENERAL_POINT_RADIUS: f64 = 1.0;
+pub const MAX_GENERAL_POINT_RADIUS: f64 = 64.0;
+const SCATTER_GRID_BASE_CELL_CSS: f64 = 32.0;
+const MAX_SCATTER_GRID_CELLS: usize = 65_536;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GeneralSeriesKind {
     Column,
+    Scatter,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -38,6 +45,7 @@ pub struct GeneralSeriesOptions {
     pub visible: bool,
     pub title: String,
     pub color: Option<String>,
+    pub point_radius: f64,
 }
 
 impl GeneralSeriesOptions {
@@ -56,6 +64,26 @@ impl GeneralSeriesOptions {
             visible: true,
             title: String::new(),
             color: None,
+            point_radius: 3.0,
+        }
+    }
+
+    pub fn scatter(
+        pane: usize,
+        dataset: GeneralDatasetId,
+        x_axis_id: impl Into<String>,
+        y_axis_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: GeneralSeriesKind::Scatter,
+            pane,
+            dataset,
+            x_axis_id: x_axis_id.into(),
+            y_axis_id: y_axis_id.into(),
+            visible: true,
+            title: String::new(),
+            color: None,
+            point_radius: 3.0,
         }
     }
 }
@@ -71,6 +99,7 @@ pub struct GeneralSeries {
     visible: bool,
     title: String,
     color: Option<String>,
+    point_radius: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -80,6 +109,175 @@ pub(crate) struct GeneralColumnGeometry {
     pub(crate) right: f64,
     pub(crate) top: f64,
     pub(crate) bottom: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct GeneralScatterGeometry {
+    pub(crate) row: usize,
+    pub(crate) x: f64,
+    pub(crate) y: f64,
+    pub(crate) radius: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ScatterGeometryKey {
+    dataset_generation: u64,
+    plot_width: u64,
+    plot_y: u64,
+    plot_height: u64,
+    x_domain: [u64; 2],
+    y_domain: [u64; 2],
+    x_scale: GeneralScaleType,
+    y_scale: GeneralScaleType,
+    x_reverse: bool,
+    y_reverse: bool,
+    radius: u64,
+}
+
+#[derive(Clone, Copy)]
+struct ScatterGeometryContext {
+    key: ScatterGeometryKey,
+    x_scale: NumericAxisScale,
+    y_scale: NumericAxisScale,
+    plot_width: f64,
+    plot_y: f64,
+    plot_bottom: f64,
+    radius: f64,
+}
+
+struct ScatterSpatialIndex {
+    key: ScatterGeometryKey,
+    origin_y: f64,
+    cell_size: f64,
+    columns: usize,
+    rows: usize,
+    offsets: Vec<usize>,
+    point_indices: Vec<u32>,
+    points: Vec<GeneralScatterGeometry>,
+}
+
+impl ScatterSpatialIndex {
+    fn new(
+        key: ScatterGeometryKey,
+        origin_y: f64,
+        plot_width: f64,
+        plot_height: f64,
+        points: Vec<GeneralScatterGeometry>,
+    ) -> Self {
+        let mut cell_size = SCATTER_GRID_BASE_CELL_CSS;
+        let (mut columns, mut rows) = grid_dimensions(plot_width, plot_height, cell_size);
+        while columns.saturating_mul(rows) > MAX_SCATTER_GRID_CELLS {
+            cell_size *= 2.0;
+            (columns, rows) = grid_dimensions(plot_width, plot_height, cell_size);
+        }
+        let cell_count = columns.saturating_mul(rows).max(1);
+        let mut counts = vec![0usize; cell_count];
+        for point in &points {
+            let cell = scatter_cell(point.x, point.y, origin_y, cell_size, columns, rows);
+            counts[cell] += 1;
+        }
+        let mut offsets = vec![0usize; cell_count + 1];
+        for (index, count) in counts.into_iter().enumerate() {
+            offsets[index + 1] = offsets[index] + count;
+        }
+        let mut cursors = offsets[..cell_count].to_vec();
+        let mut point_indices = vec![0u32; points.len()];
+        for (point_index, point) in points.iter().enumerate() {
+            let cell = scatter_cell(point.x, point.y, origin_y, cell_size, columns, rows);
+            let slot = cursors[cell];
+            point_indices[slot] = u32::try_from(point_index)
+                .expect("general scatter rows stay below the u32 index ceiling");
+            cursors[cell] += 1;
+        }
+        Self {
+            key,
+            origin_y,
+            cell_size,
+            columns,
+            rows,
+            offsets,
+            point_indices,
+            points,
+        }
+    }
+
+    fn estimated_bytes(&self) -> usize {
+        self.offsets.capacity() * std::mem::size_of::<usize>()
+            + self.point_indices.capacity() * std::mem::size_of::<u32>()
+            + self.points.capacity() * std::mem::size_of::<GeneralScatterGeometry>()
+    }
+
+    fn visit_candidates<F>(&self, x: f64, y: f64, expansion: f64, mut visit: F)
+    where
+        F: FnMut(GeneralScatterGeometry),
+    {
+        let Some((min_col, max_col)) = grid_query_range(
+            x - expansion,
+            x + expansion,
+            0.0,
+            self.cell_size,
+            self.columns,
+        ) else {
+            return;
+        };
+        let Some((min_row, max_row)) = grid_query_range(
+            y - expansion,
+            y + expansion,
+            self.origin_y,
+            self.cell_size,
+            self.rows,
+        ) else {
+            return;
+        };
+        for row in min_row..=max_row {
+            for col in min_col..=max_col {
+                let cell = row * self.columns + col;
+                for &point_index in &self.point_indices[self.offsets[cell]..self.offsets[cell + 1]]
+                {
+                    if let Some(point) = self.points.get(point_index as usize) {
+                        visit(*point);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn grid_dimensions(width: f64, height: f64, cell_size: f64) -> (usize, usize) {
+    let columns = (width.max(1.0) / cell_size).ceil().max(1.0) as usize;
+    let rows = (height.max(1.0) / cell_size).ceil().max(1.0) as usize;
+    (columns, rows)
+}
+
+fn scatter_cell(
+    x: f64,
+    y: f64,
+    origin_y: f64,
+    cell_size: f64,
+    columns: usize,
+    rows: usize,
+) -> usize {
+    let col = ((x / cell_size).floor() as isize).clamp(0, columns as isize - 1) as usize;
+    let row = (((y - origin_y) / cell_size).floor() as isize).clamp(0, rows as isize - 1) as usize;
+    row * columns + col
+}
+
+fn grid_query_range(
+    from: f64,
+    to: f64,
+    origin: f64,
+    cell_size: f64,
+    count: usize,
+) -> Option<(usize, usize)> {
+    let first = ((from - origin) / cell_size).floor() as isize;
+    let last = ((to - origin) / cell_size).floor() as isize;
+    if last < 0 || first >= count as isize {
+        return None;
+    }
+    Some((
+        first.clamp(0, count as isize - 1) as usize,
+        last.clamp(0, count as isize - 1) as usize,
+    ))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -160,6 +358,10 @@ impl GeneralSeries {
         self.color.as_deref()
     }
 
+    pub fn point_radius(&self) -> f64 {
+        self.point_radius
+    }
+
     pub(crate) fn estimated_bytes(&self) -> usize {
         self.x_axis_id.capacity()
             + self.y_axis_id.capacity()
@@ -171,6 +373,7 @@ impl GeneralSeries {
 pub(crate) struct GeneralSeriesRegistry {
     series: Vec<GeneralSeries>,
     next_id: u32,
+    scatter_spatial: RefCell<HashMap<GeneralSeriesId, ScatterSpatialIndex>>,
 }
 
 impl GeneralSeriesRegistry {
@@ -178,6 +381,7 @@ impl GeneralSeriesRegistry {
         Self {
             series: Vec::new(),
             next_id: 1,
+            scatter_spatial: RefCell::new(HashMap::new()),
         }
     }
 
@@ -229,6 +433,7 @@ impl GeneralSeriesRegistry {
             visible: options.visible,
             title: options.title,
             color: options.color,
+            point_radius: options.point_radius,
         });
         self.next_id = next_id;
         Ok(id)
@@ -239,6 +444,7 @@ impl GeneralSeriesRegistry {
             return false;
         };
         self.series.remove(index);
+        self.scatter_spatial.get_mut().remove(&id);
         true
     }
 
@@ -257,12 +463,22 @@ impl GeneralSeriesRegistry {
     }
 
     pub(crate) fn estimated_bytes(&self) -> usize {
+        let scatter_bytes = self.scatter_spatial.try_borrow().map_or(0, |cache| {
+            cache.capacity()
+                * (std::mem::size_of::<GeneralSeriesId>()
+                    + std::mem::size_of::<ScatterSpatialIndex>())
+                + cache
+                    .values()
+                    .map(ScatterSpatialIndex::estimated_bytes)
+                    .sum::<usize>()
+        });
         self.series.capacity() * std::mem::size_of::<GeneralSeries>()
             + self
                 .series
                 .iter()
                 .map(GeneralSeries::estimated_bytes)
                 .sum::<usize>()
+            + scatter_bytes
     }
 }
 
@@ -284,12 +500,10 @@ impl ChartEngine {
         let pane_domain = self
             .pane_horizontal_domain(options.pane)
             .ok_or_else(|| invalid("general series references a stale pane"))?;
-        let dataset_kind = self
-            .general_dataset(options.dataset)
-            .map(|dataset| dataset.x_kind())
-            .ok_or_else(|| {
-                ChartError::new(ErrorCode::InvalidHandle, "general dataset handle is stale")
-            })?;
+        let dataset = self.general_dataset(options.dataset).ok_or_else(|| {
+            ChartError::new(ErrorCode::InvalidHandle, "general dataset handle is stale")
+        })?;
+        let dataset_kind = dataset.x_kind();
         let x_axis = self
             .general_axis(&options.x_axis_id)
             .cloned()
@@ -320,7 +534,29 @@ impl ChartEngine {
                     ));
                 }
             }
+            GeneralSeriesKind::Scatter => {
+                if !matches!(pane_domain, HorizontalDomain::Continuous { .. })
+                    || dataset_kind != GeneralXKind::Numeric
+                    || !matches!(
+                        x_axis.scale(),
+                        GeneralScaleType::Linear
+                            | GeneralScaleType::Logarithmic
+                            | GeneralScaleType::SymmetricLog
+                    )
+                    || !matches!(
+                        y_axis.scale(),
+                        GeneralScaleType::Linear
+                            | GeneralScaleType::Logarithmic
+                            | GeneralScaleType::SymmetricLog
+                    )
+                {
+                    return Err(invalid(
+                        "scatter requires a continuous pane, numeric X data, and numeric X/Y axes",
+                    ));
+                }
+            }
         }
+        validate_dataset_for_series(options.kind, dataset, &x_axis, &y_axis)?;
         validate_presentation(&options)?;
         let id = if let Some(registry) = self.general_series.as_mut() {
             registry.insert(pane_id, options)?
@@ -400,6 +636,30 @@ impl ChartEngine {
         self.general_series
             .as_ref()
             .is_some_and(|registry| registry.uses_pane(pane_id))
+    }
+
+    pub(crate) fn validate_general_dataset_replacement(
+        &self,
+        dataset_id: GeneralDatasetId,
+        input: &GeneralXyInput,
+    ) -> Result<(), ChartError> {
+        let Some(registry) = self.general_series.as_ref() else {
+            return Ok(());
+        };
+        for series in registry
+            .series
+            .iter()
+            .filter(|series| series.dataset == dataset_id)
+        {
+            let x_axis = self
+                .general_axis(&series.x_axis_id)
+                .ok_or_else(|| invalid("bound general series X axis is stale"))?;
+            let y_axis = self
+                .general_axis(&series.y_axis_id)
+                .ok_or_else(|| invalid("bound general series Y axis is stale"))?;
+            validate_input_for_series(series.kind, input, x_axis, y_axis)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn visit_general_columns<F>(&self, series: &GeneralSeries, mut visit: F)
@@ -506,6 +766,135 @@ impl ChartEngine {
         }
     }
 
+    fn scatter_geometry_context(&self, series: &GeneralSeries) -> Option<ScatterGeometryContext> {
+        if !series.visible || series.kind != GeneralSeriesKind::Scatter {
+            return None;
+        }
+        let pane_index = self.pane_index_for_id(series.pane_id)?;
+        let plot = self.general_plot_rect(pane_index)?;
+        let dataset = self.general_dataset(series.dataset)?;
+        dataset.numeric_x()?;
+        let x_axis = self.general_axis(&series.x_axis_id)?;
+        let y_axis = self.general_axis(&series.y_axis_id)?;
+        let GeneralAxisDomain::Numeric(x_domain) = self.effective_general_axis_domain(x_axis)?
+        else {
+            return None;
+        };
+        let GeneralAxisDomain::Numeric(y_domain) = self.effective_general_axis_domain(y_axis)?
+        else {
+            return None;
+        };
+        let x_range = if x_axis.reverse() {
+            (plot.width, 0.0)
+        } else {
+            (0.0, plot.width)
+        };
+        let plot_bottom = plot.y + plot.height;
+        let y_range = if y_axis.reverse() {
+            (plot.y, plot_bottom)
+        } else {
+            (plot_bottom, plot.y)
+        };
+        let x_scale = NumericAxisScale::new(x_axis.scale(), x_domain, x_range.0, x_range.1)?;
+        let y_scale = NumericAxisScale::new(y_axis.scale(), y_domain, y_range.0, y_range.1)?;
+        Some(ScatterGeometryContext {
+            key: ScatterGeometryKey {
+                dataset_generation: dataset.generation(),
+                plot_width: plot.width.to_bits(),
+                plot_y: plot.y.to_bits(),
+                plot_height: plot.height.to_bits(),
+                x_domain: x_domain.map(f64::to_bits),
+                y_domain: y_domain.map(f64::to_bits),
+                x_scale: x_axis.scale(),
+                y_scale: y_axis.scale(),
+                x_reverse: x_axis.reverse(),
+                y_reverse: y_axis.reverse(),
+                radius: series.point_radius.to_bits(),
+            },
+            x_scale,
+            y_scale,
+            plot_width: plot.width,
+            plot_y: plot.y,
+            plot_bottom,
+            radius: series.point_radius,
+        })
+    }
+
+    fn build_scatter_spatial_index(
+        &self,
+        series: &GeneralSeries,
+        context: ScatterGeometryContext,
+    ) -> Option<ScatterSpatialIndex> {
+        let dataset = self.general_dataset(series.dataset)?;
+        let x_values = dataset.numeric_x()?;
+        let mut points = Vec::with_capacity(dataset.len());
+        for (row, (&x_value, &y_value)) in x_values.iter().zip(dataset.y()).enumerate() {
+            if !dataset.y_is_valid(row) {
+                continue;
+            }
+            let (Some(x), Some(y)) = (
+                context.x_scale.coordinate(x_value),
+                context.y_scale.coordinate(y_value),
+            ) else {
+                continue;
+            };
+            if x < -context.radius
+                || x > context.plot_width + context.radius
+                || y < context.plot_y - context.radius
+                || y > context.plot_bottom + context.radius
+            {
+                continue;
+            }
+            points.push(GeneralScatterGeometry {
+                row,
+                x,
+                y,
+                radius: context.radius,
+            });
+        }
+        Some(ScatterSpatialIndex::new(
+            context.key,
+            context.plot_y,
+            context.plot_width,
+            context.plot_bottom - context.plot_y,
+            points,
+        ))
+    }
+
+    fn with_scatter_spatial_index<R, F>(&self, series: &GeneralSeries, use_index: F) -> Option<R>
+    where
+        F: FnOnce(&ScatterSpatialIndex) -> R,
+    {
+        let context = self.scatter_geometry_context(series)?;
+        let registry = self.general_series.as_ref()?;
+        let current = registry
+            .scatter_spatial
+            .borrow()
+            .get(&series.id)
+            .is_some_and(|index| index.key == context.key);
+        if !current {
+            let index = self.build_scatter_spatial_index(series, context)?;
+            registry
+                .scatter_spatial
+                .borrow_mut()
+                .insert(series.id, index);
+        }
+        let cache = registry.scatter_spatial.borrow();
+        let index = cache.get(&series.id)?;
+        Some(use_index(index))
+    }
+
+    pub(crate) fn visit_general_scatter_points<F>(&self, series: &GeneralSeries, mut visit: F)
+    where
+        F: FnMut(GeneralScatterGeometry),
+    {
+        let _ = self.with_scatter_spatial_index(series, |index| {
+            for &point in &index.points {
+                visit(point);
+            }
+        });
+    }
+
     #[doc(hidden)]
     pub fn general_hit_test(
         &self,
@@ -539,8 +928,7 @@ impl ChartEngine {
             let Some(dataset) = self.general_dataset(series.dataset) else {
                 continue;
             };
-            self.visit_general_columns(series, |geometry| {
-                let distance = distance_to_rect(x_css, y_css, geometry);
+            let mut consider = |row: usize, distance: f64| {
                 if distance > max_distance {
                     return;
                 }
@@ -550,16 +938,29 @@ impl ChartEngine {
                 {
                     return;
                 }
-                let Some(row_id) = dataset.row_identity(geometry.row).cloned() else {
+                let Some(row_id) = dataset.row_identity(row).cloned() else {
                     return;
                 };
                 best = Some(GeneralSeriesHit {
                     series: series.id,
-                    row: geometry.row,
+                    row,
                     row_id,
                     distance,
                 });
-            });
+            };
+            match series.kind {
+                GeneralSeriesKind::Column => self.visit_general_columns(series, |geometry| {
+                    consider(geometry.row, distance_to_rect(x_css, y_css, geometry));
+                }),
+                GeneralSeriesKind::Scatter => {
+                    let expansion = series.point_radius + max_distance;
+                    let _ = self.with_scatter_spatial_index(series, |index| {
+                        index.visit_candidates(x_css, y_css, expansion, |geometry| {
+                            consider(geometry.row, distance_to_circle(x_css, y_css, geometry));
+                        });
+                    });
+                }
+            }
             if matches!(mode, GeneralHitMode::Exact)
                 && best.as_ref().is_some_and(|hit| hit.distance == 0.0)
             {
@@ -567,6 +968,32 @@ impl ChartEngine {
             }
         }
         best
+    }
+
+    #[cfg(test)]
+    pub(crate) fn general_scatter_hit_candidate_count(
+        &self,
+        series_id: GeneralSeriesId,
+        x_css: f64,
+        y_css: f64,
+        max_distance: f64,
+    ) -> Option<usize> {
+        let series = self.general_series(series_id)?;
+        if series.kind != GeneralSeriesKind::Scatter
+            || !x_css.is_finite()
+            || !y_css.is_finite()
+            || !max_distance.is_finite()
+            || max_distance < 0.0
+        {
+            return None;
+        }
+        self.with_scatter_spatial_index(series, |index| {
+            let mut count = 0usize;
+            index.visit_candidates(x_css, y_css, series.point_radius + max_distance, |_| {
+                count += 1
+            });
+            count
+        })
     }
 
     #[doc(hidden)]
@@ -578,8 +1005,7 @@ impl ChartEngine {
         let series = self.general_series(series_id)?;
         let dataset = self.general_dataset(series.dataset)?;
         let row_id = dataset.row_identity(row)?.clone();
-        let category_index = usize::try_from(*dataset.category_indices()?.get(row)?).ok()?;
-        let x_label = dataset.categories()?.get(category_index)?.clone();
+        let x_label = general_x_label(dataset, row)?;
         Some(GeneralTooltipSnapshot {
             series: series_id,
             row,
@@ -599,8 +1025,6 @@ impl ChartEngine {
     ) -> Option<GeneralAccessibilitySnapshot> {
         let series = self.general_series(series_id)?;
         let dataset = self.general_dataset(series.dataset)?;
-        let categories = dataset.categories()?;
-        let category_indices = dataset.category_indices()?;
         let total_rows = dataset.len();
         let offset = offset.min(total_rows);
         let end = offset
@@ -609,8 +1033,7 @@ impl ChartEngine {
         let mut items = Vec::with_capacity(end - offset);
         for row in offset..end {
             let row_id = dataset.row_identity(row)?.clone();
-            let category_index = usize::try_from(*category_indices.get(row)?).ok()?;
-            let x_label = categories.get(category_index)?.clone();
+            let x_label = general_x_label(dataset, row)?;
             items.push(GeneralAccessibilityItem {
                 row,
                 row_id,
@@ -646,6 +1069,95 @@ fn distance_to_rect(x: f64, y: f64, geometry: GeneralColumnGeometry) -> f64 {
     dx.hypot(dy)
 }
 
+fn distance_to_circle(x: f64, y: f64, geometry: GeneralScatterGeometry) -> f64 {
+    ((x - geometry.x).hypot(y - geometry.y) - geometry.radius).max(0.0)
+}
+
+fn general_x_label(dataset: &crate::GeneralDataset, row: usize) -> Option<String> {
+    if let Some(values) = dataset.numeric_x() {
+        return values.get(row).map(ToString::to_string);
+    }
+    if let Some(values) = dataset.temporal_x_epoch_ms() {
+        return values.get(row).map(ToString::to_string);
+    }
+    let category_index = usize::try_from(*dataset.category_indices()?.get(row)?).ok()?;
+    dataset.categories()?.get(category_index).cloned()
+}
+
+fn validate_dataset_for_series(
+    kind: GeneralSeriesKind,
+    dataset: &crate::GeneralDataset,
+    x_axis: &crate::GeneralAxis,
+    y_axis: &crate::GeneralAxis,
+) -> Result<(), ChartError> {
+    match kind {
+        GeneralSeriesKind::Column => {
+            if dataset.x_kind() != GeneralXKind::Category {
+                return Err(invalid("column series require category X data"));
+            }
+        }
+        GeneralSeriesKind::Scatter => {
+            let values = dataset
+                .numeric_x()
+                .ok_or_else(|| invalid("scatter series require numeric X data"))?;
+            if x_axis.scale() == GeneralScaleType::Logarithmic
+                && values.iter().any(|value| *value <= 0.0)
+            {
+                return Err(invalid("logarithmic scatter X values must be positive"));
+            }
+            if y_axis.scale() == GeneralScaleType::Logarithmic
+                && dataset
+                    .y()
+                    .iter()
+                    .enumerate()
+                    .any(|(index, value)| dataset.y_is_valid(index) && *value <= 0.0)
+            {
+                return Err(invalid("logarithmic scatter Y values must be positive"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_input_for_series(
+    kind: GeneralSeriesKind,
+    input: &GeneralXyInput,
+    x_axis: &crate::GeneralAxis,
+    y_axis: &crate::GeneralAxis,
+) -> Result<(), ChartError> {
+    match kind {
+        GeneralSeriesKind::Column => {
+            if input.x_kind() != GeneralXKind::Category {
+                return Err(invalid(
+                    "a dataset bound to a column series must remain category X data",
+                ));
+            }
+        }
+        GeneralSeriesKind::Scatter => {
+            let values = input.numeric_x_values().ok_or_else(|| {
+                invalid("a dataset bound to a scatter series must remain numeric X data")
+            })?;
+            if x_axis.scale() == GeneralScaleType::Logarithmic
+                && values.iter().any(|value| *value <= 0.0)
+            {
+                return Err(invalid("logarithmic scatter X values must be positive"));
+            }
+            if y_axis.scale() == GeneralScaleType::Logarithmic {
+                let validity = input.y_valid_values();
+                if input.y_values().iter().enumerate().any(|(index, value)| {
+                    validity
+                        .and_then(|values| values.get(index))
+                        .is_none_or(|valid| *valid != 0)
+                        && *value <= 0.0
+                }) {
+                    return Err(invalid("logarithmic scatter Y values must be positive"));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartError> {
     if options.title.len() > MAX_GENERAL_SERIES_TITLE_BYTES {
         return Err(resource(format!(
@@ -661,6 +1173,15 @@ fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartErro
         if Color::parse_css(color).is_none() {
             return Err(invalid("general series color must be a valid CSS color"));
         }
+    }
+    if options.kind == GeneralSeriesKind::Scatter
+        && (!options.point_radius.is_finite()
+            || !(MIN_GENERAL_POINT_RADIUS..=MAX_GENERAL_POINT_RADIUS)
+                .contains(&options.point_radius))
+    {
+        return Err(invalid(format!(
+            "scatter point radius must be finite and in {MIN_GENERAL_POINT_RADIUS}..={MAX_GENERAL_POINT_RADIUS} CSS px"
+        )));
     }
     Ok(())
 }
