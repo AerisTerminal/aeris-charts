@@ -72,6 +72,210 @@ fn constructs_without_a_browser_or_gpu() {
     assert_eq!(chart.dpr, 2.0);
 }
 
+/// Phase-0 compatibility sentinel for the all-in-one architecture. This deliberately uses the
+/// real engine mutation and frame paths instead of testing future domain types in isolation: when
+/// panes become domain-aware, the unchanged financial default must still compose the established
+/// series, pane/scale, indicator, drawing, and interaction owners into one ordered frame.
+#[test]
+fn financial_product_compatibility_fixture_survives_shared_frame_mutations() {
+    let mut chart = ChartEngine::new(960.0, 640.0, 1.0);
+    let rows = 96;
+    let times = (0..rows).map(|row| row as f64 * 60.0).collect::<Vec<_>>();
+    let close = (0..rows)
+        .map(|row| 100.0 + row as f64 * 0.1 + (row as f64 * 0.23).sin())
+        .collect::<Vec<_>>();
+    let open = close
+        .iter()
+        .enumerate()
+        .map(|(row, value)| value - (row as f64 * 0.11).sin() * 0.4)
+        .collect::<Vec<_>>();
+    let high = open
+        .iter()
+        .zip(&close)
+        .map(|(open, close)| open.max(*close) + 0.75)
+        .collect::<Vec<_>>();
+    let low = open
+        .iter()
+        .zip(&close)
+        .map(|(open, close)| open.min(*close) - 0.75)
+        .collect::<Vec<_>>();
+
+    chart
+        .set_series_data(0, &times, &open, &high, &low, &close)
+        .expect("canonical candlestick fixture");
+    let mut financial_series = vec![(0, SeriesKind::Candlestick)];
+    for kind in [
+        SeriesKind::Bar,
+        SeriesKind::Line,
+        SeriesKind::Area,
+        SeriesKind::Histogram,
+        SeriesKind::Baseline,
+    ] {
+        let id = chart.add_series(kind);
+        chart
+            .set_series_data(id, &times, &open, &high, &low, &close)
+            .expect("valid financial series fixture");
+        financial_series.push((id, kind));
+    }
+
+    let comparison_pane = chart.add_pane(true).expect("comparison pane identity");
+    let comparison_scale = chart
+        .add_price_scale(
+            comparison_pane,
+            "phase-zero-comparison",
+            PriceScaleSide::Left,
+            Some(0),
+            true,
+        )
+        .expect("named comparison scale");
+    let comparison = financial_series
+        .iter()
+        .find_map(|(id, kind)| (*kind == SeriesKind::Line).then_some(*id))
+        .unwrap();
+    assert!(chart.try_set_series_pane_and_scale(
+        comparison,
+        comparison_pane,
+        0.6,
+        "phase-zero-comparison",
+    ));
+    assert_eq!(
+        chart.series_price_scale(comparison),
+        Some((comparison_pane, comparison_scale))
+    );
+
+    let histogram = financial_series
+        .iter()
+        .find_map(|(id, kind)| (*kind == SeriesKind::Histogram).then_some(*id))
+        .unwrap();
+    assert!(chart.add_sma(0, 10).is_some());
+    assert!(chart.add_ema(0, 12).is_some());
+    assert_eq!(chart.add_ema_ribbon(0, [3, 5, 8, 13, 21]).len(), 5);
+    assert_eq!(chart.add_bollinger(0, 20, 2.0).len(), 3);
+    assert!(chart.add_rsi(0, 14).is_some());
+    assert_eq!(chart.add_macd(0, 12, 26, 9).len(), 3);
+    assert_eq!(chart.add_stochastic(0, 14, 3).len(), 2);
+    assert!(chart.add_atr(0, 14).is_some());
+    assert!(chart.add_vwap(0, Some(histogram)).is_some());
+    assert!(chart.add_wma(0, 9).is_some());
+    assert_eq!(
+        chart
+            .indicator_bindings()
+            .into_iter()
+            .map(|binding| binding.kind)
+            .collect::<Vec<_>>(),
+        vec![
+            IndicatorKind::Sma { period: 10 },
+            IndicatorKind::Ema { period: 12 },
+            IndicatorKind::EmaRibbon {
+                periods: [3, 5, 8, 13, 21],
+            },
+            IndicatorKind::Bollinger {
+                period: 20,
+                deviation: 2.0,
+            },
+            IndicatorKind::Rsi { period: 14 },
+            IndicatorKind::Macd {
+                fast: 12,
+                slow: 26,
+                signal: 9,
+            },
+            IndicatorKind::Stochastic {
+                k_period: 14,
+                d_period: 3,
+            },
+            IndicatorKind::Atr { period: 14 },
+            IndicatorKind::Vwap,
+            IndicatorKind::Wma { period: 9 },
+        ]
+    );
+
+    let point = |logical, price| DrawingPoint { logical, price };
+    let drawing_fixtures = [
+        (
+            DrawingKind::TrendLine,
+            vec![point(8.0, 100.0), point(24.0, 106.0)],
+        ),
+        (DrawingKind::HorizontalLine, vec![point(0.0, 103.0)]),
+        (DrawingKind::HorizontalRay, vec![point(20.0, 104.0)]),
+        (DrawingKind::VerticalLine, vec![point(32.0, 0.0)]),
+        (
+            DrawingKind::Rectangle,
+            vec![point(36.0, 101.0), point(48.0, 107.0)],
+        ),
+        (DrawingKind::Text, vec![point(52.0, 105.0)]),
+        (
+            DrawingKind::Brush,
+            vec![point(56.0, 102.0), point(60.0, 104.0), point(64.0, 103.0)],
+        ),
+        (
+            DrawingKind::Path,
+            vec![point(66.0, 102.0), point(70.0, 105.0), point(74.0, 104.0)],
+        ),
+        (
+            DrawingKind::LongPosition,
+            vec![point(76.0, 104.0), point(76.0, 108.0), point(76.0, 101.0)],
+        ),
+        (
+            DrawingKind::ShortPosition,
+            vec![point(84.0, 105.0), point(84.0, 101.0), point(84.0, 108.0)],
+        ),
+    ];
+    let drawing_kinds = drawing_fixtures.each_ref().map(|(kind, _)| *kind);
+    for (kind, points) in drawing_fixtures {
+        assert!(
+            chart.add_drawing(kind, 0, points, None).is_some(),
+            "{kind:?} fixture"
+        );
+    }
+
+    chart.time_scale.set_width(960.0);
+    chart.fit_content();
+    let initial = chart.build_frame();
+    assert_eq!(initial.panes.len(), chart.panes.len());
+    assert!(initial.panes.iter().all(|pane| pane.height > 0.0));
+    assert!(!initial.panes[0].main.is_empty());
+    assert!(!initial.panes[comparison_pane].main.is_empty());
+
+    chart.time_scale_start_scroll(400.0);
+    chart.time_scale_scroll_to(430.0);
+    chart.time_scale_end_scroll();
+    chart.time_scale_zoom_focused(480.0, 1.1);
+    chart.price_axis_start_scale(0, PriceScaleTarget::Right, 260.0);
+    chart.price_axis_scale_to(0, PriceScaleTarget::Right, 230.0);
+    chart.price_axis_end_scale(0, PriceScaleTarget::Right);
+    assert!(chart.set_crosshair_position(close[48], times[48], 0));
+
+    let mutated = chart.build_frame();
+    assert_eq!(mutated.panes.len(), initial.panes.len());
+    assert!(mutated.panes.iter().all(|pane| pane.height > 0.0));
+    assert!(!mutated.panes[0].main.is_empty());
+    assert!(!mutated.panes[comparison_pane].main.is_empty());
+    assert_eq!(
+        financial_series
+            .iter()
+            .map(|(id, expected)| {
+                chart
+                    .series
+                    .iter()
+                    .find(|series| series.id == *id)
+                    .map(|series| (series.kind, *expected))
+            })
+            .collect::<Vec<_>>(),
+        financial_series
+            .iter()
+            .map(|(_, expected)| Some((*expected, *expected)))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        chart
+            .drawings
+            .iter()
+            .map(|drawing| drawing.kind)
+            .collect::<Vec<_>>(),
+        drawing_kinds
+    );
+}
+
 #[test]
 fn series_kind_selects_canonical_scalar_storage_without_collapsing_flat_ohlc() {
     let mut chart = ChartEngine::new(800.0, 600.0, 1.0);
