@@ -8,6 +8,8 @@
 //!   Target D — footprint history/live/correction ingestion plus shared-frame construction
 //!   Target E — 100k visible-bar volume profile refresh and cached shared frame
 //!   Target F — 100k-point general XY line frame + nearest-hit interaction
+//!   Target G — mixed 100k-row general dashboard frame, hit interaction, and retained memory
+//!   Target H — combined 50k-bar financial + 50k-point general frame and retained memory
 //!
 //! Report-only by default (prints numbers + PASS/FAIL). Set `NUCLEUSCHARTS_PERF_STRICT=1` to exit non-zero
 //! on any failure so CI can treat it as a hard gate; thresholds are machine-dependent, so the
@@ -53,6 +55,17 @@ fn report(label: &str, measured_ms: f64, budget_ms: f64) -> bool {
     println!(
         "  [{}] {label}: {measured_ms:.2} ms (budget {budget_ms:.2} ms)",
         if pass { "PASS" } else { "FAIL" }
+    );
+    pass
+}
+
+fn report_bytes(label: &str, measured_bytes: usize, budget_bytes: usize) -> bool {
+    let pass = measured_bytes <= budget_bytes;
+    println!(
+        "  [{}] {label}: {:.2} MiB (budget {:.2} MiB)",
+        if pass { "PASS" } else { "FAIL" },
+        measured_bytes as f64 / (1024.0 * 1024.0),
+        budget_bytes as f64 / (1024.0 * 1024.0),
     );
     pass
 }
@@ -107,6 +120,11 @@ fn main() {
     const GENERAL_LINE_POINTS: usize = 100_000;
     const GENERAL_LINE_HIT_SAMPLES: usize = 100;
     const GENERAL_LINE_HIT_BUDGET_MS: f64 = 8.0;
+    const GENERAL_MIX_POINTS_PER_SERIES: usize = 20_000;
+    const GENERAL_MIX_MEMORY_BUDGET_BYTES: usize = 12 * 1024 * 1024;
+    const COMBINED_FINANCIAL_BARS: usize = 50_000;
+    const COMBINED_GENERAL_POINTS: usize = 50_000;
+    const COMBINED_MEMORY_BUDGET_BYTES: usize = 16 * 1024 * 1024;
 
     println!("nucleuscharts perf gate (release build recommended)\n");
 
@@ -412,8 +430,237 @@ fn main() {
         GENERAL_LINE_HIT_BUDGET_MS,
     );
 
-    let all_pass =
-        a_pass && b_pass && c_pass && d_pass && e_refresh && e_cached && f_frame && f_hit;
+    // ---- Target G: mixed general-only dashboard ---------------------------------------------
+    // Keep every current high-density geometry family in one coordinate region so this gate
+    // catches accidental repeated walks, unbounded retained caches, and interaction regressions.
+    let mut mixed = ChartEngine::new(1600.0, 800.0, 1.0);
+    let mixed_pane = mixed
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .expect("valid mixed-general pane");
+    mixed
+        .add_general_axis(GeneralAxisOptions::new(
+            "mixed-x",
+            mixed_pane,
+            AxisDimension::X,
+            GeneralScaleType::Linear,
+        ))
+        .expect("valid mixed-general X axis");
+    mixed
+        .add_general_axis(GeneralAxisOptions::new(
+            "mixed-y",
+            mixed_pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .expect("valid mixed-general Y axis");
+    let mixed_x: Vec<f64> = (0..GENERAL_MIX_POINTS_PER_SERIES)
+        .map(|index| index as f64)
+        .collect();
+    let mixed_y: Vec<f64> = mixed_x
+        .iter()
+        .map(|x| 100.0 + (x * 0.013).sin() * 20.0)
+        .collect();
+    let line = mixed
+        .create_general_xy_dataset(GeneralXyInput::Numeric {
+            ids: None,
+            x: mixed_x.clone(),
+            y: mixed_y.clone(),
+            y_valid: None,
+        })
+        .expect("valid mixed line dataset");
+    mixed
+        .add_general_series(GeneralSeriesOptions::xy_line(
+            mixed_pane, line, "mixed-x", "mixed-y",
+        ))
+        .expect("valid mixed line");
+    let area = mixed
+        .create_general_xy_dataset(GeneralXyInput::Numeric {
+            ids: None,
+            x: mixed_x.clone(),
+            y: mixed_y.iter().map(|value| value - 15.0).collect(),
+            y_valid: None,
+        })
+        .expect("valid mixed area dataset");
+    mixed
+        .add_general_series(GeneralSeriesOptions::xy_area(
+            mixed_pane, area, "mixed-x", "mixed-y",
+        ))
+        .expect("valid mixed area");
+    let range = mixed
+        .create_general_xy_dataset(GeneralXyInput::RangeNumeric {
+            ids: None,
+            x: mixed_x.clone(),
+            low: mixed_y.iter().map(|value| value - 8.0).collect(),
+            low_valid: None,
+            high: mixed_y.iter().map(|value| value + 8.0).collect(),
+            high_valid: None,
+        })
+        .expect("valid mixed range dataset");
+    mixed
+        .add_general_series(GeneralSeriesOptions::range_area(
+            mixed_pane, range, "mixed-x", "mixed-y",
+        ))
+        .expect("valid mixed range area");
+    let scatter = mixed
+        .create_general_xy_dataset(GeneralXyInput::Numeric {
+            ids: None,
+            x: mixed_x.clone(),
+            y: mixed_y.iter().map(|value| value + 25.0).collect(),
+            y_valid: None,
+        })
+        .expect("valid mixed scatter dataset");
+    mixed
+        .add_general_series(GeneralSeriesOptions::scatter(
+            mixed_pane, scatter, "mixed-x", "mixed-y",
+        ))
+        .expect("valid mixed scatter");
+    let bubble = mixed
+        .create_general_xy_dataset(GeneralXyInput::Bubble {
+            ids: None,
+            x: mixed_x,
+            y: mixed_y.iter().map(|value| value - 30.0).collect(),
+            y_valid: None,
+            size: (0..GENERAL_MIX_POINTS_PER_SERIES)
+                .map(|index| (index % 16 + 1) as f64)
+                .collect(),
+            size_valid: None,
+        })
+        .expect("valid mixed bubble dataset");
+    mixed
+        .add_general_series(GeneralSeriesOptions::bubble(
+            mixed_pane, bubble, "mixed-x", "mixed-y",
+        ))
+        .expect("valid mixed bubble");
+    mixed.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let mut mixed_frame = ChartFrame::default();
+    mixed.build_frame_into(&mut mixed_frame);
+    let start = Instant::now();
+    for _ in 0..FRAMES {
+        mixed.build_frame_into(&mut mixed_frame);
+    }
+    let mixed_frame_ms = start.elapsed().as_secs_f64() * 1000.0 / FRAMES as f64;
+    let start = Instant::now();
+    for sample in 0..GENERAL_LINE_HIT_SAMPLES {
+        let x = 1600.0 * (sample as f64 + 0.5) / GENERAL_LINE_HIT_SAMPLES as f64;
+        std::hint::black_box(mixed.general_hit_test(
+            mixed_pane,
+            x,
+            400.0,
+            GeneralHitMode::Nearest { max_distance: 32.0 },
+        ));
+    }
+    let mixed_hit_ms = start.elapsed().as_secs_f64() * 1000.0 / GENERAL_LINE_HIT_SAMPLES as f64;
+    let mixed_memory = mixed.memory_usage().estimated_live_bytes();
+    println!(
+        "Target G — 5-series mixed general dashboard ({} total rows):",
+        GENERAL_MIX_POINTS_PER_SERIES * 5
+    );
+    let g_frame = report("mixed general build_frame", mixed_frame_ms, FRAME_BUDGET_MS);
+    let g_hit = report(
+        "mixed general nearest hit",
+        mixed_hit_ms,
+        GENERAL_LINE_HIT_BUDGET_MS,
+    );
+    let g_memory = report_bytes(
+        "mixed general retained memory",
+        mixed_memory,
+        GENERAL_MIX_MEMORY_BUDGET_BYTES,
+    );
+
+    // ---- Target H: one engine with financial and general panes ------------------------------
+    let mut combined = ChartEngine::new(1600.0, 800.0, 1.0);
+    let (times, open, high, low, close) = gen_series(COMBINED_FINANCIAL_BARS, 0.0);
+    combined
+        .set_series_data(0, &times, &open, &high, &low, &close)
+        .expect("valid combined financial fixture");
+    combined.time_scale.set_width(1600.0);
+    combined.fit_content();
+    let combined_pane = combined
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .expect("valid combined general pane");
+    combined
+        .add_general_axis(GeneralAxisOptions::new(
+            "combined-x",
+            combined_pane,
+            AxisDimension::X,
+            GeneralScaleType::Linear,
+        ))
+        .expect("valid combined X axis");
+    combined
+        .add_general_axis(GeneralAxisOptions::new(
+            "combined-y",
+            combined_pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .expect("valid combined Y axis");
+    let combined_x: Vec<f64> = (0..COMBINED_GENERAL_POINTS)
+        .map(|index| index as f64)
+        .collect();
+    let combined_y: Vec<f64> = combined_x
+        .iter()
+        .map(|x| 50.0 + (x * 0.017).sin() * 12.0)
+        .collect();
+    let combined_dataset = combined
+        .create_general_xy_dataset(GeneralXyInput::RangeNumeric {
+            ids: None,
+            x: combined_x,
+            low: combined_y.iter().map(|value| value - 4.0).collect(),
+            low_valid: None,
+            high: combined_y.iter().map(|value| value + 4.0).collect(),
+            high_valid: None,
+        })
+        .expect("valid combined range dataset");
+    combined
+        .add_general_series(GeneralSeriesOptions::range_area(
+            combined_pane,
+            combined_dataset,
+            "combined-x",
+            "combined-y",
+        ))
+        .expect("valid combined range area");
+    combined.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let mut combined_frame = ChartFrame::default();
+    combined.build_frame_into(&mut combined_frame);
+    let start = Instant::now();
+    for _ in 0..FRAMES {
+        combined.build_frame_into(&mut combined_frame);
+    }
+    let combined_frame_ms = start.elapsed().as_secs_f64() * 1000.0 / FRAMES as f64;
+    let combined_memory = combined.memory_usage().estimated_live_bytes();
+    println!(
+        "Target H — {COMBINED_FINANCIAL_BARS} financial bars + {COMBINED_GENERAL_POINTS} general points:"
+    );
+    let h_frame = report("combined build_frame", combined_frame_ms, FRAME_BUDGET_MS);
+    let h_memory = report_bytes(
+        "combined retained memory",
+        combined_memory,
+        COMBINED_MEMORY_BUDGET_BYTES,
+    );
+
+    let all_pass = a_pass
+        && b_pass
+        && c_pass
+        && d_pass
+        && e_refresh
+        && e_cached
+        && f_frame
+        && f_hit
+        && g_frame
+        && g_hit
+        && g_memory
+        && h_frame
+        && h_memory;
     println!(
         "\n{}",
         if all_pass {

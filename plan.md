@@ -400,10 +400,12 @@ Current Phase 2 progress (2026-09-22):
   Canvas2D/WebGPU/GPUI path executor coverage remains green;
 - the complete portable browser matrix remains green with 279 passed and 10 expected skips, and the package
   smoke test contains 21 files with a 2436 kB WASM artifact;
-- the release perf harness now enforces the first general-only density gate at 100k `xy_line` points:
-  shared-frame construction must remain within 16.67 ms and nearest-hit interaction within 8 ms. Both
-  budgets pass on the current validation machine while the existing financial targets remain green.
-  Full Phase 2 remains open for the remaining series families and broader general/combined benchmark gates.
+- the release perf harness enforces a 100k `xy_line` density gate, a five-series/100k-row mixed-general
+  dashboard gate, and one combined engine with 50k financial bars plus a 50k-point general range pane.
+  General frame construction stays within 16.67 ms, nearest-hit interaction within 8 ms, mixed-general
+  retained memory within 12 MiB, and combined retained memory within 16 MiB. These remain separate from
+  the existing financial-only targets so regressions cannot hide in an aggregate result.
+  Full Phase 2 remains open for the remaining series families and host-level startup/upload budgets.
 
 Exit gate: Nucleus can build the representative Recharts dashboard examples with engine-owned
 semantics and backend parity while all existing financial gates remain green.

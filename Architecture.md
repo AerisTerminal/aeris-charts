@@ -127,9 +127,13 @@ identity. `range_area` adds bounded typed low/high columns beside the same X dom
 complete bounds atomically, treats either missing or transform-invalid bound as a run break, and emits one
 ordered `BandFill` plus its two boundary polylines from shared geometry. Band hit testing returns the nearest
 contributing row, while tooltip/accessibility snapshots expose both bounds. Replacement, explicit-ID updates,
-retention, memory accounting, and V2 persistence keep both channels aligned. The release perf harness now
-includes a 100k-point general-only line target with a 16.67 ms frame budget and 8 ms nearest-hit budget,
-so the first Phase 2 path has an explicit density contract rather than an unbudgeted performance claim.
+retention, memory accounting, and V2 persistence keep both channels aligned. The release perf harness
+includes a 100k-point general-only line target with a 16.67 ms frame budget and 8 ms nearest-hit budget.
+It also keeps the current line, area, range, scatter, and bubble paths in one 100k-row mixed-general
+target with the same frame/hit budgets and a 12 MiB retained-memory ceiling, then measures one engine
+containing 50k financial bars plus a 50k-point general range pane against the frame budget and a 16 MiB
+retained-memory ceiling. Financial-only, general-only, and combined execution therefore have separate
+enforced evidence rather than unbudgeted performance claims.
 Dataset replacement remains atomic against every bound series and cannot change a bound path/scatter/bubble
 X kind or drop a bound bubble size or range low channel. Canvas2D, retained
 WebGPU, GPUI, and the native tiny-skia rasterizer consume the same frame contract; grouped/stacked columns
