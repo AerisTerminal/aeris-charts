@@ -138,7 +138,8 @@ includes a 100k-point general-only line target with a 16.67 ms frame budget and 
 It also keeps the current line, area, range, scatter, and bubble paths in one 100k-row mixed-general
 target with the same frame/hit budgets and a 12 MiB retained-memory ceiling, then measures one engine
 containing 50k financial bars plus a 50k-point general range pane against the frame budget and a 16 MiB
-retained-memory ceiling. Financial-only, general-only, and combined execution therefore have separate
+retained-memory ceiling. A separate 100k-row numeric error-bar target enforces the same frame/hit budgets
+and a 16 MiB retained-memory ceiling. Financial-only, general-only, and combined execution therefore have separate
 enforced evidence rather than unbudgeted performance claims.
 Dataset replacement remains atomic against every bound series and cannot change a bound path/scatter/bubble
 X kind or drop a bound bubble size or range low channel. Canvas2D, retained

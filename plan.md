@@ -398,18 +398,19 @@ Current Phase 2 progress (2026-09-22):
 - numeric `error_bar` now owns optional independent X/Y lower and upper bounds in the aligned XY store.
   Shared geometry drives autoscale, ordered stems/caps/center marks, exact hits, labels, snapshots, and
   accessibility. Object and typed updates validate atomically; explicit-ID retention and V2 persistence
-  preserve each bound's missingness. Temporal/category error-bar forms and a dedicated dense-error-bar
-  performance gate remain open;
+  preserve each bound's missingness. Temporal/category error-bar forms remain open;
 - the focused general-chart browser suite is 21/21 across Chromium/Firefox/WebKit, including grouped/stacked
   columns plus bubble, range-area, and numeric error-bar ingestion, hit testing, updates, accessibility snapshots, and V2 restoration, while direct
   Canvas2D/WebGPU/GPUI path executor coverage remains green;
 - the complete portable browser matrix is green with 282 passed and 10 expected skips, and the package
   smoke test contains 21 files with a 2470 kB WASM artifact;
 - the release perf harness enforces a 100k `xy_line` density gate, a five-series/100k-row mixed-general
-  dashboard gate, and one combined engine with 50k financial bars plus a 50k-point general range pane.
+  dashboard gate, one combined engine with 50k financial bars plus a 50k-point general range pane,
+  and a separate 100k-row numeric error-bar gate.
   General frame construction stays within 16.67 ms, nearest-hit interaction within 8 ms, mixed-general
   retained memory within 12 MiB, and combined retained memory within 16 MiB. These remain separate from
-  the existing financial-only targets so regressions cannot hide in an aggregate result.
+  the existing financial-only targets so regressions cannot hide in an aggregate result. The error-bar
+  gate keeps frame/hit work within the same budgets and retained memory within 16 MiB.
   Full Phase 2 remains open for the remaining series families and host-level startup/upload budgets.
 
 Exit gate: Nucleus can build the representative Recharts dashboard examples with engine-owned

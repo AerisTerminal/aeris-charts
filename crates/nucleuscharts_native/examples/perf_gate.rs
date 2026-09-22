@@ -10,6 +10,7 @@
 //!   Target F — 100k-point general XY line frame + nearest-hit interaction
 //!   Target G — mixed 100k-row general dashboard frame, hit interaction, and retained memory
 //!   Target H — combined 50k-bar financial + 50k-point general frame and retained memory
+//!   Target I — 100k-row numeric error bars frame, hit interaction, and retained memory
 //!
 //! Report-only by default (prints numbers + PASS/FAIL). Set `NUCLEUSCHARTS_PERF_STRICT=1` to exit non-zero
 //! on any failure so CI can treat it as a hard gate; thresholds are machine-dependent, so the
@@ -125,6 +126,8 @@ fn main() {
     const COMBINED_FINANCIAL_BARS: usize = 50_000;
     const COMBINED_GENERAL_POINTS: usize = 50_000;
     const COMBINED_MEMORY_BUDGET_BYTES: usize = 16 * 1024 * 1024;
+    const ERROR_BAR_POINTS: usize = 100_000;
+    const ERROR_BAR_MEMORY_BUDGET_BYTES: usize = 16 * 1024 * 1024;
 
     println!("nucleuscharts perf gate (release build recommended)\n");
 
@@ -648,6 +651,94 @@ fn main() {
         COMBINED_MEMORY_BUDGET_BYTES,
     );
 
+    // ---- Target I: dense numeric error bars -------------------------------------------------
+    let mut errors = ChartEngine::new(1600.0, 800.0, 1.0);
+    let error_pane = errors
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .expect("valid error-bar pane");
+    errors
+        .add_general_axis(GeneralAxisOptions::new(
+            "error-x",
+            error_pane,
+            AxisDimension::X,
+            GeneralScaleType::Linear,
+        ))
+        .expect("valid error-bar X axis");
+    errors
+        .add_general_axis(GeneralAxisOptions::new(
+            "error-y",
+            error_pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .expect("valid error-bar Y axis");
+    let error_x: Vec<f64> = (0..ERROR_BAR_POINTS).map(|index| index as f64).collect();
+    let error_y: Vec<f64> = error_x
+        .iter()
+        .map(|x| 100.0 + (x * 0.013).sin() * 20.0)
+        .collect();
+    let error_dataset = errors
+        .create_general_xy_dataset(GeneralXyInput::ErrorNumeric {
+            ids: None,
+            x: error_x.clone(),
+            y: error_y.clone(),
+            y_valid: None,
+            x_low: error_x.iter().map(|x| x - 0.25).collect(),
+            x_low_valid: None,
+            x_high: error_x.iter().map(|x| x + 0.25).collect(),
+            x_high_valid: None,
+            y_low: error_y.iter().map(|y| y - 3.0).collect(),
+            y_low_valid: None,
+            y_high: error_y.iter().map(|y| y + 3.0).collect(),
+            y_high_valid: None,
+        })
+        .expect("valid dense error-bar dataset");
+    errors
+        .add_general_series(GeneralSeriesOptions::error_bar(
+            error_pane,
+            error_dataset,
+            "error-x",
+            "error-y",
+        ))
+        .expect("valid error-bar series");
+    errors.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let mut error_frame = ChartFrame::default();
+    errors.build_frame_into(&mut error_frame);
+    let start = Instant::now();
+    for _ in 0..FRAMES {
+        errors.build_frame_into(&mut error_frame);
+    }
+    let error_frame_ms = start.elapsed().as_secs_f64() * 1000.0 / FRAMES as f64;
+    let start = Instant::now();
+    for sample in 0..GENERAL_LINE_HIT_SAMPLES {
+        let x = 1600.0 * (sample as f64 + 0.5) / GENERAL_LINE_HIT_SAMPLES as f64;
+        std::hint::black_box(errors.general_hit_test(
+            error_pane,
+            x,
+            400.0,
+            GeneralHitMode::Nearest { max_distance: 32.0 },
+        ));
+    }
+    let error_hit_ms = start.elapsed().as_secs_f64() * 1000.0 / GENERAL_LINE_HIT_SAMPLES as f64;
+    let error_memory = errors.memory_usage().estimated_live_bytes();
+    println!("Target I — {ERROR_BAR_POINTS} numeric error bars:");
+    let i_frame = report("error_bar build_frame", error_frame_ms, FRAME_BUDGET_MS);
+    let i_hit = report(
+        "error_bar nearest hit",
+        error_hit_ms,
+        GENERAL_LINE_HIT_BUDGET_MS,
+    );
+    let i_memory = report_bytes(
+        "error_bar retained memory",
+        error_memory,
+        ERROR_BAR_MEMORY_BUDGET_BYTES,
+    );
+
     let all_pass = a_pass
         && b_pass
         && c_pass
@@ -660,7 +751,10 @@ fn main() {
         && g_hit
         && g_memory
         && h_frame
-        && h_memory;
+        && h_memory
+        && i_frame
+        && i_hit
+        && i_memory;
     println!(
         "\n{}",
         if all_pass {
