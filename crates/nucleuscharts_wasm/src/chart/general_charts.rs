@@ -95,6 +95,8 @@ struct SeriesInput {
     color: Option<String>,
     #[serde(default = "default_point_radius")]
     point_radius: f64,
+    #[serde(default)]
+    data_labels: bool,
 }
 
 #[derive(Deserialize)]
@@ -419,6 +421,7 @@ impl ChartInner {
         options.title = input.title;
         options.color = input.color;
         options.point_radius = input.point_radius;
+        options.data_labels = input.data_labels;
         match self.engine.add_general_series(options) {
             Ok(series) => result_ok(json!({ "series": series.get(), "dataset": dataset.get() })),
             Err(error) => {

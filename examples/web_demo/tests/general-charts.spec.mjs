@@ -34,6 +34,7 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
       y_axis_id: "revenue",
       title: "Revenue",
       color: "#267f99",
+      data_labels: true,
     });
     columns.set_data([
       { id: "jan", x: "Jan", y: 42 },
@@ -54,6 +55,7 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
       point_radius: 5,
       title: "Samples",
       color: "#7d52f4",
+      data_labels: true,
     });
     scatter.set_data_typed({
       ids: [101, 102, 103],

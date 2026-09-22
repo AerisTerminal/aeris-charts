@@ -300,6 +300,12 @@ Pass it on every streaming update that needs retention. Invalid batches leave th
 unchanged. Rows removed by retention lose their identity and any hover/selection target; retained
 explicit IDs continue to identify the same marks after front trimming.
 
+The current column/scatter options also accept `data_labels: true` to draw visible numeric Y values
+near their marks. The engine places labels in the shared frame, rejects overlapping or out-of-plot
+placements, and caps output at 512 labels and 4,096 placement attempts per pane per frame. Missing
+rows never produce labels. Custom per-row `label` channels in the proposed object/typed schemas are
+not implemented yet.
+
 ## Pane compatibility matrix
 
 `same region` below means the series can contribute to one coordinate region and ordered frame.

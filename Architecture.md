@@ -124,9 +124,10 @@ Explicit-ID incremental batches update existing rows and append new rows in the 
 an optional per-call row limit trims the oldest rows and prunes unused category labels. Validation
 precedes mutation, and interaction targets reconcile against the retained identities.
 The shared frame emits the corresponding mark chrome, so Canvas2D, WebGPU, GPUI, and native executors
-receive the same presentation without host overlays. The remaining release work includes data labels,
-schema persistence, and integration into the keyboard accessibility
-controller.
+receive the same presentation without host overlays. Opt-in numeric value labels are placed in
+the shared frame with deterministic collision rejection and per-pane emission/work ceilings; executors
+receive ordinary ordered text primitives. The remaining release work includes custom row-label channels,
+schema persistence, and integration into the keyboard accessibility controller.
 
 `ChartOptionsStore` keeps typed options canonical for engine and frame reads and retains the raw JSON
 object only for boundary-compatible deep merges and serialization. An option patch is merged and

@@ -51,6 +51,7 @@ pub struct GeneralSeriesOptions {
     pub title: String,
     pub color: Option<String>,
     pub point_radius: f64,
+    pub data_labels: bool,
 }
 
 impl GeneralSeriesOptions {
@@ -70,6 +71,7 @@ impl GeneralSeriesOptions {
             title: String::new(),
             color: None,
             point_radius: 3.0,
+            data_labels: false,
         }
     }
 
@@ -89,6 +91,7 @@ impl GeneralSeriesOptions {
             title: String::new(),
             color: None,
             point_radius: 3.0,
+            data_labels: false,
         }
     }
 }
@@ -105,6 +108,7 @@ pub struct GeneralSeries {
     title: String,
     color: Option<String>,
     point_radius: f64,
+    data_labels: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -404,6 +408,10 @@ impl GeneralSeries {
         self.point_radius
     }
 
+    pub fn data_labels(&self) -> bool {
+        self.data_labels
+    }
+
     pub(crate) fn estimated_bytes(&self) -> usize {
         self.x_axis_id.capacity()
             + self.y_axis_id.capacity()
@@ -480,6 +488,7 @@ impl GeneralSeriesRegistry {
             title: options.title,
             color: options.color,
             point_radius: options.point_radius,
+            data_labels: options.data_labels,
         });
         self.next_id = next_id;
         Ok(id)

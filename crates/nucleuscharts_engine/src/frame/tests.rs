@@ -179,6 +179,7 @@ fn category_column_series_owns_auto_domains_geometry_and_lifecycle() {
     let mut options = GeneralSeriesOptions::column(pane, dataset, "month", "revenue");
     options.color = Some("#123456".into());
     options.title = "Revenue".into();
+    options.data_labels = true;
     let series = chart.add_general_series(options).unwrap();
 
     assert_eq!(
@@ -223,6 +224,14 @@ fn category_column_series_owns_auto_domains_geometry_and_lifecycle() {
         })
         .collect();
     assert_eq!(rects.len(), 2, "missing rows must emit no column geometry");
+    assert!(frame.panes[pane]
+        .main
+        .iter()
+        .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "-5")));
+    assert!(!frame.panes[pane]
+        .main
+        .iter()
+        .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "99")));
     assert!(rects.iter().any(|rect| rect.y == baseline));
     assert!(rects.iter().any(|rect| rect.y + rect.h == baseline));
     assert!(chart
@@ -421,6 +430,7 @@ fn xy_scatter_owns_independent_domains_hits_and_runtime_view() {
     options.color = Some("#654321".into());
     options.title = "Samples".into();
     options.point_radius = 4.0;
+    options.data_labels = true;
     let series = chart.add_general_series(options).unwrap();
 
     assert_eq!(
@@ -443,6 +453,14 @@ fn xy_scatter_owns_independent_domains_hits_and_runtime_view() {
             .count(),
         3
     );
+    assert!(frame.panes[pane]
+        .main
+        .iter()
+        .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "0")));
+    assert!(!frame.panes[pane]
+        .main
+        .iter()
+        .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "99")));
 
     let mut geometry = Vec::new();
     chart.visit_general_scatter_points(chart.general_series(series).unwrap(), |point| {
@@ -694,11 +712,9 @@ fn dense_scatter_hit_testing_uses_bounded_screen_space_candidates() {
             y_valid: None,
         })
         .unwrap();
-    let series = chart
-        .add_general_series(GeneralSeriesOptions::scatter(
-            pane, dataset, "dense-x", "dense-y",
-        ))
-        .unwrap();
+    let mut options = GeneralSeriesOptions::scatter(pane, dataset, "dense-x", "dense-y");
+    options.data_labels = true;
+    let series = chart.add_general_series(options).unwrap();
     chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
 
     let plot = chart.general_plot_rect(pane).unwrap();
@@ -721,6 +737,16 @@ fn dense_scatter_hit_testing_uses_bounded_screen_space_candidates() {
         )
         .is_some());
     assert!(chart.memory_usage().general_series_capacity_bytes > 0);
+    let label_count = chart.build_frame().panes[pane]
+        .main
+        .iter()
+        .filter(|primitive| matches!(primitive, Prim::Text { .. }))
+        .count();
+    assert!(label_count > 0);
+    assert!(
+        label_count <= 512,
+        "dense scatter emitted {label_count} labels"
+    );
 }
 
 #[test]

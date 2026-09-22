@@ -341,7 +341,8 @@ Current implementation progress (2026-09-22):
   explicit-ID replacement batches, drop generated batch-local identities, and emit shared frame chrome;
 - explicit-ID incremental update/append transactions and per-call bounded retention now run through the
   shared dataset store, with browser object/typed APIs, category pruning, and interaction reconciliation;
-- data labels, general-schema persistence, and keyboard-controller
+- opt-in numeric value labels for column/scatter now use bounded, collision-aware shared-frame text;
+- custom row-label channels, general-schema persistence, and keyboard-controller
   integration remain before either general series is release-complete.
 
 Exit gate: both slices render equivalently in every backend and a financial-only chart shows no

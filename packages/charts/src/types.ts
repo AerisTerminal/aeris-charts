@@ -116,6 +116,8 @@ export interface general_series_options {
   color?: string;
   /** Scatter point radius in CSS pixels. Ignored by columns. */
   point_radius?: number;
+  /** Show bounded, engine-placed value labels beside visible marks. */
+  data_labels?: boolean;
 }
 
 export interface general_update_options {
