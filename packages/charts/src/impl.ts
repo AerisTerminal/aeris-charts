@@ -435,9 +435,25 @@ function general_ids_json(ids: readonly (string | number | null)[] | undefined, 
   return JSON.stringify(ids);
 }
 
+function general_labels_value(labels: readonly (string | null)[] | undefined, rows: number): readonly (string | null)[] | null {
+  if (labels === undefined) return null;
+  if (labels.length !== rows) {
+    throw new nucleuscharts_error("invalid_data", "general row labels and value columns must have equal lengths");
+  }
+  return labels;
+}
+
+function general_numeric_metadata_json(columns: packed_numeric_xy_columns): string {
+  const ids = general_ids_json(columns.ids, columns.x.length) || "null";
+  const labels = JSON.stringify(general_labels_value(columns.labels, columns.x.length));
+  return `{"ids":${ids},"labels":${labels}}`;
+}
+
 function pack_general_rows(kind: general_series_kind, data: readonly general_xy_row[]): general_columns_input {
   const has_explicit = data.some((row) => row.id !== undefined);
   const ids = has_explicit ? data.map((row) => row.id ?? null) : undefined;
+  const has_labels = data.some((row) => row.label !== undefined);
+  const labels = has_labels ? data.map((row) => row.label ?? null) : undefined;
   const y = new Float64Array(data.length);
   let y_valid: Uint8Array | undefined;
   for (let index = 0; index < data.length; index += 1) {
@@ -458,7 +474,7 @@ function pack_general_rows(kind: general_series_kind, data: readonly general_xy_
       }
       x[index] = value;
     }
-    return { ids, x, y, y_valid };
+    return { ids, labels, x, y, y_valid };
   }
   const categories: string[] = [];
   const category_lookup = new Map<string, number>();
@@ -476,7 +492,7 @@ function pack_general_rows(kind: general_series_kind, data: readonly general_xy_
     }
     category_indices[index] = category;
   }
-  return { ids, categories, category_indices, y, y_valid };
+  return { ids, labels, categories, category_indices, y, y_valid };
 }
 
 class general_axis_impl implements general_axis_api {
@@ -574,7 +590,7 @@ class general_series_impl implements general_series_api {
       }
       result = this.chart.wasm.upsert_general_numeric_data_typed(
         this.dataset,
-        general_ids_json(columns.ids, columns.x.length),
+        general_numeric_metadata_json(columns),
         columns.x,
         columns.y,
         columns.y_valid,
@@ -587,7 +603,11 @@ class general_series_impl implements general_series_api {
       result = this.chart.wasm.upsert_general_category_data_typed(
         this.dataset,
         general_ids_json(columns.ids, columns.category_indices.length),
-        JSON.stringify({ categories: columns.categories, max_rows: max_rows ?? 0 }),
+        JSON.stringify({
+          categories: columns.categories,
+          labels: general_labels_value(columns.labels, columns.category_indices.length),
+          max_rows: max_rows ?? 0,
+        }),
         columns.category_indices,
         columns.y,
         columns.y_valid,
@@ -606,7 +626,7 @@ class general_series_impl implements general_series_api {
       }
       result = this.chart.wasm.set_general_numeric_data_typed(
         this.dataset,
-        general_ids_json(columns.ids, columns.x.length),
+        general_numeric_metadata_json(columns),
         columns.x,
         columns.y,
         columns.y_valid,
@@ -618,7 +638,10 @@ class general_series_impl implements general_series_api {
       result = this.chart.wasm.set_general_category_data_typed(
         this.dataset,
         general_ids_json(columns.ids, columns.category_indices.length),
-        JSON.stringify(columns.categories),
+        JSON.stringify({
+          categories: columns.categories,
+          labels: general_labels_value(columns.labels, columns.category_indices.length),
+        }),
         columns.category_indices,
         columns.y,
         columns.y_valid,

@@ -103,6 +103,19 @@ struct SeriesInput {
 struct CategoryUpdateInput {
     categories: Vec<String>,
     max_rows: u32,
+    labels: Option<Vec<Option<String>>>,
+}
+
+#[derive(Deserialize)]
+struct CategoryDataInput {
+    categories: Vec<String>,
+    labels: Option<Vec<Option<String>>>,
+}
+
+#[derive(Deserialize)]
+struct NumericDataInput {
+    ids: Option<Vec<Value>>,
+    labels: Option<Vec<Option<String>>>,
 }
 
 fn default_true() -> bool {
@@ -245,6 +258,13 @@ fn parse_ids(ids_json: &str) -> Result<Option<Vec<GeneralRowId>>, String> {
     }
     let values: Vec<Value> = serde_json::from_str(ids_json)
         .map_err(|error| input_error(format!("invalid general row IDs: {error}")))?;
+    parse_id_values(Some(values))
+}
+
+fn parse_id_values(values: Option<Vec<Value>>) -> Result<Option<Vec<GeneralRowId>>, String> {
+    let Some(values) = values else {
+        return Ok(None);
+    };
     values
         .into_iter()
         .map(|value| match value {
@@ -434,7 +454,7 @@ impl ChartInner {
     pub fn set_general_numeric_data_typed(
         &mut self,
         dataset: u32,
-        ids_json: &str,
+        metadata_json: &str,
         x: &Float64Array,
         y: &Float64Array,
         y_valid: Option<Uint8Array>,
@@ -442,7 +462,11 @@ impl ChartInner {
         let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
             return input_error("general dataset handle is stale");
         };
-        let ids = match parse_ids(ids_json) {
+        let metadata = match parse_json::<NumericDataInput>(metadata_json) {
+            Ok(metadata) => metadata,
+            Err(error) => return error,
+        };
+        let ids = match parse_id_values(metadata.ids) {
             Ok(ids) => ids,
             Err(error) => return error,
         };
@@ -452,7 +476,10 @@ impl ChartInner {
             y: y.to_vec(),
             y_valid: y_valid.map(|values| values.to_vec()),
         };
-        match self.engine.replace_general_xy_dataset(dataset, input) {
+        match self
+            .engine
+            .replace_general_xy_dataset_labeled(dataset, input, metadata.labels)
+        {
             Ok(()) => result_ok(Value::Null),
             Err(error) => result_error(&error),
         }
@@ -462,7 +489,7 @@ impl ChartInner {
         &mut self,
         dataset: u32,
         ids_json: &str,
-        categories_json: &str,
+        metadata_json: &str,
         category_indices: &Uint32Array,
         y: &Float64Array,
         y_valid: Option<Uint8Array>,
@@ -474,18 +501,21 @@ impl ChartInner {
             Ok(ids) => ids,
             Err(error) => return error,
         };
-        let categories = match parse_json::<Vec<String>>(categories_json) {
-            Ok(categories) => categories,
+        let metadata = match parse_json::<CategoryDataInput>(metadata_json) {
+            Ok(metadata) => metadata,
             Err(error) => return error,
         };
         let input = GeneralXyInput::Category {
             ids,
-            categories,
+            categories: metadata.categories,
             category_indices: category_indices.to_vec(),
             y: y.to_vec(),
             y_valid: y_valid.map(|values| values.to_vec()),
         };
-        match self.engine.replace_general_xy_dataset(dataset, input) {
+        match self
+            .engine
+            .replace_general_xy_dataset_labeled(dataset, input, metadata.labels)
+        {
             Ok(()) => result_ok(Value::Null),
             Err(error) => result_error(&error),
         }
@@ -494,7 +524,7 @@ impl ChartInner {
     pub fn upsert_general_numeric_data_typed(
         &mut self,
         dataset: u32,
-        ids_json: &str,
+        metadata_json: &str,
         x: &Float64Array,
         y: &Float64Array,
         y_valid: Option<Uint8Array>,
@@ -503,7 +533,11 @@ impl ChartInner {
         let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
             return input_error("general dataset handle is stale");
         };
-        let ids = match parse_ids(ids_json) {
+        let metadata = match parse_json::<NumericDataInput>(metadata_json) {
+            Ok(metadata) => metadata,
+            Err(error) => return error,
+        };
+        let ids = match parse_id_values(metadata.ids) {
             Ok(ids) => ids,
             Err(error) => return error,
         };
@@ -513,9 +547,10 @@ impl ChartInner {
             y: y.to_vec(),
             y_valid: y_valid.map(|values| values.to_vec()),
         };
-        match self.engine.upsert_general_xy_dataset(
+        match self.engine.upsert_general_xy_dataset_labeled(
             dataset,
             input,
+            metadata.labels,
             (max_rows > 0).then_some(max_rows as usize),
         ) {
             Ok(()) => result_ok(Value::Null),
@@ -550,9 +585,10 @@ impl ChartInner {
             y: y.to_vec(),
             y_valid: y_valid.map(|values| values.to_vec()),
         };
-        match self.engine.upsert_general_xy_dataset(
+        match self.engine.upsert_general_xy_dataset_labeled(
             dataset,
             input,
+            update.labels,
             (update.max_rows > 0).then_some(update.max_rows as usize),
         ) {
             Ok(()) => result_ok(Value::Null),
@@ -580,7 +616,7 @@ impl ChartInner {
         json!({
             "series": snapshot.series.get(), "row": snapshot.row,
             "row_id": row_identity(&snapshot.row_id), "x_label": snapshot.x_label,
-            "value": snapshot.value, "title": snapshot.title,
+            "label": snapshot.label, "value": snapshot.value, "title": snapshot.title,
         })
         .to_string()
     }
@@ -604,6 +640,7 @@ impl ChartInner {
                 "row": item.row,
                 "row_id": row_identity(&item.row_id),
                 "x_label": item.x_label,
+                "label": item.label,
                 "value": item.value,
             })).collect::<Vec<_>>(),
         })

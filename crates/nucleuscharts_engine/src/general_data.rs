@@ -10,6 +10,9 @@ pub const MAX_GENERAL_DATASET_CATEGORIES: usize = 65_536;
 pub const MAX_GENERAL_DATASET_CATEGORY_BYTES: usize = 1_048_576;
 pub const MAX_GENERAL_ROW_ID_BYTES: usize = 4_096;
 pub const MAX_GENERAL_ROW_ID_BYTES_TOTAL: usize = 1_048_576;
+pub const MAX_GENERAL_ROW_LABEL_BYTES: usize = 4_096;
+pub const MAX_GENERAL_ROW_LABEL_BYTES_TOTAL: usize = 1_048_576;
+pub const MAX_GENERAL_ROW_LABELS: usize = 65_536;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GeneralXKind {
@@ -135,6 +138,7 @@ pub struct GeneralDataset {
     x: GeneralXColumn,
     y: Vec<f64>,
     y_valid: Option<Vec<u8>>,
+    labels: HashMap<usize, String>,
 }
 
 impl GeneralDataset {
@@ -176,6 +180,10 @@ impl GeneralDataset {
                 .y_valid
                 .as_ref()
                 .is_none_or(|validity| validity[index] != 0)
+    }
+
+    pub fn row_label(&self, index: usize) -> Option<&str> {
+        self.labels.get(&index).map(String::as_str)
     }
 
     pub fn numeric_x(&self) -> Option<&[f64]> {
@@ -232,6 +240,11 @@ impl GeneralDataset {
             + x_bytes
             + self.y.capacity() * std::mem::size_of::<f64>()
             + self.y_valid.as_ref().map_or(0, Vec::capacity)
+            + self.labels.capacity()
+                * (std::mem::size_of::<usize>()
+                    + std::mem::size_of::<String>()
+                    + std::mem::size_of::<usize>())
+            + self.labels.values().map(String::capacity).sum::<usize>()
     }
 }
 
@@ -447,6 +460,63 @@ fn validate_categories(categories: &[String], indices: &[u32]) -> Result<(), Cha
     Ok(())
 }
 
+fn validate_label_input(
+    labels: Option<&[Option<String>]>,
+    row_count: usize,
+) -> Result<(), ChartError> {
+    let Some(labels) = labels else {
+        return Ok(());
+    };
+    if labels.len() != row_count {
+        return Err(invalid_data(
+            "general row labels and value columns must have equal lengths",
+        ));
+    }
+    let mut count = 0usize;
+    let mut bytes = 0usize;
+    for label in labels.iter().flatten() {
+        if label.len() > MAX_GENERAL_ROW_LABEL_BYTES {
+            return Err(resource(format!(
+                "general row label exceeds {MAX_GENERAL_ROW_LABEL_BYTES} UTF-8 bytes"
+            )));
+        }
+        count += 1;
+        bytes = bytes
+            .checked_add(label.len())
+            .ok_or_else(|| resource("general row label byte count overflow"))?;
+    }
+    if count > MAX_GENERAL_ROW_LABELS || bytes > MAX_GENERAL_ROW_LABEL_BYTES_TOTAL {
+        return Err(resource(
+            "general row labels exceed their count or UTF-8 byte limit",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_label_map(labels: &HashMap<usize, String>) -> Result<(), ChartError> {
+    if labels.len() > MAX_GENERAL_ROW_LABELS
+        || labels.values().map(String::len).sum::<usize>() > MAX_GENERAL_ROW_LABEL_BYTES_TOTAL
+    {
+        return Err(resource(
+            "general row labels exceed their count or UTF-8 byte limit",
+        ));
+    }
+    Ok(())
+}
+
+fn labels_for_rows(
+    labels: Option<Vec<Option<String>>>,
+    row_count: usize,
+) -> Result<HashMap<usize, String>, ChartError> {
+    validate_label_input(labels.as_deref(), row_count)?;
+    Ok(labels
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(row, label)| label.map(|label| (row, label)))
+        .collect())
+}
+
 fn normalize_validity(validity: Option<Vec<u8>>) -> Option<Vec<u8>> {
     validity.and_then(|values| values.contains(&0).then_some(values))
 }
@@ -479,12 +549,21 @@ impl GeneralDataStore {
     }
 
     pub(crate) fn insert(&mut self, input: GeneralXyInput) -> Result<GeneralDatasetId, ChartError> {
+        self.insert_labeled(input, None)
+    }
+
+    pub(crate) fn insert_labeled(
+        &mut self,
+        input: GeneralXyInput,
+        labels: Option<Vec<Option<String>>>,
+    ) -> Result<GeneralDatasetId, ChartError> {
         if self.datasets.len() >= MAX_GENERAL_DATASETS {
             return Err(resource(format!(
                 "a chart supports at most {MAX_GENERAL_DATASETS} general datasets"
             )));
         }
         let validated = input.validate()?;
+        let labels = labels_for_rows(labels, validated.y.len())?;
         let raw_id = u32::try_from(self.next_dataset_id)
             .ok()
             .and_then(NonZeroU32::new)
@@ -503,6 +582,7 @@ impl GeneralDataStore {
             x: validated.x,
             y: validated.y,
             y_valid: validated.y_valid,
+            labels,
         });
         self.next_dataset_id = next_dataset_id;
         self.next_generated_row_id = next_generated_row_id;
@@ -514,6 +594,15 @@ impl GeneralDataStore {
         id: GeneralDatasetId,
         input: GeneralXyInput,
     ) -> Result<(), ChartError> {
+        self.replace_labeled(id, input, None)
+    }
+
+    pub(crate) fn replace_labeled(
+        &mut self,
+        id: GeneralDatasetId,
+        input: GeneralXyInput,
+        labels: Option<Vec<Option<String>>>,
+    ) -> Result<(), ChartError> {
         let Some(slot) = self.datasets.iter().position(|dataset| dataset.id == id) else {
             return Err(ChartError::new(
                 ErrorCode::InvalidHandle,
@@ -521,6 +610,7 @@ impl GeneralDataStore {
             ));
         };
         let validated = input.validate()?;
+        let labels = labels_for_rows(labels, validated.y.len())?;
         let generation = self.datasets[slot]
             .generation
             .checked_add(1)
@@ -534,6 +624,7 @@ impl GeneralDataStore {
             x: validated.x,
             y: validated.y,
             y_valid: validated.y_valid,
+            labels,
         };
         self.next_generated_row_id = next_generated_row_id;
         Ok(())
@@ -543,6 +634,16 @@ impl GeneralDataStore {
         &mut self,
         id: GeneralDatasetId,
         input: GeneralXyInput,
+        max_rows: Option<usize>,
+    ) -> Result<usize, ChartError> {
+        self.upsert_labeled(id, input, None, max_rows)
+    }
+
+    pub(crate) fn upsert_labeled(
+        &mut self,
+        id: GeneralDatasetId,
+        input: GeneralXyInput,
+        labels: Option<Vec<Option<String>>>,
         max_rows: Option<usize>,
     ) -> Result<usize, ChartError> {
         let Some(slot) = self.datasets.iter().position(|dataset| dataset.id == id) else {
@@ -557,6 +658,7 @@ impl GeneralDataStore {
             )));
         }
         let validated = input.validate()?;
+        validate_label_input(labels.as_deref(), validated.y.len())?;
         let Some(ids) = validated.ids.as_ref() else {
             return Err(invalid_data(
                 "general incremental updates require explicit row IDs",
@@ -599,6 +701,33 @@ impl GeneralDataStore {
             )));
         }
         let trim_count = max_rows.map_or(0, |limit| untrimmed_len.saturating_sub(limit));
+
+        let mut next_labels = dataset.labels.clone();
+        let mut next_new_row = dataset.len();
+        for (source_row, id) in ids.iter().enumerate() {
+            let target_row = if let Some(&row) = existing.get(id) {
+                row
+            } else {
+                let row = next_new_row;
+                next_new_row += 1;
+                row
+            };
+            next_labels.remove(&target_row);
+            if let Some(label) = labels.as_ref().and_then(|items| items[source_row].as_ref()) {
+                next_labels.insert(target_row, label.clone());
+            }
+        }
+        if trim_count > 0 {
+            next_labels = next_labels
+                .into_iter()
+                .filter_map(|(row, label)| row.checked_sub(trim_count).map(|row| (row, label)))
+                .collect();
+        }
+        validate_label_map(&next_labels)?;
+        let bounded_label_capacity = next_labels.len().saturating_mul(2).max(64);
+        if next_labels.capacity() > bounded_label_capacity {
+            next_labels.shrink_to(bounded_label_capacity);
+        }
 
         let (category_registry, category_remap, old_category_remap) =
             match (&dataset.x, &validated.x) {
@@ -784,6 +913,7 @@ impl GeneralDataStore {
         {
             dataset.y_valid = None;
         }
+        dataset.labels = next_labels;
         dataset.generation = generation;
         Ok(removed_front)
     }
@@ -1185,5 +1315,92 @@ mod tests {
         assert_eq!(retained.categories().unwrap().len(), 1);
         assert_eq!(retained.categories().unwrap()[0].as_bytes()[0], b'c');
         assert_eq!(retained.y(), &[3.0]);
+    }
+
+    #[test]
+    fn custom_labels_follow_upsert_and_retention_atomically() {
+        let mut store = GeneralDataStore::new();
+        let id = store
+            .insert_labeled(
+                GeneralXyInput::Numeric {
+                    ids: Some(vec![
+                        GeneralRowId::Text("a".into()),
+                        GeneralRowId::Text("b".into()),
+                    ]),
+                    x: vec![1.0, 2.0],
+                    y: vec![10.0, 20.0],
+                    y_valid: None,
+                },
+                Some(vec![Some("Alpha".into()), Some("Beta".into())]),
+            )
+            .unwrap();
+        assert_eq!(store.get(id).unwrap().row_label(0), Some("Alpha"));
+        store
+            .upsert_labeled(
+                id,
+                GeneralXyInput::Numeric {
+                    ids: Some(vec![
+                        GeneralRowId::Text("b".into()),
+                        GeneralRowId::Text("c".into()),
+                    ]),
+                    x: vec![2.0, 3.0],
+                    y: vec![21.0, 30.0],
+                    y_valid: None,
+                },
+                Some(vec![Some("Bravo".into()), Some("Charlie".into())]),
+                Some(2),
+            )
+            .unwrap();
+        let dataset = store.get(id).unwrap();
+        assert_eq!(dataset.row_label(0), Some("Bravo"));
+        assert_eq!(dataset.row_label(1), Some("Charlie"));
+        let before = dataset.clone();
+        let error = store
+            .upsert_labeled(
+                id,
+                GeneralXyInput::Numeric {
+                    ids: Some(vec![GeneralRowId::Text("c".into())]),
+                    x: vec![4.0],
+                    y: vec![40.0],
+                    y_valid: None,
+                },
+                Some(vec![Some("x".repeat(MAX_GENERAL_ROW_LABEL_BYTES + 1))]),
+                Some(2),
+            )
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::ResourceLimit);
+        assert_eq!(store.get(id), Some(&before));
+    }
+
+    #[test]
+    fn combined_custom_label_budget_is_checked_before_upsert() {
+        let mut store = GeneralDataStore::new();
+        let id = store
+            .insert_labeled(
+                GeneralXyInput::Numeric {
+                    ids: None,
+                    x: (0..256).map(f64::from).collect(),
+                    y: vec![1.0; 256],
+                    y_valid: None,
+                },
+                Some(vec![Some("x".repeat(MAX_GENERAL_ROW_LABEL_BYTES)); 256]),
+            )
+            .unwrap();
+        let before = store.get(id).unwrap().clone();
+        let error = store
+            .upsert_labeled(
+                id,
+                GeneralXyInput::Numeric {
+                    ids: Some(vec![GeneralRowId::Number(1.0)]),
+                    x: vec![256.0],
+                    y: vec![2.0],
+                    y_valid: None,
+                },
+                Some(vec![Some("y".into())]),
+                None,
+            )
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::ResourceLimit);
+        assert_eq!(store.get(id), Some(&before));
     }
 }

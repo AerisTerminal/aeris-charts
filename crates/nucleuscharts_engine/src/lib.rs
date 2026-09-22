@@ -1743,6 +1743,16 @@ impl ChartEngine {
         id: GeneralDatasetId,
         input: GeneralXyInput,
     ) -> Result<(), ChartError> {
+        self.replace_general_xy_dataset_labeled(id, input, None)
+    }
+
+    #[doc(hidden)]
+    pub fn replace_general_xy_dataset_labeled(
+        &mut self,
+        id: GeneralDatasetId,
+        input: GeneralXyInput,
+        labels: Option<Vec<Option<String>>>,
+    ) -> Result<(), ChartError> {
         let bound = self.general_series_uses_dataset(id);
         if bound {
             self.validate_general_dataset_replacement(id, &input)?;
@@ -1750,7 +1760,11 @@ impl ChartEngine {
         let store = self.general_data.as_mut().ok_or_else(|| {
             ChartError::new(ErrorCode::InvalidHandle, "general dataset handle is stale")
         })?;
-        store.replace(id, input)?;
+        if let Some(labels) = labels {
+            store.replace_labeled(id, input, Some(labels))?;
+        } else {
+            store.replace(id, input)?;
+        }
         if bound {
             self.reconcile_general_interaction_for_dataset(id, 0);
             self.invalidate_frame_all();
@@ -1767,6 +1781,17 @@ impl ChartEngine {
         input: GeneralXyInput,
         max_rows: Option<usize>,
     ) -> Result<(), ChartError> {
+        self.upsert_general_xy_dataset_labeled(id, input, None, max_rows)
+    }
+
+    #[doc(hidden)]
+    pub fn upsert_general_xy_dataset_labeled(
+        &mut self,
+        id: GeneralDatasetId,
+        input: GeneralXyInput,
+        labels: Option<Vec<Option<String>>>,
+        max_rows: Option<usize>,
+    ) -> Result<(), ChartError> {
         let bound = self.general_series_uses_dataset(id);
         if bound {
             self.validate_general_dataset_replacement(id, &input)?;
@@ -1774,7 +1799,11 @@ impl ChartEngine {
         let store = self.general_data.as_mut().ok_or_else(|| {
             ChartError::new(ErrorCode::InvalidHandle, "general dataset handle is stale")
         })?;
-        let removed_front = store.upsert(id, input, max_rows)?;
+        let removed_front = if let Some(labels) = labels {
+            store.upsert_labeled(id, input, Some(labels), max_rows)?
+        } else {
+            store.upsert(id, input, max_rows)?
+        };
         if bound {
             self.reconcile_general_interaction_for_dataset(id, removed_front);
             self.invalidate_frame_all();

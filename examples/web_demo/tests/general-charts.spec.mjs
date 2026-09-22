@@ -37,7 +37,7 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
       data_labels: true,
     });
     columns.set_data([
-      { id: "jan", x: "Jan", y: 42 },
+      { id: "jan", x: "Jan", y: 42, label: "January" },
       { x: "Feb", y: null },
       { id: "mar", x: "Mar", y: -17 },
     ]);
@@ -59,6 +59,7 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
     });
     scatter.set_data_typed({
       ids: [101, 102, 103],
+      labels: [null, "Center", null],
       x: new Float64Array([-10, 0, 10]),
       y: new Float64Array([-5, 0, 5]),
     });
@@ -116,6 +117,7 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
     const before_remove = {
       panes: chart.panes().length,
       axes: chart.axes().map((axis) => axis.id),
+      column_row: columns.data_at(0),
       column_missing: columns.data_at(1),
       scatter_row: scatter.data_at(2),
       scatter_accessibility: scatter.accessibility_snapshot(1, 2),
@@ -129,6 +131,29 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
       screenshot: chart.take_screenshot().toDataURL().length,
       blocked_axis_remove,
     };
+
+    const before_custom_label = chart.take_screenshot().toDataURL();
+    scatter.update_data_typed({
+      ids: [102],
+      labels: ["Zero marker"],
+      x: new Float64Array([0]),
+      y: new Float64Array([0]),
+    });
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const custom_label_changed = chart.take_screenshot().toDataURL() !== before_custom_label;
+    const updated_custom_label = scatter.data_at(1)?.label;
+    let rejected_label = null;
+    try {
+      scatter.update_data_typed({
+        ids: [102],
+        labels: ["x".repeat(4097)],
+        x: new Float64Array([0]),
+        y: new Float64Array([99]),
+      });
+    } catch (error) {
+      rejected_label = error.code;
+    }
+    const after_rejected_label = scatter.data_at(1);
 
     let rejected_update = null;
     try {
@@ -147,7 +172,7 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
     }, { max_rows: 3 });
     columns.update_data([
       { id: "jan", x: "Jan", y: 43 },
-      { id: "apr", x: "Apr", y: 9 },
+      { id: "apr", x: "Apr", y: 9, label: "April" },
     ], { max_rows: 3 });
     const after_update = {
       scatter: scatter.accessibility_snapshot(0, 10),
@@ -166,18 +191,19 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
     const remaining_panes = chart.panes().length;
     chart.remove();
     host.remove();
-    return { before_remove, rejected_update, after_rejected_update, after_update, removed_axis, remaining_panes, lifecycle };
+    return { before_remove, custom_label_changed, updated_custom_label, rejected_label, after_rejected_label, rejected_update, after_rejected_update, after_update, removed_axis, remaining_panes, lifecycle };
   });
 
   expect(result.before_remove.panes).toBe(3);
   expect(result.before_remove.axes).toEqual(["month", "revenue", "sample-x", "sample-y"]);
+  expect(result.before_remove.column_row).toMatchObject({ row_id: "jan", label: "January", value: 42 });
   expect(result.before_remove.column_missing).toMatchObject({ row_id: { generated: "1" }, x_label: "Feb", value: null });
   expect(result.before_remove.scatter_row).toMatchObject({ row_id: 103, x_label: "10", value: 5 });
   expect(result.before_remove.scatter_accessibility).toMatchObject({
     total_rows: 3,
     offset: 1,
     items: [
-      { row: 1, row_id: 102, x_label: "0", value: 0 },
+      { row: 1, row_id: 102, x_label: "0", label: "Center", value: 0 },
       { row: 2, row_id: 103, x_label: "10", value: 5 },
     ],
   });
@@ -193,11 +219,15 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
   expect(result.before_remove.scatter_series).toEqual(["scatter"]);
   expect(result.before_remove.screenshot).toBeGreaterThan(1000);
   expect(result.before_remove.blocked_axis_remove).toBe(false);
+  expect(result.custom_label_changed).toBe(true);
+  expect(result.updated_custom_label).toBe("Zero marker");
+  expect(result.rejected_label).toBe("resource_limit");
+  expect(result.after_rejected_label).toMatchObject({ row_id: 102, value: 0, label: "Zero marker" });
   expect(result.rejected_update).toBe("invalid_data");
   expect(result.after_rejected_update.total_rows).toBe(3);
   expect(result.after_rejected_update.items.map((item) => item.row_id)).toEqual([101, 102, 103]);
   expect(result.after_update.scatter.items).toMatchObject([
-    { row_id: 102, x_label: "0", value: 7 },
+    { row_id: 102, x_label: "0", label: null, value: 7 },
     { row_id: 103, x_label: "10", value: 5 },
     { row_id: 104, x_label: "11", value: 6 },
   ]);
@@ -212,7 +242,7 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
   expect(result.after_update.columns.items).toMatchObject([
     { x_label: "Feb", value: null },
     { row_id: "mar", x_label: "Mar", value: -17 },
-    { row_id: "apr", x_label: "Apr", value: 9 },
+    { row_id: "apr", x_label: "Apr", label: "April", value: 9 },
   ]);
   expect(result.removed_axis).toBe(true);
   expect(result.remaining_panes).toBe(1);

@@ -48,10 +48,13 @@ export interface general_xy_row {
   id?: general_row_id;
   x: string | number;
   y: number | null;
+  /** Optional custom text for an enabled data label; omitted labels use the numeric Y value. */
+  label?: string;
 }
 
 export interface numeric_xy_columns {
   ids?: readonly general_row_id[];
+  labels?: readonly (string | null)[];
   x: Float64Array;
   y: Float64Array;
   y_valid?: Uint8Array;
@@ -59,6 +62,7 @@ export interface numeric_xy_columns {
 
 export interface category_xy_columns {
   ids?: readonly general_row_id[];
+  labels?: readonly (string | null)[];
   categories: readonly string[];
   category_indices: Uint32Array;
   y: Float64Array;
@@ -130,6 +134,8 @@ export interface general_tooltip_snapshot {
   row: number;
   row_id: general_row_id | { generated: string };
   x_label: string;
+  /** Custom row label, or null when the numeric value supplies the visible label. */
+  label: string | null;
   value: number | null;
   title: string;
 }
@@ -150,6 +156,7 @@ export interface general_accessibility_snapshot {
     row: number;
     row_id: general_row_id | { generated: string };
     x_label: string;
+    label: string | null;
     value: number | null;
   }[];
 }

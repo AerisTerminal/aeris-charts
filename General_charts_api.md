@@ -303,8 +303,14 @@ explicit IDs continue to identify the same marks after front trimming.
 The current column/scatter options also accept `data_labels: true` to draw visible numeric Y values
 near their marks. The engine places labels in the shared frame, rejects overlapping or out-of-plot
 placements, and caps output at 512 labels and 4,096 placement attempts per pane per frame. Missing
-rows never produce labels. Custom per-row `label` channels in the proposed object/typed schemas are
-not implemented yet.
+rows never produce labels. Object rows may supply `label?: string`; typed columns may supply a
+parallel `labels?: readonly (string | null)[]`. Custom text replaces the displayed numeric value
+for that row, while an empty string intentionally hides its visible label. An omitted/null label
+falls back to the numeric value. Replacing or updating a row without a custom label clears its old
+text; untouched IDs keep theirs. Label validation, update, and retention are atomic with the row
+transaction. A label is limited to 4,096 UTF-8 bytes, and each dataset to 65,536 custom labels and
+1,048,576 label bytes. Tooltip and bounded accessibility snapshots expose the custom text as
+`label: string | null` alongside the raw value.
 
 ## Pane compatibility matrix
 

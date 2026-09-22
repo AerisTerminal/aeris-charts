@@ -342,7 +342,9 @@ Current implementation progress (2026-09-22):
 - explicit-ID incremental update/append transactions and per-call bounded retention now run through the
   shared dataset store, with browser object/typed APIs, category pruning, and interaction reconciliation;
 - opt-in numeric value labels for column/scatter now use bounded, collision-aware shared-frame text;
-- custom row-label channels, general-schema persistence, and keyboard-controller
+- bounded custom row-label channels now follow replacement, explicit-ID updates, retention, shared
+  frame placement, and tooltip/accessibility snapshots for both browser general series;
+- general-schema persistence and keyboard-controller
   integration remain before either general series is release-complete.
 
 Exit gate: both slices render equivalently in every backend and a financial-only chart shows no

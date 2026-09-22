@@ -346,6 +346,7 @@ pub struct GeneralTooltipSnapshot {
     pub row: usize,
     pub row_id: GeneralRowIdentity,
     pub x_label: String,
+    pub label: Option<String>,
     pub value: Option<f64>,
     pub title: String,
 }
@@ -355,6 +356,7 @@ pub struct GeneralAccessibilityItem {
     pub row: usize,
     pub row_id: GeneralRowIdentity,
     pub x_label: String,
+    pub label: Option<String>,
     pub value: Option<f64>,
 }
 
@@ -1237,6 +1239,7 @@ impl ChartEngine {
             row,
             row_id,
             x_label,
+            label: dataset.row_label(row).map(str::to_owned),
             value: dataset.y_is_valid(row).then(|| dataset.y()[row]),
             title: series.title.clone(),
         })
@@ -1264,6 +1267,7 @@ impl ChartEngine {
                 row,
                 row_id,
                 x_label,
+                label: dataset.row_label(row).map(str::to_owned),
                 value: dataset.y_is_valid(row).then(|| dataset.y()[row]),
             });
         }

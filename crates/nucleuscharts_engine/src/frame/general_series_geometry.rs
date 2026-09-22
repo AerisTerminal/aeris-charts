@@ -45,7 +45,10 @@ impl ChartEngine {
                     return;
                 }
                 label_attempts += 1;
-                let text = dataset.y()[row].to_string();
+                let text = dataset
+                    .row_label(row)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| dataset.y()[row].to_string());
                 let width =
                     self.measure_text_run(&text, label_size, &layout.font_family, 400, false);
                 if !width.is_finite() || width <= 0.0 || width > width_limit {

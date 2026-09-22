@@ -232,6 +232,7 @@ fn category_column_series_owns_auto_domains_geometry_and_lifecycle() {
         .main
         .iter()
         .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "99")));
+
     assert!(rects.iter().any(|rect| rect.y == baseline));
     assert!(rects.iter().any(|rect| rect.y + rect.h == baseline));
     assert!(chart
@@ -461,6 +462,33 @@ fn xy_scatter_owns_independent_domains_hits_and_runtime_view() {
         .main
         .iter()
         .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "99")));
+
+    chart
+        .replace_general_xy_dataset_labeled(
+            dataset,
+            GeneralXyInput::Numeric {
+                ids: None,
+                x: vec![-10.0, 0.0, 10.0, 20.0],
+                y: vec![-5.0, 0.0, 5.0, 99.0],
+                y_valid: Some(vec![1, 1, 1, 0]),
+            },
+            Some(vec![
+                None,
+                Some("Midpoint".into()),
+                None,
+                Some("Hidden".into()),
+            ]),
+        )
+        .unwrap();
+    let custom_frame = chart.build_frame();
+    assert!(custom_frame.panes[pane]
+        .main
+        .iter()
+        .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "Midpoint")));
+    assert!(!custom_frame.panes[pane]
+        .main
+        .iter()
+        .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "Hidden")));
 
     let mut geometry = Vec::new();
     chart.visit_general_scatter_points(chart.general_series(series).unwrap(), |point| {

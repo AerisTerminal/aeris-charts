@@ -2543,21 +2543,25 @@ impl NucleusChart {
     pub fn set_general_numeric_data_typed(
         &mut self,
         dataset: u32,
-        ids_json: &str,
+        metadata_json: &str,
         x: &Float64Array,
         y: &Float64Array,
         y_valid: Option<js_sys::Uint8Array>,
     ) -> String {
-        self.inner
-            .borrow_mut()
-            .set_general_numeric_data_typed(dataset, ids_json, x, y, y_valid)
+        self.inner.borrow_mut().set_general_numeric_data_typed(
+            dataset,
+            metadata_json,
+            x,
+            y,
+            y_valid,
+        )
     }
 
     pub fn set_general_category_data_typed(
         &mut self,
         dataset: u32,
         ids_json: &str,
-        categories_json: &str,
+        metadata_json: &str,
         category_indices: &js_sys::Uint32Array,
         y: &Float64Array,
         y_valid: Option<js_sys::Uint8Array>,
@@ -2565,7 +2569,7 @@ impl NucleusChart {
         self.inner.borrow_mut().set_general_category_data_typed(
             dataset,
             ids_json,
-            categories_json,
+            metadata_json,
             category_indices,
             y,
             y_valid,
@@ -2575,15 +2579,20 @@ impl NucleusChart {
     pub fn upsert_general_numeric_data_typed(
         &mut self,
         dataset: u32,
-        ids_json: &str,
+        metadata_json: &str,
         x: &Float64Array,
         y: &Float64Array,
         y_valid: Option<js_sys::Uint8Array>,
         max_rows: u32,
     ) -> String {
-        self.inner
-            .borrow_mut()
-            .upsert_general_numeric_data_typed(dataset, ids_json, x, y, y_valid, max_rows)
+        self.inner.borrow_mut().upsert_general_numeric_data_typed(
+            dataset,
+            metadata_json,
+            x,
+            y,
+            y_valid,
+            max_rows,
+        )
     }
 
     pub fn upsert_general_category_data_typed(
