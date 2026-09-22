@@ -107,8 +107,18 @@ is keyed by dataset generation, plot geometry, axis domains/transforms, directio
 cell count is capped, retained capacity is attributed to engine memory, and exact/nearest hits inspect
 only intersecting cells while preserving stable series/row tie-breaking. Dataset replacement remains
 atomic against every bound series. Canvas2D, retained WebGPU, GPUI, and the native tiny-skia rasterizer
-all have chart-level parity coverage for both slices. The engine seam remains hidden from the browser
-package until boundary ingestion and the remaining public behavior such as labels/selection are complete.
+all have chart-level parity coverage for both slices.
+
+The browser package exposes these two slices through the common chart lifecycle. Domain-aware pane and
+axis handles remain thin mutations over engine state. Object rows are normalized once into numeric or
+interned-category columns; typed input crosses the WASM boundary as bulk arrays, while optional string or
+numeric identities cross as one bounded JSON vector. A general-series handle owns one engine dataset and
+removes it transactionally after detaching the series. Pane enumeration and chart series-lifecycle events
+include general handles without making financial-only accessibility or primitive helpers reinterpret
+them. Tooltip, bounded accessibility, and exact/nearest hit snapshots come back from Rust. Generated row
+identities are encoded as decimal strings at the JavaScript boundary so their full `u64` identity is not
+rounded. The remaining release work includes selection/hover presentation, data labels, incremental
+updates and retention, schema persistence, and integration into the keyboard accessibility controller.
 
 `ChartOptionsStore` keeps typed options canonical for engine and frame reads and retains the raw JSON
 object only for boundary-compatible deep merges and serialization. An option patch is merged and

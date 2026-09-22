@@ -33,6 +33,11 @@ impl GeneralSeriesId {
     pub fn get(self) -> u32 {
         self.0.get()
     }
+
+    #[doc(hidden)]
+    pub fn from_raw(value: u32) -> Option<Self> {
+        NonZeroU32::new(value).map(Self)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -265,12 +270,12 @@ fn scatter_cell(
 fn grid_query_range(
     from: f64,
     to: f64,
-    origin: f64,
+    range_start: f64,
     cell_size: f64,
     count: usize,
 ) -> Option<(usize, usize)> {
-    let first = ((from - origin) / cell_size).floor() as isize;
-    let last = ((to - origin) / cell_size).floor() as isize;
+    let first = ((from - range_start) / cell_size).floor() as isize;
+    let last = ((to - range_start) / cell_size).floor() as isize;
     if last < 0 || first >= count as isize {
         return None;
     }
@@ -580,6 +585,20 @@ impl ChartEngine {
         self.general_series
             .as_ref()
             .map_or(0, GeneralSeriesRegistry::len)
+    }
+
+    #[doc(hidden)]
+    pub fn general_series_ids_in_pane(&self, pane_index: usize) -> Vec<GeneralSeriesId> {
+        let Some(pane_id) = self.pane_stable_id(pane_index) else {
+            return Vec::new();
+        };
+        self.general_series
+            .as_ref()
+            .into_iter()
+            .flat_map(GeneralSeriesRegistry::iter)
+            .filter(|series| series.pane_id == pane_id)
+            .map(GeneralSeries::id)
+            .collect()
     }
 
     #[doc(hidden)]

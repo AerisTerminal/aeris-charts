@@ -2,10 +2,13 @@
 
 ## Status and purpose
 
-This document is the Phase 0 API proposal for the all-in-one architecture in `plan.md`. It defines
-the intended browser vocabulary and compatibility rules before general-chart state or geometry is
-added. Nothing in this document is supported by the current package until it appears in
-`packages/charts/src/types.ts`, the public API manifest, and the release notes.
+This document began as the Phase 0 API proposal for the all-in-one architecture in `plan.md` and
+remains the contract for unfinished chart families. The current package now implements the first
+category-column and numeric XY-scatter subset: domain-aware panes, explicit axes, object and typed
+bulk replacement, snapshots, hit testing, and lifecycle removal are public in
+`packages/charts/src/types.ts` and tracked by the public API manifest. Later series names and the
+incremental, selection, label, persistence, and React surfaces below remain proposals until their
+implementations and release evidence land.
 
 The proposal is additive. Existing financial series, data shapes, pane methods, price-scale
 handles, snake-case methods, and persistence V1 keep their current meaning. In particular,

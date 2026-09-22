@@ -26,6 +26,9 @@ pub enum GeneralXKind {
 pub enum GeneralRowId {
     Number(f64),
     Text(String),
+    /// Boundary marker for an omitted object-row ID. The store replaces it with a monotonic
+    /// generated identity during the same validated transaction.
+    Generated,
 }
 
 impl PartialEq for GeneralRowId {
@@ -35,6 +38,7 @@ impl PartialEq for GeneralRowId {
                 normalized_number_bits(*a) == normalized_number_bits(*b)
             }
             (Self::Text(a), Self::Text(b)) => a == b,
+            (Self::Generated, Self::Generated) => true,
             _ => false,
         }
     }
@@ -53,6 +57,7 @@ impl Hash for GeneralRowId {
                 1u8.hash(state);
                 value.hash(state);
             }
+            Self::Generated => 2u8.hash(state),
         }
     }
 }
@@ -104,6 +109,11 @@ pub struct GeneralDatasetId(NonZeroU32);
 impl GeneralDatasetId {
     pub fn get(self) -> u32 {
         self.0.get()
+    }
+
+    #[doc(hidden)]
+    pub fn from_raw(value: u32) -> Option<Self> {
+        NonZeroU32::new(value).map(Self)
     }
 }
 
@@ -399,6 +409,7 @@ fn validate_ids(ids: &[GeneralRowId], row_count: usize) -> Result<(), ChartError
                 }
             }
             GeneralRowId::Number(_) => {}
+            GeneralRowId::Generated => continue,
         }
         if !unique.insert(id) {
             return Err(invalid_data("general explicit row IDs must be unique"));
@@ -558,10 +569,28 @@ fn identities_for(
     next_generated_row_id: u64,
 ) -> Result<(Vec<GeneralRowIdentity>, u64), ChartError> {
     if let Some(ids) = ids {
-        return Ok((
-            ids.into_iter().map(GeneralRowIdentity::Explicit).collect(),
-            next_generated_row_id,
-        ));
+        let generated_count = ids
+            .iter()
+            .filter(|id| matches!(id, GeneralRowId::Generated))
+            .count();
+        let generated_count = u64::try_from(generated_count)
+            .map_err(|_| resource("general generated row identity count overflow"))?;
+        let end = next_generated_row_id
+            .checked_add(generated_count)
+            .ok_or_else(|| resource("general generated row identity space is exhausted"))?;
+        let mut next = next_generated_row_id;
+        let identities = ids
+            .into_iter()
+            .map(|id| match id {
+                GeneralRowId::Generated => {
+                    let identity = GeneralRowIdentity::Generated(next);
+                    next += 1;
+                    identity
+                }
+                explicit => GeneralRowIdentity::Explicit(explicit),
+            })
+            .collect();
+        return Ok((identities, end));
     }
     let count = u64::try_from(row_count)
         .map_err(|_| resource("general generated row identity count overflow"))?;
@@ -626,6 +655,43 @@ mod tests {
         assert_eq!(
             store.get(id).unwrap().row_identity(0),
             Some(&GeneralRowIdentity::Generated(4))
+        );
+    }
+
+    #[test]
+    fn mixed_explicit_and_omitted_ids_generate_only_the_missing_rows() {
+        let mut store = GeneralDataStore::new();
+        let id = store
+            .insert(GeneralXyInput::Numeric {
+                ids: Some(vec![
+                    GeneralRowId::Text("first".into()),
+                    GeneralRowId::Generated,
+                    GeneralRowId::Number(7.0),
+                    GeneralRowId::Generated,
+                ]),
+                x: vec![1.0, 2.0, 3.0, 4.0],
+                y: vec![10.0, 20.0, 30.0, 40.0],
+                y_valid: None,
+            })
+            .unwrap();
+        let dataset = store.get(id).unwrap();
+        assert_eq!(
+            dataset.row_identity(0),
+            Some(&GeneralRowIdentity::Explicit(GeneralRowId::Text(
+                "first".into()
+            )))
+        );
+        assert_eq!(
+            dataset.row_identity(1),
+            Some(&GeneralRowIdentity::Generated(1))
+        );
+        assert_eq!(
+            dataset.row_identity(2),
+            Some(&GeneralRowIdentity::Explicit(GeneralRowId::Number(7.0)))
+        );
+        assert_eq!(
+            dataset.row_identity(3),
+            Some(&GeneralRowIdentity::Generated(2))
         );
     }
 

@@ -321,7 +321,7 @@ Vertical slices:
 - a true XY scatter chart, which validates independent continuous X/Y domains, point hit testing,
   zoom, and dense geometry.
 
-Current implementation progress (2026-09-21):
+Current implementation progress (2026-09-22):
 
 - the linear/category scale, pane-domain, explicit-axis, shared-layout, and axis-frame foundations are in
   place without adding general dispatch to the financial row path;
@@ -329,15 +329,16 @@ Current implementation progress (2026-09-21):
   automatic category/linear domains, positive/negative baseline geometry, missing-row semantics,
   exact/nearest hit testing, tooltip/accessibility snapshots, lifecycle guards, and chart-level
   Canvas2D/WebGPU/GPUI/native parity evidence;
-- the category-column slice is not yet an exposed browser feature: boundary object/typed-array ingestion,
-  data-label/selection behavior, and the remaining public API contract must land before it is complete;
 - the true XY scatter engine slice now owns numeric X/Y storage, independent linear/log/symlog domains,
   runtime pan/zoom views, bounded point sizing, missing-row semantics, ordered circle geometry,
   generation-keyed screen-space hit indexing, exact/nearest hits, tooltip/accessibility snapshots, and
   Canvas2D/WebGPU/GPUI/native parity evidence;
-- like category columns, scatter is not yet an exposed browser feature: boundary ingestion,
-  selection/hover presentation, persistence under the future general-chart schema, and public API work
-  remain before either general series is release-complete.
+- the browser package now exposes domain-aware panes, general axes, category columns, and XY scatter
+  through the common chart lifecycle, with object-row conversion, typed bulk ingestion, pane enumeration,
+  lifecycle events, data/accessibility snapshots, hit testing, screenshots, and Chromium/Firefox/WebKit
+  runtime evidence;
+- selection/hover presentation, data labels, incremental update/retention APIs, general-schema
+  persistence, and keyboard-controller integration remain before either general series is release-complete.
 
 Exit gate: both slices render equivalently in every backend and a financial-only chart shows no
 material regression in output, work, memory, or package size.

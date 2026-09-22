@@ -34,6 +34,10 @@ export interface detachable_feature {
   detach(): void;
 }
 
+function is_financial_series(series: series_api | unknown): series is series_api {
+  return typeof series === "object" && series !== null && "price_formatter" in series;
+}
+
 export interface anchored_text_options {
   vert_align?: "top" | "middle" | "bottom";
   /** Official plugin spelling; `vert_align` remains the Nucleus alias. */
@@ -693,7 +697,8 @@ export function create_tooltip(chart: chart_api, options: tooltip_options = {}):
     top_offset: options.top_offset ?? 20,
     format: options.format,
   };
-  const series = current.series ?? chart.panes().flatMap((pane) => pane.get_series())[0];
+  const series = current.series
+    ?? chart.panes().flatMap((pane) => pane.get_series()).find(is_financial_series);
   if (series === undefined) throw new Error("tooltip requires a chart series");
   const native_options = (): string => JSON.stringify({
     line_color: current.line_color,

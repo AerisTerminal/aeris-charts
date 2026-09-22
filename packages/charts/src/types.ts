@@ -40,6 +40,132 @@ export type series_kind =
   | feature_series_kind
   | "custom";
 
+/** General Cartesian series currently available through the shared chart engine. */
+export type general_series_kind = "column" | "scatter";
+export type general_row_id = string | number;
+
+export interface general_xy_row {
+  id?: general_row_id;
+  x: string | number;
+  y: number | null;
+}
+
+export interface numeric_xy_columns {
+  ids?: readonly general_row_id[];
+  x: Float64Array;
+  y: Float64Array;
+  y_valid?: Uint8Array;
+}
+
+export interface category_xy_columns {
+  ids?: readonly general_row_id[];
+  categories: readonly string[];
+  category_indices: Uint32Array;
+  y: Float64Array;
+  y_valid?: Uint8Array;
+}
+
+export type horizontal_domain_options =
+  | { type: "financial_time" }
+  | { type: "continuous"; scale?: "linear" | "log" | "symlog" }
+  | { type: "temporal" }
+  | { type: "category"; scale?: "band" | "point" }
+  | { type: "polar" };
+
+export interface general_pane_options {
+  preserve_empty?: boolean;
+  horizontal_domain: horizontal_domain_options;
+}
+
+export type axis_dimension = "x" | "y" | "angle" | "radius";
+export type axis_position = "top" | "bottom" | "left" | "right";
+export type general_scale_type =
+  | "linear"
+  | "log"
+  | "symlog"
+  | "temporal"
+  | "band"
+  | "point"
+  | "radial_linear"
+  | "angular_category";
+
+export interface general_axis_options {
+  id: string;
+  pane: number;
+  dimension: axis_dimension;
+  position?: axis_position;
+  scale: general_scale_type;
+  domain?: "auto" | readonly [number | Date, number | Date] | readonly string[];
+  reverse?: boolean;
+  visible?: boolean;
+  title?: string;
+  tick_count?: number;
+  min_tick_gap?: number;
+  band_padding_inner?: number;
+  band_padding_outer?: number;
+  zero_line?: boolean;
+  grid_visible?: boolean;
+}
+
+export interface general_series_options {
+  pane: number;
+  x_axis_id: string;
+  y_axis_id: string;
+  visible?: boolean;
+  title?: string;
+  color?: string;
+  /** Scatter point radius in CSS pixels. Ignored by columns. */
+  point_radius?: number;
+}
+
+export interface general_tooltip_snapshot {
+  series: number;
+  row: number;
+  row_id: general_row_id | { generated: string };
+  x_label: string;
+  value: number | null;
+  title: string;
+}
+
+export interface general_series_hit {
+  series: number;
+  row: number;
+  row_id: general_row_id | { generated: string };
+  distance: number;
+}
+
+export interface general_accessibility_snapshot {
+  series: number;
+  title: string;
+  total_rows: number;
+  offset: number;
+  items: readonly {
+    row: number;
+    row_id: general_row_id | { generated: string };
+    x_label: string;
+    value: number | null;
+  }[];
+}
+
+export interface general_axis_api {
+  readonly id: string;
+  options(): general_axis_options;
+  pan(fraction: number): void;
+  zoom(factor: number, anchor_value: number): void;
+  reset_view(): void;
+  remove(): boolean;
+}
+
+export interface general_series_api {
+  readonly id: number;
+  readonly kind: general_series_kind;
+  set_data(data: readonly general_xy_row[]): void;
+  set_data_typed(columns: numeric_xy_columns | category_xy_columns): void;
+  data_at(row: number): general_tooltip_snapshot | null;
+  accessibility_snapshot(offset?: number, limit?: number): general_accessibility_snapshot;
+  remove(): void;
+}
+
 /** Calendar day (reference `BusinessDay`), interpreted at UTC midnight. `month`/`day` are 1-based. */
 export interface business_day {
   year: number;
@@ -524,7 +650,7 @@ export type ema_ribbon_options = readonly [
 
 /** Series lifecycle event (platform chrome: legend chips, indicator counts). */
 export interface series_change_event {
-  series: series_api;
+  series: series_api | general_series_api;
   pane_index: number;
 }
 export type series_change_handler = (event: series_change_event) => void;
@@ -1697,7 +1823,7 @@ export interface pane_api {
   /** Set whether to keep this pane while it has no series (reference `IPaneApi.setPreserveEmptyPane`). */
   set_preserve_empty_pane(flag: boolean): void;
   /** The series attached to this pane, as live handles (reference `IPaneApi.getSeries`). */
-  get_series(): series_api[];
+  get_series(): (series_api | general_series_api)[];
   /**
    * Attach a pane primitive (reference `IPaneApi.attachPrimitive`, plugin platform Phase C-a) and
    * repaint. The primitive records backend-neutral draw commands (no raw canvas), so its
@@ -2055,6 +2181,7 @@ export interface chart_api {
    */
   value_snapshot(logical_index?: number): chart_value_snapshot[];
   add_series(kind: "footprint", options?: Partial<any_series_options> & Partial<footprint_series_options>): footprint_series_api;
+  add_series(kind: general_series_kind, options: general_series_options): general_series_api;
   add_series(kind: series_kind, options?: Partial<any_series_options>): series_api;
   /**
    * Add a custom series (plugin platform Phase C-c; reference `IChartApi.addCustomSeries`): a
@@ -2075,7 +2202,7 @@ export interface chart_api {
    * foreign handle. The primary series (the first one created, engine id 0) may also be removed;
    * the engine tombstones it safely.
    */
-  remove_series(series: series_api): void;
+  remove_series(series: series_api | general_series_api): void;
   /**
    * The chart's series in stable saved (z-)order (bottom first), as live handles. A series
    * whose handle the package no longer tracks is omitted. Cf. the reference's per-series
@@ -2143,6 +2270,14 @@ export interface chart_api {
    * default `false`).
    */
   add_pane(preserve_empty?: boolean): pane_api;
+  /** Add a pane bound to an explicit engine-owned horizontal domain. */
+  add_pane(options: general_pane_options): pane_api;
+  add_axis(options: general_axis_options): general_axis_api;
+  axis(id: string): general_axis_api | null;
+  axes(pane?: number): general_axis_api[];
+  remove_axis(id: string): boolean;
+  /** Engine-owned exact hit when `max_distance` is omitted, nearest hit otherwise. */
+  general_hit_test(pane: number, x: number, y: number, max_distance?: number): general_series_hit | null;
   /**
    * Remove the pane at `index` (reference `IChartApi.removePane`). Returns `false` without changing
    * anything when the engine refuses (e.g. an out-of-range index or the last pane). Divergence:

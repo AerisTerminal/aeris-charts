@@ -27,6 +27,9 @@ import type {
   ema_ribbon_options, ema_ribbon_periods,
   feature_series_kind, frame_stats,
   footprint_bar, footprint_series_api, footprint_series_options, footprint_trade, footprint_trade_columns,
+  general_accessibility_snapshot, general_axis_api, general_axis_options, general_pane_options, general_series_api, general_series_hit,
+  general_series_kind, general_series_options, general_tooltip_snapshot, general_xy_row,
+  category_xy_columns, numeric_xy_columns,
   ingestion_diagnostics,
   handle_scale_options, handle_scroll_options, indicator_info, kinetic_scroll_options,
   last_value_data, localization_options, logical_range,
@@ -404,6 +407,207 @@ function point_color_to_u32(css: string | undefined): number | undefined {
     return undefined;
   }
   return packed;
+}
+
+type general_engine_result<T> =
+  | { ok: true; result: T }
+  | { ok: false; error: { code: nucleuscharts_error_code; message: string } };
+
+function parse_general_result<T>(json: string): T {
+  const result = JSON.parse(json) as general_engine_result<T>;
+  if (!result.ok) throw new nucleuscharts_error(result.error.code, result.error.message);
+  return result.result;
+}
+
+type packed_numeric_xy_columns = Omit<numeric_xy_columns, "ids"> & {
+  ids?: readonly (string | number | null)[];
+};
+type packed_category_xy_columns = Omit<category_xy_columns, "ids"> & {
+  ids?: readonly (string | number | null)[];
+};
+type general_columns_input = packed_numeric_xy_columns | packed_category_xy_columns;
+
+function general_ids_json(ids: readonly (string | number | null)[] | undefined, rows: number): string {
+  if (ids === undefined) return "";
+  if (ids.length !== rows) {
+    throw new nucleuscharts_error("invalid_data", "general row IDs and value columns must have equal lengths");
+  }
+  return JSON.stringify(ids);
+}
+
+function pack_general_rows(kind: general_series_kind, data: readonly general_xy_row[]): general_columns_input {
+  const has_explicit = data.some((row) => row.id !== undefined);
+  const ids = has_explicit ? data.map((row) => row.id ?? null) : undefined;
+  const y = new Float64Array(data.length);
+  let y_valid: Uint8Array | undefined;
+  for (let index = 0; index < data.length; index += 1) {
+    const value = data[index]!.y;
+    if (value === null) {
+      y_valid ??= new Uint8Array(data.length).fill(1);
+      y_valid[index] = 0;
+    } else {
+      y[index] = value;
+    }
+  }
+  if (kind === "scatter") {
+    const x = new Float64Array(data.length);
+    for (let index = 0; index < data.length; index += 1) {
+      const value = data[index]!.x;
+      if (typeof value !== "number") {
+        throw new nucleuscharts_error("invalid_data", "scatter X values must be numbers");
+      }
+      x[index] = value;
+    }
+    return { ids, x, y, y_valid };
+  }
+  const categories: string[] = [];
+  const category_lookup = new Map<string, number>();
+  const category_indices = new Uint32Array(data.length);
+  for (let index = 0; index < data.length; index += 1) {
+    const value = data[index]!.x;
+    if (typeof value !== "string") {
+      throw new nucleuscharts_error("invalid_data", "column X values must be category strings");
+    }
+    let category = category_lookup.get(value);
+    if (category === undefined) {
+      category = categories.length;
+      categories.push(value);
+      category_lookup.set(value, category);
+    }
+    category_indices[index] = category;
+  }
+  return { ids, categories, category_indices, y, y_valid };
+}
+
+class general_axis_impl implements general_axis_api {
+  constructor(readonly id: string, private readonly chart: chart_impl) {}
+
+  private current(): general_axis_options {
+    const value = JSON.parse(this.chart.wasm.general_axis_json(this.id)) as general_axis_options | null;
+    if (value === null) throw new nucleuscharts_error("stale_handle", "this general axis has been removed");
+    return value;
+  }
+
+  options(): general_axis_options {
+    return this.current();
+  }
+
+  pan(fraction: number): void {
+    this.current();
+    parse_general_result<null>(this.chart.wasm.pan_general_axis_result_json(this.id, fraction));
+    this.chart.repaint();
+  }
+
+  zoom(factor: number, anchor_value: number): void {
+    this.current();
+    parse_general_result<null>(this.chart.wasm.zoom_general_axis_result_json(this.id, factor, anchor_value));
+    this.chart.repaint();
+  }
+
+  reset_view(): void {
+    this.current();
+    this.chart.wasm.reset_general_axis_view(this.id);
+    this.chart.repaint();
+  }
+
+  remove(): boolean {
+    const removed = this.chart.wasm.remove_general_axis(this.id);
+    if (removed) this.chart.repaint();
+    return removed;
+  }
+}
+
+class general_series_impl implements general_series_api {
+  private removed = false;
+
+  constructor(
+    readonly id: number,
+    private readonly dataset: number,
+    readonly kind: general_series_kind,
+    private readonly chart: chart_impl,
+  ) {}
+
+  mark_removed(): void {
+    this.removed = true;
+  }
+
+  private assert_live(): void {
+    void this.chart.wasm;
+    if (this.removed) throw new nucleuscharts_error("stale_handle", "this general series has been removed");
+  }
+
+  set_data(data: readonly general_xy_row[]): void {
+    this.install_data(pack_general_rows(this.kind, data));
+  }
+
+  set_data_typed(columns: numeric_xy_columns | category_xy_columns): void {
+    this.install_data(columns);
+  }
+
+  private install_data(columns: general_columns_input): void {
+    this.assert_live();
+    let result: string;
+    if (this.kind === "scatter") {
+      if (!("x" in columns)) {
+        throw new nucleuscharts_error("invalid_data", "scatter requires numeric XY columns");
+      }
+      result = this.chart.wasm.set_general_numeric_data_typed(
+        this.dataset,
+        general_ids_json(columns.ids, columns.x.length),
+        columns.x,
+        columns.y,
+        columns.y_valid,
+      );
+    } else {
+      if (!("category_indices" in columns)) {
+        throw new nucleuscharts_error("invalid_data", "column requires category XY columns");
+      }
+      result = this.chart.wasm.set_general_category_data_typed(
+        this.dataset,
+        general_ids_json(columns.ids, columns.category_indices.length),
+        JSON.stringify(columns.categories),
+        columns.category_indices,
+        columns.y,
+        columns.y_valid,
+      );
+    }
+    parse_general_result<null>(result);
+    this.chart.repaint();
+  }
+
+  data_at(row: number): general_tooltip_snapshot | null {
+    this.assert_live();
+    if (!Number.isSafeInteger(row) || row < 0) {
+      throw new nucleuscharts_error("invalid_options", "general data row must be a non-negative safe integer");
+    }
+    return JSON.parse(this.chart.wasm.general_tooltip_json(this.id, row)) as general_tooltip_snapshot | null;
+  }
+
+  accessibility_snapshot(offset = 0, limit = 512): general_accessibility_snapshot {
+    this.assert_live();
+    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 0) {
+      throw new nucleuscharts_error(
+        "invalid_options",
+        "general accessibility offset and limit must be non-negative safe integers",
+      );
+    }
+    const snapshot = JSON.parse(
+      this.chart.wasm.general_accessibility_json(this.id, offset, limit),
+    ) as general_accessibility_snapshot | null;
+    if (snapshot === null) {
+      throw new nucleuscharts_error("stale_handle", "this general series has been removed");
+    }
+    return snapshot;
+  }
+
+  remove(): void {
+    this.chart.remove_general_series_handle(this);
+  }
+
+  remove_from_engine(): boolean {
+    this.assert_live();
+    return this.chart.wasm.remove_general_series(this.id, this.dataset);
+  }
 }
 
 class series_impl implements series_api {
@@ -2084,12 +2288,16 @@ class pane_impl implements pane_api {
     this.chart.wasm.pane_set_preserve_empty(this.index(), flag);
     this.chart.repaint();
   }
-  get_series(): series_api[] {
+  get_series(): (series_api | general_series_api)[] {
     // Live handles from the engine's id list (empty for a stale index after remove_pane).
     const ids = this.chart.wasm.pane_series_ids(this.index());
-    const out: series_api[] = [];
+    const out: (series_api | general_series_api)[] = [];
     for (const id of ids) {
       out.push(this.chart.series_handle(id));
+    }
+    for (const id of this.chart.wasm.general_series_ids(this.index())) {
+      const series = this.chart.general_series_handle(id);
+      if (series !== null) out.push(series);
     }
     return out;
   }
@@ -2489,6 +2697,7 @@ export class chart_impl implements chart_api {
   private detach_gestures: (() => void) | null = null;
   private removed = false;
   private readonly series_by_id = new Map<number, series_impl>();
+  private readonly general_series_by_id = new Map<number, general_series_impl>();
   private readonly crosshair_subs = new Set<mouse_event_handler>();
   private readonly click_subs = new Set<mouse_event_handler>();
   private readonly chart_context_subs = new Set<chart_context_handler>();
@@ -3243,8 +3452,28 @@ export class chart_impl implements chart_api {
     kind: "footprint",
     options?: Partial<any_series_options> & Partial<footprint_series_options>,
   ): footprint_series_api;
+  add_series(kind: general_series_kind, options: general_series_options): general_series_api;
   add_series(kind: series_kind, options?: Partial<any_series_options>): series_api;
-  add_series(kind: series_kind, options?: Partial<any_series_options>): series_api {
+  add_series(
+    kind: series_kind | general_series_kind,
+    options?: Partial<any_series_options> | general_series_options,
+  ): series_api | general_series_api {
+    if (kind === "column" || kind === "scatter") {
+      if (options === undefined || !("x_axis_id" in options) || !("y_axis_id" in options)) {
+        throw new nucleuscharts_error(
+          "invalid_options",
+          `${kind} requires pane, x_axis_id, and y_axis_id options`,
+        );
+      }
+      const created = parse_general_result<{ series: number; dataset: number }>(
+        this.wasm.add_general_series_result_json(kind, JSON.stringify(options)),
+      );
+      const series = new general_series_impl(created.series, created.dataset, kind, this);
+      this.general_series_by_id.set(created.series, series);
+      this.emit_series_change(this.series_added_subs, series, options.pane);
+      this.repaint();
+      return series;
+    }
     if (kind === "custom") {
       throw new nucleuscharts_error(
         "invalid_options",
@@ -3252,10 +3481,11 @@ export class chart_impl implements chart_api {
       );
     }
     if (is_footprint_series_kind(kind)) {
-      const requested_scale = options?.overlay
+      const financial_options = options as (Partial<any_series_options> & Partial<footprint_series_options>) | undefined;
+      const requested_scale = financial_options?.overlay
         ? ""
-        : options?.priceScaleId ?? options?.price_scale_id;
-      const pane = options?.pane ?? 0;
+        : financial_options?.priceScaleId ?? financial_options?.price_scale_id;
+      const pane = financial_options?.pane ?? 0;
       if (requested_scale !== undefined
         && !["left", "right", ""].includes(requested_scale)
         && undef_to_null(this.wasm.price_scale_target_by_id(pane, requested_scale)) === null) {
@@ -3265,12 +3495,12 @@ export class chart_impl implements chart_api {
         );
       }
       const adopt_primary = !this.next_extra_series;
-      const id = this.wasm.add_footprint_series(adopt_primary, JSON.stringify(options ?? {}));
+      const id = this.wasm.add_footprint_series(adopt_primary, JSON.stringify(financial_options ?? {}));
       if (id === 0xffffffff) {
         throw new nucleuscharts_error("invalid_options", "footprint series options were rejected by the engine");
       }
       const series = new footprint_series_impl(id, this);
-      if (options) series.apply_options(options);
+      if (financial_options) series.apply_options(financial_options);
       this.next_extra_series = true;
       this.series_by_id.set(id, series);
       this.emit_series_change(this.series_added_subs, series, this.pane_of_series(id));
@@ -3285,7 +3515,7 @@ export class chart_impl implements chart_api {
       }
       const series = new feature_series_impl(id, kind, this);
       this.series_by_id.set(id, series);
-      if (options) series.apply_options(options);
+      if (options) series.apply_options(options as Partial<any_series_options>);
       this.emit_series_change(this.series_added_subs, series, this.pane_of_series(id));
       return series;
     }
@@ -3302,7 +3532,7 @@ export class chart_impl implements chart_api {
     const series = new series_impl(id, kind, this);
     this.series_by_id.set(id, series);
     if (options) {
-      series.apply_options(options);
+      series.apply_options(options as Partial<any_series_options>);
     }
     this.emit_series_change(this.series_added_subs, series, this.pane_of_series(id));
     return series;
@@ -3344,7 +3574,11 @@ export class chart_impl implements chart_api {
     return series;
   }
 
-  remove_series(series: series_api): void {
+  remove_series(series: series_api | general_series_api): void {
+    if (series instanceof general_series_impl) {
+      this.remove_general_series_handle(series);
+      return;
+    }
     const impl = this.series_by_id.get(series.id);
     // Ignore a foreign handle or one already removed (idempotent, matching reference leniency).
     if (!impl) return;
@@ -3400,6 +3634,10 @@ export class chart_impl implements chart_api {
       this.series_by_id.set(id, series);
     }
     return series;
+  }
+
+  general_series_handle(id: number): general_series_impl | null {
+    return this.general_series_by_id.get(id) ?? null;
   }
 
   set_series_order(ordered: series_api[]): boolean {
@@ -3591,7 +3829,11 @@ export class chart_impl implements chart_api {
   }
 
   /** Notify series-lifecycle subscribers (added and removed share the payload shape). */
-  private emit_series_change(subs: Set<series_change_handler>, series: series_api, pane_index: number): void {
+  private emit_series_change(
+    subs: Set<series_change_handler>,
+    series: series_api | general_series_api,
+    pane_index: number,
+  ): void {
     if (subs.size === 0) return;
     for (const h of subs) h({ series, pane_index });
   }
@@ -3731,6 +3973,17 @@ export class chart_impl implements chart_api {
         }
       }
     }
+    this.repaint();
+  }
+
+  remove_general_series_handle(series: general_series_impl): void {
+    const live = this.general_series_by_id.get(series.id);
+    if (live !== series) return;
+    const pane_index = this.panes().find((pane) => pane.get_series().includes(series))?.pane_index() ?? 0;
+    if (!series.remove_from_engine()) return;
+    series.mark_removed();
+    this.general_series_by_id.delete(series.id);
+    this.emit_series_change(this.series_removed_subs, series, pane_index);
     this.repaint();
   }
 
@@ -4595,11 +4848,62 @@ export class chart_impl implements chart_api {
     return out;
   }
 
-  add_pane(preserve_empty = false): pane_api {
-    const index = undef_to_null(this.wasm.add_pane(preserve_empty));
+  add_pane(options?: boolean | general_pane_options): pane_api {
+    if (typeof options === "object") {
+      const { pane } = parse_general_result<{ pane: number }>(
+        this.wasm.add_general_pane_result_json(JSON.stringify(options)),
+      );
+      this.repaint();
+      return new pane_impl(this, pane);
+    }
+    const index = undef_to_null(this.wasm.add_pane(options ?? false));
     if (index === null) throw new nucleuscharts_error("resource_limit", "pane identity space is exhausted");
     this.repaint();
     return new pane_impl(this, index);
+  }
+
+  add_axis(options: general_axis_options): general_axis_api {
+    const normalized = { ...options } as general_axis_options & { domain?: unknown };
+    if (Array.isArray(options.domain) && options.scale === "temporal") {
+      normalized.domain = options.domain.map((value) => value instanceof Date ? value.getTime() : value);
+    }
+    parse_general_result<{ id: string }>(
+      this.wasm.add_general_axis_result_json(JSON.stringify(normalized)),
+    );
+    this.repaint();
+    return new general_axis_impl(options.id, this);
+  }
+
+  axis(id: string): general_axis_api | null {
+    return this.wasm.general_axis_json(id) === "null" ? null : new general_axis_impl(id, this);
+  }
+
+  axes(pane?: number): general_axis_api[] {
+    const ids = JSON.parse(this.wasm.general_axis_ids_json(pane ?? -1)) as string[];
+    return ids.map((id) => new general_axis_impl(id, this));
+  }
+
+  remove_axis(id: string): boolean {
+    const removed = this.wasm.remove_general_axis(id);
+    if (removed) this.repaint();
+    return removed;
+  }
+
+  general_hit_test(
+    pane: number,
+    x: number,
+    y: number,
+    max_distance?: number,
+  ): general_series_hit | null {
+    if (max_distance !== undefined && (!Number.isFinite(max_distance) || max_distance < 0)) {
+      throw new nucleuscharts_error(
+        "invalid_options",
+        "general hit-test max_distance must be a finite non-negative number",
+      );
+    }
+    return JSON.parse(
+      this.wasm.general_hit_test_json(pane, x, y, max_distance ?? -1),
+    ) as general_series_hit | null;
   }
 
   remove_pane(index: number): boolean {
@@ -4756,6 +5060,8 @@ export class chart_impl implements chart_api {
     this.plugin_resize_observer = null;
     for (const series of this.series_by_id.values()) series.mark_removed();
     this.series_by_id.clear();
+    for (const series of this.general_series_by_id.values()) series.mark_removed();
+    this.general_series_by_id.clear();
     this.crosshair_subs.clear();
     this.click_subs.clear();
     this.chart_context_subs.clear();

@@ -22,6 +22,10 @@ const MIN_ZOOM_SPAN = 2;
 const ZOOM_STEP = 0.2;
 const CANVAS_PREVIOUS_ARIA = "data-nucleuscharts-a11y-previous-aria-hidden";
 
+function is_financial_series(series: series_api | unknown): series is series_api {
+  return typeof series === "object" && series !== null && "subscribe_data_changed" in series;
+}
+
 export interface accessibility_point {
   series_position: number;
   series_count: number;
@@ -304,7 +308,7 @@ class PaneAccessibility {
   }
 
   sync_series(): void {
-    const current = this.pane.get_series();
+    const current = this.pane.get_series().filter(is_financial_series);
     for (const [series, handler] of this.subscriptions) {
       if (!current.includes(series)) {
         series.unsubscribe_data_changed(handler);

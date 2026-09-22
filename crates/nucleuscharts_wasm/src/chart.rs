@@ -18,6 +18,7 @@
 mod custom_series;
 mod feature_series;
 mod footprint;
+mod general_charts;
 mod image_runs;
 mod inner_api;
 mod inner_render;
@@ -2473,6 +2474,125 @@ impl NucleusChart {
     /// reference v5 `chart.addPane(preserveEmptyPane)`: append a pane and return its index.
     pub fn add_pane(&mut self, preserve_empty: bool) -> Option<u32> {
         self.inner.borrow_mut().add_pane(preserve_empty)
+    }
+
+    /// Add a pane with an explicit non-financial horizontal domain.
+    pub fn add_general_pane_result_json(&mut self, options_json: &str) -> String {
+        self.inner
+            .borrow_mut()
+            .add_general_pane_result_json(options_json)
+    }
+
+    /// Add one engine-owned general axis.
+    pub fn add_general_axis_result_json(&mut self, options_json: &str) -> String {
+        self.inner
+            .borrow_mut()
+            .add_general_axis_result_json(options_json)
+    }
+
+    pub fn general_axis_json(&self, id: &str) -> String {
+        self.inner.borrow().general_axis_json(id)
+    }
+
+    /// General axis IDs in insertion order. `pane < 0` selects every pane.
+    pub fn general_axis_ids_json(&self, pane: i32) -> String {
+        self.inner.borrow().general_axis_ids_json(pane)
+    }
+
+    pub fn general_series_ids(&self, pane: usize) -> Vec<u32> {
+        self.inner.borrow().general_series_ids(pane)
+    }
+
+    pub fn remove_general_axis(&mut self, id: &str) -> bool {
+        self.inner.borrow_mut().remove_general_axis(id)
+    }
+
+    pub fn pan_general_axis_result_json(&mut self, id: &str, fraction: f64) -> String {
+        match self.inner.borrow_mut().pan_general_axis(id, fraction) {
+            Ok(()) => serde_json::json!({ "ok": true, "result": null }).to_string(),
+            Err(error) => serde_json::json!({ "ok": false, "error": { "code": error.code().name(), "message": error.message() } }).to_string(),
+        }
+    }
+
+    pub fn zoom_general_axis_result_json(
+        &mut self,
+        id: &str,
+        factor: f64,
+        anchor_value: f64,
+    ) -> String {
+        match self
+            .inner
+            .borrow_mut()
+            .zoom_general_axis(id, factor, anchor_value)
+        {
+            Ok(()) => serde_json::json!({ "ok": true, "result": null }).to_string(),
+            Err(error) => serde_json::json!({ "ok": false, "error": { "code": error.code().name(), "message": error.message() } }).to_string(),
+        }
+    }
+
+    pub fn reset_general_axis_view(&mut self, id: &str) -> bool {
+        self.inner.borrow_mut().reset_general_axis_view(id)
+    }
+
+    pub fn add_general_series_result_json(&mut self, kind: &str, options_json: &str) -> String {
+        self.inner
+            .borrow_mut()
+            .add_general_series_result_json(kind, options_json)
+    }
+
+    pub fn set_general_numeric_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        x: &Float64Array,
+        y: &Float64Array,
+        y_valid: Option<js_sys::Uint8Array>,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .set_general_numeric_data_typed(dataset, ids_json, x, y, y_valid)
+    }
+
+    pub fn set_general_category_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        categories_json: &str,
+        category_indices: &js_sys::Uint32Array,
+        y: &Float64Array,
+        y_valid: Option<js_sys::Uint8Array>,
+    ) -> String {
+        self.inner.borrow_mut().set_general_category_data_typed(
+            dataset,
+            ids_json,
+            categories_json,
+            category_indices,
+            y,
+            y_valid,
+        )
+    }
+
+    pub fn remove_general_series(&mut self, series: u32, dataset: u32) -> bool {
+        self.inner
+            .borrow_mut()
+            .remove_general_series(series, dataset)
+    }
+
+    pub fn general_tooltip_json(&self, series: u32, row: usize) -> String {
+        self.inner.borrow().general_tooltip_json(series, row)
+    }
+
+    pub fn general_accessibility_json(&self, series: u32, offset: usize, limit: usize) -> String {
+        self.inner
+            .borrow()
+            .general_accessibility_json(series, offset, limit)
+    }
+
+    /// `max_distance < 0` requests exact hit testing.
+    pub fn general_hit_test_json(&self, pane: usize, x: f64, y: f64, max_distance: f64) -> String {
+        self.inner
+            .borrow()
+            .general_hit_test_json(pane, x, y, max_distance)
     }
 
     /// Versioned semantic chart-state export. The JSON envelope contains either a V1 document or
