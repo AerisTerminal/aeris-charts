@@ -437,11 +437,57 @@ impl ChartEngine {
                                 .collect()
                         })
                 });
+                let high = dataset.high().map(ToOwned::to_owned);
+                let high_valid = high.as_ref().and_then(|_| {
+                    (0..dataset.len())
+                        .any(|row| !dataset.high_is_valid(row))
+                        .then(|| {
+                            (0..dataset.len())
+                                .map(|row| u8::from(dataset.high_is_valid(row)))
+                                .collect()
+                        })
+                });
+                let x_low = dataset.x_low().map(ToOwned::to_owned);
+                let x_low_valid = x_low.as_ref().and_then(|_| {
+                    (0..dataset.len())
+                        .any(|row| !dataset.x_low_is_valid(row))
+                        .then(|| {
+                            (0..dataset.len())
+                                .map(|row| u8::from(dataset.x_low_is_valid(row)))
+                                .collect()
+                        })
+                });
+                let x_high = dataset.x_high().map(ToOwned::to_owned);
+                let x_high_valid = x_high.as_ref().and_then(|_| {
+                    (0..dataset.len())
+                        .any(|row| !dataset.x_high_is_valid(row))
+                        .then(|| {
+                            (0..dataset.len())
+                                .map(|row| u8::from(dataset.x_high_is_valid(row)))
+                                .collect()
+                        })
+                });
                 debug_assert!(
                     low.is_none() || size.is_none(),
                     "range and bubble channels are mutually exclusive"
                 );
                 let input = match dataset.x_kind() {
+                    crate::GeneralXKind::Numeric if high.is_some() => {
+                        crate::GeneralXyInput::ErrorNumeric {
+                            ids,
+                            x: dataset.numeric_x().unwrap_or_default().to_vec(),
+                            y,
+                            y_valid,
+                            x_low: x_low.expect("error-bar X-low channel"),
+                            x_low_valid,
+                            x_high: x_high.expect("error-bar X-high channel"),
+                            x_high_valid,
+                            y_low: low.expect("error-bar Y-low channel"),
+                            y_low_valid: low_valid,
+                            y_high: high.expect("error-bar Y-high channel"),
+                            y_high_valid: high_valid,
+                        }
+                    }
                     crate::GeneralXKind::Numeric => match (low, size) {
                         (Some(low), None) => crate::GeneralXyInput::RangeNumeric {
                             ids,
@@ -1357,6 +1403,65 @@ mod tests {
             .unwrap();
         assert_eq!(gap.low, None);
         assert_eq!(gap.high, None);
+    }
+
+    #[test]
+    fn v2_round_trip_preserves_error_bar_bounds_and_missingness() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let pane = chart
+            .add_pane_with_domain(
+                true,
+                crate::HorizontalDomain::Continuous {
+                    scale: crate::ContinuousScaleType::Linear,
+                },
+            )
+            .unwrap();
+        for (id, dimension) in [
+            ("error-x", crate::AxisDimension::X),
+            ("error-y", crate::AxisDimension::Y),
+        ] {
+            chart
+                .add_general_axis(crate::GeneralAxisOptions::new(
+                    id,
+                    pane,
+                    dimension,
+                    crate::GeneralScaleType::Linear,
+                ))
+                .unwrap();
+        }
+        let dataset = chart
+            .create_general_xy_dataset(crate::GeneralXyInput::ErrorNumeric {
+                ids: Some(vec![crate::GeneralRowId::Text("first".into())]),
+                x: vec![10.0],
+                y: vec![20.0],
+                y_valid: None,
+                x_low: vec![8.0],
+                x_low_valid: None,
+                x_high: vec![0.0],
+                x_high_valid: Some(vec![0]),
+                y_low: vec![15.0],
+                y_low_valid: None,
+                y_high: vec![0.0],
+                y_high_valid: Some(vec![0]),
+            })
+            .unwrap();
+        chart
+            .add_general_series(crate::GeneralSeriesOptions::error_bar(
+                pane, dataset, "error-x", "error-y",
+            ))
+            .unwrap();
+
+        let document = chart.export_state_json().unwrap();
+        let mut restored = ChartEngine::new(800.0, 500.0, 1.0);
+        restored.import_state_json(&document).unwrap();
+        assert_eq!(restored.export_state_json().unwrap(), document);
+        let series = restored.general_series_ids_in_pane(pane)[0];
+        let snapshot = restored.general_tooltip_snapshot(series, 0).unwrap();
+        assert_eq!(snapshot.value, Some(20.0));
+        assert_eq!(snapshot.x_low, Some(8.0));
+        assert_eq!(snapshot.x_high, None);
+        assert_eq!(snapshot.low, Some(15.0));
+        assert_eq!(snapshot.high, None);
     }
 
     #[test]

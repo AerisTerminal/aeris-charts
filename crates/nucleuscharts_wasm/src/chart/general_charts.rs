@@ -454,6 +454,7 @@ impl ChartInner {
                         GeneralSeriesKind::XyLine => "xy_line",
                         GeneralSeriesKind::XyArea => "xy_area",
                         GeneralSeriesKind::RangeArea => "range_area",
+                        GeneralSeriesKind::ErrorBar => "error_bar",
                         GeneralSeriesKind::Column => "column",
                         GeneralSeriesKind::Scatter => "scatter",
                         GeneralSeriesKind::Bubble => "bubble",
@@ -567,6 +568,23 @@ impl ChartInner {
                     size_valid: None,
                 },
             ),
+            "error_bar" => (
+                GeneralSeriesKind::ErrorBar,
+                GeneralXyInput::ErrorNumeric {
+                    ids: None,
+                    x: Vec::new(),
+                    y: Vec::new(),
+                    y_valid: None,
+                    x_low: Vec::new(),
+                    x_low_valid: None,
+                    x_high: Vec::new(),
+                    x_high_valid: None,
+                    y_low: Vec::new(),
+                    y_low_valid: None,
+                    y_high: Vec::new(),
+                    y_high_valid: None,
+                },
+            ),
             _ => return input_error("unsupported general series kind"),
         };
         let dataset = match self.engine.create_general_xy_dataset(empty) {
@@ -581,6 +599,12 @@ impl ChartInner {
                 GeneralSeriesOptions::xy_area(input.pane, dataset, input.x_axis_id, input.y_axis_id)
             }
             GeneralSeriesKind::RangeArea => GeneralSeriesOptions::range_area(
+                input.pane,
+                dataset,
+                input.x_axis_id,
+                input.y_axis_id,
+            ),
+            GeneralSeriesKind::ErrorBar => GeneralSeriesOptions::error_bar(
                 input.pane,
                 dataset,
                 input.x_axis_id,
@@ -796,6 +820,57 @@ impl ChartInner {
             low_valid: low_valid.map(|values| values.to_vec()),
             high: high.to_vec(),
             high_valid: high_valid.map(|values| values.to_vec()),
+        };
+        match self
+            .engine
+            .replace_general_xy_dataset_labeled(dataset, input, metadata.labels)
+        {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_general_error_numeric_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        x: &Float64Array,
+        y: &Float64Array,
+        y_valid: Option<Uint8Array>,
+        x_low: &Float64Array,
+        x_low_valid: Option<Uint8Array>,
+        x_high: &Float64Array,
+        x_high_valid: Option<Uint8Array>,
+        y_low: &Float64Array,
+        y_low_valid: Option<Uint8Array>,
+        y_high: &Float64Array,
+        y_high_valid: Option<Uint8Array>,
+    ) -> String {
+        let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
+            return input_error("general dataset handle is stale");
+        };
+        let metadata = match parse_json::<NumericDataInput>(metadata_json) {
+            Ok(metadata) => metadata,
+            Err(error) => return error,
+        };
+        let ids = match parse_id_values(metadata.ids) {
+            Ok(ids) => ids,
+            Err(error) => return error,
+        };
+        let input = GeneralXyInput::ErrorNumeric {
+            ids,
+            x: x.to_vec(),
+            y: y.to_vec(),
+            y_valid: y_valid.map(|values| values.to_vec()),
+            x_low: x_low.to_vec(),
+            x_low_valid: x_low_valid.map(|values| values.to_vec()),
+            x_high: x_high.to_vec(),
+            x_high_valid: x_high_valid.map(|values| values.to_vec()),
+            y_low: y_low.to_vec(),
+            y_low_valid: y_low_valid.map(|values| values.to_vec()),
+            y_high: y_high.to_vec(),
+            y_high_valid: y_high_valid.map(|values| values.to_vec()),
         };
         match self
             .engine
@@ -1091,6 +1166,60 @@ impl ChartInner {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn upsert_general_error_numeric_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        x: &Float64Array,
+        y: &Float64Array,
+        y_valid: Option<Uint8Array>,
+        x_low: &Float64Array,
+        x_low_valid: Option<Uint8Array>,
+        x_high: &Float64Array,
+        x_high_valid: Option<Uint8Array>,
+        y_low: &Float64Array,
+        y_low_valid: Option<Uint8Array>,
+        y_high: &Float64Array,
+        y_high_valid: Option<Uint8Array>,
+        max_rows: u32,
+    ) -> String {
+        let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
+            return input_error("general dataset handle is stale");
+        };
+        let metadata = match parse_json::<NumericDataInput>(metadata_json) {
+            Ok(metadata) => metadata,
+            Err(error) => return error,
+        };
+        let ids = match parse_id_values(metadata.ids) {
+            Ok(ids) => ids,
+            Err(error) => return error,
+        };
+        let input = GeneralXyInput::ErrorNumeric {
+            ids,
+            x: x.to_vec(),
+            y: y.to_vec(),
+            y_valid: y_valid.map(|values| values.to_vec()),
+            x_low: x_low.to_vec(),
+            x_low_valid: x_low_valid.map(|values| values.to_vec()),
+            x_high: x_high.to_vec(),
+            x_high_valid: x_high_valid.map(|values| values.to_vec()),
+            y_low: y_low.to_vec(),
+            y_low_valid: y_low_valid.map(|values| values.to_vec()),
+            y_high: y_high.to_vec(),
+            y_high_valid: y_high_valid.map(|values| values.to_vec()),
+        };
+        match self.engine.upsert_general_xy_dataset_labeled(
+            dataset,
+            input,
+            metadata.labels,
+            (max_rows > 0).then_some(max_rows as usize),
+        ) {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn upsert_general_range_temporal_data_typed(
         &mut self,
         dataset: u32,
@@ -1200,6 +1329,7 @@ impl ChartInner {
             "series": snapshot.series.get(), "row": snapshot.row,
             "row_id": row_identity(&snapshot.row_id), "x_label": snapshot.x_label,
             "label": snapshot.label, "value": snapshot.value, "low": snapshot.low, "high": snapshot.high,
+            "x_low": snapshot.x_low, "x_high": snapshot.x_high,
             "size": snapshot.size, "title": snapshot.title,
         })
         .to_string()
@@ -1228,6 +1358,8 @@ impl ChartInner {
                 "value": item.value,
                 "low": item.low,
                 "high": item.high,
+                "x_low": item.x_low,
+                "x_high": item.x_high,
                 "size": item.size,
             })).collect::<Vec<_>>(),
         })

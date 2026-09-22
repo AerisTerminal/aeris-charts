@@ -929,6 +929,94 @@ fn xy_scatter_engine_frame_reaches_canvas_and_gpui_path_routes() {
 }
 
 #[test]
+fn error_bar_engine_frame_reaches_canvas_and_gpui_stroke_and_point_routes() {
+    for dpr in [1.0f64, 1.5, 2.0] {
+        let mut engine = ChartEngine::new(420.0, 260.0, dpr);
+        let pane = engine
+            .add_pane_with_domain(
+                true,
+                HorizontalDomain::Continuous {
+                    scale: ContinuousScaleType::Linear,
+                },
+            )
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "x",
+                pane,
+                AxisDimension::X,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "y",
+                pane,
+                AxisDimension::Y,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        let dataset = engine
+            .create_general_xy_dataset(GeneralXyInput::ErrorNumeric {
+                ids: None,
+                x: vec![1.0, 2.0, 3.0],
+                y: vec![2.0, 3.0, 100.0],
+                y_valid: Some(vec![1, 1, 0]),
+                x_low: vec![0.5, 0.0, 0.0],
+                x_low_valid: Some(vec![1, 0, 0]),
+                x_high: vec![1.5, 2.5, 0.0],
+                x_high_valid: Some(vec![1, 1, 0]),
+                y_low: vec![1.5, 2.5, 0.0],
+                y_low_valid: Some(vec![1, 1, 0]),
+                y_high: vec![2.5, 0.0, 0.0],
+                y_high_valid: Some(vec![1, 0, 0]),
+            })
+            .unwrap();
+        engine
+            .add_general_series(GeneralSeriesOptions::error_bar(pane, dataset, "x", "y"))
+            .unwrap();
+        engine.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+        let frame = engine.build_frame();
+        let pane_frame = &frame.panes[pane];
+        assert_eq!(
+            pane_frame
+                .main
+                .iter()
+                .filter(|primitive| matches!(primitive, Prim::Circle { .. }))
+                .count(),
+            2,
+            "DPR {dpr}: missing observation must not emit a mark"
+        );
+        assert!(pane_frame
+            .main
+            .iter()
+            .any(|primitive| matches!(primitive, Prim::HLine { .. })));
+        assert!(pane_frame
+            .main
+            .iter()
+            .any(|primitive| matches!(primitive, Prim::VLine { .. })));
+        let canvas = canvas_rects(&pane_frame.main, &pane_frame.points);
+        let (_plan, metrics) = gpui_plan(&pane_frame.main, &pane_frame.points);
+        assert_eq!(
+            canvas.path_fills, 2,
+            "DPR {dpr}: two center points expected"
+        );
+        assert!(
+            !canvas.rects.is_empty(),
+            "DPR {dpr}: error stems and caps must be drawn"
+        );
+        assert_eq!(
+            metrics.dropped_prims, 0,
+            "DPR {dpr}: GPUI must retain every primitive"
+        );
+        assert!(
+            metrics.paths >= 2,
+            "DPR {dpr}: GPUI center points must lower to paths"
+        );
+    }
+}
+
+#[test]
 fn xy_line_engine_frame_reaches_canvas_and_gpui_stroke_routes() {
     for dpr in [1.0f64, 1.5, 2.0] {
         let mut engine = ChartEngine::new(420.0, 260.0, dpr);

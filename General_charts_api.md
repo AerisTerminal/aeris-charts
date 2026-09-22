@@ -4,10 +4,11 @@
 
 This document began as the Phase 0 API proposal for the all-in-one architecture in `plan.md` and
 remains the contract for unfinished chart families. The current package implements category columns,
-numeric XY scatter/bubble marks, and the first Phase 2 `xy_line`, `xy_area`, `range_area`, and grouped/stacked vertical-column slices. Domain-aware panes, explicit axes, object and
+numeric XY scatter/bubble/error-bar marks, and the first Phase 2 `xy_line`, `xy_area`, `range_area`, and grouped/stacked vertical-column slices. Domain-aware panes, explicit axes, object and
 typed bulk replacement/update, bounded retention, row labels, snapshots, hit testing, accessibility,
 and V2 persistence are public for these implemented kinds/options. `xy_line`, `xy_area`, and `range_area` support continuous numeric,
-temporal epoch-millisecond, and category band/point X domains. Later series names and the React surface
+temporal epoch-millisecond, and category band/point X domains. `error_bar` currently supports numeric X/Y axes only,
+with optional independent bounds on either axis and a required center Y value for a visible mark. Later series names and the React surface
 below remain proposals until their implementations and release evidence land.
 
 The proposal is additive. Existing financial series, data shapes, pane methods, price-scale
@@ -222,11 +223,17 @@ interface heatmap_row {
 }
 
 interface error_bar_row extends xy_row {
+  x: number; // This implemented slice accepts numeric X only.
   x_low?: number | null;
   x_high?: number | null;
   y_low?: number | null;
   y_high?: number | null;
 }
+
+// The implemented numeric-only typed form has parallel x/y and x_low/x_high/y_low/y_high
+// Float64Array columns. Each bound has an optional Uint8Array validity mask (0 = absent),
+// independent of y_valid. Present X bounds must not cross X; with valid center Y, present
+// Y bounds must not cross Y. Absent bounds remain queryable.
 
 interface box_plot_row {
   id?: general_row_id;
@@ -290,8 +297,8 @@ interface temporal_xy_columns extends Omit<numeric_xy_columns, "x"> {
 
 All parallel arrays must have equal row counts. Validity arrays contain only `0` or `1`. Category
 indices must be in range. The transaction is validated before the live dataset changes. Bubble extends
-numeric XY columns with `size: Float64Array` and optional `size_valid: Uint8Array`. Future range, error,
-heatmap, and box column types extend this same convention rather than adding a generic dynamically typed
+numeric XY columns with `size: Float64Array` and optional `size_valid: Uint8Array`. Future
+heatmap and box column types extend this same convention rather than adding a generic dynamically typed
 channel map to the frame hot path.
 
 The first release needs `set_data()`, `set_data_typed()`, append/update by explicit row ID, bounded
@@ -299,7 +306,7 @@ retention, `data_at()`, hit-test/tooltip snapshots, and capacity telemetry. Gene
 allocated lazily when the first general series or dataset is created; a financial-only chart must
 retain zero general-dataset, domain, axis, and geometry capacity.
 
-The current column/scatter/bubble/`xy_line`/`xy_area`/`range_area` browser slices expose `update_data(rows, { max_rows })` and
+The current column/scatter/bubble/`xy_line`/`xy_area`/`range_area`/`error_bar` browser slices expose `update_data(rows, { max_rows })` and
 `update_data_typed(columns, { max_rows })`. Every updated row needs an explicit string or numeric
 `id`; matching IDs replace in place, while new IDs append in input order. `max_rows` is an optional
 per-transaction retention limit: after the update, oldest rows are removed until the dataset fits.
@@ -307,7 +314,7 @@ Pass it on every streaming update that needs retention. Invalid batches leave th
 unchanged. Rows removed by retention lose their identity and any hover/selection target; retained
 explicit IDs continue to identify the same marks after front trimming.
 
-The current column/scatter/bubble/`xy_line`/`xy_area`/`range_area` options also accept `data_labels: true` to draw visible numeric Y values
+The current column/scatter/bubble/`xy_line`/`xy_area`/`range_area`/`error_bar` options also accept `data_labels: true` to draw visible numeric Y values
 near their marks. The engine places labels in the shared frame, rejects overlapping or out-of-plot
 placements, and caps output at 512 labels and 4,096 placement attempts per pane per frame. Missing
 rows never produce labels. Object rows may supply `label?: string`; typed columns may supply a

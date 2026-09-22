@@ -93,7 +93,7 @@ row counts, category bytes, and ID bytes are bounded, and retained capacity is a
 engine memory evidence. A financial-only chart keeps the store absent and therefore retains zero general
 dataset capacity.
 
-The first concrete general-series bindings are category-band columns, numeric XY scatter/bubble marks,
+The first concrete general-series bindings are category-band columns, numeric XY scatter/bubble/error-bar marks,
 and the first Phase 2 path slices: `xy_line`, `xy_area`, and `range_area`. General
 series have monotonic chart-local identities, stable pane/axis/dataset ownership, bounded title/color
 state, and lazy registry allocation. Populated axes and datasets cannot be removed out from under a
@@ -127,7 +127,13 @@ identity. `range_area` adds bounded typed low/high columns beside the same X dom
 complete bounds atomically, treats either missing or transform-invalid bound as a run break, and emits one
 ordered `BandFill` plus its two boundary polylines from shared geometry. Band hit testing returns the nearest
 contributing row, while tooltip/accessibility snapshots expose both bounds. Replacement, explicit-ID updates,
-retention, memory accounting, and V2 persistence keep both channels aligned. The release perf harness
+retention, memory accounting, and V2 persistence keep both channels aligned. Numeric `error_bar`
+supports four independent optional bound channels around center XY values.
+The engine validates bound ordering atomically, excludes absent-center rows from marks and bound autoscale,
+and computes stems, caps, center circles, hits, labels, snapshots, and accessibility from one shared geometry
+path. Ordered `HLine`, `VLine`, and `Circle` frame primitives keep executor semantics identical; bound
+validity, explicit-ID updates, retention, memory accounting, and V2 persistence remain aligned.
+The release perf harness
 includes a 100k-point general-only line target with a 16.67 ms frame budget and 8 ms nearest-hit budget.
 It also keeps the current line, area, range, scatter, and bubble paths in one 100k-row mixed-general
 target with the same frame/hit budgets and a 12 MiB retained-memory ceiling, then measures one engine

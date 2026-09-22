@@ -395,11 +395,16 @@ Current Phase 2 progress (2026-09-22):
   band geometry splits on missing/transform-invalid bounds, drives exact/nearest hits and bounded labels, exposes
   both values to tooltip/accessibility snapshots, and participates in object/typed replacement, explicit-ID
   updates, retention, memory accounting, keyboard focus, and V2 persistence;
-- the focused general-chart browser suite is 18/18 across Chromium/Firefox/WebKit, including grouped/stacked
-  columns plus bubble and range-area ingestion, hit testing, updates, accessibility snapshots, and V2 restoration, while direct
+- numeric `error_bar` now owns optional independent X/Y lower and upper bounds in the aligned XY store.
+  Shared geometry drives autoscale, ordered stems/caps/center marks, exact hits, labels, snapshots, and
+  accessibility. Object and typed updates validate atomically; explicit-ID retention and V2 persistence
+  preserve each bound's missingness. Temporal/category error-bar forms and a dedicated dense-error-bar
+  performance gate remain open;
+- the focused general-chart browser suite is 21/21 across Chromium/Firefox/WebKit, including grouped/stacked
+  columns plus bubble, range-area, and numeric error-bar ingestion, hit testing, updates, accessibility snapshots, and V2 restoration, while direct
   Canvas2D/WebGPU/GPUI path executor coverage remains green;
-- the complete portable browser matrix remains green with 279 passed and 10 expected skips, and the package
-  smoke test contains 21 files with a 2436 kB WASM artifact;
+- the complete portable browser matrix is green with 282 passed and 10 expected skips, and the package
+  smoke test contains 21 files with a 2470 kB WASM artifact;
 - the release perf harness enforces a 100k `xy_line` density gate, a five-series/100k-row mixed-general
   dashboard gate, and one combined engine with 50k financial bars plus a 50k-point general range pane.
   General frame construction stays within 16.67 ms, nearest-hit interaction within 8 ms, mixed-general

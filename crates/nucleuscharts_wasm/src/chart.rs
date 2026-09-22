@@ -2648,6 +2648,42 @@ impl NucleusChart {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn set_general_error_numeric_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        x: &Float64Array,
+        y: &Float64Array,
+        y_valid: Option<js_sys::Uint8Array>,
+        x_low: &Float64Array,
+        x_low_valid: Option<js_sys::Uint8Array>,
+        x_high: &Float64Array,
+        x_high_valid: Option<js_sys::Uint8Array>,
+        y_low: &Float64Array,
+        y_low_valid: Option<js_sys::Uint8Array>,
+        y_high: &Float64Array,
+        y_high_valid: Option<js_sys::Uint8Array>,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .set_general_error_numeric_data_typed(
+                dataset,
+                metadata_json,
+                x,
+                y,
+                y_valid,
+                x_low,
+                x_low_valid,
+                x_high,
+                x_high_valid,
+                y_low,
+                y_low_valid,
+                y_high,
+                y_high_valid,
+            )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn set_general_range_temporal_data_typed(
         &mut self,
         dataset: u32,
@@ -2800,6 +2836,44 @@ impl NucleusChart {
                 low_valid,
                 high,
                 high_valid,
+                max_rows,
+            )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_general_error_numeric_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        x: &Float64Array,
+        y: &Float64Array,
+        y_valid: Option<js_sys::Uint8Array>,
+        x_low: &Float64Array,
+        x_low_valid: Option<js_sys::Uint8Array>,
+        x_high: &Float64Array,
+        x_high_valid: Option<js_sys::Uint8Array>,
+        y_low: &Float64Array,
+        y_low_valid: Option<js_sys::Uint8Array>,
+        y_high: &Float64Array,
+        y_high_valid: Option<js_sys::Uint8Array>,
+        max_rows: u32,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .upsert_general_error_numeric_data_typed(
+                dataset,
+                metadata_json,
+                x,
+                y,
+                y_valid,
+                x_low,
+                x_low_valid,
+                x_high,
+                x_high_valid,
+                y_low,
+                y_low_valid,
+                y_high,
+                y_high_valid,
                 max_rows,
             )
     }

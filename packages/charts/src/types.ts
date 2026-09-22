@@ -41,7 +41,7 @@ export type series_kind =
   | "custom";
 
 /** General Cartesian series currently available through the shared chart engine. */
-export type general_series_kind = "xy_line" | "xy_area" | "range_area" | "column" | "scatter" | "bubble";
+export type general_series_kind = "xy_line" | "xy_area" | "range_area" | "error_bar" | "column" | "scatter" | "bubble";
 export type general_row_id = string | number;
 
 export interface general_xy_row {
@@ -66,6 +66,15 @@ export interface range_area_row {
   label?: string;
 }
 
+/** Numeric XY observation with optional independent error bounds on either axis. */
+export interface error_bar_row extends general_xy_row {
+  x: number;
+  x_low?: number | null;
+  x_high?: number | null;
+  y_low?: number | null;
+  y_high?: number | null;
+}
+
 export interface numeric_xy_columns {
   ids?: readonly general_row_id[];
   labels?: readonly (string | null)[];
@@ -87,6 +96,18 @@ export interface numeric_range_columns {
   low_valid?: Uint8Array;
   high: Float64Array;
   high_valid?: Uint8Array;
+}
+
+/** Each bound has its own missing-value mask; a missing center Y emits no mark. */
+export interface numeric_error_columns extends numeric_xy_columns {
+  x_low: Float64Array;
+  x_low_valid?: Uint8Array;
+  x_high: Float64Array;
+  x_high_valid?: Uint8Array;
+  y_low: Float64Array;
+  y_low_valid?: Uint8Array;
+  y_high: Float64Array;
+  y_high_valid?: Uint8Array;
 }
 
 export interface temporal_xy_columns {
@@ -178,7 +199,7 @@ export interface general_series_options {
   visible?: boolean;
   title?: string;
   color?: string;
-  /** Scatter point radius in CSS pixels. Bubble radii come from sqrt(size); ignored by other kinds. */
+  /** Scatter center radius or error-bar cap half-width in CSS pixels. Bubble radii come from sqrt(size). */
   point_radius?: number;
   /** Show bounded, engine-placed value labels beside visible marks. */
   data_labels?: boolean;
@@ -207,6 +228,9 @@ export interface general_tooltip_snapshot {
   low: number | null;
   /** Upper range bound, or null for a missing bound/non-range series. */
   high: number | null;
+  /** Numeric X error bounds, or null when missing/not an error-bar series. */
+  x_low: number | null;
+  x_high: number | null;
   /** Bubble size channel, or null for missing size/non-bubble series. */
   size: number | null;
   title: string;
@@ -232,6 +256,8 @@ export interface general_accessibility_snapshot {
     value: number | null;
     low: number | null;
     high: number | null;
+    x_low: number | null;
+    x_high: number | null;
     size: number | null;
   }[];
 }
@@ -248,13 +274,13 @@ export interface general_axis_api {
 export interface general_series_api {
   readonly id: number;
   readonly kind: general_series_kind;
-  set_data(data: readonly (general_xy_row | bubble_row | range_area_row)[]): void;
-  set_data_typed(columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns): void;
+  set_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row)[]): void;
+  set_data_typed(columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns): void;
   /** Update existing rows and append missing rows by explicit `id`, atomically. */
-  update_data(data: readonly (general_xy_row | bubble_row | range_area_row)[], options?: general_update_options): void;
+  update_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row)[], options?: general_update_options): void;
   /** Typed-column form of {@link update_data}; `ids` is required at runtime. */
   update_data_typed(
-    columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns,
+    columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns,
     options?: general_update_options,
   ): void;
   data_at(row: number): general_tooltip_snapshot | null;

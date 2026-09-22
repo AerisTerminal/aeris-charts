@@ -508,6 +508,94 @@ test("bubble size data drives marks, hits, updates, accessibility, and V2 restor
   expect(result.screenshot).toBeGreaterThan(1000);
 });
 
+test("error bars preserve independent XY bounds through browser updates and restore", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
+
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:720px;height:520px;z-index:10000";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    chart.resize(720, 520, 1);
+    const pane = chart.add_pane({ preserve_empty: true, horizontal_domain: { type: "continuous", scale: "linear" } });
+    chart.add_axis({ id: "error-x", pane: pane.pane_index(), dimension: "x", scale: "linear" });
+    chart.add_axis({ id: "error-y", pane: pane.pane_index(), dimension: "y", scale: "linear" });
+    const errors = chart.add_series("error_bar", {
+      pane: pane.pane_index(), x_axis_id: "error-x", y_axis_id: "error-y", title: "Uncertainty",
+    });
+    errors.set_data([
+      { id: "full", x: 10, y: 20, x_low: 8, x_high: 13, y_low: 15, y_high: 26 },
+      { id: "one-sided", x: 20, y: 30, x_high: 25, y_low: 24 },
+      { id: "missing", x: 30, y: null, x_low: -1000, y_high: 2000 },
+    ]);
+    let invalid_range = null;
+    try {
+      errors.update_data([{ id: "full", x: 10, y: 20, x_low: 11 }]);
+    } catch (error) {
+      invalid_range = error.code;
+    }
+    const after_invalid = errors.data_at(0);
+    errors.update_data_typed({
+      ids: ["one-sided", "new"],
+      x: new Float64Array([21, 40]), y: new Float64Array([31, 45]),
+      x_low: new Float64Array([0, 38]), x_low_valid: new Uint8Array([0, 1]),
+      x_high: new Float64Array([27, 42]),
+      y_low: new Float64Array([25, 40]),
+      y_high: new Float64Array([0, 49]), y_high_valid: new Uint8Array([0, 1]),
+    }, { max_rows: 4 });
+    chart.resize(720, 520, 1);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const before_restore = errors.accessibility_snapshot(0, 10);
+    let hit = null;
+    const geometry = pane.get_geometry();
+    for (let y = geometry.top + 2; y < geometry.top + geometry.height - 2 && hit === null; y += 2) {
+      for (let x = 0; x < geometry.width; x += 2) {
+        const candidate = chart.general_hit_test(pane.pane_index(), x, y);
+        if (candidate?.series === errors.id) { hit = candidate; break; }
+      }
+    }
+    const state = chart.export_state();
+    errors.update_data([{ id: "tail", x: 50, y: 55, x_low: 48, y_high: 60 }], { max_rows: 3 });
+    const retained = errors.accessibility_snapshot(0, 10);
+    const restored_host = document.createElement("div");
+    restored_host.style.cssText = "position:fixed;left:-10000px;top:0;width:720px;height:520px";
+    document.body.appendChild(restored_host);
+    const restored = await create_chart(restored_host, { backend: "canvas2d", autoSize: false });
+    restored.resize(720, 520, 1);
+    const restore_result = restored.import_state(state);
+    const restored_errors = restored.panes().flatMap((candidate) => candidate.get_series())
+      .find((series) => series.kind === "error_bar");
+    const snapshot = {
+      invalid_range, after_invalid, before_restore, retained,
+      restored_snapshot: restored_errors?.accessibility_snapshot(0, 10) ?? null,
+      restored_kind: restored_errors?.kind ?? null,
+      restore_version: restore_result.schema_version,
+      hit,
+      screenshot: chart.take_screenshot().toDataURL().length,
+    };
+    restored.remove(); restored_host.remove(); chart.remove(); host.remove();
+    return snapshot;
+  });
+
+  expect(result.invalid_range).toBe("invalid_data");
+  expect(result.after_invalid).toMatchObject({ row_id: "full", x_low: 8, x_high: 13, low: 15, high: 26 });
+  expect(result.before_restore.items).toMatchObject([
+    { row_id: "full", x_low: 8, x_high: 13, low: 15, high: 26 },
+    { row_id: "one-sided", x_low: null, x_high: 27, low: 25, high: null },
+    { row_id: "missing", value: null },
+    { row_id: "new", x_low: 38, x_high: 42, low: 40, high: 49 },
+  ]);
+  expect(result.hit).toMatchObject({ series: expect.any(Number), row_id: expect.anything() });
+  expect(result.restore_version).toBe(2);
+  expect(result.retained.items.map((item) => item.row_id)).toEqual(["missing", "new", "tail"]);
+  expect(result.retained.items[1]).toMatchObject({ x_low: 38, x_high: 42, low: 40, high: 49 });
+  expect(result.restored_kind).toBe("error_bar");
+  expect(result.restored_snapshot).toEqual(result.before_restore);
+  expect(result.screenshot).toBeGreaterThan(1000);
+});
+
 test("range_area spans numeric, temporal, and category domains through the browser API", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");

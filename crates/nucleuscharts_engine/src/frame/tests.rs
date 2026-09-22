@@ -1828,6 +1828,182 @@ fn range_area_maps_temporal_and_category_x_and_log_invalid_bounds_as_gaps() {
 }
 
 #[test]
+fn error_bar_owns_xy_bounds_autoscale_geometry_hits_snapshots_and_atomic_updates() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "error-x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "error-y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::ErrorNumeric {
+            ids: Some(
+                ["full", "one-sided", "missing"]
+                    .into_iter()
+                    .map(|id| GeneralRowId::Text(id.into()))
+                    .collect(),
+            ),
+            x: vec![10.0, 20.0, 30.0],
+            y: vec![20.0, 30.0, 1_000.0],
+            y_valid: Some(vec![1, 1, 0]),
+            x_low: vec![8.0, 0.0, -1_000.0],
+            x_low_valid: Some(vec![1, 0, 1]),
+            x_high: vec![13.0, 25.0, 1_000.0],
+            x_high_valid: None,
+            y_low: vec![15.0, 24.0, -1_000.0],
+            y_low_valid: None,
+            y_high: vec![26.0, 0.0, 2_000.0],
+            y_high_valid: Some(vec![1, 0, 1]),
+        })
+        .unwrap();
+    let mut options = GeneralSeriesOptions::error_bar(pane, dataset, "error-x", "error-y");
+    options.color = Some("#345678".into());
+    options.title = "Confidence".into();
+    let series = chart.add_general_series(options).unwrap();
+
+    let GeneralAxisDomain::Numeric([x_low, x_high]) =
+        chart.general_axis_effective_domain("error-x").unwrap()
+    else {
+        panic!("error X axis must be numeric");
+    };
+    assert!(x_low <= 8.0 && (30.0..100.0).contains(&x_high));
+    let GeneralAxisDomain::Numeric([y_low, y_high]) =
+        chart.general_axis_effective_domain("error-y").unwrap()
+    else {
+        panic!("error Y axis must be numeric");
+    };
+    assert!(y_low <= 15.0 && (30.0..100.0).contains(&y_high));
+
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let mut geometry = Vec::new();
+    chart.visit_general_error_bars(chart.general_series(series).unwrap(), |item| {
+        geometry.push(item)
+    });
+    assert_eq!(
+        geometry.iter().map(|item| item.row).collect::<Vec<_>>(),
+        vec![0, 1]
+    );
+    assert!(geometry[0].x_low.is_some());
+    assert!(geometry[0].x_high.is_some());
+    assert!(geometry[0].y_low.is_some());
+    assert!(geometry[0].y_high.is_some());
+    assert!(geometry[1].x_low.is_none());
+    assert!(geometry[1].x_high.is_some());
+    assert!(geometry[1].y_low.is_some());
+    assert!(geometry[1].y_high.is_none());
+
+    let expected = Color::parse_css("#345678").unwrap();
+    let frame = chart.build_frame();
+    geometry.clear();
+    chart.visit_general_error_bars(chart.general_series(series).unwrap(), |item| {
+        geometry.push(item)
+    });
+    assert!(frame.panes[pane]
+        .main
+        .iter()
+        .any(|primitive| matches!(primitive, Prim::HLine { color, .. } if *color == expected)));
+    assert!(frame.panes[pane]
+        .main
+        .iter()
+        .any(|primitive| matches!(primitive, Prim::VLine { color, .. } if *color == expected)));
+    assert_eq!(
+        frame.panes[pane]
+            .main
+            .iter()
+            .filter(|primitive| matches!(primitive, Prim::Circle { fill, .. } if *fill == expected))
+            .count(),
+        2
+    );
+
+    let first = geometry[0];
+    let hit_x = (first.x + first.x_low.unwrap()) * 0.5;
+    let hit = chart
+        .general_hit_test(pane, hit_x, first.y, crate::GeneralHitMode::Exact)
+        .unwrap();
+    assert_eq!(hit.series, series);
+    assert_eq!(hit.row, 0);
+    let tooltip = chart.general_tooltip_snapshot(series, 0).unwrap();
+    assert_eq!(tooltip.value, Some(20.0));
+    assert_eq!(tooltip.x_low, Some(8.0));
+    assert_eq!(tooltip.x_high, Some(13.0));
+    assert_eq!(tooltip.low, Some(15.0));
+    assert_eq!(tooltip.high, Some(26.0));
+    let accessibility = chart
+        .general_accessibility_snapshot(series, 0, usize::MAX)
+        .unwrap();
+    assert_eq!(accessibility.items[1].x_low, None);
+    assert_eq!(accessibility.items[1].x_high, Some(25.0));
+    assert_eq!(accessibility.items[1].low, Some(24.0));
+    assert_eq!(accessibility.items[1].high, None);
+
+    let before = chart.general_tooltip_snapshot(series, 0).unwrap();
+    assert!(chart
+        .replace_general_xy_dataset(
+            dataset,
+            GeneralXyInput::ErrorNumeric {
+                ids: Some(vec![GeneralRowId::Text("bad".into())]),
+                x: vec![10.0],
+                y: vec![20.0],
+                y_valid: None,
+                x_low: vec![11.0],
+                x_low_valid: None,
+                x_high: vec![13.0],
+                x_high_valid: None,
+                y_low: vec![15.0],
+                y_low_valid: None,
+                y_high: vec![26.0],
+                y_high_valid: None,
+            },
+        )
+        .is_err());
+    assert_eq!(chart.general_tooltip_snapshot(series, 0), Some(before));
+
+    chart
+        .upsert_general_xy_dataset(
+            dataset,
+            GeneralXyInput::ErrorNumeric {
+                ids: Some(vec![GeneralRowId::Text("full".into())]),
+                x: vec![12.0],
+                y: vec![22.0],
+                y_valid: None,
+                x_low: vec![9.0],
+                x_low_valid: None,
+                x_high: vec![14.0],
+                x_high_valid: None,
+                y_low: vec![16.0],
+                y_low_valid: None,
+                y_high: vec![28.0],
+                y_high_valid: None,
+            },
+            Some(3),
+        )
+        .unwrap();
+    let updated = chart.general_tooltip_snapshot(series, 0).unwrap();
+    assert_eq!(updated.value, Some(22.0));
+    assert_eq!(updated.x_low, Some(9.0));
+    assert_eq!(updated.high, Some(28.0));
+}
+
+#[test]
 fn scatter_log_and_symlog_axes_validate_and_emit_transformed_ticks() {
     let mut chart = ChartEngine::new(500.0, 320.0, 1.0);
     let pane = chart

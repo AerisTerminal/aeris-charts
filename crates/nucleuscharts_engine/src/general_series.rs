@@ -27,6 +27,7 @@ pub enum GeneralSeriesKind {
     XyLine,
     XyArea,
     RangeArea,
+    ErrorBar,
     Column,
     Scatter,
     Bubble,
@@ -135,6 +136,29 @@ impl GeneralSeriesOptions {
             title: String::new(),
             color: None,
             point_radius: 3.0,
+            data_labels: false,
+            group_id: None,
+            stack_id: None,
+            stack_mode: GeneralStackMode::Normal,
+        }
+    }
+
+    pub fn error_bar(
+        pane: usize,
+        dataset: GeneralDatasetId,
+        x_axis_id: impl Into<String>,
+        y_axis_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: GeneralSeriesKind::ErrorBar,
+            pane,
+            dataset,
+            x_axis_id: x_axis_id.into(),
+            y_axis_id: y_axis_id.into(),
+            visible: true,
+            title: String::new(),
+            color: None,
+            point_radius: 4.0,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -262,6 +286,18 @@ pub(crate) struct GeneralRangePointGeometry {
     pub(crate) low_y: f64,
     pub(crate) high_y: f64,
     pub(crate) starts_new_run: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct GeneralErrorBarGeometry {
+    pub(crate) row: usize,
+    pub(crate) x: f64,
+    pub(crate) y: f64,
+    pub(crate) x_low: Option<f64>,
+    pub(crate) x_high: Option<f64>,
+    pub(crate) y_low: Option<f64>,
+    pub(crate) y_high: Option<f64>,
+    pub(crate) cap_half_size: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -485,6 +521,8 @@ pub struct GeneralTooltipSnapshot {
     pub value: Option<f64>,
     pub low: Option<f64>,
     pub high: Option<f64>,
+    pub x_low: Option<f64>,
+    pub x_high: Option<f64>,
     pub size: Option<f64>,
     pub title: String,
 }
@@ -498,6 +536,8 @@ pub struct GeneralAccessibilityItem {
     pub value: Option<f64>,
     pub low: Option<f64>,
     pub high: Option<f64>,
+    pub x_low: Option<f64>,
+    pub x_high: Option<f64>,
     pub size: Option<f64>,
 }
 
@@ -826,7 +866,9 @@ impl ChartEngine {
                     ));
                 }
             }
-            GeneralSeriesKind::Scatter | GeneralSeriesKind::Bubble => {
+            GeneralSeriesKind::Scatter
+            | GeneralSeriesKind::Bubble
+            | GeneralSeriesKind::ErrorBar => {
                 if !matches!(pane_domain, HorizontalDomain::Continuous { .. })
                     || dataset_kind != GeneralXKind::Numeric
                     || !matches!(
@@ -843,7 +885,7 @@ impl ChartEngine {
                     )
                 {
                     return Err(invalid(
-                        "scatter/bubble requires a continuous pane, numeric X data, and numeric X/Y axes",
+                        "scatter/bubble/error_bar requires a continuous pane, numeric X data, and numeric X/Y axes",
                     ));
                 }
             }
@@ -1707,6 +1749,108 @@ impl ChartEngine {
         )
     }
 
+    pub(crate) fn visit_general_error_bars<F>(&self, series: &GeneralSeries, mut visit: F)
+    where
+        F: FnMut(GeneralErrorBarGeometry),
+    {
+        if !series.visible || series.kind != GeneralSeriesKind::ErrorBar {
+            return;
+        }
+        let Some(pane_index) = self.pane_index_for_id(series.pane_id) else {
+            return;
+        };
+        let Some(plot) = self.general_plot_rect(pane_index) else {
+            return;
+        };
+        let Some(dataset) = self.general_dataset(series.dataset) else {
+            return;
+        };
+        let (
+            Some(x_values),
+            Some(x_low_values),
+            Some(x_high_values),
+            Some(y_low_values),
+            Some(y_high_values),
+        ) = (
+            dataset.numeric_x(),
+            dataset.x_low(),
+            dataset.x_high(),
+            dataset.low(),
+            dataset.high(),
+        )
+        else {
+            return;
+        };
+        let (Some(x_axis), Some(y_axis)) = (
+            self.general_axis(&series.x_axis_id),
+            self.general_axis(&series.y_axis_id),
+        ) else {
+            return;
+        };
+        let Some(GeneralAxisDomain::Numeric(x_domain)) = self.effective_general_axis_domain(x_axis)
+        else {
+            return;
+        };
+        let Some(GeneralAxisDomain::Numeric(y_domain)) = self.effective_general_axis_domain(y_axis)
+        else {
+            return;
+        };
+        let x_range = if x_axis.reverse() {
+            (plot.width, 0.0)
+        } else {
+            (0.0, plot.width)
+        };
+        let plot_bottom = plot.y + plot.height;
+        let y_range = if y_axis.reverse() {
+            (plot.y, plot_bottom)
+        } else {
+            (plot_bottom, plot.y)
+        };
+        let (Some(x_scale), Some(y_scale)) = (
+            NumericAxisScale::new(x_axis.scale(), x_domain, x_range.0, x_range.1),
+            NumericAxisScale::new(y_axis.scale(), y_domain, y_range.0, y_range.1),
+        ) else {
+            return;
+        };
+        for row in 0..dataset.len() {
+            if !dataset.y_is_valid(row) {
+                continue;
+            }
+            let (Some(x), Some(y)) = (
+                x_scale.coordinate(x_values[row]),
+                y_scale.coordinate(dataset.y()[row]),
+            ) else {
+                continue;
+            };
+            let x_low = dataset
+                .x_low_is_valid(row)
+                .then(|| x_scale.coordinate(x_low_values[row]))
+                .flatten();
+            let x_high = dataset
+                .x_high_is_valid(row)
+                .then(|| x_scale.coordinate(x_high_values[row]))
+                .flatten();
+            let y_low = dataset
+                .low_is_valid(row)
+                .then(|| y_scale.coordinate(y_low_values[row]))
+                .flatten();
+            let y_high = dataset
+                .high_is_valid(row)
+                .then(|| y_scale.coordinate(y_high_values[row]))
+                .flatten();
+            visit(GeneralErrorBarGeometry {
+                row,
+                x,
+                y,
+                x_low,
+                x_high,
+                y_low,
+                y_high,
+                cap_half_size: series.point_radius,
+            });
+        }
+    }
+
     fn scatter_geometry_context(&self, series: &GeneralSeries) -> Option<ScatterGeometryContext> {
         if !series.visible
             || !matches!(
@@ -1985,6 +2129,14 @@ impl ChartEngine {
                         previous = Some(geometry);
                     });
                 }
+                GeneralSeriesKind::ErrorBar => {
+                    self.visit_general_error_bars(series, |geometry| {
+                        consider(
+                            geometry.row,
+                            (distance_to_error_bar(x_css, y_css, geometry) - 3.0).max(0.0),
+                        );
+                    });
+                }
                 GeneralSeriesKind::Column => self.visit_general_columns(series, |geometry| {
                     consider(geometry.row, distance_to_rect(x_css, y_css, geometry));
                 }),
@@ -2259,9 +2411,20 @@ impl ChartEngine {
             low: dataset
                 .low()
                 .and_then(|values| dataset.low_is_valid(row).then(|| values[row])),
-            high: dataset
-                .low()
-                .and_then(|_| dataset.y_is_valid(row).then(|| dataset.y()[row])),
+            high: dataset.high().map_or_else(
+                || {
+                    dataset
+                        .low()
+                        .and_then(|_| dataset.y_is_valid(row).then(|| dataset.y()[row]))
+                },
+                |values| dataset.high_is_valid(row).then(|| values[row]),
+            ),
+            x_low: dataset
+                .x_low()
+                .and_then(|values| dataset.x_low_is_valid(row).then(|| values[row])),
+            x_high: dataset
+                .x_high()
+                .and_then(|values| dataset.x_high_is_valid(row).then(|| values[row])),
             size: dataset
                 .size()
                 .and_then(|values| dataset.size_is_valid(row).then(|| values[row])),
@@ -2296,9 +2459,20 @@ impl ChartEngine {
                 low: dataset
                     .low()
                     .and_then(|values| dataset.low_is_valid(row).then(|| values[row])),
-                high: dataset
-                    .low()
-                    .and_then(|_| dataset.y_is_valid(row).then(|| dataset.y()[row])),
+                high: dataset.high().map_or_else(
+                    || {
+                        dataset
+                            .low()
+                            .and_then(|_| dataset.y_is_valid(row).then(|| dataset.y()[row]))
+                    },
+                    |values| dataset.high_is_valid(row).then(|| values[row]),
+                ),
+                x_low: dataset
+                    .x_low()
+                    .and_then(|values| dataset.x_low_is_valid(row).then(|| values[row])),
+                x_high: dataset
+                    .x_high()
+                    .and_then(|values| dataset.x_high_is_valid(row).then(|| values[row])),
                 size: dataset
                     .size()
                     .and_then(|values| dataset.size_is_valid(row).then(|| values[row])),
@@ -2385,6 +2559,47 @@ fn extend_numeric_pair(bounds: &mut Option<(f64, f64)>, value: f64) {
 
 fn distance_to_circle(x: f64, y: f64, geometry: GeneralScatterGeometry) -> f64 {
     ((x - geometry.x).hypot(y - geometry.y) - geometry.radius).max(0.0)
+}
+
+fn distance_to_error_bar(x: f64, y: f64, geometry: GeneralErrorBarGeometry) -> f64 {
+    let mut distance = (x - geometry.x).hypot(y - geometry.y);
+    if geometry.x_low.is_some() || geometry.x_high.is_some() {
+        let from = geometry.x_low.unwrap_or(geometry.x);
+        let to = geometry.x_high.unwrap_or(geometry.x);
+        distance = distance.min(distance_to_segment(x, y, from, geometry.y, to, geometry.y).0);
+        for bound in [geometry.x_low, geometry.x_high].into_iter().flatten() {
+            distance = distance.min(
+                distance_to_segment(
+                    x,
+                    y,
+                    bound,
+                    geometry.y - geometry.cap_half_size,
+                    bound,
+                    geometry.y + geometry.cap_half_size,
+                )
+                .0,
+            );
+        }
+    }
+    if geometry.y_low.is_some() || geometry.y_high.is_some() {
+        let from = geometry.y_low.unwrap_or(geometry.y);
+        let to = geometry.y_high.unwrap_or(geometry.y);
+        distance = distance.min(distance_to_segment(x, y, geometry.x, from, geometry.x, to).0);
+        for bound in [geometry.y_low, geometry.y_high].into_iter().flatten() {
+            distance = distance.min(
+                distance_to_segment(
+                    x,
+                    y,
+                    geometry.x - geometry.cap_half_size,
+                    bound,
+                    geometry.x + geometry.cap_half_size,
+                    bound,
+                )
+                .0,
+            );
+        }
+    }
+    distance
 }
 
 fn distance_to_segment(x: f64, y: f64, x0: f64, y0: f64, x1: f64, y1: f64) -> (f64, f64) {
@@ -2527,6 +2742,23 @@ fn validate_dataset_for_series(
                 .low()
                 .ok_or_else(|| invalid("range-area series require a low-value channel"))?;
         }
+        GeneralSeriesKind::ErrorBar => {
+            dataset
+                .numeric_x()
+                .ok_or_else(|| invalid("error-bar series require numeric X data"))?;
+            dataset
+                .low()
+                .ok_or_else(|| invalid("error-bar series require a Y-low channel"))?;
+            dataset
+                .high()
+                .ok_or_else(|| invalid("error-bar series require a Y-high channel"))?;
+            dataset
+                .x_low()
+                .ok_or_else(|| invalid("error-bar series require an X-low channel"))?;
+            dataset
+                .x_high()
+                .ok_or_else(|| invalid("error-bar series require an X-high channel"))?;
+        }
         GeneralSeriesKind::Scatter => {
             let values = dataset
                 .numeric_x()
@@ -2617,6 +2849,23 @@ fn validate_input_for_series(
             }
             input.low_values().ok_or_else(|| {
                 invalid("a dataset bound to a range-area series must retain its low-value channel")
+            })?;
+        }
+        GeneralSeriesKind::ErrorBar => {
+            input.numeric_x_values().ok_or_else(|| {
+                invalid("a dataset bound to an error-bar series must remain numeric X data")
+            })?;
+            input.low_values().ok_or_else(|| {
+                invalid("a dataset bound to an error-bar series must retain its Y-low channel")
+            })?;
+            input.high_values().ok_or_else(|| {
+                invalid("a dataset bound to an error-bar series must retain its Y-high channel")
+            })?;
+            input.x_low_values().ok_or_else(|| {
+                invalid("a dataset bound to an error-bar series must retain its X-low channel")
+            })?;
+            input.x_high_values().ok_or_else(|| {
+                invalid("a dataset bound to an error-bar series must retain its X-high channel")
             })?;
         }
         GeneralSeriesKind::Scatter => {

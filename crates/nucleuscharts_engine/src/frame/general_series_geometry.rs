@@ -230,6 +230,104 @@ impl ChartEngine {
                     });
                     flush_run(&mut upper, &mut lower);
                 }
+                GeneralSeriesKind::ErrorBar => {
+                    let color = series
+                        .color()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(DEFAULT_LINE_COLOR);
+                    let line_width = hpr.min(vpr).round().max(1.0) as i32;
+                    self.visit_general_error_bars(series, |geometry| {
+                        let x = (geometry.x * hpr).round() as i32;
+                        let y = (geometry.y * vpr).round() as i32;
+                        let cap_x = (geometry.cap_half_size * hpr).round().max(1.0) as i32;
+                        let cap_y = (geometry.cap_half_size * vpr).round().max(1.0) as i32;
+                        let x_low = geometry.x_low.map(|value| (value * hpr).round() as i32);
+                        let x_high = geometry.x_high.map(|value| (value * hpr).round() as i32);
+                        let y_low = geometry.y_low.map(|value| (value * vpr).round() as i32);
+                        let y_high = geometry.y_high.map(|value| (value * vpr).round() as i32);
+                        if x_low.is_some() || x_high.is_some() {
+                            let from = x_low.unwrap_or(x);
+                            let to = x_high.unwrap_or(x);
+                            out.push(Prim::HLine {
+                                y,
+                                x0: from.min(to),
+                                x1: from.max(to),
+                                width: line_width,
+                                style: LineStyle::Solid,
+                                color,
+                            });
+                            for bound in [x_low, x_high].into_iter().flatten() {
+                                out.push(Prim::VLine {
+                                    x: bound,
+                                    y0: y - cap_y,
+                                    y1: y + cap_y,
+                                    width: line_width,
+                                    style: LineStyle::Solid,
+                                    color,
+                                });
+                            }
+                        }
+                        if y_low.is_some() || y_high.is_some() {
+                            let from = y_low.unwrap_or(y);
+                            let to = y_high.unwrap_or(y);
+                            out.push(Prim::VLine {
+                                x,
+                                y0: from.min(to),
+                                y1: from.max(to),
+                                width: line_width,
+                                style: LineStyle::Solid,
+                                color,
+                            });
+                            for bound in [y_low, y_high].into_iter().flatten() {
+                                out.push(Prim::HLine {
+                                    y: bound,
+                                    x0: x - cap_x,
+                                    x1: x + cap_x,
+                                    width: line_width,
+                                    style: LineStyle::Solid,
+                                    color,
+                                });
+                            }
+                        }
+                        out.push(Prim::Circle {
+                            cx: (geometry.x * hpr) as f32,
+                            cy: (geometry.y * vpr) as f32,
+                            radius: (2.0 * vpr) as f32,
+                            fill: color,
+                            stroke_width: 0.0,
+                            stroke: color,
+                        });
+                        let top = [Some(geometry.y), geometry.y_low, geometry.y_high]
+                            .into_iter()
+                            .flatten()
+                            .fold(geometry.y, f64::min);
+                        let bottom = [Some(geometry.y), geometry.y_low, geometry.y_high]
+                            .into_iter()
+                            .flatten()
+                            .fold(geometry.y, f64::max);
+                        push_label(
+                            geometry.row,
+                            geometry.x,
+                            top - label_size * 0.65 - 4.0,
+                            bottom + label_size * 0.65 + 4.0,
+                            plot.width - 4.0,
+                        );
+                        let (hovered, selected) =
+                            self.general_row_interaction(series.id(), geometry.row);
+                        if hovered || selected {
+                            interaction[usize::from(selected)] = Some(Prim::Circle {
+                                cx: (geometry.x * hpr) as f32,
+                                cy: (geometry.y * vpr) as f32,
+                                radius: ((geometry.cap_half_size
+                                    + if selected { 3.0 } else { 2.0 })
+                                    * vpr) as f32,
+                                fill: Color::rgba(0, 0, 0, 0),
+                                stroke_width: (if selected { 2.0 } else { 1.0 }) * vpr as f32,
+                                stroke: if selected { PRIMARY } else { GENERAL_HOVER },
+                            });
+                        }
+                    });
+                }
                 GeneralSeriesKind::Column => {
                     let color = series
                         .color()

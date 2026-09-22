@@ -107,6 +107,20 @@ pub enum GeneralXyInput {
         high: Vec<f64>,
         high_valid: Option<Vec<u8>>,
     },
+    ErrorNumeric {
+        ids: Option<Vec<GeneralRowId>>,
+        x: Vec<f64>,
+        y: Vec<f64>,
+        y_valid: Option<Vec<u8>>,
+        x_low: Vec<f64>,
+        x_low_valid: Option<Vec<u8>>,
+        x_high: Vec<f64>,
+        x_high_valid: Option<Vec<u8>>,
+        y_low: Vec<f64>,
+        y_low_valid: Option<Vec<u8>>,
+        y_high: Vec<f64>,
+        y_high_valid: Option<Vec<u8>>,
+    },
     Temporal {
         ids: Option<Vec<GeneralRowId>>,
         x_epoch_ms: Vec<i64>,
@@ -173,6 +187,12 @@ pub struct GeneralDataset {
     y_valid: Option<Vec<u8>>,
     low: Option<Vec<f64>>,
     low_valid: Option<Vec<u8>>,
+    high: Option<Vec<f64>>,
+    high_valid: Option<Vec<u8>>,
+    x_low: Option<Vec<f64>>,
+    x_low_valid: Option<Vec<u8>>,
+    x_high: Option<Vec<f64>>,
+    x_high_valid: Option<Vec<u8>>,
     size: Option<Vec<f64>>,
     size_valid: Option<Vec<u8>>,
     labels: HashMap<usize, String>,
@@ -245,6 +265,48 @@ impl GeneralDataset {
                 .is_none_or(|validity| validity[index] != 0)
     }
 
+    pub fn high(&self) -> Option<&[f64]> {
+        self.high.as_deref()
+    }
+
+    pub fn high_is_valid(&self, index: usize) -> bool {
+        self.high
+            .as_ref()
+            .is_some_and(|values| index < values.len())
+            && self
+                .high_valid
+                .as_ref()
+                .is_none_or(|validity| validity[index] != 0)
+    }
+
+    pub fn x_low(&self) -> Option<&[f64]> {
+        self.x_low.as_deref()
+    }
+
+    pub fn x_low_is_valid(&self, index: usize) -> bool {
+        self.x_low
+            .as_ref()
+            .is_some_and(|values| index < values.len())
+            && self
+                .x_low_valid
+                .as_ref()
+                .is_none_or(|validity| validity[index] != 0)
+    }
+
+    pub fn x_high(&self) -> Option<&[f64]> {
+        self.x_high.as_deref()
+    }
+
+    pub fn x_high_is_valid(&self, index: usize) -> bool {
+        self.x_high
+            .as_ref()
+            .is_some_and(|values| index < values.len())
+            && self
+                .x_high_valid
+                .as_ref()
+                .is_none_or(|validity| validity[index] != 0)
+    }
+
     pub fn row_label(&self, index: usize) -> Option<&str> {
         self.labels.get(&index).map(String::as_str)
     }
@@ -309,6 +371,21 @@ impl GeneralDataset {
                 .map_or(0, |values| values.capacity() * std::mem::size_of::<f64>())
             + self.low_valid.as_ref().map_or(0, Vec::capacity)
             + self
+                .high
+                .as_ref()
+                .map_or(0, |values| values.capacity() * std::mem::size_of::<f64>())
+            + self.high_valid.as_ref().map_or(0, Vec::capacity)
+            + self
+                .x_low
+                .as_ref()
+                .map_or(0, |values| values.capacity() * std::mem::size_of::<f64>())
+            + self.x_low_valid.as_ref().map_or(0, Vec::capacity)
+            + self
+                .x_high
+                .as_ref()
+                .map_or(0, |values| values.capacity() * std::mem::size_of::<f64>())
+            + self.x_high_valid.as_ref().map_or(0, Vec::capacity)
+            + self
                 .size
                 .as_ref()
                 .map_or(0, |values| values.capacity() * std::mem::size_of::<f64>())
@@ -328,6 +405,12 @@ struct ValidatedGeneralXy {
     y_valid: Option<Vec<u8>>,
     low: Option<Vec<f64>>,
     low_valid: Option<Vec<u8>>,
+    high: Option<Vec<f64>>,
+    high_valid: Option<Vec<u8>>,
+    x_low: Option<Vec<f64>>,
+    x_low_valid: Option<Vec<u8>>,
+    x_high: Option<Vec<f64>>,
+    x_high_valid: Option<Vec<u8>>,
     size: Option<Vec<f64>>,
     size_valid: Option<Vec<u8>>,
 }
@@ -335,9 +418,10 @@ struct ValidatedGeneralXy {
 impl GeneralXyInput {
     pub(crate) fn x_kind(&self) -> GeneralXKind {
         match self {
-            Self::Numeric { .. } | Self::Bubble { .. } | Self::RangeNumeric { .. } => {
-                GeneralXKind::Numeric
-            }
+            Self::Numeric { .. }
+            | Self::Bubble { .. }
+            | Self::RangeNumeric { .. }
+            | Self::ErrorNumeric { .. } => GeneralXKind::Numeric,
             Self::Temporal { .. } | Self::RangeTemporal { .. } => GeneralXKind::Temporal,
             Self::Category { .. } | Self::RangeCategory { .. } => GeneralXKind::Category,
         }
@@ -345,9 +429,10 @@ impl GeneralXyInput {
 
     pub(crate) fn numeric_x_values(&self) -> Option<&[f64]> {
         match self {
-            Self::Numeric { x, .. } | Self::Bubble { x, .. } | Self::RangeNumeric { x, .. } => {
-                Some(x)
-            }
+            Self::Numeric { x, .. }
+            | Self::Bubble { x, .. }
+            | Self::RangeNumeric { x, .. }
+            | Self::ErrorNumeric { x, .. } => Some(x),
             _ => None,
         }
     }
@@ -356,6 +441,7 @@ impl GeneralXyInput {
         match self {
             Self::Numeric { y, .. }
             | Self::Bubble { y, .. }
+            | Self::ErrorNumeric { y, .. }
             | Self::Temporal { y, .. }
             | Self::Category { y, .. } => y,
             Self::RangeNumeric { high, .. }
@@ -368,6 +454,7 @@ impl GeneralXyInput {
         match self {
             Self::Numeric { y_valid, .. }
             | Self::Bubble { y_valid, .. }
+            | Self::ErrorNumeric { y_valid, .. }
             | Self::Temporal { y_valid, .. }
             | Self::Category { y_valid, .. } => y_valid.as_deref(),
             Self::RangeNumeric { high_valid, .. }
@@ -387,7 +474,29 @@ impl GeneralXyInput {
         match self {
             Self::RangeNumeric { low, .. }
             | Self::RangeTemporal { low, .. }
-            | Self::RangeCategory { low, .. } => Some(low),
+            | Self::RangeCategory { low, .. }
+            | Self::ErrorNumeric { y_low: low, .. } => Some(low),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn high_values(&self) -> Option<&[f64]> {
+        match self {
+            Self::ErrorNumeric { y_high, .. } => Some(y_high),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn x_low_values(&self) -> Option<&[f64]> {
+        match self {
+            Self::ErrorNumeric { x_low, .. } => Some(x_low),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn x_high_values(&self) -> Option<&[f64]> {
+        match self {
+            Self::ErrorNumeric { x_high, .. } => Some(x_high),
             _ => None,
         }
     }
@@ -407,6 +516,12 @@ impl GeneralXyInput {
                     y_valid: normalize_validity(y_valid),
                     low: None,
                     low_valid: None,
+                    high: None,
+                    high_valid: None,
+                    x_low: None,
+                    x_low_valid: None,
+                    x_high: None,
+                    x_high_valid: None,
                     size: None,
                     size_valid: None,
                 })
@@ -432,6 +547,12 @@ impl GeneralXyInput {
                     y_valid: normalize_validity(y_valid),
                     low: None,
                     low_valid: None,
+                    high: None,
+                    high_valid: None,
+                    x_low: None,
+                    x_low_valid: None,
+                    x_high: None,
+                    x_high_valid: None,
                     size: Some(size),
                     size_valid: normalize_validity(size_valid),
                 })
@@ -463,6 +584,59 @@ impl GeneralXyInput {
                     y_valid: normalize_validity(high_valid),
                     low: Some(low),
                     low_valid: normalize_validity(low_valid),
+                    high: None,
+                    high_valid: None,
+                    x_low: None,
+                    x_low_valid: None,
+                    x_high: None,
+                    x_high_valid: None,
+                    size: None,
+                    size_valid: None,
+                })
+            }
+            Self::ErrorNumeric {
+                ids,
+                x,
+                y,
+                y_valid,
+                x_low,
+                x_low_valid,
+                x_high,
+                x_high_valid,
+                y_low,
+                y_low_valid,
+                y_high,
+                y_high_valid,
+            } => {
+                validate_row_count(x.len())?;
+                validate_common(x.len(), ids.as_deref(), &y, y_valid.as_deref())?;
+                if x.iter().any(|value| !value.is_finite()) {
+                    return Err(invalid_data("general numeric X values must be finite"));
+                }
+                validate_error_channels(
+                    &x,
+                    &y,
+                    y_valid.as_deref(),
+                    [
+                        (&x_low, x_low_valid.as_deref(), "X low"),
+                        (&x_high, x_high_valid.as_deref(), "X high"),
+                        (&y_low, y_low_valid.as_deref(), "Y low"),
+                        (&y_high, y_high_valid.as_deref(), "Y high"),
+                    ],
+                )?;
+                Ok(ValidatedGeneralXy {
+                    ids,
+                    x: GeneralXColumn::Numeric(x),
+                    y,
+                    y_valid: normalize_validity(y_valid),
+                    low: Some(y_low),
+                    low_valid: normalize_validity(y_low_valid),
+                    high: Some(y_high),
+                    high_valid: normalize_validity(y_high_valid),
+                    x_low: Some(x_low),
+                    x_low_valid: normalize_validity(x_low_valid),
+                    x_high: Some(x_high),
+                    x_high_valid: normalize_validity(x_high_valid),
                     size: None,
                     size_valid: None,
                 })
@@ -490,6 +664,12 @@ impl GeneralXyInput {
                     y_valid: normalize_validity(y_valid),
                     low: None,
                     low_valid: None,
+                    high: None,
+                    high_valid: None,
+                    x_low: None,
+                    x_low_valid: None,
+                    x_high: None,
+                    x_high_valid: None,
                     size: None,
                     size_valid: None,
                 })
@@ -531,6 +711,12 @@ impl GeneralXyInput {
                     y_valid: normalize_validity(high_valid),
                     low: Some(low),
                     low_valid: normalize_validity(low_valid),
+                    high: None,
+                    high_valid: None,
+                    x_low: None,
+                    x_low_valid: None,
+                    x_high: None,
+                    x_high_valid: None,
                     size: None,
                     size_valid: None,
                 })
@@ -560,6 +746,12 @@ impl GeneralXyInput {
                     y_valid: normalize_validity(y_valid),
                     low: None,
                     low_valid: None,
+                    high: None,
+                    high_valid: None,
+                    x_low: None,
+                    x_low_valid: None,
+                    x_high: None,
+                    x_high_valid: None,
                     size: None,
                     size_valid: None,
                 })
@@ -598,12 +790,91 @@ impl GeneralXyInput {
                     y_valid: normalize_validity(high_valid),
                     low: Some(low),
                     low_valid: normalize_validity(low_valid),
+                    high: None,
+                    high_valid: None,
+                    x_low: None,
+                    x_low_valid: None,
+                    x_high: None,
+                    x_high_valid: None,
                     size: None,
                     size_valid: None,
                 })
             }
         }
     }
+}
+
+type ErrorBoundChannels<'a> = [(&'a [f64], Option<&'a [u8]>, &'static str); 4];
+
+fn validate_error_channels(
+    x: &[f64],
+    y: &[f64],
+    y_valid: Option<&[u8]>,
+    bounds: ErrorBoundChannels<'_>,
+) -> Result<(), ChartError> {
+    let row_count = x.len();
+    for (values, validity, name) in bounds {
+        validate_error_bound_channel(row_count, values, validity, name)?;
+    }
+    let [(x_low, x_low_valid, _), (x_high, x_high_valid, _), (y_low, y_low_valid, _), (y_high, y_high_valid, _)] =
+        bounds;
+    for row in 0..row_count {
+        if x_low_valid.is_none_or(|validity| validity[row] != 0) && x_low[row] > x[row] {
+            return Err(invalid_data(
+                "general error-bar rows require X low to be less than or equal to X",
+            ));
+        }
+        if x_high_valid.is_none_or(|validity| validity[row] != 0) && x[row] > x_high[row] {
+            return Err(invalid_data(
+                "general error-bar rows require X to be less than or equal to X high",
+            ));
+        }
+        if y_valid.is_some_and(|validity| validity[row] == 0) {
+            continue;
+        }
+        if y_low_valid.is_none_or(|validity| validity[row] != 0) && y_low[row] > y[row] {
+            return Err(invalid_data(
+                "general error-bar rows require Y low to be less than or equal to Y",
+            ));
+        }
+        if y_high_valid.is_none_or(|validity| validity[row] != 0) && y[row] > y_high[row] {
+            return Err(invalid_data(
+                "general error-bar rows require Y to be less than or equal to Y high",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_error_bound_channel(
+    row_count: usize,
+    values: &[f64],
+    validity: Option<&[u8]>,
+    name: &str,
+) -> Result<(), ChartError> {
+    if values.len() != row_count {
+        return Err(invalid_data(format!(
+            "general error-bar {name} and center columns must have equal lengths"
+        )));
+    }
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(invalid_data(format!(
+            "general error-bar {name} values must be finite; use the validity column for missing values"
+        )));
+    }
+    if let Some(validity) = validity {
+        if validity.len() != row_count {
+            return Err(invalid_data(format!(
+                "general error-bar {name} validity and value columns must have equal lengths"
+            )));
+        }
+        if validity.iter().any(|value| !matches!(*value, 0 | 1)) {
+            return Err(invalid_data(format!(
+                "general error-bar {name} validity values must be 0 or 1"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn validate_range_channel(
@@ -913,6 +1184,12 @@ impl GeneralDataStore {
             y_valid: validated.y_valid,
             low: validated.low,
             low_valid: validated.low_valid,
+            high: validated.high,
+            high_valid: validated.high_valid,
+            x_low: validated.x_low,
+            x_low_valid: validated.x_low_valid,
+            x_high: validated.x_high,
+            x_high_valid: validated.x_high_valid,
             size: validated.size,
             size_valid: validated.size_valid,
             labels,
@@ -959,6 +1236,12 @@ impl GeneralDataStore {
             y_valid: validated.y_valid,
             low: validated.low,
             low_valid: validated.low_valid,
+            high: validated.high,
+            high_valid: validated.high_valid,
+            x_low: validated.x_low,
+            x_low_valid: validated.x_low_valid,
+            x_high: validated.x_high,
+            x_high_valid: validated.x_high_valid,
             size: validated.size,
             size_valid: validated.size_valid,
             labels,
@@ -1026,6 +1309,14 @@ impl GeneralDataStore {
         if dataset.low.is_some() != validated.low.is_some() {
             return Err(invalid_data(
                 "general incremental range columns must match the dataset channel shape",
+            ));
+        }
+        if dataset.high.is_some() != validated.high.is_some()
+            || dataset.x_low.is_some() != validated.x_low.is_some()
+            || dataset.x_high.is_some() != validated.x_high.is_some()
+        {
+            return Err(invalid_data(
+                "general incremental error-bar columns must match the dataset channel shape",
             ));
         }
         let existing: HashMap<GeneralRowId, usize> = dataset
@@ -1194,6 +1485,24 @@ impl GeneralDataStore {
                 if let Some(validity) = dataset.low_valid.as_mut() {
                     validity.push(1);
                 }
+                if let Some(high) = dataset.high.as_mut() {
+                    high.push(0.0);
+                }
+                if let Some(validity) = dataset.high_valid.as_mut() {
+                    validity.push(1);
+                }
+                if let Some(x_low) = dataset.x_low.as_mut() {
+                    x_low.push(0.0);
+                }
+                if let Some(validity) = dataset.x_low_valid.as_mut() {
+                    validity.push(1);
+                }
+                if let Some(x_high) = dataset.x_high.as_mut() {
+                    x_high.push(0.0);
+                }
+                if let Some(validity) = dataset.x_high_valid.as_mut() {
+                    validity.push(1);
+                }
                 dataset.len() - 1
             };
             match (&mut dataset.x, &validated.x) {
@@ -1252,6 +1561,48 @@ impl GeneralDataStore {
                     validity[target_row] = u8::from(valid);
                 }
             }
+            if let (Some(target), Some(source)) = (dataset.high.as_mut(), validated.high.as_ref()) {
+                target[target_row] = source[source_row];
+                let valid = validated
+                    .high_valid
+                    .as_ref()
+                    .is_none_or(|values| values[source_row] != 0);
+                if !valid && dataset.high_valid.is_none() {
+                    dataset.high_valid = Some(vec![1; dataset.len()]);
+                }
+                if let Some(validity) = dataset.high_valid.as_mut() {
+                    validity[target_row] = u8::from(valid);
+                }
+            }
+            if let (Some(target), Some(source)) = (dataset.x_low.as_mut(), validated.x_low.as_ref())
+            {
+                target[target_row] = source[source_row];
+                let valid = validated
+                    .x_low_valid
+                    .as_ref()
+                    .is_none_or(|values| values[source_row] != 0);
+                if !valid && dataset.x_low_valid.is_none() {
+                    dataset.x_low_valid = Some(vec![1; dataset.len()]);
+                }
+                if let Some(validity) = dataset.x_low_valid.as_mut() {
+                    validity[target_row] = u8::from(valid);
+                }
+            }
+            if let (Some(target), Some(source)) =
+                (dataset.x_high.as_mut(), validated.x_high.as_ref())
+            {
+                target[target_row] = source[source_row];
+                let valid = validated
+                    .x_high_valid
+                    .as_ref()
+                    .is_none_or(|values| values[source_row] != 0);
+                if !valid && dataset.x_high_valid.is_none() {
+                    dataset.x_high_valid = Some(vec![1; dataset.len()]);
+                }
+                if let Some(validity) = dataset.x_high_valid.as_mut() {
+                    validity[target_row] = u8::from(valid);
+                }
+            }
         }
         let mut removed_front = 0;
         if let Some(limit) = max_rows {
@@ -1286,6 +1637,24 @@ impl GeneralDataStore {
                 if let Some(validity) = dataset.low_valid.as_mut() {
                     validity.drain(..trim);
                 }
+                if let Some(high) = dataset.high.as_mut() {
+                    high.drain(..trim);
+                }
+                if let Some(validity) = dataset.high_valid.as_mut() {
+                    validity.drain(..trim);
+                }
+                if let Some(x_low) = dataset.x_low.as_mut() {
+                    x_low.drain(..trim);
+                }
+                if let Some(validity) = dataset.x_low_valid.as_mut() {
+                    validity.drain(..trim);
+                }
+                if let Some(x_high) = dataset.x_high.as_mut() {
+                    x_high.drain(..trim);
+                }
+                if let Some(validity) = dataset.x_high_valid.as_mut() {
+                    validity.drain(..trim);
+                }
                 let bounded_capacity = dataset.len().saturating_mul(2).max(1024);
                 if dataset.identities.capacity() > bounded_capacity {
                     dataset.identities.shrink_to(bounded_capacity);
@@ -1303,6 +1672,24 @@ impl GeneralDataStore {
                         low.shrink_to(bounded_capacity);
                     }
                     if let Some(validity) = dataset.low_valid.as_mut() {
+                        validity.shrink_to(bounded_capacity);
+                    }
+                    if let Some(high) = dataset.high.as_mut() {
+                        high.shrink_to(bounded_capacity);
+                    }
+                    if let Some(validity) = dataset.high_valid.as_mut() {
+                        validity.shrink_to(bounded_capacity);
+                    }
+                    if let Some(x_low) = dataset.x_low.as_mut() {
+                        x_low.shrink_to(bounded_capacity);
+                    }
+                    if let Some(validity) = dataset.x_low_valid.as_mut() {
+                        validity.shrink_to(bounded_capacity);
+                    }
+                    if let Some(x_high) = dataset.x_high.as_mut() {
+                        x_high.shrink_to(bounded_capacity);
+                    }
+                    if let Some(validity) = dataset.x_high_valid.as_mut() {
                         validity.shrink_to(bounded_capacity);
                     }
                     match &mut dataset.x {
@@ -1335,6 +1722,27 @@ impl GeneralDataStore {
             .is_some_and(|validity| !validity.contains(&0))
         {
             dataset.low_valid = None;
+        }
+        if dataset
+            .high_valid
+            .as_ref()
+            .is_some_and(|validity| !validity.contains(&0))
+        {
+            dataset.high_valid = None;
+        }
+        if dataset
+            .x_low_valid
+            .as_ref()
+            .is_some_and(|validity| !validity.contains(&0))
+        {
+            dataset.x_low_valid = None;
+        }
+        if dataset
+            .x_high_valid
+            .as_ref()
+            .is_some_and(|validity| !validity.contains(&0))
+        {
+            dataset.x_high_valid = None;
         }
         dataset.labels = next_labels;
         dataset.generation = generation;

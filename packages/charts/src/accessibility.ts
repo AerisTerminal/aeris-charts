@@ -772,7 +772,7 @@ class PaneAccessibility {
   private zoom(zoom_in: boolean): void {
     const active = this.active_series();
     if (is_general_series(active)) {
-      if (active.kind !== "scatter" && active.kind !== "bubble" && active.kind !== "xy_line" && active.kind !== "xy_area" && active.kind !== "range_area") return;
+      if (active.kind !== "scatter" && active.kind !== "bubble" && active.kind !== "xy_line" && active.kind !== "xy_area" && active.kind !== "range_area" && active.kind !== "error_bar") return;
       const item = this.general_item(this.point_index);
       const anchor = item === undefined ? 0 : Number(item.x_label);
       if (!Number.isFinite(anchor)) return;
@@ -875,6 +875,17 @@ class PaneAccessibility {
         values = item.label === null
           ? `${this.format_value(item.low, series)} to ${this.format_value(item.high, series)}`
           : `${item.label}, ${this.format_value(item.low, series)} to ${this.format_value(item.high, series)}`;
+      }
+      if (series.kind === "error_bar") {
+        const x_bounds = item.x_low !== null && item.x_high !== null
+          ? `, X ${item.x_low.toLocaleString(this.controller.locale())} to ${item.x_high.toLocaleString(this.controller.locale())}`
+          : item.x_low !== null ? `, X lower ${item.x_low.toLocaleString(this.controller.locale())}`
+            : item.x_high !== null ? `, X upper ${item.x_high.toLocaleString(this.controller.locale())}` : "";
+        const y_bounds = item.low !== null && item.high !== null
+          ? `, Y ${this.format_value(item.low, series)} to ${this.format_value(item.high, series)}`
+          : item.low !== null ? `, Y lower ${this.format_value(item.low, series)}`
+            : item.high !== null ? `, Y upper ${this.format_value(item.high, series)}` : "";
+        values = `${values}${x_bounds}${y_bounds}`;
       }
       return this.controller.options.describe_point?.(description)
         ?? this.controller.options.messages.point(

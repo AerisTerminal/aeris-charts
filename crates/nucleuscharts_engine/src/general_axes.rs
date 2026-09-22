@@ -786,6 +786,34 @@ impl ChartEngine {
                             }
                             continue;
                         }
+                        if series.kind() == crate::GeneralSeriesKind::ErrorBar {
+                            let (Some(low_values), Some(high_values)) =
+                                (dataset.low(), dataset.high())
+                            else {
+                                continue;
+                            };
+                            for (index, &value) in dataset.y().iter().enumerate() {
+                                if !dataset.y_is_valid(index)
+                                    || (axis.scale == GeneralScaleType::Logarithmic && value <= 0.0)
+                                {
+                                    continue;
+                                }
+                                extend_numeric_bounds(&mut bounds, value);
+                                if dataset.low_is_valid(index) {
+                                    let low = low_values[index];
+                                    if axis.scale != GeneralScaleType::Logarithmic || low > 0.0 {
+                                        extend_numeric_bounds(&mut bounds, low);
+                                    }
+                                }
+                                if dataset.high_is_valid(index) {
+                                    let high = high_values[index];
+                                    if axis.scale != GeneralScaleType::Logarithmic || high > 0.0 {
+                                        extend_numeric_bounds(&mut bounds, high);
+                                    }
+                                }
+                            }
+                            continue;
+                        }
                         for (index, &value) in dataset.y().iter().enumerate() {
                             if !dataset.y_is_valid(index)
                                 || (axis.scale == GeneralScaleType::Logarithmic && value <= 0.0)
@@ -795,11 +823,33 @@ impl ChartEngine {
                             extend_numeric_bounds(&mut bounds, value);
                         }
                     } else if let Some(values) = dataset.numeric_x() {
-                        for &value in values {
+                        for (index, &value) in values.iter().enumerate() {
                             if axis.scale == GeneralScaleType::Logarithmic && value <= 0.0 {
                                 continue;
                             }
                             extend_numeric_bounds(&mut bounds, value);
+                            if series.kind() == crate::GeneralSeriesKind::ErrorBar
+                                && dataset.y_is_valid(index)
+                            {
+                                if let Some(low_values) = dataset.x_low() {
+                                    if dataset.x_low_is_valid(index) {
+                                        let low = low_values[index];
+                                        if axis.scale != GeneralScaleType::Logarithmic || low > 0.0
+                                        {
+                                            extend_numeric_bounds(&mut bounds, low);
+                                        }
+                                    }
+                                }
+                                if let Some(high_values) = dataset.x_high() {
+                                    if dataset.x_high_is_valid(index) {
+                                        let high = high_values[index];
+                                        if axis.scale != GeneralScaleType::Logarithmic || high > 0.0
+                                        {
+                                            extend_numeric_bounds(&mut bounds, high);
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
