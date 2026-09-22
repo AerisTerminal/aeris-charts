@@ -93,19 +93,22 @@ row counts, category bytes, and ID bytes are bounded, and retained capacity is a
 engine memory evidence. A financial-only chart keeps the store absent and therefore retains zero general
 dataset capacity.
 
-The first concrete general-series bindings are category-band columns, numeric XY scatter/bubble/error-bar marks,
-and the first Phase 2 path slices: `xy_line`, `xy_area`, and `range_area`. General
+The released Phase 2 Cartesian bindings are category-band columns, horizontal bars, box plots, category/category
+plus numeric/numeric and temporal/numeric heatmaps, numeric XY scatter/bubble marks, numeric/temporal/category
+error bars, and `xy_line`, `xy_area`, and `range_area`. General
 series have monotonic chart-local identities, stable pane/axis/dataset ownership, bounded title/color
 state, and lazy registry allocation. Populated axes and datasets cannot be removed out from under a
 series, and a pane containing a general series cannot be removed until that series is detached. Visible
 column series contribute their category union and finite valid Y values to automatic domains; the zero baseline participates in the Y
-domain. Phase 2 column layout options add bounded `group_id`/`stack_id` state without creating renderer-specific
-series kinds. Visible members of one group subdivide each category band, while one stack consumes one group
+domain. Horizontal bars reuse the same category/value dataset but bind the numeric value scale to X and the
+category band scale to Y; category Y autoscale is engine-owned and the numeric X zero baseline participates in
+autoscale. Phase 2 bar layout options add bounded `group_id`/`stack_id` state without creating renderer-specific
+primitives. Visible members of one group subdivide each category band, while one stack consumes one group
 slot. Normal stacks accumulate positive and negative values independently from zero and contribute their
-summed category extents to Y autoscale; percent stacks normalize each category independently to `+1` and
-`-1`. Stack membership requires the same pane, group, category X axis, Y axis, and stack mode, while grouped
-columns may use separate compatible Y axes. Missing rows remain queryable and accessible but emit no mark or
-stack contribution. Column geometry is computed once
+summed category extents to the oriented numeric-axis autoscale; percent stacks normalize each category independently to `+1` and
+`-1`. Horizontal stacks apply the same rules on numeric X; vertical stacks apply them on numeric Y.
+Stack membership requires the same pane, group, axes, orientation, and stack mode. Missing rows remain queryable
+and accessible but emit no mark or stack contribution. Bar geometry is computed once
 in shared CSS-space semantics, reused by frame painting and exact/nearest hit testing, then lowered to
 ordinary ordered `Rect` primitives. Bounded tooltip and accessibility snapshots come from the same rows.
 Scatter binds independent continuous numeric axes, validates logarithmic positivity, clips geometry to
@@ -123,16 +126,50 @@ band/point X domains. Missing or transform-invalid rows split path runs instead 
 ordered `AreaFill` before the matching stroke; its zero baseline is clamped into linear/symlog plots and
 falls back to the lower-domain plot edge when a logarithmic Y axis has no zero coordinate. Line hits use
 segment distance, while area hits include the filled trapezoid and both preserve the closest endpoint row
-identity. `range_area` adds bounded typed low/high columns beside the same X domains, rejects inverted
+identity. When `xy_area` has a `stack_id`, visible members with the same pane, X/Y axes, stack ID, and stack
+mode align by exact numeric, epoch-millisecond, or category X identity rather than row position. Positive and
+negative values accumulate independently; percent mode normalizes each sign independently to `+1`/`-1`.
+Cumulative extents participate in Y autoscale, and each layer becomes a variable-bound `BandFill` between
+the preceding stack boundary and the new cumulative boundary while retaining the upper area stroke and row
+interaction identity. `range_area` adds bounded typed low/high columns beside the same X domains, rejects inverted
 complete bounds atomically, treats either missing or transform-invalid bound as a run break, and emits one
 ordered `BandFill` plus its two boundary polylines from shared geometry. Band hit testing returns the nearest
 contributing row, while tooltip/accessibility snapshots expose both bounds. Replacement, explicit-ID updates,
-retention, memory accounting, and V2 persistence keep both channels aligned. Numeric `error_bar`
-supports four independent optional bound channels around center XY values.
+retention, memory accounting, and V2 persistence keep both channels aligned. Numeric and temporal
+`error_bar` support four independent optional bound channels around center XY values; temporal X
+centers and bounds are validated whole JavaScript-safe epoch milliseconds and contribute to temporal
+autoscale. Category band/point error bars center on a category and keep only the two Y-bound channels.
 The engine validates bound ordering atomically, excludes absent-center rows from marks and bound autoscale,
 and computes stems, caps, center circles, hits, labels, snapshots, and accessibility from one shared geometry
 path. Ordered `HLine`, `VLine`, and `Circle` frame primitives keep executor semantics identical; bound
 validity, explicit-ID updates, retention, memory accounting, and V2 persistence remain aligned.
+Category-band `box_plot` reuses the aligned general dataset with five ordered numeric statistics:
+`min`, `q1`, `median`, `q3`, and `max`. Complete rows validate that order atomically; incomplete rows
+remain queryable/accessibility-visible but emit no mark and do not affect autoscale. The outer whiskers drive
+numeric-Y autoscale, including logarithmic positivity checks across all present statistics. One shared CSS-space
+geometry path computes the IQR rectangle, median, whiskers, caps, labels, and exact/nearest hits, then lowers them
+to existing `Rect`, `HLine`, and `VLine` primitives for every backend. Tooltip/accessibility snapshots expose
+quartiles separately, explicit-ID updates and bounded retention preserve aligned statistics, and V2 persistence
+round-trips the complete five-number summary without reinterpretation.
+`heatmap_grid` keeps one aligned dataset across all supported Cartesian coordinate variants. Category/category
+heatmaps add a second engine-owned category dictionary/index column for Y; the existing category X column remains
+the X registry and the ordinary numeric value/validity column remains cell intensity data. Continuous numeric and
+temporal X heatmaps instead add one aligned numeric Y-coordinate column while reusing the ordinary numeric/temporal
+X column. Category registries validate, merge, remap, trim, and compact inside the same atomic update transaction.
+Automatic domains union category registries or numeric/temporal coordinate extents as appropriate. One shared cell
+geometry path maps band grids directly and infers numeric/temporal cell boundaries from neighboring coordinate
+centers, derives deterministic normalized value intensity from visible valid cells, drives exact/nearest rectangle
+hits and labels, and lowers every cell to the ordered `Rect` primitive. Missing values remain queryable and
+accessible but emit no cell. Tooltip/accessibility snapshots expose both X and Y labels, explicit-ID updates and
+retention keep coordinate/value channels aligned, and V2 persistence round-trips every heatmap coordinate shape.
+
+General interaction/configuration state stays in the same engine registry. Shared tooltip snapshots group visible
+rows by the anchor row's exact horizontal datum in stable series/row order, including duplicate-X heatmap cells.
+The transient general brush converts host CSS-pixel endpoints immediately into semantic numeric, temporal, or
+category ranges, returns bounded selected row identities, and reprojects from semantic values after view changes.
+General reference lines, dots, and regions bind explicit axes and lower into existing shared primitives; each
+reference independently declares whether its values extend automatic domains. Reference lifecycle and V2
+persistence are engine-owned, while brush/hover/selection remain transient and are not serialized.
 The release perf harness
 includes a 100k-point general-only line target with a 16.67 ms frame budget and 8 ms nearest-hit budget.
 It also keeps the current line, area, range, scatter, and bubble paths in one 100k-row mixed-general
@@ -140,12 +177,16 @@ target with the same frame/hit budgets and a 12 MiB retained-memory ceiling, the
 containing 50k financial bars plus a 50k-point general range pane against the frame budget and a 16 MiB
 retained-memory ceiling. A separate 100k-row numeric error-bar target enforces the same frame/hit budgets
 and a 16 MiB retained-memory ceiling. Financial-only, general-only, and combined execution therefore have separate
-enforced evidence rather than unbudgeted performance claims.
+enforced evidence rather than unbudgeted performance claims. The official release browser benchmark also includes
+a five-series/100k-row representative Phase 2 general dashboard. Its first-frame host startup has an absolute
+2,000 ms p50 ceiling and its first-frame WebGPU vertex upload volume has a 96 MiB p50 ceiling; the release workflow
+evaluates these through the same versioned `budgets.json` policy as artifact-size ceilings.
 Dataset replacement remains atomic against every bound series and cannot change a bound path/scatter/bubble
 X kind or drop a bound bubble size or range low channel. Canvas2D, retained
 WebGPU, GPUI, and the native tiny-skia rasterizer consume the same frame contract; grouped/stacked columns
 reuse the already-covered ordered `Rect` executor path, bubble reuses scatter's already-covered ordered
-`Circle` executor path with per-row radii, and column, scatter, line/area, and range-band paths have direct executor
+`Circle` executor path with per-row radii, stacked area reuses the range-band `BandFill` path, and column,
+scatter, line/area, and range-band paths have direct executor
 coverage.
 
 The browser package exposes these general slices through the common chart lifecycle. Domain-aware pane and
@@ -156,8 +197,12 @@ issued a general-axis handle rather than recycling that identity. Object rows ar
 epoch-millisecond temporal, or interned-category columns; typed input crosses the WASM boundary as bulk arrays, while optional string or
 numeric identities cross as one bounded JSON vector. A general-series handle owns one engine dataset and
 removes it transactionally after detaching the series. Pane enumeration and chart series-lifecycle events
-include general handles without making financial primitive helpers reinterpret them. Tooltip, bounded
-accessibility, and exact/nearest hit snapshots come back from Rust. The shared browser accessibility
+include general handles without making financial primitive helpers reinterpret them. Tooltip, shared-tooltip,
+bounded accessibility, exact/nearest hit, brush, reference-component, and legend state come back from Rust. The legend snapshot is derived
+directly from the live series registry in stable engine order, optionally filtered by pane, and retains hidden
+series with their visibility state rather than maintaining a parallel host registry. Shared tooltip grouping,
+semantic brush selection, and reference domain extension likewise do not create browser-owned semantic mirrors.
+The shared browser accessibility
 controller recognizes financial and general handles but keeps their navigation math separate: financial
 series continue to query the time scale, while general series page through at most 512 Rust-owned
 accessibility rows at a time. General keyboard focus is a distinct engine interaction target rather than

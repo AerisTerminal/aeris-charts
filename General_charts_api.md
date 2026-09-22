@@ -3,13 +3,40 @@
 ## Status and purpose
 
 This document began as the Phase 0 API proposal for the all-in-one architecture in `plan.md` and
-remains the contract for unfinished chart families. The current package implements category columns,
-numeric XY scatter/bubble/error-bar marks, and the first Phase 2 `xy_line`, `xy_area`, `range_area`, and grouped/stacked vertical-column slices. Domain-aware panes, explicit axes, object and
+remains the contract for unfinished chart families. The current package implements the Phase 2 Cartesian
+families: category columns and horizontal bars, category-band box plots, category/category plus
+numeric/numeric and temporal/numeric heatmap grids, numeric XY scatter/bubble marks, numeric/temporal/category error bars,
+and `xy_line`, `xy_area`, `range_area`, grouped/stacked bar, and stacked-area slices. Domain-aware panes, explicit axes, object and
 typed bulk replacement/update, bounded retention, row labels, snapshots, hit testing, accessibility,
 and V2 persistence are public for these implemented kinds/options. `xy_line`, `xy_area`, and `range_area` support continuous numeric,
-temporal epoch-millisecond, and category band/point X domains. `error_bar` currently supports numeric X/Y axes only,
-with optional independent bounds on either axis and a required center Y value for a visible mark. Later series names and the React surface
+temporal epoch-millisecond, and category band/point X domains. `error_bar` supports numeric and temporal X
+axes with optional independent bounds on either axis, plus category band/point X with optional Y bounds only.
+`box_plot` uses category-band X with numeric Y and requires a complete ordered
+`min <= q1 <= median <= q3 <= max` row for visible geometry. All forms require their center/value channels
+for a visible mark. `heatmap_grid` supports band X/Y string categories, continuous numeric X with numeric Y
+coordinates, and temporal epoch-millisecond X with numeric Y coordinates. Later polar series names and the React surface
 below remain proposals until their implementations and release evidence land.
+
+General-series legend metadata is engine-owned. `chart.general_legend_snapshot(pane?)` returns bounded
+series metadata in stable engine order, including pane, kind, title, color, and visibility. Hidden series remain
+present with `visible: false` so a host-rendered legend can expose them without rebuilding state independently;
+pane filtering is read-only and V2 restore reconstructs the same semantic entries.
+
+Cross-series tooltip grouping is also engine-owned. `chart.general_shared_tooltip(series, row)` returns the
+visible rows in the same pane whose exact horizontal datum matches the anchor. Ordering is stable series order
+then row order; duplicate X values are preserved, hidden series are excluded, and a heatmap may contribute more
+than one cell for one X coordinate/category.
+
+General range selection uses `chart.set_general_brush(axis, from_coordinate, to_coordinate)`. The browser sends
+CSS-pixel endpoints once; Rust converts them immediately into a numeric, temporal, or category range and owns
+the transient selection. `general_brush_snapshot()` returns that semantic range plus a bounded list of visible
+row identities on the selected axis. Zoom/resize therefore reprojects the stored range instead of retaining stale
+pixels. `clear_general_brush()` removes it.
+
+Reference components are first-class engine state. `chart.add_general_reference(...)` creates a line, dot, or
+rectangular region bound to explicit general axes. Each reference declares `extend_domain`; automatic domains
+include its coordinates only when that flag is true. References lower into the same backend-neutral frame,
+participate in pane/axis lifecycle protection, and round-trip in V2 persistence.
 
 The proposal is additive. Existing financial series, data shapes, pane methods, price-scale
 handles, snake-case methods, and persistence V1 keep their current meaning. In particular,
@@ -148,11 +175,15 @@ Grouped and stacked charts are options on compatible column, horizontal-bar, and
 separate engines or renderer-specific kinds. A stack ID joins series only when their pane, axes,
 orientation, and category/continuous coordinate semantics match.
 
-The currently implemented Phase 2 slice exposes these options on vertical `column` series. An explicit
-`group_id` subdivides a category band among visible members; matching `stack_id` members occupy one group
-slot. `stack_mode: "normal"` uses independent positive/negative accumulation around zero and
-`stack_mode: "percent"` normalizes those category totals to `+1`/`-1`. Horizontal-bar and stacked-area
-use of the same option vocabulary remains planned work.
+The currently implemented Phase 2 slice exposes `group_id` on `column` and `horizontal_bar`, and
+`stack_id`/`stack_mode` on both bar orientations and `xy_area`. Vertical columns bind a category X axis
+to a numeric Y axis; horizontal bars reuse the same category/value rows with a numeric X axis and band Y axis.
+Grouped bars subdivide the category band; matching stacked bars occupy one group slot. Stacked areas align members by exact X identity across
+numeric, temporal, and category domains and fill between the preceding cumulative boundary and the new
+cumulative boundary. `stack_mode: "normal"` uses independent positive/negative accumulation around zero,
+while `stack_mode: "percent"` normalizes positive and negative totals independently to `+1`/`-1`.
+Both bar orientations reuse ordered `Rect` primitives, exact rectangle hits, bounded labels, snapshots,
+typed/object updates, and V2 persistence.
 
 ```ts
 interface cartesian_series_options {
@@ -215,25 +246,28 @@ interface bubble_row extends xy_row {
 
 interface heatmap_row {
   id?: general_row_id;
-  x: general_x;
-  y: number | string;
+  x: string | number | Date;
+  y: string | number;
   value: number | null;
   color?: string;
   label?: string;
 }
 
 interface error_bar_row extends xy_row {
-  x: number; // This implemented slice accepts numeric X only.
-  x_low?: number | null;
-  x_high?: number | null;
+  x: number | string | Date; // Number/Date for numeric or temporal X; string for band/point X.
+  x_low?: number | Date | null;
+  x_high?: number | Date | null;
   y_low?: number | null;
   y_high?: number | null;
 }
 
-// The implemented numeric-only typed form has parallel x/y and x_low/x_high/y_low/y_high
-// Float64Array columns. Each bound has an optional Uint8Array validity mask (0 = absent),
-// independent of y_valid. Present X bounds must not cross X; with valid center Y, present
-// Y bounds must not cross Y. Absent bounds remain queryable.
+// The numeric typed form has parallel x/y and x_low/x_high/y_low/y_high Float64Array columns.
+// The temporal typed form uses x_epoch_ms plus x_low_epoch_ms/x_high_epoch_ms Float64Array columns;
+// every present temporal X value and bound must be a whole JavaScript-safe epoch-millisecond integer.
+// The category typed form has categories/category_indices, y, y_low, and y_high columns.
+// Each bound has an optional Uint8Array validity mask (0 = absent), independent of y_valid.
+// Present numeric/temporal X bounds must not cross X; with valid center Y, present Y bounds must not
+// cross Y. Category rows reject X bounds. Absent bounds remain queryable.
 
 interface box_plot_row {
   id?: general_row_id;
@@ -293,20 +327,51 @@ interface temporal_xy_columns extends Omit<numeric_xy_columns, "x"> {
   /** Whole epoch milliseconds, exactly representable as JavaScript numbers. */
   x_epoch_ms: Float64Array;
 }
+
+interface category_heatmap_columns {
+  ids?: readonly general_row_id[];
+  x_categories: readonly string[];
+  x_category_indices: Uint32Array;
+  y_categories: readonly string[];
+  y_category_indices: Uint32Array;
+  value: Float64Array;
+  value_valid?: Uint8Array;
+}
+
+interface numeric_heatmap_columns {
+  ids?: readonly general_row_id[];
+  x: Float64Array;
+  y_coordinate: Float64Array;
+  value: Float64Array;
+  value_valid?: Uint8Array;
+}
+
+interface temporal_heatmap_columns {
+  ids?: readonly general_row_id[];
+  /** Whole epoch milliseconds, exactly representable as JavaScript numbers. */
+  x_epoch_ms: Float64Array;
+  y_coordinate: Float64Array;
+  value: Float64Array;
+  value_valid?: Uint8Array;
+}
 ```
 
 All parallel arrays must have equal row counts. Validity arrays contain only `0` or `1`. Category
 indices must be in range. The transaction is validated before the live dataset changes. Bubble extends
-numeric XY columns with `size: Float64Array` and optional `size_valid: Uint8Array`. Future
-heatmap and box column types extend this same convention rather than adding a generic dynamically typed
-channel map to the frame hot path.
+numeric XY columns with `size: Float64Array` and optional `size_valid: Uint8Array`. Box plots use category
+indices plus five parallel `Float64Array` channels named `min`, `q1`, `median`, `q3`, and `max`, each
+with an optional validity mask. Category heatmaps use independent bounded X/Y category dictionaries and aligned
+index columns plus one numeric `value` channel; both dictionaries merge and compact atomically during explicit-ID
+updates and bounded retention rather than introducing a second data store. Continuous and temporal heatmaps reuse
+the ordinary numeric/temporal X column, add one aligned numeric `y_coordinate` column, and keep `value` in the
+existing value/validity channel. Cell extents are inferred deterministically from neighboring coordinate centers.
 
 The first release needs `set_data()`, `set_data_typed()`, append/update by explicit row ID, bounded
 retention, `data_at()`, hit-test/tooltip snapshots, and capacity telemetry. General storage is
 allocated lazily when the first general series or dataset is created; a financial-only chart must
 retain zero general-dataset, domain, axis, and geometry capacity.
 
-The current column/scatter/bubble/`xy_line`/`xy_area`/`range_area`/`error_bar` browser slices expose `update_data(rows, { max_rows })` and
+The current column/horizontal-bar/box-plot/heatmap-grid/scatter/bubble/`xy_line`/`xy_area`/`range_area`/`error_bar` browser slices expose `update_data(rows, { max_rows })` and
 `update_data_typed(columns, { max_rows })`. Every updated row needs an explicit string or numeric
 `id`; matching IDs replace in place, while new IDs append in input order. `max_rows` is an optional
 per-transaction retention limit: after the update, oldest rows are removed until the dataset fits.
@@ -325,6 +390,21 @@ text; untouched IDs keep theirs. Label validation, update, and retention are ato
 transaction. A label is limited to 4,096 UTF-8 bytes, and each dataset to 65,536 custom labels and
 1,048,576 label bytes. Tooltip and bounded accessibility snapshots expose the custom text as
 `label: string | null` alongside the raw value.
+
+The current legend surface is metadata-only by design: the browser may render DOM legend controls, but the
+entry set, order, visibility, title, color, kind, and pane identity come from the engine snapshot. Legend-driven
+visibility mutation is a separate control surface and is not implied by the snapshot API.
+
+Reference components are intentionally separate from series data. A reference line binds one X or Y axis and one
+compatible numeric/temporal/category value; a dot binds explicit X and Y axes; a region binds two endpoints on
+each axis. Styling is bounded engine-owned state. `extend_domain: false` is the default semantic: the reference is
+drawn only where its value maps into the current domain. `extend_domain: true` contributes each declared reference
+coordinate to automatic domain resolution. Removing an axis used by a live reference is rejected until the
+reference is removed.
+
+Brush state is transient and is not serialized in V2. It is interaction state like hover/selection rather than
+chart configuration. The snapshot contains at most the engine's bounded brush item limit and preserves
+series/row ordering. Shared tooltips are derived snapshots and likewise add no retained host-side registry.
 
 ## Pane compatibility matrix
 

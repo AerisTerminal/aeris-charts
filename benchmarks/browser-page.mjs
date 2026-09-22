@@ -341,6 +341,63 @@ async function multi_series(points, seed, series_counts, pane_counts) {
   return { rows, backend: live[0]?.chart.backend() ?? null };
 }
 
+async function general_dashboard(points) {
+  reset();
+  const api = await load_package();
+  const container = host();
+  const rows_per_series = Math.max(1, Math.floor(points / 5));
+  const x = new Float64Array(rows_per_series);
+  const y = new Float64Array(rows_per_series);
+  const low = new Float64Array(rows_per_series);
+  const high = new Float64Array(rows_per_series);
+  const size = new Float64Array(rows_per_series);
+  for (let index = 0; index < rows_per_series; index += 1) {
+    const xv = index;
+    const yv = 50 + Math.sin(index * 0.017) * 20 + Math.cos(index * 0.003) * 5;
+    x[index] = xv;
+    y[index] = yv;
+    low[index] = yv - 4;
+    high[index] = yv + 4;
+    size[index] = 4 + (index % 25);
+  }
+
+  const started = performance.now();
+  const chart = await api.create_chart(container, { autoSize: true });
+  const pane = chart.add_pane({
+    preserve_empty: true,
+    horizontal_domain: { type: "continuous", scale: "linear" },
+  });
+  chart.add_axis({ id: "bench-general-x", pane: pane.pane_index(), dimension: "x", scale: "linear" });
+  chart.add_axis({ id: "bench-general-y", pane: pane.pane_index(), dimension: "y", scale: "linear" });
+  const common = { pane: pane.pane_index(), x_axis_id: "bench-general-x", y_axis_id: "bench-general-y" };
+  const line = chart.add_series("xy_line", common);
+  const area = chart.add_series("xy_area", common);
+  const range = chart.add_series("range_area", common);
+  const scatter = chart.add_series("scatter", common);
+  const bubble = chart.add_series("bubble", common);
+  line.set_data_typed({ x, y });
+  area.set_data_typed({ x, y });
+  range.set_data_typed({ x, low, high });
+  scatter.set_data_typed({ x, y });
+  bubble.set_data_typed({ x, y, size });
+  chart.render();
+  await next_frame();
+  const startup_ms = performance.now() - started;
+  const stats = chart.frame_stats();
+  live.push({ chart, series: line, container, columns: null });
+  return {
+    startup_ms,
+    frame_cpu_ms: stats.cpu_ms,
+    wasm_linear_memory_bytes: stats.memory_bytes,
+    gpu_buffer_allocations: stats.gpu_buffer_allocations,
+    gpu_write_calls: stats.gpu_write_calls,
+    gpu_uploaded_bytes: stats.gpu_uploaded_bytes,
+    backend: chart.backend(),
+    rows_per_series,
+    series_count: 5,
+  };
+}
+
 async function retained_updates(points, seed, series_counts, pane_counts, iterations) {
   reset();
   const rows = [];
@@ -422,5 +479,5 @@ async function soak(points, seed, duration_ms, sample_interval_ms, memory_sample
   return { duration_ms: performance.now() - started, updates, samples, backend: entry.chart.backend() };
 }
 
-globalThis.__nucleus_bench = { environment, historical, lifecycle, memory_snapshot, multi_chart, multi_series, prepare_interaction, prepare_lifecycle, realtime, reset, retained_updates, soak, start_frame_recording, startup, stop_frame_recording };
+globalThis.__nucleus_bench = { environment, general_dashboard, historical, lifecycle, memory_snapshot, multi_chart, multi_series, prepare_interaction, prepare_lifecycle, realtime, reset, retained_updates, soak, start_frame_recording, startup, stop_frame_recording };
 globalThis.__nucleus_bench_ready = true;

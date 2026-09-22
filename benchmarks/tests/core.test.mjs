@@ -167,6 +167,17 @@ test("scenario registry and JSON schema remain versioned and complete", async ()
     assert.ok(scenario.version >= 1);
     assert.ok(scenario.profiles.length > 0);
   }
+  const budgets = JSON.parse(await readFile(path.join(benchmark_root, "budgets.json"), "utf8"));
+  const by_id = new Map(manifest.scenarios.map((scenario) => [scenario.id, scenario]));
+  for (const key of Object.keys(budgets.absolute_maximums ?? {})) {
+    const scenario_id = key.slice(0, key.indexOf("."));
+    const scenario = by_id.get(scenario_id);
+    assert.ok(scenario, "absolute budget references registered scenario " + scenario_id);
+    assert.ok(
+      scenario.profiles.includes("release"),
+      "absolute-budget scenario " + scenario_id + " must remain in the release profile",
+    );
+  }
   const schema = JSON.parse(await readFile(path.join(benchmark_root, "schema", "result-v1.schema.json"), "utf8"));
   assert.equal(schema.properties.schema_version.const, 1);
   assert.ok(schema.required.includes("environment"));

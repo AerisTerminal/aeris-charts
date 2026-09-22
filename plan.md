@@ -362,6 +362,8 @@ material regression in output, work, memory, or package size.
 
 ### Phase 2: General Cartesian release
 
+**Status: complete (2026-09-22).**
+
 1. Add line, area, grouped/stacked bars, bubble, range, error-bar, heatmap, and box-plot semantics over
    the general store. XY scatter is already supplied by the validated Phase 1 foundation.
 2. Add multiple X/Y axes, orientation, domain control, reference components, legend, tooltip, data
@@ -371,7 +373,7 @@ material regression in output, work, memory, or package size.
 5. Extend the shared Phase 1 accessibility and keyboard controller to each new series kind.
 6. Add general-chart benchmark scenarios and enforced budgets.
 
-Current Phase 2 progress (2026-09-22):
+Phase 2 closure evidence (2026-09-22):
 
 - the first `xy_line` and `xy_area` slices now bind the shared store to continuous numeric, temporal, and
   category band/point X domains with numeric Y axes; missing/transform-invalid rows split shared-frame
@@ -381,13 +383,20 @@ Current Phase 2 progress (2026-09-22):
   updates and retention reuse the Phase 1 transaction path, and invalid temporal values reject atomically;
 - both path kinds reuse bounded labels, tooltip/accessibility snapshots, hover/selection/focus, V2
   persistence, and the shared keyboard controller;
-- grouped/stacked vertical columns now reuse the Phase 1 column/store path through bounded `group_id` and
-  `stack_id` options. Visible grouped members split each category band, stack members share one group slot,
+- grouped/stacked bars now reuse the Phase 1 category/value store path through bounded `group_id` and
+  `stack_id` options. Vertical `column` binds category X/numeric Y, while `horizontal_bar` binds numeric
+  X/category Y without adding a renderer-specific primitive. Visible grouped members split each category band, stack members share one group slot,
   positive/negative normal stacks accumulate independently around zero, percent stacks normalize per category,
-  stack-aware summed extents feed automatic Y domains, and exact/nearest hits retain the contributing row identity.
+  stack-aware summed extents feed the oriented numeric axis, and exact/nearest hits retain the contributing row identity.
   The options cross the WASM/TypeScript boundary, survive V2 persistence, and reuse the existing ordered `Rect`
-  backend contract rather than adding a renderer-only series kind. Horizontal-bar orientation and stacked-area
-  semantics remain open;
+  backend contract. Horizontal bars reuse object/typed category ingestion, explicit-ID updates, bounded labels,
+  accessibility/tooltip snapshots, keyboard interaction state, and category-Y axis layout;
+- stacked `xy_area` now reuses bounded `stack_id`/`stack_mode` options across numeric, temporal, and
+  category X domains. Members align by exact X identity rather than row index, positive/negative normal stacks
+  accumulate independently, percent stacks normalize each sign independently to `+1`/`-1`, cumulative
+  extents drive Y autoscale, and variable lower/upper boundaries reuse the shared `BandFill` renderer path.
+  Filled-region hits preserve the contributing series/row identity, incompatible stack modes are rejected, and
+  V2 persistence restores area stack configuration;
 - bubble series now reuse the numeric XY store and shared point geometry with a required typed size channel,
   square-root area-to-radius mapping, bounded radii and hit-index work, missing/zero-size semantics, explicit-ID
   updates and retention, tooltip/accessibility snapshots, shared keyboard focus, and V2 persistence;
@@ -395,26 +404,69 @@ Current Phase 2 progress (2026-09-22):
   band geometry splits on missing/transform-invalid bounds, drives exact/nearest hits and bounded labels, exposes
   both values to tooltip/accessibility snapshots, and participates in object/typed replacement, explicit-ID
   updates, retention, memory accounting, keyboard focus, and V2 persistence;
-- numeric `error_bar` now owns optional independent X/Y lower and upper bounds in the aligned XY store.
+- `error_bar` owns optional independent X/Y lower and upper bounds for numeric and temporal XY, and
+  Y-only bounds for category band/point X in the aligned general store. Temporal centers and X bounds
+  use whole JavaScript-safe epoch milliseconds and participate in temporal autoscale.
   Shared geometry drives autoscale, ordered stems/caps/center marks, exact hits, labels, snapshots, and
   accessibility. Object and typed updates validate atomically; explicit-ID retention and V2 persistence
-  preserve each bound's missingness. Temporal/category error-bar forms remain open;
-- the focused general-chart browser suite is 21/21 across Chromium/Firefox/WebKit, including grouped/stacked
-  columns plus bubble, range-area, and numeric error-bar ingestion, hit testing, updates, accessibility snapshots, and V2 restoration, while direct
-  Canvas2D/WebGPU/GPUI path executor coverage remains green;
-- the complete portable browser matrix is green with 282 passed and 10 expected skips, and the package
-  smoke test contains 21 files with a 2470 kB WASM artifact;
+  preserve each bound's missingness;
+- `box_plot` now implements category-band five-number summaries over the aligned store. Rows enforce
+  `min <= q1 <= median <= q3 <= max` atomically, complete outer whiskers drive numeric-Y autoscale, missing
+  statistics remain queryable but emit no mark, and shared geometry lowers the IQR box, median, whiskers, and
+  caps to existing `Rect`/`HLine`/`VLine` primitives. Object/typed replacement and explicit-ID updates,
+  bounded retention, exact hits, labels, accessibility/keyboard focus, and V2 persistence all preserve the five
+  channels without a parallel storage path;
+- `heatmap_grid` now spans category-X/category-Y, continuous numeric-X/numeric-Y, and temporal-X/numeric-Y
+  coordinates over the same aligned store. Category heatmaps retain the bounded second category registry/index
+  column for Y; continuous/temporal heatmaps retain one aligned numeric Y-coordinate column while reusing the
+  existing numeric/temporal X column and ordinary numeric value/validity channel. Category registries merge and
+  compact atomically under explicit-ID updates and `max_rows`; numeric/temporal cells infer deterministic
+  boundaries from neighboring coordinate centers. Shared `Rect` geometry drives intensity, exact/nearest hits,
+  labels, tooltip/accessibility X/Y labels, keyboard focus, backend parity, and V2 persistence. Missing cell
+  values remain queryable but emit no geometry;
+- general legends now have a bounded engine-owned metadata snapshot in stable series order, with optional pane
+  filtering and explicit hidden-series visibility. Browser hosts can render legend UI without recreating title,
+  color, kind, pane, or visibility state; removal updates immediately and V2 restore reconstructs the same
+  semantic entries;
+- shared cross-series tooltip snapshots are engine-owned and group visible rows in stable series/row order by the
+  anchor row's exact horizontal datum. Duplicate X rows are preserved, heatmaps can contribute multiple cells at
+  one X coordinate/category, and hidden/other-pane series cannot leak into the snapshot;
+- brush/range selection is transient engine state. Hosts provide CSS-pixel endpoints once; Rust converts them to
+  semantic numeric, temporal, or category ranges, returns a bounded visible-row snapshot, and reprojects the same
+  range after resize/zoom. X and Y brushes cover ordinary series, horizontal bars, and heatmap coordinate axes;
+- reference lines, dots, and rectangular regions are first-class bounded engine state bound to explicit axes.
+  Each reference independently declares `extend_domain`; automatic domains include it only when requested.
+  References lower through the shared frame, block stale pane/axis removal, survive V2 persistence, and have
+  Canvas2D/GPUI parity coverage;
+- the focused general-chart browser suite is **54/54** across Chromium/Firefox/WebKit, covering legend,
+  shared-tooltip, brush, reference components, grouped/stacked vertical and horizontal bars, stacked area,
+  bubble, range-area, box-plot, all heatmap coordinate variants, numeric/temporal/category error bars, object/typed
+  ingestion, hit testing, updates, accessibility snapshots, keyboard control, and V2 restoration;
+- the exact required portable browser suite is green with **315 passed and 10 expected skips** across
+  Chromium/Firefox/WebKit. The production pack smoke is green with 21 published files and the optimized
+  2,812,727-byte WASM artifact;
 - the release perf harness enforces a 100k `xy_line` density gate, a five-series/100k-row mixed-general
   dashboard gate, one combined engine with 50k financial bars plus a 50k-point general range pane,
   and a separate 100k-row numeric error-bar gate.
   General frame construction stays within 16.67 ms, nearest-hit interaction within 8 ms, mixed-general
   retained memory within 12 MiB, and combined retained memory within 16 MiB. These remain separate from
   the existing financial-only targets so regressions cannot hide in an aggregate result. The error-bar
-  gate keeps frame/hit work within the same budgets and retained memory within 16 MiB.
-  Full Phase 2 remains open for the remaining series families and host-level startup/upload budgets.
+  gate keeps frame/hit work within the same budgets and retained memory within 16 MiB. The strict release run
+  passes all targets: mixed-general frame 4.13 ms / hit 5.14 ms / retained 5.51 MiB, combined frame 1.14 ms /
+  retained 5.68 MiB, and 100k error bars frame 11.67 ms / hit 7.26 ms / retained 6.87 MiB;
+- the browser release benchmark now hard-gates a five-series/100k-row general dashboard. Local closure evidence
+  measured 401.09 ms p50 startup against a 2,000 ms ceiling and 87,144,240 first-frame uploaded bytes against a
+  96 MiB ceiling. Budget policy v3 also re-baselines the deliberate Phase 2 package growth after minifying the
+  shipped ESM: tarball 1,197,880 <= 1,300,000 bytes, unpacked 3,435,987 <= 3,700,000, JavaScript raw
+  343,161 <= 620,000, JavaScript Brotli 64,038 <= 95,000, WASM raw 2,812,727 <= 3,000,000, and WASM Brotli
+  761,514 <= 810,000;
+- full workspace validation is green: workspace Clippy with `-D warnings`, the complete Rust workspace test
+  matrix (including 588 engine tests, 25 GPUI parity tests, and 53 WASM tests), benchmark harness tests, package
+  lint/typecheck/API checks, formatting, and diff hygiene all pass.
 
-Exit gate: Nucleus can build the representative Recharts dashboard examples with engine-owned
-semantics and backend parity while all existing financial gates remain green.
+Exit gate: **PASS.** Nucleus builds the representative Recharts-style Cartesian dashboards with engine-owned
+semantics, typed updates, persistence, interaction, accessibility, backend parity, and enforced release budgets
+while the existing financial gates remain green. Phase 3 is the next open phase.
 
 ### Phase 3: All-in-one browser experience
 

@@ -27,10 +27,10 @@ import type {
   ema_ribbon_options, ema_ribbon_periods,
   feature_series_kind, frame_stats,
   footprint_bar, footprint_series_api, footprint_series_options, footprint_trade, footprint_trade_columns,
-  general_accessibility_snapshot, general_axis_api, general_axis_options, general_pane_options, general_series_api, general_series_hit,
-  general_series_kind, general_series_options, general_tooltip_snapshot, general_update_options, general_xy_row,
-  bubble_columns, bubble_row, category_range_columns, category_xy_columns, numeric_error_columns, numeric_range_columns, numeric_xy_columns,
-  error_bar_row, range_area_row, temporal_range_columns, temporal_xy_columns,
+  general_accessibility_snapshot, general_axis_api, general_axis_options, general_brush_snapshot, general_legend_snapshot, general_pane_options, general_reference_api, general_reference_options, general_reference_value, general_series_api, general_series_hit,
+  general_series_kind, general_series_options, general_shared_tooltip_snapshot, general_tooltip_snapshot, general_update_options, general_xy_row,
+  box_plot_row, bubble_columns, bubble_row, category_box_columns, category_error_columns, category_heatmap_columns, category_range_columns, category_xy_columns, numeric_error_columns, numeric_heatmap_columns, numeric_range_columns, numeric_xy_columns,
+  error_bar_row, heatmap_grid_row, range_area_row, temporal_error_columns, temporal_heatmap_columns, temporal_range_columns, temporal_xy_columns,
   ingestion_diagnostics,
   handle_scale_options, handle_scroll_options, indicator_info, kinetic_scroll_options,
   last_value_data, localization_options, logical_range,
@@ -441,7 +441,25 @@ type packed_temporal_xy_columns = Omit<temporal_xy_columns, "ids"> & {
 type packed_temporal_range_columns = Omit<temporal_range_columns, "ids"> & {
   ids?: readonly (string | number | null)[];
 };
+type packed_temporal_error_columns = Omit<temporal_error_columns, "ids"> & {
+  ids?: readonly (string | number | null)[];
+};
 type packed_category_range_columns = Omit<category_range_columns, "ids"> & {
+  ids?: readonly (string | number | null)[];
+};
+type packed_category_error_columns = Omit<category_error_columns, "ids"> & {
+  ids?: readonly (string | number | null)[];
+};
+type packed_category_box_columns = Omit<category_box_columns, "ids"> & {
+  ids?: readonly (string | number | null)[];
+};
+type packed_category_heatmap_columns = Omit<category_heatmap_columns, "ids"> & {
+  ids?: readonly (string | number | null)[];
+};
+type packed_numeric_heatmap_columns = Omit<numeric_heatmap_columns, "ids"> & {
+  ids?: readonly (string | number | null)[];
+};
+type packed_temporal_heatmap_columns = Omit<temporal_heatmap_columns, "ids"> & {
   ids?: readonly (string | number | null)[];
 };
 type general_columns_input =
@@ -450,7 +468,13 @@ type general_columns_input =
   | packed_numeric_range_columns
   | packed_numeric_error_columns
   | packed_temporal_range_columns
+  | packed_temporal_error_columns
   | packed_category_range_columns
+  | packed_category_error_columns
+  | packed_category_box_columns
+  | packed_category_heatmap_columns
+  | packed_numeric_heatmap_columns
+  | packed_temporal_heatmap_columns
   | packed_temporal_xy_columns
   | packed_category_xy_columns;
 
@@ -481,13 +505,158 @@ function general_value_metadata_json(
 
 function pack_general_rows(
   kind: general_series_kind,
-  data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row)[],
+  data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row)[],
   x_scale?: general_axis_options["scale"],
 ): general_columns_input {
   const has_explicit = data.some((row) => row.id !== undefined);
   const ids = has_explicit ? data.map((row) => row.id ?? null) : undefined;
   const has_labels = data.some((row) => row.label !== undefined);
   const labels = has_labels ? data.map((row) => row.label ?? null) : undefined;
+  if (kind === "heatmap_grid") {
+    if (x_scale === "temporal") {
+      const x_epoch_ms = new Float64Array(data.length);
+      const y_coordinate = new Float64Array(data.length);
+      const value = new Float64Array(data.length);
+      let value_valid: Uint8Array | undefined;
+      for (let index = 0; index < data.length; index += 1) {
+        const row = data[index] as heatmap_grid_row;
+        const x = row.x instanceof Date ? row.x.getTime() : row.x;
+        if (typeof x !== "number" || typeof row.y !== "number") {
+          throw new nucleuscharts_error(
+            "invalid_data",
+            "temporal heatmap_grid rows require Date/epoch-millisecond X and numeric Y coordinates",
+          );
+        }
+        x_epoch_ms[index] = x;
+        y_coordinate[index] = row.y;
+        if (row.value === undefined) {
+          throw new nucleuscharts_error("invalid_data", "heatmap_grid rows require a value field");
+        }
+        if (row.value === null) {
+          value_valid ??= new Uint8Array(data.length).fill(1);
+          value_valid[index] = 0;
+        } else {
+          value[index] = row.value;
+        }
+      }
+      return { ids, labels, x_epoch_ms, y_coordinate, value, value_valid };
+    }
+    if (x_scale !== "band" && x_scale !== "point") {
+      const x = new Float64Array(data.length);
+      const y_coordinate = new Float64Array(data.length);
+      const value = new Float64Array(data.length);
+      let value_valid: Uint8Array | undefined;
+      for (let index = 0; index < data.length; index += 1) {
+        const row = data[index] as heatmap_grid_row;
+        if (typeof row.x !== "number" || typeof row.y !== "number") {
+          throw new nucleuscharts_error(
+            "invalid_data",
+            "continuous heatmap_grid rows require numeric X and Y coordinates",
+          );
+        }
+        x[index] = row.x;
+        y_coordinate[index] = row.y;
+        if (row.value === undefined) {
+          throw new nucleuscharts_error("invalid_data", "heatmap_grid rows require a value field");
+        }
+        if (row.value === null) {
+          value_valid ??= new Uint8Array(data.length).fill(1);
+          value_valid[index] = 0;
+        } else {
+          value[index] = row.value;
+        }
+      }
+      return { ids, labels, x, y_coordinate, value, value_valid };
+    }
+    const x_categories: string[] = [];
+    const y_categories: string[] = [];
+    const x_lookup = new Map<string, number>();
+    const y_lookup = new Map<string, number>();
+    const x_category_indices = new Uint32Array(data.length);
+    const y_category_indices = new Uint32Array(data.length);
+    const value = new Float64Array(data.length);
+    let value_valid: Uint8Array | undefined;
+    for (let index = 0; index < data.length; index += 1) {
+      const row = data[index] as heatmap_grid_row;
+      if (typeof row.x !== "string" || typeof row.y !== "string") {
+        throw new nucleuscharts_error("invalid_data", "heatmap_grid X and Y categories must be strings");
+      }
+      let x_category = x_lookup.get(row.x);
+      if (x_category === undefined) {
+        x_category = x_categories.length;
+        x_categories.push(row.x);
+        x_lookup.set(row.x, x_category);
+      }
+      let y_category = y_lookup.get(row.y);
+      if (y_category === undefined) {
+        y_category = y_categories.length;
+        y_categories.push(row.y);
+        y_lookup.set(row.y, y_category);
+      }
+      x_category_indices[index] = x_category;
+      y_category_indices[index] = y_category;
+      if (row.value === undefined) {
+        throw new nucleuscharts_error("invalid_data", "heatmap_grid rows require a value field");
+      }
+      if (row.value === null) {
+        value_valid ??= new Uint8Array(data.length).fill(1);
+        value_valid[index] = 0;
+      } else {
+        value[index] = row.value;
+      }
+    }
+    return {
+      ids, labels, x_categories, x_category_indices, y_categories, y_category_indices, value, value_valid,
+    };
+  }
+  if (kind === "box_plot") {
+    const categories: string[] = [];
+    const category_lookup = new Map<string, number>();
+    const category_indices = new Uint32Array(data.length);
+    const min = new Float64Array(data.length);
+    const q1 = new Float64Array(data.length);
+    const median = new Float64Array(data.length);
+    const q3 = new Float64Array(data.length);
+    const max = new Float64Array(data.length);
+    let min_valid: Uint8Array | undefined;
+    let q1_valid: Uint8Array | undefined;
+    let median_valid: Uint8Array | undefined;
+    let q3_valid: Uint8Array | undefined;
+    let max_valid: Uint8Array | undefined;
+    for (let index = 0; index < data.length; index += 1) {
+      const row = data[index] as box_plot_row;
+      if (typeof row.x !== "string") {
+        throw new nucleuscharts_error("invalid_data", "box_plot category X values must be strings");
+      }
+      let category = category_lookup.get(row.x);
+      if (category === undefined) {
+        category = categories.length;
+        categories.push(row.x);
+        category_lookup.set(row.x, category);
+      }
+      category_indices[index] = category;
+      for (const [value, values, validity] of [
+        [row.min, min, () => { min_valid ??= new Uint8Array(data.length).fill(1); return min_valid; }],
+        [row.q1, q1, () => { q1_valid ??= new Uint8Array(data.length).fill(1); return q1_valid; }],
+        [row.median, median, () => { median_valid ??= new Uint8Array(data.length).fill(1); return median_valid; }],
+        [row.q3, q3, () => { q3_valid ??= new Uint8Array(data.length).fill(1); return q3_valid; }],
+        [row.max, max, () => { max_valid ??= new Uint8Array(data.length).fill(1); return max_valid; }],
+      ] as const) {
+        if (value === undefined) {
+          throw new nucleuscharts_error("invalid_data", "box_plot rows require min, q1, median, q3, and max fields");
+        }
+        if (value === null) {
+          validity()[index] = 0;
+        } else {
+          values[index] = value;
+        }
+      }
+    }
+    return {
+      ids, labels, categories, category_indices,
+      min, min_valid, q1, q1_valid, median, median_valid, q3, q3_valid, max, max_valid,
+    };
+  }
   const is_range = kind === "range_area";
   const y = new Float64Array(data.length);
   let y_valid: Uint8Array | undefined;
@@ -520,9 +689,8 @@ function pack_general_rows(
   }
   const x_mode = kind === "scatter"
     || kind === "bubble"
-    || kind === "error_bar"
     ? "numeric"
-    : kind === "column"
+    : kind === "column" || kind === "horizontal_bar"
       ? "category"
       : x_scale === "temporal"
         ? "temporal"
@@ -569,13 +737,21 @@ function pack_general_rows(
         for (const [value, values, validity] of [
           [row.x_low, x_low, x_low_valid],
           [row.x_high, x_high, x_high_valid],
+        ] as const) {
+          if (value === undefined || value === null) continue;
+          if (typeof value !== "number") {
+            throw new nucleuscharts_error("invalid_data", "numeric error_bar X bounds must be numbers");
+          }
+          values[index] = value;
+          validity[index] = 1;
+        }
+        for (const [value, values, validity] of [
           [row.y_low, y_low, y_low_valid],
           [row.y_high, y_high, y_high_valid],
         ] as const) {
-          if (value !== undefined && value !== null) {
-            values[index] = value;
-            validity[index] = 1;
-          }
+          if (value === undefined || value === null) continue;
+          values[index] = value;
+          validity[index] = 1;
         }
       }
       return {
@@ -601,6 +777,48 @@ function pack_general_rows(
         );
       }
     }
+    if (kind === "error_bar") {
+      const x_low_epoch_ms = new Float64Array(data.length);
+      const x_high_epoch_ms = new Float64Array(data.length);
+      const y_low = new Float64Array(data.length);
+      const y_high = new Float64Array(data.length);
+      const x_low_valid = new Uint8Array(data.length);
+      const x_high_valid = new Uint8Array(data.length);
+      const y_low_valid = new Uint8Array(data.length);
+      const y_high_valid = new Uint8Array(data.length);
+      for (let index = 0; index < data.length; index += 1) {
+        const row = data[index] as error_bar_row;
+        for (const [value, values, validity] of [
+          [row.x_low, x_low_epoch_ms, x_low_valid],
+          [row.x_high, x_high_epoch_ms, x_high_valid],
+        ] as const) {
+          if (value === undefined || value === null) continue;
+          if (value instanceof Date) {
+            values[index] = value.getTime();
+          } else if (typeof value === "number") {
+            values[index] = value;
+          } else {
+            throw new nucleuscharts_error(
+              "invalid_data",
+              "temporal error_bar X bounds must be Date objects or epoch-millisecond numbers",
+            );
+          }
+          validity[index] = 1;
+        }
+        if (row.y_low !== undefined && row.y_low !== null) {
+          y_low[index] = row.y_low;
+          y_low_valid[index] = 1;
+        }
+        if (row.y_high !== undefined && row.y_high !== null) {
+          y_high[index] = row.y_high;
+          y_high_valid[index] = 1;
+        }
+      }
+      return {
+        ids, labels, x_epoch_ms, y, y_valid, x_low_epoch_ms, x_low_valid,
+        x_high_epoch_ms, x_high_valid, y_low, y_low_valid, y_high, y_high_valid,
+      };
+    }
     if (is_range) return { ids, labels, x_epoch_ms, low: low!, low_valid, high: y, high_valid: y_valid };
     return { ids, labels, x_epoch_ms, y, y_valid };
   }
@@ -621,6 +839,27 @@ function pack_general_rows(
     category_indices[index] = category;
   }
   if (is_range) return { ids, labels, categories, category_indices, low: low!, low_valid, high: y, high_valid: y_valid };
+  if (kind === "error_bar") {
+    const y_low = new Float64Array(data.length);
+    const y_high = new Float64Array(data.length);
+    const y_low_valid = new Uint8Array(data.length);
+    const y_high_valid = new Uint8Array(data.length);
+    for (let index = 0; index < data.length; index += 1) {
+      const row = data[index] as error_bar_row;
+      if (row.x_low !== undefined || row.x_high !== undefined) {
+        throw new nucleuscharts_error("invalid_data", "category error bars do not accept X bounds");
+      }
+      if (row.y_low !== undefined && row.y_low !== null) {
+        y_low[index] = row.y_low;
+        y_low_valid[index] = 1;
+      }
+      if (row.y_high !== undefined && row.y_high !== null) {
+        y_high[index] = row.y_high;
+        y_high_valid[index] = 1;
+      }
+    }
+    return { ids, labels, categories, category_indices, y, y_valid, y_low, y_low_valid, y_high, y_high_valid };
+  }
   return { ids, labels, categories, category_indices, y, y_valid };
 }
 
@@ -670,6 +909,146 @@ class general_axis_impl implements general_axis_api {
   }
 }
 
+type general_reference_wire_value =
+  | { type: "numeric"; value: number }
+  | { type: "temporal"; value: number }
+  | { type: "category"; value: string };
+
+type general_reference_wire_options =
+  | (Omit<Extract<general_reference_options, { kind: "line" }>, "value"> & {
+      value: general_reference_wire_value;
+    })
+  | (Omit<Extract<general_reference_options, { kind: "dot" }>, "x" | "y"> & {
+      x: general_reference_wire_value;
+      y: general_reference_wire_value;
+    })
+  | (Omit<
+      Extract<general_reference_options, { kind: "region" }>,
+      "x_from" | "x_to" | "y_from" | "y_to"
+    > & {
+      x_from: general_reference_wire_value;
+      x_to: general_reference_wire_value;
+      y_from: general_reference_wire_value;
+      y_to: general_reference_wire_value;
+    });
+
+function general_reference_wire_value(
+  chart: chart_impl,
+  axis_id: string,
+  value: general_reference_value,
+): general_reference_wire_value {
+  const axis = chart.axis(axis_id);
+  if (axis === null) {
+    throw new nucleuscharts_error(
+      "invalid_options",
+      "general reference axis \"" + axis_id + "\" does not exist",
+    );
+  }
+  const scale = axis.options().scale;
+  if (scale === "temporal") {
+    const epoch_ms = value instanceof Date ? value.getTime() : value;
+    if (typeof epoch_ms !== "number" || !Number.isSafeInteger(epoch_ms)) {
+      throw new nucleuscharts_error(
+        "invalid_options",
+        "temporal reference values must be Date objects or whole epoch-millisecond numbers",
+      );
+    }
+    return { type: "temporal", value: epoch_ms };
+  }
+  if (scale === "band" || scale === "point") {
+    if (typeof value !== "string") {
+      throw new nucleuscharts_error("invalid_options", "category reference values must be strings");
+    }
+    return { type: "category", value };
+  }
+  if (scale === "linear" || scale === "log" || scale === "symlog") {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      throw new nucleuscharts_error("invalid_options", "numeric reference values must be finite numbers");
+    }
+    return { type: "numeric", value };
+  }
+  throw new nucleuscharts_error("invalid_options", "general references require Cartesian axes");
+}
+
+function encode_general_reference_options(
+  chart: chart_impl,
+  options: general_reference_options,
+): general_reference_wire_options {
+  switch (options.kind) {
+    case "line":
+      return {
+        ...options,
+        value: general_reference_wire_value(chart, options.axis_id, options.value),
+      };
+    case "dot":
+      return {
+        ...options,
+        x: general_reference_wire_value(chart, options.x_axis_id, options.x),
+        y: general_reference_wire_value(chart, options.y_axis_id, options.y),
+      };
+    case "region":
+      return {
+        ...options,
+        x_from: general_reference_wire_value(chart, options.x_axis_id, options.x_from),
+        x_to: general_reference_wire_value(chart, options.x_axis_id, options.x_to),
+        y_from: general_reference_wire_value(chart, options.y_axis_id, options.y_from),
+        y_to: general_reference_wire_value(chart, options.y_axis_id, options.y_to),
+      };
+  }
+}
+
+function decode_general_reference_value(value: general_reference_wire_value): number | string {
+  return value.value;
+}
+
+function decode_general_reference_options(
+  options: general_reference_wire_options,
+): general_reference_options {
+  switch (options.kind) {
+    case "line":
+      return { ...options, value: decode_general_reference_value(options.value) };
+    case "dot":
+      return {
+        ...options,
+        x: decode_general_reference_value(options.x),
+        y: decode_general_reference_value(options.y),
+      };
+    case "region":
+      return {
+        ...options,
+        x_from: decode_general_reference_value(options.x_from),
+        x_to: decode_general_reference_value(options.x_to),
+        y_from: decode_general_reference_value(options.y_from),
+        y_to: decode_general_reference_value(options.y_to),
+      };
+  }
+}
+
+class general_reference_impl implements general_reference_api {
+  constructor(readonly id: number, private readonly chart: chart_impl) {}
+
+  private current(): general_reference_wire_options {
+    const value = JSON.parse(
+      this.chart.wasm.general_reference_options_json(this.id),
+    ) as general_reference_wire_options | null;
+    if (value === null) {
+      throw new nucleuscharts_error("stale_handle", "this general reference has been removed");
+    }
+    return value;
+  }
+
+  options(): general_reference_options {
+    return decode_general_reference_options(this.current());
+  }
+
+  remove(): boolean {
+    this.current();
+    const removed = this.chart.wasm.remove_general_reference(this.id);
+    if (removed) this.chart.repaint();
+    return removed;
+  }
+}
+
 class general_series_impl implements general_series_api {
   private readonly data_changed_subs = new Set<data_changed_handler>();
   private removed = false;
@@ -699,15 +1078,15 @@ class general_series_impl implements general_series_api {
     return axis.options().scale;
   }
 
-  set_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row)[]): void {
+  set_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row)[]): void {
     this.install_data(pack_general_rows(this.kind, data, this.x_scale()));
   }
 
-  set_data_typed(columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns): void {
+  set_data_typed(columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns): void {
     this.install_data(columns);
   }
 
-  update_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row)[], options: general_update_options = {}): void {
+  update_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row)[], options: general_update_options = {}): void {
     if (data.some((row) => row.id === undefined)) {
       throw new nucleuscharts_error("invalid_data", "general incremental updates require explicit row IDs");
     }
@@ -715,7 +1094,7 @@ class general_series_impl implements general_series_api {
   }
 
   update_data_typed(
-    columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns,
+    columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns,
     options: general_update_options = {},
   ): void {
     this.upsert_data(columns, options);
@@ -739,19 +1118,93 @@ class general_series_impl implements general_series_api {
     if (this.kind === "range_area" && !("low" in columns)) {
       throw new nucleuscharts_error("invalid_data", "range_area requires low and high columns");
     }
-    if (this.kind === "error_bar" && !("x_low" in columns)) {
-      throw new nucleuscharts_error("invalid_data", "error_bar requires numeric XY and error-bound columns");
+    if (this.kind === "error_bar" && !("y_low" in columns)) {
+      throw new nucleuscharts_error("invalid_data", "error_bar requires numeric, temporal, or category error-bound columns");
     }
-    if (this.kind === "column" && !("category_indices" in columns)) {
-      throw new nucleuscharts_error("invalid_data", "column requires category XY columns");
+    if ((this.kind === "column" || this.kind === "horizontal_bar") && !("category_indices" in columns)) {
+      throw new nucleuscharts_error("invalid_data", `${this.kind} requires category/value columns`);
+    }
+    if (this.kind === "box_plot" && !("median" in columns)) {
+      throw new nucleuscharts_error("invalid_data", "box_plot requires category box columns");
+    }
+    if (this.kind === "heatmap_grid" && !("value" in columns)) {
+      throw new nucleuscharts_error("invalid_data", "heatmap_grid requires heatmap coordinate/value columns");
     }
     let result: string;
-    if ("x_low" in columns) {
+    if ("value" in columns) {
+      if ("x_category_indices" in columns) {
+        result = this.chart.wasm.upsert_general_heatmap_category_data_typed(
+          this.dataset,
+          general_ids_json(columns.ids, columns.value.length),
+          JSON.stringify({
+            x_categories: columns.x_categories,
+            y_categories: columns.y_categories,
+            labels: general_labels_value(columns.labels, columns.value.length),
+            max_rows: max_rows ?? 0,
+          }),
+          columns.x_category_indices,
+          columns.y_category_indices,
+          columns.value,
+          columns.value_valid,
+        );
+      } else if ("x_epoch_ms" in columns) {
+        result = this.chart.wasm.upsert_general_heatmap_temporal_data_typed(
+          this.dataset,
+          general_value_metadata_json(columns, columns.value.length),
+          columns.x_epoch_ms,
+          columns.y_coordinate,
+          columns.value,
+          columns.value_valid,
+          max_rows ?? 0,
+        );
+      } else {
+        result = this.chart.wasm.upsert_general_heatmap_numeric_data_typed(
+          this.dataset,
+          general_value_metadata_json(columns, columns.value.length),
+          columns.x,
+          columns.y_coordinate,
+          columns.value,
+          columns.value_valid,
+          max_rows ?? 0,
+        );
+      }
+    } else if ("median" in columns) {
+      result = this.chart.wasm.upsert_general_box_category_data_typed(
+        this.dataset,
+        general_ids_json(columns.ids, columns.category_indices.length),
+        JSON.stringify({
+          categories: columns.categories,
+          labels: general_labels_value(columns.labels, columns.category_indices.length),
+          max_rows: max_rows ?? 0,
+        }),
+        columns.category_indices,
+        columns.min, columns.min_valid,
+        columns.q1, columns.q1_valid,
+        columns.median, columns.median_valid,
+        columns.q3, columns.q3_valid,
+        columns.max, columns.max_valid,
+      );
+    } else if ("x_low" in columns) {
       result = this.chart.wasm.upsert_general_error_numeric_data_typed(
         this.dataset, general_value_metadata_json(columns, columns.x.length), columns.x,
         columns.y, columns.y_valid, columns.x_low, columns.x_low_valid,
         columns.x_high, columns.x_high_valid, columns.y_low, columns.y_low_valid,
         columns.y_high, columns.y_high_valid, max_rows ?? 0,
+      );
+    } else if ("x_low_epoch_ms" in columns) {
+      result = this.chart.wasm.upsert_general_error_temporal_data_typed(
+        this.dataset, general_value_metadata_json(columns, columns.x_epoch_ms.length), columns.x_epoch_ms,
+        columns.y, columns.y_valid, columns.x_low_epoch_ms, columns.x_low_valid,
+        columns.x_high_epoch_ms, columns.x_high_valid, columns.y_low, columns.y_low_valid,
+        columns.y_high, columns.y_high_valid, max_rows ?? 0,
+      );
+    } else if ("y_low" in columns) {
+      result = this.chart.wasm.upsert_general_error_category_data_typed(
+        this.dataset,
+        general_ids_json(columns.ids, columns.category_indices.length),
+        JSON.stringify({ categories: columns.categories, labels: general_labels_value(columns.labels, columns.category_indices.length), max_rows: max_rows ?? 0 }),
+        columns.category_indices, columns.y, columns.y_valid,
+        columns.y_low, columns.y_low_valid, columns.y_high, columns.y_high_valid,
       );
     } else if ("low" in columns && "x" in columns) {
       result = this.chart.wasm.upsert_general_range_numeric_data_typed(
@@ -829,19 +1282,89 @@ class general_series_impl implements general_series_api {
     if (this.kind === "range_area" && !("low" in columns)) {
       throw new nucleuscharts_error("invalid_data", "range_area requires low and high columns");
     }
-    if (this.kind === "error_bar" && !("x_low" in columns)) {
-      throw new nucleuscharts_error("invalid_data", "error_bar requires numeric XY and error-bound columns");
+    if (this.kind === "error_bar" && !("y_low" in columns)) {
+      throw new nucleuscharts_error("invalid_data", "error_bar requires numeric, temporal, or category error-bound columns");
     }
-    if (this.kind === "column" && !("category_indices" in columns)) {
-      throw new nucleuscharts_error("invalid_data", "column requires category XY columns");
+    if ((this.kind === "column" || this.kind === "horizontal_bar") && !("category_indices" in columns)) {
+      throw new nucleuscharts_error("invalid_data", `${this.kind} requires category/value columns`);
+    }
+    if (this.kind === "box_plot" && !("median" in columns)) {
+      throw new nucleuscharts_error("invalid_data", "box_plot requires category box columns");
+    }
+    if (this.kind === "heatmap_grid" && !("value" in columns)) {
+      throw new nucleuscharts_error("invalid_data", "heatmap_grid requires heatmap coordinate/value columns");
     }
     let result: string;
-    if ("x_low" in columns) {
+    if ("value" in columns) {
+      if ("x_category_indices" in columns) {
+        result = this.chart.wasm.set_general_heatmap_category_data_typed(
+          this.dataset,
+          general_ids_json(columns.ids, columns.value.length),
+          JSON.stringify({
+            x_categories: columns.x_categories,
+            y_categories: columns.y_categories,
+            labels: general_labels_value(columns.labels, columns.value.length),
+          }),
+          columns.x_category_indices,
+          columns.y_category_indices,
+          columns.value,
+          columns.value_valid,
+        );
+      } else if ("x_epoch_ms" in columns) {
+        result = this.chart.wasm.set_general_heatmap_temporal_data_typed(
+          this.dataset,
+          general_value_metadata_json(columns, columns.value.length),
+          columns.x_epoch_ms,
+          columns.y_coordinate,
+          columns.value,
+          columns.value_valid,
+        );
+      } else {
+        result = this.chart.wasm.set_general_heatmap_numeric_data_typed(
+          this.dataset,
+          general_value_metadata_json(columns, columns.value.length),
+          columns.x,
+          columns.y_coordinate,
+          columns.value,
+          columns.value_valid,
+        );
+      }
+    } else if ("median" in columns) {
+      result = this.chart.wasm.set_general_box_category_data_typed(
+        this.dataset,
+        general_ids_json(columns.ids, columns.category_indices.length),
+        JSON.stringify({
+          categories: columns.categories,
+          labels: general_labels_value(columns.labels, columns.category_indices.length),
+        }),
+        columns.category_indices,
+        columns.min, columns.min_valid,
+        columns.q1, columns.q1_valid,
+        columns.median, columns.median_valid,
+        columns.q3, columns.q3_valid,
+        columns.max, columns.max_valid,
+      );
+    } else if ("x_low" in columns) {
       result = this.chart.wasm.set_general_error_numeric_data_typed(
         this.dataset, general_value_metadata_json(columns, columns.x.length), columns.x,
         columns.y, columns.y_valid, columns.x_low, columns.x_low_valid,
         columns.x_high, columns.x_high_valid, columns.y_low, columns.y_low_valid,
         columns.y_high, columns.y_high_valid,
+      );
+    } else if ("x_low_epoch_ms" in columns) {
+      result = this.chart.wasm.set_general_error_temporal_data_typed(
+        this.dataset, general_value_metadata_json(columns, columns.x_epoch_ms.length), columns.x_epoch_ms,
+        columns.y, columns.y_valid, columns.x_low_epoch_ms, columns.x_low_valid,
+        columns.x_high_epoch_ms, columns.x_high_valid, columns.y_low, columns.y_low_valid,
+        columns.y_high, columns.y_high_valid,
+      );
+    } else if ("y_low" in columns) {
+      result = this.chart.wasm.set_general_error_category_data_typed(
+        this.dataset,
+        general_ids_json(columns.ids, columns.category_indices.length),
+        JSON.stringify({ categories: columns.categories, labels: general_labels_value(columns.labels, columns.category_indices.length) }),
+        columns.category_indices, columns.y, columns.y_valid,
+        columns.y_low, columns.y_low_valid, columns.y_high, columns.y_high_valid,
       );
     } else if ("low" in columns && "x" in columns) {
       result = this.chart.wasm.set_general_range_numeric_data_typed(
@@ -3813,6 +4336,9 @@ export class chart_impl implements chart_api {
       || kind === "range_area"
       || kind === "error_bar"
       || kind === "column"
+      || kind === "horizontal_bar"
+      || kind === "box_plot"
+      || kind === "heatmap_grid"
       || kind === "scatter"
       || kind === "bubble"
     ) {
@@ -5280,6 +5806,89 @@ export class chart_impl implements chart_api {
     const removed = this.wasm.remove_general_axis(id);
     if (removed) this.repaint();
     return removed;
+  }
+
+  add_general_reference(options: general_reference_options): general_reference_api {
+    const encoded = encode_general_reference_options(this, options);
+    const created = parse_general_result<{ id: number }>(
+      this.wasm.add_general_reference_result_json(JSON.stringify(encoded)),
+    );
+    this.repaint();
+    return new general_reference_impl(created.id, this);
+  }
+
+  general_references(pane?: number): general_reference_api[] {
+    if (pane !== undefined && (!Number.isSafeInteger(pane) || pane < 0)) {
+      throw new nucleuscharts_error(
+        "invalid_options",
+        "general reference pane must be a non-negative safe integer",
+      );
+    }
+    const ids = JSON.parse(this.wasm.general_reference_ids_json(pane ?? -1)) as number[];
+    return ids.map((id) => new general_reference_impl(id, this));
+  }
+
+  general_legend_snapshot(pane?: number): general_legend_snapshot {
+    if (pane !== undefined && (!Number.isSafeInteger(pane) || pane < 0)) {
+      throw new nucleuscharts_error(
+        "invalid_options",
+        "general legend pane must be a non-negative safe integer",
+      );
+    }
+    return JSON.parse(this.wasm.general_legend_snapshot_json(pane ?? -1)) as general_legend_snapshot;
+  }
+
+  general_shared_tooltip(
+    series: number | general_series_api,
+    row: number,
+  ): general_shared_tooltip_snapshot | null {
+    if (!Number.isSafeInteger(row) || row < 0) {
+      throw new nucleuscharts_error(
+        "invalid_options",
+        "general shared-tooltip row must be a non-negative safe integer",
+      );
+    }
+    const series_id = typeof series === "number" ? series : series.id;
+    if (!Number.isSafeInteger(series_id) || series_id <= 0) {
+      throw new nucleuscharts_error(
+        "invalid_options",
+        "general shared-tooltip series must have a positive safe integer id",
+      );
+    }
+    return JSON.parse(
+      this.wasm.general_shared_tooltip_json(series_id, row),
+    ) as general_shared_tooltip_snapshot | null;
+  }
+
+  set_general_brush(
+    axis: string | general_axis_api,
+    from_coordinate: number,
+    to_coordinate: number,
+  ): general_brush_snapshot {
+    if (!Number.isFinite(from_coordinate) || !Number.isFinite(to_coordinate)) {
+      throw new nucleuscharts_error(
+        "invalid_options",
+        "general brush coordinates must be finite CSS-pixel values",
+      );
+    }
+    const axis_id = typeof axis === "string" ? axis : axis.id;
+    if (axis_id.length === 0) {
+      throw new nucleuscharts_error("invalid_options", "general brush axis id must not be empty");
+    }
+    const snapshot = parse_general_result<general_brush_snapshot>(
+      this.wasm.set_general_brush_result_json(axis_id, from_coordinate, to_coordinate),
+    );
+    this.repaint();
+    return snapshot;
+  }
+
+  general_brush_snapshot(): general_brush_snapshot | null {
+    return JSON.parse(this.wasm.general_brush_snapshot_json()) as general_brush_snapshot | null;
+  }
+
+  clear_general_brush(): void {
+    this.wasm.clear_general_brush();
+    this.repaint();
   }
 
   general_hit_test(

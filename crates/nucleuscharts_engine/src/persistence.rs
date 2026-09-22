@@ -91,6 +91,8 @@ struct StateV2 {
     axes: Vec<crate::GeneralAxisOptions>,
     datasets: Vec<DatasetV2>,
     series: Vec<SeriesV2>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    references: Vec<crate::GeneralReferenceOptions>,
     chart_options: serde_json::Value,
 }
 
@@ -467,11 +469,22 @@ impl ChartEngine {
                                 .collect()
                         })
                 });
+                let heatmap_y_numeric = dataset.heatmap_y_numeric().map(ToOwned::to_owned);
                 debug_assert!(
                     low.is_none() || size.is_none(),
                     "range and bubble channels are mutually exclusive"
                 );
                 let input = match dataset.x_kind() {
+                    crate::GeneralXKind::Numeric if heatmap_y_numeric.is_some() => {
+                        crate::GeneralXyInput::HeatmapNumericNumeric {
+                            ids,
+                            x: dataset.numeric_x().unwrap_or_default().to_vec(),
+                            y_coordinate: heatmap_y_numeric
+                                .expect("numeric heatmap Y-coordinate channel"),
+                            value: y,
+                            value_valid: y_valid,
+                        }
+                    }
                     crate::GeneralXKind::Numeric if high.is_some() => {
                         crate::GeneralXyInput::ErrorNumeric {
                             ids,
@@ -520,6 +533,32 @@ impl ChartEngine {
                             high_valid: y_valid,
                         },
                     },
+                    crate::GeneralXKind::Temporal if heatmap_y_numeric.is_some() => {
+                        crate::GeneralXyInput::HeatmapTemporalNumeric {
+                            ids,
+                            x_epoch_ms: dataset.temporal_x_epoch_ms().unwrap_or_default().to_vec(),
+                            y_coordinate: heatmap_y_numeric
+                                .expect("temporal heatmap Y-coordinate channel"),
+                            value: y,
+                            value_valid: y_valid,
+                        }
+                    }
+                    crate::GeneralXKind::Temporal if high.is_some() => {
+                        crate::GeneralXyInput::ErrorTemporal {
+                            ids,
+                            x_epoch_ms: dataset.temporal_x_epoch_ms().unwrap_or_default().to_vec(),
+                            y,
+                            y_valid,
+                            x_low_epoch_ms: x_low.expect("temporal error-bar X-low channel"),
+                            x_low_valid,
+                            x_high_epoch_ms: x_high.expect("temporal error-bar X-high channel"),
+                            x_high_valid,
+                            y_low: low.expect("temporal error-bar Y-low channel"),
+                            y_low_valid: low_valid,
+                            y_high: high.expect("temporal error-bar Y-high channel"),
+                            y_high_valid: high_valid,
+                        }
+                    }
                     crate::GeneralXKind::Temporal => match low {
                         Some(low) => crate::GeneralXyInput::RangeTemporal {
                             ids,
@@ -536,6 +575,67 @@ impl ChartEngine {
                             y_valid,
                         },
                     },
+                    crate::GeneralXKind::Category
+                        if dataset.heatmap_y_categories().is_some()
+                            && dataset.heatmap_y_category_indices().is_some() =>
+                    {
+                        crate::GeneralXyInput::HeatmapCategoryCategory {
+                            ids,
+                            x_categories: dataset.categories().unwrap_or_default().to_vec(),
+                            x_category_indices: dataset
+                                .category_indices()
+                                .unwrap_or_default()
+                                .to_vec(),
+                            y_categories: dataset
+                                .heatmap_y_categories()
+                                .unwrap_or_default()
+                                .to_vec(),
+                            y_category_indices: dataset
+                                .heatmap_y_category_indices()
+                                .unwrap_or_default()
+                                .to_vec(),
+                            value: y,
+                            value_valid: y_valid,
+                        }
+                    }
+                    crate::GeneralXKind::Category
+                        if high.is_some() && x_low.is_some() && x_high.is_some() =>
+                    {
+                        crate::GeneralXyInput::BoxCategory {
+                            ids,
+                            categories: dataset.categories().unwrap_or_default().to_vec(),
+                            category_indices: dataset
+                                .category_indices()
+                                .unwrap_or_default()
+                                .to_vec(),
+                            min: low.expect("box-plot min channel"),
+                            min_valid: low_valid,
+                            q1: x_low.expect("box-plot q1 channel"),
+                            q1_valid: x_low_valid,
+                            median: y,
+                            median_valid: y_valid,
+                            q3: x_high.expect("box-plot q3 channel"),
+                            q3_valid: x_high_valid,
+                            max: high.expect("box-plot max channel"),
+                            max_valid: high_valid,
+                        }
+                    }
+                    crate::GeneralXKind::Category if high.is_some() => {
+                        crate::GeneralXyInput::ErrorCategory {
+                            ids,
+                            categories: dataset.categories().unwrap_or_default().to_vec(),
+                            category_indices: dataset
+                                .category_indices()
+                                .unwrap_or_default()
+                                .to_vec(),
+                            y,
+                            y_valid,
+                            y_low: low.expect("error-bar Y-low channel"),
+                            y_low_valid: low_valid,
+                            y_high: high.expect("error-bar Y-high channel"),
+                            y_high_valid: high_valid,
+                        }
+                    }
                     crate::GeneralXKind::Category => match low {
                         Some(low) => crate::GeneralXyInput::RangeCategory {
                             ids,
@@ -592,6 +692,18 @@ impl ChartEngine {
                 })
             })
             .collect::<Result<Vec<_>, ChartError>>()?;
+        let references = self
+            .general_reference_iter()
+            .map(|reference| {
+                self.general_reference_options(reference.id())
+                    .ok_or_else(|| {
+                        invalid(format!(
+                            "general reference {} has no live pane",
+                            reference.id().get()
+                        ))
+                    })
+            })
+            .collect::<Result<Vec<_>, ChartError>>()?;
         let document = serde_json::to_string(&StateV2 {
             schema: base.schema,
             schema_version: PERSISTENCE_SCHEMA_VERSION_GENERAL,
@@ -600,6 +712,7 @@ impl ChartEngine {
             axes,
             datasets,
             series,
+            references,
             chart_options: self.options.value().clone(),
         })
         .map_err(|error| ChartError::new(ErrorCode::SerializationError, error.to_string()))?;
@@ -1029,6 +1142,7 @@ impl ChartEngine {
             || self.next_drawing_id != 1
             || self.general_dataset_count() != 0
             || self.general_series_count() != 0
+            || self.general_reference_count() != 0
             || self.general_axes.has_issued_handles()
         {
             return Err(ChartError::new(
@@ -1062,6 +1176,9 @@ impl ChartEngine {
         }
         for axis in state.axes {
             staged.add_general_axis(axis)?;
+        }
+        for reference in state.references {
+            staged.add_general_reference(reference)?;
         }
         let mut datasets = HashMap::new();
         for dataset in state.datasets {
@@ -1264,12 +1381,71 @@ mod tests {
         let mut area =
             crate::GeneralSeriesOptions::xy_area(pane, dataset, "category-x", "category-y");
         area.title = "Category area".into();
+        area.stack_id = Some("area-share".into());
+        area.stack_mode = crate::GeneralStackMode::Percent;
         chart.add_general_series(area).unwrap();
 
         let document = chart.export_state_json().unwrap();
         let value: serde_json::Value = serde_json::from_str(&document).unwrap();
         assert_eq!(value["schema_version"], 2);
         assert_eq!(value["series"][0]["group_id"], "sales");
+        assert_eq!(value["series"][0]["stack_id"], "share");
+        assert_eq!(value["series"][0]["stack_mode"], "Percent");
+        assert_eq!(value["series"][2]["stack_id"], "area-share");
+        assert_eq!(value["series"][2]["stack_mode"], "Percent");
+        let mut restored = ChartEngine::new(800.0, 500.0, 1.0);
+        let result = restored.import_state_json(&document).unwrap();
+        assert_eq!(result.schema_version, 2);
+        assert_eq!(restored.export_state_json().unwrap(), document);
+    }
+
+    #[test]
+    fn v2_round_trip_preserves_horizontal_bar_axes_and_stack_options() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let pane = chart
+            .add_pane_with_domain(
+                true,
+                crate::HorizontalDomain::Continuous {
+                    scale: crate::ContinuousScaleType::Linear,
+                },
+            )
+            .unwrap();
+        chart
+            .add_general_axis(crate::GeneralAxisOptions::new(
+                "bar-x",
+                pane,
+                crate::AxisDimension::X,
+                crate::GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        chart
+            .add_general_axis(crate::GeneralAxisOptions::new(
+                "bar-y",
+                pane,
+                crate::AxisDimension::Y,
+                crate::GeneralScaleType::Band,
+            ))
+            .unwrap();
+        let dataset = chart
+            .create_general_xy_dataset(crate::GeneralXyInput::Category {
+                ids: Some(vec![crate::GeneralRowId::Text("a".into())]),
+                categories: vec!["A".into()],
+                category_indices: vec![0],
+                y: vec![25.0],
+                y_valid: None,
+            })
+            .unwrap();
+        let mut series =
+            crate::GeneralSeriesOptions::horizontal_bar(pane, dataset, "bar-x", "bar-y");
+        series.group_id = Some("bars".into());
+        series.stack_id = Some("share".into());
+        series.stack_mode = crate::GeneralStackMode::Percent;
+        chart.add_general_series(series).unwrap();
+
+        let document = chart.export_state_json().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&document).unwrap();
+        assert_eq!(value["series"][0]["kind"], "HorizontalBar");
+        assert_eq!(value["series"][0]["group_id"], "bars");
         assert_eq!(value["series"][0]["stack_id"], "share");
         assert_eq!(value["series"][0]["stack_mode"], "Percent");
         let mut restored = ChartEngine::new(800.0, 500.0, 1.0);
@@ -1462,6 +1638,462 @@ mod tests {
         assert_eq!(snapshot.x_high, None);
         assert_eq!(snapshot.low, Some(15.0));
         assert_eq!(snapshot.high, None);
+    }
+
+    #[test]
+    fn v2_round_trip_preserves_category_error_bar_y_bounds() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let pane = chart
+            .add_pane_with_domain(
+                true,
+                crate::HorizontalDomain::Category {
+                    scale: crate::CategoryScaleType::Band,
+                },
+            )
+            .unwrap();
+        chart
+            .add_general_axis(crate::GeneralAxisOptions::new(
+                "error-x",
+                pane,
+                crate::AxisDimension::X,
+                crate::GeneralScaleType::Band,
+            ))
+            .unwrap();
+        chart
+            .add_general_axis(crate::GeneralAxisOptions::new(
+                "error-y",
+                pane,
+                crate::AxisDimension::Y,
+                crate::GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        let dataset = chart
+            .create_general_xy_dataset(crate::GeneralXyInput::ErrorCategory {
+                ids: Some(vec![crate::GeneralRowId::Text("quarter".into())]),
+                categories: vec!["Q1".into()],
+                category_indices: vec![0],
+                y: vec![20.0],
+                y_valid: None,
+                y_low: vec![15.0],
+                y_low_valid: None,
+                y_high: vec![0.0],
+                y_high_valid: Some(vec![0]),
+            })
+            .unwrap();
+        chart
+            .add_general_series(crate::GeneralSeriesOptions::error_bar(
+                pane, dataset, "error-x", "error-y",
+            ))
+            .unwrap();
+        let document = chart.export_state_json().unwrap();
+        let mut restored = ChartEngine::new(800.0, 500.0, 1.0);
+        restored.import_state_json(&document).unwrap();
+        assert_eq!(restored.export_state_json().unwrap(), document);
+        let series = restored.general_series_ids_in_pane(pane)[0];
+        let snapshot = restored.general_tooltip_snapshot(series, 0).unwrap();
+        assert_eq!(snapshot.x_label, "Q1");
+        assert_eq!(
+            (snapshot.value, snapshot.low, snapshot.high),
+            (Some(20.0), Some(15.0), None)
+        );
+    }
+
+    #[test]
+    fn v2_round_trip_preserves_category_box_plot_statistics_and_missingness() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let pane = chart
+            .add_pane_with_domain(
+                true,
+                crate::HorizontalDomain::Category {
+                    scale: crate::CategoryScaleType::Band,
+                },
+            )
+            .unwrap();
+        chart
+            .add_general_axis(crate::GeneralAxisOptions::new(
+                "box-x",
+                pane,
+                crate::AxisDimension::X,
+                crate::GeneralScaleType::Band,
+            ))
+            .unwrap();
+        chart
+            .add_general_axis(crate::GeneralAxisOptions::new(
+                "box-y",
+                pane,
+                crate::AxisDimension::Y,
+                crate::GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        let dataset = chart
+            .create_general_xy_dataset(crate::GeneralXyInput::BoxCategory {
+                ids: Some(vec![
+                    crate::GeneralRowId::Text("full".into()),
+                    crate::GeneralRowId::Text("missing".into()),
+                ]),
+                categories: vec!["A".into(), "B".into()],
+                category_indices: vec![0, 1],
+                min: vec![5.0, 10.0],
+                min_valid: None,
+                q1: vec![10.0, 15.0],
+                q1_valid: None,
+                median: vec![15.0, 20.0],
+                median_valid: Some(vec![1, 0]),
+                q3: vec![20.0, 25.0],
+                q3_valid: None,
+                max: vec![30.0, 35.0],
+                max_valid: None,
+            })
+            .unwrap();
+        chart
+            .add_general_series(crate::GeneralSeriesOptions::box_plot(
+                pane, dataset, "box-x", "box-y",
+            ))
+            .unwrap();
+
+        let document = chart.export_state_json().unwrap();
+        let mut restored = ChartEngine::new(800.0, 500.0, 1.0);
+        restored.import_state_json(&document).unwrap();
+        assert_eq!(restored.export_state_json().unwrap(), document);
+        let series = restored.general_series_ids_in_pane(pane)[0];
+        let first = restored.general_tooltip_snapshot(series, 0).unwrap();
+        assert_eq!(first.x_label, "A");
+        assert_eq!(
+            (
+                first.low,
+                first.q1,
+                first.value,
+                first.q3,
+                first.high,
+                first.x_low,
+                first.x_high,
+            ),
+            (
+                Some(5.0),
+                Some(10.0),
+                Some(15.0),
+                Some(20.0),
+                Some(30.0),
+                None,
+                None,
+            )
+        );
+        let missing = restored.general_tooltip_snapshot(series, 1).unwrap();
+        assert_eq!(missing.value, None);
+        assert_eq!(missing.q1, Some(15.0));
+        assert_eq!(missing.q3, Some(25.0));
+    }
+
+    #[test]
+    fn v2_round_trip_preserves_category_heatmap_axes_values_and_missingness() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let pane = chart
+            .add_pane_with_domain(
+                true,
+                crate::HorizontalDomain::Category {
+                    scale: crate::CategoryScaleType::Band,
+                },
+            )
+            .unwrap();
+        chart
+            .add_general_axis(crate::GeneralAxisOptions::new(
+                "heat-x",
+                pane,
+                crate::AxisDimension::X,
+                crate::GeneralScaleType::Band,
+            ))
+            .unwrap();
+        chart
+            .add_general_axis(crate::GeneralAxisOptions::new(
+                "heat-y",
+                pane,
+                crate::AxisDimension::Y,
+                crate::GeneralScaleType::Band,
+            ))
+            .unwrap();
+        let dataset = chart
+            .create_general_xy_dataset(crate::GeneralXyInput::HeatmapCategoryCategory {
+                ids: Some(vec![
+                    crate::GeneralRowId::Text("a".into()),
+                    crate::GeneralRowId::Text("b".into()),
+                ]),
+                x_categories: vec!["Jan".into(), "Feb".into()],
+                x_category_indices: vec![0, 1],
+                y_categories: vec!["North".into(), "South".into()],
+                y_category_indices: vec![0, 1],
+                value: vec![10.0, 20.0],
+                value_valid: Some(vec![1, 0]),
+            })
+            .unwrap();
+        chart
+            .add_general_series(crate::GeneralSeriesOptions::heatmap_grid(
+                pane, dataset, "heat-x", "heat-y",
+            ))
+            .unwrap();
+
+        let document = chart.export_state_json().unwrap();
+        let mut restored = ChartEngine::new(800.0, 500.0, 1.0);
+        restored.import_state_json(&document).unwrap();
+        assert_eq!(restored.export_state_json().unwrap(), document);
+        let series = restored.general_series_ids_in_pane(pane)[0];
+        let first = restored.general_tooltip_snapshot(series, 0).unwrap();
+        assert_eq!(first.x_label, "Jan");
+        assert_eq!(first.y_label.as_deref(), Some("North"));
+        assert_eq!(first.value, Some(10.0));
+        let missing = restored.general_tooltip_snapshot(series, 1).unwrap();
+        assert_eq!(missing.x_label, "Feb");
+        assert_eq!(missing.y_label.as_deref(), Some("South"));
+        assert_eq!(missing.value, None);
+    }
+
+    #[test]
+    fn v2_round_trip_preserves_general_reference_components() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let pane = chart
+            .add_pane_with_domain(
+                true,
+                crate::HorizontalDomain::Continuous {
+                    scale: crate::ContinuousScaleType::Linear,
+                },
+            )
+            .unwrap();
+        chart
+            .add_general_axis(crate::GeneralAxisOptions::new(
+                "reference-x",
+                pane,
+                crate::AxisDimension::X,
+                crate::GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        chart
+            .add_general_axis(crate::GeneralAxisOptions::new(
+                "reference-y",
+                pane,
+                crate::AxisDimension::Y,
+                crate::GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        let expected = vec![
+            crate::GeneralReferenceOptions::Line {
+                pane,
+                axis_id: "reference-x".into(),
+                value: crate::GeneralReferenceValue::Numeric(5.0),
+                color: Some("#112233".into()),
+                line_width: 2.0,
+                extend_domain: true,
+            },
+            crate::GeneralReferenceOptions::Dot {
+                pane,
+                x_axis_id: "reference-x".into(),
+                y_axis_id: "reference-y".into(),
+                x: crate::GeneralReferenceValue::Numeric(2.0),
+                y: crate::GeneralReferenceValue::Numeric(3.0),
+                color: Some("#445566".into()),
+                radius: 6.0,
+                extend_domain: false,
+            },
+            crate::GeneralReferenceOptions::Region {
+                pane,
+                x_axis_id: "reference-x".into(),
+                y_axis_id: "reference-y".into(),
+                x_from: crate::GeneralReferenceValue::Numeric(1.0),
+                x_to: crate::GeneralReferenceValue::Numeric(4.0),
+                y_from: crate::GeneralReferenceValue::Numeric(2.0),
+                y_to: crate::GeneralReferenceValue::Numeric(8.0),
+                fill_color: Some("rgba(10,20,30,0.25)".into()),
+                extend_domain: true,
+            },
+        ];
+        for options in &expected {
+            chart.add_general_reference(options.clone()).unwrap();
+        }
+
+        let document = chart.export_state_json().unwrap();
+        let mut restored = ChartEngine::new(800.0, 500.0, 1.0);
+        restored.import_state_json(&document).unwrap();
+        assert_eq!(restored.export_state_json().unwrap(), document);
+        let restored_options = restored
+            .general_reference_ids(Some(pane))
+            .into_iter()
+            .map(|id| restored.general_reference_options(id).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(restored_options, expected);
+    }
+
+    #[test]
+    fn v2_round_trip_preserves_numeric_and_temporal_heatmap_coordinates() {
+        let mut chart = ChartEngine::new(800.0, 600.0, 1.0);
+        let numeric_pane = chart
+            .add_pane_with_domain(
+                true,
+                crate::HorizontalDomain::Continuous {
+                    scale: crate::ContinuousScaleType::Linear,
+                },
+            )
+            .unwrap();
+        chart
+            .add_general_axis(crate::GeneralAxisOptions::new(
+                "numeric-heat-x",
+                numeric_pane,
+                crate::AxisDimension::X,
+                crate::GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        chart
+            .add_general_axis(crate::GeneralAxisOptions::new(
+                "numeric-heat-y",
+                numeric_pane,
+                crate::AxisDimension::Y,
+                crate::GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        let numeric_data = chart
+            .create_general_xy_dataset(crate::GeneralXyInput::HeatmapNumericNumeric {
+                ids: Some(vec![
+                    crate::GeneralRowId::Text("numeric-a".into()),
+                    crate::GeneralRowId::Text("numeric-b".into()),
+                ]),
+                x: vec![1.0, 2.0],
+                y_coordinate: vec![10.0, 20.0],
+                value: vec![5.0, 6.0],
+                value_valid: Some(vec![1, 0]),
+            })
+            .unwrap();
+        chart
+            .add_general_series(crate::GeneralSeriesOptions::heatmap_grid(
+                numeric_pane,
+                numeric_data,
+                "numeric-heat-x",
+                "numeric-heat-y",
+            ))
+            .unwrap();
+
+        let temporal_pane = chart
+            .add_pane_with_domain(true, crate::HorizontalDomain::Temporal)
+            .unwrap();
+        chart
+            .add_general_axis(crate::GeneralAxisOptions::new(
+                "temporal-heat-x",
+                temporal_pane,
+                crate::AxisDimension::X,
+                crate::GeneralScaleType::Temporal,
+            ))
+            .unwrap();
+        chart
+            .add_general_axis(crate::GeneralAxisOptions::new(
+                "temporal-heat-y",
+                temporal_pane,
+                crate::AxisDimension::Y,
+                crate::GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        let temporal_data = chart
+            .create_general_xy_dataset(crate::GeneralXyInput::HeatmapTemporalNumeric {
+                ids: Some(vec![
+                    crate::GeneralRowId::Text("temporal-a".into()),
+                    crate::GeneralRowId::Text("temporal-b".into()),
+                ]),
+                x_epoch_ms: vec![1_700_000_000_000, 1_700_000_060_000],
+                y_coordinate: vec![15.0, 25.0],
+                value: vec![50.0, 60.0],
+                value_valid: None,
+            })
+            .unwrap();
+        chart
+            .add_general_series(crate::GeneralSeriesOptions::heatmap_grid(
+                temporal_pane,
+                temporal_data,
+                "temporal-heat-x",
+                "temporal-heat-y",
+            ))
+            .unwrap();
+
+        let document = chart.export_state_json().unwrap();
+        let mut restored = ChartEngine::new(800.0, 600.0, 1.0);
+        restored.import_state_json(&document).unwrap();
+        assert_eq!(restored.export_state_json().unwrap(), document);
+
+        let numeric_series = restored.general_series_ids_in_pane(numeric_pane)[0];
+        let numeric_first = restored
+            .general_tooltip_snapshot(numeric_series, 0)
+            .unwrap();
+        assert_eq!(numeric_first.x_label, "1");
+        assert_eq!(numeric_first.y_label.as_deref(), Some("10"));
+        assert_eq!(numeric_first.value, Some(5.0));
+        assert_eq!(
+            restored
+                .general_tooltip_snapshot(numeric_series, 1)
+                .unwrap()
+                .value,
+            None
+        );
+
+        let temporal_series = restored.general_series_ids_in_pane(temporal_pane)[0];
+        let temporal_second = restored
+            .general_tooltip_snapshot(temporal_series, 1)
+            .unwrap();
+        assert_eq!(temporal_second.x_label, "1700000060000");
+        assert_eq!(temporal_second.y_label.as_deref(), Some("25"));
+        assert_eq!(temporal_second.value, Some(60.0));
+    }
+
+    #[test]
+    fn v2_round_trip_preserves_temporal_error_bar_xy_bounds() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let pane = chart
+            .add_pane_with_domain(true, crate::HorizontalDomain::Temporal)
+            .unwrap();
+        chart
+            .add_general_axis(crate::GeneralAxisOptions::new(
+                "error-x",
+                pane,
+                crate::AxisDimension::X,
+                crate::GeneralScaleType::Temporal,
+            ))
+            .unwrap();
+        chart
+            .add_general_axis(crate::GeneralAxisOptions::new(
+                "error-y",
+                pane,
+                crate::AxisDimension::Y,
+                crate::GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        let dataset = chart
+            .create_general_xy_dataset(crate::GeneralXyInput::ErrorTemporal {
+                ids: Some(vec![crate::GeneralRowId::Text("observation".into())]),
+                x_epoch_ms: vec![1_700_000_000_000],
+                y: vec![20.0],
+                y_valid: None,
+                x_low_epoch_ms: vec![1_699_999_970_000.0],
+                x_low_valid: None,
+                x_high_epoch_ms: vec![1_700_000_030_000.0],
+                x_high_valid: None,
+                y_low: vec![15.0],
+                y_low_valid: None,
+                y_high: vec![0.0],
+                y_high_valid: Some(vec![0]),
+            })
+            .unwrap();
+        chart
+            .add_general_series(crate::GeneralSeriesOptions::error_bar(
+                pane, dataset, "error-x", "error-y",
+            ))
+            .unwrap();
+
+        let document = chart.export_state_json().unwrap();
+        let mut restored = ChartEngine::new(800.0, 500.0, 1.0);
+        restored.import_state_json(&document).unwrap();
+        assert_eq!(restored.export_state_json().unwrap(), document);
+        let series = restored.general_series_ids_in_pane(pane)[0];
+        let snapshot = restored.general_tooltip_snapshot(series, 0).unwrap();
+        assert_eq!(snapshot.x_label, "1700000000000");
+        assert_eq!(snapshot.x_low, Some(1_699_999_970_000.0));
+        assert_eq!(snapshot.x_high, Some(1_700_000_030_000.0));
+        assert_eq!(
+            (snapshot.value, snapshot.low, snapshot.high),
+            (Some(20.0), Some(15.0), None)
+        );
     }
 
     #[test]

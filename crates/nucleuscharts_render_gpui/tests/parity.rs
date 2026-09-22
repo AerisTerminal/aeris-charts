@@ -19,9 +19,10 @@
 //! records a bounded residual for.
 
 use nucleuscharts_engine::{
-    AxisDimension, CategoryScaleType, ChartEngine, ContinuousScaleType, GeneralAxisOptions,
-    GeneralScaleType, GeneralSeriesOptions, GeneralXyInput, HorizontalDomain, OrderId, OrderKind,
-    OrderRole, OrderSide, OrderStatus, PositionId, PositionSide, SeriesKind, TradingPosition,
+    AxisDimension, CategoryScaleType, ChartEngine, ContinuousScaleType, GeneralAxisDomain,
+    GeneralAxisOptions, GeneralReferenceOptions, GeneralReferenceValue, GeneralScaleType,
+    GeneralSeriesOptions, GeneralXyInput, HorizontalDomain, OrderId, OrderKind, OrderRole,
+    OrderSide, OrderStatus, PositionId, PositionSide, SeriesKind, TradingPosition,
     TradingPriceScale, WorkingOrder,
 };
 use nucleuscharts_render::canvas2d::{execute as canvas_execute, Canvas2d, Viewport};
@@ -863,6 +864,69 @@ fn category_column_engine_frame_has_identical_canvas_and_gpui_quads() {
 }
 
 #[test]
+fn horizontal_bar_engine_frame_has_identical_canvas_and_gpui_quads() {
+    for dpr in [1.0f64, 1.5, 2.0] {
+        let mut engine = ChartEngine::new(420.0, 260.0, dpr);
+        let pane = engine
+            .add_pane_with_domain(
+                true,
+                HorizontalDomain::Continuous {
+                    scale: ContinuousScaleType::Linear,
+                },
+            )
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "x",
+                pane,
+                AxisDimension::X,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "y",
+                pane,
+                AxisDimension::Y,
+                GeneralScaleType::Band,
+            ))
+            .unwrap();
+        let dataset = engine
+            .create_general_xy_dataset(GeneralXyInput::Category {
+                ids: None,
+                categories: vec!["A".into(), "B".into(), "C".into()],
+                category_indices: vec![0, 1, 2],
+                y: vec![-4.0, 8.0, 99.0],
+                y_valid: Some(vec![1, 1, 0]),
+            })
+            .unwrap();
+        let mut options = GeneralSeriesOptions::horizontal_bar(pane, dataset, "x", "y");
+        options.color = Some("#4f6b8a".into());
+        engine.add_general_series(options).unwrap();
+        engine.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+        let frame = engine.build_frame();
+        let pane_frame = &frame.panes[pane];
+        let canvas = canvas_rects(&pane_frame.main, &pane_frame.points);
+        let (plan, metrics) = gpui_plan(&pane_frame.main, &pane_frame.points);
+        assert_eq!(
+            canvas.rects.len(),
+            2,
+            "DPR {dpr}: two horizontal bars expected"
+        );
+        assert_eq!(
+            metrics.dropped_prims, 0,
+            "DPR {dpr}: no horizontal bar may drop"
+        );
+        assert_eq!(
+            gpui_quads(&plan),
+            canvas.rects,
+            "DPR {dpr}: horizontal-bar quads diverged"
+        );
+    }
+}
+
+#[test]
 fn xy_scatter_engine_frame_reaches_canvas_and_gpui_path_routes() {
     for dpr in [1.0f64, 1.5, 2.0] {
         let mut engine = ChartEngine::new(420.0, 260.0, dpr);
@@ -1017,6 +1081,540 @@ fn error_bar_engine_frame_reaches_canvas_and_gpui_stroke_and_point_routes() {
 }
 
 #[test]
+fn category_error_bar_frame_reaches_canvas_and_gpui_on_band_and_point_axes() {
+    for (category_scale, axis_scale) in [
+        (CategoryScaleType::Band, GeneralScaleType::Band),
+        (CategoryScaleType::Point, GeneralScaleType::Point),
+    ] {
+        for dpr in [1.0f64, 1.5, 2.0] {
+            let mut engine = ChartEngine::new(420.0, 260.0, dpr);
+            let pane = engine
+                .add_pane_with_domain(
+                    true,
+                    HorizontalDomain::Category {
+                        scale: category_scale,
+                    },
+                )
+                .unwrap();
+            engine
+                .add_general_axis(GeneralAxisOptions::new(
+                    "x",
+                    pane,
+                    AxisDimension::X,
+                    axis_scale,
+                ))
+                .unwrap();
+            engine
+                .add_general_axis(GeneralAxisOptions::new(
+                    "y",
+                    pane,
+                    AxisDimension::Y,
+                    GeneralScaleType::Linear,
+                ))
+                .unwrap();
+            let dataset = engine
+                .create_general_xy_dataset(GeneralXyInput::ErrorCategory {
+                    ids: None,
+                    categories: vec!["A".into(), "B".into()],
+                    category_indices: vec![0, 1],
+                    y: vec![2.0, 3.0],
+                    y_valid: None,
+                    y_low: vec![1.5, 2.5],
+                    y_low_valid: None,
+                    y_high: vec![2.5, 0.0],
+                    y_high_valid: Some(vec![1, 0]),
+                })
+                .unwrap();
+            engine
+                .add_general_series(GeneralSeriesOptions::error_bar(pane, dataset, "x", "y"))
+                .unwrap();
+            engine.recompute_layout_with_measure(
+                true,
+                |text, _| text.len() as f64 * 7.0,
+                |_, _| 0.0,
+            );
+            let frame = engine.build_frame();
+            let pane_frame = &frame.panes[pane];
+            let canvas = canvas_rects(&pane_frame.main, &pane_frame.points);
+            let (_plan, metrics) = gpui_plan(&pane_frame.main, &pane_frame.points);
+            assert_eq!(
+                canvas.path_fills, 2,
+                "DPR {dpr}: two category centers expected"
+            );
+            assert!(
+                !canvas.rects.is_empty(),
+                "DPR {dpr}: Y stems and caps expected"
+            );
+            assert_eq!(
+                metrics.dropped_prims, 0,
+                "DPR {dpr}: GPUI must retain all marks"
+            );
+            assert_eq!(
+                metrics.quads as usize,
+                canvas.rects.len(),
+                "DPR {dpr}: stems/caps must match Canvas2D"
+            );
+            assert!(
+                metrics.paths >= 2,
+                "DPR {dpr}: GPUI must lower center circles"
+            );
+        }
+    }
+}
+
+#[test]
+fn category_box_plot_frame_reaches_canvas_and_gpui_without_dropped_primitives() {
+    for dpr in [1.0f64, 1.5, 2.0] {
+        let mut engine = ChartEngine::new(420.0, 260.0, dpr);
+        let pane = engine
+            .add_pane_with_domain(
+                true,
+                HorizontalDomain::Category {
+                    scale: CategoryScaleType::Band,
+                },
+            )
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "x",
+                pane,
+                AxisDimension::X,
+                GeneralScaleType::Band,
+            ))
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "y",
+                pane,
+                AxisDimension::Y,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        let dataset = engine
+            .create_general_xy_dataset(GeneralXyInput::BoxCategory {
+                ids: None,
+                categories: vec!["A".into(), "B".into(), "Missing".into()],
+                category_indices: vec![0, 1, 2],
+                min: vec![1.0, 2.0, -100.0],
+                min_valid: None,
+                q1: vec![2.0, 3.0, -50.0],
+                q1_valid: None,
+                median: vec![3.0, 4.0, 0.0],
+                median_valid: Some(vec![1, 1, 0]),
+                q3: vec![4.0, 5.0, 50.0],
+                q3_valid: None,
+                max: vec![5.0, 7.0, 100.0],
+                max_valid: None,
+            })
+            .unwrap();
+        engine
+            .add_general_series(GeneralSeriesOptions::box_plot(pane, dataset, "x", "y"))
+            .unwrap();
+        engine.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+        let frame = engine.build_frame();
+        let pane_frame = &frame.panes[pane];
+        assert_eq!(
+            pane_frame
+                .main
+                .iter()
+                .filter(|primitive| matches!(primitive, Prim::Rect { .. }))
+                .count(),
+            2,
+            "DPR {dpr}: only complete rows emit IQR boxes"
+        );
+        assert!(pane_frame
+            .main
+            .iter()
+            .any(|primitive| matches!(primitive, Prim::HLine { .. })));
+        assert!(pane_frame
+            .main
+            .iter()
+            .any(|primitive| matches!(primitive, Prim::VLine { .. })));
+
+        let canvas = canvas_rects(&pane_frame.main, &pane_frame.points);
+        let (_plan, metrics) = gpui_plan(&pane_frame.main, &pane_frame.points);
+        assert!(
+            !canvas.rects.is_empty(),
+            "DPR {dpr}: box fills, medians, caps, and whiskers must reach Canvas2D"
+        );
+        assert_eq!(
+            metrics.dropped_prims, 0,
+            "DPR {dpr}: GPUI must retain every box-plot primitive"
+        );
+        assert_eq!(
+            metrics.quads as usize,
+            canvas.rects.len(),
+            "DPR {dpr}: Canvas2D and GPUI rectangle routes must agree"
+        );
+    }
+}
+
+#[test]
+fn category_heatmap_grid_frame_reaches_canvas_and_gpui_as_rect_cells() {
+    for dpr in [1.0f64, 1.5, 2.0] {
+        let mut engine = ChartEngine::new(420.0, 260.0, dpr);
+        let pane = engine
+            .add_pane_with_domain(
+                true,
+                HorizontalDomain::Category {
+                    scale: CategoryScaleType::Band,
+                },
+            )
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "x",
+                pane,
+                AxisDimension::X,
+                GeneralScaleType::Band,
+            ))
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "y",
+                pane,
+                AxisDimension::Y,
+                GeneralScaleType::Band,
+            ))
+            .unwrap();
+        let dataset = engine
+            .create_general_xy_dataset(GeneralXyInput::HeatmapCategoryCategory {
+                ids: None,
+                x_categories: vec!["A".into(), "B".into()],
+                x_category_indices: vec![0, 0, 1, 1],
+                y_categories: vec!["North".into(), "South".into()],
+                y_category_indices: vec![0, 1, 0, 1],
+                value: vec![10.0, 20.0, 30.0, 0.0],
+                value_valid: Some(vec![1, 1, 1, 0]),
+            })
+            .unwrap();
+        let mut options = GeneralSeriesOptions::heatmap_grid(pane, dataset, "x", "y");
+        options.color = Some("#3568a8".into());
+        engine.add_general_series(options).unwrap();
+        engine.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+        let frame = engine.build_frame();
+        let pane_frame = &frame.panes[pane];
+        assert_eq!(
+            pane_frame
+                .main
+                .iter()
+                .filter(|primitive| matches!(primitive, Prim::Rect { .. }))
+                .count(),
+            3,
+            "DPR {dpr}: only valid heatmap values emit cells"
+        );
+        let canvas = canvas_rects(&pane_frame.main, &pane_frame.points);
+        let (_plan, metrics) = gpui_plan(&pane_frame.main, &pane_frame.points);
+        assert_eq!(
+            metrics.dropped_prims, 0,
+            "DPR {dpr}: GPUI must retain every heatmap cell"
+        );
+        assert_eq!(
+            metrics.quads as usize,
+            canvas.rects.len(),
+            "DPR {dpr}: Canvas2D and GPUI heatmap rect routes must agree"
+        );
+    }
+}
+
+#[test]
+fn numeric_and_temporal_heatmap_frames_reach_canvas_and_gpui_as_rect_cells() {
+    for dpr in [1.0f64, 1.5, 2.0] {
+        let mut engine = ChartEngine::new(520.0, 420.0, dpr);
+        let numeric_pane = engine
+            .add_pane_with_domain(
+                true,
+                HorizontalDomain::Continuous {
+                    scale: ContinuousScaleType::Linear,
+                },
+            )
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "numeric-x",
+                numeric_pane,
+                AxisDimension::X,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "numeric-y",
+                numeric_pane,
+                AxisDimension::Y,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        let numeric_data = engine
+            .create_general_xy_dataset(GeneralXyInput::HeatmapNumericNumeric {
+                ids: None,
+                x: vec![0.0, 0.0, 10.0, 10.0],
+                y_coordinate: vec![10.0, 20.0, 10.0, 20.0],
+                value: vec![1.0, 2.0, 3.0, 0.0],
+                value_valid: Some(vec![1, 1, 1, 0]),
+            })
+            .unwrap();
+        engine
+            .add_general_series(GeneralSeriesOptions::heatmap_grid(
+                numeric_pane,
+                numeric_data,
+                "numeric-x",
+                "numeric-y",
+            ))
+            .unwrap();
+
+        let temporal_pane = engine
+            .add_pane_with_domain(true, HorizontalDomain::Temporal)
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "temporal-x",
+                temporal_pane,
+                AxisDimension::X,
+                GeneralScaleType::Temporal,
+            ))
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "temporal-y",
+                temporal_pane,
+                AxisDimension::Y,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        let temporal_data = engine
+            .create_general_xy_dataset(GeneralXyInput::HeatmapTemporalNumeric {
+                ids: None,
+                x_epoch_ms: vec![
+                    1_700_000_000_000,
+                    1_700_000_000_000,
+                    1_700_000_060_000,
+                    1_700_000_060_000,
+                ],
+                y_coordinate: vec![5.0, 15.0, 5.0, 15.0],
+                value: vec![10.0, 20.0, 30.0, 40.0],
+                value_valid: None,
+            })
+            .unwrap();
+        engine
+            .add_general_series(GeneralSeriesOptions::heatmap_grid(
+                temporal_pane,
+                temporal_data,
+                "temporal-x",
+                "temporal-y",
+            ))
+            .unwrap();
+
+        engine.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+        let frame = engine.build_frame();
+        for (pane, expected_cells) in [(numeric_pane, 3usize), (temporal_pane, 4usize)] {
+            let pane_frame = &frame.panes[pane];
+            assert_eq!(
+                pane_frame
+                    .main
+                    .iter()
+                    .filter(|primitive| matches!(primitive, Prim::Rect { .. }))
+                    .count(),
+                expected_cells,
+                "DPR {dpr}: valid continuous/temporal heatmap values emit one cell each"
+            );
+            let canvas = canvas_rects(&pane_frame.main, &pane_frame.points);
+            let (_plan, metrics) = gpui_plan(&pane_frame.main, &pane_frame.points);
+            assert_eq!(
+                metrics.dropped_prims, 0,
+                "DPR {dpr}: GPUI must retain heatmap cells"
+            );
+            assert_eq!(
+                metrics.quads as usize,
+                canvas.rects.len(),
+                "DPR {dpr}: Canvas2D and GPUI continuous heatmap rect routes must agree"
+            );
+        }
+    }
+}
+
+#[test]
+fn general_reference_components_reach_canvas_and_gpui_without_dropped_primitives() {
+    for dpr in [1.0f64, 1.5, 2.0] {
+        let mut engine = ChartEngine::new(520.0, 320.0, dpr);
+        let pane = engine
+            .add_pane_with_domain(
+                true,
+                HorizontalDomain::Continuous {
+                    scale: ContinuousScaleType::Linear,
+                },
+            )
+            .unwrap();
+        let mut x = GeneralAxisOptions::new(
+            "reference-x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Linear,
+        );
+        x.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+        engine.add_general_axis(x).unwrap();
+        let mut y = GeneralAxisOptions::new(
+            "reference-y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        );
+        y.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+        engine.add_general_axis(y).unwrap();
+        engine
+            .add_general_reference(GeneralReferenceOptions::Region {
+                pane,
+                x_axis_id: "reference-x".into(),
+                y_axis_id: "reference-y".into(),
+                x_from: GeneralReferenceValue::Numeric(2.0),
+                x_to: GeneralReferenceValue::Numeric(8.0),
+                y_from: GeneralReferenceValue::Numeric(2.0),
+                y_to: GeneralReferenceValue::Numeric(8.0),
+                fill_color: Some("rgba(10,20,30,0.25)".into()),
+                extend_domain: false,
+            })
+            .unwrap();
+        engine
+            .add_general_reference(GeneralReferenceOptions::Line {
+                pane,
+                axis_id: "reference-x".into(),
+                value: GeneralReferenceValue::Numeric(5.0),
+                color: Some("#112233".into()),
+                line_width: 2.0,
+                extend_domain: false,
+            })
+            .unwrap();
+        engine
+            .add_general_reference(GeneralReferenceOptions::Dot {
+                pane,
+                x_axis_id: "reference-x".into(),
+                y_axis_id: "reference-y".into(),
+                x: GeneralReferenceValue::Numeric(4.0),
+                y: GeneralReferenceValue::Numeric(6.0),
+                color: Some("#445566".into()),
+                radius: 5.0,
+                extend_domain: false,
+            })
+            .unwrap();
+
+        engine.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+        let frame = engine.build_frame();
+        let pane_frame = &frame.panes[pane];
+        assert_eq!(
+            pane_frame
+                .main
+                .iter()
+                .filter(|primitive| matches!(primitive, Prim::Rect { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            pane_frame
+                .main
+                .iter()
+                .filter(|primitive| matches!(primitive, Prim::VLine { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            pane_frame
+                .main
+                .iter()
+                .filter(|primitive| matches!(primitive, Prim::Circle { .. }))
+                .count(),
+            1
+        );
+        let canvas = canvas_rects(&pane_frame.main, &pane_frame.points);
+        let (_plan, metrics) = gpui_plan(&pane_frame.main, &pane_frame.points);
+        assert_eq!(
+            metrics.dropped_prims, 0,
+            "DPR {dpr}: no reference primitive may drop"
+        );
+        assert!(
+            canvas.rects.len() >= 2,
+            "DPR {dpr}: region and reference line reach Canvas2D"
+        );
+        assert!(
+            canvas.path_fills >= 1,
+            "DPR {dpr}: reference dot reaches Canvas2D"
+        );
+        assert!(metrics.quads >= 2, "DPR {dpr}: region and line reach GPUI");
+        assert!(metrics.paths >= 1, "DPR {dpr}: reference dot reaches GPUI");
+    }
+}
+
+#[test]
+fn temporal_error_bar_frame_reaches_canvas_and_gpui_with_xy_stems() {
+    for dpr in [1.0f64, 1.5, 2.0] {
+        let mut engine = ChartEngine::new(420.0, 260.0, dpr);
+        let pane = engine
+            .add_pane_with_domain(true, HorizontalDomain::Temporal)
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "x",
+                pane,
+                AxisDimension::X,
+                GeneralScaleType::Temporal,
+            ))
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "y",
+                pane,
+                AxisDimension::Y,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        let dataset = engine
+            .create_general_xy_dataset(GeneralXyInput::ErrorTemporal {
+                ids: None,
+                x_epoch_ms: vec![1_700_000_000_000, 1_700_000_060_000],
+                y: vec![2.0, 3.0],
+                y_valid: None,
+                x_low_epoch_ms: vec![1_699_999_970_000.0, 0.0],
+                x_low_valid: Some(vec![1, 0]),
+                x_high_epoch_ms: vec![1_700_000_030_000.0, 1_700_000_090_000.0],
+                x_high_valid: None,
+                y_low: vec![1.5, 2.5],
+                y_low_valid: None,
+                y_high: vec![2.5, 0.0],
+                y_high_valid: Some(vec![1, 0]),
+            })
+            .unwrap();
+        engine
+            .add_general_series(GeneralSeriesOptions::error_bar(pane, dataset, "x", "y"))
+            .unwrap();
+        engine.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+        let frame = engine.build_frame();
+        let pane_frame = &frame.panes[pane];
+        let canvas = canvas_rects(&pane_frame.main, &pane_frame.points);
+        let (_plan, metrics) = gpui_plan(&pane_frame.main, &pane_frame.points);
+        assert_eq!(
+            canvas.path_fills, 2,
+            "DPR {dpr}: two temporal centers expected"
+        );
+        assert!(
+            !canvas.rects.is_empty(),
+            "DPR {dpr}: temporal XY stems and caps expected"
+        );
+        assert_eq!(
+            metrics.dropped_prims, 0,
+            "DPR {dpr}: GPUI must retain all temporal error marks"
+        );
+        assert_eq!(
+            metrics.quads as usize,
+            canvas.rects.len(),
+            "DPR {dpr}: temporal stems/caps must match Canvas2D"
+        );
+        assert!(
+            metrics.paths >= 2,
+            "DPR {dpr}: GPUI must lower temporal center circles"
+        );
+    }
+}
+
+#[test]
 fn xy_line_engine_frame_reaches_canvas_and_gpui_stroke_routes() {
     for dpr in [1.0f64, 1.5, 2.0] {
         let mut engine = ChartEngine::new(420.0, 260.0, dpr);
@@ -1149,6 +1747,90 @@ fn xy_area_engine_frame_reaches_canvas_and_gpui_fill_routes() {
         assert!(
             metrics.paths >= 4,
             "DPR {dpr}: GPUI must lower area fill/stroke paths ({metrics:?})"
+        );
+    }
+}
+
+#[test]
+fn stacked_xy_area_engine_frame_reaches_canvas_and_gpui_band_routes() {
+    for dpr in [1.0f64, 1.5, 2.0] {
+        let mut engine = ChartEngine::new(420.0, 260.0, dpr);
+        let pane = engine
+            .add_pane_with_domain(
+                true,
+                HorizontalDomain::Continuous {
+                    scale: ContinuousScaleType::Linear,
+                },
+            )
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "x",
+                pane,
+                AxisDimension::X,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "y",
+                pane,
+                AxisDimension::Y,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        let first_dataset = engine
+            .create_general_xy_dataset(GeneralXyInput::Numeric {
+                ids: None,
+                x: vec![0.0, 1.0, 2.0],
+                y: vec![1.0, 2.0, 3.0],
+                y_valid: None,
+            })
+            .unwrap();
+        let second_dataset = engine
+            .create_general_xy_dataset(GeneralXyInput::Numeric {
+                ids: None,
+                x: vec![0.0, 1.0, 2.0],
+                y: vec![2.0, 1.0, 2.0],
+                y_valid: None,
+            })
+            .unwrap();
+        let mut first = GeneralSeriesOptions::xy_area(pane, first_dataset, "x", "y");
+        first.stack_id = Some("total".into());
+        engine.add_general_series(first).unwrap();
+        let mut second = GeneralSeriesOptions::xy_area(pane, second_dataset, "x", "y");
+        second.stack_id = Some("total".into());
+        engine.add_general_series(second).unwrap();
+        engine.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+        let frame = engine.build_frame();
+        let pane_frame = &frame.panes[pane];
+        assert_eq!(
+            pane_frame
+                .main
+                .iter()
+                .filter(|primitive| matches!(primitive, Prim::BandFill { point_count: 3, .. }))
+                .count(),
+            2,
+            "DPR {dpr}: each stacked area must emit one variable-bound band"
+        );
+        let canvas = canvas_rects(&pane_frame.main, &pane_frame.points);
+        let (_plan, metrics) = gpui_plan(&pane_frame.main, &pane_frame.points);
+        assert_eq!(
+            canvas.path_fills, 2,
+            "DPR {dpr}: Canvas must fill both stacked area bands"
+        );
+        assert_eq!(
+            canvas.path_strokes, 2,
+            "DPR {dpr}: Canvas must stroke both stacked upper boundaries"
+        );
+        assert_eq!(
+            metrics.dropped_prims, 0,
+            "DPR {dpr}: GPUI must retain every stacked area primitive"
+        );
+        assert!(
+            metrics.paths >= 4,
+            "DPR {dpr}: GPUI must lower both stacked fills and strokes ({metrics:?})"
         );
     }
 }

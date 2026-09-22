@@ -41,7 +41,7 @@ export type series_kind =
   | "custom";
 
 /** General Cartesian series currently available through the shared chart engine. */
-export type general_series_kind = "xy_line" | "xy_area" | "range_area" | "error_bar" | "column" | "scatter" | "bubble";
+export type general_series_kind = "xy_line" | "xy_area" | "range_area" | "error_bar" | "column" | "horizontal_bar" | "box_plot" | "heatmap_grid" | "scatter" | "bubble";
 export type general_row_id = string | number;
 
 export interface general_xy_row {
@@ -66,13 +66,32 @@ export interface range_area_row {
   label?: string;
 }
 
-/** Numeric XY observation with optional independent error bounds on either axis. */
+/** Numeric/temporal/category observation with error bounds supported by the bound X domain. */
 export interface error_bar_row extends general_xy_row {
-  x: number;
-  x_low?: number | null;
-  x_high?: number | null;
+  x: number | string | Date;
+  x_low?: number | Date | null;
+  x_high?: number | Date | null;
   y_low?: number | null;
   y_high?: number | null;
+}
+
+export interface box_plot_row {
+  id?: general_row_id;
+  x: string;
+  min: number | null;
+  q1: number | null;
+  median: number | null;
+  q3: number | null;
+  max: number | null;
+  label?: string;
+}
+
+export interface heatmap_grid_row {
+  id?: general_row_id;
+  x: string | number | Date;
+  y: string | number;
+  value: number | null;
+  label?: string;
 }
 
 export interface numeric_xy_columns {
@@ -130,6 +149,18 @@ export interface temporal_range_columns {
   high_valid?: Uint8Array;
 }
 
+/** Temporal error bounds are whole epoch-millisecond values carried as JS-safe numbers. */
+export interface temporal_error_columns extends temporal_xy_columns {
+  x_low_epoch_ms: Float64Array;
+  x_low_valid?: Uint8Array;
+  x_high_epoch_ms: Float64Array;
+  x_high_valid?: Uint8Array;
+  y_low: Float64Array;
+  y_low_valid?: Uint8Array;
+  y_high: Float64Array;
+  y_high_valid?: Uint8Array;
+}
+
 export interface category_xy_columns {
   ids?: readonly general_row_id[];
   labels?: readonly (string | null)[];
@@ -148,6 +179,60 @@ export interface category_range_columns {
   low_valid?: Uint8Array;
   high: Float64Array;
   high_valid?: Uint8Array;
+}
+
+/** Category-centered error bars have Y bounds only; X uncertainty requires numeric X. */
+export interface category_error_columns extends category_xy_columns {
+  y_low: Float64Array;
+  y_low_valid?: Uint8Array;
+  y_high: Float64Array;
+  y_high_valid?: Uint8Array;
+}
+
+export interface category_box_columns {
+  ids?: readonly general_row_id[];
+  labels?: readonly (string | null)[];
+  categories: readonly string[];
+  category_indices: Uint32Array;
+  min: Float64Array;
+  min_valid?: Uint8Array;
+  q1: Float64Array;
+  q1_valid?: Uint8Array;
+  median: Float64Array;
+  median_valid?: Uint8Array;
+  q3: Float64Array;
+  q3_valid?: Uint8Array;
+  max: Float64Array;
+  max_valid?: Uint8Array;
+}
+
+export interface category_heatmap_columns {
+  ids?: readonly general_row_id[];
+  labels?: readonly (string | null)[];
+  x_categories: readonly string[];
+  x_category_indices: Uint32Array;
+  y_categories: readonly string[];
+  y_category_indices: Uint32Array;
+  value: Float64Array;
+  value_valid?: Uint8Array;
+}
+
+export interface numeric_heatmap_columns {
+  ids?: readonly general_row_id[];
+  labels?: readonly (string | null)[];
+  x: Float64Array;
+  y_coordinate: Float64Array;
+  value: Float64Array;
+  value_valid?: Uint8Array;
+}
+
+export interface temporal_heatmap_columns {
+  ids?: readonly general_row_id[];
+  labels?: readonly (string | null)[];
+  x_epoch_ms: Float64Array;
+  y_coordinate: Float64Array;
+  value: Float64Array;
+  value_valid?: Uint8Array;
 }
 
 export type horizontal_domain_options =
@@ -192,6 +277,51 @@ export interface general_axis_options {
   grid_visible?: boolean;
 }
 
+export type general_reference_value = number | string | Date;
+
+export type general_reference_options =
+  | {
+      kind: "line";
+      pane: number;
+      axis_id: string;
+      value: general_reference_value;
+      color?: string;
+      line_width?: number;
+      /** Include the reference value in an automatic axis domain. Default false. */
+      extend_domain?: boolean;
+    }
+  | {
+      kind: "dot";
+      pane: number;
+      x_axis_id: string;
+      y_axis_id: string;
+      x: general_reference_value;
+      y: general_reference_value;
+      color?: string;
+      radius?: number;
+      /** Include both coordinates in automatic axis domains. Default false. */
+      extend_domain?: boolean;
+    }
+  | {
+      kind: "region";
+      pane: number;
+      x_axis_id: string;
+      y_axis_id: string;
+      x_from: general_reference_value;
+      x_to: general_reference_value;
+      y_from: general_reference_value;
+      y_to: general_reference_value;
+      fill_color?: string;
+      /** Include all region bounds in automatic axis domains. Default false. */
+      extend_domain?: boolean;
+    };
+
+export interface general_reference_api {
+  readonly id: number;
+  options(): general_reference_options;
+  remove(): boolean;
+}
+
 export interface general_series_options {
   pane: number;
   x_axis_id: string;
@@ -203,11 +333,11 @@ export interface general_series_options {
   point_radius?: number;
   /** Show bounded, engine-placed value labels beside visible marks. */
   data_labels?: boolean;
-  /** Column-only grouping key. Columns with the same key share each category band side-by-side. */
+  /** Bar-only grouping key. Matching columns or horizontal bars share their category band side-by-side. */
   group_id?: string;
-  /** Column-only stack key. Matching members share one group slot and accumulate by category. */
+  /** Column/horizontal_bar/xy_area stack key. Bars accumulate by category; areas by exact X identity. */
   stack_id?: string;
-  /** Column-only stack normalization. `percent` requires `stack_id`. */
+  /** Bar/xy_area stack normalization. `percent` requires `stack_id`. */
   stack_mode?: "normal" | "percent";
 }
 
@@ -221,6 +351,8 @@ export interface general_tooltip_snapshot {
   row: number;
   row_id: general_row_id | { generated: string };
   x_label: string;
+  /** Heatmap Y category label, or null for non-heatmap series. */
+  y_label: string | null;
   /** Custom row label, or null when the numeric value supplies the visible label. */
   label: string | null;
   value: number | null;
@@ -231,9 +363,38 @@ export interface general_tooltip_snapshot {
   /** Numeric X error bounds, or null when missing/not an error-bar series. */
   x_low: number | null;
   x_high: number | null;
+  /** Box-plot quartiles, or null for missing quartiles/non-box series. */
+  q1: number | null;
+  q3: number | null;
   /** Bubble size channel, or null for missing size/non-bubble series. */
   size: number | null;
   title: string;
+}
+
+export interface general_shared_tooltip_snapshot {
+  /** Pane containing the anchor and every returned visible item. */
+  pane: number;
+  anchor_series: number;
+  anchor_row: number;
+  /**
+   * Visible rows whose exact engine-owned horizontal datum matches the anchor, in stable
+   * series order then row order. A heatmap may contribute multiple cells for one X datum.
+   */
+  items: readonly general_tooltip_snapshot[];
+}
+
+export type general_brush_range =
+  | { type: "numeric"; from: number; to: number }
+  | { type: "temporal"; from: number; to: number }
+  | { type: "category"; from: string; to: string };
+
+export interface general_brush_snapshot {
+  pane: number;
+  axis_id: string;
+  dimension: "x" | "y";
+  range: general_brush_range;
+  /** Bounded stable series/row-order identities whose axis value is inside the selected range. */
+  items: readonly general_series_hit[];
 }
 
 export interface general_series_hit {
@@ -252,14 +413,30 @@ export interface general_accessibility_snapshot {
     row: number;
     row_id: general_row_id | { generated: string };
     x_label: string;
+    y_label: string | null;
     label: string | null;
     value: number | null;
     low: number | null;
     high: number | null;
     x_low: number | null;
     x_high: number | null;
+    q1: number | null;
+    q3: number | null;
     size: number | null;
   }[];
+}
+
+export interface general_legend_item {
+  series: number;
+  pane: number;
+  kind: general_series_kind;
+  title: string;
+  color: string | null;
+  visible: boolean;
+}
+
+export interface general_legend_snapshot {
+  items: readonly general_legend_item[];
 }
 
 export interface general_axis_api {
@@ -274,13 +451,13 @@ export interface general_axis_api {
 export interface general_series_api {
   readonly id: number;
   readonly kind: general_series_kind;
-  set_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row)[]): void;
-  set_data_typed(columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns): void;
+  set_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row)[]): void;
+  set_data_typed(columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns): void;
   /** Update existing rows and append missing rows by explicit `id`, atomically. */
-  update_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row)[], options?: general_update_options): void;
+  update_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row)[], options?: general_update_options): void;
   /** Typed-column form of {@link update_data}; `ids` is required at runtime. */
   update_data_typed(
-    columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns,
+    columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns,
     options?: general_update_options,
   ): void;
   data_at(row: number): general_tooltip_snapshot | null;
@@ -1662,7 +1839,17 @@ export interface chart_state_v2 {
   axes: Record<string, unknown>[];
   datasets: { id: `dataset-${number}`; input: Record<string, unknown>; labels?: (string | null)[] }[];
   series: {
-    kind: "Column" | "Scatter";
+    kind:
+      | "XyLine"
+      | "XyArea"
+      | "RangeArea"
+      | "ErrorBar"
+      | "Column"
+      | "HorizontalBar"
+      | "BoxPlot"
+      | "HeatmapGrid"
+      | "Scatter"
+      | "Bubble";
     pane: number;
     dataset: `dataset-${number}`;
     x_axis_id: string;
@@ -1672,6 +1859,9 @@ export interface chart_state_v2 {
     color: string | null;
     point_radius: number;
     data_labels: boolean;
+    group_id: string | null;
+    stack_id: string | null;
+    stack_mode: "Normal" | "Percent";
   }[];
   chart_options: Record<string, unknown>;
 }
@@ -2427,6 +2617,32 @@ export interface chart_api {
   axis(id: string): general_axis_api | null;
   axes(pane?: number): general_axis_api[];
   remove_axis(id: string): boolean;
+  /** Add an engine-owned reference line, point, or region over general Cartesian axes. */
+  add_general_reference(options: general_reference_options): general_reference_api;
+  /** General references in stable insertion order, optionally filtered to one pane. */
+  general_references(pane?: number): general_reference_api[];
+  /**
+   * Engine-owned legend metadata in stable series order. Hidden series remain present with
+   * `visible: false`; pass a pane index to filter without changing chart state.
+   */
+  general_legend_snapshot(pane?: number): general_legend_snapshot;
+  /**
+   * Engine-owned cross-series tooltip values for the exact horizontal datum of `series`/`row`.
+   * Hidden series and other panes are excluded. Returns `null` for a stale series/row.
+   */
+  general_shared_tooltip(series: number | general_series_api, row: number): general_shared_tooltip_snapshot | null;
+  /**
+   * Create/replace the transient engine-owned range brush for a Cartesian general axis.
+   * X coordinates are pane plot-local CSS pixels; Y coordinates are chart CSS pixels.
+   * The engine immediately converts them to semantic axis values, so resize/zoom reprojects the band.
+   */
+  set_general_brush(
+    axis: string | general_axis_api,
+    from_coordinate: number,
+    to_coordinate: number,
+  ): general_brush_snapshot;
+  general_brush_snapshot(): general_brush_snapshot | null;
+  clear_general_brush(): void;
   /** Engine-owned exact hit when `max_distance` is omitted, nearest hit otherwise. */
   general_hit_test(pane: number, x: number, y: number, max_distance?: number): general_series_hit | null;
   /** The mark selected by the most recent primary click/tap in a general-domain pane. */

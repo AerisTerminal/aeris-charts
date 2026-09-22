@@ -1,11 +1,20 @@
+use nucleuscharts_core::scale::general_scale::{BandScale, LinearScale, PointScale};
 use nucleuscharts_render::color::Color;
 use nucleuscharts_render::draw_list::{Gradient, IRect, LineStyle, LineType, Prim, TextAlign};
 
-use crate::{ChartEngine, GeneralSeriesKind, DEFAULT_LINE_COLOR};
+use crate::general_axes::NumericAxisScale;
+use crate::{
+    AxisDimension, ChartEngine, GeneralAxisDomain, GeneralReferenceOptions, GeneralReferenceValue,
+    GeneralScaleType, GeneralSeriesKind, DEFAULT_LINE_COLOR,
+};
 
 use super::PRIMARY;
 
 const GENERAL_HOVER: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0x73);
+const GENERAL_BRUSH: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0x28);
+const GENERAL_BRUSH_EDGE: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0x8F);
+const GENERAL_REFERENCE_REGION: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0x20);
+const GENERAL_REFERENCE_MARK: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0xCC);
 const GENERAL_LINE_WIDTH_CSS: f64 = 2.0;
 const MAX_GENERAL_DATA_LABELS_PER_PANE: usize = 512;
 const MAX_GENERAL_DATA_LABEL_ATTEMPTS_PER_PANE: usize = 4_096;
@@ -32,6 +41,63 @@ impl ChartEngine {
         let mut occupied_labels: Vec<[f64; 4]> = Vec::new();
         let mut label_primitives = Vec::new();
         let mut label_attempts = 0;
+        self.push_general_reference_regions(pane_id, plot, hpr, vpr, out);
+        if let Some((dimension, from, to)) = self.general_brush_axis_bounds(pane_index) {
+            match dimension {
+                AxisDimension::X => {
+                    let left = (from * hpr).round() as i32;
+                    let right = (to * hpr).round() as i32;
+                    let top = (plot.y * vpr).round() as i32;
+                    let bottom = ((plot.y + plot.height) * vpr).round() as i32;
+                    out.push(Prim::Rect {
+                        rect: IRect {
+                            x: left,
+                            y: top,
+                            w: (right - left).max(1),
+                            h: (bottom - top).max(1),
+                        },
+                        color: GENERAL_BRUSH,
+                    });
+                    for x in [from, to] {
+                        let x = (x * hpr).round() as i32;
+                        out.push(Prim::VLine {
+                            x,
+                            y0: top,
+                            y1: bottom,
+                            width: hpr.min(vpr).round().max(1.0) as i32,
+                            style: LineStyle::Solid,
+                            color: GENERAL_BRUSH_EDGE,
+                        });
+                    }
+                }
+                AxisDimension::Y => {
+                    let top = (from * vpr).round() as i32;
+                    let bottom = (to * vpr).round() as i32;
+                    let right = (plot.width * hpr).round() as i32;
+                    out.push(Prim::Rect {
+                        rect: IRect {
+                            x: 0,
+                            y: top,
+                            w: right.max(1),
+                            h: (bottom - top).max(1),
+                        },
+                        color: GENERAL_BRUSH,
+                    });
+                    for y in [from, to] {
+                        let y = (y * vpr).round() as i32;
+                        out.push(Prim::HLine {
+                            y,
+                            x0: 0,
+                            x1: right,
+                            width: hpr.min(vpr).round().max(1.0) as i32,
+                            style: LineStyle::Solid,
+                            color: GENERAL_BRUSH_EDGE,
+                        });
+                    }
+                }
+                AxisDimension::Angle | AxisDimension::Radius => {}
+            }
+        }
         for series in self
             .general_series_iter()
             .filter(|series| series.visible() && series.pane_id() == pane_id)
@@ -98,6 +164,67 @@ impl ChartEngine {
                         .and_then(Color::parse_css)
                         .unwrap_or(DEFAULT_LINE_COLOR);
                     let is_area = series.kind() == GeneralSeriesKind::XyArea;
+                    if is_area && series.stack_id().is_some() {
+                        let fill = Color::rgba(color.r(), color.g(), color.b(), 56);
+                        let mut upper = Vec::<[f32; 2]>::new();
+                        let mut lower = Vec::<[f32; 2]>::new();
+                        let mut flush_run =
+                            |upper: &mut Vec<[f32; 2]>, lower: &mut Vec<[f32; 2]>| {
+                                if upper.len() >= 2 && upper.len() == lower.len() {
+                                    let upper_first = points.len() as u32;
+                                    let point_count = upper.len() as u32;
+                                    points.append(upper);
+                                    let lower_first = points.len() as u32;
+                                    points.append(lower);
+                                    out.push(Prim::BandFill {
+                                        upper_first,
+                                        lower_first,
+                                        point_count,
+                                        fill,
+                                    });
+                                    out.push(Prim::Polyline {
+                                        first_point: upper_first,
+                                        point_count,
+                                        width: (GENERAL_LINE_WIDTH_CSS * vpr) as f32,
+                                        style: LineStyle::Solid,
+                                        line_type: LineType::Simple,
+                                        color,
+                                    });
+                                } else {
+                                    upper.clear();
+                                    lower.clear();
+                                }
+                            };
+                        self.visit_general_stacked_area_points(series, |geometry| {
+                            if geometry.starts_new_run {
+                                flush_run(&mut upper, &mut lower);
+                            }
+                            upper.push([(geometry.x * hpr) as f32, (geometry.high_y * vpr) as f32]);
+                            lower.push([(geometry.x * hpr) as f32, (geometry.low_y * vpr) as f32]);
+                            push_label(
+                                geometry.row,
+                                geometry.x,
+                                geometry.low_y.min(geometry.high_y) - label_size * 0.65 - 4.0,
+                                geometry.low_y.max(geometry.high_y) + label_size * 0.65 + 4.0,
+                                plot.width - 4.0,
+                            );
+                            let (hovered, selected) =
+                                self.general_row_interaction(series.id(), geometry.row);
+                            if hovered || selected {
+                                let stroke = if selected { PRIMARY } else { GENERAL_HOVER };
+                                interaction[usize::from(selected)] = Some(Prim::Circle {
+                                    cx: (geometry.x * hpr) as f32,
+                                    cy: (geometry.high_y * vpr) as f32,
+                                    radius: ((if selected { 5.0 } else { 4.0 }) * vpr) as f32,
+                                    fill: Color::rgba(0, 0, 0, 0),
+                                    stroke_width: (if selected { 2.0 } else { 1.0 }) * vpr as f32,
+                                    stroke,
+                                });
+                            }
+                        });
+                        flush_run(&mut upper, &mut lower);
+                        continue;
+                    }
                     let baseline_y = is_area
                         .then(|| self.general_path_baseline_y(series))
                         .flatten();
@@ -392,6 +519,214 @@ impl ChartEngine {
                         }
                     });
                 }
+                GeneralSeriesKind::HorizontalBar => {
+                    let color = series
+                        .color()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(DEFAULT_LINE_COLOR);
+                    self.visit_general_horizontal_bars(series, |geometry| {
+                        let left = (geometry.left * hpr).round() as i32;
+                        let right = (geometry.right * hpr).round() as i32;
+                        let top = (geometry.top * vpr).round() as i32;
+                        let bottom = (geometry.bottom * vpr).round() as i32;
+                        let width = right - left;
+                        let height = (bottom - top).max(1);
+                        if width <= 0 {
+                            return;
+                        }
+                        out.push(Prim::Rect {
+                            rect: IRect {
+                                x: left,
+                                y: top,
+                                w: width,
+                                h: height,
+                            },
+                            color,
+                        });
+                        push_label(
+                            geometry.row,
+                            (geometry.left + geometry.right) * 0.5,
+                            geometry.top - label_size * 0.65 - 2.0,
+                            geometry.bottom + label_size * 0.65 + 2.0,
+                            geometry.right - geometry.left - 4.0,
+                        );
+                        let (hovered, selected) =
+                            self.general_row_interaction(series.id(), geometry.row);
+                        if hovered || selected {
+                            interaction[usize::from(selected)] = Some(Prim::RectFrame {
+                                rect: IRect {
+                                    x: left,
+                                    y: top,
+                                    w: width,
+                                    h: height,
+                                },
+                                border: ((if selected { 2.0 } else { 1.0 }) * hpr.min(vpr))
+                                    .round()
+                                    .max(1.0) as i32,
+                                color: if selected { PRIMARY } else { GENERAL_HOVER },
+                            });
+                        }
+                    });
+                }
+                GeneralSeriesKind::BoxPlot => {
+                    let color = series
+                        .color()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(DEFAULT_LINE_COLOR);
+                    let fill = Color::rgba(color.r(), color.g(), color.b(), 48);
+                    let line_width =
+                        (GENERAL_LINE_WIDTH_CSS * hpr.min(vpr)).round().max(1.0) as i32;
+                    self.visit_general_box_plots(series, |geometry| {
+                        let left = (geometry.left * hpr).round() as i32;
+                        let right = (geometry.right * hpr).round() as i32;
+                        let q1 = (geometry.q1_y * vpr).round() as i32;
+                        let q3 = (geometry.q3_y * vpr).round() as i32;
+                        let top = q1.min(q3);
+                        let bottom = q1.max(q3);
+                        if right <= left || bottom <= top {
+                            return;
+                        }
+                        out.push(Prim::Rect {
+                            rect: IRect {
+                                x: left,
+                                y: top,
+                                w: (right - left).max(1),
+                                h: (bottom - top).max(1),
+                            },
+                            color: fill,
+                        });
+                        let x0 = (geometry.left * hpr).round() as i32;
+                        let x1 = (geometry.right * hpr).round() as i32;
+                        let cx = (geometry.center_x * hpr).round() as i32;
+                        let min_y = (geometry.min_y * vpr).round() as i32;
+                        let q1_y = (geometry.q1_y * vpr).round() as i32;
+                        let median_y = (geometry.median_y * vpr).round() as i32;
+                        let q3_y = (geometry.q3_y * vpr).round() as i32;
+                        let max_y = (geometry.max_y * vpr).round() as i32;
+                        for y in [q1_y, median_y, q3_y, min_y, max_y] {
+                            out.push(Prim::HLine {
+                                y,
+                                x0,
+                                x1,
+                                width: line_width,
+                                style: LineStyle::Solid,
+                                color,
+                            });
+                        }
+                        for x in [x0, x1] {
+                            out.push(Prim::VLine {
+                                x,
+                                y0: q1_y.min(q3_y),
+                                y1: q1_y.max(q3_y),
+                                width: line_width,
+                                style: LineStyle::Solid,
+                                color,
+                            });
+                        }
+                        for (from, to) in [(min_y, q1_y), (q3_y, max_y)] {
+                            out.push(Prim::VLine {
+                                x: cx,
+                                y0: from.min(to),
+                                y1: from.max(to),
+                                width: line_width,
+                                style: LineStyle::Solid,
+                                color,
+                            });
+                        }
+                        push_label(
+                            geometry.row,
+                            geometry.center_x,
+                            geometry.min_y.min(geometry.max_y) - label_size * 0.65 - 4.0,
+                            geometry.min_y.max(geometry.max_y) + label_size * 0.65 + 4.0,
+                            geometry.right - geometry.left - 4.0,
+                        );
+                        let (hovered, selected) =
+                            self.general_row_interaction(series.id(), geometry.row);
+                        if hovered || selected {
+                            interaction[usize::from(selected)] = Some(Prim::RectFrame {
+                                rect: IRect {
+                                    x: left,
+                                    y: (geometry.min_y.min(geometry.max_y) * vpr).round() as i32,
+                                    w: (right - left).max(1),
+                                    h: ((geometry.min_y.max(geometry.max_y)
+                                        - geometry.min_y.min(geometry.max_y))
+                                        * vpr)
+                                        .round()
+                                        .max(1.0) as i32,
+                                },
+                                border: ((if selected { 2.0 } else { 1.0 }) * hpr.min(vpr))
+                                    .round()
+                                    .max(1.0) as i32,
+                                color: if selected { PRIMARY } else { GENERAL_HOVER },
+                            });
+                        }
+                    });
+                }
+                GeneralSeriesKind::HeatmapGrid => {
+                    let base_color = series.color().and_then(Color::parse_css);
+                    self.visit_general_heatmap_cells(series, |geometry| {
+                        let left = (geometry.left * hpr).round() as i32;
+                        let right = (geometry.right * hpr).round() as i32;
+                        let top = (geometry.top * vpr).round() as i32;
+                        let bottom = (geometry.bottom * vpr).round() as i32;
+                        let width = (right - left).max(1);
+                        let height = (bottom - top).max(1);
+                        let intensity = geometry.intensity.clamp(0.0, 1.0);
+                        let color = base_color.map_or_else(
+                            || {
+                                Color::rgba(
+                                    0,
+                                    (100.0 + 155.0 * intensity).round() as u8,
+                                    (100.0 * intensity).round() as u8,
+                                    (51.0 + 204.0 * intensity).round() as u8,
+                                )
+                            },
+                            |base| {
+                                Color::rgba(
+                                    base.r(),
+                                    base.g(),
+                                    base.b(),
+                                    ((base.a() as f64) * (0.2 + 0.8 * intensity))
+                                        .round()
+                                        .clamp(0.0, 255.0)
+                                        as u8,
+                                )
+                            },
+                        );
+                        out.push(Prim::Rect {
+                            rect: IRect {
+                                x: left,
+                                y: top,
+                                w: width,
+                                h: height,
+                            },
+                            color,
+                        });
+                        push_label(
+                            geometry.row,
+                            (geometry.left + geometry.right) * 0.5,
+                            geometry.top - label_size * 0.65,
+                            geometry.bottom + label_size * 0.65,
+                            geometry.right - geometry.left - 4.0,
+                        );
+                        let (hovered, selected) =
+                            self.general_row_interaction(series.id(), geometry.row);
+                        if hovered || selected {
+                            interaction[usize::from(selected)] = Some(Prim::RectFrame {
+                                rect: IRect {
+                                    x: left,
+                                    y: top,
+                                    w: width,
+                                    h: height,
+                                },
+                                border: ((if selected { 2.0 } else { 1.0 }) * hpr.min(vpr))
+                                    .round()
+                                    .max(1.0) as i32,
+                                color: if selected { PRIMARY } else { GENERAL_HOVER },
+                            });
+                        }
+                    });
+                }
                 GeneralSeriesKind::Scatter | GeneralSeriesKind::Bubble => {
                     let color = series
                         .color()
@@ -431,7 +766,219 @@ impl ChartEngine {
                 }
             }
         }
+        self.push_general_reference_marks(pane_id, plot, hpr, vpr, out);
         out.extend(label_primitives);
         interaction
+    }
+
+    fn push_general_reference_regions(
+        &self,
+        pane_id: crate::PaneId,
+        plot: crate::general_axes::GeneralPlotRect,
+        hpr: f64,
+        vpr: f64,
+        out: &mut Vec<Prim>,
+    ) {
+        for reference in self
+            .general_reference_iter()
+            .filter(|reference| reference.pane_id() == pane_id)
+        {
+            let GeneralReferenceOptions::Region {
+                x_axis_id,
+                y_axis_id,
+                x_from,
+                x_to,
+                y_from,
+                y_to,
+                fill_color,
+                ..
+            } = reference.options()
+            else {
+                continue;
+            };
+            let (Some(x0), Some(x1), Some(y0), Some(y1)) = (
+                self.general_reference_coordinate(x_axis_id, x_from, plot),
+                self.general_reference_coordinate(x_axis_id, x_to, plot),
+                self.general_reference_coordinate(y_axis_id, y_from, plot),
+                self.general_reference_coordinate(y_axis_id, y_to, plot),
+            ) else {
+                continue;
+            };
+            let left = (x0.min(x1) * hpr).round() as i32;
+            let right = (x0.max(x1) * hpr).round() as i32;
+            let top = (y0.min(y1) * vpr).round() as i32;
+            let bottom = (y0.max(y1) * vpr).round() as i32;
+            if right <= left || bottom <= top {
+                continue;
+            }
+            out.push(Prim::Rect {
+                rect: IRect {
+                    x: left,
+                    y: top,
+                    w: right - left,
+                    h: bottom - top,
+                },
+                color: fill_color
+                    .as_deref()
+                    .and_then(Color::parse_css)
+                    .unwrap_or(GENERAL_REFERENCE_REGION),
+            });
+        }
+    }
+
+    fn push_general_reference_marks(
+        &self,
+        pane_id: crate::PaneId,
+        plot: crate::general_axes::GeneralPlotRect,
+        hpr: f64,
+        vpr: f64,
+        out: &mut Vec<Prim>,
+    ) {
+        let plot_top = (plot.y * vpr).round() as i32;
+        let plot_bottom = ((plot.y + plot.height) * vpr).round() as i32;
+        let plot_right = (plot.width * hpr).round() as i32;
+        for reference in self
+            .general_reference_iter()
+            .filter(|reference| reference.pane_id() == pane_id)
+        {
+            match reference.options() {
+                GeneralReferenceOptions::Line {
+                    axis_id,
+                    value,
+                    color,
+                    line_width,
+                    ..
+                } => {
+                    let Some(axis) = self.general_axis(axis_id) else {
+                        continue;
+                    };
+                    let Some(coordinate) = self.general_reference_coordinate(axis_id, value, plot)
+                    else {
+                        continue;
+                    };
+                    let color = color
+                        .as_deref()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(GENERAL_REFERENCE_MARK);
+                    let width = (*line_width * hpr.min(vpr)).round().max(1.0) as i32;
+                    match axis.dimension() {
+                        AxisDimension::X => out.push(Prim::VLine {
+                            x: (coordinate * hpr).round() as i32,
+                            y0: plot_top,
+                            y1: plot_bottom,
+                            width,
+                            style: LineStyle::Solid,
+                            color,
+                        }),
+                        AxisDimension::Y => out.push(Prim::HLine {
+                            y: (coordinate * vpr).round() as i32,
+                            x0: 0,
+                            x1: plot_right,
+                            width,
+                            style: LineStyle::Solid,
+                            color,
+                        }),
+                        AxisDimension::Angle | AxisDimension::Radius => {}
+                    }
+                }
+                GeneralReferenceOptions::Dot {
+                    x_axis_id,
+                    y_axis_id,
+                    x,
+                    y,
+                    color,
+                    radius,
+                    ..
+                } => {
+                    let (Some(x), Some(y)) = (
+                        self.general_reference_coordinate(x_axis_id, x, plot),
+                        self.general_reference_coordinate(y_axis_id, y, plot),
+                    ) else {
+                        continue;
+                    };
+                    let color = color
+                        .as_deref()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(GENERAL_REFERENCE_MARK);
+                    out.push(Prim::Circle {
+                        cx: (x * hpr) as f32,
+                        cy: (y * vpr) as f32,
+                        radius: (*radius * vpr) as f32,
+                        fill: color,
+                        stroke_width: 0.0,
+                        stroke: color,
+                    });
+                }
+                GeneralReferenceOptions::Region { .. } => {}
+            }
+        }
+    }
+
+    fn general_reference_coordinate(
+        &self,
+        axis_id: &str,
+        value: &GeneralReferenceValue,
+        plot: crate::general_axes::GeneralPlotRect,
+    ) -> Option<f64> {
+        let axis = self.general_axis(axis_id)?;
+        let domain = self.effective_general_axis_domain(axis)?;
+        let (from, to, low, high) = match axis.dimension() {
+            AxisDimension::X => {
+                let range = if axis.reverse() {
+                    (plot.width, 0.0)
+                } else {
+                    (0.0, plot.width)
+                };
+                (range.0, range.1, 0.0, plot.width)
+            }
+            AxisDimension::Y => {
+                let bottom = plot.y + plot.height;
+                let range = if axis.reverse() {
+                    (plot.y, bottom)
+                } else {
+                    (bottom, plot.y)
+                };
+                (range.0, range.1, plot.y, bottom)
+            }
+            AxisDimension::Angle | AxisDimension::Radius => return None,
+        };
+        let coordinate = match (value, domain) {
+            (GeneralReferenceValue::Numeric(value), GeneralAxisDomain::Numeric(domain)) => {
+                NumericAxisScale::new(axis.scale(), domain, from, to)?.coordinate(*value)
+            }
+            (GeneralReferenceValue::Temporal(value), GeneralAxisDomain::Temporal([start, end])) => {
+                LinearScale::new(start as f64, end as f64, from, to)
+                    .ok()?
+                    .coordinate(*value as f64)
+            }
+            (GeneralReferenceValue::Category(value), GeneralAxisDomain::Category(categories)) => {
+                let index = categories.iter().position(|category| category == value)?;
+                match axis.scale() {
+                    GeneralScaleType::Band => {
+                        let scale = BandScale::new(
+                            categories.len(),
+                            from,
+                            to,
+                            axis.band_padding_inner(),
+                            axis.band_padding_outer(),
+                            0.5,
+                        )
+                        .ok()?;
+                        scale.bounds(index).map(|(from, to)| (from + to) * 0.5)
+                    }
+                    GeneralScaleType::Point => {
+                        PointScale::new(categories.len(), from, to, axis.band_padding_outer(), 0.5)
+                            .ok()?
+                            .coordinate(index)
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }?;
+        coordinate
+            .is_finite()
+            .then_some(coordinate)
+            .filter(|coordinate| *coordinate >= low.min(high) && *coordinate <= high.max(low))
     }
 }

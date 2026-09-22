@@ -887,6 +887,21 @@ class PaneAccessibility {
             : item.high !== null ? `, Y upper ${this.format_value(item.high, series)}` : "";
         values = `${values}${x_bounds}${y_bounds}`;
       }
+      if (
+        series.kind === "box_plot"
+        && item.low !== null
+        && item.q1 !== null
+        && item.value !== null
+        && item.q3 !== null
+        && item.high !== null
+      ) {
+        const stats = `min ${this.format_value(item.low, series)}, q1 ${this.format_value(item.q1, series)}, median ${this.format_value(item.value, series)}, q3 ${this.format_value(item.q3, series)}, max ${this.format_value(item.high, series)}`;
+        values = item.label === null ? stats : `${item.label}, ${stats}`;
+      }
+      if (series.kind === "heatmap_grid" && item.y_label !== null) {
+        const heatmap = `${item.y_label}, ${this.format_value(item.value, series)}`;
+        values = item.label === null ? heatmap : `${item.label}, ${heatmap}`;
+      }
       return this.controller.options.describe_point?.(description)
         ?? this.controller.options.messages.point(
           description,
@@ -1047,7 +1062,10 @@ class PaneAccessibility {
       const visible = this.focused && this.controller.options.show_focus_indicator
         && item !== undefined && item.value !== null
         && (active.kind !== "bubble" || (item.size !== null && item.size > 0))
-        && (active.kind !== "range_area" || (item.low !== null && item.high !== null));
+        && (active.kind !== "range_area" || (item.low !== null && item.high !== null))
+        && (active.kind !== "box_plot"
+          || (item.low !== null && item.q1 !== null && item.q3 !== null && item.high !== null))
+        && (active.kind !== "heatmap_grid" || item.y_label !== null);
       const chart = this.controller.chart as chart_api & {
         set_general_accessibility_focus(series: number, row: number): boolean;
         clear_general_accessibility_focus(): void;

@@ -34,6 +34,7 @@
     { "id": "multi-chart-scaling-10k", "version": 2, "kind": "multi_chart", "points": 10000, "chart_counts": [1, 2, 4, 8, 16], "profiles": ["nightly", "release"], "warmup_runs": 0, "measured_runs": 1, "visibility": "public_candidate" },
     { "id": "multi-chart-dense-100k", "version": 1, "kind": "multi_chart", "points": 100000, "chart_counts": [1, 2, 4, 8], "profiles": ["release"], "warmup_runs": 0, "measured_runs": 1, "visibility": "public_candidate" },
     { "id": "multi-series-pane-scaling-10k", "version": 2, "kind": "multi_series", "points": 10000, "series_counts": [1, 2, 4, 8], "pane_counts": [1, 2, 4], "profiles": ["release"], "warmup_runs": 0, "measured_runs": 1, "visibility": "public_candidate" },
+    { "id": "general-dashboard-100k", "version": 1, "kind": "general_dashboard", "points": 100000, "profiles": ["release"], "warmup_runs": 1, "measured_runs": 5, "visibility": "public_candidate" },
     { "id": "retained-current-candle-100k", "version": 1, "kind": "retained_updates", "points": 100000, "series_counts": [1, 2, 4, 8, 16], "pane_counts": [1, 4], "iterations": 30, "profiles": ["nightly", "release"], "warmup_runs": 1, "measured_runs": 30, "visibility": "public_candidate" },
     { "id": "soak-100k", "version": 1, "kind": "soak", "points": 100000, "duration_ms": 3600000, "sample_interval_ms": 1000, "memory_sample_interval_ms": 60000, "profiles": ["soak", "release"], "warmup_runs": 0, "measured_runs": 1, "visibility": "public_candidate" }
   ]

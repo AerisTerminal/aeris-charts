@@ -2503,12 +2503,35 @@ impl NucleusChart {
         self.inner.borrow().general_axis_ids_json(pane)
     }
 
+    pub fn add_general_reference_result_json(&mut self, options_json: &str) -> String {
+        self.inner
+            .borrow_mut()
+            .add_general_reference_result_json(options_json)
+    }
+
+    pub fn general_reference_options_json(&self, id: u32) -> String {
+        self.inner.borrow().general_reference_options_json(id)
+    }
+
+    pub fn general_reference_ids_json(&self, pane: i32) -> String {
+        self.inner.borrow().general_reference_ids_json(pane)
+    }
+
+    pub fn remove_general_reference(&mut self, id: u32) -> bool {
+        self.inner.borrow_mut().remove_general_reference(id)
+    }
+
     pub fn general_series_ids(&self, pane: usize) -> Vec<u32> {
         self.inner.borrow().general_series_ids(pane)
     }
 
     pub fn general_series_catalog_json(&self) -> String {
         self.inner.borrow().general_series_catalog_json()
+    }
+
+    /// Engine-owned general-series legend metadata. `pane < 0` selects every pane.
+    pub fn general_legend_snapshot_json(&self, pane: i32) -> String {
+        self.inner.borrow().general_legend_snapshot_json(pane)
     }
 
     pub fn remove_general_axis(&mut self, id: &str) -> bool {
@@ -2648,6 +2671,74 @@ impl NucleusChart {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn set_general_heatmap_category_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        metadata_json: &str,
+        x_category_indices: &js_sys::Uint32Array,
+        y_category_indices: &js_sys::Uint32Array,
+        value: &Float64Array,
+        value_valid: Option<js_sys::Uint8Array>,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .set_general_heatmap_category_data_typed(
+                dataset,
+                ids_json,
+                metadata_json,
+                x_category_indices,
+                y_category_indices,
+                value,
+                value_valid,
+            )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_general_heatmap_numeric_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        x: &Float64Array,
+        y_coordinate: &Float64Array,
+        value: &Float64Array,
+        value_valid: Option<js_sys::Uint8Array>,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .set_general_heatmap_numeric_data_typed(
+                dataset,
+                metadata_json,
+                x,
+                y_coordinate,
+                value,
+                value_valid,
+            )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_general_heatmap_temporal_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        x_epoch_ms: &Float64Array,
+        y_coordinate: &Float64Array,
+        value: &Float64Array,
+        value_valid: Option<js_sys::Uint8Array>,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .set_general_heatmap_temporal_data_typed(
+                dataset,
+                metadata_json,
+                x_epoch_ms,
+                y_coordinate,
+                value,
+                value_valid,
+            )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn set_general_error_numeric_data_typed(
         &mut self,
         dataset: u32,
@@ -2708,6 +2799,42 @@ impl NucleusChart {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn set_general_error_temporal_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        x_epoch_ms: &Float64Array,
+        y: &Float64Array,
+        y_valid: Option<js_sys::Uint8Array>,
+        x_low_epoch_ms: &Float64Array,
+        x_low_valid: Option<js_sys::Uint8Array>,
+        x_high_epoch_ms: &Float64Array,
+        x_high_valid: Option<js_sys::Uint8Array>,
+        y_low: &Float64Array,
+        y_low_valid: Option<js_sys::Uint8Array>,
+        y_high: &Float64Array,
+        y_high_valid: Option<js_sys::Uint8Array>,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .set_general_error_temporal_data_typed(
+                dataset,
+                metadata_json,
+                x_epoch_ms,
+                y,
+                y_valid,
+                x_low_epoch_ms,
+                x_low_valid,
+                x_high_epoch_ms,
+                x_high_valid,
+                y_low,
+                y_low_valid,
+                y_high,
+                y_high_valid,
+            )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn set_general_range_category_data_typed(
         &mut self,
         dataset: u32,
@@ -2731,6 +2858,72 @@ impl NucleusChart {
                 high,
                 high_valid,
             )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_general_error_category_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        metadata_json: &str,
+        category_indices: &js_sys::Uint32Array,
+        y: &Float64Array,
+        y_valid: Option<js_sys::Uint8Array>,
+        y_low: &Float64Array,
+        y_low_valid: Option<js_sys::Uint8Array>,
+        y_high: &Float64Array,
+        y_high_valid: Option<js_sys::Uint8Array>,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .set_general_error_category_data_typed(
+                dataset,
+                ids_json,
+                metadata_json,
+                category_indices,
+                y,
+                y_valid,
+                y_low,
+                y_low_valid,
+                y_high,
+                y_high_valid,
+            )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_general_box_category_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        metadata_json: &str,
+        category_indices: &js_sys::Uint32Array,
+        min: &Float64Array,
+        min_valid: Option<js_sys::Uint8Array>,
+        q1: &Float64Array,
+        q1_valid: Option<js_sys::Uint8Array>,
+        median: &Float64Array,
+        median_valid: Option<js_sys::Uint8Array>,
+        q3: &Float64Array,
+        q3_valid: Option<js_sys::Uint8Array>,
+        max: &Float64Array,
+        max_valid: Option<js_sys::Uint8Array>,
+    ) -> String {
+        self.inner.borrow_mut().set_general_box_category_data_typed(
+            dataset,
+            ids_json,
+            metadata_json,
+            category_indices,
+            min,
+            min_valid,
+            q1,
+            q1_valid,
+            median,
+            median_valid,
+            q3,
+            q3_valid,
+            max,
+            max_valid,
+        )
     }
 
     pub fn upsert_general_numeric_data_typed(
@@ -2841,6 +3034,78 @@ impl NucleusChart {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn upsert_general_heatmap_category_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        update_json: &str,
+        x_category_indices: &js_sys::Uint32Array,
+        y_category_indices: &js_sys::Uint32Array,
+        value: &Float64Array,
+        value_valid: Option<js_sys::Uint8Array>,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .upsert_general_heatmap_category_data_typed(
+                dataset,
+                ids_json,
+                update_json,
+                x_category_indices,
+                y_category_indices,
+                value,
+                value_valid,
+            )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_general_heatmap_numeric_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        x: &Float64Array,
+        y_coordinate: &Float64Array,
+        value: &Float64Array,
+        value_valid: Option<js_sys::Uint8Array>,
+        max_rows: u32,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .upsert_general_heatmap_numeric_data_typed(
+                dataset,
+                metadata_json,
+                x,
+                y_coordinate,
+                value,
+                value_valid,
+                max_rows,
+            )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_general_heatmap_temporal_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        x_epoch_ms: &Float64Array,
+        y_coordinate: &Float64Array,
+        value: &Float64Array,
+        value_valid: Option<js_sys::Uint8Array>,
+        max_rows: u32,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .upsert_general_heatmap_temporal_data_typed(
+                dataset,
+                metadata_json,
+                x_epoch_ms,
+                y_coordinate,
+                value,
+                value_valid,
+                max_rows,
+            )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn upsert_general_error_numeric_data_typed(
         &mut self,
         dataset: u32,
@@ -2905,6 +3170,44 @@ impl NucleusChart {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn upsert_general_error_temporal_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        x_epoch_ms: &Float64Array,
+        y: &Float64Array,
+        y_valid: Option<js_sys::Uint8Array>,
+        x_low_epoch_ms: &Float64Array,
+        x_low_valid: Option<js_sys::Uint8Array>,
+        x_high_epoch_ms: &Float64Array,
+        x_high_valid: Option<js_sys::Uint8Array>,
+        y_low: &Float64Array,
+        y_low_valid: Option<js_sys::Uint8Array>,
+        y_high: &Float64Array,
+        y_high_valid: Option<js_sys::Uint8Array>,
+        max_rows: u32,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .upsert_general_error_temporal_data_typed(
+                dataset,
+                metadata_json,
+                x_epoch_ms,
+                y,
+                y_valid,
+                x_low_epoch_ms,
+                x_low_valid,
+                x_high_epoch_ms,
+                x_high_valid,
+                y_low,
+                y_low_valid,
+                y_high,
+                y_high_valid,
+                max_rows,
+            )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn upsert_general_range_category_data_typed(
         &mut self,
         dataset: u32,
@@ -2930,6 +3233,74 @@ impl NucleusChart {
             )
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_general_error_category_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        update_json: &str,
+        category_indices: &js_sys::Uint32Array,
+        y: &Float64Array,
+        y_valid: Option<js_sys::Uint8Array>,
+        y_low: &Float64Array,
+        y_low_valid: Option<js_sys::Uint8Array>,
+        y_high: &Float64Array,
+        y_high_valid: Option<js_sys::Uint8Array>,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .upsert_general_error_category_data_typed(
+                dataset,
+                ids_json,
+                update_json,
+                category_indices,
+                y,
+                y_valid,
+                y_low,
+                y_low_valid,
+                y_high,
+                y_high_valid,
+            )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_general_box_category_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        update_json: &str,
+        category_indices: &js_sys::Uint32Array,
+        min: &Float64Array,
+        min_valid: Option<js_sys::Uint8Array>,
+        q1: &Float64Array,
+        q1_valid: Option<js_sys::Uint8Array>,
+        median: &Float64Array,
+        median_valid: Option<js_sys::Uint8Array>,
+        q3: &Float64Array,
+        q3_valid: Option<js_sys::Uint8Array>,
+        max: &Float64Array,
+        max_valid: Option<js_sys::Uint8Array>,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .upsert_general_box_category_data_typed(
+                dataset,
+                ids_json,
+                update_json,
+                category_indices,
+                min,
+                min_valid,
+                q1,
+                q1_valid,
+                median,
+                median_valid,
+                q3,
+                q3_valid,
+                max,
+                max_valid,
+            )
+    }
+
     pub fn remove_general_series(&mut self, series: u32, dataset: u32) -> bool {
         self.inner
             .borrow_mut()
@@ -2938,6 +3309,29 @@ impl NucleusChart {
 
     pub fn general_tooltip_json(&self, series: u32, row: usize) -> String {
         self.inner.borrow().general_tooltip_json(series, row)
+    }
+
+    pub fn general_shared_tooltip_json(&self, series: u32, row: usize) -> String {
+        self.inner.borrow().general_shared_tooltip_json(series, row)
+    }
+
+    pub fn set_general_brush_result_json(
+        &mut self,
+        axis_id: &str,
+        from_css: f64,
+        to_css: f64,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .set_general_brush_result_json(axis_id, from_css, to_css)
+    }
+
+    pub fn general_brush_snapshot_json(&self) -> String {
+        self.inner.borrow().general_brush_snapshot_json()
+    }
+
+    pub fn clear_general_brush(&mut self) {
+        self.inner.borrow_mut().clear_general_brush();
     }
 
     pub fn general_accessibility_json(&self, series: u32, offset: usize, limit: usize) -> String {

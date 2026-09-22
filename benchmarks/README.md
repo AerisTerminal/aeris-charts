@@ -44,7 +44,7 @@ Environment classification defaults to `local`; shared workflows set `shared-ci`
 
 `shared.mjs` uses a versioned xorshift32 generator. A generator version, unsigned seed, start time, interval, start price, volatility, point count, series count, and pane count identify the dataset. Generated rows always satisfy `high >= open/close`, `low <= open/close`, and `high >= low`. Core sizes are 1K, 10K, 100K, 500K, and 1M candlesticks. Dataset creation occurs before timed installs.
 
-Canonical scenario definitions live in `scenarios.json`; this is intentionally a small manifest rather than a benchmark DSL. Scenario IDs and versions make methodology changes explicit. A material change creates a new scenario version instead of silently rewriting history. Workloads cover startup, historical loading, current-candle and append streaming, pan/zoom/crosshair input, lifecycle retention, multi-chart, multi-series/multi-pane scaling, retained current-candle updates across 1/2/4/8/16 series and one/four panes, and soak stability. Retained scenarios record semantic rebuild counts plus WebGPU allocation, write, and upload volume alongside frame CPU percentiles. Native evidence additionally measures every representative indicator on 10K/100K/1M histories, typed-equivalent batches of 1/10/100/1K/10K rows, 1/4/8/16 mixed indicators on one source, and one active source across 1/2/4/8/16 source/indicator-pane pairs.
+Canonical scenario definitions live in `scenarios.json`; this is intentionally a small manifest rather than a benchmark DSL. Scenario IDs and versions make methodology changes explicit. A material change creates a new scenario version instead of silently rewriting history. Workloads cover startup, historical loading, current-candle and append streaming, pan/zoom/crosshair input, lifecycle retention, multi-chart, multi-series/multi-pane scaling, a five-series/100K-row Phase 2 general dashboard, retained current-candle updates across 1/2/4/8/16 series and one/four panes, and soak stability. Retained scenarios record semantic rebuild counts plus WebGPU allocation, write, and upload volume alongside frame CPU percentiles. Native evidence additionally measures every representative indicator on 10K/100K/1M histories, typed-equivalent batches of 1/10/100/1K/10K rows, 1/4/8/16 mixed indicators on one source, and one active source across 1/2/4/8/16 source/indicator-pane pairs.
 
 ## Timing and statistics
 
@@ -94,9 +94,11 @@ Local raw results are immutable files under `benchmarks/results/v<version>/<envi
 
 Comparison requires the same scenario version, generator version, seed, dataset configuration, point/series/pane counts, stable environment ID, OS, architecture, CPU, runtime/browser version, GPU identity, viewport, DPR, and refresh-rate metadata. Output includes baseline, current, absolute difference, percentage difference, direction, scenario/environment compatibility, and status. Budgets live only in `budgets.json`. Relative timing thresholds remain empty until controlled baseline evidence exists; adding one requires both warning and failure percentages keyed as `<scenario>.<metric>.p50`.
 
-Deterministic artifact metrics use blocking `absolute_maximums` under the same key convention and do
-not require a machine baseline. Every benchmark run containing the named scenario evaluates them;
-an exceeded, unavailable, or failed metric exits non-zero. The initial package ceilings were set
+Blocking `absolute_maximums` use the same key convention. Deterministic artifact ceilings do not require a
+machine baseline; the machine-sensitive general-dashboard startup/upload ceilings are evaluated only on the
+official release benchmark runner, whose stable environment identity is part of the release evidence. Every
+benchmark run containing a named scenario evaluates its configured maxima; an exceeded, unavailable, or failed
+metric exits non-zero. The initial package ceilings were set
 from a clean production build at commit `813230b` and rounded above its measured output:
 
 | Metric | Observed bytes | Blocking maximum |
@@ -107,6 +109,28 @@ from a clean production build at commit `813230b` and rounded above its measured
 | JavaScript Brotli | 87,948 | 95,000 |
 | WASM raw | 1,975,672 | 2,100,000 |
 | WASM Brotli | 583,569 | 625,000 |
+
+Budget policy v3 records the deliberate Phase 2 package-size reset after the complete Cartesian API landed.
+Before changing ceilings, the published ESM build was switched to minification; that reduced JavaScript raw
+from 697,316 bytes to 343,161 and Brotli from 96,233 bytes to 64,038, so both original JavaScript ceilings remain
+unchanged. The irreducible optimized WASM and package-container growth is captured with modest release headroom:
+
+| Phase 2 metric | Observed bytes | Blocking maximum |
+| --- | ---: | ---: |
+| npm tarball | 1,197,880 | 1,300,000 |
+| npm unpacked | 3,435,987 | 3,700,000 |
+| JavaScript raw | 343,161 | 620,000 |
+| JavaScript Brotli | 64,038 | 95,000 |
+| WASM raw | 2,812,727 | 3,000,000 |
+| WASM Brotli | 761,514 | 810,000 |
+
+This reset is tied to the Phase 2 engine-owned Cartesian surface (additional data channels, reference/brush/
+shared-tooltip APIs, heatmap variants, persistence, and WASM bindings). Future growth is again blocked at the v3
+ceilings rather than inheriting an open-ended exception.
+
+Phase 2 adds release-blocking maxima for `general-dashboard-100k`: p50 startup through the first following rAF
+must stay at or below 2,000 ms, and first-frame WebGPU vertex uploads must stay at or below 96 MiB. These are
+guardrails for catastrophic host regressions, not cross-machine performance claims.
 
 These byte counts are reproducible filesystem/compression evidence, not an official wall-clock
 benchmark or a public performance claim. A deliberate size increase must explain the product

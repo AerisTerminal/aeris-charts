@@ -185,6 +185,31 @@ async function run_page_scenario(page, scenario) {
       ...samples("wasm_linear_memory_bytes", rows.map((row) => row.wasm_linear_memory_bytes), "bytes", "lower_is_better", "public_candidate", "Global WASM linear memory for each series/pane combination."),
     } };
   }
+  if (scenario.kind === "general_dashboard") {
+    const rows = [];
+    for (let run = 0; run < scenario.warmup_runs + scenario.measured_runs; run += 1) {
+      if (run > 0) {
+        await page.reload();
+        await page.waitForFunction(() => globalThis.__nucleus_bench_ready === true);
+      }
+      const result = await page.evaluate(
+        (input) => globalThis.__nucleus_bench.general_dashboard(input.points),
+        { ...scenario, seed },
+      );
+      if (run >= scenario.warmup_runs) rows.push(result);
+    }
+    return {
+      backend: rows.at(-1).backend,
+      metrics: {
+        ...samples("startup_ms", rows.map((row) => row.startup_ms), "ms", "lower_is_better", "public_candidate", "Five-series Phase 2 general dashboard creation, 100k aligned rows, and first following rAF."),
+        ...samples("frame_cpu_ms", rows.map((row) => row.frame_cpu_ms), "ms", "lower_is_better", "public_candidate", "Engine/frame CPU cost reported for the first completed representative general-dashboard frame."),
+        ...samples("wasm_linear_memory_bytes", rows.map((row) => row.wasm_linear_memory_bytes), "bytes", "lower_is_better", "public_candidate", "WASM linear memory after the representative Phase 2 general dashboard reaches its first frame."),
+        ...samples("gpu_buffer_allocations", rows.map((row) => row.gpu_buffer_allocations), "count", "lower_is_better", "internal", "WebGPU vertex-buffer allocations on the representative general-dashboard first frame."),
+        ...samples("gpu_write_calls", rows.map((row) => row.gpu_write_calls), "count", "lower_is_better", "internal", "WebGPU queue buffer writes on the representative general-dashboard first frame."),
+        ...samples("gpu_uploaded_bytes", rows.map((row) => row.gpu_uploaded_bytes), "bytes", "lower_is_better", "internal", "WebGPU vertex bytes uploaded on the representative general-dashboard first frame."),
+      },
+    };
+  }
   if (scenario.kind === "retained_updates") {
     const result = await page.evaluate((input) => globalThis.__nucleus_bench.retained_updates(input.points, input.seed, input.series_counts, input.pane_counts, input.iterations), { ...scenario, seed });
     const frames = result.rows.flatMap((row) => row.samples);

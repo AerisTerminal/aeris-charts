@@ -9,8 +9,8 @@ use nucleuscharts_render::color::Color;
 use crate::{
     axis_metrics::{AxisMetrics, AXIS_FONT_SCALE},
     AxisBand, AxisFrame, AxisLabel, AxisLabelCorners, AxisTextAlign, AxisTextMidpoint,
-    CategoryScaleType, ChartEngine, ChartError, ContinuousScaleType, ErrorCode, GeneralDataset,
-    HorizontalDomain, PaneId, PriceScaleSide,
+    CategoryScaleType, ChartEngine, ChartError, ContinuousScaleType, ErrorCode, HorizontalDomain,
+    PaneId, PriceScaleSide,
 };
 
 pub const MAX_GENERAL_AXES: usize = 128;
@@ -719,6 +719,66 @@ impl ChartEngine {
                         }
                     }
                 }
+                for reference in self.general_reference_iter().filter(|reference| {
+                    reference.pane_id() == axis.pane_id && reference.options().extend_domain()
+                }) {
+                    for value in general_reference_values_for_axis(reference.options(), &axis.id)
+                        .into_iter()
+                        .flatten()
+                    {
+                        if let crate::GeneralReferenceValue::Category(value) = value {
+                            if seen.insert(value.clone()) {
+                                categories.push(value.clone());
+                            }
+                        }
+                    }
+                }
+                (!categories.is_empty()).then_some(GeneralAxisDomain::Category(categories))
+            }
+            (AxisDimension::Y, GeneralScaleType::Band | GeneralScaleType::Point) => {
+                let mut categories = Vec::new();
+                let mut seen = HashSet::new();
+                for series in self.general_series_iter().filter(|series| {
+                    series.visible()
+                        && series.pane_id() == axis.pane_id
+                        && series.y_axis_id() == axis.id
+                        && matches!(
+                            series.kind(),
+                            crate::GeneralSeriesKind::HorizontalBar
+                                | crate::GeneralSeriesKind::HeatmapGrid
+                        )
+                }) {
+                    let Some(dataset) = self.general_dataset(series.dataset()) else {
+                        continue;
+                    };
+                    let values = if series.kind() == crate::GeneralSeriesKind::HeatmapGrid {
+                        dataset.heatmap_y_categories()
+                    } else {
+                        dataset.categories()
+                    };
+                    let Some(values) = values else {
+                        continue;
+                    };
+                    for value in values {
+                        if seen.insert(value.clone()) {
+                            categories.push(value.clone());
+                        }
+                    }
+                }
+                for reference in self.general_reference_iter().filter(|reference| {
+                    reference.pane_id() == axis.pane_id && reference.options().extend_domain()
+                }) {
+                    for value in general_reference_values_for_axis(reference.options(), &axis.id)
+                        .into_iter()
+                        .flatten()
+                    {
+                        if let crate::GeneralReferenceValue::Category(value) = value {
+                            if seen.insert(value.clone()) {
+                                categories.push(value.clone());
+                            }
+                        }
+                    }
+                }
                 (!categories.is_empty()).then_some(GeneralAxisDomain::Category(categories))
             }
             (AxisDimension::X, GeneralScaleType::Temporal) => {
@@ -728,17 +788,54 @@ impl ChartEngine {
                         && series.pane_id() == axis.pane_id
                         && series.x_axis_id() == axis.id
                 }) {
-                    let Some(values) = self
-                        .general_dataset(series.dataset())
-                        .and_then(GeneralDataset::temporal_x_epoch_ms)
-                    else {
+                    let Some(dataset) = self.general_dataset(series.dataset()) else {
                         continue;
                     };
-                    for &value in values {
+                    let Some(values) = dataset.temporal_x_epoch_ms() else {
+                        continue;
+                    };
+                    for (index, &value) in values.iter().enumerate() {
                         bounds = Some(match bounds {
                             Some((low, high)) => (low.min(value), high.max(value)),
                             None => (value, value),
                         });
+                        if series.kind() == crate::GeneralSeriesKind::ErrorBar
+                            && dataset.y_is_valid(index)
+                        {
+                            if let Some(low_values) = dataset.x_low() {
+                                if dataset.x_low_is_valid(index) {
+                                    let low = low_values[index] as i64;
+                                    bounds = Some(match bounds {
+                                        Some((from, to)) => (from.min(low), to.max(low)),
+                                        None => (low, low),
+                                    });
+                                }
+                            }
+                            if let Some(high_values) = dataset.x_high() {
+                                if dataset.x_high_is_valid(index) {
+                                    let high = high_values[index] as i64;
+                                    bounds = Some(match bounds {
+                                        Some((from, to)) => (from.min(high), to.max(high)),
+                                        None => (high, high),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                for reference in self.general_reference_iter().filter(|reference| {
+                    reference.pane_id() == axis.pane_id && reference.options().extend_domain()
+                }) {
+                    for value in general_reference_values_for_axis(reference.options(), &axis.id)
+                        .into_iter()
+                        .flatten()
+                    {
+                        if let crate::GeneralReferenceValue::Temporal(value) = value {
+                            bounds = Some(match bounds {
+                                Some((low, high)) => (low.min(*value), high.max(*value)),
+                                None => (*value, *value),
+                            });
+                        }
                     }
                 }
                 bounds.and_then(|(low, high)| expanded_temporal_domain(low, high))
@@ -764,7 +861,24 @@ impl ChartEngine {
                         continue;
                     };
                     if axis.dimension == AxisDimension::Y {
+                        if series.kind() == crate::GeneralSeriesKind::HeatmapGrid {
+                            if let Some(values) = dataset.heatmap_y_numeric() {
+                                for &value in values {
+                                    if axis.scale == GeneralScaleType::Logarithmic && value <= 0.0 {
+                                        continue;
+                                    }
+                                    extend_numeric_bounds(&mut bounds, value);
+                                }
+                                continue;
+                            }
+                        }
                         if series.kind() == crate::GeneralSeriesKind::Column {
+                            include_zero = true;
+                            continue;
+                        }
+                        if series.kind() == crate::GeneralSeriesKind::XyArea
+                            && series.stack_id().is_some()
+                        {
                             include_zero = true;
                             continue;
                         }
@@ -783,6 +897,47 @@ impl ChartEngine {
                                 }
                                 extend_numeric_bounds(&mut bounds, low);
                                 extend_numeric_bounds(&mut bounds, high);
+                            }
+                            continue;
+                        }
+                        if series.kind() == crate::GeneralSeriesKind::BoxPlot {
+                            let (
+                                Some(min_values),
+                                Some(max_values),
+                                Some(q1_values),
+                                Some(q3_values),
+                            ) = (
+                                dataset.low(),
+                                dataset.high(),
+                                dataset.x_low(),
+                                dataset.x_high(),
+                            )
+                            else {
+                                continue;
+                            };
+                            for (index, &median) in dataset.y().iter().enumerate() {
+                                if !dataset.y_is_valid(index)
+                                    || !dataset.low_is_valid(index)
+                                    || !dataset.high_is_valid(index)
+                                    || !dataset.x_low_is_valid(index)
+                                    || !dataset.x_high_is_valid(index)
+                                {
+                                    continue;
+                                }
+                                let values = [
+                                    min_values[index],
+                                    q1_values[index],
+                                    median,
+                                    q3_values[index],
+                                    max_values[index],
+                                ];
+                                if axis.scale == GeneralScaleType::Logarithmic
+                                    && values.iter().any(|value| *value <= 0.0)
+                                {
+                                    continue;
+                                }
+                                extend_numeric_bounds(&mut bounds, min_values[index]);
+                                extend_numeric_bounds(&mut bounds, max_values[index]);
                             }
                             continue;
                         }
@@ -822,6 +977,16 @@ impl ChartEngine {
                             }
                             extend_numeric_bounds(&mut bounds, value);
                         }
+                    } else if series.kind() == crate::GeneralSeriesKind::HorizontalBar {
+                        include_zero = true;
+                        if series.stack_id().is_some() {
+                            continue;
+                        }
+                        for (index, &value) in dataset.y().iter().enumerate() {
+                            if dataset.y_is_valid(index) {
+                                extend_numeric_bounds(&mut bounds, value);
+                            }
+                        }
                     } else if let Some(values) = dataset.numeric_x() {
                         for (index, &value) in values.iter().enumerate() {
                             if axis.scale == GeneralScaleType::Logarithmic && value <= 0.0 {
@@ -853,6 +1018,18 @@ impl ChartEngine {
                         }
                     }
                 }
+                for reference in self.general_reference_iter().filter(|reference| {
+                    reference.pane_id() == axis.pane_id && reference.options().extend_domain()
+                }) {
+                    for value in general_reference_values_for_axis(reference.options(), &axis.id)
+                        .into_iter()
+                        .flatten()
+                    {
+                        if let crate::GeneralReferenceValue::Numeric(value) = value {
+                            extend_numeric_bounds(&mut bounds, *value);
+                        }
+                    }
+                }
                 if axis.dimension == AxisDimension::Y {
                     if let Some((low, high)) =
                         self.general_column_axis_bounds(axis.pane_id, axis.id())
@@ -861,6 +1038,19 @@ impl ChartEngine {
                         extend_numeric_bounds(&mut bounds, high);
                         include_zero = true;
                     }
+                    if let Some((low, high)) =
+                        self.general_area_stack_axis_bounds(axis.pane_id, axis.id())
+                    {
+                        extend_numeric_bounds(&mut bounds, low);
+                        extend_numeric_bounds(&mut bounds, high);
+                        include_zero = true;
+                    }
+                } else if let Some((low, high)) =
+                    self.general_horizontal_bar_axis_bounds(axis.pane_id, axis.id())
+                {
+                    extend_numeric_bounds(&mut bounds, low);
+                    extend_numeric_bounds(&mut bounds, high);
+                    include_zero = true;
                 }
                 if include_zero && axis.scale != GeneralScaleType::Logarithmic {
                     extend_numeric_bounds(&mut bounds, 0.0);
@@ -970,6 +1160,46 @@ impl ChartEngine {
             self.invalidate_frame_all();
         }
         true
+    }
+}
+
+fn general_reference_values_for_axis<'a>(
+    options: &'a crate::GeneralReferenceOptions,
+    axis_id: &str,
+) -> [Option<&'a crate::GeneralReferenceValue>; 2] {
+    match options {
+        crate::GeneralReferenceOptions::Line {
+            axis_id: reference_axis,
+            value,
+            ..
+        } if reference_axis == axis_id => [Some(value), None],
+        crate::GeneralReferenceOptions::Dot {
+            x_axis_id,
+            y_axis_id,
+            x,
+            y,
+            ..
+        } if x_axis_id == axis_id => [Some(x), None],
+        crate::GeneralReferenceOptions::Dot {
+            x_axis_id,
+            y_axis_id,
+            x,
+            y,
+            ..
+        } if y_axis_id == axis_id => [Some(y), None],
+        crate::GeneralReferenceOptions::Region {
+            x_axis_id,
+            x_from,
+            x_to,
+            ..
+        } if x_axis_id == axis_id => [Some(x_from), Some(x_to)],
+        crate::GeneralReferenceOptions::Region {
+            y_axis_id,
+            y_from,
+            y_to,
+            ..
+        } if y_axis_id == axis_id => [Some(y_from), Some(y_to)],
+        _ => [None, None],
     }
 }
 
@@ -1447,7 +1677,9 @@ fn validate_compatibility(
             AxisDimension::Y,
             GeneralScaleType::Linear
             | GeneralScaleType::Logarithmic
-            | GeneralScaleType::SymmetricLog,
+            | GeneralScaleType::SymmetricLog
+            | GeneralScaleType::Band
+            | GeneralScaleType::Point,
         ) => true,
         (HorizontalDomain::Polar, AxisDimension::Angle, GeneralScaleType::AngularCategory) => true,
         (HorizontalDomain::Polar, AxisDimension::Radius, GeneralScaleType::RadialLinear) => true,

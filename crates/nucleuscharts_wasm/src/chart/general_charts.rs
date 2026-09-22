@@ -3,9 +3,11 @@
 use js_sys::{Float64Array, Uint32Array, Uint8Array};
 use nucleuscharts_engine::{
     AxisDimension, AxisPosition, CategoryScaleType, ChartError, ContinuousScaleType,
-    GeneralAxisDomain, GeneralAxisOptions, GeneralDatasetId, GeneralHitMode, GeneralRowId,
+    GeneralAxisDomain, GeneralAxisOptions, GeneralBrushRange, GeneralBrushSnapshot,
+    GeneralDatasetId, GeneralHitMode, GeneralReferenceId, GeneralReferenceOptions, GeneralRowId,
     GeneralRowIdentity, GeneralScaleType, GeneralSeriesId, GeneralSeriesKind, GeneralSeriesOptions,
-    GeneralStackMode, GeneralXyInput, HorizontalDomain, MAX_GENERAL_TEMPORAL_MILLISECONDS,
+    GeneralStackMode, GeneralTooltipSnapshot, GeneralXyInput, HorizontalDomain,
+    MAX_GENERAL_TEMPORAL_MILLISECONDS,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -115,6 +117,21 @@ struct CategoryUpdateInput {
 #[derive(Deserialize)]
 struct CategoryDataInput {
     categories: Vec<String>,
+    labels: Option<Vec<Option<String>>>,
+}
+
+#[derive(Deserialize)]
+struct HeatmapCategoryDataInput {
+    x_categories: Vec<String>,
+    y_categories: Vec<String>,
+    labels: Option<Vec<Option<String>>>,
+}
+
+#[derive(Deserialize)]
+struct HeatmapCategoryUpdateInput {
+    x_categories: Vec<String>,
+    y_categories: Vec<String>,
+    max_rows: u32,
     labels: Option<Vec<Option<String>>>,
 }
 
@@ -329,6 +346,44 @@ pub(super) fn general_hit_value(hit: &nucleuscharts_engine::GeneralSeriesHit) ->
     })
 }
 
+fn general_tooltip_value(snapshot: GeneralTooltipSnapshot) -> Value {
+    json!({
+        "series": snapshot.series.get(), "row": snapshot.row,
+        "row_id": row_identity(&snapshot.row_id), "x_label": snapshot.x_label,
+        "y_label": snapshot.y_label,
+        "label": snapshot.label, "value": snapshot.value, "low": snapshot.low, "high": snapshot.high,
+        "x_low": snapshot.x_low, "x_high": snapshot.x_high,
+        "q1": snapshot.q1, "q3": snapshot.q3,
+        "size": snapshot.size, "title": snapshot.title,
+    })
+}
+
+fn general_brush_value(snapshot: GeneralBrushSnapshot) -> Value {
+    let range = match snapshot.range {
+        GeneralBrushRange::Numeric([from, to]) => {
+            json!({ "type": "numeric", "from": from, "to": to })
+        }
+        GeneralBrushRange::Temporal([from, to]) => {
+            json!({ "type": "temporal", "from": from, "to": to })
+        }
+        GeneralBrushRange::Category([from, to]) => {
+            json!({ "type": "category", "from": from, "to": to })
+        }
+    };
+    json!({
+        "pane": snapshot.pane,
+        "axis_id": snapshot.axis_id,
+        "dimension": match snapshot.dimension {
+            AxisDimension::X => "x",
+            AxisDimension::Y => "y",
+            AxisDimension::Angle => "angle",
+            AxisDimension::Radius => "radius",
+        },
+        "range": range,
+        "items": snapshot.items.iter().map(general_hit_value).collect::<Vec<_>>(),
+    })
+}
+
 impl ChartInner {
     pub fn add_general_pane_result_json(&mut self, options_json: &str) -> String {
         let input = match parse_json::<PaneInput>(options_json) {
@@ -431,6 +486,41 @@ impl ChartInner {
         .to_string()
     }
 
+    pub fn add_general_reference_result_json(&mut self, options_json: &str) -> String {
+        let options = match parse_json::<GeneralReferenceOptions>(options_json) {
+            Ok(options) => options,
+            Err(error) => return error,
+        };
+        match self.engine.add_general_reference(options) {
+            Ok(id) => result_ok(json!({ "id": id.get() })),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    pub fn general_reference_options_json(&self, id: u32) -> String {
+        let Some(id) = GeneralReferenceId::from_raw(id) else {
+            return "null".to_owned();
+        };
+        self.engine
+            .general_reference_options(id)
+            .and_then(|options| serde_json::to_string(&options).ok())
+            .unwrap_or_else(|| "null".to_owned())
+    }
+
+    pub fn general_reference_ids_json(&self, pane: i32) -> String {
+        json!(self
+            .engine
+            .general_reference_ids((pane >= 0).then_some(pane as usize))
+            .into_iter()
+            .map(GeneralReferenceId::get)
+            .collect::<Vec<_>>())
+        .to_string()
+    }
+
+    pub fn remove_general_reference(&mut self, id: u32) -> bool {
+        GeneralReferenceId::from_raw(id).is_some_and(|id| self.engine.remove_general_reference(id))
+    }
+
     pub fn general_series_ids(&self, pane: usize) -> Vec<u32> {
         self.engine
             .general_series_ids_in_pane(pane)
@@ -456,6 +546,9 @@ impl ChartInner {
                         GeneralSeriesKind::RangeArea => "range_area",
                         GeneralSeriesKind::ErrorBar => "error_bar",
                         GeneralSeriesKind::Column => "column",
+                        GeneralSeriesKind::HorizontalBar => "horizontal_bar",
+                        GeneralSeriesKind::BoxPlot => "box_plot",
+                        GeneralSeriesKind::HeatmapGrid => "heatmap_grid",
                         GeneralSeriesKind::Scatter => "scatter",
                         GeneralSeriesKind::Bubble => "bubble",
                     },
@@ -463,6 +556,36 @@ impl ChartInner {
             })
             .collect::<Vec<_>>();
         json!(series).to_string()
+    }
+
+    pub fn general_legend_snapshot_json(&self, pane: i32) -> String {
+        let snapshot = self
+            .engine
+            .general_legend_snapshot((pane >= 0).then_some(pane as usize));
+        json!({
+            "items": snapshot.items.into_iter().map(|item| {
+                json!({
+                    "series": item.series.get(),
+                    "pane": item.pane,
+                    "kind": match item.kind {
+                        GeneralSeriesKind::XyLine => "xy_line",
+                        GeneralSeriesKind::XyArea => "xy_area",
+                        GeneralSeriesKind::RangeArea => "range_area",
+                        GeneralSeriesKind::ErrorBar => "error_bar",
+                        GeneralSeriesKind::Column => "column",
+                        GeneralSeriesKind::HorizontalBar => "horizontal_bar",
+                        GeneralSeriesKind::BoxPlot => "box_plot",
+                        GeneralSeriesKind::HeatmapGrid => "heatmap_grid",
+                        GeneralSeriesKind::Scatter => "scatter",
+                        GeneralSeriesKind::Bubble => "bubble",
+                    },
+                    "title": item.title,
+                    "color": item.color,
+                    "visible": item.visible,
+                })
+            }).collect::<Vec<_>>()
+        })
+        .to_string()
     }
 
     pub fn add_general_series_result_json(&mut self, kind: &str, options_json: &str) -> String {
@@ -548,6 +671,70 @@ impl ChartInner {
                     y_valid: None,
                 },
             ),
+            "horizontal_bar" => (
+                GeneralSeriesKind::HorizontalBar,
+                GeneralXyInput::Category {
+                    ids: None,
+                    categories: Vec::new(),
+                    category_indices: Vec::new(),
+                    y: Vec::new(),
+                    y_valid: None,
+                },
+            ),
+            "box_plot" => (
+                GeneralSeriesKind::BoxPlot,
+                GeneralXyInput::BoxCategory {
+                    ids: None,
+                    categories: Vec::new(),
+                    category_indices: Vec::new(),
+                    min: Vec::new(),
+                    min_valid: None,
+                    q1: Vec::new(),
+                    q1_valid: None,
+                    median: Vec::new(),
+                    median_valid: None,
+                    q3: Vec::new(),
+                    q3_valid: None,
+                    max: Vec::new(),
+                    max_valid: None,
+                },
+            ),
+            "heatmap_grid" => {
+                let Some(domain) = self.engine.pane_horizontal_domain(input.pane) else {
+                    return input_error("heatmap_grid references a stale pane");
+                };
+                let empty = match domain {
+                    HorizontalDomain::Category { .. } => GeneralXyInput::HeatmapCategoryCategory {
+                        ids: None,
+                        x_categories: Vec::new(),
+                        x_category_indices: Vec::new(),
+                        y_categories: Vec::new(),
+                        y_category_indices: Vec::new(),
+                        value: Vec::new(),
+                        value_valid: None,
+                    },
+                    HorizontalDomain::Continuous { .. } => GeneralXyInput::HeatmapNumericNumeric {
+                        ids: None,
+                        x: Vec::new(),
+                        y_coordinate: Vec::new(),
+                        value: Vec::new(),
+                        value_valid: None,
+                    },
+                    HorizontalDomain::Temporal => GeneralXyInput::HeatmapTemporalNumeric {
+                        ids: None,
+                        x_epoch_ms: Vec::new(),
+                        y_coordinate: Vec::new(),
+                        value: Vec::new(),
+                        value_valid: None,
+                    },
+                    HorizontalDomain::FinancialTime | HorizontalDomain::Polar => {
+                        return input_error(
+                            "heatmap_grid requires a category, continuous, or temporal pane",
+                        );
+                    }
+                };
+                (GeneralSeriesKind::HeatmapGrid, empty)
+            }
             "scatter" => (
                 GeneralSeriesKind::Scatter,
                 GeneralXyInput::Numeric {
@@ -568,23 +755,58 @@ impl ChartInner {
                     size_valid: None,
                 },
             ),
-            "error_bar" => (
-                GeneralSeriesKind::ErrorBar,
-                GeneralXyInput::ErrorNumeric {
-                    ids: None,
-                    x: Vec::new(),
-                    y: Vec::new(),
-                    y_valid: None,
-                    x_low: Vec::new(),
-                    x_low_valid: None,
-                    x_high: Vec::new(),
-                    x_high_valid: None,
-                    y_low: Vec::new(),
-                    y_low_valid: None,
-                    y_high: Vec::new(),
-                    y_high_valid: None,
-                },
-            ),
+            "error_bar" => {
+                let Some(domain) = self.engine.pane_horizontal_domain(input.pane) else {
+                    return input_error("error_bar references a stale pane");
+                };
+                let empty = match domain {
+                    HorizontalDomain::Continuous { .. } => GeneralXyInput::ErrorNumeric {
+                        ids: None,
+                        x: Vec::new(),
+                        y: Vec::new(),
+                        y_valid: None,
+                        x_low: Vec::new(),
+                        x_low_valid: None,
+                        x_high: Vec::new(),
+                        x_high_valid: None,
+                        y_low: Vec::new(),
+                        y_low_valid: None,
+                        y_high: Vec::new(),
+                        y_high_valid: None,
+                    },
+                    HorizontalDomain::Temporal => GeneralXyInput::ErrorTemporal {
+                        ids: None,
+                        x_epoch_ms: Vec::new(),
+                        y: Vec::new(),
+                        y_valid: None,
+                        x_low_epoch_ms: Vec::new(),
+                        x_low_valid: None,
+                        x_high_epoch_ms: Vec::new(),
+                        x_high_valid: None,
+                        y_low: Vec::new(),
+                        y_low_valid: None,
+                        y_high: Vec::new(),
+                        y_high_valid: None,
+                    },
+                    HorizontalDomain::Category { .. } => GeneralXyInput::ErrorCategory {
+                        ids: None,
+                        categories: Vec::new(),
+                        category_indices: Vec::new(),
+                        y: Vec::new(),
+                        y_valid: None,
+                        y_low: Vec::new(),
+                        y_low_valid: None,
+                        y_high: Vec::new(),
+                        y_high_valid: None,
+                    },
+                    _ => {
+                        return input_error(
+                            "error_bar requires a continuous, temporal, or category pane",
+                        )
+                    }
+                };
+                (GeneralSeriesKind::ErrorBar, empty)
+            }
             _ => return input_error("unsupported general series kind"),
         };
         let dataset = match self.engine.create_general_xy_dataset(empty) {
@@ -613,6 +835,24 @@ impl ChartInner {
             GeneralSeriesKind::Column => {
                 GeneralSeriesOptions::column(input.pane, dataset, input.x_axis_id, input.y_axis_id)
             }
+            GeneralSeriesKind::HorizontalBar => GeneralSeriesOptions::horizontal_bar(
+                input.pane,
+                dataset,
+                input.x_axis_id,
+                input.y_axis_id,
+            ),
+            GeneralSeriesKind::BoxPlot => GeneralSeriesOptions::box_plot(
+                input.pane,
+                dataset,
+                input.x_axis_id,
+                input.y_axis_id,
+            ),
+            GeneralSeriesKind::HeatmapGrid => GeneralSeriesOptions::heatmap_grid(
+                input.pane,
+                dataset,
+                input.x_axis_id,
+                input.y_axis_id,
+            ),
             GeneralSeriesKind::Scatter => {
                 GeneralSeriesOptions::scatter(input.pane, dataset, input.x_axis_id, input.y_axis_id)
             }
@@ -792,6 +1032,124 @@ impl ChartInner {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn set_general_heatmap_category_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        metadata_json: &str,
+        x_category_indices: &Uint32Array,
+        y_category_indices: &Uint32Array,
+        value: &Float64Array,
+        value_valid: Option<Uint8Array>,
+    ) -> String {
+        let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
+            return input_error("general dataset handle is stale");
+        };
+        let ids = match parse_ids(ids_json) {
+            Ok(ids) => ids,
+            Err(error) => return error,
+        };
+        let metadata = match parse_json::<HeatmapCategoryDataInput>(metadata_json) {
+            Ok(metadata) => metadata,
+            Err(error) => return error,
+        };
+        let input = GeneralXyInput::HeatmapCategoryCategory {
+            ids,
+            x_categories: metadata.x_categories,
+            x_category_indices: x_category_indices.to_vec(),
+            y_categories: metadata.y_categories,
+            y_category_indices: y_category_indices.to_vec(),
+            value: value.to_vec(),
+            value_valid: value_valid.map(|values| values.to_vec()),
+        };
+        match self
+            .engine
+            .replace_general_xy_dataset_labeled(dataset, input, metadata.labels)
+        {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_general_heatmap_numeric_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        x: &Float64Array,
+        y_coordinate: &Float64Array,
+        value: &Float64Array,
+        value_valid: Option<Uint8Array>,
+    ) -> String {
+        let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
+            return input_error("general dataset handle is stale");
+        };
+        let metadata = match parse_json::<NumericDataInput>(metadata_json) {
+            Ok(metadata) => metadata,
+            Err(error) => return error,
+        };
+        let ids = match parse_id_values(metadata.ids) {
+            Ok(ids) => ids,
+            Err(error) => return error,
+        };
+        let input = GeneralXyInput::HeatmapNumericNumeric {
+            ids,
+            x: x.to_vec(),
+            y_coordinate: y_coordinate.to_vec(),
+            value: value.to_vec(),
+            value_valid: value_valid.map(|values| values.to_vec()),
+        };
+        match self
+            .engine
+            .replace_general_xy_dataset_labeled(dataset, input, metadata.labels)
+        {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_general_heatmap_temporal_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        x_epoch_ms: &Float64Array,
+        y_coordinate: &Float64Array,
+        value: &Float64Array,
+        value_valid: Option<Uint8Array>,
+    ) -> String {
+        let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
+            return input_error("general dataset handle is stale");
+        };
+        let metadata = match parse_json::<NumericDataInput>(metadata_json) {
+            Ok(metadata) => metadata,
+            Err(error) => return error,
+        };
+        let ids = match parse_id_values(metadata.ids) {
+            Ok(ids) => ids,
+            Err(error) => return error,
+        };
+        let x_epoch_ms = match temporal_x_values(x_epoch_ms) {
+            Ok(values) => values,
+            Err(error) => return error,
+        };
+        let input = GeneralXyInput::HeatmapTemporalNumeric {
+            ids,
+            x_epoch_ms,
+            y_coordinate: y_coordinate.to_vec(),
+            value: value.to_vec(),
+            value_valid: value_valid.map(|values| values.to_vec()),
+        };
+        match self
+            .engine
+            .replace_general_xy_dataset_labeled(dataset, input, metadata.labels)
+        {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn set_general_range_numeric_data_typed(
         &mut self,
         dataset: u32,
@@ -925,6 +1283,69 @@ impl ChartInner {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn set_general_error_temporal_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        x_epoch_ms: &Float64Array,
+        y: &Float64Array,
+        y_valid: Option<Uint8Array>,
+        x_low_epoch_ms: &Float64Array,
+        x_low_valid: Option<Uint8Array>,
+        x_high_epoch_ms: &Float64Array,
+        x_high_valid: Option<Uint8Array>,
+        y_low: &Float64Array,
+        y_low_valid: Option<Uint8Array>,
+        y_high: &Float64Array,
+        y_high_valid: Option<Uint8Array>,
+    ) -> String {
+        let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
+            return input_error("general dataset handle is stale");
+        };
+        let metadata = match parse_json::<NumericDataInput>(metadata_json) {
+            Ok(metadata) => metadata,
+            Err(error) => return error,
+        };
+        let ids = match parse_id_values(metadata.ids) {
+            Ok(ids) => ids,
+            Err(error) => return error,
+        };
+        let x_epoch_ms = match temporal_x_values(x_epoch_ms) {
+            Ok(values) => values,
+            Err(error) => return error,
+        };
+        let x_low_epoch_ms = match temporal_x_values(x_low_epoch_ms) {
+            Ok(values) => values.into_iter().map(|value| value as f64).collect(),
+            Err(error) => return error,
+        };
+        let x_high_epoch_ms = match temporal_x_values(x_high_epoch_ms) {
+            Ok(values) => values.into_iter().map(|value| value as f64).collect(),
+            Err(error) => return error,
+        };
+        let input = GeneralXyInput::ErrorTemporal {
+            ids,
+            x_epoch_ms,
+            y: y.to_vec(),
+            y_valid: y_valid.map(|values| values.to_vec()),
+            x_low_epoch_ms,
+            x_low_valid: x_low_valid.map(|values| values.to_vec()),
+            x_high_epoch_ms,
+            x_high_valid: x_high_valid.map(|values| values.to_vec()),
+            y_low: y_low.to_vec(),
+            y_low_valid: y_low_valid.map(|values| values.to_vec()),
+            y_high: y_high.to_vec(),
+            y_high_valid: y_high_valid.map(|values| values.to_vec()),
+        };
+        match self
+            .engine
+            .replace_general_xy_dataset_labeled(dataset, input, metadata.labels)
+        {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn set_general_range_category_data_typed(
         &mut self,
         dataset: u32,
@@ -955,6 +1376,104 @@ impl ChartInner {
             low_valid: low_valid.map(|values| values.to_vec()),
             high: high.to_vec(),
             high_valid: high_valid.map(|values| values.to_vec()),
+        };
+        match self
+            .engine
+            .replace_general_xy_dataset_labeled(dataset, input, metadata.labels)
+        {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_general_error_category_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        metadata_json: &str,
+        category_indices: &Uint32Array,
+        y: &Float64Array,
+        y_valid: Option<Uint8Array>,
+        y_low: &Float64Array,
+        y_low_valid: Option<Uint8Array>,
+        y_high: &Float64Array,
+        y_high_valid: Option<Uint8Array>,
+    ) -> String {
+        let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
+            return input_error("general dataset handle is stale");
+        };
+        let ids = match parse_ids(ids_json) {
+            Ok(ids) => ids,
+            Err(error) => return error,
+        };
+        let metadata = match parse_json::<CategoryDataInput>(metadata_json) {
+            Ok(metadata) => metadata,
+            Err(error) => return error,
+        };
+        let input = GeneralXyInput::ErrorCategory {
+            ids,
+            categories: metadata.categories,
+            category_indices: category_indices.to_vec(),
+            y: y.to_vec(),
+            y_valid: y_valid.map(|values| values.to_vec()),
+            y_low: y_low.to_vec(),
+            y_low_valid: y_low_valid.map(|values| values.to_vec()),
+            y_high: y_high.to_vec(),
+            y_high_valid: y_high_valid.map(|values| values.to_vec()),
+        };
+        match self
+            .engine
+            .replace_general_xy_dataset_labeled(dataset, input, metadata.labels)
+        {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_general_box_category_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        metadata_json: &str,
+        category_indices: &Uint32Array,
+        min: &Float64Array,
+        min_valid: Option<Uint8Array>,
+        q1: &Float64Array,
+        q1_valid: Option<Uint8Array>,
+        median: &Float64Array,
+        median_valid: Option<Uint8Array>,
+        q3: &Float64Array,
+        q3_valid: Option<Uint8Array>,
+        max: &Float64Array,
+        max_valid: Option<Uint8Array>,
+    ) -> String {
+        let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
+            return input_error("general dataset handle is stale");
+        };
+        let ids = match parse_ids(ids_json) {
+            Ok(ids) => ids,
+            Err(error) => return error,
+        };
+        let metadata = match parse_json::<CategoryDataInput>(metadata_json) {
+            Ok(metadata) => metadata,
+            Err(error) => return error,
+        };
+        let input = GeneralXyInput::BoxCategory {
+            ids,
+            categories: metadata.categories,
+            category_indices: category_indices.to_vec(),
+            min: min.to_vec(),
+            min_valid: min_valid.map(|values| values.to_vec()),
+            q1: q1.to_vec(),
+            q1_valid: q1_valid.map(|values| values.to_vec()),
+            median: median.to_vec(),
+            median_valid: median_valid.map(|values| values.to_vec()),
+            q3: q3.to_vec(),
+            q3_valid: q3_valid.map(|values| values.to_vec()),
+            max: max.to_vec(),
+            max_valid: max_valid.map(|values| values.to_vec()),
         };
         match self
             .engine
@@ -1124,6 +1643,132 @@ impl ChartInner {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn upsert_general_heatmap_category_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        update_json: &str,
+        x_category_indices: &Uint32Array,
+        y_category_indices: &Uint32Array,
+        value: &Float64Array,
+        value_valid: Option<Uint8Array>,
+    ) -> String {
+        let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
+            return input_error("general dataset handle is stale");
+        };
+        let ids = match parse_ids(ids_json) {
+            Ok(ids) => ids,
+            Err(error) => return error,
+        };
+        let update = match parse_json::<HeatmapCategoryUpdateInput>(update_json) {
+            Ok(update) => update,
+            Err(error) => return error,
+        };
+        let input = GeneralXyInput::HeatmapCategoryCategory {
+            ids,
+            x_categories: update.x_categories,
+            x_category_indices: x_category_indices.to_vec(),
+            y_categories: update.y_categories,
+            y_category_indices: y_category_indices.to_vec(),
+            value: value.to_vec(),
+            value_valid: value_valid.map(|values| values.to_vec()),
+        };
+        match self.engine.upsert_general_xy_dataset_labeled(
+            dataset,
+            input,
+            update.labels,
+            (update.max_rows > 0).then_some(update.max_rows as usize),
+        ) {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_general_heatmap_numeric_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        x: &Float64Array,
+        y_coordinate: &Float64Array,
+        value: &Float64Array,
+        value_valid: Option<Uint8Array>,
+        max_rows: u32,
+    ) -> String {
+        let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
+            return input_error("general dataset handle is stale");
+        };
+        let metadata = match parse_json::<NumericDataInput>(metadata_json) {
+            Ok(metadata) => metadata,
+            Err(error) => return error,
+        };
+        let ids = match parse_id_values(metadata.ids) {
+            Ok(ids) => ids,
+            Err(error) => return error,
+        };
+        let input = GeneralXyInput::HeatmapNumericNumeric {
+            ids,
+            x: x.to_vec(),
+            y_coordinate: y_coordinate.to_vec(),
+            value: value.to_vec(),
+            value_valid: value_valid.map(|values| values.to_vec()),
+        };
+        match self.engine.upsert_general_xy_dataset_labeled(
+            dataset,
+            input,
+            metadata.labels,
+            (max_rows > 0).then_some(max_rows as usize),
+        ) {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_general_heatmap_temporal_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        x_epoch_ms: &Float64Array,
+        y_coordinate: &Float64Array,
+        value: &Float64Array,
+        value_valid: Option<Uint8Array>,
+        max_rows: u32,
+    ) -> String {
+        let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
+            return input_error("general dataset handle is stale");
+        };
+        let metadata = match parse_json::<NumericDataInput>(metadata_json) {
+            Ok(metadata) => metadata,
+            Err(error) => return error,
+        };
+        let ids = match parse_id_values(metadata.ids) {
+            Ok(ids) => ids,
+            Err(error) => return error,
+        };
+        let x_epoch_ms = match temporal_x_values(x_epoch_ms) {
+            Ok(values) => values,
+            Err(error) => return error,
+        };
+        let input = GeneralXyInput::HeatmapTemporalNumeric {
+            ids,
+            x_epoch_ms,
+            y_coordinate: y_coordinate.to_vec(),
+            value: value.to_vec(),
+            value_valid: value_valid.map(|values| values.to_vec()),
+        };
+        match self.engine.upsert_general_xy_dataset_labeled(
+            dataset,
+            input,
+            metadata.labels,
+            (max_rows > 0).then_some(max_rows as usize),
+        ) {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn upsert_general_range_numeric_data_typed(
         &mut self,
         dataset: u32,
@@ -1266,6 +1911,72 @@ impl ChartInner {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn upsert_general_error_temporal_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        x_epoch_ms: &Float64Array,
+        y: &Float64Array,
+        y_valid: Option<Uint8Array>,
+        x_low_epoch_ms: &Float64Array,
+        x_low_valid: Option<Uint8Array>,
+        x_high_epoch_ms: &Float64Array,
+        x_high_valid: Option<Uint8Array>,
+        y_low: &Float64Array,
+        y_low_valid: Option<Uint8Array>,
+        y_high: &Float64Array,
+        y_high_valid: Option<Uint8Array>,
+        max_rows: u32,
+    ) -> String {
+        let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
+            return input_error("general dataset handle is stale");
+        };
+        let metadata = match parse_json::<NumericDataInput>(metadata_json) {
+            Ok(metadata) => metadata,
+            Err(error) => return error,
+        };
+        let ids = match parse_id_values(metadata.ids) {
+            Ok(ids) => ids,
+            Err(error) => return error,
+        };
+        let x_epoch_ms = match temporal_x_values(x_epoch_ms) {
+            Ok(values) => values,
+            Err(error) => return error,
+        };
+        let x_low_epoch_ms = match temporal_x_values(x_low_epoch_ms) {
+            Ok(values) => values.into_iter().map(|value| value as f64).collect(),
+            Err(error) => return error,
+        };
+        let x_high_epoch_ms = match temporal_x_values(x_high_epoch_ms) {
+            Ok(values) => values.into_iter().map(|value| value as f64).collect(),
+            Err(error) => return error,
+        };
+        let input = GeneralXyInput::ErrorTemporal {
+            ids,
+            x_epoch_ms,
+            y: y.to_vec(),
+            y_valid: y_valid.map(|values| values.to_vec()),
+            x_low_epoch_ms,
+            x_low_valid: x_low_valid.map(|values| values.to_vec()),
+            x_high_epoch_ms,
+            x_high_valid: x_high_valid.map(|values| values.to_vec()),
+            y_low: y_low.to_vec(),
+            y_low_valid: y_low_valid.map(|values| values.to_vec()),
+            y_high: y_high.to_vec(),
+            y_high_valid: y_high_valid.map(|values| values.to_vec()),
+        };
+        match self.engine.upsert_general_xy_dataset_labeled(
+            dataset,
+            input,
+            metadata.labels,
+            (max_rows > 0).then_some(max_rows as usize),
+        ) {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn upsert_general_range_category_data_typed(
         &mut self,
         dataset: u32,
@@ -1308,6 +2019,108 @@ impl ChartInner {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_general_error_category_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        update_json: &str,
+        category_indices: &Uint32Array,
+        y: &Float64Array,
+        y_valid: Option<Uint8Array>,
+        y_low: &Float64Array,
+        y_low_valid: Option<Uint8Array>,
+        y_high: &Float64Array,
+        y_high_valid: Option<Uint8Array>,
+    ) -> String {
+        let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
+            return input_error("general dataset handle is stale");
+        };
+        let ids = match parse_ids(ids_json) {
+            Ok(ids) => ids,
+            Err(error) => return error,
+        };
+        let update = match parse_json::<CategoryUpdateInput>(update_json) {
+            Ok(update) => update,
+            Err(error) => return error,
+        };
+        let input = GeneralXyInput::ErrorCategory {
+            ids,
+            categories: update.categories,
+            category_indices: category_indices.to_vec(),
+            y: y.to_vec(),
+            y_valid: y_valid.map(|values| values.to_vec()),
+            y_low: y_low.to_vec(),
+            y_low_valid: y_low_valid.map(|values| values.to_vec()),
+            y_high: y_high.to_vec(),
+            y_high_valid: y_high_valid.map(|values| values.to_vec()),
+        };
+        match self.engine.upsert_general_xy_dataset_labeled(
+            dataset,
+            input,
+            update.labels,
+            (update.max_rows > 0).then_some(update.max_rows as usize),
+        ) {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_general_box_category_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        update_json: &str,
+        category_indices: &Uint32Array,
+        min: &Float64Array,
+        min_valid: Option<Uint8Array>,
+        q1: &Float64Array,
+        q1_valid: Option<Uint8Array>,
+        median: &Float64Array,
+        median_valid: Option<Uint8Array>,
+        q3: &Float64Array,
+        q3_valid: Option<Uint8Array>,
+        max: &Float64Array,
+        max_valid: Option<Uint8Array>,
+    ) -> String {
+        let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
+            return input_error("general dataset handle is stale");
+        };
+        let ids = match parse_ids(ids_json) {
+            Ok(ids) => ids,
+            Err(error) => return error,
+        };
+        let update = match parse_json::<CategoryUpdateInput>(update_json) {
+            Ok(update) => update,
+            Err(error) => return error,
+        };
+        let input = GeneralXyInput::BoxCategory {
+            ids,
+            categories: update.categories,
+            category_indices: category_indices.to_vec(),
+            min: min.to_vec(),
+            min_valid: min_valid.map(|values| values.to_vec()),
+            q1: q1.to_vec(),
+            q1_valid: q1_valid.map(|values| values.to_vec()),
+            median: median.to_vec(),
+            median_valid: median_valid.map(|values| values.to_vec()),
+            q3: q3.to_vec(),
+            q3_valid: q3_valid.map(|values| values.to_vec()),
+            max: max.to_vec(),
+            max_valid: max_valid.map(|values| values.to_vec()),
+        };
+        match self.engine.upsert_general_xy_dataset_labeled(
+            dataset,
+            input,
+            update.labels,
+            (update.max_rows > 0).then_some(update.max_rows as usize),
+        ) {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
     pub fn remove_general_series(&mut self, series: u32, dataset: u32) -> bool {
         let (Some(series), Some(dataset)) = (
             GeneralSeriesId::from_raw(series),
@@ -1325,14 +2138,49 @@ impl ChartInner {
         let Some(snapshot) = self.engine.general_tooltip_snapshot(series, row) else {
             return "null".to_owned();
         };
+        general_tooltip_value(snapshot).to_string()
+    }
+
+    pub fn general_shared_tooltip_json(&self, series: u32, row: usize) -> String {
+        let Some(series) = GeneralSeriesId::from_raw(series) else {
+            return "null".to_owned();
+        };
+        let Some(snapshot) = self.engine.general_shared_tooltip_snapshot(series, row) else {
+            return "null".to_owned();
+        };
         json!({
-            "series": snapshot.series.get(), "row": snapshot.row,
-            "row_id": row_identity(&snapshot.row_id), "x_label": snapshot.x_label,
-            "label": snapshot.label, "value": snapshot.value, "low": snapshot.low, "high": snapshot.high,
-            "x_low": snapshot.x_low, "x_high": snapshot.x_high,
-            "size": snapshot.size, "title": snapshot.title,
+            "pane": snapshot.pane,
+            "anchor_series": snapshot.anchor_series.get(),
+            "anchor_row": snapshot.anchor_row,
+            "items": snapshot.items.into_iter().map(general_tooltip_value).collect::<Vec<_>>(),
         })
         .to_string()
+    }
+
+    pub fn set_general_brush_result_json(
+        &mut self,
+        axis_id: &str,
+        from_css: f64,
+        to_css: f64,
+    ) -> String {
+        match self
+            .engine
+            .set_general_brush_from_pixels(axis_id, from_css, to_css)
+        {
+            Ok(snapshot) => result_ok(general_brush_value(snapshot)),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    pub fn general_brush_snapshot_json(&self) -> String {
+        self.engine.general_brush_snapshot().map_or_else(
+            || "null".to_owned(),
+            |snapshot| general_brush_value(snapshot).to_string(),
+        )
+    }
+
+    pub fn clear_general_brush(&mut self) {
+        self.engine.clear_general_brush();
     }
 
     pub fn general_accessibility_json(&self, series: u32, offset: usize, limit: usize) -> String {
@@ -1354,12 +2202,15 @@ impl ChartInner {
                 "row": item.row,
                 "row_id": row_identity(&item.row_id),
                 "x_label": item.x_label,
+                "y_label": item.y_label,
                 "label": item.label,
                 "value": item.value,
                 "low": item.low,
                 "high": item.high,
                 "x_low": item.x_low,
                 "x_high": item.x_high,
+                "q1": item.q1,
+                "q3": item.q3,
                 "size": item.size,
             })).collect::<Vec<_>>(),
         })

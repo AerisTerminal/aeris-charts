@@ -135,6 +135,20 @@ pub enum GeneralXyInput {
         high: Vec<f64>,
         high_valid: Option<Vec<u8>>,
     },
+    ErrorTemporal {
+        ids: Option<Vec<GeneralRowId>>,
+        x_epoch_ms: Vec<i64>,
+        y: Vec<f64>,
+        y_valid: Option<Vec<u8>>,
+        x_low_epoch_ms: Vec<f64>,
+        x_low_valid: Option<Vec<u8>>,
+        x_high_epoch_ms: Vec<f64>,
+        x_high_valid: Option<Vec<u8>>,
+        y_low: Vec<f64>,
+        y_low_valid: Option<Vec<u8>>,
+        y_high: Vec<f64>,
+        y_high_valid: Option<Vec<u8>>,
+    },
     Category {
         ids: Option<Vec<GeneralRowId>>,
         categories: Vec<String>,
@@ -150,6 +164,55 @@ pub enum GeneralXyInput {
         low_valid: Option<Vec<u8>>,
         high: Vec<f64>,
         high_valid: Option<Vec<u8>>,
+    },
+    ErrorCategory {
+        ids: Option<Vec<GeneralRowId>>,
+        categories: Vec<String>,
+        category_indices: Vec<u32>,
+        y: Vec<f64>,
+        y_valid: Option<Vec<u8>>,
+        y_low: Vec<f64>,
+        y_low_valid: Option<Vec<u8>>,
+        y_high: Vec<f64>,
+        y_high_valid: Option<Vec<u8>>,
+    },
+    BoxCategory {
+        ids: Option<Vec<GeneralRowId>>,
+        categories: Vec<String>,
+        category_indices: Vec<u32>,
+        min: Vec<f64>,
+        min_valid: Option<Vec<u8>>,
+        q1: Vec<f64>,
+        q1_valid: Option<Vec<u8>>,
+        median: Vec<f64>,
+        median_valid: Option<Vec<u8>>,
+        q3: Vec<f64>,
+        q3_valid: Option<Vec<u8>>,
+        max: Vec<f64>,
+        max_valid: Option<Vec<u8>>,
+    },
+    HeatmapCategoryCategory {
+        ids: Option<Vec<GeneralRowId>>,
+        x_categories: Vec<String>,
+        x_category_indices: Vec<u32>,
+        y_categories: Vec<String>,
+        y_category_indices: Vec<u32>,
+        value: Vec<f64>,
+        value_valid: Option<Vec<u8>>,
+    },
+    HeatmapNumericNumeric {
+        ids: Option<Vec<GeneralRowId>>,
+        x: Vec<f64>,
+        y_coordinate: Vec<f64>,
+        value: Vec<f64>,
+        value_valid: Option<Vec<u8>>,
+    },
+    HeatmapTemporalNumeric {
+        ids: Option<Vec<GeneralRowId>>,
+        x_epoch_ms: Vec<i64>,
+        y_coordinate: Vec<f64>,
+        value: Vec<f64>,
+        value_valid: Option<Vec<u8>>,
     },
 }
 
@@ -195,6 +258,9 @@ pub struct GeneralDataset {
     x_high_valid: Option<Vec<u8>>,
     size: Option<Vec<f64>>,
     size_valid: Option<Vec<u8>>,
+    heatmap_y_numeric: Option<Vec<f64>>,
+    heatmap_y_categories: Option<Vec<String>>,
+    heatmap_y_category_indices: Option<Vec<u32>>,
     labels: HashMap<usize, String>,
 }
 
@@ -339,6 +405,18 @@ impl GeneralDataset {
         }
     }
 
+    pub fn heatmap_y_categories(&self) -> Option<&[String]> {
+        self.heatmap_y_categories.as_deref()
+    }
+
+    pub fn heatmap_y_numeric(&self) -> Option<&[f64]> {
+        self.heatmap_y_numeric.as_deref()
+    }
+
+    pub fn heatmap_y_category_indices(&self) -> Option<&[u32]> {
+        self.heatmap_y_category_indices.as_deref()
+    }
+
     fn estimated_bytes(&self) -> usize {
         let identity_text = self
             .identities
@@ -390,6 +468,18 @@ impl GeneralDataset {
                 .as_ref()
                 .map_or(0, |values| values.capacity() * std::mem::size_of::<f64>())
             + self.size_valid.as_ref().map_or(0, Vec::capacity)
+            + self
+                .heatmap_y_numeric
+                .as_ref()
+                .map_or(0, |values| values.capacity() * std::mem::size_of::<f64>())
+            + self.heatmap_y_categories.as_ref().map_or(0, |categories| {
+                categories.capacity() * std::mem::size_of::<String>()
+                    + categories.iter().map(String::capacity).sum::<usize>()
+            })
+            + self
+                .heatmap_y_category_indices
+                .as_ref()
+                .map_or(0, |indices| indices.capacity() * std::mem::size_of::<u32>())
             + self.labels.capacity()
                 * (std::mem::size_of::<usize>()
                     + std::mem::size_of::<String>()
@@ -413,6 +503,9 @@ struct ValidatedGeneralXy {
     x_high_valid: Option<Vec<u8>>,
     size: Option<Vec<f64>>,
     size_valid: Option<Vec<u8>>,
+    heatmap_y_numeric: Option<Vec<f64>>,
+    heatmap_y_categories: Option<Vec<String>>,
+    heatmap_y_category_indices: Option<Vec<u32>>,
 }
 
 impl GeneralXyInput {
@@ -421,9 +514,17 @@ impl GeneralXyInput {
             Self::Numeric { .. }
             | Self::Bubble { .. }
             | Self::RangeNumeric { .. }
-            | Self::ErrorNumeric { .. } => GeneralXKind::Numeric,
-            Self::Temporal { .. } | Self::RangeTemporal { .. } => GeneralXKind::Temporal,
-            Self::Category { .. } | Self::RangeCategory { .. } => GeneralXKind::Category,
+            | Self::ErrorNumeric { .. }
+            | Self::HeatmapNumericNumeric { .. } => GeneralXKind::Numeric,
+            Self::Temporal { .. }
+            | Self::RangeTemporal { .. }
+            | Self::ErrorTemporal { .. }
+            | Self::HeatmapTemporalNumeric { .. } => GeneralXKind::Temporal,
+            Self::Category { .. }
+            | Self::RangeCategory { .. }
+            | Self::ErrorCategory { .. }
+            | Self::BoxCategory { .. }
+            | Self::HeatmapCategoryCategory { .. } => GeneralXKind::Category,
         }
     }
 
@@ -432,7 +533,8 @@ impl GeneralXyInput {
             Self::Numeric { x, .. }
             | Self::Bubble { x, .. }
             | Self::RangeNumeric { x, .. }
-            | Self::ErrorNumeric { x, .. } => Some(x),
+            | Self::ErrorNumeric { x, .. }
+            | Self::HeatmapNumericNumeric { x, .. } => Some(x),
             _ => None,
         }
     }
@@ -442,8 +544,14 @@ impl GeneralXyInput {
             Self::Numeric { y, .. }
             | Self::Bubble { y, .. }
             | Self::ErrorNumeric { y, .. }
+            | Self::ErrorCategory { y, .. }
+            | Self::ErrorTemporal { y, .. }
             | Self::Temporal { y, .. }
             | Self::Category { y, .. } => y,
+            Self::BoxCategory { median, .. } => median,
+            Self::HeatmapCategoryCategory { value, .. }
+            | Self::HeatmapNumericNumeric { value, .. }
+            | Self::HeatmapTemporalNumeric { value, .. } => value,
             Self::RangeNumeric { high, .. }
             | Self::RangeTemporal { high, .. }
             | Self::RangeCategory { high, .. } => high,
@@ -455,8 +563,14 @@ impl GeneralXyInput {
             Self::Numeric { y_valid, .. }
             | Self::Bubble { y_valid, .. }
             | Self::ErrorNumeric { y_valid, .. }
+            | Self::ErrorCategory { y_valid, .. }
+            | Self::ErrorTemporal { y_valid, .. }
             | Self::Temporal { y_valid, .. }
             | Self::Category { y_valid, .. } => y_valid.as_deref(),
+            Self::BoxCategory { median_valid, .. } => median_valid.as_deref(),
+            Self::HeatmapCategoryCategory { value_valid, .. }
+            | Self::HeatmapNumericNumeric { value_valid, .. }
+            | Self::HeatmapTemporalNumeric { value_valid, .. } => value_valid.as_deref(),
             Self::RangeNumeric { high_valid, .. }
             | Self::RangeTemporal { high_valid, .. }
             | Self::RangeCategory { high_valid, .. } => high_valid.as_deref(),
@@ -475,14 +589,20 @@ impl GeneralXyInput {
             Self::RangeNumeric { low, .. }
             | Self::RangeTemporal { low, .. }
             | Self::RangeCategory { low, .. }
-            | Self::ErrorNumeric { y_low: low, .. } => Some(low),
+            | Self::ErrorNumeric { y_low: low, .. }
+            | Self::ErrorCategory { y_low: low, .. }
+            | Self::ErrorTemporal { y_low: low, .. } => Some(low),
+            Self::BoxCategory { min, .. } => Some(min),
             _ => None,
         }
     }
 
     pub(crate) fn high_values(&self) -> Option<&[f64]> {
         match self {
-            Self::ErrorNumeric { y_high, .. } => Some(y_high),
+            Self::ErrorNumeric { y_high, .. }
+            | Self::ErrorCategory { y_high, .. }
+            | Self::ErrorTemporal { y_high, .. } => Some(y_high),
+            Self::BoxCategory { max, .. } => Some(max),
             _ => None,
         }
     }
@@ -490,6 +610,8 @@ impl GeneralXyInput {
     pub(crate) fn x_low_values(&self) -> Option<&[f64]> {
         match self {
             Self::ErrorNumeric { x_low, .. } => Some(x_low),
+            Self::ErrorTemporal { x_low_epoch_ms, .. } => Some(x_low_epoch_ms),
+            Self::BoxCategory { q1, .. } => Some(q1),
             _ => None,
         }
     }
@@ -497,6 +619,10 @@ impl GeneralXyInput {
     pub(crate) fn x_high_values(&self) -> Option<&[f64]> {
         match self {
             Self::ErrorNumeric { x_high, .. } => Some(x_high),
+            Self::ErrorTemporal {
+                x_high_epoch_ms, ..
+            } => Some(x_high_epoch_ms),
+            Self::BoxCategory { q3, .. } => Some(q3),
             _ => None,
         }
     }
@@ -524,6 +650,9 @@ impl GeneralXyInput {
                     x_high_valid: None,
                     size: None,
                     size_valid: None,
+                    heatmap_y_numeric: None,
+                    heatmap_y_categories: None,
+                    heatmap_y_category_indices: None,
                 })
             }
             Self::Bubble {
@@ -555,6 +684,9 @@ impl GeneralXyInput {
                     x_high_valid: None,
                     size: Some(size),
                     size_valid: normalize_validity(size_valid),
+                    heatmap_y_numeric: None,
+                    heatmap_y_categories: None,
+                    heatmap_y_category_indices: None,
                 })
             }
             Self::RangeNumeric {
@@ -592,6 +724,9 @@ impl GeneralXyInput {
                     x_high_valid: None,
                     size: None,
                     size_valid: None,
+                    heatmap_y_numeric: None,
+                    heatmap_y_categories: None,
+                    heatmap_y_category_indices: None,
                 })
             }
             Self::ErrorNumeric {
@@ -639,6 +774,9 @@ impl GeneralXyInput {
                     x_high_valid: normalize_validity(x_high_valid),
                     size: None,
                     size_valid: None,
+                    heatmap_y_numeric: None,
+                    heatmap_y_categories: None,
+                    heatmap_y_category_indices: None,
                 })
             }
             Self::Temporal {
@@ -672,6 +810,9 @@ impl GeneralXyInput {
                     x_high_valid: None,
                     size: None,
                     size_valid: None,
+                    heatmap_y_numeric: None,
+                    heatmap_y_categories: None,
+                    heatmap_y_category_indices: None,
                 })
             }
             Self::RangeTemporal {
@@ -719,6 +860,80 @@ impl GeneralXyInput {
                     x_high_valid: None,
                     size: None,
                     size_valid: None,
+                    heatmap_y_numeric: None,
+                    heatmap_y_categories: None,
+                    heatmap_y_category_indices: None,
+                })
+            }
+            Self::ErrorTemporal {
+                ids,
+                x_epoch_ms,
+                y,
+                y_valid,
+                x_low_epoch_ms,
+                x_low_valid,
+                x_high_epoch_ms,
+                x_high_valid,
+                y_low,
+                y_low_valid,
+                y_high,
+                y_high_valid,
+            } => {
+                validate_row_count(x_epoch_ms.len())?;
+                validate_common(x_epoch_ms.len(), ids.as_deref(), &y, y_valid.as_deref())?;
+                if x_epoch_ms
+                    .iter()
+                    .any(|value| value.unsigned_abs() > MAX_GENERAL_TEMPORAL_MILLISECONDS as u64)
+                {
+                    return Err(invalid_data(format!(
+                        "general temporal X values must stay within +/-{MAX_GENERAL_TEMPORAL_MILLISECONDS} epoch milliseconds"
+                    )));
+                }
+                validate_temporal_error_bound_channel(
+                    x_epoch_ms.len(),
+                    &x_low_epoch_ms,
+                    x_low_valid.as_deref(),
+                    "X low",
+                )?;
+                validate_temporal_error_bound_channel(
+                    x_epoch_ms.len(),
+                    &x_high_epoch_ms,
+                    x_high_valid.as_deref(),
+                    "X high",
+                )?;
+                let x_numeric = x_epoch_ms
+                    .iter()
+                    .map(|value| *value as f64)
+                    .collect::<Vec<_>>();
+                validate_error_channels(
+                    &x_numeric,
+                    &y,
+                    y_valid.as_deref(),
+                    [
+                        (&x_low_epoch_ms, x_low_valid.as_deref(), "X low"),
+                        (&x_high_epoch_ms, x_high_valid.as_deref(), "X high"),
+                        (&y_low, y_low_valid.as_deref(), "Y low"),
+                        (&y_high, y_high_valid.as_deref(), "Y high"),
+                    ],
+                )?;
+                Ok(ValidatedGeneralXy {
+                    ids,
+                    x: GeneralXColumn::Temporal(x_epoch_ms),
+                    y,
+                    y_valid: normalize_validity(y_valid),
+                    low: Some(y_low),
+                    low_valid: normalize_validity(y_low_valid),
+                    high: Some(y_high),
+                    high_valid: normalize_validity(y_high_valid),
+                    x_low: Some(x_low_epoch_ms),
+                    x_low_valid: normalize_validity(x_low_valid),
+                    x_high: Some(x_high_epoch_ms),
+                    x_high_valid: normalize_validity(x_high_valid),
+                    size: None,
+                    size_valid: None,
+                    heatmap_y_numeric: None,
+                    heatmap_y_categories: None,
+                    heatmap_y_category_indices: None,
                 })
             }
             Self::Category {
@@ -754,6 +969,9 @@ impl GeneralXyInput {
                     x_high_valid: None,
                     size: None,
                     size_valid: None,
+                    heatmap_y_numeric: None,
+                    heatmap_y_categories: None,
+                    heatmap_y_category_indices: None,
                 })
             }
             Self::RangeCategory {
@@ -798,6 +1016,277 @@ impl GeneralXyInput {
                     x_high_valid: None,
                     size: None,
                     size_valid: None,
+                    heatmap_y_numeric: None,
+                    heatmap_y_categories: None,
+                    heatmap_y_category_indices: None,
+                })
+            }
+            Self::ErrorCategory {
+                ids,
+                categories,
+                category_indices,
+                y,
+                y_valid,
+                y_low,
+                y_low_valid,
+                y_high,
+                y_high_valid,
+            } => {
+                validate_row_count(category_indices.len())?;
+                validate_common(
+                    category_indices.len(),
+                    ids.as_deref(),
+                    &y,
+                    y_valid.as_deref(),
+                )?;
+                validate_categories(&categories, &category_indices)?;
+                validate_error_y_channels(
+                    &y,
+                    y_valid.as_deref(),
+                    (&y_low, y_low_valid.as_deref()),
+                    (&y_high, y_high_valid.as_deref()),
+                )?;
+                Ok(ValidatedGeneralXy {
+                    ids,
+                    x: GeneralXColumn::Category {
+                        categories,
+                        indices: category_indices,
+                    },
+                    y,
+                    y_valid: normalize_validity(y_valid),
+                    low: Some(y_low),
+                    low_valid: normalize_validity(y_low_valid),
+                    high: Some(y_high),
+                    high_valid: normalize_validity(y_high_valid),
+                    x_low: None,
+                    x_low_valid: None,
+                    x_high: None,
+                    x_high_valid: None,
+                    size: None,
+                    size_valid: None,
+                    heatmap_y_numeric: None,
+                    heatmap_y_categories: None,
+                    heatmap_y_category_indices: None,
+                })
+            }
+            Self::BoxCategory {
+                ids,
+                categories,
+                category_indices,
+                min,
+                min_valid,
+                q1,
+                q1_valid,
+                median,
+                median_valid,
+                q3,
+                q3_valid,
+                max,
+                max_valid,
+            } => {
+                validate_row_count(category_indices.len())?;
+                validate_common(
+                    category_indices.len(),
+                    ids.as_deref(),
+                    &median,
+                    median_valid.as_deref(),
+                )?;
+                validate_categories(&categories, &category_indices)?;
+                for (values, validity, name) in [
+                    (&min, min_valid.as_deref(), "min"),
+                    (&q1, q1_valid.as_deref(), "q1"),
+                    (&q3, q3_valid.as_deref(), "q3"),
+                    (&max, max_valid.as_deref(), "max"),
+                ] {
+                    validate_box_channel(category_indices.len(), values, validity, name)?;
+                }
+                for row in 0..category_indices.len() {
+                    let all_present = median_valid
+                        .as_deref()
+                        .is_none_or(|validity| validity[row] != 0)
+                        && min_valid
+                            .as_deref()
+                            .is_none_or(|validity| validity[row] != 0)
+                        && q1_valid
+                            .as_deref()
+                            .is_none_or(|validity| validity[row] != 0)
+                        && q3_valid
+                            .as_deref()
+                            .is_none_or(|validity| validity[row] != 0)
+                        && max_valid
+                            .as_deref()
+                            .is_none_or(|validity| validity[row] != 0);
+                    if all_present
+                        && !(min[row] <= q1[row]
+                            && q1[row] <= median[row]
+                            && median[row] <= q3[row]
+                            && q3[row] <= max[row])
+                    {
+                        return Err(invalid_data(
+                            "general box-plot rows require min <= q1 <= median <= q3 <= max",
+                        ));
+                    }
+                }
+                Ok(ValidatedGeneralXy {
+                    ids,
+                    x: GeneralXColumn::Category {
+                        categories,
+                        indices: category_indices,
+                    },
+                    y: median,
+                    y_valid: normalize_validity(median_valid),
+                    low: Some(min),
+                    low_valid: normalize_validity(min_valid),
+                    high: Some(max),
+                    high_valid: normalize_validity(max_valid),
+                    x_low: Some(q1),
+                    x_low_valid: normalize_validity(q1_valid),
+                    x_high: Some(q3),
+                    x_high_valid: normalize_validity(q3_valid),
+                    size: None,
+                    size_valid: None,
+                    heatmap_y_numeric: None,
+                    heatmap_y_categories: None,
+                    heatmap_y_category_indices: None,
+                })
+            }
+            Self::HeatmapCategoryCategory {
+                ids,
+                x_categories,
+                x_category_indices,
+                y_categories,
+                y_category_indices,
+                value,
+                value_valid,
+            } => {
+                validate_row_count(x_category_indices.len())?;
+                validate_common(
+                    x_category_indices.len(),
+                    ids.as_deref(),
+                    &value,
+                    value_valid.as_deref(),
+                )?;
+                if y_category_indices.len() != x_category_indices.len() {
+                    return Err(invalid_data(
+                        "general heatmap X/Y category indices and values must have equal lengths",
+                    ));
+                }
+                validate_categories(&x_categories, &x_category_indices)?;
+                validate_categories(&y_categories, &y_category_indices)?;
+                Ok(ValidatedGeneralXy {
+                    ids,
+                    x: GeneralXColumn::Category {
+                        categories: x_categories,
+                        indices: x_category_indices,
+                    },
+                    y: value,
+                    y_valid: normalize_validity(value_valid),
+                    low: None,
+                    low_valid: None,
+                    high: None,
+                    high_valid: None,
+                    x_low: None,
+                    x_low_valid: None,
+                    x_high: None,
+                    x_high_valid: None,
+                    size: None,
+                    size_valid: None,
+                    heatmap_y_numeric: None,
+                    heatmap_y_categories: Some(y_categories),
+                    heatmap_y_category_indices: Some(y_category_indices),
+                })
+            }
+            Self::HeatmapNumericNumeric {
+                ids,
+                x,
+                y_coordinate,
+                value,
+                value_valid,
+            } => {
+                validate_row_count(x.len())?;
+                validate_common(x.len(), ids.as_deref(), &value, value_valid.as_deref())?;
+                if y_coordinate.len() != x.len() {
+                    return Err(invalid_data(
+                        "general numeric heatmap X/Y coordinates and values must have equal lengths",
+                    ));
+                }
+                if x.iter().any(|value| !value.is_finite())
+                    || y_coordinate.iter().any(|value| !value.is_finite())
+                {
+                    return Err(invalid_data(
+                        "general numeric heatmap coordinates must be finite",
+                    ));
+                }
+                Ok(ValidatedGeneralXy {
+                    ids,
+                    x: GeneralXColumn::Numeric(x),
+                    y: value,
+                    y_valid: normalize_validity(value_valid),
+                    low: None,
+                    low_valid: None,
+                    high: None,
+                    high_valid: None,
+                    x_low: None,
+                    x_low_valid: None,
+                    x_high: None,
+                    x_high_valid: None,
+                    size: None,
+                    size_valid: None,
+                    heatmap_y_numeric: Some(y_coordinate),
+                    heatmap_y_categories: None,
+                    heatmap_y_category_indices: None,
+                })
+            }
+            Self::HeatmapTemporalNumeric {
+                ids,
+                x_epoch_ms,
+                y_coordinate,
+                value,
+                value_valid,
+            } => {
+                validate_row_count(x_epoch_ms.len())?;
+                validate_common(
+                    x_epoch_ms.len(),
+                    ids.as_deref(),
+                    &value,
+                    value_valid.as_deref(),
+                )?;
+                if y_coordinate.len() != x_epoch_ms.len() {
+                    return Err(invalid_data(
+                        "general temporal heatmap X/Y coordinates and values must have equal lengths",
+                    ));
+                }
+                if x_epoch_ms
+                    .iter()
+                    .any(|value| value.unsigned_abs() > MAX_GENERAL_TEMPORAL_MILLISECONDS as u64)
+                {
+                    return Err(invalid_data(format!(
+                        "general temporal X values must stay within +/-{MAX_GENERAL_TEMPORAL_MILLISECONDS} epoch milliseconds"
+                    )));
+                }
+                if y_coordinate.iter().any(|value| !value.is_finite()) {
+                    return Err(invalid_data(
+                        "general temporal heatmap Y coordinates must be finite",
+                    ));
+                }
+                Ok(ValidatedGeneralXy {
+                    ids,
+                    x: GeneralXColumn::Temporal(x_epoch_ms),
+                    y: value,
+                    y_valid: normalize_validity(value_valid),
+                    low: None,
+                    low_valid: None,
+                    high: None,
+                    high_valid: None,
+                    x_low: None,
+                    x_low_valid: None,
+                    x_high: None,
+                    x_high_valid: None,
+                    size: None,
+                    size_valid: None,
+                    heatmap_y_numeric: Some(y_coordinate),
+                    heatmap_y_categories: None,
+                    heatmap_y_category_indices: None,
                 })
             }
         }
@@ -813,7 +1302,7 @@ fn validate_error_channels(
     bounds: ErrorBoundChannels<'_>,
 ) -> Result<(), ChartError> {
     let row_count = x.len();
-    for (values, validity, name) in bounds {
+    for (values, validity, name) in bounds.into_iter().take(2) {
         validate_error_bound_channel(row_count, values, validity, name)?;
     }
     let [(x_low, x_low_valid, _), (x_high, x_high_valid, _), (y_low, y_low_valid, _), (y_high, y_high_valid, _)] =
@@ -829,6 +1318,20 @@ fn validate_error_channels(
                 "general error-bar rows require X to be less than or equal to X high",
             ));
         }
+    }
+    validate_error_y_channels(y, y_valid, (y_low, y_low_valid), (y_high, y_high_valid))?;
+    Ok(())
+}
+
+fn validate_error_y_channels(
+    y: &[f64],
+    y_valid: Option<&[u8]>,
+    (y_low, y_low_valid): (&[f64], Option<&[u8]>),
+    (y_high, y_high_valid): (&[f64], Option<&[u8]>),
+) -> Result<(), ChartError> {
+    validate_error_bound_channel(y.len(), y_low, y_low_valid, "Y low")?;
+    validate_error_bound_channel(y.len(), y_high, y_high_valid, "Y high")?;
+    for row in 0..y.len() {
         if y_valid.is_some_and(|validity| validity[row] == 0) {
             continue;
         }
@@ -873,6 +1376,55 @@ fn validate_error_bound_channel(
                 "general error-bar {name} validity values must be 0 or 1"
             )));
         }
+    }
+    Ok(())
+}
+
+fn validate_box_channel(
+    row_count: usize,
+    values: &[f64],
+    validity: Option<&[u8]>,
+    name: &str,
+) -> Result<(), ChartError> {
+    if values.len() != row_count {
+        return Err(invalid_data(format!(
+            "general box-plot {name} and category columns must have equal lengths"
+        )));
+    }
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(invalid_data(format!(
+            "general box-plot {name} values must be finite; use the validity column for missing values"
+        )));
+    }
+    if let Some(validity) = validity {
+        if validity.len() != row_count {
+            return Err(invalid_data(format!(
+                "general box-plot {name} validity and value columns must have equal lengths"
+            )));
+        }
+        if validity.iter().any(|value| !matches!(*value, 0 | 1)) {
+            return Err(invalid_data(format!(
+                "general box-plot {name} validity values must be 0 or 1"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_temporal_error_bound_channel(
+    row_count: usize,
+    values: &[f64],
+    validity: Option<&[u8]>,
+    name: &str,
+) -> Result<(), ChartError> {
+    validate_error_bound_channel(row_count, values, validity, name)?;
+    if values
+        .iter()
+        .any(|value| value.fract() != 0.0 || value.abs() > MAX_GENERAL_TEMPORAL_MILLISECONDS as f64)
+    {
+        return Err(invalid_data(format!(
+            "general temporal error-bar {name} values must be whole epoch milliseconds within +/-{MAX_GENERAL_TEMPORAL_MILLISECONDS}"
+        )));
     }
     Ok(())
 }
@@ -1192,6 +1744,9 @@ impl GeneralDataStore {
             x_high_valid: validated.x_high_valid,
             size: validated.size,
             size_valid: validated.size_valid,
+            heatmap_y_numeric: validated.heatmap_y_numeric,
+            heatmap_y_categories: validated.heatmap_y_categories,
+            heatmap_y_category_indices: validated.heatmap_y_category_indices,
             labels,
         });
         self.next_dataset_id = next_dataset_id;
@@ -1244,6 +1799,9 @@ impl GeneralDataStore {
             x_high_valid: validated.x_high_valid,
             size: validated.size,
             size_valid: validated.size_valid,
+            heatmap_y_numeric: validated.heatmap_y_numeric,
+            heatmap_y_categories: validated.heatmap_y_categories,
+            heatmap_y_category_indices: validated.heatmap_y_category_indices,
             labels,
         };
         self.next_generated_row_id = next_generated_row_id;
@@ -1317,6 +1875,19 @@ impl GeneralDataStore {
         {
             return Err(invalid_data(
                 "general incremental error-bar columns must match the dataset channel shape",
+            ));
+        }
+        if dataset.heatmap_y_categories.is_some() != validated.heatmap_y_categories.is_some()
+            || dataset.heatmap_y_category_indices.is_some()
+                != validated.heatmap_y_category_indices.is_some()
+        {
+            return Err(invalid_data(
+                "general incremental heatmap Y-category columns must match the dataset channel shape",
+            ));
+        }
+        if dataset.heatmap_y_numeric.is_some() != validated.heatmap_y_numeric.is_some() {
+            return Err(invalid_data(
+                "general incremental heatmap numeric-Y columns must match the dataset channel shape",
             ));
         }
         let existing: HashMap<GeneralRowId, usize> = dataset
@@ -1435,6 +2006,71 @@ impl GeneralDataStore {
                 }
                 _ => (None, Vec::new(), Vec::new()),
             };
+        let (heatmap_y_registry, heatmap_y_remap, old_heatmap_y_remap) = match (
+            dataset.heatmap_y_categories.as_ref(),
+            dataset.heatmap_y_category_indices.as_ref(),
+            validated.heatmap_y_categories.as_ref(),
+            validated.heatmap_y_category_indices.as_ref(),
+        ) {
+            (Some(current), Some(current_indices), Some(incoming), Some(incoming_indices)) => {
+                let mut registry = current.clone();
+                let mut lookup: HashMap<String, u32> = registry
+                    .iter()
+                    .enumerate()
+                    .map(|(index, category)| (category.clone(), index as u32))
+                    .collect();
+                let mut remap = Vec::with_capacity(incoming.len());
+                for category in incoming {
+                    let index = if let Some(&index) = lookup.get(category) {
+                        index
+                    } else {
+                        let index = u32::try_from(registry.len()).map_err(|_| {
+                            resource(
+                                "general heatmap Y category registry exceeds its index representation",
+                            )
+                        })?;
+                        lookup.insert(category.clone(), index);
+                        registry.push(category.clone());
+                        index
+                    };
+                    remap.push(index);
+                }
+                let mut old_remap = Vec::new();
+                if max_rows.is_some() {
+                    let mut projected = current_indices.clone();
+                    for (source_row, id) in ids.iter().enumerate() {
+                        let category = remap[incoming_indices[source_row] as usize];
+                        if let Some(&row) = existing.get(id) {
+                            projected[row] = category;
+                        } else {
+                            projected.push(category);
+                        }
+                    }
+                    let mut used = vec![false; registry.len()];
+                    for &index in projected.iter().skip(trim_count) {
+                        used[index as usize] = true;
+                    }
+                    let mut final_remap = vec![0u32; registry.len()];
+                    let mut retained =
+                        Vec::with_capacity(used.iter().filter(|&&value| value).count());
+                    for (index, category) in registry.drain(..).enumerate() {
+                        if used[index] {
+                            final_remap[index] = retained.len() as u32;
+                            retained.push(category);
+                        }
+                    }
+                    old_remap = final_remap[..current.len()].to_vec();
+                    for index in &mut remap {
+                        *index = final_remap[*index as usize];
+                    }
+                    registry = retained;
+                }
+                validate_categories(&registry, &[])?;
+                (Some(registry), remap, old_remap)
+            }
+            (None, None, None, None) => (None, Vec::new(), Vec::new()),
+            _ => unreachable!("heatmap Y-category channel shape was validated before mutation"),
+        };
         let generation = dataset
             .generation
             .checked_add(1)
@@ -1455,6 +2091,19 @@ impl GeneralDataStore {
                     .unwrap_or(*index);
             }
             *categories = category_registry;
+        }
+        if let (Some(categories), Some(indices), Some(registry)) = (
+            dataset.heatmap_y_categories.as_mut(),
+            dataset.heatmap_y_category_indices.as_mut(),
+            heatmap_y_registry,
+        ) {
+            for index in indices.iter_mut() {
+                *index = old_heatmap_y_remap
+                    .get(*index as usize)
+                    .copied()
+                    .unwrap_or(*index);
+            }
+            *categories = registry;
         }
 
         for (source_row, id) in ids.iter().enumerate() {
@@ -1503,6 +2152,12 @@ impl GeneralDataStore {
                 if let Some(validity) = dataset.x_high_valid.as_mut() {
                     validity.push(1);
                 }
+                if let Some(indices) = dataset.heatmap_y_category_indices.as_mut() {
+                    indices.push(0);
+                }
+                if let Some(values) = dataset.heatmap_y_numeric.as_mut() {
+                    values.push(0.0);
+                }
                 dataset.len() - 1
             };
             match (&mut dataset.x, &validated.x) {
@@ -1523,6 +2178,18 @@ impl GeneralDataStore {
                     target[target_row] = category_remap[source[source_row] as usize];
                 }
                 _ => unreachable!("general X kinds were validated before mutation"),
+            }
+            if let (Some(target), Some(source)) = (
+                dataset.heatmap_y_category_indices.as_mut(),
+                validated.heatmap_y_category_indices.as_ref(),
+            ) {
+                target[target_row] = heatmap_y_remap[source[source_row] as usize];
+            }
+            if let (Some(target), Some(source)) = (
+                dataset.heatmap_y_numeric.as_mut(),
+                validated.heatmap_y_numeric.as_ref(),
+            ) {
+                target[target_row] = source[source_row];
             }
             dataset.y[target_row] = validated.y[source_row];
             let valid = validated
@@ -1655,6 +2322,12 @@ impl GeneralDataStore {
                 if let Some(validity) = dataset.x_high_valid.as_mut() {
                     validity.drain(..trim);
                 }
+                if let Some(indices) = dataset.heatmap_y_category_indices.as_mut() {
+                    indices.drain(..trim);
+                }
+                if let Some(values) = dataset.heatmap_y_numeric.as_mut() {
+                    values.drain(..trim);
+                }
                 let bounded_capacity = dataset.len().saturating_mul(2).max(1024);
                 if dataset.identities.capacity() > bounded_capacity {
                     dataset.identities.shrink_to(bounded_capacity);
@@ -1691,6 +2364,12 @@ impl GeneralDataStore {
                     }
                     if let Some(validity) = dataset.x_high_valid.as_mut() {
                         validity.shrink_to(bounded_capacity);
+                    }
+                    if let Some(indices) = dataset.heatmap_y_category_indices.as_mut() {
+                        indices.shrink_to(bounded_capacity);
+                    }
+                    if let Some(values) = dataset.heatmap_y_numeric.as_mut() {
+                        values.shrink_to(bounded_capacity);
                     }
                     match &mut dataset.x {
                         GeneralXColumn::Numeric(values) => values.shrink_to(bounded_capacity),
