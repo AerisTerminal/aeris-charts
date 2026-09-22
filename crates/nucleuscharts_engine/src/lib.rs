@@ -1752,7 +1752,31 @@ impl ChartEngine {
         })?;
         store.replace(id, input)?;
         if bound {
-            self.reconcile_general_interaction_for_dataset(id);
+            self.reconcile_general_interaction_for_dataset(id, 0);
+            self.invalidate_frame_all();
+        } else {
+            self.invalidate_frame_scene();
+        }
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn upsert_general_xy_dataset(
+        &mut self,
+        id: GeneralDatasetId,
+        input: GeneralXyInput,
+        max_rows: Option<usize>,
+    ) -> Result<(), ChartError> {
+        let bound = self.general_series_uses_dataset(id);
+        if bound {
+            self.validate_general_dataset_replacement(id, &input)?;
+        }
+        let store = self.general_data.as_mut().ok_or_else(|| {
+            ChartError::new(ErrorCode::InvalidHandle, "general dataset handle is stale")
+        })?;
+        let removed_front = store.upsert(id, input, max_rows)?;
+        if bound {
+            self.reconcile_general_interaction_for_dataset(id, removed_front);
             self.invalidate_frame_all();
         } else {
             self.invalidate_frame_scene();

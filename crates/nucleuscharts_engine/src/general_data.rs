@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroU32;
 
@@ -539,6 +539,255 @@ impl GeneralDataStore {
         Ok(())
     }
 
+    pub(crate) fn upsert(
+        &mut self,
+        id: GeneralDatasetId,
+        input: GeneralXyInput,
+        max_rows: Option<usize>,
+    ) -> Result<usize, ChartError> {
+        let Some(slot) = self.datasets.iter().position(|dataset| dataset.id == id) else {
+            return Err(ChartError::new(
+                ErrorCode::InvalidHandle,
+                "general dataset handle is stale",
+            ));
+        };
+        if max_rows == Some(0) || max_rows.is_some_and(|limit| limit > MAX_GENERAL_DATASET_ROWS) {
+            return Err(invalid_data(format!(
+                "general retention must be between 1 and {MAX_GENERAL_DATASET_ROWS} rows"
+            )));
+        }
+        let validated = input.validate()?;
+        let Some(ids) = validated.ids.as_ref() else {
+            return Err(invalid_data(
+                "general incremental updates require explicit row IDs",
+            ));
+        };
+        if ids.iter().any(|id| matches!(id, GeneralRowId::Generated)) {
+            return Err(invalid_data(
+                "general incremental updates require explicit row IDs",
+            ));
+        }
+        let dataset = &self.datasets[slot];
+        if dataset.x_kind()
+            != match &validated.x {
+                GeneralXColumn::Numeric(_) => GeneralXKind::Numeric,
+                GeneralXColumn::Temporal(_) => GeneralXKind::Temporal,
+                GeneralXColumn::Category { .. } => GeneralXKind::Category,
+            }
+        {
+            return Err(invalid_data(
+                "general incremental X columns must match the dataset kind",
+            ));
+        }
+        let existing: HashMap<GeneralRowId, usize> = dataset
+            .identities
+            .iter()
+            .enumerate()
+            .filter_map(|(row, identity)| match identity {
+                GeneralRowIdentity::Explicit(id) => Some((id.clone(), row)),
+                GeneralRowIdentity::Generated(_) => None,
+            })
+            .collect();
+        let appended = ids.iter().filter(|id| !existing.contains_key(*id)).count();
+        let untrimmed_len = dataset
+            .len()
+            .checked_add(appended)
+            .ok_or_else(|| resource("general dataset row count overflow"))?;
+        if max_rows.is_none() && untrimmed_len > MAX_GENERAL_DATASET_ROWS {
+            return Err(resource(format!(
+                "general dataset exceeds {MAX_GENERAL_DATASET_ROWS} rows"
+            )));
+        }
+        let trim_count = max_rows.map_or(0, |limit| untrimmed_len.saturating_sub(limit));
+
+        let (category_registry, category_remap, old_category_remap) =
+            match (&dataset.x, &validated.x) {
+                (
+                    GeneralXColumn::Category {
+                        categories: current,
+                        indices: current_indices,
+                    },
+                    GeneralXColumn::Category {
+                        categories: incoming,
+                        indices: incoming_indices,
+                    },
+                ) => {
+                    let mut registry = current.clone();
+                    let mut lookup: HashMap<String, u32> = registry
+                        .iter()
+                        .enumerate()
+                        .map(|(index, category)| (category.clone(), index as u32))
+                        .collect();
+                    let mut remap = Vec::with_capacity(incoming.len());
+                    for category in incoming {
+                        let index =
+                            if let Some(&index) = lookup.get(category) {
+                                index
+                            } else {
+                                let index = u32::try_from(registry.len()).map_err(|_| {
+                            resource("general category registry exceeds its index representation")
+                        })?;
+                                lookup.insert(category.clone(), index);
+                                registry.push(category.clone());
+                                index
+                            };
+                        remap.push(index);
+                    }
+                    let mut old_remap = Vec::new();
+                    if max_rows.is_some() {
+                        let mut projected = current_indices.clone();
+                        for (source_row, id) in ids.iter().enumerate() {
+                            let category = remap[incoming_indices[source_row] as usize];
+                            if let Some(&row) = existing.get(id) {
+                                projected[row] = category;
+                            } else {
+                                projected.push(category);
+                            }
+                        }
+                        let mut used = vec![false; registry.len()];
+                        for &index in projected.iter().skip(trim_count) {
+                            used[index as usize] = true;
+                        }
+                        let mut final_remap = vec![0u32; registry.len()];
+                        let mut retained =
+                            Vec::with_capacity(used.iter().filter(|&&value| value).count());
+                        for (index, category) in registry.drain(..).enumerate() {
+                            if used[index] {
+                                final_remap[index] = retained.len() as u32;
+                                retained.push(category);
+                            }
+                        }
+                        old_remap = final_remap[..current.len()].to_vec();
+                        for index in &mut remap {
+                            *index = final_remap[*index as usize];
+                        }
+                        registry = retained;
+                    }
+                    validate_categories(&registry, &[])?;
+                    (Some(registry), remap, old_remap)
+                }
+                _ => (None, Vec::new(), Vec::new()),
+            };
+        let generation = dataset
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| resource("general dataset generation is exhausted"))?;
+        let dataset = &mut self.datasets[slot];
+        if let (
+            GeneralXColumn::Category {
+                categories,
+                indices,
+            },
+            Some(category_registry),
+        ) = (&mut dataset.x, category_registry)
+        {
+            for index in indices {
+                *index = old_category_remap
+                    .get(*index as usize)
+                    .copied()
+                    .unwrap_or(*index);
+            }
+            *categories = category_registry;
+        }
+
+        for (source_row, id) in ids.iter().enumerate() {
+            let target_row = if let Some(&row) = existing.get(id) {
+                row
+            } else {
+                dataset
+                    .identities
+                    .push(GeneralRowIdentity::Explicit(id.clone()));
+                match &mut dataset.x {
+                    GeneralXColumn::Numeric(values) => values.push(0.0),
+                    GeneralXColumn::Temporal(values) => values.push(0),
+                    GeneralXColumn::Category { indices, .. } => indices.push(0),
+                }
+                dataset.y.push(0.0);
+                if let Some(validity) = dataset.y_valid.as_mut() {
+                    validity.push(1);
+                }
+                dataset.len() - 1
+            };
+            match (&mut dataset.x, &validated.x) {
+                (GeneralXColumn::Numeric(target), GeneralXColumn::Numeric(source)) => {
+                    target[target_row] = source[source_row];
+                }
+                (GeneralXColumn::Temporal(target), GeneralXColumn::Temporal(source)) => {
+                    target[target_row] = source[source_row];
+                }
+                (
+                    GeneralXColumn::Category {
+                        indices: target, ..
+                    },
+                    GeneralXColumn::Category {
+                        indices: source, ..
+                    },
+                ) => {
+                    target[target_row] = category_remap[source[source_row] as usize];
+                }
+                _ => unreachable!("general X kinds were validated before mutation"),
+            }
+            dataset.y[target_row] = validated.y[source_row];
+            let valid = validated
+                .y_valid
+                .as_ref()
+                .is_none_or(|values| values[source_row] != 0);
+            if !valid && dataset.y_valid.is_none() {
+                dataset.y_valid = Some(vec![1; dataset.len()]);
+            }
+            if let Some(validity) = dataset.y_valid.as_mut() {
+                validity[target_row] = u8::from(valid);
+            }
+        }
+        let mut removed_front = 0;
+        if let Some(limit) = max_rows {
+            let trim = dataset.len().saturating_sub(limit);
+            if trim > 0 {
+                removed_front = trim;
+                dataset.identities.drain(..trim);
+                match &mut dataset.x {
+                    GeneralXColumn::Numeric(values) => {
+                        values.drain(..trim);
+                    }
+                    GeneralXColumn::Temporal(values) => {
+                        values.drain(..trim);
+                    }
+                    GeneralXColumn::Category { indices, .. } => {
+                        indices.drain(..trim);
+                    }
+                }
+                dataset.y.drain(..trim);
+                if let Some(validity) = dataset.y_valid.as_mut() {
+                    validity.drain(..trim);
+                }
+                let bounded_capacity = dataset.len().saturating_mul(2).max(1024);
+                if dataset.identities.capacity() > bounded_capacity {
+                    dataset.identities.shrink_to(bounded_capacity);
+                    dataset.y.shrink_to(bounded_capacity);
+                    if let Some(validity) = dataset.y_valid.as_mut() {
+                        validity.shrink_to(bounded_capacity);
+                    }
+                    match &mut dataset.x {
+                        GeneralXColumn::Numeric(values) => values.shrink_to(bounded_capacity),
+                        GeneralXColumn::Temporal(values) => values.shrink_to(bounded_capacity),
+                        GeneralXColumn::Category { indices, .. } => {
+                            indices.shrink_to(bounded_capacity)
+                        }
+                    }
+                }
+            }
+        }
+        if dataset
+            .y_valid
+            .as_ref()
+            .is_some_and(|validity| !validity.contains(&0))
+        {
+            dataset.y_valid = None;
+        }
+        dataset.generation = generation;
+        Ok(removed_front)
+    }
+
     pub(crate) fn remove(&mut self, id: GeneralDatasetId) -> bool {
         let Some(index) = self.datasets.iter().position(|dataset| dataset.id == id) else {
             return false;
@@ -777,5 +1026,164 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code(), ErrorCode::InvalidData);
         assert_eq!(store.get(id), Some(&before));
+    }
+
+    #[test]
+    fn explicit_id_upsert_updates_appends_and_trims_atomically() {
+        let mut store = GeneralDataStore::new();
+        let id = store
+            .insert(GeneralXyInput::Numeric {
+                ids: Some(vec![
+                    GeneralRowId::Text("a".into()),
+                    GeneralRowId::Text("b".into()),
+                ]),
+                x: vec![1.0, 2.0],
+                y: vec![10.0, 20.0],
+                y_valid: None,
+            })
+            .unwrap();
+        store
+            .upsert(
+                id,
+                GeneralXyInput::Numeric {
+                    ids: Some(vec![
+                        GeneralRowId::Text("b".into()),
+                        GeneralRowId::Text("c".into()),
+                    ]),
+                    x: vec![22.0, 3.0],
+                    y: vec![220.0, 30.0],
+                    y_valid: Some(vec![0, 1]),
+                },
+                Some(2),
+            )
+            .unwrap();
+        let dataset = store.get(id).unwrap();
+        assert_eq!(dataset.numeric_x(), Some(&[22.0, 3.0][..]));
+        assert_eq!(dataset.y(), &[220.0, 30.0]);
+        assert!(!dataset.y_is_valid(0));
+        assert!(dataset.y_is_valid(1));
+        assert_eq!(
+            dataset.row_identity(0),
+            Some(&GeneralRowIdentity::Explicit(GeneralRowId::Text(
+                "b".into()
+            )))
+        );
+        assert_eq!(dataset.generation(), 2);
+
+        let before = dataset.clone();
+        let error = store
+            .upsert(
+                id,
+                GeneralXyInput::Numeric {
+                    ids: None,
+                    x: vec![4.0],
+                    y: vec![40.0],
+                    y_valid: None,
+                },
+                None,
+            )
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::InvalidData);
+        assert_eq!(store.get(id), Some(&before));
+    }
+
+    #[test]
+    fn category_upsert_merges_the_registry_and_remaps_rows() {
+        let mut store = GeneralDataStore::new();
+        let id = store
+            .insert(GeneralXyInput::Category {
+                ids: Some(vec![GeneralRowId::Number(1.0)]),
+                categories: vec!["Jan".into()],
+                category_indices: vec![0],
+                y: vec![10.0],
+                y_valid: None,
+            })
+            .unwrap();
+        store
+            .upsert(
+                id,
+                GeneralXyInput::Category {
+                    ids: Some(vec![GeneralRowId::Number(1.0), GeneralRowId::Number(2.0)]),
+                    categories: vec!["Feb".into(), "Jan".into()],
+                    category_indices: vec![0, 1],
+                    y: vec![11.0, 20.0],
+                    y_valid: None,
+                },
+                None,
+            )
+            .unwrap();
+        let dataset = store.get(id).unwrap();
+        assert_eq!(dataset.categories().unwrap(), &["Jan", "Feb"]);
+        assert_eq!(dataset.category_indices().unwrap(), &[1, 0]);
+        assert_eq!(dataset.y(), &[11.0, 20.0]);
+        assert_eq!(
+            store
+                .upsert(
+                    id,
+                    GeneralXyInput::Category {
+                        ids: Some(vec![GeneralRowId::Number(3.0)]),
+                        categories: vec!["Mar".into()],
+                        category_indices: vec![0],
+                        y: vec![30.0],
+                        y_valid: None,
+                    },
+                    Some(2),
+                )
+                .unwrap(),
+            1
+        );
+        let dataset = store.get(id).unwrap();
+        assert_eq!(dataset.categories().unwrap(), &["Jan", "Mar"]);
+        assert_eq!(dataset.category_indices().unwrap(), &[0, 1]);
+        assert_eq!(dataset.y(), &[20.0, 30.0]);
+    }
+
+    #[test]
+    fn category_retention_validates_the_final_registry() {
+        let mut store = GeneralDataStore::new();
+        let id = store
+            .insert(GeneralXyInput::Category {
+                ids: Some(vec![GeneralRowId::Number(1.0)]),
+                categories: vec!["a".repeat(600_000)],
+                category_indices: vec![0],
+                y: vec![1.0],
+                y_valid: None,
+            })
+            .unwrap();
+        let update = GeneralXyInput::Category {
+            ids: Some(vec![GeneralRowId::Number(2.0)]),
+            categories: vec!["b".repeat(600_000)],
+            category_indices: vec![0],
+            y: vec![2.0],
+            y_valid: None,
+        };
+        let before = store.get(id).unwrap().clone();
+        assert_eq!(
+            store.upsert(id, update.clone(), None).unwrap_err().code(),
+            ErrorCode::ResourceLimit
+        );
+        assert_eq!(store.get(id), Some(&before));
+        assert_eq!(store.upsert(id, update, Some(1)).unwrap(), 1);
+        let retained = store.get(id).unwrap();
+        assert_eq!(retained.categories().unwrap().len(), 1);
+        assert_eq!(retained.categories().unwrap()[0].len(), 600_000);
+        assert_eq!(retained.y(), &[2.0]);
+        store
+            .upsert(
+                id,
+                GeneralXyInput::Category {
+                    ids: Some(vec![GeneralRowId::Number(2.0)]),
+                    categories: vec!["c".repeat(600_000)],
+                    category_indices: vec![0],
+                    y: vec![3.0],
+                    y_valid: None,
+                },
+                Some(1),
+            )
+            .unwrap();
+        let retained = store.get(id).unwrap();
+        assert_eq!(retained.categories().unwrap().len(), 1);
+        assert_eq!(retained.categories().unwrap()[0].as_bytes()[0], b'c');
+        assert_eq!(retained.y(), &[3.0]);
     }
 }

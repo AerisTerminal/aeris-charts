@@ -292,6 +292,14 @@ retention, `data_at()`, hit-test/tooltip snapshots, and capacity telemetry. Gene
 allocated lazily when the first general series or dataset is created; a financial-only chart must
 retain zero general-dataset, domain, axis, and geometry capacity.
 
+The current column/scatter browser slices expose `update_data(rows, { max_rows })` and
+`update_data_typed(columns, { max_rows })`. Every updated row needs an explicit string or numeric
+`id`; matching IDs replace in place, while new IDs append in input order. `max_rows` is an optional
+per-transaction retention limit: after the update, oldest rows are removed until the dataset fits.
+Pass it on every streaming update that needs retention. Invalid batches leave the prior dataset
+unchanged. Rows removed by retention lose their identity and any hover/selection target; retained
+explicit IDs continue to identify the same marks after front trimming.
+
 ## Pane compatibility matrix
 
 `same region` below means the series can contribute to one coordinate region and ordered frame.

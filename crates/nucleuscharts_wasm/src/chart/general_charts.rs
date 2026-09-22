@@ -97,6 +97,12 @@ struct SeriesInput {
     point_radius: f64,
 }
 
+#[derive(Deserialize)]
+struct CategoryUpdateInput {
+    categories: Vec<String>,
+    max_rows: u32,
+}
+
 fn default_true() -> bool {
     true
 }
@@ -477,6 +483,75 @@ impl ChartInner {
             y_valid: y_valid.map(|values| values.to_vec()),
         };
         match self.engine.replace_general_xy_dataset(dataset, input) {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    pub fn upsert_general_numeric_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        x: &Float64Array,
+        y: &Float64Array,
+        y_valid: Option<Uint8Array>,
+        max_rows: u32,
+    ) -> String {
+        let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
+            return input_error("general dataset handle is stale");
+        };
+        let ids = match parse_ids(ids_json) {
+            Ok(ids) => ids,
+            Err(error) => return error,
+        };
+        let input = GeneralXyInput::Numeric {
+            ids,
+            x: x.to_vec(),
+            y: y.to_vec(),
+            y_valid: y_valid.map(|values| values.to_vec()),
+        };
+        match self.engine.upsert_general_xy_dataset(
+            dataset,
+            input,
+            (max_rows > 0).then_some(max_rows as usize),
+        ) {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    pub fn upsert_general_category_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        update_json: &str,
+        category_indices: &Uint32Array,
+        y: &Float64Array,
+        y_valid: Option<Uint8Array>,
+    ) -> String {
+        let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
+            return input_error("general dataset handle is stale");
+        };
+        let ids = match parse_ids(ids_json) {
+            Ok(ids) => ids,
+            Err(error) => return error,
+        };
+        let update = match parse_json::<CategoryUpdateInput>(update_json) {
+            Ok(update) => update,
+            Err(error) => return error,
+        };
+        let input = GeneralXyInput::Category {
+            ids,
+            categories: update.categories,
+            category_indices: category_indices.to_vec(),
+            y: y.to_vec(),
+            y_valid: y_valid.map(|values| values.to_vec()),
+        };
+        match self.engine.upsert_general_xy_dataset(
+            dataset,
+            input,
+            (update.max_rows > 0).then_some(update.max_rows as usize),
+        ) {
             Ok(()) => result_ok(Value::Null),
             Err(error) => result_error(&error),
         }

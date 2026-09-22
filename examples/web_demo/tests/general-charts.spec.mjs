@@ -128,6 +128,31 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
       blocked_axis_remove,
     };
 
+    let rejected_update = null;
+    try {
+      scatter.update_data([
+        { id: 105, x: 12, y: 7 },
+        { id: 105, x: 13, y: 8 },
+      ]);
+    } catch (error) {
+      rejected_update = error.code;
+    }
+    const after_rejected_update = scatter.accessibility_snapshot(0, 10);
+    scatter.update_data_typed({
+      ids: [102, 104],
+      x: new Float64Array([0, 11]),
+      y: new Float64Array([7, 6]),
+    }, { max_rows: 3 });
+    columns.update_data([
+      { id: "jan", x: "Jan", y: 43 },
+      { id: "apr", x: "Apr", y: 9 },
+    ], { max_rows: 3 });
+    const after_update = {
+      scatter: scatter.accessibility_snapshot(0, 10),
+      columns: columns.accessibility_snapshot(0, 10),
+      selected: scatter.selected_hit(),
+    };
+
     scatter.remove();
     const removed_axis = x_axis.remove();
     chart.remove_axis("sample-y");
@@ -139,7 +164,7 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
     const remaining_panes = chart.panes().length;
     chart.remove();
     host.remove();
-    return { before_remove, removed_axis, remaining_panes, lifecycle };
+    return { before_remove, rejected_update, after_rejected_update, after_update, removed_axis, remaining_panes, lifecycle };
   });
 
   expect(result.before_remove.panes).toBe(3);
@@ -166,6 +191,27 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
   expect(result.before_remove.scatter_series).toEqual(["scatter"]);
   expect(result.before_remove.screenshot).toBeGreaterThan(1000);
   expect(result.before_remove.blocked_axis_remove).toBe(false);
+  expect(result.rejected_update).toBe("invalid_data");
+  expect(result.after_rejected_update.total_rows).toBe(3);
+  expect(result.after_rejected_update.items.map((item) => item.row_id)).toEqual([101, 102, 103]);
+  expect(result.after_update.scatter.items).toMatchObject([
+    { row_id: 102, x_label: "0", value: 7 },
+    { row_id: 103, x_label: "10", value: 5 },
+    { row_id: 104, x_label: "11", value: 6 },
+  ]);
+  if (result.before_remove.selected_hit.row_id === 101) {
+    expect(result.after_update.selected).toBeNull();
+  } else {
+    expect(result.after_update.selected).toMatchObject({
+      row_id: result.before_remove.selected_hit.row_id,
+      row: result.before_remove.selected_hit.row - 1,
+    });
+  }
+  expect(result.after_update.columns.items).toMatchObject([
+    { x_label: "Feb", value: null },
+    { row_id: "mar", x_label: "Mar", value: -17 },
+    { row_id: "apr", x_label: "Apr", value: 9 },
+  ]);
   expect(result.removed_axis).toBe(true);
   expect(result.remaining_panes).toBe(1);
   expect(result.lifecycle).toEqual([

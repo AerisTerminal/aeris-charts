@@ -339,7 +339,9 @@ Current implementation progress (2026-09-22):
   runtime evidence;
 - exact browser hover and primary selection now retain engine-owned row identities, follow reordered
   explicit-ID replacement batches, drop generated batch-local identities, and emit shared frame chrome;
-- data labels, incremental update/retention APIs, general-schema persistence, and keyboard-controller
+- explicit-ID incremental update/append transactions and per-call bounded retention now run through the
+  shared dataset store, with browser object/typed APIs, category pruning, and interaction reconciliation;
+- data labels, general-schema persistence, and keyboard-controller
   integration remain before either general series is release-complete.
 
 Exit gate: both slices render equivalently in every backend and a financial-only chart shows no

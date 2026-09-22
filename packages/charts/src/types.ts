@@ -118,6 +118,11 @@ export interface general_series_options {
   point_radius?: number;
 }
 
+export interface general_update_options {
+  /** Keep only the newest rows after this transaction. Omit to retain the full dataset. */
+  max_rows?: number;
+}
+
 export interface general_tooltip_snapshot {
   series: number;
   row: number;
@@ -161,6 +166,13 @@ export interface general_series_api {
   readonly kind: general_series_kind;
   set_data(data: readonly general_xy_row[]): void;
   set_data_typed(columns: numeric_xy_columns | category_xy_columns): void;
+  /** Update existing rows and append missing rows by explicit `id`, atomically. */
+  update_data(data: readonly general_xy_row[], options?: general_update_options): void;
+  /** Typed-column form of {@link update_data}; `ids` is required at runtime. */
+  update_data_typed(
+    columns: numeric_xy_columns | category_xy_columns,
+    options?: general_update_options,
+  ): void;
   data_at(row: number): general_tooltip_snapshot | null;
   /** This series' currently selected mark, or `null` when another mark/series is selected. */
   selected_hit(): general_series_hit | null;

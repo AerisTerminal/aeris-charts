@@ -1147,6 +1147,7 @@ impl ChartEngine {
     pub(crate) fn reconcile_general_interaction_for_dataset(
         &mut self,
         dataset_id: GeneralDatasetId,
+        removed_front: usize,
     ) {
         let Some(registry) = self.general_series.as_ref() else {
             return;
@@ -1165,8 +1166,13 @@ impl ChartEngine {
         let reconcile = |target: Option<GeneralInteractionTarget>| {
             let mut current = target?;
             if dataset_series.contains(&current.series) {
-                current.row = (0..dataset.len())
-                    .find(|&row| dataset.row_identity(row) == Some(&current.row_id))?;
+                let shifted = current.row.checked_sub(removed_front);
+                current.row = shifted
+                    .filter(|&row| dataset.row_identity(row) == Some(&current.row_id))
+                    .or_else(|| {
+                        (0..dataset.len())
+                            .find(|&row| dataset.row_identity(row) == Some(&current.row_id))
+                    })?;
             }
             Some(current)
         };

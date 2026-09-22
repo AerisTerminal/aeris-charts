@@ -2572,6 +2572,39 @@ impl NucleusChart {
         )
     }
 
+    pub fn upsert_general_numeric_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        x: &Float64Array,
+        y: &Float64Array,
+        y_valid: Option<js_sys::Uint8Array>,
+        max_rows: u32,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .upsert_general_numeric_data_typed(dataset, ids_json, x, y, y_valid, max_rows)
+    }
+
+    pub fn upsert_general_category_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        update_json: &str,
+        category_indices: &js_sys::Uint32Array,
+        y: &Float64Array,
+        y_valid: Option<js_sys::Uint8Array>,
+    ) -> String {
+        self.inner.borrow_mut().upsert_general_category_data_typed(
+            dataset,
+            ids_json,
+            update_json,
+            category_indices,
+            y,
+            y_valid,
+        )
+    }
+
     pub fn remove_general_series(&mut self, series: u32, dataset: u32) -> bool {
         self.inner
             .borrow_mut()

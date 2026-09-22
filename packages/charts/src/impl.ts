@@ -28,7 +28,7 @@ import type {
   feature_series_kind, frame_stats,
   footprint_bar, footprint_series_api, footprint_series_options, footprint_trade, footprint_trade_columns,
   general_accessibility_snapshot, general_axis_api, general_axis_options, general_pane_options, general_series_api, general_series_hit,
-  general_series_kind, general_series_options, general_tooltip_snapshot, general_xy_row,
+  general_series_kind, general_series_options, general_tooltip_snapshot, general_update_options, general_xy_row,
   category_xy_columns, numeric_xy_columns,
   ingestion_diagnostics,
   handle_scale_options, handle_scroll_options, indicator_info, kinetic_scroll_options,
@@ -542,6 +542,59 @@ class general_series_impl implements general_series_api {
 
   set_data_typed(columns: numeric_xy_columns | category_xy_columns): void {
     this.install_data(columns);
+  }
+
+  update_data(data: readonly general_xy_row[], options: general_update_options = {}): void {
+    if (data.some((row) => row.id === undefined)) {
+      throw new nucleuscharts_error("invalid_data", "general incremental updates require explicit row IDs");
+    }
+    this.upsert_data(pack_general_rows(this.kind, data), options);
+  }
+
+  update_data_typed(
+    columns: numeric_xy_columns | category_xy_columns,
+    options: general_update_options = {},
+  ): void {
+    this.upsert_data(columns, options);
+  }
+
+  private upsert_data(columns: general_columns_input, options: general_update_options): void {
+    this.assert_live();
+    if (columns.ids === undefined) {
+      throw new nucleuscharts_error("invalid_data", "general incremental updates require explicit row IDs");
+    }
+    const max_rows = options.max_rows;
+    if (max_rows !== undefined && (!Number.isSafeInteger(max_rows) || max_rows <= 0 || max_rows > 0xffff_ffff)) {
+      throw new nucleuscharts_error("invalid_options", "general max_rows must be a positive safe 32-bit integer");
+    }
+    let result: string;
+    if (this.kind === "scatter") {
+      if (!("x" in columns)) {
+        throw new nucleuscharts_error("invalid_data", "scatter requires numeric XY columns");
+      }
+      result = this.chart.wasm.upsert_general_numeric_data_typed(
+        this.dataset,
+        general_ids_json(columns.ids, columns.x.length),
+        columns.x,
+        columns.y,
+        columns.y_valid,
+        max_rows ?? 0,
+      );
+    } else {
+      if (!("category_indices" in columns)) {
+        throw new nucleuscharts_error("invalid_data", "column requires category XY columns");
+      }
+      result = this.chart.wasm.upsert_general_category_data_typed(
+        this.dataset,
+        general_ids_json(columns.ids, columns.category_indices.length),
+        JSON.stringify({ categories: columns.categories, max_rows: max_rows ?? 0 }),
+        columns.category_indices,
+        columns.y,
+        columns.y_valid,
+      );
+    }
+    parse_general_result<null>(result);
+    this.chart.repaint();
   }
 
   private install_data(columns: general_columns_input): void {

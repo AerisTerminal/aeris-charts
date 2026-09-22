@@ -120,9 +120,12 @@ identities are encoded as decimal strings at the JavaScript boundary so their fu
 rounded. The ordinary browser pointer path feeds exact general hits back into engine-owned transient
 hover and primary selection. Interaction targets retain row identity rather than formatted coordinates:
 explicit identities follow reordered replacement batches, while generated batch-local identities clear.
+Explicit-ID incremental batches update existing rows and append new rows in the shared dataset store;
+an optional per-call row limit trims the oldest rows and prunes unused category labels. Validation
+precedes mutation, and interaction targets reconcile against the retained identities.
 The shared frame emits the corresponding mark chrome, so Canvas2D, WebGPU, GPUI, and native executors
 receive the same presentation without host overlays. The remaining release work includes data labels,
-incremental updates and retention, schema persistence, and integration into the keyboard accessibility
+schema persistence, and integration into the keyboard accessibility
 controller.
 
 `ChartOptionsStore` keeps typed options canonical for engine and frame reads and retains the raw JSON
