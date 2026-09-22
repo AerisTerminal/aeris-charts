@@ -29,7 +29,8 @@ import type {
   footprint_bar, footprint_series_api, footprint_series_options, footprint_trade, footprint_trade_columns,
   general_accessibility_snapshot, general_axis_api, general_axis_options, general_pane_options, general_series_api, general_series_hit,
   general_series_kind, general_series_options, general_tooltip_snapshot, general_update_options, general_xy_row,
-  category_xy_columns, numeric_xy_columns, temporal_xy_columns,
+  bubble_columns, bubble_row, category_range_columns, category_xy_columns, numeric_range_columns, numeric_xy_columns,
+  range_area_row, temporal_range_columns, temporal_xy_columns,
   ingestion_diagnostics,
   handle_scale_options, handle_scroll_options, indicator_info, kinetic_scroll_options,
   last_value_data, localization_options, logical_range,
@@ -422,13 +423,32 @@ function parse_general_result<T>(json: string): T {
 type packed_numeric_xy_columns = Omit<numeric_xy_columns, "ids"> & {
   ids?: readonly (string | number | null)[];
 };
+type packed_bubble_columns = Omit<bubble_columns, "ids"> & {
+  ids?: readonly (string | number | null)[];
+};
+type packed_numeric_range_columns = Omit<numeric_range_columns, "ids"> & {
+  ids?: readonly (string | number | null)[];
+};
 type packed_category_xy_columns = Omit<category_xy_columns, "ids"> & {
   ids?: readonly (string | number | null)[];
 };
 type packed_temporal_xy_columns = Omit<temporal_xy_columns, "ids"> & {
   ids?: readonly (string | number | null)[];
 };
-type general_columns_input = packed_numeric_xy_columns | packed_temporal_xy_columns | packed_category_xy_columns;
+type packed_temporal_range_columns = Omit<temporal_range_columns, "ids"> & {
+  ids?: readonly (string | number | null)[];
+};
+type packed_category_range_columns = Omit<category_range_columns, "ids"> & {
+  ids?: readonly (string | number | null)[];
+};
+type general_columns_input =
+  | packed_numeric_xy_columns
+  | packed_bubble_columns
+  | packed_numeric_range_columns
+  | packed_temporal_range_columns
+  | packed_category_range_columns
+  | packed_temporal_xy_columns
+  | packed_category_xy_columns;
 
 function general_ids_json(ids: readonly (string | number | null)[] | undefined, rows: number): string {
   if (ids === undefined) return "";
@@ -457,25 +477,45 @@ function general_value_metadata_json(
 
 function pack_general_rows(
   kind: general_series_kind,
-  data: readonly general_xy_row[],
+  data: readonly (general_xy_row | bubble_row | range_area_row)[],
   x_scale?: general_axis_options["scale"],
 ): general_columns_input {
   const has_explicit = data.some((row) => row.id !== undefined);
   const ids = has_explicit ? data.map((row) => row.id ?? null) : undefined;
   const has_labels = data.some((row) => row.label !== undefined);
   const labels = has_labels ? data.map((row) => row.label ?? null) : undefined;
+  const is_range = kind === "range_area";
   const y = new Float64Array(data.length);
   let y_valid: Uint8Array | undefined;
+  const low = is_range ? new Float64Array(data.length) : undefined;
+  let low_valid: Uint8Array | undefined;
   for (let index = 0; index < data.length; index += 1) {
-    const value = data[index]!.y;
+    const row = data[index]!;
+    const value = is_range ? (row as range_area_row).high : (row as general_xy_row).y;
+    if (value === undefined) {
+      throw new nucleuscharts_error("invalid_data", "range_area rows require low and high fields");
+    }
     if (value === null) {
       y_valid ??= new Uint8Array(data.length).fill(1);
       y_valid[index] = 0;
     } else {
       y[index] = value;
     }
+    if (is_range) {
+      const low_value = (row as range_area_row).low;
+      if (low_value === undefined) {
+        throw new nucleuscharts_error("invalid_data", "range_area rows require low and high fields");
+      }
+      if (low_value === null) {
+        low_valid ??= new Uint8Array(data.length).fill(1);
+        low_valid[index] = 0;
+      } else {
+        low![index] = low_value;
+      }
+    }
   }
   const x_mode = kind === "scatter"
+    || kind === "bubble"
     ? "numeric"
     : kind === "column"
       ? "category"
@@ -493,6 +533,24 @@ function pack_general_rows(
       }
       x[index] = value;
     }
+    if (kind === "bubble") {
+      const size = new Float64Array(data.length);
+      let size_valid: Uint8Array | undefined;
+      for (let index = 0; index < data.length; index += 1) {
+        const value = (data[index] as bubble_row).size;
+        if (value === undefined) {
+          throw new nucleuscharts_error("invalid_data", "bubble rows require a size field");
+        }
+        if (value === null) {
+          size_valid ??= new Uint8Array(data.length).fill(1);
+          size_valid[index] = 0;
+        } else {
+          size[index] = value;
+        }
+      }
+      return { ids, labels, x, y, y_valid, size, size_valid };
+    }
+    if (is_range) return { ids, labels, x, low: low!, low_valid, high: y, high_valid: y_valid };
     return { ids, labels, x, y, y_valid };
   }
   if (x_mode === "temporal") {
@@ -510,6 +568,7 @@ function pack_general_rows(
         );
       }
     }
+    if (is_range) return { ids, labels, x_epoch_ms, low: low!, low_valid, high: y, high_valid: y_valid };
     return { ids, labels, x_epoch_ms, y, y_valid };
   }
   const categories: string[] = [];
@@ -528,6 +587,7 @@ function pack_general_rows(
     }
     category_indices[index] = category;
   }
+  if (is_range) return { ids, labels, categories, category_indices, low: low!, low_valid, high: y, high_valid: y_valid };
   return { ids, labels, categories, category_indices, y, y_valid };
 }
 
@@ -606,15 +666,15 @@ class general_series_impl implements general_series_api {
     return axis.options().scale;
   }
 
-  set_data(data: readonly general_xy_row[]): void {
+  set_data(data: readonly (general_xy_row | bubble_row | range_area_row)[]): void {
     this.install_data(pack_general_rows(this.kind, data, this.x_scale()));
   }
 
-  set_data_typed(columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns): void {
+  set_data_typed(columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns): void {
     this.install_data(columns);
   }
 
-  update_data(data: readonly general_xy_row[], options: general_update_options = {}): void {
+  update_data(data: readonly (general_xy_row | bubble_row | range_area_row)[], options: general_update_options = {}): void {
     if (data.some((row) => row.id === undefined)) {
       throw new nucleuscharts_error("invalid_data", "general incremental updates require explicit row IDs");
     }
@@ -622,7 +682,7 @@ class general_series_impl implements general_series_api {
   }
 
   update_data_typed(
-    columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns,
+    columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns,
     options: general_update_options = {},
   ): void {
     this.upsert_data(columns, options);
@@ -640,11 +700,45 @@ class general_series_impl implements general_series_api {
     if (this.kind === "scatter" && !("x" in columns)) {
       throw new nucleuscharts_error("invalid_data", "scatter requires numeric XY columns");
     }
+    if (this.kind === "bubble" && (!("x" in columns) || !("size" in columns))) {
+      throw new nucleuscharts_error("invalid_data", "bubble requires numeric XY columns with a size channel");
+    }
+    if (this.kind === "range_area" && !("low" in columns)) {
+      throw new nucleuscharts_error("invalid_data", "range_area requires low and high columns");
+    }
     if (this.kind === "column" && !("category_indices" in columns)) {
       throw new nucleuscharts_error("invalid_data", "column requires category XY columns");
     }
     let result: string;
-    if ("x" in columns) {
+    if ("low" in columns && "x" in columns) {
+      result = this.chart.wasm.upsert_general_range_numeric_data_typed(
+        this.dataset, general_value_metadata_json(columns, columns.x.length), columns.x,
+        columns.low, columns.low_valid, columns.high, columns.high_valid, max_rows ?? 0,
+      );
+    } else if ("low" in columns && "x_epoch_ms" in columns) {
+      result = this.chart.wasm.upsert_general_range_temporal_data_typed(
+        this.dataset, general_value_metadata_json(columns, columns.x_epoch_ms.length), columns.x_epoch_ms,
+        columns.low, columns.low_valid, columns.high, columns.high_valid, max_rows ?? 0,
+      );
+    } else if ("low" in columns) {
+      result = this.chart.wasm.upsert_general_range_category_data_typed(
+        this.dataset,
+        general_ids_json(columns.ids, columns.category_indices.length),
+        JSON.stringify({ categories: columns.categories, labels: general_labels_value(columns.labels, columns.category_indices.length), max_rows: max_rows ?? 0 }),
+        columns.category_indices, columns.low, columns.low_valid, columns.high, columns.high_valid,
+      );
+    } else if ("size" in columns) {
+      result = this.chart.wasm.upsert_general_bubble_data_typed(
+        this.dataset,
+        general_value_metadata_json(columns, columns.x.length),
+        columns.x,
+        columns.y,
+        columns.y_valid,
+        columns.size,
+        columns.size_valid,
+        max_rows ?? 0,
+      );
+    } else if ("x" in columns) {
       result = this.chart.wasm.upsert_general_numeric_data_typed(
         this.dataset,
         general_value_metadata_json(columns, columns.x.length),
@@ -686,11 +780,44 @@ class general_series_impl implements general_series_api {
     if (this.kind === "scatter" && !("x" in columns)) {
       throw new nucleuscharts_error("invalid_data", "scatter requires numeric XY columns");
     }
+    if (this.kind === "bubble" && (!("x" in columns) || !("size" in columns))) {
+      throw new nucleuscharts_error("invalid_data", "bubble requires numeric XY columns with a size channel");
+    }
+    if (this.kind === "range_area" && !("low" in columns)) {
+      throw new nucleuscharts_error("invalid_data", "range_area requires low and high columns");
+    }
     if (this.kind === "column" && !("category_indices" in columns)) {
       throw new nucleuscharts_error("invalid_data", "column requires category XY columns");
     }
     let result: string;
-    if ("x" in columns) {
+    if ("low" in columns && "x" in columns) {
+      result = this.chart.wasm.set_general_range_numeric_data_typed(
+        this.dataset, general_value_metadata_json(columns, columns.x.length), columns.x,
+        columns.low, columns.low_valid, columns.high, columns.high_valid,
+      );
+    } else if ("low" in columns && "x_epoch_ms" in columns) {
+      result = this.chart.wasm.set_general_range_temporal_data_typed(
+        this.dataset, general_value_metadata_json(columns, columns.x_epoch_ms.length), columns.x_epoch_ms,
+        columns.low, columns.low_valid, columns.high, columns.high_valid,
+      );
+    } else if ("low" in columns) {
+      result = this.chart.wasm.set_general_range_category_data_typed(
+        this.dataset,
+        general_ids_json(columns.ids, columns.category_indices.length),
+        JSON.stringify({ categories: columns.categories, labels: general_labels_value(columns.labels, columns.category_indices.length) }),
+        columns.category_indices, columns.low, columns.low_valid, columns.high, columns.high_valid,
+      );
+    } else if ("size" in columns) {
+      result = this.chart.wasm.set_general_bubble_data_typed(
+        this.dataset,
+        general_value_metadata_json(columns, columns.x.length),
+        columns.x,
+        columns.y,
+        columns.y_valid,
+        columns.size,
+        columns.size_valid,
+      );
+    } else if ("x" in columns) {
       result = this.chart.wasm.set_general_numeric_data_typed(
         this.dataset,
         general_value_metadata_json(columns, columns.x.length),
@@ -3627,7 +3754,14 @@ export class chart_impl implements chart_api {
     kind: series_kind | general_series_kind,
     options?: Partial<any_series_options> | general_series_options,
   ): series_api | general_series_api {
-    if (kind === "xy_line" || kind === "xy_area" || kind === "column" || kind === "scatter") {
+    if (
+      kind === "xy_line"
+      || kind === "xy_area"
+      || kind === "range_area"
+      || kind === "column"
+      || kind === "scatter"
+      || kind === "bubble"
+    ) {
       if (options === undefined || !("x_axis_id" in options) || !("y_axis_id" in options)) {
         throw new nucleuscharts_error(
           "invalid_options",

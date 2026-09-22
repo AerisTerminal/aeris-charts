@@ -93,32 +93,49 @@ row counts, category bytes, and ID bytes are bounded, and retained capacity is a
 engine memory evidence. A financial-only chart keeps the store absent and therefore retains zero general
 dataset capacity.
 
-The first concrete general-series bindings are category-band columns, numeric XY scatter, and the first
-Phase 2 path slices: `xy_line` and `xy_area`. General
+The first concrete general-series bindings are category-band columns, numeric XY scatter/bubble marks,
+and the first Phase 2 path slices: `xy_line`, `xy_area`, and `range_area`. General
 series have monotonic chart-local identities, stable pane/axis/dataset ownership, bounded title/color
 state, and lazy registry allocation. Populated axes and datasets cannot be removed out from under a
 series, and a pane containing a general series cannot be removed until that series is detached. Visible
 column series contribute their category union and finite valid Y values to automatic domains; the zero baseline participates in the Y
-domain. Missing rows remain queryable and accessible but emit no mark. Column geometry is computed once
+domain. Phase 2 column layout options add bounded `group_id`/`stack_id` state without creating renderer-specific
+series kinds. Visible members of one group subdivide each category band, while one stack consumes one group
+slot. Normal stacks accumulate positive and negative values independently from zero and contribute their
+summed category extents to Y autoscale; percent stacks normalize each category independently to `+1` and
+`-1`. Stack membership requires the same pane, group, category X axis, Y axis, and stack mode, while grouped
+columns may use separate compatible Y axes. Missing rows remain queryable and accessible but emit no mark or
+stack contribution. Column geometry is computed once
 in shared CSS-space semantics, reused by frame painting and exact/nearest hit testing, then lowered to
 ordinary ordered `Rect` primitives. Bounded tooltip and accessibility snapshots come from the same rows.
 Scatter binds independent continuous numeric axes, validates logarithmic positivity, clips geometry to
 the runtime view, and lowers points to ordered `Circle` primitives. Its lazily rebuilt screen-space grid
 is keyed by dataset generation, plot geometry, axis domains/transforms, direction, and point radius; grid
 cell count is capped, retained capacity is attributed to engine memory, and exact/nearest hits inspect
-only intersecting cells while preserving stable series/row tie-breaking. `xy_line` and `xy_area` reuse the same
+only intersecting cells while preserving stable series/row tie-breaking. Bubble reuses that point/index
+contract with a required typed size channel, square-root area-to-radius mapping clamped to the shared
+point-radius bound, and queryable zero/missing sizes that emit no mark. The size channel participates in
+atomic replacement, explicit-ID updates, bounded retention, accessibility, tooltip snapshots, memory
+accounting, and V2 persistence. `xy_line` and `xy_area` reuse the same
 general dataset/axis ownership across continuous numeric, temporal epoch-millisecond, and category
 band/point X domains. Missing or transform-invalid rows split path runs instead of bridging gaps.
 `xy_line` lowers each run to the shared point pool plus ordered `Polyline` primitives. `xy_area` adds an
 ordered `AreaFill` before the matching stroke; its zero baseline is clamped into linear/symlog plots and
 falls back to the lower-domain plot edge when a logarithmic Y axis has no zero coordinate. Line hits use
 segment distance, while area hits include the filled trapezoid and both preserve the closest endpoint row
-identity. The release perf harness now
+identity. `range_area` adds bounded typed low/high columns beside the same X domains, rejects inverted
+complete bounds atomically, treats either missing or transform-invalid bound as a run break, and emits one
+ordered `BandFill` plus its two boundary polylines from shared geometry. Band hit testing returns the nearest
+contributing row, while tooltip/accessibility snapshots expose both bounds. Replacement, explicit-ID updates,
+retention, memory accounting, and V2 persistence keep both channels aligned. The release perf harness now
 includes a 100k-point general-only line target with a 16.67 ms frame budget and 8 ms nearest-hit budget,
 so the first Phase 2 path has an explicit density contract rather than an unbudgeted performance claim.
-Dataset replacement remains atomic against every bound series and cannot change a bound path/scatter X kind. Canvas2D, retained
-WebGPU, GPUI, and the native tiny-skia rasterizer consume the same frame contract; column, scatter, and
-line/area paths have direct executor coverage.
+Dataset replacement remains atomic against every bound series and cannot change a bound path/scatter/bubble
+X kind or drop a bound bubble size or range low channel. Canvas2D, retained
+WebGPU, GPUI, and the native tiny-skia rasterizer consume the same frame contract; grouped/stacked columns
+reuse the already-covered ordered `Rect` executor path, bubble reuses scatter's already-covered ordered
+`Circle` executor path with per-row radii, and column, scatter, line/area, and range-band paths have direct executor
+coverage.
 
 The browser package exposes these general slices through the common chart lifecycle. Domain-aware pane and
 axis handles remain thin mutations over engine state. General-axis browser handles carry the engine's

@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 
 use nucleuscharts_core::scale::general_scale::{BandScale, LinearScale, PointScale};
@@ -14,6 +14,8 @@ use crate::{
 pub const MAX_GENERAL_SERIES: usize = 1_024;
 pub const MAX_GENERAL_SERIES_TITLE_BYTES: usize = 4_096;
 pub const MAX_GENERAL_SERIES_COLOR_BYTES: usize = 256;
+pub const MAX_GENERAL_SERIES_GROUP_ID_BYTES: usize = 128;
+pub const MAX_GENERAL_SERIES_STACK_ID_BYTES: usize = 128;
 pub const MAX_GENERAL_ACCESSIBILITY_ITEMS: usize = 512;
 pub const MIN_GENERAL_POINT_RADIUS: f64 = 1.0;
 pub const MAX_GENERAL_POINT_RADIUS: f64 = 64.0;
@@ -24,8 +26,19 @@ const MAX_SCATTER_GRID_CELLS: usize = 65_536;
 pub enum GeneralSeriesKind {
     XyLine,
     XyArea,
+    RangeArea,
     Column,
     Scatter,
+    Bubble,
+}
+
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum GeneralStackMode {
+    #[default]
+    Normal,
+    Percent,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -54,6 +67,9 @@ pub struct GeneralSeriesOptions {
     pub color: Option<String>,
     pub point_radius: f64,
     pub data_labels: bool,
+    pub group_id: Option<String>,
+    pub stack_id: Option<String>,
+    pub stack_mode: GeneralStackMode,
 }
 
 impl GeneralSeriesOptions {
@@ -74,6 +90,9 @@ impl GeneralSeriesOptions {
             color: None,
             point_radius: 3.0,
             data_labels: false,
+            group_id: None,
+            stack_id: None,
+            stack_mode: GeneralStackMode::Normal,
         }
     }
 
@@ -94,6 +113,32 @@ impl GeneralSeriesOptions {
             color: None,
             point_radius: 3.0,
             data_labels: false,
+            group_id: None,
+            stack_id: None,
+            stack_mode: GeneralStackMode::Normal,
+        }
+    }
+
+    pub fn range_area(
+        pane: usize,
+        dataset: GeneralDatasetId,
+        x_axis_id: impl Into<String>,
+        y_axis_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: GeneralSeriesKind::RangeArea,
+            pane,
+            dataset,
+            x_axis_id: x_axis_id.into(),
+            y_axis_id: y_axis_id.into(),
+            visible: true,
+            title: String::new(),
+            color: None,
+            point_radius: 3.0,
+            data_labels: false,
+            group_id: None,
+            stack_id: None,
+            stack_mode: GeneralStackMode::Normal,
         }
     }
 
@@ -114,6 +159,9 @@ impl GeneralSeriesOptions {
             color: None,
             point_radius: 3.0,
             data_labels: false,
+            group_id: None,
+            stack_id: None,
+            stack_mode: GeneralStackMode::Normal,
         }
     }
 
@@ -134,6 +182,32 @@ impl GeneralSeriesOptions {
             color: None,
             point_radius: 3.0,
             data_labels: false,
+            group_id: None,
+            stack_id: None,
+            stack_mode: GeneralStackMode::Normal,
+        }
+    }
+
+    pub fn bubble(
+        pane: usize,
+        dataset: GeneralDatasetId,
+        x_axis_id: impl Into<String>,
+        y_axis_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: GeneralSeriesKind::Bubble,
+            pane,
+            dataset,
+            x_axis_id: x_axis_id.into(),
+            y_axis_id: y_axis_id.into(),
+            visible: true,
+            title: String::new(),
+            color: None,
+            point_radius: 3.0,
+            data_labels: false,
+            group_id: None,
+            stack_id: None,
+            stack_mode: GeneralStackMode::Normal,
         }
     }
 }
@@ -151,6 +225,9 @@ pub struct GeneralSeries {
     color: Option<String>,
     point_radius: f64,
     data_labels: bool,
+    group_id: Option<String>,
+    stack_id: Option<String>,
+    stack_mode: GeneralStackMode,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -178,6 +255,15 @@ pub(crate) struct GeneralLinePointGeometry {
     pub(crate) starts_new_run: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct GeneralRangePointGeometry {
+    pub(crate) row: usize,
+    pub(crate) x: f64,
+    pub(crate) low_y: f64,
+    pub(crate) high_y: f64,
+    pub(crate) starts_new_run: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ScatterGeometryKey {
     dataset_generation: u64,
@@ -201,7 +287,6 @@ struct ScatterGeometryContext {
     plot_width: f64,
     plot_y: f64,
     plot_bottom: f64,
-    radius: f64,
 }
 
 struct ScatterSpatialIndex {
@@ -398,6 +483,9 @@ pub struct GeneralTooltipSnapshot {
     pub x_label: String,
     pub label: Option<String>,
     pub value: Option<f64>,
+    pub low: Option<f64>,
+    pub high: Option<f64>,
+    pub size: Option<f64>,
     pub title: String,
 }
 
@@ -408,6 +496,9 @@ pub struct GeneralAccessibilityItem {
     pub x_label: String,
     pub label: Option<String>,
     pub value: Option<f64>,
+    pub low: Option<f64>,
+    pub high: Option<f64>,
+    pub size: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -464,11 +555,25 @@ impl GeneralSeries {
         self.data_labels
     }
 
+    pub fn group_id(&self) -> Option<&str> {
+        self.group_id.as_deref()
+    }
+
+    pub fn stack_id(&self) -> Option<&str> {
+        self.stack_id.as_deref()
+    }
+
+    pub fn stack_mode(&self) -> GeneralStackMode {
+        self.stack_mode
+    }
+
     pub(crate) fn estimated_bytes(&self) -> usize {
         self.x_axis_id.capacity()
             + self.y_axis_id.capacity()
             + self.title.capacity()
             + self.color.as_ref().map_or(0, String::capacity)
+            + self.group_id.as_ref().map_or(0, String::capacity)
+            + self.stack_id.as_ref().map_or(0, String::capacity)
     }
 }
 
@@ -543,6 +648,9 @@ impl GeneralSeriesRegistry {
             color: options.color,
             point_radius: options.point_radius,
             data_labels: options.data_labels,
+            group_id: options.group_id,
+            stack_id: options.stack_id,
+            stack_mode: options.stack_mode,
         });
         self.next_id = next_id;
         Ok(id)
@@ -662,7 +770,9 @@ impl ChartEngine {
             return Err(invalid("general series axis dimensions are incompatible"));
         }
         match options.kind {
-            GeneralSeriesKind::XyLine | GeneralSeriesKind::XyArea => {
+            GeneralSeriesKind::XyLine
+            | GeneralSeriesKind::XyArea
+            | GeneralSeriesKind::RangeArea => {
                 let compatible_x = matches!(
                     (pane_domain, dataset_kind, x_axis.scale()),
                     (
@@ -698,7 +808,7 @@ impl ChartEngine {
                     )
                 {
                     return Err(invalid(
-                        "xy_line/xy_area requires X data/axis semantics matching its continuous, temporal, or category pane and a numeric Y axis",
+                        "xy_line/xy_area/range_area requires X data/axis semantics matching its continuous, temporal, or category pane and a numeric Y axis",
                     ));
                 }
             }
@@ -716,7 +826,7 @@ impl ChartEngine {
                     ));
                 }
             }
-            GeneralSeriesKind::Scatter => {
+            GeneralSeriesKind::Scatter | GeneralSeriesKind::Bubble => {
                 if !matches!(pane_domain, HorizontalDomain::Continuous { .. })
                     || dataset_kind != GeneralXKind::Numeric
                     || !matches!(
@@ -733,13 +843,14 @@ impl ChartEngine {
                     )
                 {
                     return Err(invalid(
-                        "scatter requires a continuous pane, numeric X data, and numeric X/Y axes",
+                        "scatter/bubble requires a continuous pane, numeric X data, and numeric X/Y axes",
                     ));
                 }
             }
         }
         validate_dataset_for_series(options.kind, dataset, &x_axis, &y_axis)?;
         validate_presentation(&options)?;
+        self.validate_column_layout_compatibility(pane_id, &options)?;
         let id = if let Some(registry) = self.general_series.as_mut() {
             registry.insert(pane_id, options)?
         } else {
@@ -750,6 +861,49 @@ impl ChartEngine {
         };
         self.invalidate_frame_all();
         Ok(id)
+    }
+
+    fn validate_column_layout_compatibility(
+        &self,
+        pane_id: PaneId,
+        options: &GeneralSeriesOptions,
+    ) -> Result<(), ChartError> {
+        if options.kind != GeneralSeriesKind::Column {
+            return Ok(());
+        }
+
+        if let Some(group_id) = options.group_id.as_deref() {
+            for sibling in self.general_series_iter().filter(|series| {
+                series.kind == GeneralSeriesKind::Column
+                    && series.pane_id == pane_id
+                    && series.group_id() == Some(group_id)
+            }) {
+                if sibling.x_axis_id != options.x_axis_id {
+                    return Err(invalid(
+                        "grouped column series must share the same category X axis",
+                    ));
+                }
+            }
+        }
+
+        if let Some(stack_id) = options.stack_id.as_deref() {
+            for sibling in self.general_series_iter().filter(|series| {
+                series.kind == GeneralSeriesKind::Column
+                    && series.pane_id == pane_id
+                    && series.group_id() == options.group_id.as_deref()
+                    && series.stack_id() == Some(stack_id)
+            }) {
+                if sibling.x_axis_id != options.x_axis_id
+                    || sibling.y_axis_id != options.y_axis_id
+                    || sibling.stack_mode != options.stack_mode
+                {
+                    return Err(invalid(
+                        "stacked column series must share X/Y axes, group ID, and stack mode",
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     #[doc(hidden)]
@@ -919,12 +1073,68 @@ impl ChartEngine {
         let Ok(y_scale) = LinearScale::new(y_from, y_to, y_range.0, y_range.1) else {
             return;
         };
-        let baseline = y_scale.coordinate_clamped(0.0).unwrap_or(y_range.0);
         let axis_lookup: HashMap<&str, usize> = axis_categories
             .iter()
             .enumerate()
             .map(|(index, category)| (category.as_str(), index))
             .collect();
+
+        let (slot_index, slot_count) = self.general_column_group_slot(series);
+        let mut stack_base = series
+            .stack_id
+            .is_some()
+            .then(|| vec![(0.0_f64, 0.0_f64); axis_categories.len()]);
+        let mut stack_totals = (series.stack_mode == GeneralStackMode::Percent)
+            .then(|| vec![(0.0_f64, 0.0_f64); axis_categories.len()]);
+        if series.stack_id.is_some() {
+            if let Some(registry) = self.general_series.as_ref() {
+                if let Some(totals) = stack_totals.as_mut() {
+                    for sibling in registry.series.iter().filter(|candidate| {
+                        candidate.visible && column_stack_matches(series, candidate)
+                    }) {
+                        accumulate_column_values(
+                            self,
+                            sibling,
+                            &axis_lookup,
+                            |axis_index, value| {
+                                if value >= 0.0 {
+                                    totals[axis_index].0 += value;
+                                } else {
+                                    totals[axis_index].1 += -value;
+                                }
+                            },
+                        );
+                    }
+                }
+                for sibling in registry.series.iter().filter(|candidate| {
+                    candidate.visible && column_stack_matches(series, candidate)
+                }) {
+                    if sibling.id == series.id {
+                        break;
+                    }
+                    let Some(base) = stack_base.as_mut() else {
+                        break;
+                    };
+                    accumulate_column_values(self, sibling, &axis_lookup, |axis_index, value| {
+                        if value >= 0.0 {
+                            base[axis_index].0 += value;
+                        } else {
+                            base[axis_index].1 += value;
+                        }
+                    });
+                }
+                if let (Some(base), Some(totals)) = (stack_base.as_mut(), stack_totals.as_ref()) {
+                    for (base, total) in base.iter_mut().zip(totals) {
+                        if total.0 > 0.0 {
+                            base.0 /= total.0;
+                        }
+                        if total.1 > 0.0 {
+                            base.1 /= total.1;
+                        }
+                    }
+                }
+            }
+        }
 
         for (row, &category_index) in category_indices.iter().enumerate() {
             if !dataset.y_is_valid(row) {
@@ -942,13 +1152,59 @@ impl ChartEngine {
             let Some((left, right)) = x_scale.bounds(axis_index) else {
                 continue;
             };
-            let Some(value_y) = y_scale.coordinate_clamped(dataset.y()[row]) else {
+            let full_left = left.min(right).clamp(0.0, plot.width);
+            let full_right = left.max(right).clamp(0.0, plot.width);
+            let slot_width = (full_right - full_left) / slot_count.max(1) as f64;
+            let left = full_left + slot_width * slot_index as f64;
+            let right = if slot_index + 1 == slot_count {
+                full_right
+            } else {
+                left + slot_width
+            };
+            let raw_value = dataset.y()[row];
+            let (from_value, to_value) = if series.stack_id.is_some() {
+                let normalized_value = match stack_totals.as_ref() {
+                    Some(totals) if raw_value >= 0.0 => {
+                        let total = totals[axis_index].0;
+                        if total > 0.0 {
+                            raw_value / total
+                        } else {
+                            0.0
+                        }
+                    }
+                    Some(totals) => {
+                        let total = totals[axis_index].1;
+                        if total > 0.0 {
+                            raw_value / total
+                        } else {
+                            0.0
+                        }
+                    }
+                    None => raw_value,
+                };
+                let Some(stack_base) = stack_base.as_mut() else {
+                    continue;
+                };
+                let base = if raw_value >= 0.0 {
+                    &mut stack_base[axis_index].0
+                } else {
+                    &mut stack_base[axis_index].1
+                };
+                let from = *base;
+                let to = from + normalized_value;
+                *base = to;
+                (from, to)
+            } else {
+                (0.0, raw_value)
+            };
+            let Some(from_y) = y_scale.coordinate_clamped(from_value) else {
                 continue;
             };
-            let left = left.clamp(0.0, plot.width);
-            let right = right.clamp(0.0, plot.width);
-            let top = baseline.min(value_y).clamp(plot.y, plot_bottom);
-            let bottom = baseline.max(value_y).clamp(plot.y, plot_bottom);
+            let Some(to_y) = y_scale.coordinate_clamped(to_value) else {
+                continue;
+            };
+            let top = from_y.min(to_y).clamp(plot.y, plot_bottom);
+            let bottom = from_y.max(to_y).clamp(plot.y, plot_bottom);
             if right <= left || bottom <= top {
                 continue;
             }
@@ -960,6 +1216,134 @@ impl ChartEngine {
                 bottom,
             });
         }
+    }
+
+    fn general_column_group_slot(&self, series: &GeneralSeries) -> (usize, usize) {
+        let Some(group_id) = series.group_id() else {
+            return (0, 1);
+        };
+        let Some(registry) = self.general_series.as_ref() else {
+            return (0, 1);
+        };
+        let mut target_slot = 0usize;
+        let mut slot_count = 0usize;
+        for (index, sibling) in registry.series.iter().enumerate() {
+            if !sibling.visible
+                || sibling.kind != GeneralSeriesKind::Column
+                || sibling.pane_id != series.pane_id
+                || sibling.x_axis_id != series.x_axis_id
+                || sibling.group_id() != Some(group_id)
+            {
+                continue;
+            }
+            let representative = sibling.stack_id().is_none()
+                || !registry.series[..index].iter().any(|previous| {
+                    previous.visible
+                        && previous.kind == GeneralSeriesKind::Column
+                        && previous.pane_id == series.pane_id
+                        && previous.x_axis_id == series.x_axis_id
+                        && previous.group_id() == Some(group_id)
+                        && previous.stack_id() == sibling.stack_id()
+                });
+            if !representative {
+                continue;
+            }
+            if sibling.id == series.id
+                || (series.stack_id().is_some() && sibling.stack_id() == series.stack_id())
+            {
+                target_slot = slot_count;
+            }
+            slot_count += 1;
+        }
+        (target_slot, slot_count.max(1))
+    }
+
+    pub(crate) fn general_column_axis_bounds(
+        &self,
+        pane_id: PaneId,
+        y_axis_id: &str,
+    ) -> Option<(f64, f64)> {
+        let registry = self.general_series.as_ref()?;
+        let mut bounds: Option<(f64, f64)> = None;
+        let mut processed_stacks = HashSet::new();
+
+        for series in registry.series.iter().filter(|series| {
+            series.visible
+                && series.kind == GeneralSeriesKind::Column
+                && series.pane_id == pane_id
+                && series.y_axis_id == y_axis_id
+        }) {
+            if let Some(stack_id) = series.stack_id() {
+                let key = (
+                    series.x_axis_id.clone(),
+                    series.group_id.clone(),
+                    stack_id.to_owned(),
+                    series.stack_mode,
+                );
+                if !processed_stacks.insert(key) {
+                    continue;
+                }
+                let mut category_totals: HashMap<String, (f64, f64)> = HashMap::new();
+                for sibling in registry.series.iter().filter(|candidate| {
+                    candidate.visible
+                        && candidate.y_axis_id == y_axis_id
+                        && column_stack_matches(series, candidate)
+                }) {
+                    let Some(dataset) = self.general_dataset(sibling.dataset) else {
+                        continue;
+                    };
+                    let (Some(categories), Some(indices)) =
+                        (dataset.categories(), dataset.category_indices())
+                    else {
+                        continue;
+                    };
+                    for (row, &category_index) in indices.iter().enumerate() {
+                        if !dataset.y_is_valid(row) {
+                            continue;
+                        }
+                        let Some(category) = usize::try_from(category_index)
+                            .ok()
+                            .and_then(|index| categories.get(index))
+                        else {
+                            continue;
+                        };
+                        let value = dataset.y()[row];
+                        let totals = category_totals.entry(category.clone()).or_default();
+                        if value >= 0.0 {
+                            totals.0 += value;
+                        } else {
+                            totals.1 += value;
+                        }
+                    }
+                }
+                for (positive, negative) in category_totals.into_values() {
+                    match series.stack_mode {
+                        GeneralStackMode::Normal => {
+                            extend_numeric_pair(&mut bounds, positive);
+                            extend_numeric_pair(&mut bounds, negative);
+                        }
+                        GeneralStackMode::Percent => {
+                            if positive > 0.0 {
+                                extend_numeric_pair(&mut bounds, 1.0);
+                            }
+                            if negative < 0.0 {
+                                extend_numeric_pair(&mut bounds, -1.0);
+                            }
+                        }
+                    }
+                }
+            } else if let Some(dataset) = self.general_dataset(series.dataset) {
+                for (row, &value) in dataset.y().iter().enumerate() {
+                    if dataset.y_is_valid(row) {
+                        extend_numeric_pair(&mut bounds, value);
+                    }
+                }
+            }
+        }
+        if bounds.is_some() {
+            extend_numeric_pair(&mut bounds, 0.0);
+        }
+        bounds
     }
 
     pub(crate) fn visit_general_path_points<F>(&self, series: &GeneralSeries, mut visit: F)
@@ -1126,6 +1510,172 @@ impl ChartEngine {
         }
     }
 
+    pub(crate) fn visit_general_range_points<F>(&self, series: &GeneralSeries, mut visit: F)
+    where
+        F: FnMut(GeneralRangePointGeometry),
+    {
+        if !series.visible || series.kind != GeneralSeriesKind::RangeArea {
+            return;
+        }
+        let Some(pane_index) = self.pane_index_for_id(series.pane_id) else {
+            return;
+        };
+        let Some(plot) = self.general_plot_rect(pane_index) else {
+            return;
+        };
+        let Some(dataset) = self.general_dataset(series.dataset) else {
+            return;
+        };
+        let Some(low_values) = dataset.low() else {
+            return;
+        };
+        let (Some(x_axis), Some(y_axis)) = (
+            self.general_axis(&series.x_axis_id),
+            self.general_axis(&series.y_axis_id),
+        ) else {
+            return;
+        };
+        let Some(x_domain) = self.effective_general_axis_domain(x_axis) else {
+            return;
+        };
+        let Some(GeneralAxisDomain::Numeric(y_domain)) = self.effective_general_axis_domain(y_axis)
+        else {
+            return;
+        };
+        let x_range = if x_axis.reverse() {
+            (plot.width, 0.0)
+        } else {
+            (0.0, plot.width)
+        };
+        let plot_bottom = plot.y + plot.height;
+        let y_range = if y_axis.reverse() {
+            (plot.y, plot_bottom)
+        } else {
+            (plot_bottom, plot.y)
+        };
+        let Some(y_scale) = NumericAxisScale::new(y_axis.scale(), y_domain, y_range.0, y_range.1)
+        else {
+            return;
+        };
+        let numeric_x_scale = match &x_domain {
+            GeneralAxisDomain::Numeric(domain) => {
+                NumericAxisScale::new(x_axis.scale(), *domain, x_range.0, x_range.1)
+            }
+            _ => None,
+        };
+        let temporal_x_scale = match &x_domain {
+            GeneralAxisDomain::Temporal([from, to]) => {
+                LinearScale::new(*from as f64, *to as f64, x_range.0, x_range.1).ok()
+            }
+            _ => None,
+        };
+        let category_lookup: Option<HashMap<&str, usize>> = match &x_domain {
+            GeneralAxisDomain::Category(values) => Some(
+                values
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| (value.as_str(), index))
+                    .collect(),
+            ),
+            _ => None,
+        };
+        let category_band_scale = match &x_domain {
+            GeneralAxisDomain::Category(values) if x_axis.scale() == GeneralScaleType::Band => {
+                BandScale::new(
+                    values.len(),
+                    x_range.0,
+                    x_range.1,
+                    x_axis.band_padding_inner(),
+                    x_axis.band_padding_outer(),
+                    0.5,
+                )
+                .ok()
+            }
+            _ => None,
+        };
+        let category_point_scale = match &x_domain {
+            GeneralAxisDomain::Category(values) if x_axis.scale() == GeneralScaleType::Point => {
+                PointScale::new(
+                    values.len(),
+                    x_range.0,
+                    x_range.1,
+                    x_axis.band_padding_outer(),
+                    0.5,
+                )
+                .ok()
+            }
+            _ => None,
+        };
+
+        let mut starts_new_run = true;
+        for (row, &low) in low_values.iter().enumerate().take(dataset.len()) {
+            if !dataset.y_is_valid(row) || !dataset.low_is_valid(row) {
+                starts_new_run = true;
+                continue;
+            }
+            let Some(high_y) = y_scale.coordinate(dataset.y()[row]) else {
+                starts_new_run = true;
+                continue;
+            };
+            let Some(low_y) = y_scale.coordinate(low) else {
+                starts_new_run = true;
+                continue;
+            };
+            let x = match dataset.x_kind() {
+                GeneralXKind::Numeric => dataset
+                    .numeric_x()
+                    .and_then(|values| values.get(row))
+                    .and_then(|value| numeric_x_scale.and_then(|scale| scale.coordinate(*value))),
+                GeneralXKind::Temporal => dataset
+                    .temporal_x_epoch_ms()
+                    .and_then(|values| values.get(row))
+                    .and_then(|value| {
+                        temporal_x_scale
+                            .as_ref()
+                            .and_then(|scale| scale.coordinate(*value as f64))
+                    }),
+                GeneralXKind::Category => {
+                    let axis_index = dataset
+                        .category_indices()
+                        .and_then(|values| values.get(row))
+                        .and_then(|value| usize::try_from(*value).ok())
+                        .and_then(|index| dataset.categories().and_then(|values| values.get(index)))
+                        .and_then(|category| {
+                            category_lookup
+                                .as_ref()
+                                .and_then(|lookup| lookup.get(category.as_str()))
+                                .copied()
+                        });
+                    axis_index.and_then(|index| match x_axis.scale() {
+                        GeneralScaleType::Band => category_band_scale
+                            .as_ref()
+                            .and_then(|scale| scale.center(index)),
+                        GeneralScaleType::Point => category_point_scale
+                            .as_ref()
+                            .and_then(|scale| scale.coordinate(index)),
+                        _ => None,
+                    })
+                }
+            };
+            let Some(x) = x else {
+                starts_new_run = true;
+                continue;
+            };
+            if !x.is_finite() || !low_y.is_finite() || !high_y.is_finite() {
+                starts_new_run = true;
+                continue;
+            }
+            visit(GeneralRangePointGeometry {
+                row,
+                x,
+                low_y,
+                high_y,
+                starts_new_run,
+            });
+            starts_new_run = false;
+        }
+    }
+
     pub(crate) fn general_path_baseline_y(&self, series: &GeneralSeries) -> Option<f64> {
         if !series.visible
             || !matches!(
@@ -1158,7 +1708,12 @@ impl ChartEngine {
     }
 
     fn scatter_geometry_context(&self, series: &GeneralSeries) -> Option<ScatterGeometryContext> {
-        if !series.visible || series.kind != GeneralSeriesKind::Scatter {
+        if !series.visible
+            || !matches!(
+                series.kind,
+                GeneralSeriesKind::Scatter | GeneralSeriesKind::Bubble
+            )
+        {
             return None;
         }
         let pane_index = self.pane_index_for_id(series.pane_id)?;
@@ -1188,6 +1743,11 @@ impl ChartEngine {
         };
         let x_scale = NumericAxisScale::new(x_axis.scale(), x_domain, x_range.0, x_range.1)?;
         let y_scale = NumericAxisScale::new(y_axis.scale(), y_domain, y_range.0, y_range.1)?;
+        let radius = if series.kind == GeneralSeriesKind::Bubble {
+            MAX_GENERAL_POINT_RADIUS
+        } else {
+            series.point_radius
+        };
         Some(ScatterGeometryContext {
             key: ScatterGeometryKey {
                 dataset_generation: dataset.generation(),
@@ -1200,14 +1760,13 @@ impl ChartEngine {
                 y_scale: y_axis.scale(),
                 x_reverse: x_axis.reverse(),
                 y_reverse: y_axis.reverse(),
-                radius: series.point_radius.to_bits(),
+                radius: radius.to_bits(),
             },
             x_scale,
             y_scale,
             plot_width: plot.width,
             plot_y: plot.y,
             plot_bottom,
-            radius: series.point_radius,
         })
     }
 
@@ -1223,25 +1782,32 @@ impl ChartEngine {
             if !dataset.y_is_valid(row) {
                 continue;
             }
+            let radius = match series.kind {
+                GeneralSeriesKind::Scatter => series.point_radius,
+                GeneralSeriesKind::Bubble => {
+                    let size = dataset.size()?.get(row).copied()?;
+                    if !dataset.size_is_valid(row) || size <= 0.0 {
+                        continue;
+                    }
+                    size.sqrt()
+                        .clamp(MIN_GENERAL_POINT_RADIUS, MAX_GENERAL_POINT_RADIUS)
+                }
+                _ => return None,
+            };
             let (Some(x), Some(y)) = (
                 context.x_scale.coordinate(x_value),
                 context.y_scale.coordinate(y_value),
             ) else {
                 continue;
             };
-            if x < -context.radius
-                || x > context.plot_width + context.radius
-                || y < context.plot_y - context.radius
-                || y > context.plot_bottom + context.radius
+            if x < -radius
+                || x > context.plot_width + radius
+                || y < context.plot_y - radius
+                || y > context.plot_bottom + radius
             {
                 continue;
             }
-            points.push(GeneralScatterGeometry {
-                row,
-                x,
-                y,
-                radius: context.radius,
-            });
+            points.push(GeneralScatterGeometry { row, x, y, radius });
         }
         Some(ScatterSpatialIndex::new(
             context.key,
@@ -1389,11 +1955,45 @@ impl ChartEngine {
                         previous = Some(geometry);
                     });
                 }
+                GeneralSeriesKind::RangeArea => {
+                    let mut previous: Option<GeneralRangePointGeometry> = None;
+                    self.visit_general_range_points(series, |geometry| {
+                        if geometry.starts_new_run {
+                            previous = Some(geometry);
+                            return;
+                        }
+                        let Some(from) = previous else {
+                            previous = Some(geometry);
+                            return;
+                        };
+                        let (distance, position) = distance_to_band_segment(
+                            x_css,
+                            y_css,
+                            from.x,
+                            from.low_y,
+                            from.high_y,
+                            geometry.x,
+                            geometry.low_y,
+                            geometry.high_y,
+                        );
+                        let row = if position <= 0.5 {
+                            from.row
+                        } else {
+                            geometry.row
+                        };
+                        consider(row, distance);
+                        previous = Some(geometry);
+                    });
+                }
                 GeneralSeriesKind::Column => self.visit_general_columns(series, |geometry| {
                     consider(geometry.row, distance_to_rect(x_css, y_css, geometry));
                 }),
-                GeneralSeriesKind::Scatter => {
-                    let expansion = series.point_radius + max_distance;
+                GeneralSeriesKind::Scatter | GeneralSeriesKind::Bubble => {
+                    let expansion = if series.kind == GeneralSeriesKind::Bubble {
+                        MAX_GENERAL_POINT_RADIUS
+                    } else {
+                        series.point_radius
+                    } + max_distance;
                     let _ = self.with_scatter_spatial_index(series, |index| {
                         index.visit_candidates(x_css, y_css, expansion, |geometry| {
                             consider(geometry.row, distance_to_circle(x_css, y_css, geometry));
@@ -1617,8 +2217,10 @@ impl ChartEngine {
         max_distance: f64,
     ) -> Option<usize> {
         let series = self.general_series(series_id)?;
-        if series.kind != GeneralSeriesKind::Scatter
-            || !x_css.is_finite()
+        if !matches!(
+            series.kind,
+            GeneralSeriesKind::Scatter | GeneralSeriesKind::Bubble
+        ) || !x_css.is_finite()
             || !y_css.is_finite()
             || !max_distance.is_finite()
             || max_distance < 0.0
@@ -1627,9 +2229,12 @@ impl ChartEngine {
         }
         self.with_scatter_spatial_index(series, |index| {
             let mut count = 0usize;
-            index.visit_candidates(x_css, y_css, series.point_radius + max_distance, |_| {
-                count += 1
-            });
+            let expansion = if series.kind == GeneralSeriesKind::Bubble {
+                MAX_GENERAL_POINT_RADIUS
+            } else {
+                series.point_radius
+            } + max_distance;
+            index.visit_candidates(x_css, y_css, expansion, |_| count += 1);
             count
         })
     }
@@ -1651,6 +2256,15 @@ impl ChartEngine {
             x_label,
             label: dataset.row_label(row).map(str::to_owned),
             value: dataset.y_is_valid(row).then(|| dataset.y()[row]),
+            low: dataset
+                .low()
+                .and_then(|values| dataset.low_is_valid(row).then(|| values[row])),
+            high: dataset
+                .low()
+                .and_then(|_| dataset.y_is_valid(row).then(|| dataset.y()[row])),
+            size: dataset
+                .size()
+                .and_then(|values| dataset.size_is_valid(row).then(|| values[row])),
             title: series.title.clone(),
         })
     }
@@ -1679,6 +2293,15 @@ impl ChartEngine {
                 x_label,
                 label: dataset.row_label(row).map(str::to_owned),
                 value: dataset.y_is_valid(row).then(|| dataset.y()[row]),
+                low: dataset
+                    .low()
+                    .and_then(|values| dataset.low_is_valid(row).then(|| values[row])),
+                high: dataset
+                    .low()
+                    .and_then(|_| dataset.y_is_valid(row).then(|| dataset.y()[row])),
+                size: dataset
+                    .size()
+                    .and_then(|values| dataset.size_is_valid(row).then(|| values[row])),
             });
         }
         Some(GeneralAccessibilitySnapshot {
@@ -1707,6 +2330,57 @@ fn distance_to_rect(x: f64, y: f64, geometry: GeneralColumnGeometry) -> f64 {
         0.0
     };
     dx.hypot(dy)
+}
+
+fn column_stack_matches(reference: &GeneralSeries, candidate: &GeneralSeries) -> bool {
+    reference.kind == GeneralSeriesKind::Column
+        && candidate.kind == GeneralSeriesKind::Column
+        && reference.pane_id == candidate.pane_id
+        && reference.x_axis_id == candidate.x_axis_id
+        && reference.y_axis_id == candidate.y_axis_id
+        && reference.group_id == candidate.group_id
+        && reference.stack_id.is_some()
+        && reference.stack_id == candidate.stack_id
+        && reference.stack_mode == candidate.stack_mode
+}
+
+fn accumulate_column_values<F>(
+    engine: &ChartEngine,
+    series: &GeneralSeries,
+    axis_lookup: &HashMap<&str, usize>,
+    mut visit: F,
+) where
+    F: FnMut(usize, f64),
+{
+    let Some(dataset) = engine.general_dataset(series.dataset) else {
+        return;
+    };
+    let (Some(categories), Some(indices)) = (dataset.categories(), dataset.category_indices())
+    else {
+        return;
+    };
+    for (row, &category_index) in indices.iter().enumerate() {
+        if !dataset.y_is_valid(row) {
+            continue;
+        }
+        let Some(category) = usize::try_from(category_index)
+            .ok()
+            .and_then(|index| categories.get(index))
+        else {
+            continue;
+        };
+        let Some(&axis_index) = axis_lookup.get(category.as_str()) else {
+            continue;
+        };
+        visit(axis_index, dataset.y()[row]);
+    }
+}
+
+fn extend_numeric_pair(bounds: &mut Option<(f64, f64)>, value: f64) {
+    *bounds = Some(match *bounds {
+        Some((low, high)) => (low.min(value), high.max(value)),
+        None => (value, value),
+    });
 }
 
 fn distance_to_circle(x: f64, y: f64, geometry: GeneralScatterGeometry) -> f64 {
@@ -1760,6 +2434,39 @@ fn distance_to_area_segment(
     (distance, position)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn distance_to_band_segment(
+    x: f64,
+    y: f64,
+    x0: f64,
+    low0: f64,
+    high0: f64,
+    x1: f64,
+    low1: f64,
+    high1: f64,
+) -> (f64, f64) {
+    let (_, projected) = distance_to_segment(x, y, x0, high0, x1, high1);
+    let position = if (x1 - x0).abs() > f64::EPSILON {
+        ((x - x0) / (x1 - x0)).clamp(0.0, 1.0)
+    } else {
+        projected
+    };
+    let low_y = low0 + (low1 - low0) * position;
+    let high_y = high0 + (high1 - high0) * position;
+    if x >= x0.min(x1) && x <= x0.max(x1) && y >= low_y.min(high_y) && y <= low_y.max(high_y) {
+        return (0.0, position);
+    }
+    let distance = [
+        distance_to_segment(x, y, x0, low0, x1, low1).0,
+        distance_to_segment(x, y, x0, high0, x1, high1).0,
+        distance_to_segment(x, y, x0, low0, x0, high0).0,
+        distance_to_segment(x, y, x1, low1, x1, high1).0,
+    ]
+    .into_iter()
+    .fold(f64::INFINITY, f64::min);
+    (distance, position)
+}
+
 fn general_x_label(dataset: &crate::GeneralDataset, row: usize) -> Option<String> {
     if let Some(values) = dataset.numeric_x() {
         return values.get(row).map(ToString::to_string);
@@ -1800,6 +2507,26 @@ fn validate_dataset_for_series(
                 ));
             }
         }
+        GeneralSeriesKind::RangeArea => {
+            let expected_x = match x_axis.scale() {
+                GeneralScaleType::Linear
+                | GeneralScaleType::Logarithmic
+                | GeneralScaleType::SymmetricLog => GeneralXKind::Numeric,
+                GeneralScaleType::Temporal => GeneralXKind::Temporal,
+                GeneralScaleType::Band | GeneralScaleType::Point => GeneralXKind::Category,
+                GeneralScaleType::RadialLinear | GeneralScaleType::AngularCategory => {
+                    return Err(invalid("range-area X axis scale is incompatible"));
+                }
+            };
+            if dataset.x_kind() != expected_x {
+                return Err(invalid(
+                    "range-area dataset X kind must match its bound X axis",
+                ));
+            }
+            dataset
+                .low()
+                .ok_or_else(|| invalid("range-area series require a low-value channel"))?;
+        }
         GeneralSeriesKind::Scatter => {
             let values = dataset
                 .numeric_x()
@@ -1810,6 +2537,14 @@ fn validate_dataset_for_series(
                 return Err(invalid("logarithmic scatter X values must be positive"));
             }
             validate_logarithmic_general_y(dataset, y_axis)?;
+        }
+        GeneralSeriesKind::Bubble => {
+            dataset
+                .numeric_x()
+                .ok_or_else(|| invalid("bubble series require numeric X data"))?;
+            dataset
+                .size()
+                .ok_or_else(|| invalid("bubble series require a size channel"))?;
         }
     }
     Ok(())
@@ -1864,6 +2599,26 @@ fn validate_input_for_series(
                 ));
             }
         }
+        GeneralSeriesKind::RangeArea => {
+            let expected_x = match x_axis.scale() {
+                GeneralScaleType::Linear
+                | GeneralScaleType::Logarithmic
+                | GeneralScaleType::SymmetricLog => GeneralXKind::Numeric,
+                GeneralScaleType::Temporal => GeneralXKind::Temporal,
+                GeneralScaleType::Band | GeneralScaleType::Point => GeneralXKind::Category,
+                GeneralScaleType::RadialLinear | GeneralScaleType::AngularCategory => {
+                    return Err(invalid("range-area X axis scale is incompatible"));
+                }
+            };
+            if input.x_kind() != expected_x {
+                return Err(invalid(
+                    "a dataset bound to a range-area series must keep the X kind required by its X axis",
+                ));
+            }
+            input.low_values().ok_or_else(|| {
+                invalid("a dataset bound to a range-area series must retain its low-value channel")
+            })?;
+        }
         GeneralSeriesKind::Scatter => {
             let values = input.numeric_x_values().ok_or_else(|| {
                 invalid("a dataset bound to a scatter series must remain numeric X data")
@@ -1874,6 +2629,14 @@ fn validate_input_for_series(
                 return Err(invalid("logarithmic scatter X values must be positive"));
             }
             validate_logarithmic_input_y(input, y_axis)?;
+        }
+        GeneralSeriesKind::Bubble => {
+            input.numeric_x_values().ok_or_else(|| {
+                invalid("a dataset bound to a bubble series must remain numeric X data")
+            })?;
+            input.size_values().ok_or_else(|| {
+                invalid("a dataset bound to a bubble series must retain its size channel")
+            })?;
         }
     }
     Ok(())
@@ -1914,6 +2677,36 @@ fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartErro
         if Color::parse_css(color).is_none() {
             return Err(invalid("general series color must be a valid CSS color"));
         }
+    }
+    if options
+        .group_id
+        .as_ref()
+        .is_some_and(|value| value.len() > MAX_GENERAL_SERIES_GROUP_ID_BYTES)
+    {
+        return Err(resource(format!(
+            "general series group ID exceeds {MAX_GENERAL_SERIES_GROUP_ID_BYTES} UTF-8 bytes"
+        )));
+    }
+    if options
+        .stack_id
+        .as_ref()
+        .is_some_and(|value| value.len() > MAX_GENERAL_SERIES_STACK_ID_BYTES)
+    {
+        return Err(resource(format!(
+            "general series stack ID exceeds {MAX_GENERAL_SERIES_STACK_ID_BYTES} UTF-8 bytes"
+        )));
+    }
+    if options.kind != GeneralSeriesKind::Column
+        && (options.group_id.is_some()
+            || options.stack_id.is_some()
+            || options.stack_mode != GeneralStackMode::Normal)
+    {
+        return Err(invalid(
+            "grouping and stacking options are currently supported only by column series",
+        ));
+    }
+    if options.stack_id.is_none() && options.stack_mode != GeneralStackMode::Normal {
+        return Err(invalid("percent stack mode requires a stack ID"));
     }
     if options.kind == GeneralSeriesKind::Scatter
         && (!options.point_radius.is_finite()

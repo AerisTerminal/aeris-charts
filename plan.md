@@ -380,8 +380,26 @@ Current Phase 2 progress (2026-09-22):
 - browser object/typed ingestion includes epoch-millisecond temporal columns, explicit-ID incremental
   updates and retention reuse the Phase 1 transaction path, and invalid temporal values reject atomically;
 - both path kinds reuse bounded labels, tooltip/accessibility snapshots, hover/selection/focus, V2
-  persistence, and the shared keyboard controller. The focused general-chart browser suite is 9/9 across
-  Chromium/Firefox/WebKit, and direct Canvas2D/WebGPU/GPUI path executor coverage is green;
+  persistence, and the shared keyboard controller;
+- grouped/stacked vertical columns now reuse the Phase 1 column/store path through bounded `group_id` and
+  `stack_id` options. Visible grouped members split each category band, stack members share one group slot,
+  positive/negative normal stacks accumulate independently around zero, percent stacks normalize per category,
+  stack-aware summed extents feed automatic Y domains, and exact/nearest hits retain the contributing row identity.
+  The options cross the WASM/TypeScript boundary, survive V2 persistence, and reuse the existing ordered `Rect`
+  backend contract rather than adding a renderer-only series kind. Horizontal-bar orientation and stacked-area
+  semantics remain open;
+- bubble series now reuse the numeric XY store and shared point geometry with a required typed size channel,
+  square-root area-to-radius mapping, bounded radii and hit-index work, missing/zero-size semantics, explicit-ID
+  updates and retention, tooltip/accessibility snapshots, shared keyboard focus, and V2 persistence;
+- `range_area` now owns aligned typed low/high channels over numeric, temporal, and category X domains. Shared
+  band geometry splits on missing/transform-invalid bounds, drives exact/nearest hits and bounded labels, exposes
+  both values to tooltip/accessibility snapshots, and participates in object/typed replacement, explicit-ID
+  updates, retention, memory accounting, keyboard focus, and V2 persistence;
+- the focused general-chart browser suite is 18/18 across Chromium/Firefox/WebKit, including grouped/stacked
+  columns plus bubble and range-area ingestion, hit testing, updates, accessibility snapshots, and V2 restoration, while direct
+  Canvas2D/WebGPU/GPUI path executor coverage remains green;
+- the complete portable browser matrix remains green with 279 passed and 10 expected skips, and the package
+  smoke test contains 21 files with a 2436 kB WASM artifact;
 - the release perf harness now enforces the first general-only density gate at 100k `xy_line` points:
   shared-frame construction must remain within 16.67 ms and nearest-hit interaction within 8 ms. Both
   budgets pass on the current validation machine while the existing financial targets remain green.

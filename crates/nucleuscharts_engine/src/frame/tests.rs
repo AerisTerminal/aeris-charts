@@ -7,7 +7,8 @@ use super::conflation::{
 use super::*;
 use crate::{
     AxisDimension, CategoryScaleType, ContinuousScaleType, GeneralAxisDomain, GeneralAxisOptions,
-    GeneralRowId, GeneralScaleType, GeneralSeriesOptions, GeneralXyInput, HorizontalDomain,
+    GeneralRowId, GeneralScaleType, GeneralSeriesOptions, GeneralStackMode, GeneralXyInput,
+    HorizontalDomain,
 };
 use nucleuscharts_core::model::data_layer::DataLayer;
 use nucleuscharts_core::model::plot_list::{PlotList, PlotValues};
@@ -410,6 +411,271 @@ fn category_column_series_owns_auto_domains_geometry_and_lifecycle() {
     assert!(chart.remove_general_dataset(dataset));
     assert_eq!(chart.memory_usage().general_data_capacity_bytes, 0);
     assert!(chart.remove_pane(pane));
+}
+
+#[test]
+fn grouped_columns_share_each_band_without_overlap_and_keep_hit_identity() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Band,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "group-x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Band,
+        ))
+        .unwrap();
+    let mut y =
+        GeneralAxisOptions::new("group-y", pane, AxisDimension::Y, GeneralScaleType::Linear);
+    y.domain = GeneralAxisDomain::Numeric([0.0, 20.0]);
+    chart.add_general_axis(y).unwrap();
+
+    let dataset_a = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: Some(vec![GeneralRowId::Text("a-jan".into())]),
+            categories: vec!["Jan".into()],
+            category_indices: vec![0],
+            y: vec![10.0],
+            y_valid: None,
+        })
+        .unwrap();
+    let dataset_b = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: Some(vec![GeneralRowId::Text("b-jan".into())]),
+            categories: vec!["Jan".into()],
+            category_indices: vec![0],
+            y: vec![15.0],
+            y_valid: None,
+        })
+        .unwrap();
+    let mut first = GeneralSeriesOptions::column(pane, dataset_a, "group-x", "group-y");
+    first.group_id = Some("sales".into());
+    let first = chart.add_general_series(first).unwrap();
+    let mut second = GeneralSeriesOptions::column(pane, dataset_b, "group-x", "group-y");
+    second.group_id = Some("sales".into());
+    let second = chart.add_general_series(second).unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+    let mut first_geometry = Vec::new();
+    chart.visit_general_columns(chart.general_series(first).unwrap(), |geometry| {
+        first_geometry.push(geometry)
+    });
+    let mut second_geometry = Vec::new();
+    chart.visit_general_columns(chart.general_series(second).unwrap(), |geometry| {
+        second_geometry.push(geometry)
+    });
+    assert_eq!(first_geometry.len(), 1);
+    assert_eq!(second_geometry.len(), 1);
+    let first_rect = first_geometry[0];
+    let second_rect = second_geometry[0];
+    assert!(first_rect.right <= second_rect.left + 1e-9);
+    assert!((first_rect.right - second_rect.left).abs() < 1e-9);
+    assert!(
+        (first_rect.right - first_rect.left - (second_rect.right - second_rect.left)).abs() < 1e-9
+    );
+
+    for (series, rect, expected_id) in
+        [(first, first_rect, "a-jan"), (second, second_rect, "b-jan")]
+    {
+        let hit = chart
+            .general_hit_test(
+                pane,
+                (rect.left + rect.right) * 0.5,
+                (rect.top + rect.bottom) * 0.5,
+                crate::GeneralHitMode::Exact,
+            )
+            .unwrap();
+        assert_eq!(hit.series, series);
+        assert_eq!(
+            hit.row_id,
+            crate::GeneralRowIdentity::Explicit(GeneralRowId::Text(expected_id.into()))
+        );
+    }
+}
+
+#[test]
+fn stacked_columns_sum_auto_domain_and_diverge_from_zero_by_sign() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Band,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "stack-x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Band,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "stack-y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+
+    let make_dataset = |chart: &mut ChartEngine, prefix: &str, values: Vec<f64>| {
+        chart
+            .create_general_xy_dataset(GeneralXyInput::Category {
+                ids: Some(vec![
+                    GeneralRowId::Text(format!("{prefix}-pos")),
+                    GeneralRowId::Text(format!("{prefix}-neg")),
+                ]),
+                categories: vec!["Positive".into(), "Negative".into()],
+                category_indices: vec![0, 1],
+                y: values,
+                y_valid: None,
+            })
+            .unwrap()
+    };
+    let first_dataset = make_dataset(&mut chart, "first", vec![10.0, -3.0]);
+    let second_dataset = make_dataset(&mut chart, "second", vec![5.0, -2.0]);
+    let mut first = GeneralSeriesOptions::column(pane, first_dataset, "stack-x", "stack-y");
+    first.stack_id = Some("total".into());
+    let first = chart.add_general_series(first).unwrap();
+    let mut second = GeneralSeriesOptions::column(pane, second_dataset, "stack-x", "stack-y");
+    second.stack_id = Some("total".into());
+    let second = chart.add_general_series(second).unwrap();
+
+    assert_eq!(
+        chart.general_axis_effective_domain("stack-y"),
+        Some(GeneralAxisDomain::Numeric([-5.0, 15.0]))
+    );
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let mut first_geometry = Vec::new();
+    chart.visit_general_columns(chart.general_series(first).unwrap(), |geometry| {
+        first_geometry.push(geometry)
+    });
+    let mut second_geometry = Vec::new();
+    chart.visit_general_columns(chart.general_series(second).unwrap(), |geometry| {
+        second_geometry.push(geometry)
+    });
+    assert_eq!(first_geometry.len(), 2);
+    assert_eq!(second_geometry.len(), 2);
+    assert!((second_geometry[0].bottom - first_geometry[0].top).abs() < 1e-9);
+    assert!((second_geometry[1].top - first_geometry[1].bottom).abs() < 1e-9);
+
+    let second_positive = second_geometry[0];
+    let hit = chart
+        .general_hit_test(
+            pane,
+            (second_positive.left + second_positive.right) * 0.5,
+            (second_positive.top + second_positive.bottom) * 0.5,
+            crate::GeneralHitMode::Exact,
+        )
+        .unwrap();
+    assert_eq!(hit.series, second);
+    assert_eq!(hit.row, 0);
+}
+
+#[test]
+fn percent_stacked_columns_normalize_each_category_and_validate_stack_contract() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Band,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "percent-x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Band,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "percent-y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+
+    let dataset_a = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: None,
+            categories: vec!["Up".into(), "Down".into()],
+            category_indices: vec![0, 1],
+            y: vec![25.0, -10.0],
+            y_valid: None,
+        })
+        .unwrap();
+    let dataset_b = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: None,
+            categories: vec!["Up".into(), "Down".into()],
+            category_indices: vec![0, 1],
+            y: vec![75.0, -30.0],
+            y_valid: None,
+        })
+        .unwrap();
+
+    let mut invalid = GeneralSeriesOptions::column(pane, dataset_a, "percent-x", "percent-y");
+    invalid.stack_mode = GeneralStackMode::Percent;
+    assert!(chart.add_general_series(invalid).is_err());
+
+    let mut first = GeneralSeriesOptions::column(pane, dataset_a, "percent-x", "percent-y");
+    first.stack_id = Some("share".into());
+    first.stack_mode = GeneralStackMode::Percent;
+    let first = chart.add_general_series(first).unwrap();
+    let mut second = GeneralSeriesOptions::column(pane, dataset_b, "percent-x", "percent-y");
+    second.stack_id = Some("share".into());
+    second.stack_mode = GeneralStackMode::Percent;
+    let second = chart.add_general_series(second).unwrap();
+    let mut incompatible_mode =
+        GeneralSeriesOptions::column(pane, dataset_b, "percent-x", "percent-y");
+    incompatible_mode.stack_id = Some("share".into());
+    assert!(
+        chart.add_general_series(incompatible_mode).is_err(),
+        "members of one stack must agree on stack mode"
+    );
+    assert_eq!(
+        chart.general_axis_effective_domain("percent-y"),
+        Some(GeneralAxisDomain::Numeric([-1.0, 1.0]))
+    );
+
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let mut first_geometry = Vec::new();
+    chart.visit_general_columns(chart.general_series(first).unwrap(), |geometry| {
+        first_geometry.push(geometry)
+    });
+    let mut second_geometry = Vec::new();
+    chart.visit_general_columns(chart.general_series(second).unwrap(), |geometry| {
+        second_geometry.push(geometry)
+    });
+    assert!((second_geometry[0].bottom - first_geometry[0].top).abs() < 1e-9);
+    assert!((second_geometry[1].top - first_geometry[1].bottom).abs() < 1e-9);
+    let plot = chart.general_plot_rect(pane).unwrap();
+    assert!((second_geometry[0].top - plot.y).abs() < 1e-9);
+    assert!((second_geometry[1].bottom - (plot.y + plot.height)).abs() < 1e-9);
+
+    let mut incompatible = GeneralSeriesOptions::column(pane, dataset_b, "percent-x", "percent-y");
+    incompatible.group_id = Some("other".into());
+    incompatible.stack_id = Some("share".into());
+    incompatible.stack_mode = GeneralStackMode::Normal;
+    assert!(
+        chart.add_general_series(incompatible).is_ok(),
+        "the same stack label in a different group is a distinct stack"
+    );
 }
 
 #[test]
@@ -1024,6 +1290,540 @@ fn xy_scatter_owns_independent_domains_hits_and_runtime_view() {
     assert_eq!(
         chart.general_tooltip_snapshot(series, 0).unwrap().x_label,
         "100"
+    );
+}
+
+#[test]
+fn bubble_size_channel_drives_geometry_hits_updates_and_queryable_missing_rows() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    let mut x =
+        GeneralAxisOptions::new("bubble-x", pane, AxisDimension::X, GeneralScaleType::Linear);
+    x.domain = GeneralAxisDomain::Numeric([0.0, 6.0]);
+    chart.add_general_axis(x).unwrap();
+    let mut y =
+        GeneralAxisOptions::new("bubble-y", pane, AxisDimension::Y, GeneralScaleType::Linear);
+    y.domain = GeneralAxisDomain::Numeric([0.0, 6.0]);
+    chart.add_general_axis(y).unwrap();
+
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Bubble {
+            ids: Some(
+                ["small", "large", "zero", "missing"]
+                    .into_iter()
+                    .map(|id| GeneralRowId::Text(id.into()))
+                    .collect(),
+            ),
+            x: vec![1.0, 2.0, 3.0, 4.0],
+            y: vec![1.0, 2.0, 3.0, 4.0],
+            y_valid: None,
+            size: vec![4.0, 100.0, 0.0, 0.0],
+            size_valid: Some(vec![1, 1, 1, 0]),
+        })
+        .unwrap();
+    let mut options = GeneralSeriesOptions::bubble(pane, dataset, "bubble-x", "bubble-y");
+    options.color = Some("#123456".into());
+    options.title = "Bubble samples".into();
+    let series = chart.add_general_series(options).unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+    let expected_color = Color::parse_css("#123456").unwrap();
+    let frame = chart.build_frame();
+    let mut geometry = Vec::new();
+    chart.visit_general_scatter_points(chart.general_series(series).unwrap(), |point| {
+        geometry.push(point)
+    });
+    assert_eq!(
+        geometry.iter().map(|point| point.row).collect::<Vec<_>>(),
+        vec![0, 1],
+        "zero and missing sizes remain stored but emit no bubble geometry"
+    );
+    assert_eq!(geometry[0].radius, 2.0);
+    assert_eq!(geometry[1].radius, 10.0);
+
+    assert_eq!(
+        frame.panes[pane]
+            .main
+            .iter()
+            .filter(|primitive| {
+                matches!(primitive, Prim::Circle { fill, .. } if *fill == expected_color)
+            })
+            .count(),
+        2
+    );
+
+    let large = geometry[1];
+    assert!(
+        chart
+            .general_scatter_hit_candidate_count(series, large.x, large.y, 0.0)
+            .unwrap()
+            > 0,
+        "the bubble center must be present in the shared screen-space hit index"
+    );
+    let hit = chart
+        .general_hit_test(pane, large.x, large.y, crate::GeneralHitMode::Exact)
+        .unwrap();
+    assert_eq!(hit.series, series);
+    assert_eq!(hit.row, 1);
+    assert_eq!(
+        hit.row_id,
+        crate::GeneralRowIdentity::Explicit(GeneralRowId::Text("large".into()))
+    );
+    let small = geometry[0];
+    assert_eq!(
+        chart.general_hit_test(
+            pane,
+            small.x + small.radius + 1.0,
+            small.y,
+            crate::GeneralHitMode::Exact,
+        ),
+        None,
+        "exact hits use each bubble's actual radius"
+    );
+
+    assert_eq!(
+        chart.general_tooltip_snapshot(series, 0).unwrap().size,
+        Some(4.0)
+    );
+    assert_eq!(
+        chart.general_tooltip_snapshot(series, 2).unwrap().size,
+        Some(0.0)
+    );
+    assert_eq!(
+        chart.general_tooltip_snapshot(series, 3).unwrap().size,
+        None
+    );
+    let accessibility = chart
+        .general_accessibility_snapshot(series, 0, usize::MAX)
+        .unwrap();
+    assert_eq!(accessibility.total_rows, 4);
+    assert_eq!(
+        accessibility
+            .items
+            .iter()
+            .map(|item| item.size)
+            .collect::<Vec<_>>(),
+        vec![Some(4.0), Some(100.0), Some(0.0), None]
+    );
+
+    let before = chart.general_tooltip_snapshot(series, 1).unwrap();
+    assert!(
+        chart
+            .replace_general_xy_dataset(
+                dataset,
+                GeneralXyInput::Bubble {
+                    ids: Some(
+                        ["small", "large", "zero", "missing"]
+                            .into_iter()
+                            .map(|id| GeneralRowId::Text(id.into()))
+                            .collect(),
+                    ),
+                    x: vec![11.0, 12.0, 13.0, 14.0],
+                    y: vec![11.0, 12.0, 13.0, 14.0],
+                    y_valid: None,
+                    size: vec![4.0, -1.0, 0.0, 0.0],
+                    size_valid: Some(vec![1, 1, 1, 0]),
+                },
+            )
+            .is_err(),
+        "negative bubble sizes reject atomically"
+    );
+    assert_eq!(chart.general_tooltip_snapshot(series, 1).unwrap(), before);
+
+    chart
+        .upsert_general_xy_dataset(
+            dataset,
+            GeneralXyInput::Bubble {
+                ids: Some(vec![
+                    GeneralRowId::Text("large".into()),
+                    GeneralRowId::Text("new".into()),
+                ]),
+                x: vec![2.5, 5.0],
+                y: vec![2.5, 5.0],
+                y_valid: None,
+                size: vec![144.0, 25.0],
+                size_valid: None,
+            },
+            Some(4),
+        )
+        .unwrap();
+    let first = chart.general_tooltip_snapshot(series, 0).unwrap();
+    assert_eq!(
+        first.row_id,
+        crate::GeneralRowIdentity::Explicit(GeneralRowId::Text("large".into()))
+    );
+    assert_eq!(first.size, Some(144.0));
+    let last = chart.general_tooltip_snapshot(series, 3).unwrap();
+    assert_eq!(
+        last.row_id,
+        crate::GeneralRowIdentity::Explicit(GeneralRowId::Text("new".into()))
+    );
+    assert_eq!(last.size, Some(25.0));
+
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    geometry.clear();
+    chart.visit_general_scatter_points(chart.general_series(series).unwrap(), |point| {
+        geometry.push(point)
+    });
+    assert_eq!(
+        geometry.iter().map(|point| point.row).collect::<Vec<_>>(),
+        vec![0, 3]
+    );
+    assert_eq!(geometry[0].radius, 12.0);
+    assert_eq!(geometry[1].radius, 5.0);
+}
+
+#[test]
+fn bubble_log_axes_retain_transform_invalid_rows_as_missing_geometry() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Logarithmic,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "bubble-log-x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Logarithmic,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "bubble-log-y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Logarithmic,
+        ))
+        .unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Bubble {
+            ids: None,
+            x: vec![1.0, 0.0, 10.0],
+            y: vec![1.0, 10.0, 0.0],
+            y_valid: None,
+            size: vec![9.0, 16.0, 25.0],
+            size_valid: None,
+        })
+        .unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::bubble(
+            pane,
+            dataset,
+            "bubble-log-x",
+            "bubble-log-y",
+        ))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+    let mut rows = Vec::new();
+    chart.visit_general_scatter_points(chart.general_series(series).unwrap(), |point| {
+        rows.push(point.row)
+    });
+    assert_eq!(rows, vec![0]);
+    assert_eq!(
+        chart
+            .general_accessibility_snapshot(series, 0, usize::MAX)
+            .unwrap()
+            .total_rows,
+        3
+    );
+}
+
+#[test]
+fn range_area_preserves_gaps_fills_band_hits_rows_and_exposes_bounds() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    let mut x =
+        GeneralAxisOptions::new("range-x", pane, AxisDimension::X, GeneralScaleType::Linear);
+    x.domain = GeneralAxisDomain::Numeric([0.0, 3.0]);
+    chart.add_general_axis(x).unwrap();
+    let y = GeneralAxisOptions::new("range-y", pane, AxisDimension::Y, GeneralScaleType::Linear);
+    chart.add_general_axis(y).unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::RangeNumeric {
+            ids: Some(
+                ["a", "b", "gap", "d"]
+                    .into_iter()
+                    .map(|id| GeneralRowId::Text(id.into()))
+                    .collect(),
+            ),
+            x: vec![0.0, 1.0, 2.0, 3.0],
+            low: vec![1.0, 2.0, -1_000.0, 4.0],
+            low_valid: Some(vec![1, 1, 0, 1]),
+            high: vec![3.0, 5.0, 1_000.0, 6.0],
+            high_valid: Some(vec![1, 1, 0, 1]),
+        })
+        .unwrap();
+    let mut options = GeneralSeriesOptions::range_area(pane, dataset, "range-x", "range-y");
+    options.color = Some("#446688".into());
+    options.title = "Interval".into();
+    let series = chart.add_general_series(options).unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+    let GeneralAxisDomain::Numeric([domain_low, domain_high]) =
+        chart.general_axis_effective_domain("range-y").unwrap()
+    else {
+        panic!("range Y axis must resolve to a numeric domain");
+    };
+    assert!(domain_low > -100.0 && domain_high < 100.0);
+
+    let frame = chart.build_frame();
+    let mut geometry = Vec::new();
+    chart.visit_general_range_points(chart.general_series(series).unwrap(), |point| {
+        geometry.push(point)
+    });
+    assert_eq!(
+        geometry.iter().map(|point| point.row).collect::<Vec<_>>(),
+        vec![0, 1, 3]
+    );
+    assert_eq!(
+        geometry
+            .iter()
+            .map(|point| point.starts_new_run)
+            .collect::<Vec<_>>(),
+        vec![true, false, true]
+    );
+    assert_eq!(
+        frame.panes[pane]
+            .main
+            .iter()
+            .filter(|primitive| matches!(primitive, Prim::BandFill { point_count: 2, .. }))
+            .count(),
+        1
+    );
+
+    let from = geometry[0];
+    let to = geometry[1];
+    let hit = chart
+        .general_hit_test(
+            pane,
+            (from.x + to.x) * 0.5,
+            (from.low_y + from.high_y + to.low_y + to.high_y) * 0.25,
+            crate::GeneralHitMode::Exact,
+        )
+        .unwrap();
+    assert_eq!(hit.series, series);
+    assert_eq!(hit.row, 0);
+    assert_eq!(hit.distance, 0.0);
+
+    let gap_x = (geometry[1].x + geometry[2].x) * 0.5;
+    let gap_y = (geometry[1].high_y + geometry[2].high_y) * 0.5;
+    assert_eq!(
+        chart.general_hit_test(pane, gap_x, gap_y, crate::GeneralHitMode::Exact),
+        None
+    );
+
+    let tooltip = chart.general_tooltip_snapshot(series, 0).unwrap();
+    assert_eq!(tooltip.low, Some(1.0));
+    assert_eq!(tooltip.high, Some(3.0));
+    assert_eq!(tooltip.value, Some(3.0));
+    let missing = chart.general_tooltip_snapshot(series, 2).unwrap();
+    assert_eq!(missing.low, None);
+    assert_eq!(missing.high, None);
+    let accessibility = chart
+        .general_accessibility_snapshot(series, 0, usize::MAX)
+        .unwrap();
+    assert_eq!(accessibility.items[1].low, Some(2.0));
+    assert_eq!(accessibility.items[1].high, Some(5.0));
+
+    let before = chart.general_tooltip_snapshot(series, 0).unwrap();
+    assert!(chart
+        .replace_general_xy_dataset(
+            dataset,
+            GeneralXyInput::RangeNumeric {
+                ids: Some(vec![GeneralRowId::Text("invalid".into())]),
+                x: vec![0.0],
+                low: vec![5.0],
+                low_valid: None,
+                high: vec![4.0],
+                high_valid: None,
+            },
+        )
+        .is_err());
+    assert_eq!(chart.general_tooltip_snapshot(series, 0), Some(before));
+}
+
+#[test]
+fn range_area_maps_temporal_and_category_x_and_log_invalid_bounds_as_gaps() {
+    let mut temporal = ChartEngine::new(640.0, 400.0, 1.0);
+    let temporal_pane = temporal
+        .add_pane_with_domain(true, HorizontalDomain::Temporal)
+        .unwrap();
+    temporal
+        .add_general_axis(GeneralAxisOptions::new(
+            "range-time-x",
+            temporal_pane,
+            AxisDimension::X,
+            GeneralScaleType::Temporal,
+        ))
+        .unwrap();
+    temporal
+        .add_general_axis(GeneralAxisOptions::new(
+            "range-time-y",
+            temporal_pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let temporal_data = temporal
+        .create_general_xy_dataset(GeneralXyInput::RangeTemporal {
+            ids: None,
+            x_epoch_ms: vec![1_700_000_000_000, 1_700_000_060_000],
+            low: vec![8.0, 9.0],
+            low_valid: None,
+            high: vec![12.0, 14.0],
+            high_valid: None,
+        })
+        .unwrap();
+    let temporal_series = temporal
+        .add_general_series(GeneralSeriesOptions::range_area(
+            temporal_pane,
+            temporal_data,
+            "range-time-x",
+            "range-time-y",
+        ))
+        .unwrap();
+    temporal.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let mut temporal_geometry = Vec::new();
+    temporal
+        .visit_general_range_points(temporal.general_series(temporal_series).unwrap(), |point| {
+            temporal_geometry.push(point)
+        });
+    assert_eq!(temporal_geometry.len(), 2);
+
+    let mut category = ChartEngine::new(640.0, 400.0, 1.0);
+    let category_pane = category
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Point,
+            },
+        )
+        .unwrap();
+    category
+        .add_general_axis(GeneralAxisOptions::new(
+            "range-category-x",
+            category_pane,
+            AxisDimension::X,
+            GeneralScaleType::Point,
+        ))
+        .unwrap();
+    category
+        .add_general_axis(GeneralAxisOptions::new(
+            "range-category-y",
+            category_pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let category_data = category
+        .create_general_xy_dataset(GeneralXyInput::RangeCategory {
+            ids: None,
+            categories: vec!["A".into(), "B".into()],
+            category_indices: vec![0, 1],
+            low: vec![1.0, 2.0],
+            low_valid: None,
+            high: vec![3.0, 4.0],
+            high_valid: None,
+        })
+        .unwrap();
+    let category_series = category
+        .add_general_series(GeneralSeriesOptions::range_area(
+            category_pane,
+            category_data,
+            "range-category-x",
+            "range-category-y",
+        ))
+        .unwrap();
+    category.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let mut category_geometry = Vec::new();
+    category
+        .visit_general_range_points(category.general_series(category_series).unwrap(), |point| {
+            category_geometry.push(point)
+        });
+    assert_eq!(category_geometry.len(), 2);
+
+    let mut log_chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let log_pane = log_chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Logarithmic,
+            },
+        )
+        .unwrap();
+    log_chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "range-log-x",
+            log_pane,
+            AxisDimension::X,
+            GeneralScaleType::Logarithmic,
+        ))
+        .unwrap();
+    log_chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "range-log-y",
+            log_pane,
+            AxisDimension::Y,
+            GeneralScaleType::Logarithmic,
+        ))
+        .unwrap();
+    let log_data = log_chart
+        .create_general_xy_dataset(GeneralXyInput::RangeNumeric {
+            ids: None,
+            x: vec![1.0, 10.0, 100.0],
+            low: vec![1.0, -1.0, 10.0],
+            low_valid: None,
+            high: vec![2.0, 5.0, 20.0],
+            high_valid: None,
+        })
+        .unwrap();
+    let log_series = log_chart
+        .add_general_series(GeneralSeriesOptions::range_area(
+            log_pane,
+            log_data,
+            "range-log-x",
+            "range-log-y",
+        ))
+        .unwrap();
+    log_chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let mut log_geometry = Vec::new();
+    log_chart.visit_general_range_points(log_chart.general_series(log_series).unwrap(), |point| {
+        log_geometry.push(point)
+    });
+    assert_eq!(
+        log_geometry
+            .iter()
+            .map(|point| point.row)
+            .collect::<Vec<_>>(),
+        vec![0, 2]
+    );
+    assert!(log_geometry.iter().all(|point| point.starts_new_run));
+    assert_eq!(
+        log_chart
+            .general_tooltip_snapshot(log_series, 1)
+            .unwrap()
+            .low,
+        Some(-1.0)
     );
 }
 

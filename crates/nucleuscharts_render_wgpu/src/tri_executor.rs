@@ -1,4 +1,4 @@
-//! Converts the anti-aliased geometry subset of the Prim IR (`Polyline` / `AreaFill` / `Circle` /
+//! Converts the anti-aliased geometry subset of the Prim IR (`Polyline` / `AreaFill` / `BandFill` / `Circle` /
 //! `RoundRect`)
 //! into triangle-mesh vertices for the wgpu tri pipeline.
 //!
@@ -374,7 +374,7 @@ pub fn geom_prims_to_tris(
 ) {
     for prim in prims {
         match prim {
-            Prim::Background { .. } | Prim::AreaFill { .. } => {
+            Prim::Background { .. } | Prim::AreaFill { .. } | Prim::BandFill { .. } => {
                 geom_prim_to_tris(prim, points, fill);
             }
             _ => geom_prim_to_tris(prim, points, stroke),

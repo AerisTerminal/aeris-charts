@@ -610,6 +610,101 @@ fn xy_area_segment_reaches_canvas2d_and_webgpu_fill_and_stroke_paths() {
     );
 }
 
+#[test]
+fn range_area_segment_reaches_canvas2d_and_webgpu_fill_and_stroke_paths() {
+    let mut chart = ChartEngine::new(360.0, 240.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::RangeNumeric {
+            ids: None,
+            x: vec![0.0, 1.0, 2.0, 3.0, 4.0],
+            low: vec![1.0, 2.0, 0.0, 3.0, 1.0],
+            low_valid: Some(vec![1, 1, 0, 1, 1]),
+            high: vec![4.0, 5.0, 6.0, 7.0, 5.0],
+            high_valid: None,
+        })
+        .unwrap();
+    chart
+        .add_general_series(GeneralSeriesOptions::range_area(pane, dataset, "x", "y"))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+    let frame = chart.build_frame();
+    let pane_frame = &frame.panes[pane];
+    assert_eq!(
+        pane_frame
+            .main
+            .iter()
+            .filter(|primitive| matches!(primitive, Prim::BandFill { point_count: 2, .. }))
+            .count(),
+        2,
+        "missing bounds must split the range band into two fill runs"
+    );
+    assert_eq!(
+        pane_frame
+            .main
+            .iter()
+            .filter(|primitive| matches!(primitive, Prim::Polyline { point_count: 2, .. }))
+            .count(),
+        4,
+        "each range run must retain both boundary strokes"
+    );
+
+    let mut canvas = CountingCanvas::default();
+    execute(
+        &pane_frame.main,
+        &pane_frame.points,
+        &mut canvas,
+        Viewport {
+            width: frame.width as f32,
+            height: frame.height as f32,
+        },
+    );
+    let mut fill_tris = Vec::new();
+    let mut stroke_tris = Vec::new();
+    geom_prims_to_tris(
+        &pane_frame.main,
+        &pane_frame.points,
+        &mut fill_tris,
+        &mut stroke_tris,
+    );
+    assert!(
+        canvas.calls > 0,
+        "Canvas2D must execute the range primitives"
+    );
+    assert!(
+        !fill_tris.is_empty(),
+        "WebGPU must tessellate range-area band fills"
+    );
+    assert!(
+        !stroke_tris.is_empty(),
+        "WebGPU must tessellate range-area boundary strokes"
+    );
+}
+
 /// Runs must tile their pipeline's buffer contiguously, in ascending order, covering it exactly.
 fn assert_runs_tile_buffers(group: &DrawGroup) {
     for (pipeline, len) in [

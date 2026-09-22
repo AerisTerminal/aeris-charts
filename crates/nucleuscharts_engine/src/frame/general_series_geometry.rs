@@ -159,6 +159,77 @@ impl ChartEngine {
                     });
                     flush_run(&mut run);
                 }
+                GeneralSeriesKind::RangeArea => {
+                    let color = series
+                        .color()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(DEFAULT_LINE_COLOR);
+                    let fill = Color::rgba(color.r(), color.g(), color.b(), 56);
+                    let mut upper = Vec::<[f32; 2]>::new();
+                    let mut lower = Vec::<[f32; 2]>::new();
+                    let mut flush_run = |upper: &mut Vec<[f32; 2]>, lower: &mut Vec<[f32; 2]>| {
+                        if upper.len() >= 2 && upper.len() == lower.len() {
+                            let upper_first = points.len() as u32;
+                            let point_count = upper.len() as u32;
+                            points.append(upper);
+                            let lower_first = points.len() as u32;
+                            points.append(lower);
+                            out.push(Prim::BandFill {
+                                upper_first,
+                                lower_first,
+                                point_count,
+                                fill,
+                            });
+                            out.push(Prim::Polyline {
+                                first_point: upper_first,
+                                point_count,
+                                width: (GENERAL_LINE_WIDTH_CSS * vpr) as f32,
+                                style: LineStyle::Solid,
+                                line_type: LineType::Simple,
+                                color,
+                            });
+                            out.push(Prim::Polyline {
+                                first_point: lower_first,
+                                point_count,
+                                width: (GENERAL_LINE_WIDTH_CSS * vpr) as f32,
+                                style: LineStyle::Solid,
+                                line_type: LineType::Simple,
+                                color,
+                            });
+                        } else {
+                            upper.clear();
+                            lower.clear();
+                        }
+                    };
+                    self.visit_general_range_points(series, |geometry| {
+                        if geometry.starts_new_run {
+                            flush_run(&mut upper, &mut lower);
+                        }
+                        upper.push([(geometry.x * hpr) as f32, (geometry.high_y * vpr) as f32]);
+                        lower.push([(geometry.x * hpr) as f32, (geometry.low_y * vpr) as f32]);
+                        push_label(
+                            geometry.row,
+                            geometry.x,
+                            geometry.high_y - label_size * 0.65 - 4.0,
+                            geometry.low_y + label_size * 0.65 + 4.0,
+                            plot.width - 4.0,
+                        );
+                        let (hovered, selected) =
+                            self.general_row_interaction(series.id(), geometry.row);
+                        if hovered || selected {
+                            let stroke = if selected { PRIMARY } else { GENERAL_HOVER };
+                            interaction[usize::from(selected)] = Some(Prim::Circle {
+                                cx: (geometry.x * hpr) as f32,
+                                cy: (((geometry.low_y + geometry.high_y) * 0.5) * vpr) as f32,
+                                radius: ((if selected { 5.0 } else { 4.0 }) * vpr) as f32,
+                                fill: Color::rgba(0, 0, 0, 0),
+                                stroke_width: (if selected { 2.0 } else { 1.0 }) * vpr as f32,
+                                stroke,
+                            });
+                        }
+                    });
+                    flush_run(&mut upper, &mut lower);
+                }
                 GeneralSeriesKind::Column => {
                     let color = series
                         .color()
@@ -223,7 +294,7 @@ impl ChartEngine {
                         }
                     });
                 }
-                GeneralSeriesKind::Scatter => {
+                GeneralSeriesKind::Scatter | GeneralSeriesKind::Bubble => {
                     let color = series
                         .color()
                         .and_then(Color::parse_css)

@@ -91,11 +91,35 @@ pub enum GeneralXyInput {
         y: Vec<f64>,
         y_valid: Option<Vec<u8>>,
     },
+    Bubble {
+        ids: Option<Vec<GeneralRowId>>,
+        x: Vec<f64>,
+        y: Vec<f64>,
+        y_valid: Option<Vec<u8>>,
+        size: Vec<f64>,
+        size_valid: Option<Vec<u8>>,
+    },
+    RangeNumeric {
+        ids: Option<Vec<GeneralRowId>>,
+        x: Vec<f64>,
+        low: Vec<f64>,
+        low_valid: Option<Vec<u8>>,
+        high: Vec<f64>,
+        high_valid: Option<Vec<u8>>,
+    },
     Temporal {
         ids: Option<Vec<GeneralRowId>>,
         x_epoch_ms: Vec<i64>,
         y: Vec<f64>,
         y_valid: Option<Vec<u8>>,
+    },
+    RangeTemporal {
+        ids: Option<Vec<GeneralRowId>>,
+        x_epoch_ms: Vec<i64>,
+        low: Vec<f64>,
+        low_valid: Option<Vec<u8>>,
+        high: Vec<f64>,
+        high_valid: Option<Vec<u8>>,
     },
     Category {
         ids: Option<Vec<GeneralRowId>>,
@@ -103,6 +127,15 @@ pub enum GeneralXyInput {
         category_indices: Vec<u32>,
         y: Vec<f64>,
         y_valid: Option<Vec<u8>>,
+    },
+    RangeCategory {
+        ids: Option<Vec<GeneralRowId>>,
+        categories: Vec<String>,
+        category_indices: Vec<u32>,
+        low: Vec<f64>,
+        low_valid: Option<Vec<u8>>,
+        high: Vec<f64>,
+        high_valid: Option<Vec<u8>>,
     },
 }
 
@@ -138,6 +171,10 @@ pub struct GeneralDataset {
     x: GeneralXColumn,
     y: Vec<f64>,
     y_valid: Option<Vec<u8>>,
+    low: Option<Vec<f64>>,
+    low_valid: Option<Vec<u8>>,
+    size: Option<Vec<f64>>,
+    size_valid: Option<Vec<u8>>,
     labels: HashMap<usize, String>,
 }
 
@@ -178,6 +215,32 @@ impl GeneralDataset {
         index < self.y.len()
             && self
                 .y_valid
+                .as_ref()
+                .is_none_or(|validity| validity[index] != 0)
+    }
+
+    pub fn size(&self) -> Option<&[f64]> {
+        self.size.as_deref()
+    }
+
+    pub fn size_is_valid(&self, index: usize) -> bool {
+        self.size
+            .as_ref()
+            .is_some_and(|values| index < values.len())
+            && self
+                .size_valid
+                .as_ref()
+                .is_none_or(|validity| validity[index] != 0)
+    }
+
+    pub fn low(&self) -> Option<&[f64]> {
+        self.low.as_deref()
+    }
+
+    pub fn low_is_valid(&self, index: usize) -> bool {
+        self.low.as_ref().is_some_and(|values| index < values.len())
+            && self
+                .low_valid
                 .as_ref()
                 .is_none_or(|validity| validity[index] != 0)
     }
@@ -240,6 +303,16 @@ impl GeneralDataset {
             + x_bytes
             + self.y.capacity() * std::mem::size_of::<f64>()
             + self.y_valid.as_ref().map_or(0, Vec::capacity)
+            + self
+                .low
+                .as_ref()
+                .map_or(0, |values| values.capacity() * std::mem::size_of::<f64>())
+            + self.low_valid.as_ref().map_or(0, Vec::capacity)
+            + self
+                .size
+                .as_ref()
+                .map_or(0, |values| values.capacity() * std::mem::size_of::<f64>())
+            + self.size_valid.as_ref().map_or(0, Vec::capacity)
             + self.labels.capacity()
                 * (std::mem::size_of::<usize>()
                     + std::mem::size_of::<String>()
@@ -253,35 +326,69 @@ struct ValidatedGeneralXy {
     x: GeneralXColumn,
     y: Vec<f64>,
     y_valid: Option<Vec<u8>>,
+    low: Option<Vec<f64>>,
+    low_valid: Option<Vec<u8>>,
+    size: Option<Vec<f64>>,
+    size_valid: Option<Vec<u8>>,
 }
 
 impl GeneralXyInput {
     pub(crate) fn x_kind(&self) -> GeneralXKind {
         match self {
-            Self::Numeric { .. } => GeneralXKind::Numeric,
-            Self::Temporal { .. } => GeneralXKind::Temporal,
-            Self::Category { .. } => GeneralXKind::Category,
+            Self::Numeric { .. } | Self::Bubble { .. } | Self::RangeNumeric { .. } => {
+                GeneralXKind::Numeric
+            }
+            Self::Temporal { .. } | Self::RangeTemporal { .. } => GeneralXKind::Temporal,
+            Self::Category { .. } | Self::RangeCategory { .. } => GeneralXKind::Category,
         }
     }
 
     pub(crate) fn numeric_x_values(&self) -> Option<&[f64]> {
         match self {
-            Self::Numeric { x, .. } => Some(x),
+            Self::Numeric { x, .. } | Self::Bubble { x, .. } | Self::RangeNumeric { x, .. } => {
+                Some(x)
+            }
             _ => None,
         }
     }
 
     pub(crate) fn y_values(&self) -> &[f64] {
         match self {
-            Self::Numeric { y, .. } | Self::Temporal { y, .. } | Self::Category { y, .. } => y,
+            Self::Numeric { y, .. }
+            | Self::Bubble { y, .. }
+            | Self::Temporal { y, .. }
+            | Self::Category { y, .. } => y,
+            Self::RangeNumeric { high, .. }
+            | Self::RangeTemporal { high, .. }
+            | Self::RangeCategory { high, .. } => high,
         }
     }
 
     pub(crate) fn y_valid_values(&self) -> Option<&[u8]> {
         match self {
             Self::Numeric { y_valid, .. }
+            | Self::Bubble { y_valid, .. }
             | Self::Temporal { y_valid, .. }
             | Self::Category { y_valid, .. } => y_valid.as_deref(),
+            Self::RangeNumeric { high_valid, .. }
+            | Self::RangeTemporal { high_valid, .. }
+            | Self::RangeCategory { high_valid, .. } => high_valid.as_deref(),
+        }
+    }
+
+    pub(crate) fn size_values(&self) -> Option<&[f64]> {
+        match self {
+            Self::Bubble { size, .. } => Some(size),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn low_values(&self) -> Option<&[f64]> {
+        match self {
+            Self::RangeNumeric { low, .. }
+            | Self::RangeTemporal { low, .. }
+            | Self::RangeCategory { low, .. } => Some(low),
+            _ => None,
         }
     }
 
@@ -298,6 +405,66 @@ impl GeneralXyInput {
                     x: GeneralXColumn::Numeric(x),
                     y,
                     y_valid: normalize_validity(y_valid),
+                    low: None,
+                    low_valid: None,
+                    size: None,
+                    size_valid: None,
+                })
+            }
+            Self::Bubble {
+                ids,
+                x,
+                y,
+                y_valid,
+                size,
+                size_valid,
+            } => {
+                validate_row_count(x.len())?;
+                validate_common(x.len(), ids.as_deref(), &y, y_valid.as_deref())?;
+                if x.iter().any(|value| !value.is_finite()) {
+                    return Err(invalid_data("general numeric X values must be finite"));
+                }
+                validate_size_channel(x.len(), &size, size_valid.as_deref())?;
+                Ok(ValidatedGeneralXy {
+                    ids,
+                    x: GeneralXColumn::Numeric(x),
+                    y,
+                    y_valid: normalize_validity(y_valid),
+                    low: None,
+                    low_valid: None,
+                    size: Some(size),
+                    size_valid: normalize_validity(size_valid),
+                })
+            }
+            Self::RangeNumeric {
+                ids,
+                x,
+                low,
+                low_valid,
+                high,
+                high_valid,
+            } => {
+                validate_row_count(x.len())?;
+                validate_common(x.len(), ids.as_deref(), &high, high_valid.as_deref())?;
+                if x.iter().any(|value| !value.is_finite()) {
+                    return Err(invalid_data("general numeric X values must be finite"));
+                }
+                validate_range_channel(
+                    x.len(),
+                    &low,
+                    low_valid.as_deref(),
+                    &high,
+                    high_valid.as_deref(),
+                )?;
+                Ok(ValidatedGeneralXy {
+                    ids,
+                    x: GeneralXColumn::Numeric(x),
+                    y: high,
+                    y_valid: normalize_validity(high_valid),
+                    low: Some(low),
+                    low_valid: normalize_validity(low_valid),
+                    size: None,
+                    size_valid: None,
                 })
             }
             Self::Temporal {
@@ -321,6 +488,51 @@ impl GeneralXyInput {
                     x: GeneralXColumn::Temporal(x_epoch_ms),
                     y,
                     y_valid: normalize_validity(y_valid),
+                    low: None,
+                    low_valid: None,
+                    size: None,
+                    size_valid: None,
+                })
+            }
+            Self::RangeTemporal {
+                ids,
+                x_epoch_ms,
+                low,
+                low_valid,
+                high,
+                high_valid,
+            } => {
+                validate_row_count(x_epoch_ms.len())?;
+                validate_common(
+                    x_epoch_ms.len(),
+                    ids.as_deref(),
+                    &high,
+                    high_valid.as_deref(),
+                )?;
+                if x_epoch_ms
+                    .iter()
+                    .any(|value| value.unsigned_abs() > MAX_GENERAL_TEMPORAL_MILLISECONDS as u64)
+                {
+                    return Err(invalid_data(format!(
+                        "general temporal X values must stay within +/-{MAX_GENERAL_TEMPORAL_MILLISECONDS} epoch milliseconds"
+                    )));
+                }
+                validate_range_channel(
+                    x_epoch_ms.len(),
+                    &low,
+                    low_valid.as_deref(),
+                    &high,
+                    high_valid.as_deref(),
+                )?;
+                Ok(ValidatedGeneralXy {
+                    ids,
+                    x: GeneralXColumn::Temporal(x_epoch_ms),
+                    y: high,
+                    y_valid: normalize_validity(high_valid),
+                    low: Some(low),
+                    low_valid: normalize_validity(low_valid),
+                    size: None,
+                    size_valid: None,
                 })
             }
             Self::Category {
@@ -346,10 +558,123 @@ impl GeneralXyInput {
                     },
                     y,
                     y_valid: normalize_validity(y_valid),
+                    low: None,
+                    low_valid: None,
+                    size: None,
+                    size_valid: None,
+                })
+            }
+            Self::RangeCategory {
+                ids,
+                categories,
+                category_indices,
+                low,
+                low_valid,
+                high,
+                high_valid,
+            } => {
+                validate_row_count(category_indices.len())?;
+                validate_common(
+                    category_indices.len(),
+                    ids.as_deref(),
+                    &high,
+                    high_valid.as_deref(),
+                )?;
+                validate_categories(&categories, &category_indices)?;
+                validate_range_channel(
+                    category_indices.len(),
+                    &low,
+                    low_valid.as_deref(),
+                    &high,
+                    high_valid.as_deref(),
+                )?;
+                Ok(ValidatedGeneralXy {
+                    ids,
+                    x: GeneralXColumn::Category {
+                        categories,
+                        indices: category_indices,
+                    },
+                    y: high,
+                    y_valid: normalize_validity(high_valid),
+                    low: Some(low),
+                    low_valid: normalize_validity(low_valid),
+                    size: None,
+                    size_valid: None,
                 })
             }
         }
     }
+}
+
+fn validate_range_channel(
+    row_count: usize,
+    low: &[f64],
+    low_valid: Option<&[u8]>,
+    high: &[f64],
+    high_valid: Option<&[u8]>,
+) -> Result<(), ChartError> {
+    if low.len() != row_count {
+        return Err(invalid_data(
+            "general range low and high columns must have equal lengths",
+        ));
+    }
+    if low.iter().any(|value| !value.is_finite()) {
+        return Err(invalid_data(
+            "general range low values must be finite; use the validity column for missing values",
+        ));
+    }
+    if let Some(validity) = low_valid {
+        if validity.len() != row_count {
+            return Err(invalid_data(
+                "general range low validity and value columns must have equal lengths",
+            ));
+        }
+        if validity.iter().any(|value| !matches!(*value, 0 | 1)) {
+            return Err(invalid_data(
+                "general range low validity values must be 0 or 1",
+            ));
+        }
+    }
+    for row in 0..row_count {
+        let low_present = low_valid.is_none_or(|validity| validity[row] != 0);
+        let high_present = high_valid.is_none_or(|validity| validity[row] != 0);
+        if low_present && high_present && low[row] > high[row] {
+            return Err(invalid_data(
+                "general range rows require low to be less than or equal to high",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_size_channel(
+    row_count: usize,
+    size: &[f64],
+    size_valid: Option<&[u8]>,
+) -> Result<(), ChartError> {
+    if size.len() != row_count {
+        return Err(invalid_data(
+            "general bubble size and value columns must have equal lengths",
+        ));
+    }
+    if let Some(validity) = size_valid {
+        if validity.len() != row_count {
+            return Err(invalid_data(
+                "general bubble size validity and value columns must have equal lengths",
+            ));
+        }
+        if validity.iter().any(|value| !matches!(*value, 0 | 1)) {
+            return Err(invalid_data(
+                "general bubble size validity values must be 0 or 1",
+            ));
+        }
+    }
+    if size.iter().any(|value| !value.is_finite() || *value < 0.0) {
+        return Err(invalid_data(
+            "general bubble sizes must be finite and non-negative; use the validity column for missing values",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_row_count(row_count: usize) -> Result<(), ChartError> {
@@ -586,6 +911,10 @@ impl GeneralDataStore {
             x: validated.x,
             y: validated.y,
             y_valid: validated.y_valid,
+            low: validated.low,
+            low_valid: validated.low_valid,
+            size: validated.size,
+            size_valid: validated.size_valid,
             labels,
         });
         self.next_dataset_id = next_dataset_id;
@@ -628,6 +957,10 @@ impl GeneralDataStore {
             x: validated.x,
             y: validated.y,
             y_valid: validated.y_valid,
+            low: validated.low,
+            low_valid: validated.low_valid,
+            size: validated.size,
+            size_valid: validated.size_valid,
             labels,
         };
         self.next_generated_row_id = next_generated_row_id;
@@ -683,6 +1016,16 @@ impl GeneralDataStore {
         {
             return Err(invalid_data(
                 "general incremental X columns must match the dataset kind",
+            ));
+        }
+        if dataset.size.is_some() != validated.size.is_some() {
+            return Err(invalid_data(
+                "general incremental size columns must match the dataset channel shape",
+            ));
+        }
+        if dataset.low.is_some() != validated.low.is_some() {
+            return Err(invalid_data(
+                "general incremental range columns must match the dataset channel shape",
             ));
         }
         let existing: HashMap<GeneralRowId, usize> = dataset
@@ -839,6 +1182,18 @@ impl GeneralDataStore {
                 if let Some(validity) = dataset.y_valid.as_mut() {
                     validity.push(1);
                 }
+                if let Some(size) = dataset.size.as_mut() {
+                    size.push(0.0);
+                }
+                if let Some(validity) = dataset.size_valid.as_mut() {
+                    validity.push(1);
+                }
+                if let Some(low) = dataset.low.as_mut() {
+                    low.push(0.0);
+                }
+                if let Some(validity) = dataset.low_valid.as_mut() {
+                    validity.push(1);
+                }
                 dataset.len() - 1
             };
             match (&mut dataset.x, &validated.x) {
@@ -871,6 +1226,32 @@ impl GeneralDataStore {
             if let Some(validity) = dataset.y_valid.as_mut() {
                 validity[target_row] = u8::from(valid);
             }
+            if let (Some(target), Some(source)) = (dataset.size.as_mut(), validated.size.as_ref()) {
+                target[target_row] = source[source_row];
+                let valid = validated
+                    .size_valid
+                    .as_ref()
+                    .is_none_or(|values| values[source_row] != 0);
+                if !valid && dataset.size_valid.is_none() {
+                    dataset.size_valid = Some(vec![1; dataset.len()]);
+                }
+                if let Some(validity) = dataset.size_valid.as_mut() {
+                    validity[target_row] = u8::from(valid);
+                }
+            }
+            if let (Some(target), Some(source)) = (dataset.low.as_mut(), validated.low.as_ref()) {
+                target[target_row] = source[source_row];
+                let valid = validated
+                    .low_valid
+                    .as_ref()
+                    .is_none_or(|values| values[source_row] != 0);
+                if !valid && dataset.low_valid.is_none() {
+                    dataset.low_valid = Some(vec![1; dataset.len()]);
+                }
+                if let Some(validity) = dataset.low_valid.as_mut() {
+                    validity[target_row] = u8::from(valid);
+                }
+            }
         }
         let mut removed_front = 0;
         if let Some(limit) = max_rows {
@@ -893,11 +1274,35 @@ impl GeneralDataStore {
                 if let Some(validity) = dataset.y_valid.as_mut() {
                     validity.drain(..trim);
                 }
+                if let Some(size) = dataset.size.as_mut() {
+                    size.drain(..trim);
+                }
+                if let Some(validity) = dataset.size_valid.as_mut() {
+                    validity.drain(..trim);
+                }
+                if let Some(low) = dataset.low.as_mut() {
+                    low.drain(..trim);
+                }
+                if let Some(validity) = dataset.low_valid.as_mut() {
+                    validity.drain(..trim);
+                }
                 let bounded_capacity = dataset.len().saturating_mul(2).max(1024);
                 if dataset.identities.capacity() > bounded_capacity {
                     dataset.identities.shrink_to(bounded_capacity);
                     dataset.y.shrink_to(bounded_capacity);
                     if let Some(validity) = dataset.y_valid.as_mut() {
+                        validity.shrink_to(bounded_capacity);
+                    }
+                    if let Some(size) = dataset.size.as_mut() {
+                        size.shrink_to(bounded_capacity);
+                    }
+                    if let Some(validity) = dataset.size_valid.as_mut() {
+                        validity.shrink_to(bounded_capacity);
+                    }
+                    if let Some(low) = dataset.low.as_mut() {
+                        low.shrink_to(bounded_capacity);
+                    }
+                    if let Some(validity) = dataset.low_valid.as_mut() {
                         validity.shrink_to(bounded_capacity);
                     }
                     match &mut dataset.x {
@@ -916,6 +1321,20 @@ impl GeneralDataStore {
             .is_some_and(|validity| !validity.contains(&0))
         {
             dataset.y_valid = None;
+        }
+        if dataset
+            .size_valid
+            .as_ref()
+            .is_some_and(|validity| !validity.contains(&0))
+        {
+            dataset.size_valid = None;
+        }
+        if dataset
+            .low_valid
+            .as_ref()
+            .is_some_and(|validity| !validity.contains(&0))
+        {
+            dataset.low_valid = None;
         }
         dataset.labels = next_labels;
         dataset.generation = generation;

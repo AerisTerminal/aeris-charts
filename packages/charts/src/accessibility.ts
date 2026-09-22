@@ -772,7 +772,7 @@ class PaneAccessibility {
   private zoom(zoom_in: boolean): void {
     const active = this.active_series();
     if (is_general_series(active)) {
-      if (active.kind !== "scatter" && active.kind !== "xy_line" && active.kind !== "xy_area") return;
+      if (active.kind !== "scatter" && active.kind !== "bubble" && active.kind !== "xy_line" && active.kind !== "xy_area" && active.kind !== "range_area") return;
       const item = this.general_item(this.point_index);
       const anchor = item === undefined ? 0 : Number(item.x_label);
       if (!Number.isFinite(anchor)) return;
@@ -863,11 +863,19 @@ class PaneAccessibility {
         time: item.x_label,
         value,
       };
-      const values = item.label === null
+      let values = item.label === null
         ? this.format_value(item.value, series)
         : item.value === null
           ? item.label
           : `${item.label}, ${this.format_value(item.value, series)}`;
+      if (series.kind === "bubble" && item.size !== null) {
+        values = `${values}, size ${item.size.toLocaleString(this.controller.locale())}`;
+      }
+      if (series.kind === "range_area" && item.low !== null && item.high !== null) {
+        values = item.label === null
+          ? `${this.format_value(item.low, series)} to ${this.format_value(item.high, series)}`
+          : `${item.label}, ${this.format_value(item.low, series)} to ${this.format_value(item.high, series)}`;
+      }
       return this.controller.options.describe_point?.(description)
         ?? this.controller.options.messages.point(
           description,
@@ -1026,7 +1034,9 @@ class PaneAccessibility {
       this.focus_handle?.handle.set(null, this.focus_options_json());
       const item = this.general_item(this.point_index);
       const visible = this.focused && this.controller.options.show_focus_indicator
-        && item !== undefined && item.value !== null;
+        && item !== undefined && item.value !== null
+        && (active.kind !== "bubble" || (item.size !== null && item.size > 0))
+        && (active.kind !== "range_area" || (item.low !== null && item.high !== null));
       const chart = this.controller.chart as chart_api & {
         set_general_accessibility_focus(series: number, row: number): boolean;
         clear_general_accessibility_focus(): void;

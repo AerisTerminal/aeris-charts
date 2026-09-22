@@ -1066,6 +1066,90 @@ fn xy_area_engine_frame_reaches_canvas_and_gpui_fill_routes() {
 }
 
 #[test]
+fn range_area_engine_frame_reaches_canvas_and_gpui_fill_routes() {
+    for dpr in [1.0f64, 1.5, 2.0] {
+        let mut engine = ChartEngine::new(420.0, 260.0, dpr);
+        let pane = engine
+            .add_pane_with_domain(
+                true,
+                HorizontalDomain::Continuous {
+                    scale: ContinuousScaleType::Linear,
+                },
+            )
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "x",
+                pane,
+                AxisDimension::X,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "y",
+                pane,
+                AxisDimension::Y,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        let dataset = engine
+            .create_general_xy_dataset(GeneralXyInput::RangeNumeric {
+                ids: None,
+                x: vec![0.0, 1.0, 2.0, 3.0, 4.0],
+                low: vec![1.0, 2.0, 0.0, 3.0, 1.0],
+                low_valid: Some(vec![1, 1, 0, 1, 1]),
+                high: vec![4.0, 5.0, 6.0, 7.0, 5.0],
+                high_valid: None,
+            })
+            .unwrap();
+        engine
+            .add_general_series(GeneralSeriesOptions::range_area(pane, dataset, "x", "y"))
+            .unwrap();
+        engine.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+        let frame = engine.build_frame();
+        let pane_frame = &frame.panes[pane];
+        assert_eq!(
+            pane_frame
+                .main
+                .iter()
+                .filter(|primitive| matches!(primitive, Prim::BandFill { point_count: 2, .. }))
+                .count(),
+            2,
+            "DPR {dpr}: missing bounds must split the range band into two fill runs"
+        );
+        assert_eq!(
+            pane_frame
+                .main
+                .iter()
+                .filter(|primitive| matches!(primitive, Prim::Polyline { point_count: 2, .. }))
+                .count(),
+            4,
+            "DPR {dpr}: both bounds of each range run must be stroked"
+        );
+        let canvas = canvas_rects(&pane_frame.main, &pane_frame.points);
+        let (_plan, metrics) = gpui_plan(&pane_frame.main, &pane_frame.points);
+        assert_eq!(
+            canvas.path_fills, 2,
+            "DPR {dpr}: Canvas must fill both range runs"
+        );
+        assert_eq!(
+            canvas.path_strokes, 4,
+            "DPR {dpr}: Canvas must stroke both bounds of both runs"
+        );
+        assert_eq!(
+            metrics.dropped_prims, 0,
+            "DPR {dpr}: no range-area primitive may drop"
+        );
+        assert!(
+            metrics.paths >= 6,
+            "DPR {dpr}: GPUI must lower range fill/stroke paths ({metrics:?})"
+        );
+    }
+}
+
+#[test]
 fn a_real_engine_frame_lowers_every_prim_it_contains() {
     let mut engine = real_engine_frame(1.5);
     let frame = engine.build_frame();

@@ -4,9 +4,9 @@
 
 This document began as the Phase 0 API proposal for the all-in-one architecture in `plan.md` and
 remains the contract for unfinished chart families. The current package implements category columns,
-numeric XY scatter, and the first Phase 2 `xy_line` and `xy_area` slices. Domain-aware panes, explicit axes, object and
+numeric XY scatter/bubble marks, and the first Phase 2 `xy_line`, `xy_area`, `range_area`, and grouped/stacked vertical-column slices. Domain-aware panes, explicit axes, object and
 typed bulk replacement/update, bounded retention, row labels, snapshots, hit testing, accessibility,
-and V2 persistence are public for these implemented kinds. `xy_line` and `xy_area` support continuous numeric,
+and V2 persistence are public for these implemented kinds/options. `xy_line`, `xy_area`, and `range_area` support continuous numeric,
 temporal epoch-millisecond, and category band/point X domains. Later series names and the React surface
 below remain proposals until their implementations and release evidence land.
 
@@ -147,6 +147,12 @@ Grouped and stacked charts are options on compatible column, horizontal-bar, and
 separate engines or renderer-specific kinds. A stack ID joins series only when their pane, axes,
 orientation, and category/continuous coordinate semantics match.
 
+The currently implemented Phase 2 slice exposes these options on vertical `column` series. An explicit
+`group_id` subdivides a category band among visible members; matching `stack_id` members occupy one group
+slot. `stack_mode: "normal"` uses independent positive/negative accumulation around zero and
+`stack_mode: "percent"` normalizes those category totals to `+1`/`-1`. Horizontal-bar and stacked-area
+use of the same option vocabulary remains planned work.
+
 ```ts
 interface cartesian_series_options {
   pane?: number;
@@ -283,16 +289,17 @@ interface temporal_xy_columns extends Omit<numeric_xy_columns, "x"> {
 ```
 
 All parallel arrays must have equal row counts. Validity arrays contain only `0` or `1`. Category
-indices must be in range. The transaction is validated before the live dataset changes. Future
-range, bubble, error, heatmap, and box column types extend this same convention rather than adding a
-generic dynamically typed channel map to the frame hot path.
+indices must be in range. The transaction is validated before the live dataset changes. Bubble extends
+numeric XY columns with `size: Float64Array` and optional `size_valid: Uint8Array`. Future range, error,
+heatmap, and box column types extend this same convention rather than adding a generic dynamically typed
+channel map to the frame hot path.
 
 The first release needs `set_data()`, `set_data_typed()`, append/update by explicit row ID, bounded
 retention, `data_at()`, hit-test/tooltip snapshots, and capacity telemetry. General storage is
 allocated lazily when the first general series or dataset is created; a financial-only chart must
 retain zero general-dataset, domain, axis, and geometry capacity.
 
-The current column/scatter/`xy_line`/`xy_area` browser slices expose `update_data(rows, { max_rows })` and
+The current column/scatter/bubble/`xy_line`/`xy_area`/`range_area` browser slices expose `update_data(rows, { max_rows })` and
 `update_data_typed(columns, { max_rows })`. Every updated row needs an explicit string or numeric
 `id`; matching IDs replace in place, while new IDs append in input order. `max_rows` is an optional
 per-transaction retention limit: after the update, oldest rows are removed until the dataset fits.
@@ -300,7 +307,7 @@ Pass it on every streaming update that needs retention. Invalid batches leave th
 unchanged. Rows removed by retention lose their identity and any hover/selection target; retained
 explicit IDs continue to identify the same marks after front trimming.
 
-The current column/scatter/`xy_line`/`xy_area` options also accept `data_labels: true` to draw visible numeric Y values
+The current column/scatter/bubble/`xy_line`/`xy_area`/`range_area` options also accept `data_labels: true` to draw visible numeric Y values
 near their marks. The engine places labels in the shared frame, rejects overlapping or out-of-plot
 placements, and caps output at 512 labels and 4,096 placement attempts per pane per frame. Missing
 rows never produce labels. Object rows may supply `label?: string`; typed columns may supply a

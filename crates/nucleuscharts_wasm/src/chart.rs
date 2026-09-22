@@ -2565,6 +2565,28 @@ impl NucleusChart {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_general_bubble_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        x: &Float64Array,
+        y: &Float64Array,
+        y_valid: Option<js_sys::Uint8Array>,
+        size: &Float64Array,
+        size_valid: Option<js_sys::Uint8Array>,
+    ) -> String {
+        self.inner.borrow_mut().set_general_bubble_data_typed(
+            dataset,
+            metadata_json,
+            x,
+            y,
+            y_valid,
+            size,
+            size_valid,
+        )
+    }
+
     pub fn set_general_temporal_data_typed(
         &mut self,
         dataset: u32,
@@ -2601,6 +2623,80 @@ impl NucleusChart {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_general_range_numeric_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        x: &Float64Array,
+        low: &Float64Array,
+        low_valid: Option<js_sys::Uint8Array>,
+        high: &Float64Array,
+        high_valid: Option<js_sys::Uint8Array>,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .set_general_range_numeric_data_typed(
+                dataset,
+                metadata_json,
+                x,
+                low,
+                low_valid,
+                high,
+                high_valid,
+            )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_general_range_temporal_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        x_epoch_ms: &Float64Array,
+        low: &Float64Array,
+        low_valid: Option<js_sys::Uint8Array>,
+        high: &Float64Array,
+        high_valid: Option<js_sys::Uint8Array>,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .set_general_range_temporal_data_typed(
+                dataset,
+                metadata_json,
+                x_epoch_ms,
+                low,
+                low_valid,
+                high,
+                high_valid,
+            )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_general_range_category_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        metadata_json: &str,
+        category_indices: &js_sys::Uint32Array,
+        low: &Float64Array,
+        low_valid: Option<js_sys::Uint8Array>,
+        high: &Float64Array,
+        high_valid: Option<js_sys::Uint8Array>,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .set_general_range_category_data_typed(
+                dataset,
+                ids_json,
+                metadata_json,
+                category_indices,
+                low,
+                low_valid,
+                high,
+                high_valid,
+            )
+    }
+
     pub fn upsert_general_numeric_data_typed(
         &mut self,
         dataset: u32,
@@ -2616,6 +2712,30 @@ impl NucleusChart {
             x,
             y,
             y_valid,
+            max_rows,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_general_bubble_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        x: &Float64Array,
+        y: &Float64Array,
+        y_valid: Option<js_sys::Uint8Array>,
+        size: &Float64Array,
+        size_valid: Option<js_sys::Uint8Array>,
+        max_rows: u32,
+    ) -> String {
+        self.inner.borrow_mut().upsert_general_bubble_data_typed(
+            dataset,
+            metadata_json,
+            x,
+            y,
+            y_valid,
+            size,
+            size_valid,
             max_rows,
         )
     }
@@ -2656,6 +2776,84 @@ impl NucleusChart {
             y,
             y_valid,
         )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_general_range_numeric_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        x: &Float64Array,
+        low: &Float64Array,
+        low_valid: Option<js_sys::Uint8Array>,
+        high: &Float64Array,
+        high_valid: Option<js_sys::Uint8Array>,
+        max_rows: u32,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .upsert_general_range_numeric_data_typed(
+                dataset,
+                metadata_json,
+                x,
+                low,
+                low_valid,
+                high,
+                high_valid,
+                max_rows,
+            )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_general_range_temporal_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        x_epoch_ms: &Float64Array,
+        low: &Float64Array,
+        low_valid: Option<js_sys::Uint8Array>,
+        high: &Float64Array,
+        high_valid: Option<js_sys::Uint8Array>,
+        max_rows: u32,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .upsert_general_range_temporal_data_typed(
+                dataset,
+                metadata_json,
+                x_epoch_ms,
+                low,
+                low_valid,
+                high,
+                high_valid,
+                max_rows,
+            )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_general_range_category_data_typed(
+        &mut self,
+        dataset: u32,
+        ids_json: &str,
+        update_json: &str,
+        category_indices: &js_sys::Uint32Array,
+        low: &Float64Array,
+        low_valid: Option<js_sys::Uint8Array>,
+        high: &Float64Array,
+        high_valid: Option<js_sys::Uint8Array>,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .upsert_general_range_category_data_typed(
+                dataset,
+                ids_json,
+                update_json,
+                category_indices,
+                low,
+                low_valid,
+                high,
+                high_valid,
+            )
     }
 
     pub fn remove_general_series(&mut self, series: u32, dataset: u32) -> bool {

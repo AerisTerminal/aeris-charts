@@ -83,10 +83,10 @@ pub use general_data::{
 #[doc(hidden)]
 pub use general_series::{
     GeneralAccessibilityItem, GeneralAccessibilitySnapshot, GeneralHitMode, GeneralSeries,
-    GeneralSeriesHit, GeneralSeriesId, GeneralSeriesKind, GeneralSeriesOptions,
+    GeneralSeriesHit, GeneralSeriesId, GeneralSeriesKind, GeneralSeriesOptions, GeneralStackMode,
     GeneralTooltipSnapshot, MAX_GENERAL_ACCESSIBILITY_ITEMS, MAX_GENERAL_POINT_RADIUS,
-    MAX_GENERAL_SERIES, MAX_GENERAL_SERIES_COLOR_BYTES, MAX_GENERAL_SERIES_TITLE_BYTES,
-    MIN_GENERAL_POINT_RADIUS,
+    MAX_GENERAL_SERIES, MAX_GENERAL_SERIES_COLOR_BYTES, MAX_GENERAL_SERIES_GROUP_ID_BYTES,
+    MAX_GENERAL_SERIES_STACK_ID_BYTES, MAX_GENERAL_SERIES_TITLE_BYTES, MIN_GENERAL_POINT_RADIUS,
 };
 pub use hit_test::{SeriesHit, SeriesHitKind};
 pub(crate) use indicators::{IndicatorBinding, IndicatorChange};

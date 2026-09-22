@@ -766,6 +766,25 @@ impl ChartEngine {
                     if axis.dimension == AxisDimension::Y {
                         if series.kind() == crate::GeneralSeriesKind::Column {
                             include_zero = true;
+                            continue;
+                        }
+                        if series.kind() == crate::GeneralSeriesKind::RangeArea {
+                            let Some(low_values) = dataset.low() else {
+                                continue;
+                            };
+                            for (index, &high) in dataset.y().iter().enumerate() {
+                                let low = low_values[index];
+                                if !dataset.y_is_valid(index)
+                                    || !dataset.low_is_valid(index)
+                                    || (axis.scale == GeneralScaleType::Logarithmic
+                                        && (low <= 0.0 || high <= 0.0))
+                                {
+                                    continue;
+                                }
+                                extend_numeric_bounds(&mut bounds, low);
+                                extend_numeric_bounds(&mut bounds, high);
+                            }
+                            continue;
                         }
                         for (index, &value) in dataset.y().iter().enumerate() {
                             if !dataset.y_is_valid(index)
@@ -782,6 +801,15 @@ impl ChartEngine {
                             }
                             extend_numeric_bounds(&mut bounds, value);
                         }
+                    }
+                }
+                if axis.dimension == AxisDimension::Y {
+                    if let Some((low, high)) =
+                        self.general_column_axis_bounds(axis.pane_id, axis.id())
+                    {
+                        extend_numeric_bounds(&mut bounds, low);
+                        extend_numeric_bounds(&mut bounds, high);
+                        include_zero = true;
                     }
                 }
                 if include_zero && axis.scale != GeneralScaleType::Logarithmic {

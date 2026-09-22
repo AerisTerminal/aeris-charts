@@ -281,6 +281,373 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
   ]);
 });
 
+test("general columns group and stack through the browser API and V2 persistence", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
+
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:720px;height:640px;z-index:10000";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    chart.resize(720, 640, 1);
+
+    const grouped_pane = chart.add_pane({
+      preserve_empty: true,
+      horizontal_domain: { type: "category", scale: "band" },
+    });
+    chart.add_axis({ id: "grouped-x", pane: grouped_pane.pane_index(), dimension: "x", scale: "band" });
+    chart.add_axis({ id: "grouped-y", pane: grouped_pane.pane_index(), dimension: "y", scale: "linear" });
+    const grouped_a = chart.add_series("column", {
+      pane: grouped_pane.pane_index(), x_axis_id: "grouped-x", y_axis_id: "grouped-y",
+      group_id: "sales", title: "North",
+    });
+    const grouped_b = chart.add_series("column", {
+      pane: grouped_pane.pane_index(), x_axis_id: "grouped-x", y_axis_id: "grouped-y",
+      group_id: "sales", title: "South",
+    });
+    grouped_a.set_data([{ id: "north-jan", x: "Jan", y: 10 }, { id: "north-feb", x: "Feb", y: 14 }]);
+    grouped_b.set_data([{ id: "south-jan", x: "Jan", y: 18 }, { id: "south-feb", x: "Feb", y: 7 }]);
+
+    const stacked_pane = chart.add_pane({
+      preserve_empty: true,
+      horizontal_domain: { type: "category", scale: "band" },
+    });
+    chart.add_axis({ id: "stacked-x", pane: stacked_pane.pane_index(), dimension: "x", scale: "band" });
+    chart.add_axis({ id: "stacked-y", pane: stacked_pane.pane_index(), dimension: "y", scale: "linear" });
+    const stacked_a = chart.add_series("column", {
+      pane: stacked_pane.pane_index(), x_axis_id: "stacked-x", y_axis_id: "stacked-y",
+      group_id: "totals", stack_id: "combined", stack_mode: "normal", title: "Base",
+    });
+    const stacked_b = chart.add_series("column", {
+      pane: stacked_pane.pane_index(), x_axis_id: "stacked-x", y_axis_id: "stacked-y",
+      group_id: "totals", stack_id: "combined", stack_mode: "normal", title: "Top",
+    });
+    stacked_a.set_data([{ id: "base-up", x: "Up", y: 10 }, { id: "base-down", x: "Down", y: -4 }]);
+    stacked_b.set_data([{ id: "top-up", x: "Up", y: 5 }, { id: "top-down", x: "Down", y: -2 }]);
+
+    let invalid_stack_mode = null;
+    try {
+      chart.add_series("column", {
+        pane: grouped_pane.pane_index(), x_axis_id: "grouped-x", y_axis_id: "grouped-y",
+        stack_id: "bad", stack_mode: "invalid",
+      });
+    } catch (error) {
+      invalid_stack_mode = error.code;
+    }
+
+    chart.resize(720, 640, 1);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+    const scan_hits = (pane, seriesIds) => {
+      const found = new Map();
+      const geometry = pane.get_geometry();
+      for (let y = geometry.top + 2; y < geometry.top + geometry.height - 2 && found.size < seriesIds.length; y += 2) {
+        for (let x = 0; x < geometry.width; x += 2) {
+          const hit = chart.general_hit_test(pane.pane_index(), x, y);
+          if (hit && seriesIds.includes(hit.series) && !found.has(hit.series)) found.set(hit.series, hit);
+        }
+      }
+      return Array.from(found.values());
+    };
+    const grouped_hits = scan_hits(grouped_pane, [grouped_a.id, grouped_b.id]);
+    const stacked_hits = scan_hits(stacked_pane, [stacked_a.id, stacked_b.id]);
+
+    const state = chart.export_state();
+    const persisted_columns = state.series.filter((series) => series.kind === "Column");
+    const restored_host = document.createElement("div");
+    restored_host.style.cssText = "position:fixed;left:-10000px;top:0;width:720px;height:640px";
+    document.body.appendChild(restored_host);
+    const restored = await create_chart(restored_host, { backend: "canvas2d", autoSize: false });
+    restored.resize(720, 640, 1);
+    const restore_result = restored.import_state(state);
+    const restored_columns = restored.panes()
+      .flatMap((pane) => pane.get_series())
+      .filter((series) => series.kind === "column").length;
+
+    const snapshot = {
+      invalid_stack_mode,
+      grouped_hits,
+      stacked_hits,
+      persisted_columns: persisted_columns.map(({ group_id, stack_id, stack_mode }) => ({ group_id, stack_id, stack_mode })),
+      restored_columns,
+      restore_version: restore_result.schema_version,
+      grouped_values: [grouped_a.data_at(0)?.value, grouped_b.data_at(0)?.value],
+      stacked_values: [stacked_a.data_at(0)?.value, stacked_b.data_at(0)?.value],
+    };
+    restored.remove();
+    restored_host.remove();
+    chart.remove();
+    host.remove();
+    return snapshot;
+  });
+
+  expect(result.invalid_stack_mode).toBe("invalid_options");
+  expect(result.grouped_hits).toHaveLength(2);
+  expect(new Set(result.grouped_hits.map((hit) => hit.series)).size).toBe(2);
+  expect(result.stacked_hits).toHaveLength(2);
+  expect(new Set(result.stacked_hits.map((hit) => hit.series)).size).toBe(2);
+  expect(result.grouped_values).toEqual([10, 18]);
+  expect(result.stacked_values).toEqual([10, 5]);
+  expect(result.persisted_columns).toEqual([
+    { group_id: "sales", stack_id: null, stack_mode: "Normal" },
+    { group_id: "sales", stack_id: null, stack_mode: "Normal" },
+    { group_id: "totals", stack_id: "combined", stack_mode: "Normal" },
+    { group_id: "totals", stack_id: "combined", stack_mode: "Normal" },
+  ]);
+  expect(result.restore_version).toBe(2);
+  expect(result.restored_columns).toBe(4);
+});
+
+test("bubble size data drives marks, hits, updates, accessibility, and V2 restore", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
+
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:720px;height:520px;z-index:10000";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    chart.resize(720, 520, 1);
+
+    const pane = chart.add_pane({
+      preserve_empty: true,
+      horizontal_domain: { type: "continuous", scale: "linear" },
+    });
+    chart.add_axis({ id: "bubble-x", pane: pane.pane_index(), dimension: "x", scale: "linear" });
+    chart.add_axis({ id: "bubble-y", pane: pane.pane_index(), dimension: "y", scale: "linear" });
+    const bubble = chart.add_series("bubble", {
+      pane: pane.pane_index(),
+      x_axis_id: "bubble-x",
+      y_axis_id: "bubble-y",
+      title: "Population",
+      color: "#336699",
+      data_labels: true,
+    });
+    bubble.set_data([
+      { id: "small", x: 1, y: 1, size: 4 },
+      { id: "large", x: 2, y: 2, size: 100 },
+      { id: "zero", x: 3, y: 3, size: 0 },
+      { id: "missing", x: 4, y: 4, size: null },
+    ]);
+
+    let negative_size_rejection = null;
+    try {
+      bubble.update_data([{ id: "large", x: 2, y: 2, size: -1 }]);
+    } catch (error) {
+      negative_size_rejection = error.code;
+    }
+    const after_rejection = bubble.data_at(1);
+
+    bubble.update_data_typed({
+      ids: ["large", "new"],
+      x: new Float64Array([2.5, 5]),
+      y: new Float64Array([2.5, 5]),
+      size: new Float64Array([144, 25]),
+    });
+    chart.resize(720, 520, 1);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+    let hit = null;
+    const geometry = pane.get_geometry();
+    for (let y = geometry.top + 2; y < geometry.top + geometry.height - 2 && hit === null; y += 2) {
+      for (let x = 0; x < geometry.width; x += 2) {
+        const candidate = chart.general_hit_test(pane.pane_index(), x, y);
+        if (candidate?.series === bubble.id) {
+          hit = candidate;
+          break;
+        }
+      }
+    }
+
+    const before_restore = bubble.accessibility_snapshot(0, 10);
+    const state = chart.export_state();
+    const restored_host = document.createElement("div");
+    restored_host.style.cssText = "position:fixed;left:-10000px;top:0;width:720px;height:520px";
+    document.body.appendChild(restored_host);
+    const restored = await create_chart(restored_host, { backend: "canvas2d", autoSize: false });
+    restored.resize(720, 520, 1);
+    const restore_result = restored.import_state(state);
+    const restored_bubble = restored.panes()
+      .flatMap((candidate) => candidate.get_series())
+      .find((series) => series.kind === "bubble");
+    const restored_snapshot = restored_bubble?.accessibility_snapshot(0, 10) ?? null;
+
+    const snapshot = {
+      negative_size_rejection,
+      after_rejection,
+      before_restore,
+      restored_snapshot,
+      restored_kind: restored_bubble?.kind ?? null,
+      restore_version: restore_result.schema_version,
+      hit,
+      screenshot: chart.take_screenshot().toDataURL().length,
+    };
+    restored.remove();
+    restored_host.remove();
+    chart.remove();
+    host.remove();
+    return snapshot;
+  });
+
+  expect(result.negative_size_rejection).toBe("invalid_data");
+  expect(result.after_rejection).toMatchObject({ row_id: "large", value: 2, size: 100 });
+  expect(result.before_restore.items).toMatchObject([
+    { row_id: "small", size: 4 },
+    { row_id: "large", x_label: "2.5", value: 2.5, size: 144 },
+    { row_id: "zero", size: 0 },
+    { row_id: "missing", size: null },
+    { row_id: "new", x_label: "5", value: 5, size: 25 },
+  ]);
+  expect(result.hit).toMatchObject({ series: expect.any(Number), row_id: expect.anything() });
+  expect(result.restore_version).toBe(2);
+  expect(result.restored_kind).toBe("bubble");
+  expect(result.restored_snapshot).toEqual(result.before_restore);
+  expect(result.screenshot).toBeGreaterThan(1000);
+});
+
+test("range_area spans numeric, temporal, and category domains through the browser API", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
+
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:720px;height:760px;z-index:10000";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    chart.resize(720, 760, 1);
+
+    const numeric_pane = chart.add_pane({
+      preserve_empty: true,
+      horizontal_domain: { type: "continuous", scale: "linear" },
+    });
+    chart.add_axis({ id: "range-x", pane: numeric_pane.pane_index(), dimension: "x", scale: "linear" });
+    chart.add_axis({ id: "range-y", pane: numeric_pane.pane_index(), dimension: "y", scale: "linear" });
+    const numeric = chart.add_series("range_area", {
+      pane: numeric_pane.pane_index(), x_axis_id: "range-x", y_axis_id: "range-y", title: "Forecast",
+    });
+    numeric.set_data([
+      { id: "a", x: 1, low: 2, high: 5, label: "A" },
+      { id: "b", x: 2, low: 3, high: 7, label: "B" },
+      { id: "gap", x: 3, low: null, high: 8 },
+    ]);
+
+    let invalid_range = null;
+    try {
+      numeric.update_data([{ id: "b", x: 2, low: 9, high: 4 }]);
+    } catch (error) {
+      invalid_range = error.code;
+    }
+    const after_invalid = numeric.data_at(1);
+    numeric.update_data_typed({
+      ids: ["b", "c"],
+      labels: ["B2", "C"],
+      x: new Float64Array([2.5, 4]),
+      low: new Float64Array([4, 5]),
+      high: new Float64Array([8, 9]),
+    }, { max_rows: 4 });
+
+    const temporal_pane = chart.add_pane({
+      preserve_empty: true,
+      horizontal_domain: { type: "temporal" },
+    });
+    chart.add_axis({ id: "range-time", pane: temporal_pane.pane_index(), dimension: "x", scale: "temporal" });
+    chart.add_axis({ id: "range-time-y", pane: temporal_pane.pane_index(), dimension: "y", scale: "linear" });
+    const temporal = chart.add_series("range_area", {
+      pane: temporal_pane.pane_index(), x_axis_id: "range-time", y_axis_id: "range-time-y",
+    });
+    temporal.set_data_typed({
+      ids: ["t1", "t2"],
+      x_epoch_ms: new Float64Array([Date.UTC(2026, 0, 1), Date.UTC(2026, 0, 2)]),
+      low: new Float64Array([10, 12]),
+      high: new Float64Array([14, 16]),
+    });
+
+    const category_pane = chart.add_pane({
+      preserve_empty: true,
+      horizontal_domain: { type: "category", scale: "point" },
+    });
+    chart.add_axis({ id: "range-category", pane: category_pane.pane_index(), dimension: "x", scale: "point" });
+    chart.add_axis({ id: "range-category-y", pane: category_pane.pane_index(), dimension: "y", scale: "linear" });
+    const category = chart.add_series("range_area", {
+      pane: category_pane.pane_index(), x_axis_id: "range-category", y_axis_id: "range-category-y",
+    });
+    category.set_data_typed({
+      ids: ["q1", "q2"],
+      categories: ["Q1", "Q2"],
+      category_indices: new Uint32Array([0, 1]),
+      low: new Float64Array([20, 22]),
+      high: new Float64Array([28, 30]),
+    });
+
+    chart.resize(720, 760, 1);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    let hit = null;
+    const geometry = numeric_pane.get_geometry();
+    for (let y = geometry.top + 2; y < geometry.top + geometry.height - 2 && hit === null; y += 2) {
+      for (let x = 0; x < geometry.width; x += 2) {
+        const candidate = chart.general_hit_test(numeric_pane.pane_index(), x, y);
+        if (candidate?.series === numeric.id) {
+          hit = candidate;
+          break;
+        }
+      }
+    }
+
+    const before_restore = [numeric, temporal, category].map((series) => series.accessibility_snapshot(0, 10));
+    const state = chart.export_state();
+    const restored_host = document.createElement("div");
+    restored_host.style.cssText = "position:fixed;left:-10000px;top:0;width:720px;height:760px";
+    document.body.appendChild(restored_host);
+    const restored = await create_chart(restored_host, { backend: "canvas2d", autoSize: false });
+    restored.resize(720, 760, 1);
+    const restore_result = restored.import_state(state);
+    const restored_ranges = restored.panes()
+      .flatMap((pane) => pane.get_series())
+      .filter((series) => series.kind === "range_area")
+      .map((series) => series.accessibility_snapshot(0, 10));
+
+    const snapshot = {
+      invalid_range,
+      after_invalid,
+      hit,
+      before_restore,
+      restored_ranges,
+      restore_version: restore_result.schema_version,
+      screenshot: chart.take_screenshot().toDataURL().length,
+    };
+    restored.remove();
+    restored_host.remove();
+    chart.remove();
+    host.remove();
+    return snapshot;
+  });
+
+  expect(result.invalid_range).toBe("invalid_data");
+  expect(result.after_invalid).toMatchObject({ row_id: "b", low: 3, high: 7, value: 7 });
+  expect(result.hit).toMatchObject({ series: expect.any(Number), row_id: expect.anything() });
+  expect(result.before_restore[0].items).toMatchObject([
+    { row_id: "a", x_label: "1", label: "A", low: 2, high: 5 },
+    { row_id: "b", x_label: "2.5", label: "B2", low: 4, high: 8 },
+    { row_id: "gap", low: null, high: 8 },
+    { row_id: "c", x_label: "4", label: "C", low: 5, high: 9 },
+  ]);
+  expect(result.before_restore[1].items).toMatchObject([
+    { row_id: "t1", low: 10, high: 14 },
+    { row_id: "t2", low: 12, high: 16 },
+  ]);
+  expect(result.before_restore[2].items).toMatchObject([
+    { row_id: "q1", x_label: "Q1", low: 20, high: 28 },
+    { row_id: "q2", x_label: "Q2", low: 22, high: 30 },
+  ]);
+  expect(result.restore_version).toBe(2);
+  expect(result.restored_ranges).toEqual(result.before_restore);
+  expect(result.screenshot).toBeGreaterThan(1000);
+});
+
 test("xy_line and xy_area span general domains and restore through V2", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
@@ -447,7 +814,7 @@ test("xy_line and xy_area span general domains and restore through V2", async ({
   expect(result.screenshot).toBeGreaterThan(1000);
 });
 
-test("general columns, scatter, and XY lines participate in the shared keyboard accessibility controller", async ({ page }) => {
+test("general columns, points, lines, and ranges participate in the shared keyboard accessibility controller", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
 
@@ -521,6 +888,24 @@ test("general columns, scatter, and XY lines participate in the shared keyboard 
       { id: "l3", x: 2, y: 2 },
     ]);
 
+    const range_pane = chart.add_pane({
+      preserve_empty: true,
+      horizontal_domain: { type: "continuous", scale: "linear" },
+    });
+    chart.add_axis({ id: "kbd-range-x", pane: range_pane.pane_index(), dimension: "x", scale: "linear" });
+    chart.add_axis({ id: "kbd-range-y", pane: range_pane.pane_index(), dimension: "y", scale: "linear" });
+    const range = chart.add_series("range_area", {
+      pane: range_pane.pane_index(),
+      x_axis_id: "kbd-range-x",
+      y_axis_id: "kbd-range-y",
+      title: "Keyboard forecast",
+    });
+    range.set_data([
+      { id: "r1", x: -2, low: 1, high: 3 },
+      { id: "r2", x: 0, low: 2, high: 5, label: "Expected" },
+      { id: "r3", x: 2, low: 3, high: 6 },
+    ]);
+
     const accessibility = api.enable_accessibility(chart, {
       chart_title: (pane) => pane === category_pane.pane_index()
         ? "Category keyboard pane"
@@ -528,15 +913,17 @@ test("general columns, scatter, and XY lines participate in the shared keyboard 
           ? "Scatter keyboard pane"
           : pane === line_pane.pane_index()
             ? "Line keyboard pane"
-            : "Financial pane",
+            : pane === range_pane.pane_index()
+              ? "Range keyboard pane"
+              : "Financial pane",
       data_scope: "all",
       show_shortcuts: true,
     });
-    window.__general_keyboard = { chart, host, columns, scatter, line, accessibility };
+    window.__general_keyboard = { chart, host, columns, scatter, line, range, accessibility };
   });
 
   const layers = page.locator("#general-keyboard-host .nucleuscharts-a11y-layer");
-  await expect(layers).toHaveCount(4);
+  await expect(layers).toHaveCount(5);
 
   await layers.nth(1).focus();
   await page.keyboard.press("Home");
@@ -587,6 +974,21 @@ test("general columns, scatter, and XY lines participate in the shared keyboard 
   await page.waitForTimeout(30);
   const line_after_zoom = await page.evaluate(() => window.__general_keyboard.chart.take_screenshot().toDataURL());
   expect(line_after_zoom).not.toBe(line_before_zoom);
+
+  await layers.nth(4).focus();
+  await page.keyboard.press("Home");
+  await page.keyboard.press("ArrowRight");
+  const range_region = layers.nth(4).locator(".nucleuscharts-a11y-live-region");
+  await expect(range_region).toContainText("Keyboard forecast");
+  const range_text = await range_region.textContent();
+  expect(range_text).toContain("Expected");
+  expect(range_text).toContain("2 to 5");
+  expect(range_text).toContain("Point 2 of 3");
+  const range_before_zoom = await page.evaluate(() => window.__general_keyboard.chart.take_screenshot().toDataURL());
+  await page.keyboard.press("+");
+  await page.waitForTimeout(30);
+  const range_after_zoom = await page.evaluate(() => window.__general_keyboard.chart.take_screenshot().toDataURL());
+  expect(range_after_zoom).not.toBe(range_before_zoom);
 
   await page.evaluate(() => {
     window.__general_keyboard.accessibility.detach();
