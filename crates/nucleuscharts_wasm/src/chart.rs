@@ -2565,6 +2565,23 @@ impl NucleusChart {
         )
     }
 
+    pub fn set_general_temporal_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        x_epoch_ms: &Float64Array,
+        y: &Float64Array,
+        y_valid: Option<js_sys::Uint8Array>,
+    ) -> String {
+        self.inner.borrow_mut().set_general_temporal_data_typed(
+            dataset,
+            metadata_json,
+            x_epoch_ms,
+            y,
+            y_valid,
+        )
+    }
+
     pub fn set_general_category_data_typed(
         &mut self,
         dataset: u32,
@@ -2597,6 +2614,25 @@ impl NucleusChart {
             dataset,
             metadata_json,
             x,
+            y,
+            y_valid,
+            max_rows,
+        )
+    }
+
+    pub fn upsert_general_temporal_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        x_epoch_ms: &Float64Array,
+        y: &Float64Array,
+        y_valid: Option<js_sys::Uint8Array>,
+        max_rows: u32,
+    ) -> String {
+        self.inner.borrow_mut().upsert_general_temporal_data_typed(
+            dataset,
+            metadata_json,
+            x_epoch_ms,
             y,
             y_valid,
             max_rows,

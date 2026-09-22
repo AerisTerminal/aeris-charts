@@ -371,6 +371,22 @@ material regression in output, work, memory, or package size.
 5. Extend the shared Phase 1 accessibility and keyboard controller to each new series kind.
 6. Add general-chart benchmark scenarios and enforced budgets.
 
+Current Phase 2 progress (2026-09-22):
+
+- the first `xy_line` and `xy_area` slices now bind the shared store to continuous numeric, temporal, and
+  category band/point X domains with numeric Y axes; missing/transform-invalid rows split shared-frame
+  path runs, line/filled-area hits preserve row identity, and bound replacement cannot reinterpret the X
+  column kind;
+- browser object/typed ingestion includes epoch-millisecond temporal columns, explicit-ID incremental
+  updates and retention reuse the Phase 1 transaction path, and invalid temporal values reject atomically;
+- both path kinds reuse bounded labels, tooltip/accessibility snapshots, hover/selection/focus, V2
+  persistence, and the shared keyboard controller. The focused general-chart browser suite is 9/9 across
+  Chromium/Firefox/WebKit, and direct Canvas2D/WebGPU/GPUI path executor coverage is green;
+- the release perf harness now enforces the first general-only density gate at 100k `xy_line` points:
+  shared-frame construction must remain within 16.67 ms and nearest-hit interaction within 8 ms. Both
+  budgets pass on the current validation machine while the existing financial targets remain green.
+  Full Phase 2 remains open for the remaining series families and broader general/combined benchmark gates.
+
 Exit gate: Nucleus can build the representative Recharts dashboard examples with engine-owned
 semantics and backend parity while all existing financial gates remain green.
 

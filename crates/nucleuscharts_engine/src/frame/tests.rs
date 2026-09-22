@@ -413,6 +413,403 @@ fn category_column_series_owns_auto_domains_geometry_and_lifecycle() {
 }
 
 #[test]
+fn xy_line_preserves_gaps_hits_rows_and_shared_frame_geometry() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    let mut x = GeneralAxisOptions::new("line-x", pane, AxisDimension::X, GeneralScaleType::Linear);
+    x.domain = GeneralAxisDomain::Numeric([0.0, 4.0]);
+    chart.add_general_axis(x).unwrap();
+    let mut y = GeneralAxisOptions::new("line-y", pane, AxisDimension::Y, GeneralScaleType::Linear);
+    y.domain = GeneralAxisDomain::Numeric([0.0, 4.0]);
+    chart.add_general_axis(y).unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Numeric {
+            ids: Some(
+                ["a", "b", "gap", "d", "e"]
+                    .into_iter()
+                    .map(|id| GeneralRowId::Text(id.into()))
+                    .collect(),
+            ),
+            x: vec![0.0, 1.0, 2.0, 3.0, 4.0],
+            y: vec![0.0, 1.0, 99.0, 3.0, 4.0],
+            y_valid: Some(vec![1, 1, 0, 1, 1]),
+        })
+        .unwrap();
+    let mut options = GeneralSeriesOptions::xy_line(pane, dataset, "line-x", "line-y");
+    options.color = Some("#336699".into());
+    options.title = "Trend".into();
+    options.data_labels = true;
+    let series = chart.add_general_series(options).unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+    let frame = chart.build_frame();
+    let mut geometry = Vec::new();
+    chart.visit_general_path_points(chart.general_series(series).unwrap(), |point| {
+        geometry.push(point)
+    });
+    assert_eq!(
+        geometry.iter().map(|point| point.row).collect::<Vec<_>>(),
+        vec![0, 1, 3, 4]
+    );
+    assert_eq!(
+        geometry
+            .iter()
+            .map(|point| point.starts_new_run)
+            .collect::<Vec<_>>(),
+        vec![true, false, true, false],
+        "missing rows must split the line rather than bridging the gap"
+    );
+
+    let line_primitives = frame.panes[pane]
+        .main
+        .iter()
+        .filter(|primitive| matches!(primitive, Prim::Polyline { point_count: 2, .. }))
+        .count();
+    assert_eq!(line_primitives, 2);
+    assert!(frame.panes[pane]
+        .main
+        .iter()
+        .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "1")));
+    assert!(!frame.panes[pane]
+        .main
+        .iter()
+        .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "99")));
+
+    let first = geometry[0];
+    let second = geometry[1];
+    let midpoint = ((first.x + second.x) * 0.5, (first.y + second.y) * 0.5);
+    let hit = chart
+        .general_hit_test(pane, midpoint.0, midpoint.1, crate::GeneralHitMode::Exact)
+        .unwrap();
+    assert_eq!(hit.series, series);
+    assert_eq!(hit.row, 0);
+    assert_eq!(hit.distance, 0.0);
+
+    let gap_midpoint = (
+        (geometry[1].x + geometry[2].x) * 0.5,
+        (geometry[1].y + geometry[2].y) * 0.5,
+    );
+    assert_eq!(
+        chart.general_hit_test(
+            pane,
+            gap_midpoint.0,
+            gap_midpoint.1,
+            crate::GeneralHitMode::Exact,
+        ),
+        None,
+        "a missing row must leave the visual and hit-test gap empty"
+    );
+
+    assert_eq!(
+        chart.update_general_hover(pane, midpoint.0, midpoint.1),
+        Some(hit.clone())
+    );
+    assert!(chart.select_general_hovered());
+    let selected = chart.build_frame();
+    assert!(selected.panes[pane].main.iter().any(|primitive| {
+        matches!(primitive, Prim::Circle { stroke, stroke_width, .. } if *stroke == PRIMARY && *stroke_width >= 2.0)
+    }));
+    let tooltip = chart.general_tooltip_snapshot(series, 0).unwrap();
+    assert_eq!(tooltip.x_label, "0");
+    assert_eq!(tooltip.value, Some(0.0));
+    assert_eq!(tooltip.title, "Trend");
+    let accessibility = chart
+        .general_accessibility_snapshot(series, 0, usize::MAX)
+        .unwrap();
+    assert_eq!(accessibility.items.len(), 5);
+    assert_eq!(accessibility.items[2].value, None);
+}
+
+#[test]
+fn xy_line_maps_temporal_and_category_domains_without_reinterpreting_x() {
+    let mut temporal = ChartEngine::new(640.0, 400.0, 1.0);
+    let temporal_pane = temporal
+        .add_pane_with_domain(true, HorizontalDomain::Temporal)
+        .unwrap();
+    temporal
+        .add_general_axis(GeneralAxisOptions::new(
+            "time-x",
+            temporal_pane,
+            AxisDimension::X,
+            GeneralScaleType::Temporal,
+        ))
+        .unwrap();
+    temporal
+        .add_general_axis(GeneralAxisOptions::new(
+            "time-y",
+            temporal_pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let temporal_dataset = temporal
+        .create_general_xy_dataset(GeneralXyInput::Temporal {
+            ids: None,
+            x_epoch_ms: vec![1_000, 2_000, 3_000],
+            y: vec![1.0, 2.0, 3.0],
+            y_valid: None,
+        })
+        .unwrap();
+    let temporal_series = temporal
+        .add_general_series(GeneralSeriesOptions::xy_line(
+            temporal_pane,
+            temporal_dataset,
+            "time-x",
+            "time-y",
+        ))
+        .unwrap();
+    temporal.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let mut temporal_points = Vec::new();
+    temporal
+        .visit_general_path_points(temporal.general_series(temporal_series).unwrap(), |point| {
+            temporal_points.push(point)
+        });
+    assert_eq!(temporal_points.len(), 3);
+    assert_eq!(
+        temporal
+            .general_tooltip_snapshot(temporal_series, 1)
+            .unwrap()
+            .x_label,
+        "2000"
+    );
+
+    let mut category = ChartEngine::new(640.0, 400.0, 1.0);
+    let category_pane = category
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Point,
+            },
+        )
+        .unwrap();
+    category
+        .add_general_axis(GeneralAxisOptions::new(
+            "category-x",
+            category_pane,
+            AxisDimension::X,
+            GeneralScaleType::Point,
+        ))
+        .unwrap();
+    category
+        .add_general_axis(GeneralAxisOptions::new(
+            "category-y",
+            category_pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let category_dataset = category
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: None,
+            categories: vec!["A".into(), "B".into(), "C".into()],
+            category_indices: vec![0, 1, 2],
+            y: vec![3.0, 1.0, 2.0],
+            y_valid: None,
+        })
+        .unwrap();
+    let category_series = category
+        .add_general_series(GeneralSeriesOptions::xy_line(
+            category_pane,
+            category_dataset,
+            "category-x",
+            "category-y",
+        ))
+        .unwrap();
+    category.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let mut category_points = Vec::new();
+    category
+        .visit_general_path_points(category.general_series(category_series).unwrap(), |point| {
+            category_points.push(point)
+        });
+    assert_eq!(category_points.len(), 3);
+    assert!(category_points.windows(2).all(|pair| pair[0].x < pair[1].x));
+    assert_eq!(
+        category
+            .general_tooltip_snapshot(category_series, 1)
+            .unwrap()
+            .x_label,
+        "B"
+    );
+    let incompatible = category.replace_general_xy_dataset(
+        category_dataset,
+        GeneralXyInput::Numeric {
+            ids: None,
+            x: vec![1.0, 2.0],
+            y: vec![10.0, 20.0],
+            y_valid: None,
+        },
+    );
+    assert_eq!(
+        incompatible.unwrap_err().code(),
+        crate::ErrorCode::InvalidOptions
+    );
+    assert_eq!(
+        category
+            .general_dataset(category_dataset)
+            .unwrap()
+            .categories(),
+        Some(&["A".to_string(), "B".to_string(), "C".to_string()][..]),
+        "a bound XY line must reject an X-kind replacement atomically"
+    );
+}
+
+#[test]
+fn xy_line_log_axes_retain_non_positive_rows_as_geometry_gaps() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Logarithmic,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "log-x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Logarithmic,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "log-y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Logarithmic,
+        ))
+        .unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Numeric {
+            ids: Some(
+                ["a", "b", "bad-x", "bad-y", "e"]
+                    .into_iter()
+                    .map(|id| GeneralRowId::Text(id.into()))
+                    .collect(),
+            ),
+            x: vec![1.0, 10.0, 0.0, 100.0, 1_000.0],
+            y: vec![1.0, 10.0, 100.0, 0.0, 1_000.0],
+            y_valid: None,
+        })
+        .unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::xy_line(
+            pane, dataset, "log-x", "log-y",
+        ))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+    let mut geometry = Vec::new();
+    chart.visit_general_path_points(chart.general_series(series).unwrap(), |point| {
+        geometry.push(point)
+    });
+    assert_eq!(
+        geometry.iter().map(|point| point.row).collect::<Vec<_>>(),
+        vec![0, 1, 4]
+    );
+    assert_eq!(
+        geometry
+            .iter()
+            .map(|point| point.starts_new_run)
+            .collect::<Vec<_>>(),
+        vec![true, false, true]
+    );
+    let snapshot = chart
+        .general_accessibility_snapshot(series, 0, usize::MAX)
+        .unwrap();
+    assert_eq!(snapshot.total_rows, 5);
+    assert_eq!(snapshot.items[2].x_label, "0");
+    assert_eq!(snapshot.items[3].value, Some(0.0));
+}
+
+#[test]
+fn xy_area_emits_fill_and_stroke_runs_and_hits_the_filled_region() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    let mut x = GeneralAxisOptions::new("area-x", pane, AxisDimension::X, GeneralScaleType::Linear);
+    x.domain = GeneralAxisDomain::Numeric([0.0, 4.0]);
+    chart.add_general_axis(x).unwrap();
+    let mut y = GeneralAxisOptions::new("area-y", pane, AxisDimension::Y, GeneralScaleType::Linear);
+    y.domain = GeneralAxisDomain::Numeric([0.0, 4.0]);
+    chart.add_general_axis(y).unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Numeric {
+            ids: Some(
+                ["a", "b", "gap", "d", "e"]
+                    .into_iter()
+                    .map(|id| GeneralRowId::Text(id.into()))
+                    .collect(),
+            ),
+            x: vec![0.0, 1.0, 2.0, 3.0, 4.0],
+            y: vec![1.0, 2.0, 99.0, 3.0, 1.0],
+            y_valid: Some(vec![1, 1, 0, 1, 1]),
+        })
+        .unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::xy_area(
+            pane, dataset, "area-x", "area-y",
+        ))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+    let frame = chart.build_frame();
+    assert_eq!(
+        frame.panes[pane]
+            .main
+            .iter()
+            .filter(|primitive| matches!(primitive, Prim::AreaFill { point_count: 2, .. }))
+            .count(),
+        2
+    );
+    assert_eq!(
+        frame.panes[pane]
+            .main
+            .iter()
+            .filter(|primitive| matches!(primitive, Prim::Polyline { point_count: 2, .. }))
+            .count(),
+        2
+    );
+
+    let mut geometry = Vec::new();
+    chart.visit_general_path_points(chart.general_series(series).unwrap(), |point| {
+        geometry.push(point)
+    });
+    let baseline = chart
+        .general_path_baseline_y(chart.general_series(series).unwrap())
+        .unwrap();
+    let x = (geometry[0].x + geometry[1].x) * 0.5;
+    let top = (geometry[0].y + geometry[1].y) * 0.5;
+    let y = (top + baseline) * 0.5;
+    let hit = chart
+        .general_hit_test(pane, x, y, crate::GeneralHitMode::Exact)
+        .unwrap();
+    assert_eq!(hit.series, series);
+    assert_eq!(hit.distance, 0.0);
+
+    let gap_x = (geometry[1].x + geometry[2].x) * 0.5;
+    assert_eq!(
+        chart.general_hit_test(pane, gap_x, y, crate::GeneralHitMode::Exact),
+        None,
+        "missing rows must split area fill and hit geometry"
+    );
+}
+
+#[test]
 fn xy_scatter_owns_independent_domains_hits_and_runtime_view() {
     let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
     let pane = chart

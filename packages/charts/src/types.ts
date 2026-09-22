@@ -41,12 +41,12 @@ export type series_kind =
   | "custom";
 
 /** General Cartesian series currently available through the shared chart engine. */
-export type general_series_kind = "column" | "scatter";
+export type general_series_kind = "xy_line" | "xy_area" | "column" | "scatter";
 export type general_row_id = string | number;
 
 export interface general_xy_row {
   id?: general_row_id;
-  x: string | number;
+  x: string | number | Date;
   y: number | null;
   /** Optional custom text for an enabled data label; omitted labels use the numeric Y value. */
   label?: string;
@@ -56,6 +56,15 @@ export interface numeric_xy_columns {
   ids?: readonly general_row_id[];
   labels?: readonly (string | null)[];
   x: Float64Array;
+  y: Float64Array;
+  y_valid?: Uint8Array;
+}
+
+export interface temporal_xy_columns {
+  ids?: readonly general_row_id[];
+  labels?: readonly (string | null)[];
+  /** Whole epoch-millisecond values carried as JS-safe numbers. */
+  x_epoch_ms: Float64Array;
   y: Float64Array;
   y_valid?: Uint8Array;
 }
@@ -118,7 +127,7 @@ export interface general_series_options {
   visible?: boolean;
   title?: string;
   color?: string;
-  /** Scatter point radius in CSS pixels. Ignored by columns. */
+  /** Scatter point radius in CSS pixels. Ignored by columns, XY lines, and XY areas. */
   point_radius?: number;
   /** Show bounded, engine-placed value labels beside visible marks. */
   data_labels?: boolean;
@@ -174,12 +183,12 @@ export interface general_series_api {
   readonly id: number;
   readonly kind: general_series_kind;
   set_data(data: readonly general_xy_row[]): void;
-  set_data_typed(columns: numeric_xy_columns | category_xy_columns): void;
+  set_data_typed(columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns): void;
   /** Update existing rows and append missing rows by explicit `id`, atomically. */
   update_data(data: readonly general_xy_row[], options?: general_update_options): void;
   /** Typed-column form of {@link update_data}; `ids` is required at runtime. */
   update_data_typed(
-    columns: numeric_xy_columns | category_xy_columns,
+    columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns,
     options?: general_update_options,
   ): void;
   data_at(row: number): general_tooltip_snapshot | null;

@@ -1119,6 +1119,14 @@ mod tests {
             crate::GeneralSeriesOptions::column(pane, dataset, "category-x", "category-y");
         series.data_labels = true;
         chart.add_general_series(series).unwrap();
+        let mut line =
+            crate::GeneralSeriesOptions::xy_line(pane, dataset, "category-x", "category-y");
+        line.title = "Category trend".into();
+        chart.add_general_series(line).unwrap();
+        let mut area =
+            crate::GeneralSeriesOptions::xy_area(pane, dataset, "category-x", "category-y");
+        area.title = "Category area".into();
+        chart.add_general_series(area).unwrap();
 
         let document = chart.export_state_json().unwrap();
         let value: serde_json::Value = serde_json::from_str(&document).unwrap();

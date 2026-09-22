@@ -437,6 +437,179 @@ fn xy_scatter_segment_reaches_canvas2d_and_webgpu_circle_paths() {
     );
 }
 
+#[test]
+fn xy_line_segment_reaches_canvas2d_and_webgpu_stroke_paths() {
+    let mut chart = ChartEngine::new(360.0, 240.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Numeric {
+            ids: None,
+            x: vec![0.0, 1.0, 2.0, 3.0, 4.0],
+            y: vec![0.0, 1.0, 99.0, 3.0, 4.0],
+            y_valid: Some(vec![1, 1, 0, 1, 1]),
+        })
+        .unwrap();
+    let mut options = GeneralSeriesOptions::xy_line(pane, dataset, "x", "y");
+    options.color = Some("#2d6b8f".into());
+    chart.add_general_series(options).unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+    let frame = chart.build_frame();
+    let pane_frame = &frame.panes[pane];
+    let expected = Color::parse_css("#2d6b8f").unwrap();
+    let segment = chart
+        .frame_series_segments(pane)
+        .iter()
+        .find(|segment| {
+            pane_frame.main
+                [segment.start.min(pane_frame.main.len())..segment.end.min(pane_frame.main.len())]
+                .iter()
+                .any(|primitive| {
+                    matches!(primitive, Prim::Polyline { color, .. } if *color == expected)
+                })
+        })
+        .expect("XY line segment must reach retained backends");
+    let prims = &pane_frame.main[segment.start..segment.end];
+    assert_eq!(
+        prims
+            .iter()
+            .filter(|primitive| matches!(primitive, Prim::Polyline { color, point_count: 2, .. } if *color == expected))
+            .count(),
+        2,
+        "missing Y must split XY line into two stroke runs"
+    );
+
+    let mut canvas = CountingCanvas::default();
+    execute(
+        prims,
+        &pane_frame.points,
+        &mut canvas,
+        Viewport {
+            width: frame.width as f32,
+            height: frame.height as f32,
+        },
+    );
+    let canvas_calls = canvas.calls;
+
+    let mut fill_tris = Vec::new();
+    let mut stroke_tris = Vec::new();
+    geom_prims_to_tris(prims, &pane_frame.points, &mut fill_tris, &mut stroke_tris);
+    assert!(
+        canvas_calls > 0,
+        "Canvas2D must execute the line primitives"
+    );
+    assert!(
+        fill_tris.is_empty(),
+        "XY lines must not create fill geometry"
+    );
+    assert!(
+        !stroke_tris.is_empty(),
+        "WebGPU must tessellate XY line polylines into stroke geometry"
+    );
+}
+
+#[test]
+fn xy_area_segment_reaches_canvas2d_and_webgpu_fill_and_stroke_paths() {
+    let mut chart = ChartEngine::new(360.0, 240.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Numeric {
+            ids: None,
+            x: vec![0.0, 1.0, 2.0, 3.0, 4.0],
+            y: vec![1.0, 2.0, 99.0, 3.0, 1.0],
+            y_valid: Some(vec![1, 1, 0, 1, 1]),
+        })
+        .unwrap();
+    chart
+        .add_general_series(GeneralSeriesOptions::xy_area(pane, dataset, "x", "y"))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+    let frame = chart.build_frame();
+    let pane_frame = &frame.panes[pane];
+    assert_eq!(
+        pane_frame
+            .main
+            .iter()
+            .filter(|primitive| matches!(primitive, Prim::AreaFill { point_count: 2, .. }))
+            .count(),
+        2
+    );
+    let mut canvas = CountingCanvas::default();
+    execute(
+        &pane_frame.main,
+        &pane_frame.points,
+        &mut canvas,
+        Viewport {
+            width: frame.width as f32,
+            height: frame.height as f32,
+        },
+    );
+    let mut fill_tris = Vec::new();
+    let mut stroke_tris = Vec::new();
+    geom_prims_to_tris(
+        &pane_frame.main,
+        &pane_frame.points,
+        &mut fill_tris,
+        &mut stroke_tris,
+    );
+    assert!(canvas.calls > 0);
+    assert!(
+        !fill_tris.is_empty(),
+        "WebGPU must tessellate XY area fills"
+    );
+    assert!(
+        !stroke_tris.is_empty(),
+        "WebGPU must tessellate XY area strokes"
+    );
+}
+
 /// Runs must tile their pipeline's buffer contiguously, in ascending order, covering it exactly.
 fn assert_runs_tile_buffers(group: &DrawGroup) {
     for (pipeline, len) in [

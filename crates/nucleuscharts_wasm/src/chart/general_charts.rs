@@ -5,7 +5,7 @@ use nucleuscharts_engine::{
     AxisDimension, AxisPosition, CategoryScaleType, ChartError, ContinuousScaleType,
     GeneralAxisDomain, GeneralAxisOptions, GeneralDatasetId, GeneralHitMode, GeneralRowId,
     GeneralRowIdentity, GeneralScaleType, GeneralSeriesId, GeneralSeriesKind, GeneralSeriesOptions,
-    GeneralXyInput, HorizontalDomain,
+    GeneralXyInput, HorizontalDomain, MAX_GENERAL_TEMPORAL_MILLISECONDS,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -149,6 +149,29 @@ fn result_error(error: &ChartError) -> String {
 fn input_error(message: impl Into<String>) -> String {
     let error = ChartError::new(nucleuscharts_engine::ErrorCode::InvalidOptions, message);
     result_error(&error)
+}
+
+fn data_error(message: impl Into<String>) -> String {
+    let error = ChartError::new(nucleuscharts_engine::ErrorCode::InvalidData, message);
+    result_error(&error)
+}
+
+fn temporal_x_values(values: &Float64Array) -> Result<Vec<i64>, String> {
+    values
+        .to_vec()
+        .into_iter()
+        .map(|value| {
+            if !value.is_finite()
+                || value.fract() != 0.0
+                || value.abs() > MAX_GENERAL_TEMPORAL_MILLISECONDS as f64
+            {
+                return Err(data_error(format!(
+                    "general temporal X values must be whole epoch milliseconds within +/-{MAX_GENERAL_TEMPORAL_MILLISECONDS}"
+                )));
+            }
+            Ok(value as i64)
+        })
+        .collect()
 }
 
 fn parse_json<T: for<'de> Deserialize<'de>>(text: &str) -> Result<T, String> {
@@ -422,6 +445,8 @@ impl ChartInner {
                     "x_axis_id": series.x_axis_id(),
                     "y_axis_id": series.y_axis_id(),
                     "kind": match series.kind() {
+                        GeneralSeriesKind::XyLine => "xy_line",
+                        GeneralSeriesKind::XyArea => "xy_area",
                         GeneralSeriesKind::Column => "column",
                         GeneralSeriesKind::Scatter => "scatter",
                     },
@@ -437,6 +462,45 @@ impl ChartInner {
             Err(error) => return error,
         };
         let (kind, empty) = match kind {
+            "xy_line" | "xy_area" => {
+                let Some(domain) = self.engine.pane_horizontal_domain(input.pane) else {
+                    return input_error(format!("{kind} references a stale pane"));
+                };
+                let empty = match domain {
+                    HorizontalDomain::Continuous { .. } => GeneralXyInput::Numeric {
+                        ids: None,
+                        x: Vec::new(),
+                        y: Vec::new(),
+                        y_valid: None,
+                    },
+                    HorizontalDomain::Temporal => GeneralXyInput::Temporal {
+                        ids: None,
+                        x_epoch_ms: Vec::new(),
+                        y: Vec::new(),
+                        y_valid: None,
+                    },
+                    HorizontalDomain::Category { .. } => GeneralXyInput::Category {
+                        ids: None,
+                        categories: Vec::new(),
+                        category_indices: Vec::new(),
+                        y: Vec::new(),
+                        y_valid: None,
+                    },
+                    HorizontalDomain::FinancialTime | HorizontalDomain::Polar => {
+                        return input_error(format!(
+                            "{kind} requires a continuous, temporal, or category pane"
+                        ));
+                    }
+                };
+                (
+                    if kind == "xy_area" {
+                        GeneralSeriesKind::XyArea
+                    } else {
+                        GeneralSeriesKind::XyLine
+                    },
+                    empty,
+                )
+            }
             "column" => (
                 GeneralSeriesKind::Column,
                 GeneralXyInput::Category {
@@ -463,6 +527,12 @@ impl ChartInner {
             Err(error) => return result_error(&error),
         };
         let mut options = match kind {
+            GeneralSeriesKind::XyLine => {
+                GeneralSeriesOptions::xy_line(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+            }
+            GeneralSeriesKind::XyArea => {
+                GeneralSeriesOptions::xy_area(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+            }
             GeneralSeriesKind::Column => {
                 GeneralSeriesOptions::column(input.pane, dataset, input.x_axis_id, input.y_axis_id)
             }
@@ -506,6 +576,44 @@ impl ChartInner {
         let input = GeneralXyInput::Numeric {
             ids,
             x: x.to_vec(),
+            y: y.to_vec(),
+            y_valid: y_valid.map(|values| values.to_vec()),
+        };
+        match self
+            .engine
+            .replace_general_xy_dataset_labeled(dataset, input, metadata.labels)
+        {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    pub fn set_general_temporal_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        x_epoch_ms: &Float64Array,
+        y: &Float64Array,
+        y_valid: Option<Uint8Array>,
+    ) -> String {
+        let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
+            return input_error("general dataset handle is stale");
+        };
+        let metadata = match parse_json::<NumericDataInput>(metadata_json) {
+            Ok(metadata) => metadata,
+            Err(error) => return error,
+        };
+        let ids = match parse_id_values(metadata.ids) {
+            Ok(ids) => ids,
+            Err(error) => return error,
+        };
+        let x_epoch_ms = match temporal_x_values(x_epoch_ms) {
+            Ok(values) => values,
+            Err(error) => return error,
+        };
+        let input = GeneralXyInput::Temporal {
+            ids,
+            x_epoch_ms,
             y: y.to_vec(),
             y_valid: y_valid.map(|values| values.to_vec()),
         };
@@ -577,6 +685,47 @@ impl ChartInner {
         let input = GeneralXyInput::Numeric {
             ids,
             x: x.to_vec(),
+            y: y.to_vec(),
+            y_valid: y_valid.map(|values| values.to_vec()),
+        };
+        match self.engine.upsert_general_xy_dataset_labeled(
+            dataset,
+            input,
+            metadata.labels,
+            (max_rows > 0).then_some(max_rows as usize),
+        ) {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
+    pub fn upsert_general_temporal_data_typed(
+        &mut self,
+        dataset: u32,
+        metadata_json: &str,
+        x_epoch_ms: &Float64Array,
+        y: &Float64Array,
+        y_valid: Option<Uint8Array>,
+        max_rows: u32,
+    ) -> String {
+        let Some(dataset) = GeneralDatasetId::from_raw(dataset) else {
+            return input_error("general dataset handle is stale");
+        };
+        let metadata = match parse_json::<NumericDataInput>(metadata_json) {
+            Ok(metadata) => metadata,
+            Err(error) => return error,
+        };
+        let ids = match parse_id_values(metadata.ids) {
+            Ok(ids) => ids,
+            Err(error) => return error,
+        };
+        let x_epoch_ms = match temporal_x_values(x_epoch_ms) {
+            Ok(values) => values,
+            Err(error) => return error,
+        };
+        let input = GeneralXyInput::Temporal {
+            ids,
+            x_epoch_ms,
             y: y.to_vec(),
             y_valid: y_valid.map(|values| values.to_vec()),
         };

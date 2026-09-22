@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 
-use nucleuscharts_core::scale::general_scale::{BandScale, LinearScale};
+use nucleuscharts_core::scale::general_scale::{BandScale, LinearScale, PointScale};
 use nucleuscharts_render::color::Color;
 
 use crate::general_axes::NumericAxisScale;
@@ -22,6 +22,8 @@ const MAX_SCATTER_GRID_CELLS: usize = 65_536;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum GeneralSeriesKind {
+    XyLine,
+    XyArea,
     Column,
     Scatter,
 }
@@ -55,6 +57,46 @@ pub struct GeneralSeriesOptions {
 }
 
 impl GeneralSeriesOptions {
+    pub fn xy_line(
+        pane: usize,
+        dataset: GeneralDatasetId,
+        x_axis_id: impl Into<String>,
+        y_axis_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: GeneralSeriesKind::XyLine,
+            pane,
+            dataset,
+            x_axis_id: x_axis_id.into(),
+            y_axis_id: y_axis_id.into(),
+            visible: true,
+            title: String::new(),
+            color: None,
+            point_radius: 3.0,
+            data_labels: false,
+        }
+    }
+
+    pub fn xy_area(
+        pane: usize,
+        dataset: GeneralDatasetId,
+        x_axis_id: impl Into<String>,
+        y_axis_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: GeneralSeriesKind::XyArea,
+            pane,
+            dataset,
+            x_axis_id: x_axis_id.into(),
+            y_axis_id: y_axis_id.into(),
+            visible: true,
+            title: String::new(),
+            color: None,
+            point_radius: 3.0,
+            data_labels: false,
+        }
+    }
+
     pub fn column(
         pane: usize,
         dataset: GeneralDatasetId,
@@ -126,6 +168,14 @@ pub(crate) struct GeneralScatterGeometry {
     pub(crate) x: f64,
     pub(crate) y: f64,
     pub(crate) radius: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct GeneralLinePointGeometry {
+    pub(crate) row: usize,
+    pub(crate) x: f64,
+    pub(crate) y: f64,
+    pub(crate) starts_new_run: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -612,6 +662,46 @@ impl ChartEngine {
             return Err(invalid("general series axis dimensions are incompatible"));
         }
         match options.kind {
+            GeneralSeriesKind::XyLine | GeneralSeriesKind::XyArea => {
+                let compatible_x = matches!(
+                    (pane_domain, dataset_kind, x_axis.scale()),
+                    (
+                        HorizontalDomain::Continuous { .. },
+                        GeneralXKind::Numeric,
+                        GeneralScaleType::Linear
+                            | GeneralScaleType::Logarithmic
+                            | GeneralScaleType::SymmetricLog
+                    ) | (
+                        HorizontalDomain::Temporal,
+                        GeneralXKind::Temporal,
+                        GeneralScaleType::Temporal
+                    ) | (
+                        HorizontalDomain::Category {
+                            scale: crate::CategoryScaleType::Band
+                        },
+                        GeneralXKind::Category,
+                        GeneralScaleType::Band
+                    ) | (
+                        HorizontalDomain::Category {
+                            scale: crate::CategoryScaleType::Point
+                        },
+                        GeneralXKind::Category,
+                        GeneralScaleType::Point
+                    )
+                );
+                if !compatible_x
+                    || !matches!(
+                        y_axis.scale(),
+                        GeneralScaleType::Linear
+                            | GeneralScaleType::Logarithmic
+                            | GeneralScaleType::SymmetricLog
+                    )
+                {
+                    return Err(invalid(
+                        "xy_line/xy_area requires X data/axis semantics matching its continuous, temporal, or category pane and a numeric Y axis",
+                    ));
+                }
+            }
             GeneralSeriesKind::Column => {
                 if pane_domain
                     != (HorizontalDomain::Category {
@@ -872,6 +962,201 @@ impl ChartEngine {
         }
     }
 
+    pub(crate) fn visit_general_path_points<F>(&self, series: &GeneralSeries, mut visit: F)
+    where
+        F: FnMut(GeneralLinePointGeometry),
+    {
+        if !series.visible
+            || !matches!(
+                series.kind,
+                GeneralSeriesKind::XyLine | GeneralSeriesKind::XyArea
+            )
+        {
+            return;
+        }
+        let Some(pane_index) = self.pane_index_for_id(series.pane_id) else {
+            return;
+        };
+        let Some(plot) = self.general_plot_rect(pane_index) else {
+            return;
+        };
+        let Some(dataset) = self.general_dataset(series.dataset) else {
+            return;
+        };
+        let (Some(x_axis), Some(y_axis)) = (
+            self.general_axis(&series.x_axis_id),
+            self.general_axis(&series.y_axis_id),
+        ) else {
+            return;
+        };
+        let Some(x_domain) = self.effective_general_axis_domain(x_axis) else {
+            return;
+        };
+        let Some(GeneralAxisDomain::Numeric(y_domain)) = self.effective_general_axis_domain(y_axis)
+        else {
+            return;
+        };
+
+        let x_range = if x_axis.reverse() {
+            (plot.width, 0.0)
+        } else {
+            (0.0, plot.width)
+        };
+        let plot_bottom = plot.y + plot.height;
+        let y_range = if y_axis.reverse() {
+            (plot.y, plot_bottom)
+        } else {
+            (plot_bottom, plot.y)
+        };
+        let Some(y_scale) = NumericAxisScale::new(y_axis.scale(), y_domain, y_range.0, y_range.1)
+        else {
+            return;
+        };
+        let numeric_x_scale = match &x_domain {
+            GeneralAxisDomain::Numeric(domain) => {
+                NumericAxisScale::new(x_axis.scale(), *domain, x_range.0, x_range.1)
+            }
+            _ => None,
+        };
+        let temporal_x_scale = match &x_domain {
+            GeneralAxisDomain::Temporal([from, to]) => {
+                LinearScale::new(*from as f64, *to as f64, x_range.0, x_range.1).ok()
+            }
+            _ => None,
+        };
+        let category_lookup: Option<HashMap<&str, usize>> = match &x_domain {
+            GeneralAxisDomain::Category(values) => Some(
+                values
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| (value.as_str(), index))
+                    .collect(),
+            ),
+            _ => None,
+        };
+        let category_band_scale = match &x_domain {
+            GeneralAxisDomain::Category(values) if x_axis.scale() == GeneralScaleType::Band => {
+                BandScale::new(
+                    values.len(),
+                    x_range.0,
+                    x_range.1,
+                    x_axis.band_padding_inner(),
+                    x_axis.band_padding_outer(),
+                    0.5,
+                )
+                .ok()
+            }
+            _ => None,
+        };
+        let category_point_scale = match &x_domain {
+            GeneralAxisDomain::Category(values) if x_axis.scale() == GeneralScaleType::Point => {
+                PointScale::new(
+                    values.len(),
+                    x_range.0,
+                    x_range.1,
+                    x_axis.band_padding_outer(),
+                    0.5,
+                )
+                .ok()
+            }
+            _ => None,
+        };
+
+        let mut starts_new_run = true;
+        for row in 0..dataset.len() {
+            if !dataset.y_is_valid(row) {
+                starts_new_run = true;
+                continue;
+            }
+            let Some(y) = y_scale.coordinate(dataset.y()[row]) else {
+                starts_new_run = true;
+                continue;
+            };
+            let x = match dataset.x_kind() {
+                GeneralXKind::Numeric => dataset
+                    .numeric_x()
+                    .and_then(|values| values.get(row))
+                    .and_then(|value| numeric_x_scale.and_then(|scale| scale.coordinate(*value))),
+                GeneralXKind::Temporal => dataset
+                    .temporal_x_epoch_ms()
+                    .and_then(|values| values.get(row))
+                    .and_then(|value| {
+                        temporal_x_scale
+                            .as_ref()
+                            .and_then(|scale| scale.coordinate(*value as f64))
+                    }),
+                GeneralXKind::Category => {
+                    let axis_index = dataset
+                        .category_indices()
+                        .and_then(|values| values.get(row))
+                        .and_then(|value| usize::try_from(*value).ok())
+                        .and_then(|index| dataset.categories().and_then(|values| values.get(index)))
+                        .and_then(|category| {
+                            category_lookup
+                                .as_ref()
+                                .and_then(|lookup| lookup.get(category.as_str()))
+                                .copied()
+                        });
+                    axis_index.and_then(|index| match x_axis.scale() {
+                        GeneralScaleType::Band => category_band_scale
+                            .as_ref()
+                            .and_then(|scale| scale.center(index)),
+                        GeneralScaleType::Point => category_point_scale
+                            .as_ref()
+                            .and_then(|scale| scale.coordinate(index)),
+                        _ => None,
+                    })
+                }
+            };
+            let Some(x) = x else {
+                starts_new_run = true;
+                continue;
+            };
+            if !x.is_finite() || !y.is_finite() {
+                starts_new_run = true;
+                continue;
+            }
+            visit(GeneralLinePointGeometry {
+                row,
+                x,
+                y,
+                starts_new_run,
+            });
+            starts_new_run = false;
+        }
+    }
+
+    pub(crate) fn general_path_baseline_y(&self, series: &GeneralSeries) -> Option<f64> {
+        if !series.visible
+            || !matches!(
+                series.kind,
+                GeneralSeriesKind::XyLine | GeneralSeriesKind::XyArea
+            )
+        {
+            return None;
+        }
+        let pane_index = self.pane_index_for_id(series.pane_id)?;
+        let plot = self.general_plot_rect(pane_index)?;
+        let y_axis = self.general_axis(&series.y_axis_id)?;
+        let GeneralAxisDomain::Numeric(y_domain) = self.effective_general_axis_domain(y_axis)?
+        else {
+            return None;
+        };
+        let plot_bottom = plot.y + plot.height;
+        let y_range = if y_axis.reverse() {
+            (plot.y, plot_bottom)
+        } else {
+            (plot_bottom, plot.y)
+        };
+        let scale = NumericAxisScale::new(y_axis.scale(), y_domain, y_range.0, y_range.1)?;
+        Some(
+            scale
+                .coordinate(0.0)
+                .unwrap_or(y_range.0)
+                .clamp(plot.y, plot_bottom),
+        )
+    }
+
     fn scatter_geometry_context(&self, series: &GeneralSeries) -> Option<ScatterGeometryContext> {
         if !series.visible || series.kind != GeneralSeriesKind::Scatter {
             return None;
@@ -1055,6 +1340,55 @@ impl ChartEngine {
                 });
             };
             match series.kind {
+                GeneralSeriesKind::XyLine => {
+                    let mut previous: Option<GeneralLinePointGeometry> = None;
+                    self.visit_general_path_points(series, |geometry| {
+                        if geometry.starts_new_run {
+                            previous = Some(geometry);
+                            return;
+                        }
+                        let Some(from) = previous else {
+                            previous = Some(geometry);
+                            return;
+                        };
+                        let (distance, position) = distance_to_segment(
+                            x_css, y_css, from.x, from.y, geometry.x, geometry.y,
+                        );
+                        let row = if position <= 0.5 {
+                            from.row
+                        } else {
+                            geometry.row
+                        };
+                        consider(row, (distance - 3.0).max(0.0));
+                        previous = Some(geometry);
+                    });
+                }
+                GeneralSeriesKind::XyArea => {
+                    let Some(baseline_y) = self.general_path_baseline_y(series) else {
+                        continue;
+                    };
+                    let mut previous: Option<GeneralLinePointGeometry> = None;
+                    self.visit_general_path_points(series, |geometry| {
+                        if geometry.starts_new_run {
+                            previous = Some(geometry);
+                            return;
+                        }
+                        let Some(from) = previous else {
+                            previous = Some(geometry);
+                            return;
+                        };
+                        let (distance, position) = distance_to_area_segment(
+                            x_css, y_css, from.x, from.y, geometry.x, geometry.y, baseline_y,
+                        );
+                        let row = if position <= 0.5 {
+                            from.row
+                        } else {
+                            geometry.row
+                        };
+                        consider(row, distance);
+                        previous = Some(geometry);
+                    });
+                }
                 GeneralSeriesKind::Column => self.visit_general_columns(series, |geometry| {
                     consider(geometry.row, distance_to_rect(x_css, y_css, geometry));
                 }),
@@ -1379,6 +1713,53 @@ fn distance_to_circle(x: f64, y: f64, geometry: GeneralScatterGeometry) -> f64 {
     ((x - geometry.x).hypot(y - geometry.y) - geometry.radius).max(0.0)
 }
 
+fn distance_to_segment(x: f64, y: f64, x0: f64, y0: f64, x1: f64, y1: f64) -> (f64, f64) {
+    let dx = x1 - x0;
+    let dy = y1 - y0;
+    let length_squared = dx * dx + dy * dy;
+    if !length_squared.is_finite() || length_squared <= f64::EPSILON {
+        return ((x - x0).hypot(y - y0), 0.0);
+    }
+    let position = (((x - x0) * dx + (y - y0) * dy) / length_squared).clamp(0.0, 1.0);
+    let nearest_x = x0 + dx * position;
+    let nearest_y = y0 + dy * position;
+    ((x - nearest_x).hypot(y - nearest_y), position)
+}
+
+fn distance_to_area_segment(
+    x: f64,
+    y: f64,
+    x0: f64,
+    y0: f64,
+    x1: f64,
+    y1: f64,
+    baseline_y: f64,
+) -> (f64, f64) {
+    let (_, projected) = distance_to_segment(x, y, x0, y0, x1, y1);
+    let position = if (x1 - x0).abs() > f64::EPSILON {
+        ((x - x0) / (x1 - x0)).clamp(0.0, 1.0)
+    } else {
+        projected
+    };
+    let top_y = y0 + (y1 - y0) * position;
+    if x >= x0.min(x1)
+        && x <= x0.max(x1)
+        && y >= top_y.min(baseline_y)
+        && y <= top_y.max(baseline_y)
+    {
+        return (0.0, position);
+    }
+    let distance = [
+        distance_to_segment(x, y, x0, y0, x1, y1).0,
+        distance_to_segment(x, y, x0, baseline_y, x1, baseline_y).0,
+        distance_to_segment(x, y, x0, y0, x0, baseline_y).0,
+        distance_to_segment(x, y, x1, y1, x1, baseline_y).0,
+    ]
+    .into_iter()
+    .fold(f64::INFINITY, f64::min);
+    (distance, position)
+}
+
 fn general_x_label(dataset: &crate::GeneralDataset, row: usize) -> Option<String> {
     if let Some(values) = dataset.numeric_x() {
         return values.get(row).map(ToString::to_string);
@@ -1402,6 +1783,23 @@ fn validate_dataset_for_series(
                 return Err(invalid("column series require category X data"));
             }
         }
+        GeneralSeriesKind::XyLine | GeneralSeriesKind::XyArea => {
+            let expected_x = match x_axis.scale() {
+                GeneralScaleType::Linear
+                | GeneralScaleType::Logarithmic
+                | GeneralScaleType::SymmetricLog => GeneralXKind::Numeric,
+                GeneralScaleType::Temporal => GeneralXKind::Temporal,
+                GeneralScaleType::Band | GeneralScaleType::Point => GeneralXKind::Category,
+                GeneralScaleType::RadialLinear | GeneralScaleType::AngularCategory => {
+                    return Err(invalid("general path X axis scale is incompatible"));
+                }
+            };
+            if dataset.x_kind() != expected_x {
+                return Err(invalid(
+                    "general path dataset X kind must match its bound X axis",
+                ));
+            }
+        }
         GeneralSeriesKind::Scatter => {
             let values = dataset
                 .numeric_x()
@@ -1411,16 +1809,26 @@ fn validate_dataset_for_series(
             {
                 return Err(invalid("logarithmic scatter X values must be positive"));
             }
-            if y_axis.scale() == GeneralScaleType::Logarithmic
-                && dataset
-                    .y()
-                    .iter()
-                    .enumerate()
-                    .any(|(index, value)| dataset.y_is_valid(index) && *value <= 0.0)
-            {
-                return Err(invalid("logarithmic scatter Y values must be positive"));
-            }
+            validate_logarithmic_general_y(dataset, y_axis)?;
         }
+    }
+    Ok(())
+}
+
+fn validate_logarithmic_general_y(
+    dataset: &crate::GeneralDataset,
+    y_axis: &crate::GeneralAxis,
+) -> Result<(), ChartError> {
+    if y_axis.scale() == GeneralScaleType::Logarithmic
+        && dataset
+            .y()
+            .iter()
+            .enumerate()
+            .any(|(index, value)| dataset.y_is_valid(index) && *value <= 0.0)
+    {
+        return Err(invalid(
+            "logarithmic general-series Y values must be positive",
+        ));
     }
     Ok(())
 }
@@ -1439,6 +1847,23 @@ fn validate_input_for_series(
                 ));
             }
         }
+        GeneralSeriesKind::XyLine | GeneralSeriesKind::XyArea => {
+            let expected_x = match x_axis.scale() {
+                GeneralScaleType::Linear
+                | GeneralScaleType::Logarithmic
+                | GeneralScaleType::SymmetricLog => GeneralXKind::Numeric,
+                GeneralScaleType::Temporal => GeneralXKind::Temporal,
+                GeneralScaleType::Band | GeneralScaleType::Point => GeneralXKind::Category,
+                GeneralScaleType::RadialLinear | GeneralScaleType::AngularCategory => {
+                    return Err(invalid("general path X axis scale is incompatible"));
+                }
+            };
+            if input.x_kind() != expected_x {
+                return Err(invalid(
+                    "a dataset bound to a general path series must keep the X kind required by its X axis",
+                ));
+            }
+        }
         GeneralSeriesKind::Scatter => {
             let values = input.numeric_x_values().ok_or_else(|| {
                 invalid("a dataset bound to a scatter series must remain numeric X data")
@@ -1448,17 +1873,27 @@ fn validate_input_for_series(
             {
                 return Err(invalid("logarithmic scatter X values must be positive"));
             }
-            if y_axis.scale() == GeneralScaleType::Logarithmic {
-                let validity = input.y_valid_values();
-                if input.y_values().iter().enumerate().any(|(index, value)| {
-                    validity
-                        .and_then(|values| values.get(index))
-                        .is_none_or(|valid| *valid != 0)
-                        && *value <= 0.0
-                }) {
-                    return Err(invalid("logarithmic scatter Y values must be positive"));
-                }
-            }
+            validate_logarithmic_input_y(input, y_axis)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_logarithmic_input_y(
+    input: &GeneralXyInput,
+    y_axis: &crate::GeneralAxis,
+) -> Result<(), ChartError> {
+    if y_axis.scale() == GeneralScaleType::Logarithmic {
+        let validity = input.y_valid_values();
+        if input.y_values().iter().enumerate().any(|(index, value)| {
+            validity
+                .and_then(|values| values.get(index))
+                .is_none_or(|valid| *valid != 0)
+                && *value <= 0.0
+        }) {
+            return Err(invalid(
+                "logarithmic general-series Y values must be positive",
+            ));
         }
     }
     Ok(())

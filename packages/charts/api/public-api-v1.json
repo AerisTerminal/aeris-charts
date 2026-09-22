@@ -33,8 +33,8 @@
     },
     {
       "path": "grid.d.ts",
-      "bytes": 6466,
-      "sha256": "3ba25f48269f04380ee3e95324d89fc0b049a9fde8ff15ad8ed79a827c7814b3"
+      "bytes": 6458,
+      "sha256": "f9ab1bee833b3d98f13492d7b1b2e5c3e304ede8c49921c1725c9ce7c45ac554"
     },
     {
       "path": "index.d.ts",
@@ -68,8 +68,8 @@
     },
     {
       "path": "types.d.ts",
-      "bytes": 112690,
-      "sha256": "0bc02fce48490ef88805948f441d7e4223657b1edbc5fdafe49f976073726864"
+      "bytes": 113921,
+      "sha256": "b316ce58bf76b6bf926e450fcc5911ab73700ba55d81c0f6654952f94fb041fe"
     }
   ]
 }

@@ -93,7 +93,8 @@ row counts, category bytes, and ID bytes are bounded, and retained capacity is a
 engine memory evidence. A financial-only chart keeps the store absent and therefore retains zero general
 dataset capacity.
 
-The first concrete general-series bindings are category-band columns and numeric XY scatter. General
+The first concrete general-series bindings are category-band columns, numeric XY scatter, and the first
+Phase 2 path slices: `xy_line` and `xy_area`. General
 series have monotonic chart-local identities, stable pane/axis/dataset ownership, bounded title/color
 state, and lazy registry allocation. Populated axes and datasets cannot be removed out from under a
 series, and a pane containing a general series cannot be removed until that series is detached. Visible
@@ -105,16 +106,26 @@ Scatter binds independent continuous numeric axes, validates logarithmic positiv
 the runtime view, and lowers points to ordered `Circle` primitives. Its lazily rebuilt screen-space grid
 is keyed by dataset generation, plot geometry, axis domains/transforms, direction, and point radius; grid
 cell count is capped, retained capacity is attributed to engine memory, and exact/nearest hits inspect
-only intersecting cells while preserving stable series/row tie-breaking. Dataset replacement remains
-atomic against every bound series. Canvas2D, retained WebGPU, GPUI, and the native tiny-skia rasterizer
-all have chart-level parity coverage for both slices.
+only intersecting cells while preserving stable series/row tie-breaking. `xy_line` and `xy_area` reuse the same
+general dataset/axis ownership across continuous numeric, temporal epoch-millisecond, and category
+band/point X domains. Missing or transform-invalid rows split path runs instead of bridging gaps.
+`xy_line` lowers each run to the shared point pool plus ordered `Polyline` primitives. `xy_area` adds an
+ordered `AreaFill` before the matching stroke; its zero baseline is clamped into linear/symlog plots and
+falls back to the lower-domain plot edge when a logarithmic Y axis has no zero coordinate. Line hits use
+segment distance, while area hits include the filled trapezoid and both preserve the closest endpoint row
+identity. The release perf harness now
+includes a 100k-point general-only line target with a 16.67 ms frame budget and 8 ms nearest-hit budget,
+so the first Phase 2 path has an explicit density contract rather than an unbudgeted performance claim.
+Dataset replacement remains atomic against every bound series and cannot change a bound path/scatter X kind. Canvas2D, retained
+WebGPU, GPUI, and the native tiny-skia rasterizer consume the same frame contract; column, scatter, and
+line/area paths have direct executor coverage.
 
-The browser package exposes these two slices through the common chart lifecycle. Domain-aware pane and
+The browser package exposes these general slices through the common chart lifecycle. Domain-aware pane and
 axis handles remain thin mutations over engine state. General-axis browser handles carry the engine's
 monotonic handle token as well as the user-visible axis ID, so removing and recreating an axis with the
 same ID stales the old handle instead of retargeting it; V2 restore likewise rejects charts that already
 issued a general-axis handle rather than recycling that identity. Object rows are normalized once into numeric or
-interned-category columns; typed input crosses the WASM boundary as bulk arrays, while optional string or
+epoch-millisecond temporal, or interned-category columns; typed input crosses the WASM boundary as bulk arrays, while optional string or
 numeric identities cross as one bounded JSON vector. A general-series handle owns one engine dataset and
 removes it transactionally after detaching the series. Pane enumeration and chart series-lifecycle events
 include general handles without making financial primitive helpers reinterpret them. Tooltip, bounded
@@ -124,7 +135,9 @@ series continue to query the time scale, while general series page through at mo
 accessibility rows at a time. General keyboard focus is a distinct engine interaction target rather than
 an alias for hover or primary selection; explicit row identities follow reordered replacement batches,
 generated batch-local identities clear, and the shared frame paints the same focus chrome for every
-executor. Scatter keyboard zoom mutates its bound general X axis rather than the financial time scale.
+executor. Scatter and continuous-numeric `xy_line`/`xy_area` keyboard zoom mutate their bound general X
+axis rather than the financial time scale; category/temporal path navigation remains row-oriented without
+inventing an unsupported axis zoom.
 Generated row
 identities are encoded as decimal strings at the JavaScript boundary so their full `u64` identity is not
 rounded. The ordinary browser pointer path feeds exact general hits back into engine-owned transient

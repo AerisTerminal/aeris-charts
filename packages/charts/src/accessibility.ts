@@ -772,12 +772,13 @@ class PaneAccessibility {
   private zoom(zoom_in: boolean): void {
     const active = this.active_series();
     if (is_general_series(active)) {
-      if (active.kind !== "scatter") return;
+      if (active.kind !== "scatter" && active.kind !== "xy_line" && active.kind !== "xy_area") return;
       const item = this.general_item(this.point_index);
       const anchor = item === undefined ? 0 : Number(item.x_label);
       if (!Number.isFinite(anchor)) return;
       const axis = this.controller.chart.axes(this.pane_index).find((candidate) => candidate.id === active.x_axis_id);
-      axis?.zoom(zoom_in ? 1.25 : 0.8, anchor);
+      if (axis === undefined || !["linear", "log", "symlog"].includes(axis.options().scale)) return;
+      axis.zoom(zoom_in ? 1.25 : 0.8, anchor);
       this.update_focus_ring();
       return;
     }

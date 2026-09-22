@@ -1,11 +1,12 @@
 use nucleuscharts_render::color::Color;
-use nucleuscharts_render::draw_list::{IRect, Prim, TextAlign};
+use nucleuscharts_render::draw_list::{Gradient, IRect, LineStyle, LineType, Prim, TextAlign};
 
 use crate::{ChartEngine, GeneralSeriesKind, DEFAULT_LINE_COLOR};
 
 use super::PRIMARY;
 
 const GENERAL_HOVER: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0x73);
+const GENERAL_LINE_WIDTH_CSS: f64 = 2.0;
 const MAX_GENERAL_DATA_LABELS_PER_PANE: usize = 512;
 const MAX_GENERAL_DATA_LABEL_ATTEMPTS_PER_PANE: usize = 4_096;
 
@@ -16,6 +17,7 @@ impl ChartEngine {
         hpr: f64,
         vpr: f64,
         out: &mut Vec<Prim>,
+        points: &mut Vec<[f32; 2]>,
     ) -> [Option<Prim>; 2] {
         let mut interaction = [None, None];
         let Some(pane_id) = self.pane_stable_id(pane_index) else {
@@ -90,6 +92,73 @@ impl ChartEngine {
                 }
             };
             match series.kind() {
+                GeneralSeriesKind::XyLine | GeneralSeriesKind::XyArea => {
+                    let color = series
+                        .color()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(DEFAULT_LINE_COLOR);
+                    let is_area = series.kind() == GeneralSeriesKind::XyArea;
+                    let baseline_y = is_area
+                        .then(|| self.general_path_baseline_y(series))
+                        .flatten();
+                    let mut run = Vec::<[f32; 2]>::new();
+                    let mut flush_run = |run: &mut Vec<[f32; 2]>| {
+                        if run.len() >= 2 {
+                            let first_point = points.len() as u32;
+                            let point_count = run.len() as u32;
+                            points.append(run);
+                            if let Some(base_y) = baseline_y {
+                                out.push(Prim::AreaFill {
+                                    first_point,
+                                    point_count,
+                                    base_y: (base_y * vpr) as f32,
+                                    line_type: LineType::Simple,
+                                    gradient: Gradient {
+                                        top: Color::rgba(color.r(), color.g(), color.b(), 72),
+                                        bottom: Color::rgba(color.r(), color.g(), color.b(), 24),
+                                    },
+                                });
+                            }
+                            out.push(Prim::Polyline {
+                                first_point,
+                                point_count,
+                                width: (GENERAL_LINE_WIDTH_CSS * vpr) as f32,
+                                style: LineStyle::Solid,
+                                line_type: LineType::Simple,
+                                color,
+                            });
+                        } else {
+                            run.clear();
+                        }
+                    };
+                    self.visit_general_path_points(series, |geometry| {
+                        if geometry.starts_new_run {
+                            flush_run(&mut run);
+                        }
+                        run.push([(geometry.x * hpr) as f32, (geometry.y * vpr) as f32]);
+                        push_label(
+                            geometry.row,
+                            geometry.x,
+                            geometry.y - label_size * 0.65 - 4.0,
+                            geometry.y + label_size * 0.65 + 4.0,
+                            plot.width - 4.0,
+                        );
+                        let (hovered, selected) =
+                            self.general_row_interaction(series.id(), geometry.row);
+                        if hovered || selected {
+                            let stroke = if selected { PRIMARY } else { GENERAL_HOVER };
+                            interaction[usize::from(selected)] = Some(Prim::Circle {
+                                cx: (geometry.x * hpr) as f32,
+                                cy: (geometry.y * vpr) as f32,
+                                radius: ((if selected { 5.0 } else { 4.0 }) * vpr) as f32,
+                                fill: Color::rgba(0, 0, 0, 0),
+                                stroke_width: (if selected { 2.0 } else { 1.0 }) * vpr as f32,
+                                stroke,
+                            });
+                        }
+                    });
+                    flush_run(&mut run);
+                }
                 GeneralSeriesKind::Column => {
                     let color = series
                         .color()

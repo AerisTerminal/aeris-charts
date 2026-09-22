@@ -3,12 +3,12 @@
 ## Status and purpose
 
 This document began as the Phase 0 API proposal for the all-in-one architecture in `plan.md` and
-remains the contract for unfinished chart families. The current package now implements the first
-category-column and numeric XY-scatter subset: domain-aware panes, explicit axes, object and typed
-bulk replacement, snapshots, hit testing, and lifecycle removal are public in
-`packages/charts/src/types.ts` and tracked by the public API manifest. Later series names and the
-incremental, label, persistence, and React surfaces below remain proposals until their
-implementations and release evidence land.
+remains the contract for unfinished chart families. The current package implements category columns,
+numeric XY scatter, and the first Phase 2 `xy_line` and `xy_area` slices. Domain-aware panes, explicit axes, object and
+typed bulk replacement/update, bounded retention, row labels, snapshots, hit testing, accessibility,
+and V2 persistence are public for these implemented kinds. `xy_line` and `xy_area` support continuous numeric,
+temporal epoch-millisecond, and category band/point X domains. Later series names and the React surface
+below remain proposals until their implementations and release evidence land.
 
 The proposal is additive. Existing financial series, data shapes, pane methods, price-scale
 handles, snake-case methods, and persistence V1 keep their current meaning. In particular,
@@ -292,7 +292,7 @@ retention, `data_at()`, hit-test/tooltip snapshots, and capacity telemetry. Gene
 allocated lazily when the first general series or dataset is created; a financial-only chart must
 retain zero general-dataset, domain, axis, and geometry capacity.
 
-The current column/scatter browser slices expose `update_data(rows, { max_rows })` and
+The current column/scatter/`xy_line`/`xy_area` browser slices expose `update_data(rows, { max_rows })` and
 `update_data_typed(columns, { max_rows })`. Every updated row needs an explicit string or numeric
 `id`; matching IDs replace in place, while new IDs append in input order. `max_rows` is an optional
 per-transaction retention limit: after the update, oldest rows are removed until the dataset fits.
@@ -300,7 +300,7 @@ Pass it on every streaming update that needs retention. Invalid batches leave th
 unchanged. Rows removed by retention lose their identity and any hover/selection target; retained
 explicit IDs continue to identify the same marks after front trimming.
 
-The current column/scatter options also accept `data_labels: true` to draw visible numeric Y values
+The current column/scatter/`xy_line`/`xy_area` options also accept `data_labels: true` to draw visible numeric Y values
 near their marks. The engine places labels in the shared frame, rejects overlapping or out-of-plot
 placements, and caps output at 512 labels and 4,096 placement attempts per pane per frame. Missing
 rows never produce labels. Object rows may supply `label?: string`; typed columns may supply a
@@ -372,6 +372,16 @@ collision, positive/negative baselines, missing rows, labels, tooltip/hit testin
 and all executor paths. The XY-scatter slice is ready only when it proves independent continuous X
 and Y domains, log/symlog validation where enabled, point-size bounds, dense hit testing, pan/zoom,
 missing rows, and all executor paths.
+
+The first `xy_line` slice is accepted only when continuous numeric, temporal, and category X domains
+remain explicit; missing rows split stroke runs; bound datasets cannot change X kind; segment hits,
+row identity, labels, accessibility, keyboard navigation, incremental updates, V2 persistence, and
+Canvas2D/WebGPU/GPUI execution all use the same engine-owned semantics.
+
+The first `xy_area` slice uses that same path and identity contract, fills each contiguous run to an
+engine-owned baseline, never bridges missing or transform-invalid rows, and includes the filled region in
+hit testing. The shared frame emits `AreaFill` followed by the matching stroke, with direct Canvas2D,
+WebGPU, and GPUI executor coverage.
 
 Both slices must use the same chart lifecycle, pane handles, theme, event subscriptions,
 screenshot path, and ordered frame as financial series. A financial-only chart must show no

@@ -281,7 +281,173 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
   ]);
 });
 
-test("general columns and scatter participate in the shared keyboard accessibility controller", async ({ page }) => {
+test("xy_line and xy_area span general domains and restore through V2", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
+
+  const result = await page.evaluate(async () => {
+    const api = await import("/dist/nucleuscharts_financial.js");
+    const host = document.createElement("div");
+    Object.assign(host.style, {
+      position: "fixed",
+      width: "720px",
+      height: "640px",
+      left: "0",
+      top: "0",
+      zIndex: "10000",
+    });
+    document.body.appendChild(host);
+    const chart = await api.create_chart(host, { backend: "canvas2d", autoSize: false });
+    chart.resize(720, 640, 1);
+
+    const numeric_pane = chart.add_pane({
+      preserve_empty: true,
+      horizontal_domain: { type: "continuous", scale: "linear" },
+    });
+    chart.add_axis({ id: "line-x", pane: numeric_pane.pane_index(), dimension: "x", scale: "linear" });
+    chart.add_axis({ id: "line-y", pane: numeric_pane.pane_index(), dimension: "y", scale: "linear" });
+    const numeric_line = chart.add_series("xy_line", {
+      pane: numeric_pane.pane_index(),
+      x_axis_id: "line-x",
+      y_axis_id: "line-y",
+      title: "Numeric trend",
+      color: "#336699",
+      data_labels: true,
+    });
+    numeric_line.set_data([
+      { id: "n0", x: 0, y: 0 },
+      { id: "n1", x: 1, y: 1 },
+      { id: "gap", x: 2, y: null },
+      { id: "n3", x: 3, y: 3 },
+      { id: "n4", x: 4, y: 4 },
+    ]);
+
+    const temporal_pane = chart.add_pane({
+      preserve_empty: true,
+      horizontal_domain: { type: "temporal" },
+    });
+    chart.add_axis({ id: "time-x", pane: temporal_pane.pane_index(), dimension: "x", scale: "temporal" });
+    chart.add_axis({ id: "time-y", pane: temporal_pane.pane_index(), dimension: "y", scale: "linear" });
+    const temporal_line = chart.add_series("xy_line", {
+      pane: temporal_pane.pane_index(),
+      x_axis_id: "time-x",
+      y_axis_id: "time-y",
+      title: "Temporal trend",
+    });
+    temporal_line.set_data_typed({
+      ids: [1, 2, 3],
+      x_epoch_ms: new Float64Array([1_700_000_000_000, 1_700_000_060_000, 1_700_000_120_000]),
+      y: new Float64Array([10, 12, 11]),
+    });
+    temporal_line.update_data([
+      { id: 2, x: new Date(1_700_000_060_000), y: 13 },
+    ]);
+    let temporal_rejection = null;
+    try {
+      temporal_line.set_data_typed({
+        ids: [9],
+        x_epoch_ms: new Float64Array([1_700_000_000_000.5]),
+        y: new Float64Array([99]),
+      });
+    } catch (error) {
+      temporal_rejection = error.code;
+    }
+    const temporal_after_rejection = temporal_line.accessibility_snapshot(0, 10);
+
+    const category_pane = chart.add_pane({
+      preserve_empty: true,
+      horizontal_domain: { type: "category", scale: "point" },
+    });
+    chart.add_axis({ id: "point-x", pane: category_pane.pane_index(), dimension: "x", scale: "point" });
+    chart.add_axis({ id: "point-y", pane: category_pane.pane_index(), dimension: "y", scale: "linear" });
+    const category_line = chart.add_series("xy_line", {
+      pane: category_pane.pane_index(),
+      x_axis_id: "point-x",
+      y_axis_id: "point-y",
+      title: "Category trend",
+    });
+    category_line.set_data([
+      { id: "a", x: "A", y: 3 },
+      { id: "b", x: "B", y: 1 },
+      { id: "c", x: "C", y: 2 },
+    ]);
+    const category_area = chart.add_series("xy_area", {
+      pane: category_pane.pane_index(),
+      x_axis_id: "point-x",
+      y_axis_id: "point-y",
+      title: "Category area",
+      color: "#7e57c2",
+    });
+    category_area.set_data([
+      { id: "aa", x: "A", y: 1 },
+      { id: "ab", x: "B", y: 2 },
+      { id: "ac", x: "C", y: 1.5 },
+    ]);
+
+    chart.resize(720, 640, 1);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const geometry = numeric_pane.get_geometry();
+    let hit = null;
+    for (let y = geometry.top + 4; y < geometry.top + geometry.height - 4 && hit === null; y += 2) {
+      for (let x = 0; x < geometry.width; x += 2) {
+        const candidate = chart.general_hit_test(numeric_pane.pane_index(), x, y);
+        if (candidate?.series === numeric_line.id) {
+          hit = candidate;
+          break;
+        }
+      }
+    }
+
+    const state = chart.export_state();
+    const restored_host = document.createElement("div");
+    restored_host.style.cssText = "position:fixed;left:-10000px;top:0;width:720px;height:640px";
+    document.body.appendChild(restored_host);
+    const restored = await api.create_chart(restored_host, { backend: "canvas2d", autoSize: false });
+    restored.resize(720, 640, 1);
+    const restore_result = restored.import_state(state);
+    const restored_kinds = restored.panes()
+      .flatMap((pane) => pane.get_series())
+      .map((series) => series.kind ?? series.series_type());
+
+    const snapshot = {
+      state_version: state.schema_version,
+      restore_version: restore_result.schema_version,
+      restored_kinds,
+      numeric_gap: numeric_line.data_at(2),
+      numeric_accessibility: numeric_line.accessibility_snapshot(0, 10),
+      temporal_accessibility: temporal_after_rejection,
+      category_accessibility: category_line.accessibility_snapshot(0, 10),
+      area_accessibility: category_area.accessibility_snapshot(0, 10),
+      temporal_rejection,
+      hit,
+      screenshot: chart.take_screenshot().toDataURL().length,
+    };
+    restored.remove();
+    restored_host.remove();
+    chart.remove();
+    host.remove();
+    return snapshot;
+  });
+
+  expect(result.state_version).toBe(2);
+  expect(result.restore_version).toBe(2);
+  expect(result.restored_kinds.filter((kind) => kind === "xy_line")).toHaveLength(3);
+  expect(result.restored_kinds.filter((kind) => kind === "xy_area")).toHaveLength(1);
+  expect(result.numeric_gap).toMatchObject({ row_id: "gap", x_label: "2", value: null });
+  expect(result.numeric_accessibility.items.map((item) => item.value)).toEqual([0, 1, null, 3, 4]);
+  expect(result.temporal_rejection).toBe("invalid_data");
+  expect(result.temporal_accessibility.items).toMatchObject([
+    { row_id: 1, x_label: "1700000000000", value: 10 },
+    { row_id: 2, x_label: "1700000060000", value: 13 },
+    { row_id: 3, x_label: "1700000120000", value: 11 },
+  ]);
+  expect(result.category_accessibility.items.map((item) => item.x_label)).toEqual(["A", "B", "C"]);
+  expect(result.area_accessibility.items.map((item) => item.value)).toEqual([1, 2, 1.5]);
+  expect(result.hit).toMatchObject({ series: expect.any(Number), row_id: expect.anything() });
+  expect(result.screenshot).toBeGreaterThan(1000);
+});
+
+test("general columns, scatter, and XY lines participate in the shared keyboard accessibility controller", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
 
@@ -333,8 +499,26 @@ test("general columns and scatter participate in the shared keyboard accessibili
     });
     scatter.set_data([
       { id: 1, x: -10, y: -5 },
-      { id: 2, x: 0, y: 0, label: "Origin" },
+      { id: 2, x: 0, y: 0, label: "Center" },
       { id: 3, x: 10, y: 5 },
+    ]);
+
+    const line_pane = chart.add_pane({
+      preserve_empty: true,
+      horizontal_domain: { type: "continuous", scale: "linear" },
+    });
+    chart.add_axis({ id: "kbd-line-x", pane: line_pane.pane_index(), dimension: "x", scale: "linear" });
+    chart.add_axis({ id: "kbd-line-y", pane: line_pane.pane_index(), dimension: "y", scale: "linear" });
+    const line = chart.add_series("xy_line", {
+      pane: line_pane.pane_index(),
+      x_axis_id: "kbd-line-x",
+      y_axis_id: "kbd-line-y",
+      title: "Keyboard trend",
+    });
+    line.set_data([
+      { id: "l1", x: -2, y: 1 },
+      { id: "l2", x: 0, y: 3 },
+      { id: "l3", x: 2, y: 2 },
     ]);
 
     const accessibility = api.enable_accessibility(chart, {
@@ -342,21 +526,22 @@ test("general columns and scatter participate in the shared keyboard accessibili
         ? "Category keyboard pane"
         : pane === scatter_pane.pane_index()
           ? "Scatter keyboard pane"
-          : "Financial pane",
+          : pane === line_pane.pane_index()
+            ? "Line keyboard pane"
+            : "Financial pane",
       data_scope: "all",
       show_shortcuts: true,
     });
-    window.__general_keyboard = { chart, host, columns, scatter, accessibility };
+    window.__general_keyboard = { chart, host, columns, scatter, line, accessibility };
   });
 
   const layers = page.locator("#general-keyboard-host .nucleuscharts-a11y-layer");
-  await expect(layers).toHaveCount(3);
+  await expect(layers).toHaveCount(4);
 
   await layers.nth(1).focus();
   await page.keyboard.press("Home");
-  await page.waitForTimeout(30);
-  await expect(layers.nth(1).locator(".nucleuscharts-a11y-live-region"))
-    .toContainText("Jan");
+  const category_region = layers.nth(1).locator(".nucleuscharts-a11y-live-region");
+  await expect(category_region).toContainText("Jan");
 
   await page.evaluate(() => {
     window.__general_keyboard.columns.set_data([
@@ -366,15 +551,16 @@ test("general columns and scatter participate in the shared keyboard accessibili
     ]);
   });
   await page.keyboard.press("ArrowRight");
-  await page.waitForTimeout(30);
-  const category_text = await layers.nth(1).locator(".nucleuscharts-a11y-live-region").textContent();
+  await expect(category_region).toContainText("Mar");
+  const category_text = await category_region.textContent();
   expect(category_text).toContain("Mar");
   expect(category_text).toContain("Point 3 of 3");
 
   await layers.nth(2).focus();
   await page.keyboard.press("End");
-  await page.waitForTimeout(30);
-  const scatter_text = await layers.nth(2).locator(".nucleuscharts-a11y-live-region").textContent();
+  const scatter_region = layers.nth(2).locator(".nucleuscharts-a11y-live-region");
+  await expect(scatter_region).toContainText("Keyboard samples");
+  const scatter_text = await scatter_region.textContent();
   expect(scatter_text).toContain("Keyboard samples");
   expect(scatter_text).toContain("10");
   expect(scatter_text).toContain("Point 3 of 3");
@@ -386,8 +572,21 @@ test("general columns and scatter participate in the shared keyboard accessibili
   expect(after_zoom).not.toBe(before_zoom);
 
   await page.keyboard.press("Enter");
+  await expect(scatter_region).toContainText("data points");
+
+  await layers.nth(3).focus();
+  await page.keyboard.press("Home");
+  await page.keyboard.press("ArrowRight");
+  const line_region = layers.nth(3).locator(".nucleuscharts-a11y-live-region");
+  await expect(line_region).toContainText("Keyboard trend");
+  const line_text = await line_region.textContent();
+  expect(line_text).toContain("Keyboard trend");
+  expect(line_text).toContain("Point 2 of 3");
+  const line_before_zoom = await page.evaluate(() => window.__general_keyboard.chart.take_screenshot().toDataURL());
+  await page.keyboard.press("+");
   await page.waitForTimeout(30);
-  await expect(layers.nth(2).locator(".nucleuscharts-a11y-live-region")).toContainText("data points");
+  const line_after_zoom = await page.evaluate(() => window.__general_keyboard.chart.take_screenshot().toDataURL());
+  expect(line_after_zoom).not.toBe(line_before_zoom);
 
   await page.evaluate(() => {
     window.__general_keyboard.accessibility.detach();

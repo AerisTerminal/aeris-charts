@@ -929,6 +929,143 @@ fn xy_scatter_engine_frame_reaches_canvas_and_gpui_path_routes() {
 }
 
 #[test]
+fn xy_line_engine_frame_reaches_canvas_and_gpui_stroke_routes() {
+    for dpr in [1.0f64, 1.5, 2.0] {
+        let mut engine = ChartEngine::new(420.0, 260.0, dpr);
+        let pane = engine
+            .add_pane_with_domain(
+                true,
+                HorizontalDomain::Continuous {
+                    scale: ContinuousScaleType::Linear,
+                },
+            )
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "x",
+                pane,
+                AxisDimension::X,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "y",
+                pane,
+                AxisDimension::Y,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        let dataset = engine
+            .create_general_xy_dataset(GeneralXyInput::Numeric {
+                ids: None,
+                x: vec![0.0, 1.0, 2.0, 3.0, 4.0],
+                y: vec![0.0, 1.0, 99.0, 3.0, 4.0],
+                y_valid: Some(vec![1, 1, 0, 1, 1]),
+            })
+            .unwrap();
+        let mut options = GeneralSeriesOptions::xy_line(pane, dataset, "x", "y");
+        options.color = Some("#365f91".into());
+        engine.add_general_series(options).unwrap();
+        engine.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+        let frame = engine.build_frame();
+        let pane_frame = &frame.panes[pane];
+        let expected = Color::parse_css("#365f91").unwrap();
+        assert_eq!(
+            pane_frame
+                .main
+                .iter()
+                .filter(|primitive| matches!(primitive, Prim::Polyline { color, point_count: 2, .. } if *color == expected))
+                .count(),
+            2,
+            "DPR {dpr}: missing Y must split XY line into two stroke runs"
+        );
+        let canvas = canvas_rects(&pane_frame.main, &pane_frame.points);
+        let (_plan, metrics) = gpui_plan(&pane_frame.main, &pane_frame.points);
+        assert_eq!(
+            canvas.path_strokes, 2,
+            "DPR {dpr}: Canvas must stroke both line runs"
+        );
+        assert_eq!(metrics.dropped_prims, 0, "DPR {dpr}: no XY line may drop");
+        assert!(
+            metrics.paths >= 2,
+            "DPR {dpr}: GPUI must lower both XY line runs to paths ({metrics:?})"
+        );
+    }
+}
+
+#[test]
+fn xy_area_engine_frame_reaches_canvas_and_gpui_fill_routes() {
+    for dpr in [1.0f64, 1.5, 2.0] {
+        let mut engine = ChartEngine::new(420.0, 260.0, dpr);
+        let pane = engine
+            .add_pane_with_domain(
+                true,
+                HorizontalDomain::Continuous {
+                    scale: ContinuousScaleType::Linear,
+                },
+            )
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "x",
+                pane,
+                AxisDimension::X,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        engine
+            .add_general_axis(GeneralAxisOptions::new(
+                "y",
+                pane,
+                AxisDimension::Y,
+                GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        let dataset = engine
+            .create_general_xy_dataset(GeneralXyInput::Numeric {
+                ids: None,
+                x: vec![0.0, 1.0, 2.0, 3.0, 4.0],
+                y: vec![1.0, 2.0, 99.0, 3.0, 1.0],
+                y_valid: Some(vec![1, 1, 0, 1, 1]),
+            })
+            .unwrap();
+        engine
+            .add_general_series(GeneralSeriesOptions::xy_area(pane, dataset, "x", "y"))
+            .unwrap();
+        engine.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+        let frame = engine.build_frame();
+        let pane_frame = &frame.panes[pane];
+        assert_eq!(
+            pane_frame
+                .main
+                .iter()
+                .filter(|primitive| matches!(primitive, Prim::AreaFill { point_count: 2, .. }))
+                .count(),
+            2,
+            "DPR {dpr}: missing Y must split XY area into two fill runs"
+        );
+        let canvas = canvas_rects(&pane_frame.main, &pane_frame.points);
+        let (_plan, metrics) = gpui_plan(&pane_frame.main, &pane_frame.points);
+        assert_eq!(
+            canvas.path_fills, 2,
+            "DPR {dpr}: Canvas must fill both area runs"
+        );
+        assert!(
+            canvas.path_strokes >= 2,
+            "DPR {dpr}: Canvas must stroke both area runs"
+        );
+        assert_eq!(metrics.dropped_prims, 0, "DPR {dpr}: no XY area may drop");
+        assert!(
+            metrics.paths >= 4,
+            "DPR {dpr}: GPUI must lower area fill/stroke paths ({metrics:?})"
+        );
+    }
+}
+
+#[test]
 fn a_real_engine_frame_lowers_every_prim_it_contains() {
     let mut engine = real_engine_frame(1.5);
     let frame = engine.build_frame();

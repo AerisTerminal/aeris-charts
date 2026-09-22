@@ -1,4 +1,4 @@
-//! Performance gate for the two named production targets (roadmap). Headless: measures the
+//! Performance gate for the repository's named production targets (roadmap). Headless: measures the
 //! `nucleuscharts_engine` CPU cost — frame construction and data ingestion — which is what governs whether
 //! the browser can hit 60fps; GPU present time is a separate, backend-specific concern.
 //!
@@ -7,6 +7,7 @@
 //!   Target C — canonical pointer sample:      fixed-capacity resolver under 0.01 ms/sample
 //!   Target D — footprint history/live/correction ingestion plus shared-frame construction
 //!   Target E — 100k visible-bar volume profile refresh and cached shared frame
+//!   Target F — 100k-point general XY line frame + nearest-hit interaction
 //!
 //! Report-only by default (prints numbers + PASS/FAIL). Set `NUCLEUSCHARTS_PERF_STRICT=1` to exit non-zero
 //! on any failure so CI can treat it as a hard gate; thresholds are machine-dependent, so the
@@ -17,8 +18,10 @@
 use std::time::Instant;
 
 use nucleuscharts_engine::{
-    AggressorSide, ChartEngine, ChartFrame, FootprintAggregationOptions, FootprintBarAggregation,
-    FootprintSeriesOptions, FootprintTrade, FootprintVisualOptions, GestureResolver, InputDevice,
+    AggressorSide, AxisDimension, ChartEngine, ChartFrame, ContinuousScaleType,
+    FootprintAggregationOptions, FootprintBarAggregation, FootprintSeriesOptions, FootprintTrade,
+    FootprintVisualOptions, GeneralAxisOptions, GeneralHitMode, GeneralScaleType,
+    GeneralSeriesOptions, GeneralXyInput, GestureResolver, HorizontalDomain, InputDevice,
     InputTarget, PointerSample, SeriesKind,
 };
 
@@ -101,6 +104,9 @@ fn main() {
     const FOOTPRINT_LIVE_BUDGET_MS: f64 = 50.0;
     const FOOTPRINT_CORRECTION_BARS: usize = 10;
     const FOOTPRINT_CORRECTION_BUDGET_MS: f64 = 300.0;
+    const GENERAL_LINE_POINTS: usize = 100_000;
+    const GENERAL_LINE_HIT_SAMPLES: usize = 100;
+    const GENERAL_LINE_HIT_BUDGET_MS: f64 = 8.0;
 
     println!("nucleuscharts perf gate (release build recommended)\n");
 
@@ -330,7 +336,84 @@ fn main() {
     println!("Target E — 100k visible-bar volume profile (48 rows):");
     let e_refresh = report("profile refresh + frame", profile_ms, FRAME_BUDGET_MS);
     let e_cached = report("cached profile frame", cached_ms, FRAME_BUDGET_MS);
-    let all_pass = a_pass && b_pass && c_pass && d_pass && e_refresh && e_cached;
+
+    // ---- Target F: first Phase 2 general-only density gate -----------------------------------
+    let mut general = ChartEngine::new(1600.0, 800.0, 1.0);
+    let pane = general
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .expect("valid general pane");
+    general
+        .add_general_axis(GeneralAxisOptions::new(
+            "general-x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Linear,
+        ))
+        .expect("valid general X axis");
+    general
+        .add_general_axis(GeneralAxisOptions::new(
+            "general-y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .expect("valid general Y axis");
+    let mut x = Vec::with_capacity(GENERAL_LINE_POINTS);
+    let mut y = Vec::with_capacity(GENERAL_LINE_POINTS);
+    for index in 0..GENERAL_LINE_POINTS {
+        x.push(index as f64);
+        y.push(100.0 + (index as f64 * 0.013).sin() * 20.0);
+    }
+    let dataset = general
+        .create_general_xy_dataset(GeneralXyInput::Numeric {
+            ids: None,
+            x,
+            y,
+            y_valid: None,
+        })
+        .expect("valid general line dataset");
+    general
+        .add_general_series(GeneralSeriesOptions::xy_line(
+            pane,
+            dataset,
+            "general-x",
+            "general-y",
+        ))
+        .expect("valid general XY line");
+    general.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let mut general_frame = ChartFrame::default();
+    general.build_frame_into(&mut general_frame);
+    let start = Instant::now();
+    for _ in 0..FRAMES {
+        general.build_frame_into(&mut general_frame);
+    }
+    let general_frame_ms = start.elapsed().as_secs_f64() * 1000.0 / FRAMES as f64;
+    let start = Instant::now();
+    for sample in 0..GENERAL_LINE_HIT_SAMPLES {
+        let x = 1600.0 * (sample as f64 + 0.5) / GENERAL_LINE_HIT_SAMPLES as f64;
+        std::hint::black_box(general.general_hit_test(
+            pane,
+            x,
+            400.0,
+            GeneralHitMode::Nearest { max_distance: 32.0 },
+        ));
+    }
+    let general_hit_ms = start.elapsed().as_secs_f64() * 1000.0 / GENERAL_LINE_HIT_SAMPLES as f64;
+    println!("Target F — {GENERAL_LINE_POINTS} point general XY line:");
+    let f_frame = report("xy_line build_frame", general_frame_ms, FRAME_BUDGET_MS);
+    let f_hit = report(
+        "xy_line nearest hit",
+        general_hit_ms,
+        GENERAL_LINE_HIT_BUDGET_MS,
+    );
+
+    let all_pass =
+        a_pass && b_pass && c_pass && d_pass && e_refresh && e_cached && f_frame && f_hit;
     println!(
         "\n{}",
         if all_pass {

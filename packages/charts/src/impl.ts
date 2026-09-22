@@ -29,7 +29,7 @@ import type {
   footprint_bar, footprint_series_api, footprint_series_options, footprint_trade, footprint_trade_columns,
   general_accessibility_snapshot, general_axis_api, general_axis_options, general_pane_options, general_series_api, general_series_hit,
   general_series_kind, general_series_options, general_tooltip_snapshot, general_update_options, general_xy_row,
-  category_xy_columns, numeric_xy_columns,
+  category_xy_columns, numeric_xy_columns, temporal_xy_columns,
   ingestion_diagnostics,
   handle_scale_options, handle_scroll_options, indicator_info, kinetic_scroll_options,
   last_value_data, localization_options, logical_range,
@@ -425,7 +425,10 @@ type packed_numeric_xy_columns = Omit<numeric_xy_columns, "ids"> & {
 type packed_category_xy_columns = Omit<category_xy_columns, "ids"> & {
   ids?: readonly (string | number | null)[];
 };
-type general_columns_input = packed_numeric_xy_columns | packed_category_xy_columns;
+type packed_temporal_xy_columns = Omit<temporal_xy_columns, "ids"> & {
+  ids?: readonly (string | number | null)[];
+};
+type general_columns_input = packed_numeric_xy_columns | packed_temporal_xy_columns | packed_category_xy_columns;
 
 function general_ids_json(ids: readonly (string | number | null)[] | undefined, rows: number): string {
   if (ids === undefined) return "";
@@ -443,13 +446,20 @@ function general_labels_value(labels: readonly (string | null)[] | undefined, ro
   return labels;
 }
 
-function general_numeric_metadata_json(columns: packed_numeric_xy_columns): string {
-  const ids = general_ids_json(columns.ids, columns.x.length) || "null";
-  const labels = JSON.stringify(general_labels_value(columns.labels, columns.x.length));
+function general_value_metadata_json(
+  columns: { ids?: readonly (string | number | null)[]; labels?: readonly (string | null)[] },
+  rows: number,
+): string {
+  const ids = general_ids_json(columns.ids, rows) || "null";
+  const labels = JSON.stringify(general_labels_value(columns.labels, rows));
   return `{"ids":${ids},"labels":${labels}}`;
 }
 
-function pack_general_rows(kind: general_series_kind, data: readonly general_xy_row[]): general_columns_input {
+function pack_general_rows(
+  kind: general_series_kind,
+  data: readonly general_xy_row[],
+  x_scale?: general_axis_options["scale"],
+): general_columns_input {
   const has_explicit = data.some((row) => row.id !== undefined);
   const ids = has_explicit ? data.map((row) => row.id ?? null) : undefined;
   const has_labels = data.some((row) => row.label !== undefined);
@@ -465,16 +475,42 @@ function pack_general_rows(kind: general_series_kind, data: readonly general_xy_
       y[index] = value;
     }
   }
-  if (kind === "scatter") {
+  const x_mode = kind === "scatter"
+    ? "numeric"
+    : kind === "column"
+      ? "category"
+      : x_scale === "temporal"
+        ? "temporal"
+        : x_scale === "band" || x_scale === "point"
+          ? "category"
+          : "numeric";
+  if (x_mode === "numeric") {
     const x = new Float64Array(data.length);
     for (let index = 0; index < data.length; index += 1) {
       const value = data[index]!.x;
       if (typeof value !== "number") {
-        throw new nucleuscharts_error("invalid_data", "scatter X values must be numbers");
+        throw new nucleuscharts_error("invalid_data", `${kind} numeric X values must be numbers`);
       }
       x[index] = value;
     }
     return { ids, labels, x, y, y_valid };
+  }
+  if (x_mode === "temporal") {
+    const x_epoch_ms = new Float64Array(data.length);
+    for (let index = 0; index < data.length; index += 1) {
+      const value = data[index]!.x;
+      if (value instanceof Date) {
+        x_epoch_ms[index] = value.getTime();
+      } else if (typeof value === "number") {
+        x_epoch_ms[index] = value;
+      } else {
+        throw new nucleuscharts_error(
+          "invalid_data",
+          `${kind} temporal X values must be Date objects or epoch-millisecond numbers`,
+        );
+      }
+    }
+    return { ids, labels, x_epoch_ms, y, y_valid };
   }
   const categories: string[] = [];
   const category_lookup = new Map<string, number>();
@@ -482,7 +518,7 @@ function pack_general_rows(kind: general_series_kind, data: readonly general_xy_
   for (let index = 0; index < data.length; index += 1) {
     const value = data[index]!.x;
     if (typeof value !== "string") {
-      throw new nucleuscharts_error("invalid_data", "column X values must be category strings");
+      throw new nucleuscharts_error("invalid_data", `${kind} category X values must be strings`);
     }
     let category = category_lookup.get(value);
     if (category === undefined) {
@@ -564,11 +600,17 @@ class general_series_impl implements general_series_api {
     if (this.removed) throw new nucleuscharts_error("stale_handle", "this general series has been removed");
   }
 
-  set_data(data: readonly general_xy_row[]): void {
-    this.install_data(pack_general_rows(this.kind, data));
+  private x_scale(): general_axis_options["scale"] {
+    const axis = this.chart.axis(this.x_axis_id);
+    if (axis === null) throw new nucleuscharts_error("stale_handle", "this general series X axis has been removed");
+    return axis.options().scale;
   }
 
-  set_data_typed(columns: numeric_xy_columns | category_xy_columns): void {
+  set_data(data: readonly general_xy_row[]): void {
+    this.install_data(pack_general_rows(this.kind, data, this.x_scale()));
+  }
+
+  set_data_typed(columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns): void {
     this.install_data(columns);
   }
 
@@ -576,11 +618,11 @@ class general_series_impl implements general_series_api {
     if (data.some((row) => row.id === undefined)) {
       throw new nucleuscharts_error("invalid_data", "general incremental updates require explicit row IDs");
     }
-    this.upsert_data(pack_general_rows(this.kind, data), options);
+    this.upsert_data(pack_general_rows(this.kind, data, this.x_scale()), options);
   }
 
   update_data_typed(
-    columns: numeric_xy_columns | category_xy_columns,
+    columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns,
     options: general_update_options = {},
   ): void {
     this.upsert_data(columns, options);
@@ -595,23 +637,32 @@ class general_series_impl implements general_series_api {
     if (max_rows !== undefined && (!Number.isSafeInteger(max_rows) || max_rows <= 0 || max_rows > 0xffff_ffff)) {
       throw new nucleuscharts_error("invalid_options", "general max_rows must be a positive safe 32-bit integer");
     }
+    if (this.kind === "scatter" && !("x" in columns)) {
+      throw new nucleuscharts_error("invalid_data", "scatter requires numeric XY columns");
+    }
+    if (this.kind === "column" && !("category_indices" in columns)) {
+      throw new nucleuscharts_error("invalid_data", "column requires category XY columns");
+    }
     let result: string;
-    if (this.kind === "scatter") {
-      if (!("x" in columns)) {
-        throw new nucleuscharts_error("invalid_data", "scatter requires numeric XY columns");
-      }
+    if ("x" in columns) {
       result = this.chart.wasm.upsert_general_numeric_data_typed(
         this.dataset,
-        general_numeric_metadata_json(columns),
+        general_value_metadata_json(columns, columns.x.length),
         columns.x,
         columns.y,
         columns.y_valid,
         max_rows ?? 0,
       );
+    } else if ("x_epoch_ms" in columns) {
+      result = this.chart.wasm.upsert_general_temporal_data_typed(
+        this.dataset,
+        general_value_metadata_json(columns, columns.x_epoch_ms.length),
+        columns.x_epoch_ms,
+        columns.y,
+        columns.y_valid,
+        max_rows ?? 0,
+      );
     } else {
-      if (!("category_indices" in columns)) {
-        throw new nucleuscharts_error("invalid_data", "column requires category XY columns");
-      }
       result = this.chart.wasm.upsert_general_category_data_typed(
         this.dataset,
         general_ids_json(columns.ids, columns.category_indices.length),
@@ -632,22 +683,30 @@ class general_series_impl implements general_series_api {
 
   private install_data(columns: general_columns_input): void {
     this.assert_live();
+    if (this.kind === "scatter" && !("x" in columns)) {
+      throw new nucleuscharts_error("invalid_data", "scatter requires numeric XY columns");
+    }
+    if (this.kind === "column" && !("category_indices" in columns)) {
+      throw new nucleuscharts_error("invalid_data", "column requires category XY columns");
+    }
     let result: string;
-    if (this.kind === "scatter") {
-      if (!("x" in columns)) {
-        throw new nucleuscharts_error("invalid_data", "scatter requires numeric XY columns");
-      }
+    if ("x" in columns) {
       result = this.chart.wasm.set_general_numeric_data_typed(
         this.dataset,
-        general_numeric_metadata_json(columns),
+        general_value_metadata_json(columns, columns.x.length),
         columns.x,
         columns.y,
         columns.y_valid,
       );
+    } else if ("x_epoch_ms" in columns) {
+      result = this.chart.wasm.set_general_temporal_data_typed(
+        this.dataset,
+        general_value_metadata_json(columns, columns.x_epoch_ms.length),
+        columns.x_epoch_ms,
+        columns.y,
+        columns.y_valid,
+      );
     } else {
-      if (!("category_indices" in columns)) {
-        throw new nucleuscharts_error("invalid_data", "column requires category XY columns");
-      }
       result = this.chart.wasm.set_general_category_data_typed(
         this.dataset,
         general_ids_json(columns.ids, columns.category_indices.length),
@@ -3568,7 +3627,7 @@ export class chart_impl implements chart_api {
     kind: series_kind | general_series_kind,
     options?: Partial<any_series_options> | general_series_options,
   ): series_api | general_series_api {
-    if (kind === "column" || kind === "scatter") {
+    if (kind === "xy_line" || kind === "xy_area" || kind === "column" || kind === "scatter") {
       if (options === undefined || !("x_axis_id" in options) || !("y_axis_id" in options)) {
         throw new nucleuscharts_error(
           "invalid_options",
