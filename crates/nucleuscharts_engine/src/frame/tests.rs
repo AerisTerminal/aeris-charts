@@ -266,6 +266,13 @@ fn category_column_series_owns_auto_domains_geometry_and_lifecycle() {
         Some(hit.clone())
     );
     assert_eq!(chart.general_hovered_hit(), Some(hit.clone()));
+    assert!(chart.set_general_accessibility_focus(series, 0));
+    assert_eq!(chart.general_accessibility_focused_hit(), Some(hit.clone()));
+    let focused_frame = chart.build_frame();
+    assert!(focused_frame.panes[pane]
+        .main
+        .iter()
+        .any(|primitive| matches!(primitive, Prim::RectFrame { border: 1, .. })));
     assert!(chart.select_general_hovered());
     assert_eq!(chart.general_selected_hit(), Some(hit.clone()));
     let selected_frame = chart.build_frame();
@@ -325,6 +332,11 @@ fn category_column_series_owns_auto_domains_geometry_and_lifecycle() {
         "batch-scoped generated identities must not retain selection across replacement"
     );
     assert_eq!(
+        chart.general_accessibility_focused_hit(),
+        None,
+        "batch-scoped generated identities must not retain keyboard focus across replacement"
+    );
+    assert_eq!(
         chart.general_axis_effective_domain("revenue"),
         Some(GeneralAxisDomain::Numeric([-20.0, 5.0]))
     );
@@ -358,6 +370,7 @@ fn category_column_series_owns_auto_domains_geometry_and_lifecycle() {
         (jan.top + jan.bottom) / 2.0,
     );
     assert!(chart.select_general_hovered());
+    assert!(chart.set_general_accessibility_focus(series, 0));
     chart
         .replace_general_xy_dataset(
             dataset,
@@ -379,6 +392,13 @@ fn category_column_series_owns_auto_domains_geometry_and_lifecycle() {
         chart.general_selected_hit().unwrap().row_id,
         crate::GeneralRowIdentity::Explicit(GeneralRowId::Text("jan".into()))
     );
+    assert_eq!(chart.general_accessibility_focused_hit().unwrap().row, 1);
+    assert_eq!(
+        chart.general_accessibility_focused_hit().unwrap().row_id,
+        crate::GeneralRowIdentity::Explicit(GeneralRowId::Text("jan".into()))
+    );
+    chart.clear_general_accessibility_focus();
+    assert_eq!(chart.general_accessibility_focused_hit(), None);
 
     assert!(!chart.remove_general_axis("month"));
     assert!(!chart.remove_general_dataset(dataset));

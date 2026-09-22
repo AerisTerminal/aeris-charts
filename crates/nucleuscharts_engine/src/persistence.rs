@@ -4,7 +4,7 @@
 //! indicator definitions, custom extensions, runtime caches, retained frames, and renderer state
 //! remain host-owned or derived.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
@@ -16,7 +16,9 @@ use crate::drawings::{DrawingPriceScale, DrawingTextHAlign, DrawingTextVAlign};
 use crate::{ChartEngine, ChartError, Drawing, DrawingKind, DrawingPoint, ErrorCode, Pane, PaneId};
 
 pub const PERSISTENCE_SCHEMA_VERSION: u32 = 1;
+pub const PERSISTENCE_SCHEMA_VERSION_GENERAL: u32 = 2;
 pub const PERSISTENCE_MAX_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
+pub const PERSISTENCE_MAX_GENERAL_DOCUMENT_BYTES: usize = 32 * 1024 * 1024;
 pub const PERSISTENCE_MAX_PANES: usize = 64;
 pub const PERSISTENCE_MAX_DRAWINGS: usize = 10_000;
 pub const PERSISTENCE_MAX_POINTS_PER_DRAWING: usize = crate::drawings::MAX_DRAWING_POINTS;
@@ -78,6 +80,47 @@ struct StateV1 {
     schema_version: u32,
     panes: Vec<PaneV1>,
     drawings: Vec<DrawingV1>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StateV2 {
+    schema: String,
+    schema_version: u32,
+    panes: Vec<PaneV2>,
+    drawings: Vec<DrawingV1>,
+    axes: Vec<crate::GeneralAxisOptions>,
+    datasets: Vec<DatasetV2>,
+    series: Vec<SeriesV2>,
+    chart_options: serde_json::Value,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PaneV2 {
+    #[serde(flatten)]
+    pane: PaneV1,
+    horizontal_domain: crate::HorizontalDomain,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct DatasetV2 {
+    id: String,
+    input: crate::GeneralXyInput,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    labels: Option<Vec<Option<String>>>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SeriesV2 {
+    kind: crate::GeneralSeriesKind,
+    pane: usize,
+    dataset: String,
+    x_axis_id: String,
+    y_axis_id: String,
+    visible: bool,
+    title: String,
+    color: Option<String>,
+    point_radius: f64,
+    data_labels: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -208,18 +251,26 @@ fn validate_positive_number(value: f64, field: &str) -> Result<(), ChartError> {
 }
 
 impl ChartEngine {
-    /// Deterministic V1 JSON containing pane topology and semantic drawings only.
+    /// Deterministic JSON of stable chart state. Financial-only charts retain the V1 wire format.
     pub fn export_state_json(&self) -> Result<String, ChartError> {
+        if self
+            .panes
+            .iter()
+            .any(|pane| pane.general_horizontal_domain.is_some())
+            || self.general_dataset_count() != 0
+            || self.general_series_count() != 0
+            || !self.general_axes(None).is_empty()
+        {
+            return self.export_state_v2_json();
+        }
+        self.export_state_v1_json()
+    }
+
+    fn export_state_v1_json(&self) -> Result<String, ChartError> {
         let panes = self
             .panes
             .iter()
             .map(|pane| {
-                if pane.general_horizontal_domain.is_some() {
-                    return Err(ChartError::new(
-                        ErrorCode::UnsupportedOperation,
-                        "V1 persistence supports only financial-time panes",
-                    ));
-                }
                 let id = pane.persistent_id().ok_or_else(|| {
                     ChartError::new(
                         ErrorCode::SerializationError,
@@ -289,6 +340,141 @@ impl ChartEngine {
             drawings,
         })
         .map_err(|error| ChartError::new(ErrorCode::SerializationError, error.to_string()))
+    }
+
+    fn export_state_v2_json(&self) -> Result<String, ChartError> {
+        let base: StateV1 = serde_json::from_str(&self.export_state_v1_json()?)
+            .map_err(|error| ChartError::new(ErrorCode::SerializationError, error.to_string()))?;
+        let panes = base
+            .panes
+            .into_iter()
+            .enumerate()
+            .map(|(index, pane)| {
+                Ok(PaneV2 {
+                    pane,
+                    horizontal_domain: self
+                        .pane_horizontal_domain(index)
+                        .ok_or_else(|| invalid(format!("pane {index} has no horizontal domain")))?,
+                })
+            })
+            .collect::<Result<Vec<_>, ChartError>>()?;
+        let axes = self
+            .general_axes
+            .iter()
+            .map(|axis| {
+                let pane = self
+                    .pane_index_for_id(axis.pane_id())
+                    .ok_or_else(|| invalid(format!("axis {:?} has no live pane", axis.id())))?;
+                Ok(crate::GeneralAxisOptions {
+                    id: axis.id().to_string(),
+                    pane,
+                    dimension: axis.dimension(),
+                    position: axis.position(),
+                    scale: axis.scale(),
+                    domain: axis.domain().clone(),
+                    reverse: axis.reverse(),
+                    visible: axis.visible(),
+                    title: axis.title().map(str::to_string),
+                    tick_count: axis.tick_count(),
+                    min_tick_gap: axis.min_tick_gap(),
+                    band_padding_inner: axis.band_padding_inner(),
+                    band_padding_outer: axis.band_padding_outer(),
+                    zero_line: axis.zero_line(),
+                    grid_visible: axis.grid_visible(),
+                })
+            })
+            .collect::<Result<Vec<_>, ChartError>>()?;
+        let mut dataset_ids = HashMap::new();
+        let datasets = self
+            .general_data
+            .iter()
+            .flat_map(|store| store.iter())
+            .enumerate()
+            .map(|(index, dataset)| {
+                let id = format!("dataset-{}", index + 1);
+                dataset_ids.insert(dataset.id(), id.clone());
+                let ids = (0..dataset.len())
+                    .map(|row| match dataset.row_identity(row) {
+                        Some(crate::GeneralRowIdentity::Explicit(id)) => id.clone(),
+                        _ => crate::GeneralRowId::Generated,
+                    })
+                    .collect::<Vec<_>>();
+                let ids = ids
+                    .iter()
+                    .any(|id| !matches!(id, crate::GeneralRowId::Generated))
+                    .then_some(ids);
+                let y = dataset.y().to_vec();
+                let y_valid = (0..dataset.len())
+                    .any(|row| !dataset.y_is_valid(row))
+                    .then(|| {
+                        (0..dataset.len())
+                            .map(|row| u8::from(dataset.y_is_valid(row)))
+                            .collect()
+                    });
+                let input = match dataset.x_kind() {
+                    crate::GeneralXKind::Numeric => crate::GeneralXyInput::Numeric {
+                        ids,
+                        x: dataset.numeric_x().unwrap_or_default().to_vec(),
+                        y,
+                        y_valid,
+                    },
+                    crate::GeneralXKind::Temporal => crate::GeneralXyInput::Temporal {
+                        ids,
+                        x_epoch_ms: dataset.temporal_x_epoch_ms().unwrap_or_default().to_vec(),
+                        y,
+                        y_valid,
+                    },
+                    crate::GeneralXKind::Category => crate::GeneralXyInput::Category {
+                        ids,
+                        categories: dataset.categories().unwrap_or_default().to_vec(),
+                        category_indices: dataset.category_indices().unwrap_or_default().to_vec(),
+                        y,
+                        y_valid,
+                    },
+                };
+                let labels = (0..dataset.len())
+                    .map(|row| dataset.row_label(row).map(str::to_string))
+                    .collect::<Vec<_>>();
+                let labels = labels.iter().any(Option::is_some).then_some(labels);
+                DatasetV2 { id, input, labels }
+            })
+            .collect::<Vec<_>>();
+        let series = self
+            .general_series_iter()
+            .map(|series| {
+                Ok(SeriesV2 {
+                    kind: series.kind(),
+                    pane: self.pane_index_for_id(series.pane_id()).ok_or_else(|| {
+                        invalid(format!("series {} has no live pane", series.id().get()))
+                    })?,
+                    dataset: dataset_ids.get(&series.dataset()).cloned().ok_or_else(|| {
+                        invalid(format!("series {} has no live dataset", series.id().get()))
+                    })?,
+                    x_axis_id: series.x_axis_id().to_string(),
+                    y_axis_id: series.y_axis_id().to_string(),
+                    visible: series.visible(),
+                    title: series.title().to_string(),
+                    color: series.color().map(str::to_string),
+                    point_radius: series.point_radius(),
+                    data_labels: series.data_labels(),
+                })
+            })
+            .collect::<Result<Vec<_>, ChartError>>()?;
+        let document = serde_json::to_string(&StateV2 {
+            schema: base.schema,
+            schema_version: PERSISTENCE_SCHEMA_VERSION_GENERAL,
+            panes,
+            drawings: base.drawings,
+            axes,
+            datasets,
+            series,
+            chart_options: self.options.value().clone(),
+        })
+        .map_err(|error| ChartError::new(ErrorCode::SerializationError, error.to_string()))?;
+        if document.len() > PERSISTENCE_MAX_GENERAL_DOCUMENT_BYTES {
+            return Err(resource("V2 persistence document exceeds the size limit"));
+        }
+        Ok(document)
     }
 
     /// Parse and validate untrusted state without mutating the chart.
@@ -661,8 +847,158 @@ impl ChartEngine {
         &mut self,
         json: &str,
     ) -> Result<PersistenceRestoreResult, ChartError> {
+        if json.len() > PERSISTENCE_MAX_GENERAL_DOCUMENT_BYTES {
+            return Err(resource("persistence document exceeds the size limit"));
+        }
+        let envelope: serde_json::Value = match serde_json::from_str(json) {
+            Ok(envelope) => envelope,
+            Err(_) if json.len() > PERSISTENCE_MAX_DOCUMENT_BYTES => {
+                return Err(resource("persistence document exceeds the V1 size limit"));
+            }
+            Err(error) => {
+                return Err(ChartError::new(
+                    ErrorCode::SerializationError,
+                    format!("malformed JSON: {error}"),
+                ));
+            }
+        };
+        let is_v2 = envelope
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64)
+            == Some(u64::from(PERSISTENCE_SCHEMA_VERSION_GENERAL));
+        if !is_v2 && json.len() > PERSISTENCE_MAX_DOCUMENT_BYTES {
+            return Err(resource("persistence document exceeds the V1 size limit"));
+        }
+        if is_v2 {
+            if envelope.get("schema").and_then(serde_json::Value::as_str)
+                != Some("nucleuscharts-state")
+            {
+                return Err(ChartError::new(
+                    ErrorCode::SerializationError,
+                    "unsupported or missing persistence schema",
+                ));
+            }
+            let state: StateV2 = serde_json::from_value(envelope).map_err(|error| {
+                ChartError::new(
+                    ErrorCode::SerializationError,
+                    format!("invalid V2 document: {error}"),
+                )
+            })?;
+            return self.import_state_v2(state);
+        }
         let state = Self::validate_state_json(json)?;
         self.install_validated_state(state)
+    }
+
+    fn import_state_v2(&mut self, state: StateV2) -> Result<PersistenceRestoreResult, ChartError> {
+        if self.panes.len() != 1
+            || self.panes[0].general_horizontal_domain.is_some()
+            || !self.drawings.is_empty()
+            || self.next_drawing_id != 1
+            || self.general_dataset_count() != 0
+            || self.general_series_count() != 0
+            || self.general_axes.has_issued_handles()
+        {
+            return Err(ChartError::new(
+                ErrorCode::UnsupportedOperation,
+                "state import requires a fresh chart before general or drawing handles have been issued",
+            ));
+        }
+        if !state.chart_options.is_object() {
+            return Err(invalid("V2 chart_options must be an object"));
+        }
+        serde_json::from_value::<nucleuscharts_core::options::ChartOptions>(
+            state.chart_options.clone(),
+        )
+        .map_err(|error| invalid(format!("invalid V2 chart_options: {error}")))?;
+        let domains = state
+            .panes
+            .iter()
+            .map(|pane| pane.horizontal_domain)
+            .collect::<Vec<_>>();
+        let validated = Self::validate_state_v1(StateV1 {
+            schema: state.schema,
+            schema_version: PERSISTENCE_SCHEMA_VERSION,
+            panes: state.panes.into_iter().map(|pane| pane.pane).collect(),
+            drawings: state.drawings,
+        })?;
+        let mut staged = ChartEngine::new(self.css_width, self.css_height, self.dpr);
+        staged.next_pane_id = self.next_pane_id;
+        let mut result = staged.install_validated_state(validated)?;
+        for (pane, domain) in staged.panes.iter_mut().zip(domains) {
+            pane.general_horizontal_domain = staged.general_horizontal_domains.register(domain)?;
+        }
+        for axis in state.axes {
+            staged.add_general_axis(axis)?;
+        }
+        let mut datasets = HashMap::new();
+        for dataset in state.datasets {
+            if datasets.contains_key(&dataset.id) {
+                return Err(invalid(format!("duplicate dataset id {:?}", dataset.id)));
+            }
+            let id = staged.create_general_xy_dataset(dataset.input.clone())?;
+            if let Some(labels) = dataset.labels {
+                staged.replace_general_xy_dataset_labeled(id, dataset.input, Some(labels))?;
+            }
+            datasets.insert(dataset.id, id);
+        }
+        for series in state.series {
+            let dataset = *datasets.get(&series.dataset).ok_or_else(|| {
+                invalid(format!(
+                    "series references unknown dataset {:?}",
+                    series.dataset
+                ))
+            })?;
+            staged.add_general_series(crate::GeneralSeriesOptions {
+                kind: series.kind,
+                pane: series.pane,
+                dataset,
+                x_axis_id: series.x_axis_id,
+                y_axis_id: series.y_axis_id,
+                visible: series.visible,
+                title: series.title,
+                color: series.color,
+                point_radius: series.point_radius,
+                data_labels: series.data_labels,
+            })?;
+        }
+        let options_json = serde_json::to_string(&state.chart_options)
+            .map_err(|error| invalid(format!("invalid V2 chart_options: {error}")))?;
+        staged
+            .apply_options(&options_json)
+            .map_err(|error| invalid(format!("invalid V2 chart_options: {error}")))?;
+        self.panes = staged.panes;
+        self.general_horizontal_domains = staged.general_horizontal_domains;
+        self.general_axes = staged.general_axes;
+        self.general_data = staged.general_data;
+        self.general_series = staged.general_series;
+        self.drawings = staged.drawings;
+        self.next_pane_id = staged.next_pane_id;
+        self.next_persistent_pane_id = staged.next_persistent_pane_id;
+        self.next_drawing_id = staged.next_drawing_id;
+        self.options = staged.options;
+        self.apply_options(&options_json)
+            .expect("validated V2 chart options must serialize");
+        self.selected_drawing = None;
+        self.drawing_drag = None;
+        self.drawing_history = crate::DrawingHistory::default();
+        self.drawing_controller.pending = None;
+        self.drawing_controller.brush = None;
+        self.editing_drawing = None;
+        self.hovered_drawing = None;
+        self.hovered_text = None;
+        for series in &mut self.series {
+            if !series.removed {
+                series.pane_index = 0;
+            }
+        }
+        self.drawing_runtime
+            .borrow_mut()
+            .rebuild_all(&self.drawings, self.panes.len());
+        self.layout_panes(self.pane_h);
+        self.invalidate_frame_all();
+        result.schema_version = PERSISTENCE_SCHEMA_VERSION_GENERAL;
+        Ok(result)
     }
 
     /// Import with per-stage timings for the repository's release evidence harness.
@@ -728,6 +1064,129 @@ mod tests {
             second.import_state_json(&canonical).unwrap();
             assert_eq!(second.export_state_json().unwrap(), canonical);
         }
+    }
+
+    #[test]
+    fn v2_round_trip_preserves_general_panes_axes_data_and_series() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let pane = chart
+            .add_pane_with_domain(
+                true,
+                crate::HorizontalDomain::Category {
+                    scale: crate::CategoryScaleType::Band,
+                },
+            )
+            .unwrap();
+        chart
+            .add_general_axis(crate::GeneralAxisOptions::new(
+                "category-x",
+                pane,
+                crate::AxisDimension::X,
+                crate::GeneralScaleType::Band,
+            ))
+            .unwrap();
+        chart
+            .add_general_axis(crate::GeneralAxisOptions::new(
+                "category-y",
+                pane,
+                crate::AxisDimension::Y,
+                crate::GeneralScaleType::Linear,
+            ))
+            .unwrap();
+        let dataset = chart
+            .create_general_xy_dataset(crate::GeneralXyInput::Category {
+                ids: Some(vec![crate::GeneralRowId::Text("jan".into())]),
+                categories: vec!["Jan".into()],
+                category_indices: vec![0],
+                y: vec![42.0],
+                y_valid: None,
+            })
+            .unwrap();
+        chart
+            .replace_general_xy_dataset_labeled(
+                dataset,
+                crate::GeneralXyInput::Category {
+                    ids: Some(vec![crate::GeneralRowId::Text("jan".into())]),
+                    categories: vec!["Jan".into()],
+                    category_indices: vec![0],
+                    y: vec![42.0],
+                    y_valid: None,
+                },
+                Some(vec![Some("January".into())]),
+            )
+            .unwrap();
+        let mut series =
+            crate::GeneralSeriesOptions::column(pane, dataset, "category-x", "category-y");
+        series.data_labels = true;
+        chart.add_general_series(series).unwrap();
+
+        let document = chart.export_state_json().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&document).unwrap();
+        assert_eq!(value["schema_version"], 2);
+        let mut restored = ChartEngine::new(800.0, 500.0, 1.0);
+        let result = restored.import_state_json(&document).unwrap();
+        assert_eq!(result.schema_version, 2);
+        assert_eq!(restored.export_state_json().unwrap(), document);
+    }
+
+    #[test]
+    fn v2_invalid_series_reference_leaves_target_unchanged() {
+        let mut source = ChartEngine::new(800.0, 500.0, 1.0);
+        source
+            .add_pane_with_domain(
+                true,
+                crate::HorizontalDomain::Continuous {
+                    scale: crate::ContinuousScaleType::Linear,
+                },
+            )
+            .unwrap();
+        let mut document: serde_json::Value =
+            serde_json::from_str(&source.export_state_json().unwrap()).unwrap();
+        document["series"] = serde_json::json!([{
+            "kind": "Scatter",
+            "pane": 1,
+            "dataset": "dataset-999",
+            "x_axis_id": "x",
+            "y_axis_id": "y",
+            "visible": true,
+            "title": "",
+            "color": null,
+            "point_radius": 3.0,
+            "data_labels": false
+        }]);
+        let mut target = ChartEngine::new(800.0, 500.0, 1.0);
+        let before = target.export_state_json().unwrap();
+        assert!(target.import_state_json(&document.to_string()).is_err());
+        assert_eq!(target.export_state_json().unwrap(), before);
+    }
+
+    #[test]
+    fn v2_import_rejects_a_chart_after_general_axis_handles_were_issued() {
+        let mut source = ChartEngine::new(800.0, 500.0, 1.0);
+        source
+            .add_pane_with_domain(true, crate::HorizontalDomain::Temporal)
+            .unwrap();
+        let document = source.export_state_json().unwrap();
+
+        let mut target = ChartEngine::new(800.0, 500.0, 1.0);
+        let pane = target
+            .add_pane_with_domain(true, crate::HorizontalDomain::Temporal)
+            .unwrap();
+        target
+            .add_general_axis(crate::GeneralAxisOptions::new(
+                "stale-x",
+                pane,
+                crate::AxisDimension::X,
+                crate::GeneralScaleType::Temporal,
+            ))
+            .unwrap();
+        assert!(target.remove_general_axis("stale-x"));
+        assert!(target.remove_pane(pane));
+        let before = target.export_state_json().unwrap();
+
+        let error = target.import_state_json(&document).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::UnsupportedOperation);
+        assert_eq!(target.export_state_json().unwrap(), before);
     }
 
     #[test]
@@ -836,6 +1295,12 @@ mod tests {
                 .unwrap_err()
                 .code(),
             ErrorCode::ResourceLimit
+        );
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        assert_eq!(
+            chart.import_state_json(&too_large).unwrap_err().code(),
+            ErrorCode::ResourceLimit,
+            "V2 capacity must not weaken the legacy oversized-document contract"
         );
         let anchors = (0..=PERSISTENCE_MAX_POINTS_PER_DRAWING)
             .map(|index| serde_json::json!({ "logical": index, "price": 1 }))

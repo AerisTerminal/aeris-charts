@@ -21,7 +21,7 @@ import style_tokens from "../../../crates/nucleuscharts_core/style_tokens.json";
 import type {
   chart_api,
   chart_options,
-  chart_state_v1,
+  chart_state,
   deep_partial,
   drawing_kind,
   drawing_options,
@@ -44,10 +44,10 @@ export interface workspace_cell_state_v1 {
   stable_cell_id: number;
   /** Opaque host-owned identity (symbol/instrument key); NucleusCharts never interprets it. */
   host_chart_identity?: string;
-  chart_state: chart_state_v1;
+  chart_state: chart_state;
 }
 
-/** Host-storable composition of generic layout plus each chart's existing persistence V1. */
+/** Host-storable layout plus each chart's independently versioned persistence document. */
 export interface chart_workspace_state_v1 {
   schema: "nucleuscharts-workspace";
   schema_version: 1;
@@ -409,7 +409,7 @@ export async function create_chart_grid(
 
   const initialize_chart = async (
     record: cell_record,
-    state?: chart_state_v1,
+    state?: chart_state,
   ): Promise<cell_record> => {
     const { id, host } = record;
     // The slot must be ATTACHED (real size) before the chart measures its container: a

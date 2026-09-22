@@ -345,9 +345,21 @@ impl ChartInner {
         options.zero_line = input.zero_line;
         options.grid_visible = input.grid_visible;
         match self.engine.add_general_axis(options) {
-            Ok(()) => result_ok(json!({ "id": input.id })),
+            Ok(()) => {
+                let handle_token = self
+                    .engine
+                    .general_axis(&input.id)
+                    .map_or(0, nucleuscharts_engine::GeneralAxis::handle_token);
+                result_ok(json!({ "id": input.id, "handle_token": handle_token }))
+            }
             Err(error) => result_error(&error),
         }
+    }
+
+    pub fn general_axis_handle_token(&self, id: &str) -> u32 {
+        self.engine
+            .general_axis(id)
+            .map_or(0, nucleuscharts_engine::GeneralAxis::handle_token)
     }
 
     pub fn general_axis_json(&self, id: &str) -> String {
@@ -396,6 +408,27 @@ impl ChartInner {
             .into_iter()
             .map(GeneralSeriesId::get)
             .collect()
+    }
+
+    /// Rehydrate browser handles after an atomic persistence restore.
+    pub fn general_series_catalog_json(&self) -> String {
+        let series = (0..self.engine.panes.len())
+            .flat_map(|pane| self.engine.general_series_ids_in_pane(pane))
+            .filter_map(|id| self.engine.general_series(id))
+            .map(|series| {
+                json!({
+                    "id": series.id().get(),
+                    "dataset": series.dataset().get(),
+                    "x_axis_id": series.x_axis_id(),
+                    "y_axis_id": series.y_axis_id(),
+                    "kind": match series.kind() {
+                        GeneralSeriesKind::Column => "column",
+                        GeneralSeriesKind::Scatter => "scatter",
+                    },
+                })
+            })
+            .collect::<Vec<_>>();
+        json!(series).to_string()
     }
 
     pub fn add_general_series_result_json(&mut self, kind: &str, options_json: &str) -> String {
@@ -666,12 +699,33 @@ impl ChartInner {
         )
     }
 
+    pub fn general_accessibility_focused_hit_json(&self) -> String {
+        self.engine
+            .general_accessibility_focused_hit()
+            .as_ref()
+            .map_or_else(
+                || "null".to_owned(),
+                |hit| general_hit_value(hit).to_string(),
+            )
+    }
+
     pub fn select_general_hovered(&mut self) -> bool {
         self.engine.select_general_hovered()
     }
 
     pub fn clear_general_selection(&mut self) {
         self.engine.clear_general_selection();
+    }
+
+    pub fn set_general_accessibility_focus(&mut self, series: u32, row: usize) -> bool {
+        let Some(series) = GeneralSeriesId::from_raw(series) else {
+            return false;
+        };
+        self.engine.set_general_accessibility_focus(series, row)
+    }
+
+    pub fn clear_general_accessibility_focus(&mut self) {
+        self.engine.clear_general_accessibility_focus();
     }
 }
 

@@ -110,12 +110,22 @@ atomic against every bound series. Canvas2D, retained WebGPU, GPUI, and the nati
 all have chart-level parity coverage for both slices.
 
 The browser package exposes these two slices through the common chart lifecycle. Domain-aware pane and
-axis handles remain thin mutations over engine state. Object rows are normalized once into numeric or
+axis handles remain thin mutations over engine state. General-axis browser handles carry the engine's
+monotonic handle token as well as the user-visible axis ID, so removing and recreating an axis with the
+same ID stales the old handle instead of retargeting it; V2 restore likewise rejects charts that already
+issued a general-axis handle rather than recycling that identity. Object rows are normalized once into numeric or
 interned-category columns; typed input crosses the WASM boundary as bulk arrays, while optional string or
 numeric identities cross as one bounded JSON vector. A general-series handle owns one engine dataset and
 removes it transactionally after detaching the series. Pane enumeration and chart series-lifecycle events
-include general handles without making financial-only accessibility or primitive helpers reinterpret
-them. Tooltip, bounded accessibility, and exact/nearest hit snapshots come back from Rust. Generated row
+include general handles without making financial primitive helpers reinterpret them. Tooltip, bounded
+accessibility, and exact/nearest hit snapshots come back from Rust. The shared browser accessibility
+controller recognizes financial and general handles but keeps their navigation math separate: financial
+series continue to query the time scale, while general series page through at most 512 Rust-owned
+accessibility rows at a time. General keyboard focus is a distinct engine interaction target rather than
+an alias for hover or primary selection; explicit row identities follow reordered replacement batches,
+generated batch-local identities clear, and the shared frame paints the same focus chrome for every
+executor. Scatter keyboard zoom mutates its bound general X axis rather than the financial time scale.
+Generated row
 identities are encoded as decimal strings at the JavaScript boundary so their full `u64` identity is not
 rounded. The ordinary browser pointer path feeds exact general hits back into engine-owned transient
 hover and primary selection. Interaction targets retain row identity rather than formatted coordinates:
@@ -128,9 +138,10 @@ receive the same presentation without host overlays. Opt-in numeric value labels
 the shared frame with deterministic collision rejection and per-pane emission/work ceilings; executors
 receive ordinary ordered text primitives. Sparse, bounded custom row labels live in the dataset
 store and participate in the same validated replacement/upsert/retention transaction as X/Y data;
-tooltip and accessibility snapshots expose their text without replacing raw numeric values. The
-remaining release work includes general-schema persistence and integration into the keyboard
-accessibility controller.
+tooltip and accessibility snapshots expose their text without replacing raw numeric values. General
+chart persistence uses schema V2 for pane domains, axes, datasets, labels, series bindings, and chart
+options while financial-only exports remain V1-compatible; restore rehydrates browser general-series
+handles without persisting transient hover, selection, or keyboard focus.
 
 `ChartOptionsStore` keeps typed options canonical for engine and frame reads and retains the raw JSON
 object only for boundary-compatible deep merges and serialization. An option patch is merged and
@@ -251,11 +262,15 @@ only the affected drawing runtime state, a new mutation clears the redo branch, 
 never contains either history stack.
 
 Versioned persistence is an engine-owned semantic DTO boundary, never serialization of live engine
-structs. V1 contains ordered pane topology and built-in drawings only. Pane persistence identity is
+structs. Financial-only charts continue to export V1 with ordered pane topology and built-in
+drawings only. V2 adds pane horizontal domains, general axes, typed general datasets (including
+row identities and labels), general series bindings, and chart options. V1 restoration and its
+fixtures remain unchanged; V2 validates on a detached engine before committing general state and
+rebuilds browser series handles from an engine catalog. Pane persistence identity is
 separate from live `PaneId`: import preserves document references while issuing fresh monotonic live
 IDs, so pre-import pane and price-scale handles become stale. The complete document is size-bounded,
 parsed, and validated before one transactional install; drawing bounds, candidates, and geometry are
-rebuilt once from anchors. Market history, series/indicator definitions, chart options, extensions,
+rebuilt once from anchors. Financial market history and series/indicator definitions, extensions,
 callbacks, and every runtime cache remain host-owned or derived. Unknown versions and semantic kinds
 fail structurally without mutation.
 

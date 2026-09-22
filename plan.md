@@ -344,22 +344,31 @@ Current implementation progress (2026-09-22):
 - opt-in numeric value labels for column/scatter now use bounded, collision-aware shared-frame text;
 - bounded custom row-label channels now follow replacement, explicit-ID updates, retention, shared
   frame placement, and tooltip/accessibility snapshots for both browser general series;
-- general-schema persistence and keyboard-controller
-  integration remain before either general series is release-complete.
+- general-schema persistence now round-trips pane domains, axes, datasets, series, labels, and chart
+  options under V2 while keeping V1 financial restoration;
+- category columns and XY scatter now participate in the shared browser keyboard/accessibility
+  controller using bounded Rust snapshots and a separate engine-owned focus target; explicit row IDs
+  retain focus through reordered replacement, generated identities clear, scatter keyboard zoom targets
+  its general X axis, and Chromium/Firefox/WebKit runtime coverage exercises the shared controller.
+
+The Phase 1 feature checklist and exit gate are validated. The final gate passed the complete Rust
+format/Clippy/workspace-test suite, the release performance gate, package install/lint/build/typecheck/
+pack smoke (21 files; 2352 kB WASM), and the complete browser matrix with 278 passed and 13 expected
+skips across Chromium/Firefox/WebKit. Financial-only parity, memory-retention, ring-ingest, and browser
+performance gates remained green with the general slices enabled.
 
 Exit gate: both slices render equivalently in every backend and a financial-only chart shows no
 material regression in output, work, memory, or package size.
 
 ### Phase 2: General Cartesian release
 
-1. Add line, area, grouped/stacked bars, scatter, bubble, range, error-bar, heatmap, and box-plot
-   semantics over the general store.
+1. Add line, area, grouped/stacked bars, bubble, range, error-bar, heatmap, and box-plot semantics over
+   the general store. XY scatter is already supplied by the validated Phase 1 foundation.
 2. Add multiple X/Y axes, orientation, domain control, reference components, legend, tooltip, data
    labels, brush, and selection.
-3. Add typed bulk browser ingestion and incremental updates.
-4. Add persistence for general datasets and chart configuration under a new schema version without
-   changing V1 restoration.
-5. Add accessibility and keyboard behavior.
+3. Extend the Phase 1 typed bulk browser-ingestion and incremental-update path to each new series kind.
+4. Extend schema V2 persistence to each new series/configuration shape without changing V1 restoration.
+5. Extend the shared Phase 1 accessibility and keyboard controller to each new series kind.
 6. Add general-chart benchmark scenarios and enforced budgets.
 
 Exit gate: Nucleus can build the representative Recharts dashboard examples with engine-owned

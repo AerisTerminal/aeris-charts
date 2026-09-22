@@ -21,7 +21,7 @@ pub const MAX_GENERAL_AXIS_CATEGORIES: usize = 65_536;
 pub const MAX_GENERAL_AXIS_CATEGORY_BYTES: usize = 1_048_576;
 pub const MAX_GENERAL_TEMPORAL_MILLISECONDS: i64 = 9_007_199_254_740_991;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AxisDimension {
     X,
     Y,
@@ -29,7 +29,7 @@ pub enum AxisDimension {
     Radius,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AxisPosition {
     Top,
     Bottom,
@@ -37,7 +37,7 @@ pub enum AxisPosition {
     Right,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum GeneralScaleType {
     Linear,
     Logarithmic,
@@ -49,7 +49,7 @@ pub enum GeneralScaleType {
     AngularCategory,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum GeneralAxisDomain {
     #[default]
     Auto,
@@ -58,7 +58,7 @@ pub enum GeneralAxisDomain {
     Category(Vec<String>),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GeneralAxisOptions {
     pub id: String,
     pub pane: usize,
@@ -199,6 +199,11 @@ impl GeneralAxis {
         self.handle
     }
 
+    #[doc(hidden)]
+    pub fn handle_token(&self) -> u32 {
+        self.handle.0.get()
+    }
+
     pub fn id(&self) -> &str {
         &self.id
     }
@@ -283,6 +288,10 @@ impl GeneralAxisRegistry {
             axes: Vec::new(),
             next_handle: 1,
         }
+    }
+
+    pub(crate) fn has_issued_handles(&self) -> bool {
+        self.next_handle != 1
     }
 
     fn insert(

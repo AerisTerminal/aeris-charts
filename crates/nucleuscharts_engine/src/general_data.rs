@@ -25,7 +25,7 @@ pub enum GeneralXKind {
 ///
 /// Numeric IDs normalize `-0` and `0` to the same identity. Non-finite values are rejected before
 /// installation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum GeneralRowId {
     Number(f64),
     Text(String),
@@ -83,7 +83,7 @@ pub enum GeneralRowIdentity {
 ///
 /// Object-shaped host rows are converted into one of these variants once at the boundary. Missing
 /// Y values use `y_valid`; NaN and infinity are never missing sentinels.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum GeneralXyInput {
     Numeric {
         ids: Option<Vec<GeneralRowId>>,
@@ -546,6 +546,10 @@ impl GeneralDataStore {
 
     pub(crate) fn get(&self, id: GeneralDatasetId) -> Option<&GeneralDataset> {
         self.datasets.iter().find(|dataset| dataset.id == id)
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &GeneralDataset> {
+        self.datasets.iter()
     }
 
     pub(crate) fn insert(&mut self, input: GeneralXyInput) -> Result<GeneralDatasetId, ChartError> {

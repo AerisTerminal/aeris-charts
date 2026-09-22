@@ -1552,9 +1552,34 @@ export interface chart_state_v1 {
   drawings: persisted_drawing_v1[];
 }
 
+/** V2 adds engine-owned general pane, axis, dataset, and series state. */
+export interface chart_state_v2 {
+  schema: "nucleuscharts-state";
+  schema_version: 2;
+  panes: (persisted_pane_v1 & { horizontal_domain: unknown })[];
+  drawings: persisted_drawing_v1[];
+  axes: Record<string, unknown>[];
+  datasets: { id: `dataset-${number}`; input: Record<string, unknown>; labels?: (string | null)[] }[];
+  series: {
+    kind: "Column" | "Scatter";
+    pane: number;
+    dataset: `dataset-${number}`;
+    x_axis_id: string;
+    y_axis_id: string;
+    visible: boolean;
+    title: string;
+    color: string | null;
+    point_radius: number;
+    data_labels: boolean;
+  }[];
+  chart_options: Record<string, unknown>;
+}
+
+export type chart_state = chart_state_v1 | chart_state_v2;
+
 /** Counts returned after one validated, atomic state restore. */
 export interface persistence_restore_result {
-  schema_version: 1;
+  schema_version: 1 | 2;
   panes: number;
   drawings: number;
   points: number;
@@ -2387,10 +2412,10 @@ export interface chart_api {
   add_drawing(kind: drawing_kind, points: drawing_point[], options?: Partial<drawing_options>, pane_index?: number): drawing_api;
   /** Every drawing as live handles, in z-order (bottom first). */
   drawings(): drawing_api[];
-  /** Export deterministic persistence V1 (pane topology + semantic drawings; never market data or runtime caches). */
-  export_state(): chart_state_v1;
+  /** Export V1 financial state or V2 general state; neither includes financial market data or runtime caches. */
+  export_state(): chart_state;
   /** Validate and atomically restore V1 into a fresh chart. Throws {@link nucleuscharts_error} on failure. */
-  import_state(state: chart_state_v1 | string): persistence_restore_result;
+  import_state(state: chart_state | string): persistence_restore_result;
   /** Remove every drawing (the "clear all" action) and repaint. */
   clear_drawings(): void;
   /** Undo one committed drawing create/delete/move/style operation in this chart only. */

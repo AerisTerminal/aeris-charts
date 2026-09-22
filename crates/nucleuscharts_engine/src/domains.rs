@@ -6,7 +6,7 @@ use crate::{ChartError, ErrorCode};
 /// established shared time scale and consume no registry entry.
 pub const MAX_GENERAL_HORIZONTAL_DOMAINS: usize = 64;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ContinuousScaleType {
     #[default]
     Linear,
@@ -14,7 +14,7 @@ pub enum ContinuousScaleType {
     SymmetricLog,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CategoryScaleType {
     #[default]
     Band,
@@ -22,7 +22,7 @@ pub enum CategoryScaleType {
 }
 
 /// Engine-owned horizontal coordinate semantics for one pane.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum HorizontalDomain {
     /// Existing logical-index spacing over the chart-wide timestamp union.
     #[default]

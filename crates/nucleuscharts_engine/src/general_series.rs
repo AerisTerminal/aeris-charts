@@ -20,7 +20,7 @@ pub const MAX_GENERAL_POINT_RADIUS: f64 = 64.0;
 const SCATTER_GRID_BASE_CELL_CSS: f64 = 32.0;
 const MAX_SCATTER_GRID_CELLS: usize = 65_536;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum GeneralSeriesKind {
     Column,
     Scatter,
@@ -428,6 +428,7 @@ pub(crate) struct GeneralSeriesRegistry {
     scatter_spatial: RefCell<HashMap<GeneralSeriesId, ScatterSpatialIndex>>,
     hovered: Option<GeneralInteractionTarget>,
     selected: Option<GeneralInteractionTarget>,
+    accessibility_focused: Option<GeneralInteractionTarget>,
 }
 
 impl GeneralSeriesRegistry {
@@ -438,6 +439,7 @@ impl GeneralSeriesRegistry {
             scatter_spatial: RefCell::new(HashMap::new()),
             hovered: None,
             selected: None,
+            accessibility_focused: None,
         }
     }
 
@@ -516,6 +518,13 @@ impl GeneralSeriesRegistry {
         {
             self.selected = None;
         }
+        if self
+            .accessibility_focused
+            .as_ref()
+            .is_some_and(|target| target.series == id)
+        {
+            self.accessibility_focused = None;
+        }
         true
     }
 
@@ -556,6 +565,10 @@ impl GeneralSeriesRegistry {
                 .map_or(0, GeneralInteractionTarget::estimated_bytes)
             + self
                 .selected
+                .as_ref()
+                .map_or(0, GeneralInteractionTarget::estimated_bytes)
+            + self
+                .accessibility_focused
                 .as_ref()
                 .map_or(0, GeneralInteractionTarget::estimated_bytes)
     }
@@ -1139,6 +1152,62 @@ impl ChartEngine {
             .map(GeneralInteractionTarget::hit)
     }
 
+    #[doc(hidden)]
+    pub fn set_general_accessibility_focus(
+        &mut self,
+        series_id: GeneralSeriesId,
+        row: usize,
+    ) -> bool {
+        let Some(series) = self.general_series(series_id) else {
+            return false;
+        };
+        let dataset_id = series.dataset;
+        let Some(row_id) = self
+            .general_dataset(dataset_id)
+            .and_then(|dataset| dataset.row_identity(row))
+            .cloned()
+        else {
+            return false;
+        };
+        let next = Some(GeneralInteractionTarget {
+            series: series_id,
+            row,
+            row_id,
+            distance: 0.0,
+        });
+        let changed = self
+            .general_series
+            .as_ref()
+            .is_some_and(|registry| registry.accessibility_focused != next);
+        if let Some(registry) = self.general_series.as_mut() {
+            registry.accessibility_focused = next;
+        }
+        if changed {
+            self.invalidate_frame_overlay();
+        }
+        true
+    }
+
+    #[doc(hidden)]
+    pub fn clear_general_accessibility_focus(&mut self) {
+        let changed = self
+            .general_series
+            .as_mut()
+            .is_some_and(|registry| registry.accessibility_focused.take().is_some());
+        if changed {
+            self.invalidate_frame_overlay();
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn general_accessibility_focused_hit(&self) -> Option<GeneralSeriesHit> {
+        self.general_series
+            .as_ref()?
+            .accessibility_focused
+            .as_ref()
+            .map(GeneralInteractionTarget::hit)
+    }
+
     pub(crate) fn general_row_interaction(
         &self,
         series: GeneralSeriesId,
@@ -1150,7 +1219,8 @@ impl ChartEngine {
         let matches =
             |target: &GeneralInteractionTarget| target.series == series && target.row == row;
         (
-            registry.hovered.as_ref().is_some_and(matches),
+            registry.hovered.as_ref().is_some_and(matches)
+                || registry.accessibility_focused.as_ref().is_some_and(matches),
             registry.selected.as_ref().is_some_and(matches),
         )
     }
@@ -1171,6 +1241,7 @@ impl ChartEngine {
             .collect();
         let previous_hovered = registry.hovered.clone();
         let previous_selected = registry.selected.clone();
+        let previous_accessibility_focused = registry.accessibility_focused.clone();
         let Some(dataset) = self.general_dataset(dataset_id) else {
             return;
         };
@@ -1189,10 +1260,15 @@ impl ChartEngine {
         };
         let next_hovered = reconcile(previous_hovered.clone());
         let next_selected = reconcile(previous_selected.clone());
-        if previous_hovered != next_hovered || previous_selected != next_selected {
+        let next_accessibility_focused = reconcile(previous_accessibility_focused.clone());
+        if previous_hovered != next_hovered
+            || previous_selected != next_selected
+            || previous_accessibility_focused != next_accessibility_focused
+        {
             if let Some(registry) = self.general_series.as_mut() {
                 registry.hovered = next_hovered;
                 registry.selected = next_selected;
+                registry.accessibility_focused = next_accessibility_focused;
             }
             self.invalidate_frame_overlay();
         }

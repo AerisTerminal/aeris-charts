@@ -182,6 +182,17 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
 
     scatter.remove();
     const removed_axis = x_axis.remove();
+    const replacement_x_axis = chart.add_axis({
+      id: "sample-x",
+      pane: scatter_pane.pane_index(),
+      dimension: "x",
+      scale: "linear",
+      title: "Replacement X",
+    });
+    let stale_axis_code = null;
+    try { x_axis.options(); } catch (error) { stale_axis_code = error.code; }
+    const replacement_axis_title = replacement_x_axis.options().title;
+    replacement_x_axis.remove();
     chart.remove_axis("sample-y");
     chart.remove_pane(scatter_pane.pane_index());
     columns.remove();
@@ -191,7 +202,21 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
     const remaining_panes = chart.panes().length;
     chart.remove();
     host.remove();
-    return { before_remove, custom_label_changed, updated_custom_label, rejected_label, after_rejected_label, rejected_update, after_rejected_update, after_update, removed_axis, remaining_panes, lifecycle };
+    return {
+      before_remove,
+      custom_label_changed,
+      updated_custom_label,
+      rejected_label,
+      after_rejected_label,
+      rejected_update,
+      after_rejected_update,
+      after_update,
+      removed_axis,
+      stale_axis_code,
+      replacement_axis_title,
+      remaining_panes,
+      lifecycle,
+    };
   });
 
   expect(result.before_remove.panes).toBe(3);
@@ -245,6 +270,8 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
     { row_id: "apr", x_label: "Apr", label: "April", value: 9 },
   ]);
   expect(result.removed_axis).toBe(true);
+  expect(result.stale_axis_code).toBe("stale_handle");
+  expect(result.replacement_axis_title).toBe("Replacement X");
   expect(result.remaining_panes).toBe(1);
   expect(result.lifecycle).toEqual([
     ["added", "column", 1],
@@ -252,4 +279,120 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
     ["removed", "scatter", 2],
     ["removed", "column", 1],
   ]);
+});
+
+test("general columns and scatter participate in the shared keyboard accessibility controller", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
+
+  await page.evaluate(async () => {
+    const api = await import("/dist/nucleuscharts_financial.js");
+    const host = document.createElement("div");
+    Object.assign(host.style, {
+      position: "fixed",
+      width: "640px",
+      height: "480px",
+      left: "0",
+      top: "0",
+      zIndex: "10000",
+    });
+    host.id = "general-keyboard-host";
+    document.body.appendChild(host);
+    const chart = await api.create_chart(host, { backend: "canvas2d", autoSize: false });
+    chart.resize(640, 480, 1);
+
+    const category_pane = chart.add_pane({
+      preserve_empty: true,
+      horizontal_domain: { type: "category", scale: "band" },
+    });
+    chart.add_axis({ id: "kbd-month", pane: category_pane.pane_index(), dimension: "x", scale: "band" });
+    chart.add_axis({ id: "kbd-revenue", pane: category_pane.pane_index(), dimension: "y", scale: "linear" });
+    const columns = chart.add_series("column", {
+      pane: category_pane.pane_index(),
+      x_axis_id: "kbd-month",
+      y_axis_id: "kbd-revenue",
+      title: "Keyboard revenue",
+    });
+    columns.set_data([
+      { id: "jan", x: "Jan", y: 10 },
+      { id: "feb", x: "Feb", y: 20 },
+      { id: "mar", x: "Mar", y: 30 },
+    ]);
+
+    const scatter_pane = chart.add_pane({
+      preserve_empty: true,
+      horizontal_domain: { type: "continuous", scale: "linear" },
+    });
+    chart.add_axis({ id: "kbd-x", pane: scatter_pane.pane_index(), dimension: "x", scale: "linear" });
+    chart.add_axis({ id: "kbd-y", pane: scatter_pane.pane_index(), dimension: "y", scale: "linear" });
+    const scatter = chart.add_series("scatter", {
+      pane: scatter_pane.pane_index(),
+      x_axis_id: "kbd-x",
+      y_axis_id: "kbd-y",
+      title: "Keyboard samples",
+    });
+    scatter.set_data([
+      { id: 1, x: -10, y: -5 },
+      { id: 2, x: 0, y: 0, label: "Origin" },
+      { id: 3, x: 10, y: 5 },
+    ]);
+
+    const accessibility = api.enable_accessibility(chart, {
+      chart_title: (pane) => pane === category_pane.pane_index()
+        ? "Category keyboard pane"
+        : pane === scatter_pane.pane_index()
+          ? "Scatter keyboard pane"
+          : "Financial pane",
+      data_scope: "all",
+      show_shortcuts: true,
+    });
+    window.__general_keyboard = { chart, host, columns, scatter, accessibility };
+  });
+
+  const layers = page.locator("#general-keyboard-host .nucleuscharts-a11y-layer");
+  await expect(layers).toHaveCount(3);
+
+  await layers.nth(1).focus();
+  await page.keyboard.press("Home");
+  await page.waitForTimeout(30);
+  await expect(layers.nth(1).locator(".nucleuscharts-a11y-live-region"))
+    .toContainText("Jan");
+
+  await page.evaluate(() => {
+    window.__general_keyboard.columns.set_data([
+      { id: "feb", x: "Feb", y: 20 },
+      { id: "jan", x: "Jan", y: 11 },
+      { id: "mar", x: "Mar", y: 30 },
+    ]);
+  });
+  await page.keyboard.press("ArrowRight");
+  await page.waitForTimeout(30);
+  const category_text = await layers.nth(1).locator(".nucleuscharts-a11y-live-region").textContent();
+  expect(category_text).toContain("Mar");
+  expect(category_text).toContain("Point 3 of 3");
+
+  await layers.nth(2).focus();
+  await page.keyboard.press("End");
+  await page.waitForTimeout(30);
+  const scatter_text = await layers.nth(2).locator(".nucleuscharts-a11y-live-region").textContent();
+  expect(scatter_text).toContain("Keyboard samples");
+  expect(scatter_text).toContain("10");
+  expect(scatter_text).toContain("Point 3 of 3");
+
+  const before_zoom = await page.evaluate(() => window.__general_keyboard.chart.take_screenshot().toDataURL());
+  await page.keyboard.press("+");
+  await page.waitForTimeout(30);
+  const after_zoom = await page.evaluate(() => window.__general_keyboard.chart.take_screenshot().toDataURL());
+  expect(after_zoom).not.toBe(before_zoom);
+
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(30);
+  await expect(layers.nth(2).locator(".nucleuscharts-a11y-live-region")).toContainText("data points");
+
+  await page.evaluate(() => {
+    window.__general_keyboard.accessibility.detach();
+    window.__general_keyboard.chart.remove();
+    window.__general_keyboard.host.remove();
+    delete window.__general_keyboard;
+  });
 });

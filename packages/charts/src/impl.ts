@@ -21,7 +21,7 @@ import type { nucleuscharts_error_code } from "./errors.js";
 import type {
   alert_api, alert_condition, alert_frequency, alert_line, alert_price_scale, alert_snapshot,
   crosshair_action_request, crosshair_action_request_handler,
-  any_series_options, backend_status, bars_info, chart_api, chart_context_handler, chart_context_params, chart_options, chart_state_v1, chart_value_snapshot, data_changed_handler, dbl_click_handler,
+  any_series_options, backend_status, bars_info, chart_api, chart_context_handler, chart_context_params, chart_options, chart_state, chart_value_snapshot, data_changed_handler, dbl_click_handler,
   deep_partial, drawing_api, drawing_created_handler, drawing_info, drawing_kind, drawing_options,
   drawing_point, drawing_tool_change_handler,
   ema_ribbon_options, ema_ribbon_periods,
@@ -496,9 +496,16 @@ function pack_general_rows(kind: general_series_kind, data: readonly general_xy_
 }
 
 class general_axis_impl implements general_axis_api {
-  constructor(readonly id: string, private readonly chart: chart_impl) {}
+  constructor(
+    readonly id: string,
+    private readonly handle_token: number,
+    private readonly chart: chart_impl,
+  ) {}
 
   private current(): general_axis_options {
+    if (this.chart.wasm.general_axis_handle_token(this.id) !== this.handle_token) {
+      throw new nucleuscharts_error("stale_handle", "this general axis has been removed");
+    }
     const value = JSON.parse(this.chart.wasm.general_axis_json(this.id)) as general_axis_options | null;
     if (value === null) throw new nucleuscharts_error("stale_handle", "this general axis has been removed");
     return value;
@@ -527,6 +534,7 @@ class general_axis_impl implements general_axis_api {
   }
 
   remove(): boolean {
+    this.current();
     const removed = this.chart.wasm.remove_general_axis(this.id);
     if (removed) this.chart.repaint();
     return removed;
@@ -534,17 +542,21 @@ class general_axis_impl implements general_axis_api {
 }
 
 class general_series_impl implements general_series_api {
+  private readonly data_changed_subs = new Set<data_changed_handler>();
   private removed = false;
 
   constructor(
     readonly id: number,
     private readonly dataset: number,
     readonly kind: general_series_kind,
+    readonly x_axis_id: string,
+    readonly y_axis_id: string,
     private readonly chart: chart_impl,
   ) {}
 
   mark_removed(): void {
     this.removed = true;
+    this.data_changed_subs.clear();
   }
 
   private assert_live(): void {
@@ -615,6 +627,7 @@ class general_series_impl implements general_series_api {
     }
     parse_general_result<null>(result);
     this.chart.repaint();
+    for (const handler of this.data_changed_subs) handler("update");
   }
 
   private install_data(columns: general_columns_input): void {
@@ -649,6 +662,7 @@ class general_series_impl implements general_series_api {
     }
     parse_general_result<null>(result);
     this.chart.repaint();
+    for (const handler of this.data_changed_subs) handler("full");
   }
 
   data_at(row: number): general_tooltip_snapshot | null {
@@ -680,6 +694,15 @@ class general_series_impl implements general_series_api {
       throw new nucleuscharts_error("stale_handle", "this general series has been removed");
     }
     return snapshot;
+  }
+
+  subscribe_data_changed(handler: data_changed_handler): void {
+    this.assert_live();
+    this.data_changed_subs.add(handler);
+  }
+
+  unsubscribe_data_changed(handler: data_changed_handler): void {
+    this.data_changed_subs.delete(handler);
   }
 
   remove(): void {
@@ -3555,7 +3578,14 @@ export class chart_impl implements chart_api {
       const created = parse_general_result<{ series: number; dataset: number }>(
         this.wasm.add_general_series_result_json(kind, JSON.stringify(options)),
       );
-      const series = new general_series_impl(created.series, created.dataset, kind, this);
+      const series = new general_series_impl(
+        created.series,
+        created.dataset,
+        kind,
+        options.x_axis_id,
+        options.y_axis_id,
+        this,
+      );
       this.general_series_by_id.set(created.series, series);
       this.emit_series_change(this.series_added_subs, series, options.pane);
       this.repaint();
@@ -4166,15 +4196,15 @@ export class chart_impl implements chart_api {
     return list.map((d) => new drawing_impl(this, d.id, d.kind, d.pane_index));
   }
 
-  export_state(): chart_state_v1 {
+  export_state(): chart_state {
     const result = JSON.parse(this.wasm.export_state_result_json()) as
       | { ok: true; document: string }
       | persistence_error_result;
     if (!result.ok) throw_persistence_error(result);
-    return JSON.parse(result.document) as chart_state_v1;
+    return JSON.parse(result.document) as chart_state;
   }
 
-  import_state(state: chart_state_v1 | string): persistence_restore_result {
+  import_state(state: chart_state | string): persistence_restore_result {
     let document: string;
     try {
       document = typeof state === "string" ? state : JSON.stringify(state);
@@ -4185,6 +4215,24 @@ export class chart_impl implements chart_api {
       | { ok: true; result: persistence_restore_result }
       | persistence_error_result;
     if (!response.ok) throw_persistence_error(response);
+    if (response.result.schema_version === 2) {
+      const catalog = JSON.parse(this.wasm.general_series_catalog_json()) as
+        { id: number; dataset: number; kind: general_series_kind; x_axis_id: string; y_axis_id: string }[];
+      this.general_series_by_id.clear();
+      for (const entry of catalog) {
+        this.general_series_by_id.set(
+          entry.id,
+          new general_series_impl(
+            entry.id,
+            entry.dataset,
+            entry.kind,
+            entry.x_axis_id,
+            entry.y_axis_id,
+            this,
+          ),
+        );
+      }
+    }
     this.repaint();
     return response.result;
   }
@@ -4964,20 +5012,21 @@ export class chart_impl implements chart_api {
     if (Array.isArray(options.domain) && options.scale === "temporal") {
       normalized.domain = options.domain.map((value) => value instanceof Date ? value.getTime() : value);
     }
-    parse_general_result<{ id: string }>(
+    const created = parse_general_result<{ id: string; handle_token: number }>(
       this.wasm.add_general_axis_result_json(JSON.stringify(normalized)),
     );
     this.repaint();
-    return new general_axis_impl(options.id, this);
+    return new general_axis_impl(created.id, created.handle_token, this);
   }
 
   axis(id: string): general_axis_api | null {
-    return this.wasm.general_axis_json(id) === "null" ? null : new general_axis_impl(id, this);
+    const handle_token = this.wasm.general_axis_handle_token(id);
+    return handle_token === 0 ? null : new general_axis_impl(id, handle_token, this);
   }
 
   axes(pane?: number): general_axis_api[] {
     const ids = JSON.parse(this.wasm.general_axis_ids_json(pane ?? -1)) as string[];
-    return ids.map((id) => new general_axis_impl(id, this));
+    return ids.map((id) => new general_axis_impl(id, this.wasm.general_axis_handle_token(id), this));
   }
 
   remove_axis(id: string): boolean {
@@ -5005,6 +5054,21 @@ export class chart_impl implements chart_api {
 
   general_selected_hit(): general_series_hit | null {
     return JSON.parse(this.wasm.general_selected_hit_json()) as general_series_hit | null;
+  }
+
+  general_accessibility_focused_hit(): general_series_hit | null {
+    return JSON.parse(this.wasm.general_accessibility_focused_hit_json()) as general_series_hit | null;
+  }
+
+  set_general_accessibility_focus(series: number, row: number): boolean {
+    const accepted = this.wasm.set_general_accessibility_focus(series, row);
+    if (accepted) this.repaint();
+    return accepted;
+  }
+
+  clear_general_accessibility_focus(): void {
+    this.wasm.clear_general_accessibility_focus();
+    this.repaint();
   }
 
   remove_pane(index: number): boolean {

@@ -5283,14 +5283,16 @@ fn general_domain_capacity_failure_is_atomic_and_removal_releases_a_slot() {
 }
 
 #[test]
-fn v1_persistence_rejects_general_panes_instead_of_reinterpreting_them() {
+fn persistence_upgrades_general_panes_to_v2_without_reinterpreting_them() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     chart
         .add_pane_with_domain(true, HorizontalDomain::Temporal)
         .unwrap();
-    let error = chart.export_state_json().unwrap_err();
-    assert_eq!(error.code(), ErrorCode::UnsupportedOperation);
-    assert!(error.message().contains("financial-time panes"));
+    let document = chart.export_state_json().unwrap();
+    let value: serde_json::Value = serde_json::from_str(&document).unwrap();
+    assert_eq!(value["schema_version"], 2);
+    assert_eq!(value["panes"][0]["horizontal_domain"], "FinancialTime");
+    assert_eq!(value["panes"][1]["horizontal_domain"], "Temporal");
 }
 
 #[test]

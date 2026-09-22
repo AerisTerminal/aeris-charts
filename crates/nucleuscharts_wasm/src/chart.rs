@@ -2494,6 +2494,10 @@ impl NucleusChart {
         self.inner.borrow().general_axis_json(id)
     }
 
+    pub fn general_axis_handle_token(&self, id: &str) -> u32 {
+        self.inner.borrow().general_axis_handle_token(id)
+    }
+
     /// General axis IDs in insertion order. `pane < 0` selects every pane.
     pub fn general_axis_ids_json(&self, pane: i32) -> String {
         self.inner.borrow().general_axis_ids_json(pane)
@@ -2501,6 +2505,10 @@ impl NucleusChart {
 
     pub fn general_series_ids(&self, pane: usize) -> Vec<u32> {
         self.inner.borrow().general_series_ids(pane)
+    }
+
+    pub fn general_series_catalog_json(&self) -> String {
+        self.inner.borrow().general_series_catalog_json()
     }
 
     pub fn remove_general_axis(&mut self, id: &str) -> bool {
@@ -2641,12 +2649,26 @@ impl NucleusChart {
         self.inner.borrow().general_selected_hit_json()
     }
 
+    pub fn general_accessibility_focused_hit_json(&self) -> String {
+        self.inner.borrow().general_accessibility_focused_hit_json()
+    }
+
     pub fn select_general_hovered(&mut self) -> bool {
         self.inner.borrow_mut().select_general_hovered()
     }
 
     pub fn clear_general_selection(&mut self) {
         self.inner.borrow_mut().clear_general_selection();
+    }
+
+    pub fn set_general_accessibility_focus(&mut self, series: u32, row: usize) -> bool {
+        self.inner
+            .borrow_mut()
+            .set_general_accessibility_focus(series, row)
+    }
+
+    pub fn clear_general_accessibility_focus(&mut self) {
+        self.inner.borrow_mut().clear_general_accessibility_focus();
     }
 
     /// Versioned semantic chart-state export. The JSON envelope contains either a V1 document or
