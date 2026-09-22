@@ -7,7 +7,7 @@ remains the contract for unfinished chart families. The current package now impl
 category-column and numeric XY-scatter subset: domain-aware panes, explicit axes, object and typed
 bulk replacement, snapshots, hit testing, and lifecycle removal are public in
 `packages/charts/src/types.ts` and tracked by the public API manifest. Later series names and the
-incremental, selection, label, persistence, and React surfaces below remain proposals until their
+incremental, label, persistence, and React surfaces below remain proposals until their
 implementations and release evidence land.
 
 The proposal is additive. Existing financial series, data shapes, pane methods, price-scale

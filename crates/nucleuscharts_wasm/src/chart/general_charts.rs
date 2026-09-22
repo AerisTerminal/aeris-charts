@@ -254,13 +254,22 @@ fn parse_ids(ids_json: &str) -> Result<Option<Vec<GeneralRowId>>, String> {
         .map(Some)
 }
 
-fn row_identity(identity: &GeneralRowIdentity) -> Value {
+pub(super) fn row_identity(identity: &GeneralRowIdentity) -> Value {
     match identity {
         GeneralRowIdentity::Generated(value) => json!({ "generated": value.to_string() }),
         GeneralRowIdentity::Explicit(GeneralRowId::Number(value)) => json!(value),
         GeneralRowIdentity::Explicit(GeneralRowId::Text(value)) => json!(value),
         GeneralRowIdentity::Explicit(GeneralRowId::Generated) => Value::Null,
     }
+}
+
+pub(super) fn general_hit_value(hit: &nucleuscharts_engine::GeneralSeriesHit) -> Value {
+    json!({
+        "series": hit.series.get(),
+        "row": hit.row,
+        "row_id": row_identity(&hit.row_id),
+        "distance": hit.distance,
+    })
 }
 
 impl ChartInner {
@@ -532,7 +541,22 @@ impl ChartInner {
         let Some(hit) = self.engine.general_hit_test(pane, x, y, mode) else {
             return "null".to_owned();
         };
-        json!({ "series": hit.series.get(), "row": hit.row, "row_id": row_identity(&hit.row_id), "distance": hit.distance }).to_string()
+        general_hit_value(&hit).to_string()
+    }
+
+    pub fn general_selected_hit_json(&self) -> String {
+        self.engine.general_selected_hit().as_ref().map_or_else(
+            || "null".to_owned(),
+            |hit| general_hit_value(hit).to_string(),
+        )
+    }
+
+    pub fn select_general_hovered(&mut self) -> bool {
+        self.engine.select_general_hovered()
+    }
+
+    pub fn clear_general_selection(&mut self) {
+        self.engine.clear_general_selection();
     }
 }
 

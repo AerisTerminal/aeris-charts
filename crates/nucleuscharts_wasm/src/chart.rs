@@ -2595,6 +2595,18 @@ impl NucleusChart {
             .general_hit_test_json(pane, x, y, max_distance)
     }
 
+    pub fn general_selected_hit_json(&self) -> String {
+        self.inner.borrow().general_selected_hit_json()
+    }
+
+    pub fn select_general_hovered(&mut self) -> bool {
+        self.inner.borrow_mut().select_general_hovered()
+    }
+
+    pub fn clear_general_selection(&mut self) {
+        self.inner.borrow_mut().clear_general_selection();
+    }
+
     /// Versioned semantic chart-state export. The JSON envelope contains either a V1 document or
     /// a structured public error; runtime caches and host market data are never included.
     pub fn export_state_result_json(&self) -> String {
@@ -3314,6 +3326,7 @@ impl NucleusChart {
         inner.engine.set_hovered_series(None);
         inner.engine.set_hovered_text(None);
         inner.engine.set_hovered_drawing(None);
+        inner.engine.clear_general_hover();
     }
     /// industry-standard click-to-select: the host's click pipeline sets the series under the
     /// click (`None` on empty pane space); the engine snapshots sparse canonical anchor identities

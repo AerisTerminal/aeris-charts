@@ -162,6 +162,8 @@ export interface general_series_api {
   set_data(data: readonly general_xy_row[]): void;
   set_data_typed(columns: numeric_xy_columns | category_xy_columns): void;
   data_at(row: number): general_tooltip_snapshot | null;
+  /** This series' currently selected mark, or `null` when another mark/series is selected. */
+  selected_hit(): general_series_hit | null;
   accessibility_snapshot(offset?: number, limit?: number): general_accessibility_snapshot;
   remove(): void;
 }
@@ -568,7 +570,9 @@ export interface mouse_event_params {
    * per-kind hit tests (candle/bar high-low range, histogram column, line stroke) — or a
    * series primitive's hit, whose owning series reports here. `null` when nothing is hit.
    */
-  hovered_series: series_api | null;
+  hovered_series: series_api | general_series_api | null;
+  /** Exact engine-owned mark hit for a general series, otherwise `null`. */
+  general_hit: general_series_hit | null;
   /**
    * The `external_id` a primitive's `hit_test` reported for the hovered object (reference
    * `MouseEventParams.hoveredObjectId`), or `null` when no primitive is hit.
@@ -2278,6 +2282,8 @@ export interface chart_api {
   remove_axis(id: string): boolean;
   /** Engine-owned exact hit when `max_distance` is omitted, nearest hit otherwise. */
   general_hit_test(pane: number, x: number, y: number, max_distance?: number): general_series_hit | null;
+  /** The mark selected by the most recent primary click/tap in a general-domain pane. */
+  general_selected_hit(): general_series_hit | null;
   /**
    * Remove the pane at `index` (reference `IChartApi.removePane`). Returns `false` without changing
    * anything when the engine refuses (e.g. an out-of-range index or the last pane). Divergence:

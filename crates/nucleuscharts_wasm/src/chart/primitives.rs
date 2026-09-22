@@ -246,11 +246,15 @@ impl ChartInner {
     /// but overlooks its primitive path).
     pub(super) fn hover_at(&mut self, x_css: f64, y_css: f64) -> String {
         let result =
-            |series_id: Option<SeriesId>, object_id: Option<String>, cursor: Option<String>| {
+            |series_id: Option<SeriesId>,
+             object_id: Option<String>,
+             cursor: Option<String>,
+             general_hit: Option<&nucleuscharts_engine::GeneralSeriesHit>| {
                 serde_json::json!({
                     "series_id": series_id,
                     "object_id": object_id,
                     "cursor": cursor,
+                    "general_hit": general_hit.map(super::general_charts::general_hit_value),
                 })
                 .to_string()
             };
@@ -258,8 +262,10 @@ impl ChartInner {
             self.engine.set_hovered_series(None);
             self.engine.set_hovered_text(None);
             self.engine.set_hovered_drawing(None);
-            return result(None, None, None);
+            self.engine.clear_general_hover();
+            return result(None, None, None, None);
         };
+        let general_hit = self.engine.update_general_hover(pane, x_css, y_css);
         // Absolute bitmap px of the whole chart, exactly like the draw context (module
         // docs): the frame build's ratios, plus the integer pane offset on x.
         let nominal_dpr = self.dpr.max(0.01);
@@ -308,10 +314,16 @@ impl ChartInner {
         // A `top`-layer primitive hit always beats the built-in series hit tests.
         if let Some(hit) = &best_primitive {
             if hit.z_rank() == 2 {
+                self.engine.clear_general_hover();
                 self.engine.set_hovered_series(hit.series);
                 self.engine.set_hovered_text(None);
                 self.engine.set_hovered_drawing(None);
-                return result(hit.series, hit.external_id.clone(), hit.cursor.clone());
+                return result(
+                    hit.series,
+                    hit.external_id.clone(),
+                    hit.cursor.clone(),
+                    None,
+                );
             }
         }
         // Engine-owned drawing tools (drawings.rs): their hit wins over series and
@@ -324,6 +336,7 @@ impl ChartInner {
         // kinds have no hover chrome). Hit testing stays on stable z-order so promotion
         // cannot oscillate hover.
         if let Some(id) = self.engine.drawing_text_hit_at(x_css, y_css) {
+            self.engine.clear_general_hover();
             self.engine.set_hovered_series(None);
             self.engine.set_hovered_text(Some(id));
             self.engine.set_hovered_drawing(Some(id));
@@ -331,9 +344,11 @@ impl ChartInner {
                 None,
                 Some(format!("drawing:{id}")),
                 Some("text".to_string()),
+                None,
             );
         }
         if let Some(drawing) = self.engine.hit_test_drawing(x_css, y_css) {
+            self.engine.clear_general_hover();
             self.engine.set_hovered_series(None);
             self.engine.set_hovered_text(Some(drawing.id));
             self.engine.set_hovered_drawing(Some(drawing.id));
@@ -341,6 +356,7 @@ impl ChartInner {
                 None,
                 Some(format!("drawing:{}", drawing.id)),
                 Some(drawing.cursor.to_string()),
+                None,
             );
         }
         self.engine.set_hovered_text(None);
@@ -356,8 +372,9 @@ impl ChartInner {
                         Some(hit) => (Some(hit.series), None, None),
                         None => (hit.series, hit.external_id.clone(), hit.cursor.clone()),
                     };
+                    self.engine.clear_general_hover();
                     self.engine.set_hovered_series(series_id);
-                    return result(series_id, object_id, cursor);
+                    return result(series_id, object_id, cursor, None);
                 }
             }
             if self
@@ -376,16 +393,33 @@ impl ChartInner {
             }
         }
         if let Some(hit) = best_series {
+            self.engine.clear_general_hover();
             self.engine.set_hovered_series(Some(hit.series));
-            return result(Some(hit.series), None, None);
+            return result(Some(hit.series), None, None, None);
+        }
+        if let Some(hit) = &best_primitive {
+            if hit.z_rank() == 1 && hit.series.is_none() {
+                self.engine.clear_general_hover();
+                self.engine.set_hovered_series(None);
+                return result(None, hit.external_id.clone(), hit.cursor.clone(), None);
+            }
+        }
+        if let Some(hit) = &general_hit {
+            self.engine.set_hovered_series(None);
+            return result(None, None, None, Some(hit));
         }
         // A pane-sourced or `bottom`-layer primitive hit survives only without a series hit.
         if let Some(hit) = &best_primitive {
             self.engine.set_hovered_series(hit.series);
-            return result(hit.series, hit.external_id.clone(), hit.cursor.clone());
+            return result(
+                hit.series,
+                hit.external_id.clone(),
+                hit.cursor.clone(),
+                None,
+            );
         }
         self.engine.set_hovered_series(None);
-        result(None, None, None)
+        result(None, None, None, None)
     }
 
     /// Refresh the engine's per-frame autoscale store from every series primitive's

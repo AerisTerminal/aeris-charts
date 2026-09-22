@@ -1752,6 +1752,7 @@ impl ChartEngine {
         })?;
         store.replace(id, input)?;
         if bound {
+            self.reconcile_general_interaction_for_dataset(id);
             self.invalidate_frame_all();
         } else {
             self.invalidate_frame_scene();

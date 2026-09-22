@@ -2091,7 +2091,7 @@ impl ChartEngine {
             // still enters the same ordered `main` primitive stream and receives a retained-group
             // segment so the WebGPU path consumes exactly what Canvas2D/GPUI/native consume.
             let general_start = out.main.len();
-            self.build_general_series_frame(pi, hpr, vpr, &mut out.main);
+            let general_interaction = self.build_general_series_frame(pi, hpr, vpr, &mut out.main);
             if out.main.len() != general_start {
                 retained.series_segments[pi].push(FrameSeriesSegment {
                     series_id: None,
@@ -2101,6 +2101,17 @@ impl ChartEngine {
                         .frame_invalidation
                         .scene
                         .max(self.frame_invalidation.coordinate),
+                    coordinate_revision: self.frame_invalidation.coordinate,
+                });
+            }
+            let start = out.main.len();
+            out.main.extend(general_interaction.into_iter().flatten());
+            if out.main.len() != start {
+                retained.series_segments[pi].push(FrameSeriesSegment {
+                    series_id: None,
+                    start,
+                    end: out.main.len(),
+                    revision: self.frame_invalidation.overlay,
                     coordinate_revision: self.frame_invalidation.coordinate,
                 });
             }

@@ -65,16 +65,47 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 
     let hit = null;
+    let hit_point = null;
     const geometry = scatter_pane.get_geometry();
-    for (let y = geometry.top; y <= geometry.top + geometry.height && hit === null; y += 2) {
-      for (let x = geometry.left; x <= geometry.left + geometry.width; x += 2) {
-        const candidate = chart.general_hit_test(scatter_pane.pane_index(), x, y, 2);
+    for (let y = geometry.top + 6; y <= geometry.top + geometry.height - 6 && hit === null; y += 2) {
+      for (let x = 0; x <= geometry.width; x += 2) {
+        const candidate = chart.general_hit_test(scatter_pane.pane_index(), x, y);
         if (candidate?.series === scatter.id) {
           hit = candidate;
+          hit_point = { x, y };
           break;
         }
       }
     }
+
+    let hover_event = null;
+    let click_event = null;
+    chart.subscribe_crosshair_move((params) => {
+      if (params.general_hit !== null) {
+        hover_event = { hit: params.general_hit, kind: params.hovered_series?.kind ?? null };
+      }
+    });
+    chart.subscribe_click((params) => {
+      click_event = params.general_hit;
+    });
+    const overlay = host.querySelectorAll("canvas")[3];
+    const browser_x = hit_point.x + geometry.left;
+    overlay.dispatchEvent(new PointerEvent("pointermove", {
+      clientX: browser_x,
+      clientY: hit_point.y,
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true,
+      buttons: 0,
+      bubbles: true,
+    }));
+    overlay.dispatchEvent(new MouseEvent("click", {
+      clientX: browser_x,
+      clientY: hit_point.y,
+      button: 0,
+      bubbles: true,
+    }));
+    await new Promise((resolve) => requestAnimationFrame(resolve));
 
     x_axis.zoom(2, 0);
     x_axis.pan(0.25);
@@ -87,6 +118,10 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
       scatter_row: scatter.data_at(2),
       scatter_accessibility: scatter.accessibility_snapshot(1, 2),
       hit,
+      hover_event,
+      click_event,
+      selected_hit: scatter.selected_hit(),
+      chart_selected_hit: chart.general_selected_hit(),
       category_series: category_pane.get_series().map((series) => series.kind ?? series.series_type()),
       scatter_series: scatter_pane.get_series().map((series) => series.kind ?? series.series_type()),
       screenshot: chart.take_screenshot().toDataURL().length,
@@ -120,6 +155,13 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
     ],
   });
   expect(result.before_remove.hit).toMatchObject({ series: expect.any(Number), row_id: expect.any(Number) });
+  expect(result.before_remove.hover_event).toMatchObject({
+    hit: { series: expect.any(Number), row_id: expect.any(Number) },
+    kind: "scatter",
+  });
+  expect(result.before_remove.click_event).toMatchObject({ series: expect.any(Number), row_id: expect.any(Number) });
+  expect(result.before_remove.selected_hit).toEqual(result.before_remove.chart_selected_hit);
+  expect(result.before_remove.selected_hit).toMatchObject({ series: expect.any(Number), row_id: expect.any(Number) });
   expect(result.before_remove.category_series).toEqual(["column"]);
   expect(result.before_remove.scatter_series).toEqual(["scatter"]);
   expect(result.before_remove.screenshot).toBeGreaterThan(1000);

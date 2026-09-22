@@ -300,6 +300,43 @@ pub struct GeneralSeriesHit {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+struct GeneralInteractionTarget {
+    series: GeneralSeriesId,
+    row: usize,
+    row_id: GeneralRowIdentity,
+    distance: f64,
+}
+
+impl From<&GeneralSeriesHit> for GeneralInteractionTarget {
+    fn from(hit: &GeneralSeriesHit) -> Self {
+        Self {
+            series: hit.series,
+            row: hit.row,
+            row_id: hit.row_id.clone(),
+            distance: hit.distance,
+        }
+    }
+}
+
+impl GeneralInteractionTarget {
+    fn hit(&self) -> GeneralSeriesHit {
+        GeneralSeriesHit {
+            series: self.series,
+            row: self.row,
+            row_id: self.row_id.clone(),
+            distance: self.distance,
+        }
+    }
+
+    fn estimated_bytes(&self) -> usize {
+        match &self.row_id {
+            GeneralRowIdentity::Explicit(crate::GeneralRowId::Text(value)) => value.capacity(),
+            _ => 0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct GeneralTooltipSnapshot {
     pub series: GeneralSeriesId,
     pub row: usize,
@@ -379,6 +416,8 @@ pub(crate) struct GeneralSeriesRegistry {
     series: Vec<GeneralSeries>,
     next_id: u32,
     scatter_spatial: RefCell<HashMap<GeneralSeriesId, ScatterSpatialIndex>>,
+    hovered: Option<GeneralInteractionTarget>,
+    selected: Option<GeneralInteractionTarget>,
 }
 
 impl GeneralSeriesRegistry {
@@ -387,6 +426,8 @@ impl GeneralSeriesRegistry {
             series: Vec::new(),
             next_id: 1,
             scatter_spatial: RefCell::new(HashMap::new()),
+            hovered: None,
+            selected: None,
         }
     }
 
@@ -450,6 +491,20 @@ impl GeneralSeriesRegistry {
         };
         self.series.remove(index);
         self.scatter_spatial.get_mut().remove(&id);
+        if self
+            .hovered
+            .as_ref()
+            .is_some_and(|target| target.series == id)
+        {
+            self.hovered = None;
+        }
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|target| target.series == id)
+        {
+            self.selected = None;
+        }
         true
     }
 
@@ -484,6 +539,14 @@ impl GeneralSeriesRegistry {
                 .map(GeneralSeries::estimated_bytes)
                 .sum::<usize>()
             + scatter_bytes
+            + self
+                .hovered
+                .as_ref()
+                .map_or(0, GeneralInteractionTarget::estimated_bytes)
+            + self
+                .selected
+                .as_ref()
+                .map_or(0, GeneralInteractionTarget::estimated_bytes)
     }
 }
 
@@ -987,6 +1050,135 @@ impl ChartEngine {
             }
         }
         best
+    }
+
+    #[doc(hidden)]
+    pub fn update_general_hover(
+        &mut self,
+        pane_index: usize,
+        x_css: f64,
+        y_css: f64,
+    ) -> Option<GeneralSeriesHit> {
+        let hit = self.general_hit_test(pane_index, x_css, y_css, GeneralHitMode::Exact);
+        let next = hit.as_ref().map(GeneralInteractionTarget::from);
+        let changed = self
+            .general_series
+            .as_ref()
+            .is_some_and(|registry| registry.hovered != next);
+        if let Some(registry) = self.general_series.as_mut() {
+            registry.hovered = next;
+        }
+        if changed {
+            self.invalidate_frame_overlay();
+        }
+        hit
+    }
+
+    #[doc(hidden)]
+    pub fn clear_general_hover(&mut self) {
+        let changed = self
+            .general_series
+            .as_mut()
+            .is_some_and(|registry| registry.hovered.take().is_some());
+        if changed {
+            self.invalidate_frame_overlay();
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn general_hovered_hit(&self) -> Option<GeneralSeriesHit> {
+        self.general_series
+            .as_ref()?
+            .hovered
+            .as_ref()
+            .map(GeneralInteractionTarget::hit)
+    }
+
+    #[doc(hidden)]
+    pub fn select_general_hovered(&mut self) -> bool {
+        let Some(registry) = self.general_series.as_mut() else {
+            return false;
+        };
+        let next = registry.hovered.clone();
+        let hit = next.is_some();
+        if registry.selected != next {
+            registry.selected = next;
+            self.invalidate_frame_overlay();
+        }
+        hit
+    }
+
+    #[doc(hidden)]
+    pub fn clear_general_selection(&mut self) {
+        let changed = self
+            .general_series
+            .as_mut()
+            .is_some_and(|registry| registry.selected.take().is_some());
+        if changed {
+            self.invalidate_frame_overlay();
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn general_selected_hit(&self) -> Option<GeneralSeriesHit> {
+        self.general_series
+            .as_ref()?
+            .selected
+            .as_ref()
+            .map(GeneralInteractionTarget::hit)
+    }
+
+    pub(crate) fn general_row_interaction(
+        &self,
+        series: GeneralSeriesId,
+        row: usize,
+    ) -> (bool, bool) {
+        let Some(registry) = self.general_series.as_ref() else {
+            return (false, false);
+        };
+        let matches =
+            |target: &GeneralInteractionTarget| target.series == series && target.row == row;
+        (
+            registry.hovered.as_ref().is_some_and(matches),
+            registry.selected.as_ref().is_some_and(matches),
+        )
+    }
+
+    pub(crate) fn reconcile_general_interaction_for_dataset(
+        &mut self,
+        dataset_id: GeneralDatasetId,
+    ) {
+        let Some(registry) = self.general_series.as_ref() else {
+            return;
+        };
+        let dataset_series: Vec<GeneralSeriesId> = registry
+            .series
+            .iter()
+            .filter(|series| series.dataset == dataset_id)
+            .map(GeneralSeries::id)
+            .collect();
+        let previous_hovered = registry.hovered.clone();
+        let previous_selected = registry.selected.clone();
+        let Some(dataset) = self.general_dataset(dataset_id) else {
+            return;
+        };
+        let reconcile = |target: Option<GeneralInteractionTarget>| {
+            let mut current = target?;
+            if dataset_series.contains(&current.series) {
+                current.row = (0..dataset.len())
+                    .find(|&row| dataset.row_identity(row) == Some(&current.row_id))?;
+            }
+            Some(current)
+        };
+        let next_hovered = reconcile(previous_hovered.clone());
+        let next_selected = reconcile(previous_selected.clone());
+        if previous_hovered != next_hovered || previous_selected != next_selected {
+            if let Some(registry) = self.general_series.as_mut() {
+                registry.hovered = next_hovered;
+                registry.selected = next_selected;
+            }
+            self.invalidate_frame_overlay();
+        }
     }
 
     #[cfg(test)]

@@ -583,6 +583,12 @@ class general_series_impl implements general_series_api {
     return JSON.parse(this.chart.wasm.general_tooltip_json(this.id, row)) as general_tooltip_snapshot | null;
   }
 
+  selected_hit(): general_series_hit | null {
+    this.assert_live();
+    const hit = this.chart.general_selected_hit();
+    return hit?.series === this.id ? hit : null;
+  }
+
   accessibility_snapshot(offset = 0, limit = 512): general_accessibility_snapshot {
     this.assert_live();
     if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 0) {
@@ -2727,7 +2733,12 @@ export class chart_impl implements chart_api {
   /** Crosshair position tracked TS-side (for crosshair-less screenshots); `null` when hidden. */
   private last_crosshair: { x: number; y: number } | null = null;
   /** Last hover hit-test result (Phase C-d), refreshed on crosshair moves; feeds event params. */
-  private hover: { series_id: number | null; object_id: string | null; cursor: string | null } | null = null;
+  private hover: {
+    series_id: number | null;
+    object_id: string | null;
+    cursor: string | null;
+    general_hit: general_series_hit | null;
+  } | null = null;
   /** Host-side serialization cache for the engine-owned armed drawing template. */
   private tool_options_json = "{}";
   private tool_listener: ((tool: drawing_kind | null) => void) | null = null;
@@ -3877,10 +3888,15 @@ export class chart_impl implements chart_api {
         series_data.set(entry.series, { time: entry.time, value: entry.value });
       }
     }
-    const hovered_series = this.hover?.series_id != null ? this.series_handle(this.hover.series_id) : null;
+    const hovered_series = this.hover?.series_id != null
+      ? this.series_handle(this.hover.series_id)
+      : this.hover?.general_hit != null
+        ? this.general_series_by_id.get(this.hover.general_hit.series) ?? null
+        : null;
     return {
       time, logical, point: { x, y }, pane_index: this.pane_index_at(x, y), series_data, value_snapshot,
-      hovered_series, hovered_object_id: this.hover?.object_id ?? null,
+      hovered_series, general_hit: this.hover?.general_hit ?? null,
+      hovered_object_id: this.hover?.object_id ?? null,
     };
   }
 
@@ -3916,7 +3932,7 @@ export class chart_impl implements chart_api {
 
   /** The engine-hit series under the current hover, or `null` (drives the pointer cursor). */
   hover_series_id(): number | null {
-    return this.hover?.series_id ?? null;
+    return this.hover?.series_id ?? this.hover?.general_hit?.series ?? null;
   }
 
   /** Emit a crosshair-move event (called by the gesture recognizer). */
@@ -3933,7 +3949,7 @@ export class chart_impl implements chart_api {
     const params: mouse_event_params = {
       time: null, logical: null, point: null, pane_index: null, series_data: new Map(),
       value_snapshot: this.value_snapshot(),
-      hovered_series: null, hovered_object_id: null,
+      hovered_series: null, general_hit: null, hovered_object_id: null,
     };
     for (const h of this.crosshair_subs) h(params);
   }
@@ -3958,7 +3974,12 @@ export class chart_impl implements chart_api {
     const trend_text_hit = Number(this.wasm.drawing_text_hit_at(x, y));
     const drawing_hit = trend_text_hit > 0 || this.wasm.select_drawing_at(x, y);
     if (trend_text_hit > 0) this.wasm.set_selected_drawing(trend_text_hit);
-    this.wasm.set_selected_series(drawing_hit ? undefined : (this.hover?.series_id ?? undefined));
+    const general_hit = !drawing_hit && this.hover?.general_hit != null;
+    if (general_hit) this.wasm.select_general_hovered();
+    else this.wasm.clear_general_selection();
+    this.wasm.set_selected_series(
+      drawing_hit || general_hit ? undefined : (this.hover?.series_id ?? undefined),
+    );
     // Text drawings: empty labels open typing mode on the first click (there is no ink to
     // "focus" otherwise). Non-empty labels follow the public reference's two-step model — first click
     // selects (focus border), a click opens typing mode only when already selected at press.
@@ -4904,6 +4925,10 @@ export class chart_impl implements chart_api {
     return JSON.parse(
       this.wasm.general_hit_test_json(pane, x, y, max_distance ?? -1),
     ) as general_series_hit | null;
+  }
+
+  general_selected_hit(): general_series_hit | null {
+    return JSON.parse(this.wasm.general_selected_hit_json()) as general_series_hit | null;
   }
 
   remove_pane(index: number): boolean {

@@ -3,6 +3,10 @@ use nucleuscharts_render::draw_list::{IRect, Prim};
 
 use crate::{ChartEngine, GeneralSeriesKind, DEFAULT_LINE_COLOR};
 
+use super::PRIMARY;
+
+const GENERAL_HOVER: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0x73);
+
 impl ChartEngine {
     pub(super) fn build_general_series_frame(
         &self,
@@ -10,9 +14,10 @@ impl ChartEngine {
         hpr: f64,
         vpr: f64,
         out: &mut Vec<Prim>,
-    ) {
+    ) -> [Option<Prim>; 2] {
+        let mut interaction = [None, None];
         let Some(pane_id) = self.pane_stable_id(pane_index) else {
-            return;
+            return interaction;
         };
         for series in self
             .general_series_iter()
@@ -43,6 +48,22 @@ impl ChartEngine {
                             },
                             color,
                         });
+                        let (hovered, selected) =
+                            self.general_row_interaction(series.id(), geometry.row);
+                        if hovered || selected {
+                            interaction[usize::from(selected)] = Some(Prim::RectFrame {
+                                rect: IRect {
+                                    x: left,
+                                    y: top,
+                                    w: width,
+                                    h: height,
+                                },
+                                border: ((if selected { 2.0 } else { 1.0 }) * hpr.min(vpr))
+                                    .round()
+                                    .max(1.0) as i32,
+                                color: if selected { PRIMARY } else { GENERAL_HOVER },
+                            });
+                        }
                     });
                 }
                 GeneralSeriesKind::Scatter => {
@@ -59,9 +80,24 @@ impl ChartEngine {
                             stroke_width: 0.0,
                             stroke: color,
                         });
+                        let (hovered, selected) =
+                            self.general_row_interaction(series.id(), geometry.row);
+                        if hovered || selected {
+                            let stroke = if selected { PRIMARY } else { GENERAL_HOVER };
+                            interaction[usize::from(selected)] = Some(Prim::Circle {
+                                cx: (geometry.x * hpr) as f32,
+                                cy: (geometry.y * vpr) as f32,
+                                radius: ((geometry.radius + if selected { 3.0 } else { 2.0 }) * vpr)
+                                    as f32,
+                                fill: Color::rgba(0, 0, 0, 0),
+                                stroke_width: (if selected { 2.0 } else { 1.0 }) * vpr as f32,
+                                stroke,
+                            });
+                        }
                     });
                 }
             }
         }
+        interaction
     }
 }

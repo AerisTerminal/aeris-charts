@@ -117,8 +117,13 @@ removes it transactionally after detaching the series. Pane enumeration and char
 include general handles without making financial-only accessibility or primitive helpers reinterpret
 them. Tooltip, bounded accessibility, and exact/nearest hit snapshots come back from Rust. Generated row
 identities are encoded as decimal strings at the JavaScript boundary so their full `u64` identity is not
-rounded. The remaining release work includes selection/hover presentation, data labels, incremental
-updates and retention, schema persistence, and integration into the keyboard accessibility controller.
+rounded. The ordinary browser pointer path feeds exact general hits back into engine-owned transient
+hover and primary selection. Interaction targets retain row identity rather than formatted coordinates:
+explicit identities follow reordered replacement batches, while generated batch-local identities clear.
+The shared frame emits the corresponding mark chrome, so Canvas2D, WebGPU, GPUI, and native executors
+receive the same presentation without host overlays. The remaining release work includes data labels,
+incremental updates and retention, schema persistence, and integration into the keyboard accessibility
+controller.
 
 `ChartOptionsStore` keeps typed options canonical for engine and frame reads and retains the raw JSON
 object only for boundary-compatible deep merges and serialization. An option patch is merged and

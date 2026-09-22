@@ -7,7 +7,7 @@ use super::conflation::{
 use super::*;
 use crate::{
     AxisDimension, CategoryScaleType, ContinuousScaleType, GeneralAxisDomain, GeneralAxisOptions,
-    GeneralScaleType, GeneralSeriesOptions, GeneralXyInput, HorizontalDomain,
+    GeneralRowId, GeneralScaleType, GeneralSeriesOptions, GeneralXyInput, HorizontalDomain,
 };
 use nucleuscharts_core::model::data_layer::DataLayer;
 use nucleuscharts_core::model::plot_list::{PlotList, PlotValues};
@@ -247,6 +247,24 @@ fn category_column_series_owns_auto_domains_geometry_and_lifecycle() {
     assert_eq!(hit.series, series);
     assert_eq!(hit.row, 0);
     assert_eq!(hit.distance, 0.0);
+    assert_eq!(
+        chart.update_general_hover(
+            pane,
+            (first.left + first.right) / 2.0,
+            (first.top + first.bottom) / 2.0,
+        ),
+        Some(hit.clone())
+    );
+    assert_eq!(chart.general_hovered_hit(), Some(hit.clone()));
+    assert!(chart.select_general_hovered());
+    assert_eq!(chart.general_selected_hit(), Some(hit.clone()));
+    let selected_frame = chart.build_frame();
+    assert!(selected_frame.panes[pane].main.iter().any(|primitive| {
+        matches!(primitive, Prim::RectFrame { color, border: 2, .. } if *color == PRIMARY)
+    }));
+    chart.clear_general_hover();
+    assert_eq!(chart.general_hovered_hit(), None);
+    assert_eq!(chart.general_selected_hit(), Some(hit.clone()));
 
     let nearest = chart
         .general_hit_test(
@@ -292,11 +310,65 @@ fn category_column_series_owns_auto_domains_geometry_and_lifecycle() {
         )
         .unwrap();
     assert_eq!(
+        chart.general_selected_hit(),
+        None,
+        "batch-scoped generated identities must not retain selection across replacement"
+    );
+    assert_eq!(
         chart.general_axis_effective_domain("revenue"),
         Some(GeneralAxisDomain::Numeric([-20.0, 5.0]))
     );
     let replaced_axis = chart.build_axis_frame(80.0, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
     assert!(replaced_axis.labels.iter().any(|label| label.text == "-20"));
+
+    chart
+        .replace_general_xy_dataset(
+            dataset,
+            GeneralXyInput::Category {
+                ids: Some(vec![
+                    GeneralRowId::Text("jan".into()),
+                    GeneralRowId::Text("feb".into()),
+                    GeneralRowId::Text("mar".into()),
+                ]),
+                categories: vec!["Jan".into(), "Feb".into(), "Mar".into()],
+                category_indices: vec![0, 1, 2],
+                y: vec![-20.0, 5.0, 10.0],
+                y_valid: None,
+            },
+        )
+        .unwrap();
+    geometry.clear();
+    chart.visit_general_columns(chart.general_series(series).unwrap(), |item| {
+        geometry.push(item)
+    });
+    let jan = geometry.iter().find(|item| item.row == 0).unwrap();
+    chart.update_general_hover(
+        pane,
+        (jan.left + jan.right) / 2.0,
+        (jan.top + jan.bottom) / 2.0,
+    );
+    assert!(chart.select_general_hovered());
+    chart
+        .replace_general_xy_dataset(
+            dataset,
+            GeneralXyInput::Category {
+                ids: Some(vec![
+                    GeneralRowId::Text("feb".into()),
+                    GeneralRowId::Text("jan".into()),
+                    GeneralRowId::Text("mar".into()),
+                ]),
+                categories: vec!["Jan".into(), "Feb".into(), "Mar".into()],
+                category_indices: vec![1, 0, 2],
+                y: vec![5.0, -20.0, 10.0],
+                y_valid: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(chart.general_selected_hit().unwrap().row, 1);
+    assert_eq!(
+        chart.general_selected_hit().unwrap().row_id,
+        crate::GeneralRowIdentity::Explicit(GeneralRowId::Text("jan".into()))
+    );
 
     assert!(!chart.remove_general_axis("month"));
     assert!(!chart.remove_general_dataset(dataset));

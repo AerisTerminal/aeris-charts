@@ -337,8 +337,10 @@ Current implementation progress (2026-09-22):
   through the common chart lifecycle, with object-row conversion, typed bulk ingestion, pane enumeration,
   lifecycle events, data/accessibility snapshots, hit testing, screenshots, and Chromium/Firefox/WebKit
   runtime evidence;
-- selection/hover presentation, data labels, incremental update/retention APIs, general-schema
-  persistence, and keyboard-controller integration remain before either general series is release-complete.
+- exact browser hover and primary selection now retain engine-owned row identities, follow reordered
+  explicit-ID replacement batches, drop generated batch-local identities, and emit shared frame chrome;
+- data labels, incremental update/retention APIs, general-schema persistence, and keyboard-controller
+  integration remain before either general series is release-complete.
 
 Exit gate: both slices render equivalently in every backend and a financial-only chart shows no
 material regression in output, work, memory, or package size.
