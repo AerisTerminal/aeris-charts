@@ -1,581 +1,385 @@
-# Nucleus Charts All-in-One Architecture Plan
+# Nucleus Charts All-in-One Architecture and Competitive Delivery Plan
 
-## Decision
+## Decision and scope
 
-Nucleus Charts will become one all-in-one charting library for financial charts and general
-application visualization. It will not become a collection of separate products, and the existing
-financial engine will not be removed, replaced, or reduced to a compatibility layer.
+Nucleus will be a complete financial and general visualization library. Lightweight Charts is the
+financial competitive reference; Recharts is the general charting competitive reference. A basic
+working dashboard, a list of rendered chart types, or a thin React wrapper does not meet this goal.
+Competitive quality includes authoring, visual control, interaction, accessibility, lifecycle,
+responsive layout, documentation, distribution, and measured performance.
 
-The financial chart is the primary core of Nucleus. Its deterministic timestamp union, compact
-scalar/OHLC storage, price and time scales, panes, interactions, indicators, drawings, trading
-objects, footprint data, LOD, and streaming update paths remain authoritative for financial series.
-General charting will be added as new engine-owned capabilities alongside that path. All chart
-families will use the same chart lifecycle, ordered frame contract, rendering backends, interaction
-normalization, accessibility model, styling system, and public library.
+Keep one public library, one ChartEngine, and one ordered frame contract. Preserve the specialized
+financial data and coordinate paths while completing general charting as a first-class capability.
+The browser package remains `@axiusflowhq/financial` with an optional `/react` entry. Package naming
+or distribution changes require a compatibility decision; this plan does not introduce another product.
 
-This is an additive architecture:
+This revision is an architecture review and future delivery contract, dated 2026-09-23. It does not
+claim that the fixes below are implemented or that runtime gates were rerun. The working tree already
+contained general-chart and demo changes during review; those changes are not release evidence.
+[Architecture.md](Architecture.md) describes current ownership and execution. This document specifies
+the target and acceptance gates. [General_charts_api.md](General_charts_api.md) mixes implemented
+contracts with proposals and must be reconciled as part of R0 below.
+
+## Review conclusion and corrected status
+
+The existing shared-engine direction is sound. Replacing it with a browser-only renderer or making
+financial storage universally generic would harm Nucleus: charts would diverge across backends or
+financial updates would pay unnecessary work. Retain the working foundations and finish their contracts.
+
+The previous Phase 1-3 completion statements described narrower implementation slices. They are
+superseded by this review: Cartesian product completeness and the all-in-one authoring experience
+are **open**. Earlier test counts and timings are historical observations in Git history, not proof
+of current completion. Existing code and tests remain valuable and must be preserved.
+
+| Area | Code evidence reviewed | Assessment and required correction |
+| --- | --- | --- |
+| Shared ownership | `general_data.rs`, `general_series.rs`, frame construction, engine Cargo dependencies | Typed general data and semantics already live in Rust beside financial storage. Retain this boundary. |
+| Standalone creation | `examples/web_demo/general_dashboard.js` creates a general pane then removes pane 0 | Provide an explicit initial general domain through the canonical constructor, without a transient financial pane or host cleanup recipe. Keep the financial default compatible. |
+| Temporal axes | `general_axes.rs::axis_ticks`, `tick_labels_for_domain`, `pan_general_axis`, `zoom_general_axis` | Temporal data and geometry exist, but temporal ticks fall through to empty output and pan/zoom reject nonnumeric domains. Complete the full temporal coordinate contract. |
+| Grid and zero lines | `GeneralAxis` stores policies; accessor callers currently serialize them in `persistence.rs` | Accepted options have no corresponding general grid execution. Implement shared frame output and observable toggle tests. |
+| Mutable public objects | `packages/charts/src/types.ts::general_series_api` and `general_axis_api` | General handles lack option mutation. Rust has visibility mutation, but the browser handle lacks it. Add atomic mutations that preserve identity and invalidate the affected state. |
+| React reconciliation | `packages/charts/src/react.ts::GeneralPane` | Changed series options recreate series; changed axes recreate dependent series. GeneralPane accepts configuration arrays rather than the proposed component composition. Complete both engine mutation and declarative authoring. |
+| Failed React installation | `GeneralPane` creates a handle, calls `setData`, then records ownership | A failed initial data install can leave an untracked series. Add rollback and failure-path lifecycle tests; review callback exceptions and cleanup ordering too. |
+| Visual configuration | `GeneralSeriesOptions`, `frame/general_series_geometry.rs` | The surface is narrow; general line width is fixed in frame construction. Audit and implement documented styles and geometry choices end to end. |
+| Shared components | Legend/shared-tooltip/brush/reference snapshots in `general_series.rs` | Semantic building blocks exist. Snapshots alone do not establish a complete interactive legend, tooltip, brush, or export experience. |
+| Chart breadth | `GeneralSeriesKind` has ten Cartesian variants | Polar and hierarchy/flow families remain open. Funnel, treemap, Sankey, and sunburst belong in the competitive target, not an indefinite demand backlog. |
+| Documentation | Prior plan examples and `Architecture.md` | Prior scatter example omitted required axis bindings. Architecture places extensive engine-owned general behavior under the core heading and overgeneralizes retained React updates. Correct ownership wording without presenting future code as current. |
+
+These are source-confirmed gaps or explicitly identified review risks. Remaining matrix entries below
+are required coverage to audit, not assertions that every listed feature is absent. No claim of an
+exhaustive defect audit or current benchmark pass is made.
+
+## Competitive parity contract
+
+Parity means equivalent user capabilities, predictable behavior, and polished results. It does not
+require copying React/SVG internals, identical method names, undocumented quirks, or arbitrary DOM
+execution inside Rust. Record deliberate semantic differences and demonstrate the migration path.
+An omission cannot be renamed a difference merely to close a milestone.
+
+The following official references were reviewed on 2026-09-23. R0 must pin the exact released Recharts
+version/source revision used by executable comparisons; a moving documentation site is insufficient
+as a permanent test baseline.
+
+- [Recharts API catalog](https://recharts.github.io/en-US/api/) establishes Cartesian, polar, composed,
+  funnel, treemap, Sankey, and sunburst families plus shared components and synchronization.
+- [Line API](https://recharts.github.io/en-US/api/Line/) supplies reference behavior for data mapping,
+  dots, missing-point connections, styling, and animation.
+- [XAxis API](https://recharts.github.io/en-US/api/XAxis/) supplies axis/domain/tick configuration coverage.
+- [Tooltip API](https://recharts.github.io/en-US/api/Tooltip/) supplies tooltip presentation and behavior coverage.
+- [ResponsiveContainer API](https://recharts.github.io/en-US/api/ResponsiveContainer/) supplies sizing coverage.
+- [FunnelChart API](https://recharts.github.io/en-US/api/FunnelChart/) documents stacking offsets and synchronization.
+- [Sankey API](https://recharts.github.io/en-US/api/Sankey/),
+  [Treemap API](https://recharts.github.io/api/Treemap/), and
+  [Sunburst API](https://recharts.github.io/en-US/api/SunburstChart/) establish distinct flow/hierarchy contracts.
+- [Accessibility guidance](https://github.com/recharts/recharts/wiki/Recharts-and-accessibility)
+  informs keyboard and screen-reader comparisons.
+
+### Required coverage matrix
+
+Each row must acquire exact versioned reference examples, Nucleus API mappings, named automated
+fixtures, manual checks where needed, and recorded differences before it can be marked verified.
+The initial status is deliberately conservative: **partial** means code exists but the full row is
+unverified; **open** means the product contract still needs delivery. These are Nucleus requirements,
+including platform capabilities beyond the competitor's browser rendering model.
+
+| Capability | Initial status | Required outcome | Delivery |
+| --- | --- | --- | --- |
+| Standalone and composed charts | Partial | General-only, financial-only, and mixed panes; compatible overlays, explicit axes, deterministic ordering and lifecycle | R1, R3 |
+| Line, area, range and scatter/bubble | Partial | Linear/step/curved interpolation, gap/connection policy, baselines, symbols, active marks, fills/strokes and error bounds | R3 |
+| Bars and stacks | Partial | Both orientations, groups, sizing/gaps, corners, per-item styling, mixed signs, range bars, stack order and required offset modes | R3 |
+| Box plots and heatmaps | Partial | Preserve existing extra families; complete color domains, legends, missing values and interaction | R3 |
+| Scales and axes | Partial | Numeric/log/symlog, temporal, category/point, reversed/multiple axes, explicit/auto domains, ticks, formatting, overflow and grid policy | R2 |
+| Pie/donut, radar, radial bar, polar area | Open | Polar layout, start/end angles, inner/outer radii, padding, labels/leaders, angular/radial axes and interactions | R6 |
+| Funnel, treemap, Sankey, sunburst | Open | Purpose-built deterministic bounded layouts, data contracts, styling, labels, hits, accessibility and updates | R7 |
+| Legend and tooltip | Partial | Default usable components, visibility controls, item/shared modes, placement, formatting, ordering, custom content and touch/keyboard behavior | R4 |
+| References, labels, titles and grids | Partial | Engine layout and domain contribution, overlap/overflow policy, background/foreground order, style and export consistency | R2, R4 |
+| Brush, selection and synchronization | Partial | Pointer/touch/keyboard controls, semantic range handles, domain-aware pan/zoom, linked charts and feedback-loop prevention | R4 |
+| Responsive layout | Partial | Zero-size/hidden/revealed containers, constrained/aspect sizing, DPR/font changes, small plots and bounded layout convergence | R1, R2 |
+| React authoring | Partial | Composable axes/series/components, typed data mapping, controlled updates, stable identities, Strict Mode, failure cleanup and SSR-safe import | R5 |
+| Customization | Partial | Per-item styles, symbols, gradients, dash patterns, label/tooltip formatting, bounded custom marks and explicit host-only content boundaries | R3-R5 |
+| Animation | Open for general transitions | Enter/update/exit and interruption with stable identities, bounded retained state, shared timing semantics and reduced motion | R6 |
+| Accessibility/localization | Partial | Keyboard operation of every family/control, meaningful bounded snapshots, focus retention, announcements, contrast, locale and text measurement | Every phase |
+| Persistence, export and recovery | Partial | Complete schema coverage, atomic restore, callback reattachment, equivalent frame exports, backend failover and clean disposal | Every phase, R8 |
+| Packaging and migration | Partial | Packed-consumer examples, framework-neutral and React guides, discoverable API, reproducible competitor comparisons | R0, R5, R8 |
+
+Gauge, arbitrary graph/network, geographic, and 3D visualization are beyond this competitive baseline.
+They may be added later without postponing any required row. Full competitiveness is a release gate,
+not a promise to implement every conceivable visualization.
+
+## Architecture to retain and complete
 
 ```text
-One Nucleus public library and chart API
-                    |
-             one ChartEngine
-                    |
-    +---------------+----------------+
-    |                                |
-existing financial domain       general data domains
-time/OHLC/indicators/trading     category/numeric/XY/polar
-    |                                |
-    +---------- shared layout -------+
-                    |
-       one ordered ChartFrame contract
-                    |
-     WebGPU | Canvas2D | GPUI | native
+Framework-neutral API / React authoring / native host
+    -> validated commands and bulk data normalization
+    -> one ChartEngine
+         financial: DataLayer, time union, price/time scales, financial interactions
+         general: typed datasets, explicit domains/axes, series and layout families
+    -> shared layout, semantic interaction snapshots and ordered ChartFrame
+    -> DrawList
+    -> Canvas2D | WebGPU | GPUI | native
 ```
 
-Internal modules may have distinct responsibilities, but they must not become divergent products,
-rendering models, or user-facing libraries.
+### Ownership and dependency direction
 
-## Product target
+| Owner | Responsibility |
+| --- | --- |
+| `nucleuscharts_core` | Platform-free scale math, validation fundamentals, financial storage and shared option/value types; f64 media-space math |
+| `nucleuscharts_engine` | General datasets, axes, domain resolution, series/layout algorithms, mutations, interaction, transitions, persistence and frame construction |
+| `nucleuscharts_render` | Ordered primitives and shared lowering/tessellation math; no host or chart-family policy |
+| Executors | Execute prepared primitives with equivalent clipping/blending/text; own bounded device/font/image resources and recovery |
+| WASM and TypeScript | Bulk conversion, platform input, resource initialization, typed handles, host callbacks, DOM presentation and accessibility |
+| React | Declarative ownership and reconciliation through the public imperative API; no duplicate data/geometry/interaction model |
 
-Nucleus should cover the combined practical territory of Lightweight Charts and Recharts while
-retaining the capabilities that distinguish it from both:
+Do not add crates, generic scene graphs, plugin registries, trait layers, or speculative feature flags
+just to accommodate the roadmap. Extract cohesive internal modules when their actual responsibilities
+justify it. Do not turn growing `general_series.rs` into a universal layout abstraction: hierarchy
+and flow need appropriate typed input and algorithms, while sharing lifecycle and frame output.
 
-- professional real-time financial charts;
-- common dashboard and application charts;
-- composed charts mixing compatible series;
-- deterministic browser, native, and headless output;
-- high-density and streaming data;
-- one framework-neutral core with first-party TypeScript and React ergonomics;
-- Rust-owned chart semantics and geometry rather than a Rust wrapper around a JavaScript renderer.
+### Financial isolation and first-class general creation
 
-The target is not API-level emulation of either library. Recharts is React/SVG-oriented and
-Lightweight Charts is a specialized imperative Canvas library. Nucleus should provide familiar
-capabilities and a straightforward migration path while retaining its own API, renderer model, and
-performance guarantees.
+Keep financial time union, compact OHLC/scalar columns, LOD, indicators, drawings, trading, price scales,
+and streaming updates authoritative. General work must add no per-row dispatch to those loops and
+retain zero general dataset/cache capacity in a financial-only chart. Protect existing public APIs,
+V1 restore, input behavior, whitespace and financial golden fixtures.
 
-## Non-negotiable invariants
+Add an explicit creation-time domain/topology contract at the engine owner and expose it consistently
+through WASM, TypeScript and React. Defaults remain financial. General-only charts must reserve only
+the chrome they use. Stable pane IDs must survive reorder; disposal must not require callers to seed
+a temporary financial keeper pane. Define the engine's last-pane invariant and adapter ownership together.
 
-### Preserve the financial hot path
+### Data, identity and atomic mutations
 
-- Existing financial series continue to use the canonical timestamp-union `DataLayer`.
-- Existing scalar and OHLC columns are not replaced with dynamically typed row objects.
-- Current-bar replacement, append, historical merge, whitespace, LOD, autoscale, indicator, and
-  query behavior must not acquire general-chart dispatch in their row-level hot loops.
-- A chart containing only existing financial features must not allocate general-chart datasets,
-  scales, layout state, or geometry caches.
-- Existing browser and Rust APIs remain compatible through the pre-1.0 compatibility policy.
-- Existing frame ordering, clipping, snapping, scale behavior, and backend parity remain intact.
+Retain typed general columns, explicit validity and stable row IDs. Distinguish financial UTC seconds,
+continuous epoch milliseconds, category identity and display text without unit guessing. Specify
+ordering, duplicate-X/category policy, missing values and generated-versus-explicit identity per family.
 
-### Keep one semantic owner and one frame
+Provide in-place axis/series option updates and visibility, order and compatible binding changes.
+Validate dependent datasets, stacks, references and axes before mutation. Invalid updates must preserve
+the entire prior state. A style change retains data, handles, focus/selection and runtime view unless
+its documented semantics require otherwise. Structural domain/type changes must be explicit.
 
-- Chart semantics remain in `nucleuscharts_engine`; backends only execute prepared frames.
-- A chart type may not be implemented separately in WebGPU, Canvas2D, GPUI, or native code.
-- Every built-in series owns its validation, scale contribution, geometry, hit testing, tooltip
-  values, accessibility values, and invalidation rules in shared Rust code.
-- Host callbacks may extend the library, but no built-in chart may depend on a browser callback for
-  its canonical geometry.
-- Financial and general series ultimately contribute to the same ordered `ChartFrame`.
+Chart-level object data and React data keys normalize once per changed input; typed streaming remains
+a bulk path. Decide shared-column ownership from real composed-chart callers and measurements before
+adding public dataset machinery. Host accessors never run inside frame or hit-test loops. Hierarchy
+and flow input require stable node/link identities, validation of references/cycles as applicable,
+defined ordering and depth/size/work caps; they must not be forced into XY rows.
 
-### Keep the product unified
+### Layout, scales and shared geometry
 
-- `@axiusflowhq/financial` evolves into the all-in-one Nucleus browser SDK rather than leaving a
-  financial package behind and creating an unrelated general chart package.
-- Rust consumers continue to enter through the coordinated Nucleus crates and `ChartEngine`.
-- `chart.add_series(...)`, panes, scale handles, event subscriptions, screenshots, themes, and
-  lifecycle operations remain the common concepts.
-- React support is an adapter over the same imperative engine. React never owns scales, geometry,
-  hit testing, or animation state.
-- Different internal data domains must be composable within one chart where their coordinate
-  semantics are compatible. Incompatible coordinate systems use distinct panes or plot regions,
-  not separate chart engines.
+Resolve data domains and runtime views separately. The same transform must drive ticks, grids,
+geometry, hits, brushes, references and accessibility. Complete temporal interval selection and
+formatting with an explicit deterministic timezone policy; never silently use the browser timezone.
+Category zoom/pan and duplicate labels need declared semantics. Test extreme and degenerate domains.
 
-## Target engine architecture
+Layout reserves chart content, titles, legends, axis strips and plot regions through bounded passes.
+Define behavior when text/axes do not fit rather than letting clipping or layout oscillation decide.
+Font, DPR, formatter and locale changes invalidate measurements. Host measurement is permitted;
+host-owned tick selection or autoscale is not.
 
-### 1. Domain-aware panes without changing the financial default
+General grids use resolved general ticks in the ordered background layer. Reference/background fills,
+series, interaction chrome and labels need explicit order and clips. New curves, sectors, polygons,
+symbols, rounded shapes or gradients must have shared geometry/lowering and every executor implemented
+before their public feature is complete. Retain f64 until the documented encoding boundary.
 
-Today every pane participates in the chart's shared financial time domain. The target is for a pane
-or plot region to bind to an engine-owned horizontal domain:
+### Components, interactions and extension boundaries
 
-- `financial_time`: the existing logical-index and timestamp-union behavior;
-- `continuous`: numeric X values with a linear, logarithmic, or symmetric-log transform;
-- `temporal`: continuous timestamps with elapsed-time spacing;
-- `category`: ordered labels with a band or point scale;
-- `polar`: angle and radius domains.
+The engine owns component meaning, content snapshots, anchors, selections and reserved plot space.
+Hosts may present HTML tooltips, semantic controls or accessible DOM. Default legends/tooltips must
+be usable without copying demo code; optional rich HTML does not become the only implementation of
+built-in chart geometry. Define what exports include and provide frame-rendered equivalents for
+built-in chrome. Document host-only custom content limitations.
 
-The default remains `financial_time`. Existing constructors and restored V1 workspaces therefore
-retain their current behavior without new configuration.
+Unify pointer, touch and keyboard commands for general selection, brushing and view changes. Derive
+axis-versus-item tooltip membership from the correct oriented domain, including horizontal bars,
+duplicate values, missing rows and mixed series. Synchronization uses semantic values or declared
+index matching with explicit mismatch policy. A bounded host coordinator may route events between
+independent charts; each receiving engine resolves its own semantics. Origin/revision tracking must
+prevent loops and disposal must remove subscriptions.
 
-Domain binding belongs to the pane or plot region rather than to a renderer. Series may share a
-region only when their coordinate requirements are compatible. For example, a financial
-candlestick, moving-average line, and volume histogram continue to share financial time. A
-category bar and category line may share a category region. A pie chart uses a polar region and
-cannot silently join a financial time pane.
+Customization receives bounded read-only snapshots or returns validated styles/marks through an
+explicit host boundary. Do not promise portable execution of arbitrary SVG/React elements. Built-ins
+must remain available on native and headless paths, with clear migration equivalents for common
+Recharts customization tasks. Review licenses before copying any external code or assets.
 
-The first implementation should add a domain registry and optional general-domain state around the
-existing financial fields. It must not rewrite `TimeScaleCore` into a universal scale or add a
-trait-object call to every financial coordinate conversion.
+### React and transitions
 
-### 2. General columnar data beside `DataLayer`
+Build declarative axes, Cartesian/polar series, legend, tooltip, labels, references and brush over
+complete imperative mutations. Retain GeneralPane compatibility. Stable keys retain identities;
+ordinary options/visibility/data changes do not recreate chart objects. Validate a reconciliation
+batch before destructive operations and roll back newly acquired resources on failure. Test changed
+kinds, invalid data, callback failures, parent/child cleanup, async initialization, stale closures,
+concurrent rerenders and Strict Mode. SSR-safe import and static server-rendered chart output are
+different capabilities; document each accurately.
 
-General series need an engine-owned columnar store supporting:
+General transitions are engine-owned interpolation sampled with an explicit monotonic clock supplied
+by hosts. Bound duration, retained prior geometry and active transitions; interrupt from the current
+presentation, reconcile hit/focus behavior, and stop scheduling at rest. Reduced motion disables or
+shortens transitions deterministically. Streaming financial updates retain their established policy.
 
-- numeric columns;
-- temporal columns;
-- interned category columns;
-- optional color, size, label, group, low/high, and baseline channels;
-- explicit missing values;
-- stable row identity for updates, hit testing, transitions, and selections;
-- typed bulk ingestion from browser typed arrays;
-- bounded caches and capacity reporting.
+### Invalidation, performance and persistence
 
-This store is not a replacement for `DataLayer`. Financial series continue to use their existing
-storage. The general store is created lazily when the first general series or dataset is added.
+Classify mutations by data, domain, layout, geometry, paint and interaction impact. Record generation
+inputs for retained state; remove caches with their owner and rebuild device resources after loss.
+A row cap alone does not prove bounded interactive latency. Measure worst-case dense/overlapping hits,
+stack alignment, category unions, long labels, many axes/series and hierarchy depth. Reuse existing
+LOD/index mechanisms where appropriate; add optimizations only after release measurements.
 
-The public API should remain simple for common cases:
+Persist new semantic configuration with versioned migrations and transactional restore. Preserve V1
+financial compatibility and current V2 contracts; version schema extensions when compatibility requires
+it. Runtime callbacks, DOM, device resources and transient animation/hover/focus are not serialized.
+Restored live handles must not alias stale handles. State exports and image exports are separate gates.
 
-```ts
-const bars = chart.add_series("column", { x_axis_id: "month", y_axis_id: "revenue" });
-bars.set_data([
-  { x: "Jan", y: 42 },
-  { x: "Feb", y: 57 },
-]);
+## Delivery sequence and exit gates
 
-const points = chart.add_series("scatter");
-points.set_data([
-  { x: 12.5, y: 8.2 },
-  { x: 18.0, y: 13.4 },
-]);
+All phases below are open. Existing implementation counts toward them only after its required behavior
+is demonstrated. Implement the next dependency-complete vertical slice; do not delay all fixes until a
+large framework rewrite or skip foundation work to add a demo chart.
+
+### R0 — Establish the auditable competitive baseline
+
+1. Pin Recharts release/source and retain the existing financial competitor baseline. Inventory public
+   props/components and map every relevant capability to the matrix above with supported combinations.
+2. Add reference fixtures for each matrix row and record intentional differences. Keep executable fixtures
+   in existing test infrastructure; transient screenshots/reports stay out of committed documentation.
+3. Reconcile `General_charts_api.md`, `Public_api.md`, examples and architecture claims against exports,
+   manifests, scripts and actual call paths. Separate supported, experimental and proposed behavior.
+4. Capture clean release financial/general/combined baselines and current enforced budgets before code changes.
+
+Exit: every required capability has a scoped owner, dependency, fixture and honest status; no unsupported
+example or historical PASS substitutes for current evidence. Version/date and evidence paths accompany
+future status changes. Unverified rows stay open.
+
+### R1 — Repair lifecycle and mutable object foundations
+
+Depends on R0. Implement initial general-domain creation, last-pane ownership and atomic in-place
+axis/series mutations through all public boundaries. Fix failed installation/cleanup and ensure
+visibility and ordering affect domains, legends, hits and exports consistently.
+
+Exit: standalone general and mixed charts can create, update, rebind, reorder, hide, remove and restore
+through actual browser and native paths. Invalid operations leave prior state intact. Handles, explicit
+row focus/selection and unaffected views survive routine changes; repeated mount/dispose releases resources.
+
+### R2 — Complete scale, axis and responsive layout contracts
+
+Depends on R1. Finish temporal ticks/formatting/view operations, category behavior, explicit ticks and
+formatters, numeric extremes, grid/zero lines, domain padding/clipping, multiple axes, titles and small
+container behavior. Correct the reviewed silent-option gaps before declaring axes complete.
+
+Exit: deterministic domain/coordinate round trips and frame fixtures cover all supported scale/orientation
+combinations. Browser resize/font/DPR and pointer/keyboard view tests agree with native/GPUI output;
+no accepted option silently does nothing and layout work has an enforced bound.
+
+### R3 — Finish Cartesian visual and data semantics
+
+Depends on R1-R2. Complete the Cartesian matrix, including curve/gap/baseline policies, range bars,
+stack offsets/order, styles, symbols, gradients, error bars, composition, and per-item customization.
+Audit existing box/heatmap/bubble behavior rather than rewriting completed storage and geometry.
+
+Exit: each family passes object/typed ingestion, atomic updates, missing/duplicate/extreme data,
+visibility/stack changes, exact/nearest hits, labels, accessibility, persistence and executor parity.
+Reference examples demonstrate visual configurability; high-density fixtures demonstrate bounded work.
+
+### R4 — Deliver complete chart components and interaction
+
+Depends on R1-R3. Ship usable legends/tooltips, titles/labels, references, keyboard/touch brush controls,
+selection and linked-chart synchronization. Complete localization, overflow, focus and export behavior.
+
+Exit: consumers build an interactive dashboard from published APIs without demo-owned semantic logic.
+Legend toggles preserve identity, brushing survives resize, synchronization handles unequal datasets
+without loops, and all controls are keyboard/screen-reader usable with bounded snapshots.
+
+### R5 — Deliver competitive React and framework-neutral authoring
+
+Depends on R1-R4. Add composable components and typed data mapping over canonical handles. Provide
+controlled/uncontrolled behavior where applicable, events, documented defaults and migration recipes.
+Support equivalent imperative composition for hosts that do not use React.
+
+Exit: packed-consumer examples cover standalone, composed, synchronized and financial/general charts.
+Prop changes retain engine identities; failure/Strict Mode/concurrent lifecycle tests pass. SSR import,
+hydration setup, bundler/WASM asset resolution and cleanup work without repository paths.
+
+### R6 — Deliver polar families and shared transitions
+
+Depends on R2-R5. Add angular/radial transforms and shared sector/polygon geometry, then pie/donut,
+radar, radial bar and polar area. Implement shared general transitions, including existing Cartesian
+families, with interruption and reduced-motion behavior.
+
+Exit: all polar variants cover degenerate/zero/missing data, angles/radii, label collision, legends,
+selection, keyboard navigation, persistence and every executor. Fixed-clock transition fixtures prove
+repeatability, correct interaction targets, bounded memory and zero idle animation scheduling.
+
+### R7 — Deliver required hierarchy and flow families
+
+Depends on the lifecycle, layout and primitive contracts above. Implement funnel, treemap, Sankey and
+sunburst as dedicated engine layout families with typed validated inputs. Use shared polar geometry
+for sunburst where appropriate; do not reuse incompatible XY storage merely to avoid a proper owner.
+
+Exit: each family has deterministic ordering/layout, declared cycle/depth/size policies, bounded work,
+update/transition behavior, labels/styles, exact hits, tooltip/legend behavior where applicable,
+accessibility, persistence and cross-backend fixtures. These families are required for competitive closure.
+
+### R8 — Close competitive parity and release readiness
+
+Depends on R0-R7. Run the complete matrix against the pinned competitor and demonstrate financial-only,
+general-only and combined workloads. Finish documentation, customization/migration examples, export,
+backend fallback/device recovery and clean-install evidence. Recheck upstream scope before claiming parity;
+new upstream features must be recorded and assessed explicitly.
+
+Exit: every required matrix row is verified or has a maintainer-approved, clearly documented semantic
+alternative that satisfies the user task. No required family remains demand-deferred. Publish capability
+claims only for verified behavior, with measured startup/size/frame/input/memory results and known limits.
+
+## Verification and evidence policy
+
+Each implementation starts with a failing regression or measurable invariant through its actual public
+host/executor path. Shared-engine unit tests alone cannot close a browser or rendering requirement.
+Run the complete gates required by [AGENTS.md](AGENTS.md) before committing code:
+
+```text
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy -p nucleuscharts_wasm --target wasm32-unknown-unknown --locked -- -D warnings
+cargo test --workspace --locked
+cargo run -p nucleuscharts_native --example perf_gate --release
+
+cd packages/charts
+npm ci
+npm run lint
+npm run build
+npm run typecheck
+npm run test:pack
 ```
 
-Internally, object input is validated and converted once at the host boundary. Frame construction
-must read typed columns rather than JavaScript-shaped rows.
-
-### 3. Shared scale and axis vocabulary
-
-Add general scale implementations without weakening financial price and time scales:
-
-- linear;
-- logarithmic;
-- symmetric logarithmic;
-- continuous temporal;
-- band/category;
-- point/category;
-- radial linear and angular category scales.
-
-Axes become explicit engine-owned objects with stable IDs, orientation, scale binding, tick policy,
-formatter, title, grid contribution, visibility, and layout order. Existing financial price-scale
-and time-scale handles remain supported and map to their established specialized implementations.
-
-General axes must support:
-
-- top, bottom, left, and right placement;
-- multiple X and Y axes;
-- vertical and horizontal series orientation;
-- independent and shared domains;
-- explicit domain bounds and automatic domain calculation;
-- tick and label collision handling;
-- categorical bands and padding;
-- zero lines and reference values.
-
-Axis layout remains a shared engine responsibility. Hosts may measure text through the existing
-boundary, but they may not decide tick placement or data geometry.
-
-### 4. Marks and series
-
-Common public series remain concrete, typed series rather than exposing a grammar-of-graphics DSL as
-the only API. Internally they may share mark builders and channel resolution.
-
-#### Cartesian foundation
-
-- line;
-- area and range area;
-- column and horizontal bar;
-- grouped and stacked bars;
-- stacked area;
-- scatter;
-- bubble;
-- box-and-whisker;
-- heatmap;
-- error bars;
-- composed charts using compatible axes.
-
-Existing financial `line`, `area`, `histogram`, `bar`, and advanced series keep their current data
-meaning. New general names or an explicit data-domain option must prevent ambiguous behavior. The
-API must never infer whether `{ time, value }` is financial or whether `{ x, y }` is general.
-
-#### Polar foundation
-
-- pie;
-- donut;
-- radar;
-- radial bar;
-- polar area.
-
-#### Later specialized layouts
-
-- funnel;
-- gauge;
-- treemap;
-- sunburst;
-- Sankey;
-- graph/network.
-
-Treemap, sunburst, Sankey, and graph layouts are not ordinary Cartesian series. Each requires a
-bounded, deterministic shared layout algorithm and should be added only after the Cartesian and
-polar contracts are stable. Geographic and 3D visualization are outside the initial target.
-
-### 5. Extend the ordered frame contract
-
-The existing primitive set is sufficient for most financial geometry but not the complete target.
-Add primitives only in response to an implemented built-in series:
-
-- filled and stroked paths;
-- arbitrary polygons with an explicit fill rule;
-- arcs and sectors;
-- reusable symbol instances;
-- generalized linear gradients;
-- explicit transform or clip scopes if pane-local coordinates cannot express a required layout.
-
-Primitive order, clipping, alpha blending, snapping, and text placement remain fully specified by
-the frame. Tessellation must be shared or produce an equally canonical intermediate representation;
-individual executors must not independently interpret high-level chart types.
-
-Every new primitive requires Canvas2D, WebGPU, GPUI, and native support plus a cross-backend frame
-fixture before a chart type depending on it is considered complete.
-
-### 6. Shared chart components
-
-The following are first-class engine components rather than React or DOM features:
-
-- legends;
-- titles and subtitles;
-- axis titles;
-- tooltips and shared/cross-series tooltip snapshots;
-- data labels;
-- reference lines, dots, and regions;
-- brushes and range selection;
-- zoom and pan appropriate to each domain;
-- selection and hover state;
-- transitions between compatible data states;
-- accessibility snapshots and keyboard navigation.
-
-Browser hosts own DOM accessibility nodes, optional HTML tooltip presentation, cursors, clipboard,
-and scheduling. Their content and coordinates come from bounded engine snapshots.
-
-### 7. One public API with two authoring styles
-
-The framework-neutral imperative API remains canonical. It should gain conventional camel-case
-aliases or a camel-case facade for broad JavaScript adoption while preserving the current snake-case
-surface.
-
-A first-party React adapter should reconcile declarative components into incremental mutations of
-the same chart instance:
-
-```tsx
-<NucleusChart data={data}>
-  <XAxis dataKey="month" type="category" />
-  <YAxis id="revenue" />
-  <Column dataKey="revenue" yAxisId="revenue" />
-  <Line dataKey="margin" yAxisId="percent" />
-  <Tooltip />
-  <Legend />
-</NucleusChart>
-```
-
-The adapter must diff configuration and data identities. A React render must not automatically
-destroy the chart, replace all series data, rebuild all scales, or cross the WASM boundary once per
-point.
-
-The initial all-in-one release should remain usable without React in vanilla JavaScript, Vue,
-Svelte, Solid, web workers where supported, native Rust, and GPUI.
-
-## Delivery plan
-
-### Phase 0: Freeze evidence and compatibility
-
-Before architectural implementation:
-
-1. Record release measurements for financial startup, package size, 100k and 1m pan/zoom,
-   current-bar replacement, append streaming, frame construction, memory, and lifecycle retention.
-2. Convert the relevant benchmark observations into enforced budgets.
-3. Add a compact compatibility fixture covering every existing financial series, pane, named scale,
-   drawing, indicator, and interaction path affected by domain-aware panes.
-4. Define the public general-series data shapes and axis vocabulary in an API proposal. The
-   concrete proposal is maintained in [`General_charts_api.md`](General_charts_api.md).
-5. Define which chart combinations may share a pane and which require separate plot regions. The
-   compatibility matrix and rejection rules live in that same proposal.
-
-Exit gate: the project can prove that later work has not regressed the existing financial product.
-
-### Phase 1: Frame and scale foundations
-
-1. Add only the path, polygon, sector, and symbol primitives needed by the first vertical slices.
-2. Implement executor parity and native golden fixtures for those primitives.
-3. Add general linear and category scales as siblings of the existing scales.
-4. Introduce the pane-domain registry with `financial_time` as the unchanged default.
-5. Add explicit general X/Y axis state and layout without changing existing financial axis output.
-
-Vertical slices:
-
-- a category column chart, which validates bands, categorical ticks, labels, tooltips, and bars;
-- a true XY scatter chart, which validates independent continuous X/Y domains, point hit testing,
-  zoom, and dense geometry.
-
-Current implementation progress (2026-09-22):
-
-- the linear/category scale, pane-domain, explicit-axis, shared-layout, and axis-frame foundations are in
-  place without adding general dispatch to the financial row path;
-- the category-column engine slice now owns bounded typed category/Y storage, stable row identity,
-  automatic category/linear domains, positive/negative baseline geometry, missing-row semantics,
-  exact/nearest hit testing, tooltip/accessibility snapshots, lifecycle guards, and chart-level
-  Canvas2D/WebGPU/GPUI/native parity evidence;
-- the true XY scatter engine slice now owns numeric X/Y storage, independent linear/log/symlog domains,
-  runtime pan/zoom views, bounded point sizing, missing-row semantics, ordered circle geometry,
-  generation-keyed screen-space hit indexing, exact/nearest hits, tooltip/accessibility snapshots, and
-  Canvas2D/WebGPU/GPUI/native parity evidence;
-- the browser package now exposes domain-aware panes, general axes, category columns, and XY scatter
-  through the common chart lifecycle, with object-row conversion, typed bulk ingestion, pane enumeration,
-  lifecycle events, data/accessibility snapshots, hit testing, screenshots, and Chromium/Firefox/WebKit
-  runtime evidence;
-- exact browser hover and primary selection now retain engine-owned row identities, follow reordered
-  explicit-ID replacement batches, drop generated batch-local identities, and emit shared frame chrome;
-- explicit-ID incremental update/append transactions and per-call bounded retention now run through the
-  shared dataset store, with browser object/typed APIs, category pruning, and interaction reconciliation;
-- opt-in numeric value labels for column/scatter now use bounded, collision-aware shared-frame text;
-- bounded custom row-label channels now follow replacement, explicit-ID updates, retention, shared
-  frame placement, and tooltip/accessibility snapshots for both browser general series;
-- general-schema persistence now round-trips pane domains, axes, datasets, series, labels, and chart
-  options under V2 while keeping V1 financial restoration;
-- category columns and XY scatter now participate in the shared browser keyboard/accessibility
-  controller using bounded Rust snapshots and a separate engine-owned focus target; explicit row IDs
-  retain focus through reordered replacement, generated identities clear, scatter keyboard zoom targets
-  its general X axis, and Chromium/Firefox/WebKit runtime coverage exercises the shared controller.
-
-The Phase 1 feature checklist and exit gate are validated. The final gate passed the complete Rust
-format/Clippy/workspace-test suite, the release performance gate, package install/lint/build/typecheck/
-pack smoke (21 files; 2352 kB WASM), and the complete browser matrix with 278 passed and 13 expected
-skips across Chromium/Firefox/WebKit. Financial-only parity, memory-retention, ring-ingest, and browser
-performance gates remained green with the general slices enabled.
-
-Exit gate: both slices render equivalently in every backend and a financial-only chart shows no
-material regression in output, work, memory, or package size.
-
-### Phase 2: General Cartesian release
-
-**Status: complete (2026-09-22).**
-
-1. Add line, area, grouped/stacked bars, bubble, range, error-bar, heatmap, and box-plot semantics over
-   the general store. XY scatter is already supplied by the validated Phase 1 foundation.
-2. Add multiple X/Y axes, orientation, domain control, reference components, legend, tooltip, data
-   labels, brush, and selection.
-3. Extend the Phase 1 typed bulk browser-ingestion and incremental-update path to each new series kind.
-4. Extend schema V2 persistence to each new series/configuration shape without changing V1 restoration.
-5. Extend the shared Phase 1 accessibility and keyboard controller to each new series kind.
-6. Add general-chart benchmark scenarios and enforced budgets.
-
-Phase 2 closure evidence (2026-09-22):
-
-- the first `xy_line` and `xy_area` slices now bind the shared store to continuous numeric, temporal, and
-  category band/point X domains with numeric Y axes; missing/transform-invalid rows split shared-frame
-  path runs, line/filled-area hits preserve row identity, and bound replacement cannot reinterpret the X
-  column kind;
-- browser object/typed ingestion includes epoch-millisecond temporal columns, explicit-ID incremental
-  updates and retention reuse the Phase 1 transaction path, and invalid temporal values reject atomically;
-- both path kinds reuse bounded labels, tooltip/accessibility snapshots, hover/selection/focus, V2
-  persistence, and the shared keyboard controller;
-- grouped/stacked bars now reuse the Phase 1 category/value store path through bounded `group_id` and
-  `stack_id` options. Vertical `column` binds category X/numeric Y, while `horizontal_bar` binds numeric
-  X/category Y without adding a renderer-specific primitive. Visible grouped members split each category band, stack members share one group slot,
-  positive/negative normal stacks accumulate independently around zero, percent stacks normalize per category,
-  stack-aware summed extents feed the oriented numeric axis, and exact/nearest hits retain the contributing row identity.
-  The options cross the WASM/TypeScript boundary, survive V2 persistence, and reuse the existing ordered `Rect`
-  backend contract. Horizontal bars reuse object/typed category ingestion, explicit-ID updates, bounded labels,
-  accessibility/tooltip snapshots, keyboard interaction state, and category-Y axis layout;
-- stacked `xy_area` now reuses bounded `stack_id`/`stack_mode` options across numeric, temporal, and
-  category X domains. Members align by exact X identity rather than row index, positive/negative normal stacks
-  accumulate independently, percent stacks normalize each sign independently to `+1`/`-1`, cumulative
-  extents drive Y autoscale, and variable lower/upper boundaries reuse the shared `BandFill` renderer path.
-  Filled-region hits preserve the contributing series/row identity, incompatible stack modes are rejected, and
-  V2 persistence restores area stack configuration;
-- bubble series now reuse the numeric XY store and shared point geometry with a required typed size channel,
-  square-root area-to-radius mapping, bounded radii and hit-index work, missing/zero-size semantics, explicit-ID
-  updates and retention, tooltip/accessibility snapshots, shared keyboard focus, and V2 persistence;
-- `range_area` now owns aligned typed low/high channels over numeric, temporal, and category X domains. Shared
-  band geometry splits on missing/transform-invalid bounds, drives exact/nearest hits and bounded labels, exposes
-  both values to tooltip/accessibility snapshots, and participates in object/typed replacement, explicit-ID
-  updates, retention, memory accounting, keyboard focus, and V2 persistence;
-- `error_bar` owns optional independent X/Y lower and upper bounds for numeric and temporal XY, and
-  Y-only bounds for category band/point X in the aligned general store. Temporal centers and X bounds
-  use whole JavaScript-safe epoch milliseconds and participate in temporal autoscale.
-  Shared geometry drives autoscale, ordered stems/caps/center marks, exact hits, labels, snapshots, and
-  accessibility. Object and typed updates validate atomically; explicit-ID retention and V2 persistence
-  preserve each bound's missingness;
-- `box_plot` now implements category-band five-number summaries over the aligned store. Rows enforce
-  `min <= q1 <= median <= q3 <= max` atomically, complete outer whiskers drive numeric-Y autoscale, missing
-  statistics remain queryable but emit no mark, and shared geometry lowers the IQR box, median, whiskers, and
-  caps to existing `Rect`/`HLine`/`VLine` primitives. Object/typed replacement and explicit-ID updates,
-  bounded retention, exact hits, labels, accessibility/keyboard focus, and V2 persistence all preserve the five
-  channels without a parallel storage path;
-- `heatmap_grid` now spans category-X/category-Y, continuous numeric-X/numeric-Y, and temporal-X/numeric-Y
-  coordinates over the same aligned store. Category heatmaps retain the bounded second category registry/index
-  column for Y; continuous/temporal heatmaps retain one aligned numeric Y-coordinate column while reusing the
-  existing numeric/temporal X column and ordinary numeric value/validity channel. Category registries merge and
-  compact atomically under explicit-ID updates and `max_rows`; numeric/temporal cells infer deterministic
-  boundaries from neighboring coordinate centers. Shared `Rect` geometry drives intensity, exact/nearest hits,
-  labels, tooltip/accessibility X/Y labels, keyboard focus, backend parity, and V2 persistence. Missing cell
-  values remain queryable but emit no geometry;
-- general legends now have a bounded engine-owned metadata snapshot in stable series order, with optional pane
-  filtering and explicit hidden-series visibility. Browser hosts can render legend UI without recreating title,
-  color, kind, pane, or visibility state; removal updates immediately and V2 restore reconstructs the same
-  semantic entries;
-- shared cross-series tooltip snapshots are engine-owned and group visible rows in stable series/row order by the
-  anchor row's exact horizontal datum. Duplicate X rows are preserved, heatmaps can contribute multiple cells at
-  one X coordinate/category, and hidden/other-pane series cannot leak into the snapshot;
-- brush/range selection is transient engine state. Hosts provide CSS-pixel endpoints once; Rust converts them to
-  semantic numeric, temporal, or category ranges, returns a bounded visible-row snapshot, and reprojects the same
-  range after resize/zoom. X and Y brushes cover ordinary series, horizontal bars, and heatmap coordinate axes;
-- reference lines, dots, and rectangular regions are first-class bounded engine state bound to explicit axes.
-  Each reference independently declares `extend_domain`; automatic domains include it only when requested.
-  References lower through the shared frame, block stale pane/axis removal, survive V2 persistence, and have
-  Canvas2D/GPUI parity coverage;
-- the focused general-chart browser suite is **54/54** across Chromium/Firefox/WebKit, covering legend,
-  shared-tooltip, brush, reference components, grouped/stacked vertical and horizontal bars, stacked area,
-  bubble, range-area, box-plot, all heatmap coordinate variants, numeric/temporal/category error bars, object/typed
-  ingestion, hit testing, updates, accessibility snapshots, keyboard control, and V2 restoration;
-- the exact required portable browser suite is green with **315 passed and 10 expected skips** across
-  Chromium/Firefox/WebKit. The production pack smoke is green with 21 published files and the optimized
-  2,812,727-byte WASM artifact;
-- the release perf harness enforces a 100k `xy_line` density gate, a five-series/100k-row mixed-general
-  dashboard gate, one combined engine with 50k financial bars plus a 50k-point general range pane,
-  and a separate 100k-row numeric error-bar gate.
-  General frame construction stays within 16.67 ms, nearest-hit interaction within 8 ms, mixed-general
-  retained memory within 12 MiB, and combined retained memory within 16 MiB. These remain separate from
-  the existing financial-only targets so regressions cannot hide in an aggregate result. The error-bar
-  gate keeps frame/hit work within the same budgets and retained memory within 16 MiB. The strict release run
-  passes all targets: mixed-general frame 4.13 ms / hit 5.14 ms / retained 5.51 MiB, combined frame 1.14 ms /
-  retained 5.68 MiB, and 100k error bars frame 11.67 ms / hit 7.26 ms / retained 6.87 MiB;
-- the browser release benchmark now hard-gates a five-series/100k-row general dashboard. Local closure evidence
-  measured 401.09 ms p50 startup against a 2,000 ms ceiling and 87,144,240 first-frame uploaded bytes against a
-  96 MiB ceiling. Budget policy v3 also re-baselines the deliberate Phase 2 package growth after minifying the
-  shipped ESM: tarball 1,197,880 <= 1,300,000 bytes, unpacked 3,435,987 <= 3,700,000, JavaScript raw
-  343,161 <= 620,000, JavaScript Brotli 64,038 <= 95,000, WASM raw 2,812,727 <= 3,000,000, and WASM Brotli
-  761,514 <= 810,000;
-- full workspace validation is green: workspace Clippy with `-D warnings`, the complete Rust workspace test
-  matrix (including 588 engine tests, 25 GPUI parity tests, and 53 WASM tests), benchmark harness tests, package
-  lint/typecheck/API checks, formatting, and diff hygiene all pass.
-
-Exit gate: **PASS.** Nucleus builds the representative Recharts-style Cartesian dashboards with engine-owned
-semantics, typed updates, persistence, interaction, accessibility, backend parity, and enforced release budgets
-while the existing financial gates remain green. Phase 3 is the next open phase.
-
-### Phase 3: All-in-one browser experience
-
-1. Present financial and general series through one documented package and chart lifecycle.
-2. Add the camel-case JavaScript facade without removing snake-case APIs.
-3. Ship the React adapter with reconciliation, lifecycle, SSR-safe import, and strict cleanup tests.
-4. Publish framework-neutral and React examples that combine a financial pane with general summary
-   panes in one chart/workspace.
-5. Make browser installation possible without repository-specific knowledge or accidental loading
-   of development-only assets.
-6. Measure whether the full WASM artifact still meets the package-size and startup budgets.
-
-If size evidence shows that one artifact materially harms users, produce optimized build editions
-from the same source and public API contract. Such editions are distribution optimization, not
-separate products or semantic forks. Do not introduce them speculatively.
-
-Status: **COMPLETE on 2026-09-23.**
-
-- `@axiusflowhq/financial` remains the one framework-neutral package and chart lifecycle for financial,
-  general, and combined visualization. The existing snake-case surface remains supported, while the
-  common JavaScript lifecycle now also exposes camel-case aliases on the same chart/series/scale handles;
-- the optional `@axiusflowhq/financial/react` subpath adds `NucleusChart`, `FinancialSeries`,
-  `GeneralPane`, and `useNucleusChart` as a thin authoring layer over the imperative engine. React is an
-  optional peer, SSR import performs no DOM work, ordinary rerenders retain engine identities, and
-  Strict Mode coverage proves child cleanup plus final chart disposal across Chromium, Firefox, and WebKit;
-- `examples/all_in_one/vanilla.mjs` and `examples/all_in_one/react.tsx` demonstrate a financial pane and
-  general summary pane in one workspace without a second chart model or framework-specific engine;
-- the production package now exports the optimized WASM asset explicitly, pack smoke installs the actual
-  tarball into an empty consumer, verifies both naming styles and the React/WASM exports, and rejects
-  repository-only runtime paths such as crate, demo, benchmark, or intermediate `pkg/` paths;
-- the final artifact remains inside all enforced package budgets, so no speculative split edition is
-  warranted: tarball **1,215,014 <= 1,300,000 bytes**, unpacked **3,539,407 <= 3,700,000**, JavaScript
-  raw **344,783 <= 620,000**, JavaScript Brotli **64,328 <= 95,000**, WASM raw
-  **2,812,727 <= 3,000,000**, and WASM Brotli **761,514 <= 810,000**;
-- the 100k general-dashboard startup gate remains comfortably inside budget after the Phase 3 packaging
-  work: **336.76 ms p50 <= 2,000 ms**, with **87,144,240 <= 100,663,296** first-frame uploaded bytes;
-- the focused general/React browser matrix is **60/60** across Chromium, Firefox, and WebKit, and the exact
-  required portable CI browser suite is green with **321 passed and 10 expected skips**. Package build,
-  typecheck, lint, API snapshot, namespace policy, release-gate simulation, SSR import, clean-install, and
-  packed-consumer checks are part of the closure evidence and the release workflow now gates the new
-  React/namespace contracts as well.
-
-Exit gate: **PASS.** A consumer can choose financial, general, or combined visualization through one
-library, and React is an authoring option over the same engine rather than a separate implementation.
-Phase 4 is the next open phase.
-
-### Phase 4: Polar charts
-
-1. Add angular and radial scales.
-2. Add shared sector and polar polygon geometry.
-3. Implement pie, donut, radar, radial bar, and polar area.
-4. Add polar hit testing, labels, legends, accessibility, animation, and backend parity.
-
-Exit gate: polar charts meet the same deterministic frame, accessibility, and executor standards as
-Cartesian and financial charts.
-
-### Phase 5: Demand-driven specialized layouts
-
-Prioritize funnel, gauge, treemap, sunburst, Sankey, and graph layouts using demonstrated customer
-demand. Each layout needs its own measurable invariants, complexity bounds, deterministic fixtures,
-accessibility representation, and backend-parity evidence before implementation begins.
-
-## Verification requirements
-
-Every phase retains the repository's complete standard gates. In addition:
-
-- financial golden and frame fixtures must remain unchanged unless an intentional visual change is
-  separately approved;
-- every general chart type needs scale, autoscale, whitespace/missing-value, hit-test, tooltip,
-  selection, accessibility, persistence, and lifecycle coverage where applicable;
-- every new primitive needs Canvas2D, WebGPU, GPUI, and native parity evidence;
-- browser-facing work needs Chromium, Firefox, and WebKit behavior checks;
-- React reconciliation needs tests proving stable engine and series identities across rerenders;
-- performance suites must separate financial-only, general-only, and combined workloads;
-- package size, WASM initialization, first frame, steady-state frame cost, GPU uploads, retained
-  memory, and high-density interaction must have explicit budgets;
-- no performance claim may be made from an unbudgeted or uncontrolled result.
-
-## Architectural rejection criteria
-
-An implementation must be rejected if it:
-
-- replaces financial timestamp/OHLC storage with a generic row model;
-- makes existing financial coordinate or frame loops dynamically dispatch through general chart
-  abstractions without measured necessity;
-- implements a built-in chart only in a browser or React layer;
-- introduces renderer-specific chart semantics;
-- forks state or geometry between Canvas2D, WebGPU, GPUI, and native;
-- treats custom-series callbacks as the implementation of a promised built-in chart;
-- rebuilds the complete chart for routine React property or data changes;
-- adds an unbounded dataset, cache, label set, transition queue, or layout iteration;
-- adds chart types without corresponding hit testing, accessibility, lifecycle, and parity behavior;
-- weakens financial tests or budgets to accommodate general-chart work;
-- creates a separately branded or independently behaving general chart product.
-
-## Initial definition of success
-
-The first all-in-one milestone is successful when one Nucleus chart/workspace can, without semantic
-or rendering forks:
-
-1. retain all current financial behavior and performance within enforced budgets;
-2. render a streaming candlestick pane with indicators and drawings;
-3. render category bar/line summary panes and a true XY scatter pane;
-4. share themes, events, screenshots, accessibility, persistence, and backend selection;
-5. produce equivalent ordered frames across browser, GPUI, WebGPU, and native paths;
-6. expose the result through both the framework-neutral API and the React adapter;
-7. remain one library whose financial core is still the primary optimized path.
-
-Only after this milestone should breadth become the priority. The durable advantage is not the raw
-number of chart names; it is that financial and general visualization share one Rust-owned,
-deterministic, high-performance platform without sacrificing the financial engine that established
-Nucleus.
+Also run public API/namespace/release-policy guards, applicable Chromium/Firefox/WebKit Playwright
+coverage, native golden/frame checks, and GPUI parity/replay checks for affected execution. Keep
+portable correctness blocking and calibrated machine-specific visual/performance evidence labeled.
+Run performance thresholds in strict mode as CI does; never relax tests or budgets to conceal regressions.
+
+Use `benchmarks/benchmark.mjs` and `benchmarks/budgets.json` for versioned release evidence. Current
+policy v3 includes a 2,000 ms general-dashboard startup ceiling and 100,663,296-byte first-frame upload
+ceiling, alongside package-size limits. These limits are existing guards, not a declaration that their
+ceilings are competitive targets. Preserve them until measured evidence supports an explicit revision.
+Add family-specific budgets before closure, including p95 input/frame latency, steady-state allocation,
+retained CPU/GPU memory, upload work, cold startup and repeated disposal. Compare equal data, viewport,
+DPR, interactions and release builds; disclose hardware/browser/font versions and unsupported metrics.
+
+A matrix entry can be marked **verified** only with a commit/revision, exact fixture commands and results,
+backend/browser coverage, relevant performance evidence, and recorded manual checks. Screenshots must
+cover small and large containers, light/dark themes, long/Unicode labels, overflow and active states.
+Accessibility requires interaction and assistive-technology review, not just snapshot existence.
+
+Documentation-only revisions may skip runtime gates. Check diffs, links/paths, source consistency and
+documentation hygiene. This plan revision makes no production ownership or execution change; update
+`Architecture.md` in the same commit as future code that changes those contracts, and correct current
+wording discrepancies during R0. Preserve unrelated working-tree changes and stage only task-owned files.
+
+## Definition of completion
+
+Nucleus is competitively complete for this plan when a consumer can build the full required Recharts
+capability matrix through a coherent published API, combine it with the established financial product,
+and rely on equivalent semantic output across supported backends. Routine changes retain identity;
+invalid updates are atomic; controls are accessible; styles and layouts are deliberate; resources and
+work are bounded; installation and migration are documented; and all release gates have current evidence.
+
+Until then, report completed slices and remaining gaps precisely. A working demo or a green subset of
+tests is progress, not completion of the all-in-one library.
