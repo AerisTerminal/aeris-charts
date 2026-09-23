@@ -2,7 +2,7 @@
   "name": "@axiusflowhq/financial",
   "version": "0.11.0",
   "type": "module",
-  "description": "Financial charting SDK powered by Rust, WebAssembly, and WebGPU.",
+  "description": "Nucleus all-in-one financial and general charting SDK powered by Rust and WebAssembly.",
   "license": "AGPL-3.0-only",
   "author": "Axiusflow",
   "repository": {
@@ -41,6 +41,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js"
+    },
+    "./wasm": "./dist/nucleuscharts_wasm_bg.wasm",
     "./design.css": "./dist/nucleuscharts.css"
   },
   "files": [
@@ -59,17 +64,29 @@
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true});require('fs').rmSync('pkg',{recursive:true,force:true})\"",
     "build:wasm": "wasm-pack build ../../crates/nucleuscharts_wasm --target web --out-dir ../../packages/charts/pkg",
     "build:js": "esbuild src/index.ts --bundle --format=esm --minify --sourcemap --loader:.svg=text --outfile=dist/index.js",
+    "build:react": "esbuild src/react.ts --bundle --format=esm --minify --sourcemap --external:react --external:./index.js --outfile=dist/react.js",
     "build:types": "tsc --declaration --emitDeclarationOnly --outDir dist --noEmit false",
     "build:copy-wasm": "node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});fs.copyFileSync('pkg/nucleuscharts_wasm_bg.wasm','dist/nucleuscharts_wasm_bg.wasm')\"",
     "build:copy-design": "node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});fs.copyFileSync('src/nucleuscharts.css','dist/nucleuscharts.css')\"",
-    "build": "npm run build:wasm && npm run build:js && npm run build:types && npm run build:copy-wasm && npm run build:copy-design",
+    "build": "npm run build:wasm && npm run build:js && npm run build:react && npm run build:types && npm run build:copy-wasm && npm run build:copy-design",
     "lint": "oxlint src",
+    "test:react-ssr": "node -e \"import('./dist/react.js').then(m=>{if(typeof m.NucleusChart!=='function')process.exit(1)})\"",
     "test:pack": "node scripts/pack_smoke.mjs",
-    "prepublishOnly": "npm run clean && npm run build && npm run check:api && npm run check:release-gates && npm run test:pack"
+    "prepublishOnly": "npm run clean && npm run build && npm run check:api && npm run check:namespace && npm run check:release-gates && npm run test:react-ssr && npm run test:pack"
+  },
+  "peerDependencies": {
+    "react": ">=18.2.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   },
   "devDependencies": {
+    "@types/react": "^18.3.24",
     "esbuild": "^0.28.2",
     "oxlint": "^1.81.0",
+    "react": "^18.3.1",
     "typescript": "^7.0.2"
   }
 }

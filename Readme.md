@@ -48,24 +48,92 @@ npm install @axiusflowhq/financial
 Version tags publish automatically when the tag matches `packages/charts/package.json` exactly
 (for example, package version `0.9.0` is released from tag `v0.9.0`).
 
-Create a chart with the asynchronous, snake-case API:
+Create a chart with the asynchronous camel-case API:
 
 ```ts
-import { create_chart } from "@axiusflowhq/financial";
+import { createChart } from "@axiusflowhq/financial";
 
 const container = document.querySelector<HTMLElement>("#chart");
 if (!container) throw new Error("missing chart container");
 
-const chart = await create_chart(container, { autoSize: true });
-const candles = chart.add_series("candlestick");
+const chart = await createChart(container, { autoSize: true });
+const candles = chart.addSeries("candlestick");
 
-candles.set_data([
+candles.setData([
   { time: 1735689600, open: 100, high: 108, low: 98, close: 105 },
   { time: 1735776000, open: 105, high: 112, low: 103, close: 110 },
 ]);
 
-chart.time_scale().fit_content();
+chart.timeScale().fitContent();
 ```
+
+The original snake-case names remain available on the same chart and series handles. Options and
+data fields retain their documented names; the camel-case aliases apply to the common method calls.
+
+Financial and general series can share one chart lifecycle while occupying panes with compatible
+coordinate domains:
+
+```ts
+const summary = chart.addPane({
+  preserve_empty: true,
+  horizontal_domain: { type: "category", scale: "band" },
+});
+const pane = summary.paneIndex();
+chart.addAxis({ id: "month", pane, dimension: "x", scale: "band" });
+chart.addAxis({ id: "revenue", pane, dimension: "y", scale: "linear" });
+const revenue = chart.addSeries("column", {
+  pane, x_axis_id: "month", y_axis_id: "revenue", title: "Revenue",
+});
+revenue.setData([{ id: "jan", x: "Jan", y: 42 }, { id: "feb", x: "Feb", y: 57 }]);
+
+// Both panes render through the same engine and chart.render() lifecycle.
+chart.render();
+```
+
+The same engine is available as an optional React authoring layer. Install React in applications that
+use it, then import the adapter from the package subpath; framework-neutral applications do not load
+or depend on React:
+
+```sh
+npm install @axiusflowhq/financial react
+```
+
+```tsx
+import { FinancialSeries, GeneralPane, NucleusChart } from "@axiusflowhq/financial/react";
+
+const axes = [
+  { id: "month", dimension: "x", scale: "band" },
+  { id: "revenue", dimension: "y", scale: "linear" },
+] as const;
+
+export function Dashboard({ candles, revenue }) {
+  return (
+    <NucleusChart options={{ autoSize: true }} style={{ width: "100%", height: 560 }}>
+      <FinancialSeries kind="candlestick" data={candles} />
+      <GeneralPane
+        options={{ horizontal_domain: { type: "category", scale: "band" } }}
+        axes={axes}
+        series={[{
+          key: "revenue",
+          kind: "column",
+          options: { x_axis_id: "month", y_axis_id: "revenue", title: "Revenue" },
+          data: revenue,
+        }]}
+      />
+    </NucleusChart>
+  );
+}
+```
+
+The adapter creates the ordinary imperative chart once, reconciles data/configuration onto retained
+engine handles, and calls the same `chart.remove()` lifecycle on unmount. Its module is safe to import
+during SSR because chart creation and DOM access begin only after the component mounts. Complete
+framework-neutral and React combined examples live in `examples/all_in_one/`.
+
+The optimized WASM binary is shipped beside the ESM entry and resolves there automatically. Bundlers
+that require an explicit asset URL may import `@axiusflowhq/financial/wasm` (or their normal URL-loader
+form of that export) and pass the resulting URL to `initWasm()` before creating a chart; no `pkg/`,
+`crates/`, demo, or repository path is part of the consumer contract.
 
 Numeric times are finite whole UTC seconds in the exact inclusive range
 `-62167219200..253402300799` (years 0000..9999). Nucleus never auto-converts numeric timestamps;

@@ -1,0 +1,298 @@
+import {
+  createContext,
+  createElement,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
+
+import { createChart } from "./index.js";
+import type {
+  any_series_options,
+  chart_api,
+  chart_options,
+  deep_partial,
+  general_axis_api,
+  general_axis_options,
+  general_pane_options,
+  general_series_api,
+  general_series_kind,
+  general_series_options,
+  pane_api,
+  series_api,
+  series_data,
+  series_kind,
+} from "./types.js";
+
+const chart_context = createContext<chart_api | null>(null);
+
+/** Return the live Nucleus chart owned by the nearest {@link NucleusChart}. */
+export function useNucleusChart(): chart_api {
+  const chart = useContext(chart_context);
+  if (chart === null) throw new Error("useNucleusChart must be used inside <NucleusChart>");
+  return chart;
+}
+
+export interface NucleusChartProps {
+  options?: deep_partial<chart_options>;
+  className?: string;
+  style?: CSSProperties;
+  children?: ReactNode;
+  onChartReady?: (chart: chart_api) => void;
+}
+
+/**
+ * React lifecycle adapter over the ordinary browser chart. The chart is created once per mounted
+ * component, option changes are applied to the same handle, and cleanup calls the canonical
+ * `chart.remove()` path. No DOM work runs during server rendering.
+ */
+export function NucleusChart({ options, className, style, children, onChartReady }: NucleusChartProps) {
+  const host_ref = useRef<HTMLDivElement | null>(null);
+  const on_ready_ref = useRef(onChartReady);
+  const initial_options_ref = useRef(options);
+  const [chart, set_chart] = useState<chart_api | null>(null);
+  const [failure, set_failure] = useState<unknown>(null);
+  on_ready_ref.current = onChartReady;
+
+  useEffect(() => {
+    const host = host_ref.current;
+    if (host === null) return;
+    let live = true;
+    let owned: chart_api | null = null;
+
+    void createChart(host, initial_options_ref.current).then((created) => {
+      if (!live) {
+        created.remove();
+        return;
+      }
+      owned = created;
+      set_chart(created);
+      on_ready_ref.current?.(created);
+    }, (error: unknown) => {
+      if (live) set_failure(error);
+    });
+
+    return () => {
+      live = false;
+      owned?.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (chart !== null && options !== undefined) chart.applyOptions(options);
+  }, [chart, options]);
+
+  if (failure !== null) throw failure;
+
+  const contents = chart === null
+    ? null
+    : createElement(chart_context.Provider, { value: chart }, children);
+  return createElement("div", {
+    ref: host_ref,
+    className,
+    style: { position: "relative", ...style },
+  }, contents);
+}
+
+export type react_financial_series_kind = Exclude<series_kind, "custom">;
+
+export interface FinancialSeriesProps {
+  kind: react_financial_series_kind;
+  data: readonly series_data[];
+  options?: Partial<any_series_options>;
+  onSeriesReady?: (series: series_api) => void;
+}
+
+/** A financial series whose engine identity is retained across ordinary React rerenders. */
+export function FinancialSeries({ kind, data, options, onSeriesReady }: FinancialSeriesProps) {
+  const chart = useNucleusChart();
+  const options_ref = useRef(options);
+  const ready_ref = useRef(onSeriesReady);
+  const [series, set_series] = useState<series_api | null>(null);
+  options_ref.current = options;
+  ready_ref.current = onSeriesReady;
+
+  useEffect(() => {
+    const created = chart.addSeries(kind as series_kind, options_ref.current);
+    set_series(created);
+    ready_ref.current?.(created);
+    return () => chart.removeSeries(created);
+  }, [chart, kind]);
+
+  useEffect(() => {
+    if (series !== null) series.setData(data);
+  }, [series, data]);
+
+  useEffect(() => {
+    if (series !== null && options !== undefined) series.applyOptions(options);
+  }, [series, options]);
+
+  return null;
+}
+
+export type GeneralAxisSpec = Omit<general_axis_options, "pane">;
+
+export interface GeneralSeriesSpec {
+  /** Stable React-side identity. Changing this value creates a different engine series. */
+  key: string;
+  kind: general_series_kind;
+  options: Omit<general_series_options, "pane">;
+  data: Parameters<general_series_api["set_data"]>[0];
+}
+
+export interface GeneralPaneProps {
+  /** The horizontal-domain contract. The adapter retains this pane while mounted, even when empty. */
+  options: Omit<general_pane_options, "preserve_empty">;
+  axes: readonly GeneralAxisSpec[];
+  series: readonly GeneralSeriesSpec[];
+  onPaneReady?: (pane: pane_api) => void;
+  onSeriesReady?: (key: string, series: general_series_api) => void;
+}
+
+interface axis_runtime {
+  handle: general_axis_api;
+  signature: string;
+}
+
+interface series_runtime {
+  handle: general_series_api;
+  signature: string;
+  data: GeneralSeriesSpec["data"];
+}
+
+interface pane_runtime {
+  pane: pane_api;
+  axes: Map<string, axis_runtime>;
+  series: Map<string, series_runtime>;
+}
+
+function stable_signature(value: unknown): string {
+  return JSON.stringify(value, (_key, item: unknown) => item instanceof Date ? item.getTime() : item);
+}
+
+function dispose_pane_runtime(chart: chart_api, runtime: pane_runtime): void {
+  try {
+    chart.backend();
+  } catch {
+    // React may dispose the parent chart before child effect cleanup under Strict Mode/unmount.
+    return;
+  }
+  // The engine always retains at least one pane. React sibling cleanup can remove the ordinary
+  // financial series first, which may collapse its now-empty default pane and leave this owned
+  // general pane as the last one. Seed a temporary ordinary pane so the owned pane can still be
+  // removed exactly; afterwards return the keeper to the engine's normal non-preserved behavior.
+  const keeper = chart.panes().length === 1 ? chart.add_pane(true) : null;
+  for (const item of runtime.series.values()) {
+    item.handle.remove();
+  }
+  runtime.series.clear();
+  for (const item of Array.from(runtime.axes.values()).reverse()) {
+    if (!item.handle.remove()) throw new Error(`general axis ${item.handle.id} could not be removed during cleanup`);
+  }
+  runtime.axes.clear();
+  const removed = chart.remove_pane(runtime.pane.pane_index());
+  keeper?.set_preserve_empty_pane(false);
+  if (!removed) throw new Error("general pane could not be removed during cleanup");
+}
+
+/**
+ * Own one general-domain pane, its axes, and its general series. Axes and series are reconciled by
+ * stable IDs/keys; unchanged series keep their engine identity and a changed data reference calls
+ * `set_data` on that same handle. Structural axis/series-option changes replace only the affected
+ * general series, never the chart.
+ */
+export function GeneralPane({ options, axes, series, onPaneReady, onSeriesReady }: GeneralPaneProps) {
+  const chart = useNucleusChart();
+  const runtime_ref = useRef<pane_runtime | null>(null);
+  const ready_ref = useRef(onPaneReady);
+  const series_ready_ref = useRef(onSeriesReady);
+  const [generation, set_generation] = useState(0);
+  const domain_signature = stable_signature(options.horizontal_domain);
+  ready_ref.current = onPaneReady;
+  series_ready_ref.current = onSeriesReady;
+
+  const axis_ids = new Set<string>();
+  for (const axis of axes) {
+    if (axis_ids.has(axis.id)) throw new Error(`duplicate general axis id: ${axis.id}`);
+    axis_ids.add(axis.id);
+  }
+  const series_keys = new Set<string>();
+  for (const item of series) {
+    if (series_keys.has(item.key)) throw new Error(`duplicate general series key: ${item.key}`);
+    series_keys.add(item.key);
+  }
+
+  useEffect(() => {
+    const pane = chart.addPane({ preserve_empty: true, horizontal_domain: options.horizontal_domain });
+    const runtime: pane_runtime = { pane, axes: new Map(), series: new Map() };
+    runtime_ref.current = runtime;
+    ready_ref.current?.(pane);
+    set_generation((value) => value + 1);
+    return () => {
+      if (runtime_ref.current === runtime) runtime_ref.current = null;
+      dispose_pane_runtime(chart, runtime);
+    };
+    // A horizontal-domain change is structural and intentionally replaces this one pane.
+  }, [chart, domain_signature]);
+
+  useEffect(() => {
+    const runtime = runtime_ref.current;
+    if (runtime === null) return;
+    const pane = runtime.pane.pane_index();
+    const desired_axes = new Map(axes.map((axis) => [axis.id, axis] as const));
+    const desired_series = new Map(series.map((item) => [item.key, item] as const));
+    const changed_axes = new Set<string>();
+
+    for (const [id, current] of runtime.axes) {
+      const desired = desired_axes.get(id);
+      if (desired === undefined || stable_signature(desired) !== current.signature) changed_axes.add(id);
+    }
+
+    for (const [key, current] of runtime.series) {
+      const desired = desired_series.get(key);
+      const depends_on_changed_axis = desired !== undefined
+        && (changed_axes.has(desired.options.x_axis_id) || changed_axes.has(desired.options.y_axis_id));
+      const changed = desired === undefined
+        || desired.kind !== current.handle.kind
+        || stable_signature(desired.options) !== current.signature
+        || depends_on_changed_axis;
+      if (changed) {
+        current.handle.remove();
+        runtime.series.delete(key);
+      }
+    }
+
+    for (const id of changed_axes) {
+      const current = runtime.axes.get(id);
+      if (current !== undefined) {
+        if (!current.handle.remove()) throw new Error(`general axis ${id} could not be reconciled`);
+        runtime.axes.delete(id);
+      }
+    }
+
+    for (const axis of axes) {
+      if (runtime.axes.has(axis.id)) continue;
+      const handle = chart.addAxis({ ...axis, pane });
+      runtime.axes.set(axis.id, { handle, signature: stable_signature(axis) });
+    }
+
+    for (const desired of series) {
+      let current = runtime.series.get(desired.key);
+      if (current === undefined) {
+        const handle = chart.addSeries(desired.kind, { ...desired.options, pane });
+        handle.setData(desired.data);
+        current = { handle, signature: stable_signature(desired.options), data: desired.data };
+        runtime.series.set(desired.key, current);
+        series_ready_ref.current?.(desired.key, handle);
+      } else if (current.data !== desired.data) {
+        current.handle.setData(desired.data);
+        current.data = desired.data;
+      }
+    }
+  }, [chart, generation, axes, series]);
+
+  return null;
+}

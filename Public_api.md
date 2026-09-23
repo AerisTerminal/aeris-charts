@@ -2,8 +2,10 @@
 
 ## Supported product surface
 
-The supported product is the pre-1.0 browser package `@axiusflowhq/financial`. Its root ESM
-entry point and `./design.css` are the only npm export paths. The supported root surface is:
+The supported product is the pre-1.0 browser package `@axiusflowhq/financial`. Its framework-neutral
+root ESM entry point, optional `./react` adapter, `./wasm` asset, and `./design.css` stylesheet are the
+supported npm export paths. React is an optional peer dependency and is not loaded by root consumers.
+The supported root surface is:
 
 - chart creation and initialization;
 - chart, series, time-scale, pane, price-scale, price-line, and drawing handles declared in
@@ -48,6 +50,8 @@ entry point and `./design.css` are the only npm export paths. The supported root
   names remain compatible;
 - `nucleuscharts_error` and its machine-readable error codes;
 - chart-state persistence V1 through `chart.export_state()` and `chart.import_state()`.
+- camel-case aliases for the common JavaScript lifecycle (`createChart`, `initWasm`, chart/series/scale
+  creation and data methods) while every existing snake-case entry remains supported on the same handles;
 - canonical presentation reset through `chart.reset_style_to_defaults()`. It restores Nucleus-owned
   chart and series visual defaults for the chart's selected theme, including semantic unset/follow
   states, while preserving data, panes, drawings, indicators, series visibility/metadata, price
@@ -56,6 +60,13 @@ entry point and `./design.css` are the only npm export paths. The supported root
 - read-only backend diagnostics through `chart.backend_status()`, including the requested and active
   backend, stable fallback stage/reason, secure-context and `navigator.gpu` exposure, and optional
   unstable platform detail. `chart.backend()` retains its existing active-backend return value.
+
+The `./react` entry exports `NucleusChart`, `FinancialSeries`, `GeneralPane`, and `useNucleusChart` plus
+their configuration types. It is an authoring adapter over the root imperative API: ordinary rerenders
+retain chart/series identities, data changes mutate those existing handles, structural general-axis or
+series changes replace only the affected engine objects, and unmount uses the canonical disposal path.
+It does not define chart semantics independently of the Rust engine. Importing the module is SSR-safe;
+DOM/WASM chart creation starts from the mounted component effect.
 
 ### Volume profile
 

@@ -1,5 +1,68 @@
 import { test, expect } from "@playwright/test";
 
+test("React adapter keeps chart and series identities across rerenders and disposes under StrictMode", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.exerciseReactAdapter();
+  });
+  expect(result).toEqual({
+    same_chart: true,
+    same_financial_handle: true,
+    same_general_handle: true,
+    same_financial_id: true,
+    same_general_id: true,
+    pane_index_stable: true,
+    pane_count: 2,
+    axis_count: 2,
+    general_legend_count: 1,
+    child_cleanup: true,
+    disposed: true,
+  });
+});
+
+test("camel-case aliases share the original chart and series handles", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { createChart, create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const host = document.createElement("div");
+    Object.assign(host.style, { width: "480px", height: "320px" });
+    document.body.appendChild(host);
+    const chart = await createChart(host, { backend: "canvas2d", autoSize: false });
+    try {
+      const pane = chart.addPane({ preserve_empty: true, horizontal_domain: { type: "category", scale: "band" } });
+      chart.addAxis({ id: "category", pane: pane.pane_index(), dimension: "x", scale: "band" });
+      chart.addAxis({ id: "value", pane: pane.pane_index(), dimension: "y", scale: "linear" });
+      const series = chart.addSeries("column", { pane: pane.pane_index(), x_axis_id: "category", y_axis_id: "value" });
+      series.setData([{ id: "a", x: "A", y: 3 }]);
+      series.updateData([{ id: "a", x: "A", y: 7 }]);
+      const data = series.data_at(0);
+      const alias_data = series.dataAt(0);
+      const financial = chart.addSeries("candlestick");
+      financial.setData([{ time: 1735689600, open: 1, high: 3, low: 1, close: 2 }]);
+      const same_financial_data = financial.data()[0]?.close === 2;
+      const state = chart.exportState();
+      return {
+        exported_create_alias: createChart !== create_chart,
+        same_series_data: data?.value === 7 && alias_data?.value === 7,
+        same_financial_data,
+        state_has_series: state !== null,
+        same_scale_handle: chart.timeScale() === chart.time_scale(),
+      };
+    } finally {
+      chart.remove();
+      host.remove();
+    }
+  });
+  expect(result).toEqual({
+    exported_create_alias: false,
+    same_series_data: true,
+    same_financial_data: true,
+    state_has_series: true,
+    same_scale_handle: true,
+  });
+});
+
 test("public category-column and XY-scatter slices share the chart lifecycle", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");

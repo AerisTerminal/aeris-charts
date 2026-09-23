@@ -129,9 +129,9 @@ test("split divider live-tracks the axis border token on apply_options (no topol
     return seen;
   });
   expect(patches).toEqual([{ rightPriceScale: { borderColor: "#ff8800" } }]);
-  expect(await divider_rgb()).toBe("rgb(255, 136, 0)");
+  await expect.poll(divider_rgb).toBe("rgb(255, 136, 0)");
 
   // And back: the divider keeps following the same token, not a pinned color.
   await page.evaluate(() => window.__chart.apply_options({ rightPriceScale: { borderColor: "#2B2B43" } }));
-  expect(await divider_rgb()).toBe("rgb(43, 43, 67)");
+  await expect.poll(divider_rgb).toBe("rgb(43, 43, 67)");
 });

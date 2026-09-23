@@ -1,5 +1,5 @@
 /**
- * @axiusflowhq/financial — public API (snake_case).
+ * @axiusflowhq/financial — public API.
  *
  * A thin, typed façade over the `nucleuscharts_wasm` engine. It owns the browser-side concerns that the
  * engine deliberately leaves out: creating the stacked canvases (WebGPU/Canvas2D pane + package-owned
@@ -43,12 +43,15 @@ import type { chart_api, chart_options, deep_partial, localization_options, trac
 /**
  * Pre-instantiate the wasm engine, optionally from an explicit URL. Only needed when the default
  * resolution (the `.wasm` shipped beside `dist/index.js`) doesn't apply — e.g. Vite's dev
- * pre-bundler (`import wasm_url from "@axiusflowhq/financial/dist/nucleuscharts_wasm_bg.wasm?url"`). Call once,
+ * pre-bundler (`import wasm_url from "@axiusflowhq/financial/wasm?url"`). Call once,
  * before the first `create_chart`; later calls are no-ops.
  */
 export function init_wasm(wasm_url?: string | URL): Promise<unknown> {
   return ensure_init(wasm_url);
 }
+
+/** Camel-case alias of {@link init_wasm}. */
+export const initWasm = init_wasm;
 
 /**
  * Create a chart inside `container`. Resolves once the rendering backend is ready and the first
@@ -188,3 +191,6 @@ export async function create_chart(
   chart.render();
   return chart;
 }
+
+/** Camel-case alias of {@link create_chart}; both return the same chart API. */
+export const createChart = create_chart;

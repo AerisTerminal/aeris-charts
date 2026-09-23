@@ -38,8 +38,8 @@
     },
     {
       "path": "index.d.ts",
-      "bytes": 2000,
-      "sha256": "ca1875e9dd8e2c073b7dbdc460295989462965fffe94448db356cb59d2da3f92"
+      "bytes": 2191,
+      "sha256": "f9b6666803d302645750f8030494983e3e3d7f785b274f058beffa489ef462a2"
     },
     {
       "path": "offscreen.d.ts",
@@ -57,6 +57,11 @@
       "sha256": "bf6a09b59dbb8390d03c39383545aa3ac6022817106daf664de22cc26ec76859"
     },
     {
+      "path": "react.d.ts",
+      "bytes": 76793,
+      "sha256": "253fbacf9ce14533bab1ace12853d7649e2191cb97c85fe46a155b316bdb1b12"
+    },
+    {
       "path": "shortcuts.d.ts",
       "bytes": 1615,
       "sha256": "61f11616e959c9729b971b2a58bcd8705961067e78e9dc47fd3e24cd6dbebba0"
@@ -68,8 +73,8 @@
     },
     {
       "path": "types.d.ts",
-      "bytes": 124409,
-      "sha256": "3fb8411dd6f91982d35ffeb137a0a7720c310e4705310b16b071fafa58013077"
+      "bytes": 126536,
+      "sha256": "9610a026b19c8a44f0a69e9a44464d2bbea29893ad02ff0513be43df26e684cc"
     }
   ]
 }

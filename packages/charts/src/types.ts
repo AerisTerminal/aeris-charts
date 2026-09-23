@@ -1,6 +1,7 @@
 /**
- * Public data, option, and handle types for `@axiusflowhq/financial` (snake_case). Extracted from
- * `index.ts`.
+ * Public data, option, and handle types for `@axiusflowhq/financial`. The original snake-case
+ * methods remain canonical and supported; common browser lifecycle methods also expose camel-case
+ * aliases on the same handles. Extracted from `index.ts`.
  */
 
 import type { pane_primitive, pane_primitive_handle, series_primitive, series_primitive_handle } from "./primitives.js";
@@ -440,6 +441,7 @@ export interface general_legend_snapshot {
 }
 
 export interface general_axis_api {
+  resetView: general_axis_api["reset_view"];
   readonly id: string;
   options(): general_axis_options;
   pan(fraction: number): void;
@@ -465,6 +467,14 @@ export interface general_series_api {
   selected_hit(): general_series_hit | null;
   accessibility_snapshot(offset?: number, limit?: number): general_accessibility_snapshot;
   remove(): void;
+  /** Camel-case aliases; both naming styles operate on this same series handle. */
+  setData: general_series_api["set_data"];
+  setDataTyped: general_series_api["set_data_typed"];
+  updateData: general_series_api["update_data"];
+  updateDataTyped: general_series_api["update_data_typed"];
+  dataAt: general_series_api["data_at"];
+  selectedHit: general_series_api["selected_hit"];
+  accessibilitySnapshot: general_series_api["accessibility_snapshot"];
 }
 
 /** Calendar day (reference `BusinessDay`), interpreted at UTC midnight. `month`/`day` are 1-based. */
@@ -1903,6 +1913,13 @@ export type drawing_tool_change_handler = (tool: drawing_kind | null) => void;
 
 /** A single data series on the chart. */
 export interface series_api {
+  /** Camel-case aliases; both naming styles operate on this same series handle. */
+  setData: series_api["set_data"];
+  setDataTyped: series_api["set_data_typed"];
+  updateTyped: series_api["update_typed"];
+  applyOptions: series_api["apply_options"];
+  moveToPane: series_api["move_to_pane"];
+  priceScale: series_api["price_scale"];
   /** Replace the series' data. Accepts OHLC or single-value points; packed to typed arrays here. */
   set_data(data: readonly series_data[]): void;
   /** Diagnostics from the most recent set/update call; `null` is the allocation-free clean case. */
@@ -2015,7 +2032,7 @@ export interface series_api {
   last_value_data(global_last?: boolean): last_value_data | null;
   /**
    * The current price formatter of this series (reference `ISeriesApi.priceFormatter`). Divergence:
-   * reference returns an `IPriceFormatter` object with a `format` method; this snake_case API returns
+   * reference returns an `IPriceFormatter` object with a `format` method; this method returns
    * the bare format function `(price) => string`.
    */
   price_formatter(): (price: number) => string;
@@ -2085,6 +2102,12 @@ export interface footprint_series_api extends series_api {
 
 /** The horizontal (time) scale. */
 export interface time_scale_api {
+  fitContent: time_scale_api["fit_content"];
+  scrollToRealTime: time_scale_api["scroll_to_real_time"];
+  setVisibleRange: time_scale_api["set_visible_range"];
+  getVisibleRange: time_scale_api["get_visible_range"];
+  setVisibleLogicalRange: time_scale_api["set_visible_logical_range"];
+  getVisibleLogicalRange: time_scale_api["get_visible_logical_range"];
   /** Distance in logical bars between the latest point and the right edge. */
   scroll_position(): number;
   /**
@@ -2126,6 +2149,9 @@ export interface time_scale_api {
 
 /** A pane price scale. The handle becomes stale when its pane or named scale is removed. */
 export interface price_scale_api {
+  applyOptions: price_scale_api["apply_options"];
+  setVisibleRange: price_scale_api["set_visible_range"];
+  getVisibleRange: price_scale_api["get_visible_range"];
   apply_options(options: deep_partial<price_scale_options>): void;
   options(): price_scale_options;
   width(): number;
@@ -2136,6 +2162,7 @@ export interface price_scale_api {
 
 /** A stacked pane (roadmap Phase B1), informed by common public chart APIs. */
 export interface pane_api {
+  paneIndex: pane_api["pane_index"];
   /** This pane's current index (0 = top/price pane). Throws after this pane is removed. */
   pane_index(): number;
   /** Current CSS height in px (from the last layout pass). */
@@ -2491,6 +2518,18 @@ export interface volume_profile_indicator_api {
 
 /** The chart. Create with {@link create_chart}. */
 export interface chart_api {
+  /** Camel-case aliases; both naming styles operate on this same chart handle. */
+  addSeries: chart_api["add_series"];
+  removeSeries: chart_api["remove_series"];
+  addPane: chart_api["add_pane"];
+  addAxis: chart_api["add_axis"];
+  removeAxis: chart_api["remove_axis"];
+  applyOptions: chart_api["apply_options"];
+  timeScale: chart_api["time_scale"];
+  priceScale: chart_api["price_scale"];
+  takeScreenshot: chart_api["take_screenshot"];
+  exportState: chart_api["export_state"];
+  importState: chart_api["import_state"];
   /** Active pane backend: `webgpu` when available, otherwise the shared `canvas2d` fallback. */
   backend(): "webgpu" | "canvas2d";
   /** Structured backend selection/fallback diagnostics for this chart. */

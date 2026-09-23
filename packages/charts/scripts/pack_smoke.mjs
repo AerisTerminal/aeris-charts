@@ -6,7 +6,7 @@
  *   1. `npm pack` produces a tarball containing JavaScript, types, WebAssembly, the portable
  *      design system, and LICENSE.
  *   2. `npm install <tarball>` into an empty consumer dir.
- *   3. The installed module imports in Node (side-effect-free) and exposes `create_chart`.
+ *   3. The installed core module imports in Node (side-effect-free) and exposes both naming styles.
  *   4. `dist/nucleuscharts_wasm_bg.wasm` is present inside the installed package (non-trivial size).
  *
  * Node cannot *run* create_chart (browser-only wasm fetch + DOM) — this test deliberately checks
@@ -41,6 +41,8 @@ try {
   for (const required of [
     "package/dist/index.js",
     "package/dist/index.d.ts",
+    "package/dist/react.js",
+    "package/dist/react.d.ts",
     "package/dist/nucleuscharts_wasm_bg.wasm",
     "package/dist/nucleuscharts.css",
     "package/LICENSE",
@@ -60,7 +62,14 @@ try {
   const entry = join(scratch, "node_modules", "@axiusflowhq", "financial", "dist", "index.js");
   const mod = await import(pathToFileURL(entry).href);
   assert.equal(typeof mod.create_chart, "function", "create_chart not exported");
+  assert.equal(typeof mod.createChart, "function", "createChart not exported");
   assert.equal(typeof mod.init_wasm, "function", "init_wasm not exported");
+  assert.equal(typeof mod.initWasm, "function", "initWasm not exported");
+
+  const installed_js = readFileSync(entry, "utf8");
+  for (const forbidden of ["../pkg/", "../../crates/", "examples/web_demo", "benchmarks/"]) {
+    assert.ok(!installed_js.includes(forbidden), `published runtime leaked repository-only path: ${forbidden}`);
+  }
 
   // 4. The wasm binary shipped with real content.
   const wasm = statSync(
@@ -72,6 +81,8 @@ try {
     readFileSync(join(scratch, "node_modules", "@axiusflowhq", "financial", "package.json"), "utf8"),
   );
   assert.equal(pkg.license, "AGPL-3.0-only");
+  assert.equal(pkg.exports["./react"].import, "./dist/react.js");
+  assert.equal(pkg.exports["./wasm"], "./dist/nucleuscharts_wasm_bg.wasm");
 
   console.log(`pack smoke OK: ${tgz} (${files.length} files, wasm ${(wasm.size / 1024).toFixed(0)} kB)`);
   rmSync(join(pkg_dir, tgz), { force: true });

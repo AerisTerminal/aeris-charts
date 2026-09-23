@@ -864,6 +864,7 @@ function pack_general_rows(
 }
 
 class general_axis_impl implements general_axis_api {
+  resetView(): void { this.reset_view(); }
   constructor(
     readonly id: string,
     private readonly handle_token: number,
@@ -1050,6 +1051,15 @@ class general_reference_impl implements general_reference_api {
 }
 
 class general_series_impl implements general_series_api {
+  setData(...args: Parameters<general_series_api["set_data"]>): void { this.set_data(...args); }
+  setDataTyped(...args: Parameters<general_series_api["set_data_typed"]>): void { this.set_data_typed(...args); }
+  updateData(...args: Parameters<general_series_api["update_data"]>): void { this.update_data(...args); }
+  updateDataTyped(...args: Parameters<general_series_api["update_data_typed"]>): void { this.update_data_typed(...args); }
+  dataAt(...args: Parameters<general_series_api["data_at"]>): general_tooltip_snapshot | null { return this.data_at(...args); }
+  selectedHit(): general_series_hit | null { return this.selected_hit(); }
+  accessibilitySnapshot(...args: Parameters<general_series_api["accessibility_snapshot"]>): general_accessibility_snapshot {
+    return this.accessibility_snapshot(...args);
+  }
   private readonly data_changed_subs = new Set<data_changed_handler>();
   private removed = false;
 
@@ -1478,6 +1488,12 @@ class general_series_impl implements general_series_api {
 }
 
 class series_impl implements series_api {
+  setData(...args: Parameters<series_api["set_data"]>): void { this.set_data(...args); }
+  setDataTyped(...args: Parameters<series_api["set_data_typed"]>): void { this.set_data_typed(...args); }
+  updateTyped(...args: Parameters<series_api["update_typed"]>): void { this.update_typed(...args); }
+  applyOptions(...args: Parameters<series_api["apply_options"]>): void { this.apply_options(...args); }
+  moveToPane(...args: Parameters<series_api["move_to_pane"]>): void { this.move_to_pane(...args); }
+  priceScale(): price_scale_api { return this.price_scale(); }
   protected readonly data_changed_subs = new Set<data_changed_handler>();
   private removed = false;
   private last_ingestion: ingestion_diagnostics | null = null;
@@ -2877,6 +2893,12 @@ class footprint_series_impl extends series_impl implements footprint_series_api 
 }
 
 class time_scale_impl implements time_scale_api {
+  fitContent(): void { this.fit_content(); }
+  scrollToRealTime(): void { this.scroll_to_real_time(); }
+  setVisibleRange(...args: Parameters<time_scale_api["set_visible_range"]>): void { this.set_visible_range(...args); }
+  getVisibleRange(): time_range | null { return this.get_visible_range(); }
+  setVisibleLogicalRange(...args: Parameters<time_scale_api["set_visible_logical_range"]>): void { this.set_visible_logical_range(...args); }
+  getVisibleLogicalRange(): logical_range | null { return this.get_visible_logical_range(); }
   constructor(private readonly chart: chart_impl) {}
 
   scroll_position(): number {
@@ -3019,6 +3041,9 @@ class time_scale_impl implements time_scale_api {
 }
 
 class price_scale_impl implements price_scale_api {
+  applyOptions(...args: Parameters<price_scale_api["apply_options"]>): void { this.apply_options(...args); }
+  setVisibleRange(...args: Parameters<price_scale_api["set_visible_range"]>): void { this.set_visible_range(...args); }
+  getVisibleRange(): price_range | null { return this.get_visible_range(); }
   private readonly pane_id: number;
 
   constructor(
@@ -3104,6 +3129,7 @@ class price_scale_impl implements price_scale_api {
 }
 
 class pane_impl implements pane_api {
+  paneIndex(): number { return this.pane_index(); }
   private readonly stable_id: number;
 
   constructor(private readonly chart: chart_impl, index: number) {
@@ -3534,6 +3560,24 @@ class alert_impl implements alert_api {
 }
 
 export class chart_impl implements chart_api {
+  addSeries(kind: "footprint", options?: Partial<any_series_options> & Partial<footprint_series_options>): footprint_series_api;
+  addSeries(kind: general_series_kind, options: general_series_options): general_series_api;
+  addSeries(kind: series_kind, options?: Partial<any_series_options>): series_api;
+  addSeries(kind: series_kind | general_series_kind, options?: Partial<any_series_options> | general_series_options): series_api | general_series_api {
+    return this.add_series(kind as series_kind, options as Partial<any_series_options>);
+  }
+  removeSeries(...args: Parameters<chart_api["remove_series"]>): void { this.remove_series(...args); }
+  addPane(preserve_empty?: boolean): pane_api;
+  addPane(options: general_pane_options): pane_api;
+  addPane(options?: boolean | general_pane_options): pane_api { return this.add_pane(options); }
+  addAxis(...args: Parameters<chart_api["add_axis"]>): general_axis_api { return this.add_axis(...args); }
+  removeAxis(...args: Parameters<chart_api["remove_axis"]>): boolean { return this.remove_axis(...args); }
+  applyOptions(...args: Parameters<chart_api["apply_options"]>): void { this.apply_options(...args); }
+  timeScale(): time_scale_api { return this.time_scale(); }
+  priceScale(...args: Parameters<chart_api["price_scale"]>): price_scale_api { return this.price_scale(...args); }
+  takeScreenshot(...args: Parameters<chart_api["take_screenshot"]>): HTMLCanvasElement { return this.take_screenshot(...args); }
+  exportState(): chart_state { return this.export_state(); }
+  importState(...args: Parameters<chart_api["import_state"]>): persistence_restore_result { return this.import_state(...args); }
   private wasm_instance: NucleusChart | null;
   private next_extra_series = false;
   private readonly gestures_cfg: resolved_gestures = {

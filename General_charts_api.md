@@ -44,8 +44,8 @@ handles, snake-case methods, and persistence V1 keep their current meaning. In p
 remain financial-time series. Nucleus must never guess whether a row belongs to the financial or
 general data domain.
 
-The imperative API remains canonical. Camel-case aliases and the React adapter come later and
-must call the same mutations rather than define another chart model.
+The imperative API remains canonical. Phase 3 adds camel-case aliases plus a React adapter that call
+the same mutations rather than defining another chart model; snake-case methods remain supported.
 
 ## Domain vocabulary
 

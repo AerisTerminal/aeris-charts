@@ -483,8 +483,35 @@ If size evidence shows that one artifact materially harms users, produce optimiz
 from the same source and public API contract. Such editions are distribution optimization, not
 separate products or semantic forks. Do not introduce them speculatively.
 
-Exit gate: a consumer can choose financial, general, or combined visualization through one library,
-and React is an authoring option rather than a separate implementation.
+Status: **COMPLETE on 2026-09-23.**
+
+- `@axiusflowhq/financial` remains the one framework-neutral package and chart lifecycle for financial,
+  general, and combined visualization. The existing snake-case surface remains supported, while the
+  common JavaScript lifecycle now also exposes camel-case aliases on the same chart/series/scale handles;
+- the optional `@axiusflowhq/financial/react` subpath adds `NucleusChart`, `FinancialSeries`,
+  `GeneralPane`, and `useNucleusChart` as a thin authoring layer over the imperative engine. React is an
+  optional peer, SSR import performs no DOM work, ordinary rerenders retain engine identities, and
+  Strict Mode coverage proves child cleanup plus final chart disposal across Chromium, Firefox, and WebKit;
+- `examples/all_in_one/vanilla.mjs` and `examples/all_in_one/react.tsx` demonstrate a financial pane and
+  general summary pane in one workspace without a second chart model or framework-specific engine;
+- the production package now exports the optimized WASM asset explicitly, pack smoke installs the actual
+  tarball into an empty consumer, verifies both naming styles and the React/WASM exports, and rejects
+  repository-only runtime paths such as crate, demo, benchmark, or intermediate `pkg/` paths;
+- the final artifact remains inside all enforced package budgets, so no speculative split edition is
+  warranted: tarball **1,215,014 <= 1,300,000 bytes**, unpacked **3,539,407 <= 3,700,000**, JavaScript
+  raw **344,783 <= 620,000**, JavaScript Brotli **64,328 <= 95,000**, WASM raw
+  **2,812,727 <= 3,000,000**, and WASM Brotli **761,514 <= 810,000**;
+- the 100k general-dashboard startup gate remains comfortably inside budget after the Phase 3 packaging
+  work: **336.76 ms p50 <= 2,000 ms**, with **87,144,240 <= 100,663,296** first-frame uploaded bytes;
+- the focused general/React browser matrix is **60/60** across Chromium, Firefox, and WebKit, and the exact
+  required portable CI browser suite is green with **321 passed and 10 expected skips**. Package build,
+  typecheck, lint, API snapshot, namespace policy, release-gate simulation, SSR import, clean-install, and
+  packed-consumer checks are part of the closure evidence and the release workflow now gates the new
+  React/namespace contracts as well.
+
+Exit gate: **PASS.** A consumer can choose financial, general, or combined visualization through one
+library, and React is an authoring option over the same engine rather than a separate implementation.
+Phase 4 is the next open phase.
 
 ### Phase 4: Polar charts
 
