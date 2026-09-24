@@ -353,7 +353,7 @@ export interface general_series_options {
   stack_mode?: "normal" | "percent";
 }
 
-/** Options that can change without replacing a general series or its dataset/axis bindings. */
+/** Presentation-only subset retained for callers that do not need compatible axis rebinding. */
 export type general_series_presentation_options = Omit<
   general_series_options,
   "pane" | "x_axis_id" | "y_axis_id"
@@ -477,7 +477,8 @@ export interface general_series_api {
   readonly id: number;
   readonly kind: general_series_kind;
   options(): general_series_options;
-  apply_options(options: Partial<general_series_presentation_options>): void;
+  /** Mutate presentation and compatible pane/axis bindings while retaining identity and data. */
+  apply_options(options: Partial<general_series_options>): void;
   set_visible(visible: boolean): void;
   set_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row)[]): void;
   set_data_typed(columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns): void;
@@ -2609,6 +2610,10 @@ export interface chart_api {
    * the engine tombstones it safely.
    */
   remove_series(series: series_api | general_series_api): void;
+  /** General series in stable paint, legend, hit-test, and persistence order (bottom first). */
+  general_series_order(pane?: number): general_series_api[];
+  /** Atomically reorder every general series in the selected pane, or globally when omitted. */
+  set_general_series_order(ordered: general_series_api[], pane?: number): boolean;
   /**
    * The chart's series in stable saved (z-)order (bottom first), as live handles. A series
    * whose handle the package no longer tracks is omitted. Cf. the reference's per-series

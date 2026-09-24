@@ -399,9 +399,15 @@ engine snapshot rather than maintaining parallel visibility state.
 Axis and series handles also expose `apply_options`/`applyOptions`. Axis updates cover domain, direction,
 position, visibility, title, tick spacing/count, band padding, zero line, and grid policy; changing a configured
 domain resets only that axis's runtime view. Series updates cover visibility, title, color, point radius, data
-labels, grouping, stack identity, and stack mode. Each update validates a complete candidate before commit,
-preserves handles and data, and leaves prior state intact on rejection. Pane/domain-family and axis-binding
-changes remain structural and are not accepted by these methods.
+labels, grouping, stack identity, stack mode, and compatible pane/axis rebinding. A rebind requires the target
+pane to have the same horizontal-domain semantics and the target X/Y axes to retain the current scale types.
+Each update validates a complete candidate before commit, preserves handles and data, and leaves prior state
+intact on rejection. Kind and dataset changes remain structural.
+
+`chart.general_series_order(pane?)` returns live handles in the engine's stable bottom-first order.
+`chart.set_general_series_order(handles, pane?)` atomically accepts only an exact permutation of every live
+general series in that scope. Pane-local reordering leaves every other pane's relative order unchanged. The
+same order drives painting, legend and hit-test traversal, React keyed array order, and V2 persistence.
 
 Reference components are intentionally separate from series data. A reference line binds one X or Y axis and one
 compatible numeric/temporal/category value; a dot binds explicit X and Y axes; a region binds two endpoints on

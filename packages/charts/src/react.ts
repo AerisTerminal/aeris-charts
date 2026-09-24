@@ -230,8 +230,8 @@ function dispose_pane_runtime(chart: chart_api, runtime: pane_runtime): void {
 /**
  * Own one general-domain pane, its axes, and its general series. Axes and series are reconciled by
  * stable IDs/keys; unchanged series keep their engine identity and a changed data reference calls
- * `set_data` on that same handle. Structural axis/series-option changes replace only the affected
- * general series, never the chart.
+ * `set_data` on that same handle. Compatible series binding changes retain handles; structural axis
+ * or kind changes replace only the affected general series, never the chart.
  */
 export function GeneralPane({ options, axes, series, onPaneReady, onSeriesReady }: GeneralPaneProps) {
   const chart = useNucleusChart();
@@ -304,16 +304,25 @@ export function GeneralPane({ options, axes, series, onPaneReady, onSeriesReady 
         && (changed_axes.has(desired.options.x_axis_id) || changed_axes.has(desired.options.y_axis_id));
       const changed = desired === undefined
         || desired.kind !== current.handle.kind
-        || stable_signature(general_series_bindings(desired.options)) !== current.binding_signature
         || depends_on_changed_axis;
       if (changed) {
         current.handle.remove();
         runtime.series.delete(key);
       } else {
+        const binding_signature = stable_signature(general_series_bindings(desired.options));
         const presentation = general_series_presentation(desired.options);
         const presentation_signature = stable_signature(presentation);
-        if (presentation_signature !== current.presentation_signature) {
-          current.handle.applyOptions(presentation);
+        if (
+          binding_signature !== current.binding_signature
+          || presentation_signature !== current.presentation_signature
+        ) {
+          current.handle.applyOptions({
+            ...presentation,
+            pane,
+            x_axis_id: desired.options.x_axis_id,
+            y_axis_id: desired.options.y_axis_id,
+          });
+          current.binding_signature = binding_signature;
           current.presentation_signature = presentation_signature;
         }
       }
@@ -360,6 +369,17 @@ export function GeneralPane({ options, axes, series, onPaneReady, onSeriesReady 
         current.handle.setData(desired.data);
         current.data = desired.data;
       }
+    }
+
+    const desired_order = series
+      .map((item) => runtime.series.get(item.key)?.handle)
+      .filter((handle): handle is general_series_api => handle !== undefined);
+    const current_order = chart.general_series_order(pane);
+    if (
+      desired_order.length === current_order.length
+      && desired_order.some((handle, index) => handle !== current_order[index])
+    ) {
+      chart.set_general_series_order(desired_order, pane);
     }
   }, [chart, generation, axes, series]);
 

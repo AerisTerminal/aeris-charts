@@ -13,6 +13,7 @@ import type { chart_api, general_series_api, pane_api, series_api } from "../../
 const axes: readonly GeneralAxisSpec[] = [
   { id: "month", dimension: "x", position: "bottom", scale: "band" },
   { id: "revenue", dimension: "y", position: "left", scale: "linear" },
+  { id: "revenue-alt", dimension: "y", position: "right", scale: "linear" },
 ];
 
 const pane_options = { horizontal_domain: { type: "category" as const, scale: "band" as const } };
@@ -65,6 +66,7 @@ export async function exerciseReactAdapter(): Promise<Record<string, unknown>> {
   let chart: chart_api | null = null;
   let financial: series_api | null = null;
   let general: general_series_api | null = null;
+  let forecast: general_series_api | null = null;
   let pane: pane_api | null = null;
 
   const render = (
@@ -72,6 +74,8 @@ export async function exerciseReactAdapter(): Promise<Record<string, unknown>> {
     revenue_value: number,
     show_children = true,
     title = "Revenue",
+    use_alternate_axis = false,
+    reverse_general_order = false,
   ) => {
     const render_axes = axes.map((axis) => axis.id === "revenue"
       ? { ...axis, title: title === "Revenue" ? "Revenue axis" : "Updated revenue axis" }
@@ -79,9 +83,22 @@ export async function exerciseReactAdapter(): Promise<Record<string, unknown>> {
     const general_series: readonly GeneralSeriesSpec[] = [{
       key: "revenue",
       kind: "column",
-      options: { x_axis_id: "month", y_axis_id: "revenue", title, color: title === "Revenue" ? "#2563eb" : "#dc2626" },
+      options: {
+        x_axis_id: "month",
+        y_axis_id: use_alternate_axis ? "revenue-alt" : "revenue",
+        title,
+        color: title === "Revenue" ? "#2563eb" : "#dc2626",
+      },
       data: [{ id: "jan", x: "Jan", y: revenue_value }],
+    }, {
+      key: "forecast",
+      kind: "xy_line",
+      options: { x_axis_id: "month", y_axis_id: "revenue", title: "Forecast", color: "#16a34a" },
+      data: [{ id: "jan-forecast", x: "Jan", y: revenue_value + 5 }],
     }];
+    const ordered_general_series = reverse_general_order
+      ? [...general_series].reverse()
+      : general_series;
     root.render(
       <StrictMode>
         <NucleusChart
@@ -98,9 +115,12 @@ export async function exerciseReactAdapter(): Promise<Record<string, unknown>> {
             <GeneralPane
               options={pane_options}
               axes={render_axes}
-              series={general_series}
+              series={ordered_general_series}
               onPaneReady={(value) => { pane = value; }}
-              onSeriesReady={(_key, value) => { general = value; }}
+              onSeriesReady={(key, value) => {
+                if (key === "revenue") general = value;
+                if (key === "forecast") forecast = value;
+              }}
             />
           </> : null}
         </NucleusChart>
@@ -110,7 +130,7 @@ export async function exerciseReactAdapter(): Promise<Record<string, unknown>> {
 
   render(2, 42);
   try {
-    await wait_until(() => chart !== null && financial !== null && general !== null && pane !== null
+    await wait_until(() => chart !== null && financial !== null && general !== null && forecast !== null && pane !== null
       && safely(() => (chart as chart_api).backend().length > 0)
       && safely(() => (financial as series_api).data()[0]?.close === 2)
       && safely(() => (general as general_series_api).dataAt(0)?.value === 42)
@@ -119,31 +139,40 @@ export async function exerciseReactAdapter(): Promise<Record<string, unknown>> {
     console.error = original_console_error;
     window.removeEventListener("error", on_window_error);
     throw new Error(
-      `React fixture readiness: chart=${chart !== null} financial=${financial !== null} general=${general !== null} pane=${pane !== null} children=${host.childElementCount} errors=${react_errors.join(" | ")} window=${window_errors.join(" | ")}`,
+      `React fixture readiness: chart=${chart !== null} financial=${financial !== null} general=${general !== null} forecast=${forecast !== null} pane=${pane !== null} children=${host.childElementCount} errors=${react_errors.join(" | ")} window=${window_errors.join(" | ")}`,
     );
   }
   const first_chart = chart as chart_api;
   const first_financial = financial as series_api;
   const first_general = general as general_series_api;
+  const first_forecast = forecast as general_series_api;
   const first_pane = pane as pane_api;
   const financial_id = first_financial.id;
   const general_id = first_general.id;
   const pane_index = first_pane.paneIndex();
 
-  render(3, 57, true, "Updated revenue");
+  render(3, 57, true, "Updated revenue", true, true);
   await wait_until(() => safely(() => (financial as series_api).data()[0]?.close === 3));
   await wait_until(() => safely(() => (general as general_series_api).dataAt(0)?.value === 57));
   await wait_until(() => safely(() => (general as general_series_api).options().title === "Updated revenue"));
+  await wait_until(() => safely(() => (general as general_series_api).options().y_axis_id === "revenue-alt"));
+  await wait_until(() => safely(() => first_chart.general_series_order(pane_index)[0] === first_forecast));
   await wait_until(() => safely(() => first_chart.axis("revenue")?.options().title === "Updated revenue axis"));
 
   const result = {
     same_chart: chart === first_chart,
     same_financial_handle: financial === first_financial,
     same_general_handle: general === first_general,
+    same_forecast_handle: forecast === first_forecast,
     same_financial_id: (financial as series_api).id === financial_id,
     same_general_id: (general as general_series_api).id === general_id,
     updated_general_title: (general as general_series_api).options().title,
     updated_general_color: (general as general_series_api).options().color,
+    updated_general_axis: (general as general_series_api).options().y_axis_id,
+    updated_general_order: (
+      first_chart.general_series_order(pane_index)[0] === first_forecast
+      && first_chart.general_series_order(pane_index)[1] === first_general
+    ),
     updated_axis_title: first_chart.axis("revenue")?.options().title,
     pane_index_stable: (pane as pane_api).paneIndex() === pane_index,
     pane_count: first_chart.panes().length,

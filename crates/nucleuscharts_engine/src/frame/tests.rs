@@ -115,12 +115,12 @@ fn general_legend_snapshot_preserves_series_order_visibility_filtering_and_remov
             ))
             .unwrap();
     }
-    let datasets = [2.0, 3.0, 4.0].map(|value| {
+    let datasets = [4.0, 3.0, 4.0].map(|value| {
         chart
             .create_general_xy_dataset(GeneralXyInput::Numeric {
                 ids: None,
-                x: vec![1.0],
-                y: vec![value],
+                x: vec![1.0, 2.0],
+                y: vec![value, value],
                 y_valid: None,
             })
             .unwrap()
@@ -183,6 +183,73 @@ fn general_legend_snapshot_preserves_series_order_visibility_filtering_and_remov
         .items
         .is_empty());
 
+    assert_eq!(chart.general_series_order(None), vec![first, hidden, third]);
+    assert!(chart.set_general_series_order(Some(pane_a), vec![hidden, first]));
+    assert_eq!(chart.general_series_order(None), vec![hidden, first, third]);
+    assert!(!chart.set_general_series_order(Some(pane_a), vec![first]));
+    assert_eq!(
+        chart.general_series_order(Some(pane_a)),
+        vec![hidden, first]
+    );
+
+    let mut rebound = GeneralSeriesOptions::xy_line(pane_b, datasets[0], "b-x", "b-y");
+    rebound.title = "Rebound revenue".into();
+    rebound.color = Some("#654321".into());
+    chart.update_general_series_options(first, rebound).unwrap();
+    let rebound = chart.general_series(first).unwrap();
+    assert_eq!(chart.general_series_pane_index(first), Some(pane_b));
+    assert_eq!(rebound.x_axis_id(), "b-x");
+    assert_eq!(rebound.y_axis_id(), "b-y");
+    assert_eq!(rebound.dataset(), datasets[0]);
+    assert_eq!(rebound.title(), "Rebound revenue");
+
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "b-log",
+            pane_b,
+            AxisDimension::Y,
+            GeneralScaleType::Logarithmic,
+        ))
+        .unwrap();
+    let rejected = GeneralSeriesOptions::xy_line(pane_b, datasets[0], "b-x", "b-log");
+    assert!(chart
+        .update_general_series_options(first, rejected)
+        .is_err());
+    assert_eq!(chart.general_series(first).unwrap().y_axis_id(), "b-y");
+
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let mut overlap = None;
+    chart.visit_general_path_points(chart.general_series(first).unwrap(), |point| {
+        overlap.get_or_insert((point.x, point.y));
+    });
+    let overlap = overlap.unwrap();
+    assert_eq!(
+        chart
+            .general_hit_test(pane_b, overlap.0, overlap.1, crate::GeneralHitMode::Exact)
+            .unwrap()
+            .series,
+        third
+    );
+
+    assert!(chart.set_general_series_order(Some(pane_b), vec![third, first]));
+    assert_eq!(chart.general_series_order(None), vec![hidden, third, first]);
+    assert_eq!(
+        chart
+            .general_hit_test(pane_b, overlap.0, overlap.1, crate::GeneralHitMode::Exact)
+            .unwrap()
+            .series,
+        first
+    );
+    assert_eq!(
+        chart
+            .general_legend_snapshot(Some(pane_b))
+            .items
+            .iter()
+            .map(|item| item.series)
+            .collect::<Vec<_>>(),
+        vec![third, first]
+    );
+
     assert!(chart.remove_general_series(hidden));
     assert_eq!(
         chart
@@ -191,7 +258,7 @@ fn general_legend_snapshot_preserves_series_order_visibility_filtering_and_remov
             .iter()
             .map(|item| item.series)
             .collect::<Vec<_>>(),
-        vec![first, third]
+        vec![third, first]
     );
 }
 

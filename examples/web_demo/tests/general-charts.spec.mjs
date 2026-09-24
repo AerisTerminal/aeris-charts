@@ -219,15 +219,18 @@ test("React adapter keeps chart and series identities across rerenders and dispo
     same_chart: true,
     same_financial_handle: true,
     same_general_handle: true,
+    same_forecast_handle: true,
     same_financial_id: true,
     same_general_id: true,
     updated_general_title: "Updated revenue",
     updated_general_color: "#dc2626",
+    updated_general_axis: "revenue-alt",
+    updated_general_order: true,
     updated_axis_title: "Updated revenue axis",
     pane_index_stable: true,
     pane_count: 2,
-    axis_count: 2,
-    general_legend_count: 1,
+    axis_count: 3,
+    general_legend_count: 2,
     child_cleanup: true,
     disposed: true,
   });
@@ -566,7 +569,7 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
   ]);
 });
 
-test("general legend snapshots preserve order, hidden state, pane filtering, lifecycle, and V2 restore", async ({ page }) => {
+test("general series rebind and reorder atomically while preserving legend, data, and V2 restore", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");
 
@@ -636,6 +639,33 @@ test("general legend snapshots preserve order, hidden state, pane filtering, lif
     });
     margin.set_data([{ id: "m", x: 1, y: 4 }]);
 
+    const initial_order = chart.general_series_order().map((series) => series.id);
+    const reordered_first = chart.set_general_series_order(
+      [hidden, revenue],
+      first_pane.pane_index(),
+    );
+    const rejected_order = chart.set_general_series_order([revenue], first_pane.pane_index());
+    revenue.apply_options({
+      pane: second_pane.pane_index(),
+      x_axis_id: "legend-b-x",
+      y_axis_id: "legend-b-y",
+    });
+    revenue.update_data([{ id: "r", x: 1, y: 5 }]);
+    const reordered_second = chart.set_general_series_order(
+      [margin, revenue],
+      second_pane.pane_index(),
+    );
+    let rejected_rebind = null;
+    try {
+      revenue.apply_options({ x_axis_id: "missing-axis" });
+    } catch (error) {
+      rejected_rebind = error.code;
+    }
+    const final_order = chart.general_series_order().map((series) => series.id);
+    const pane_order = chart
+      .general_series_order(second_pane.pane_index())
+      .map((series) => series.id);
+
     let invalid_pane = null;
     try {
       chart.general_legend_snapshot(-1);
@@ -663,7 +693,15 @@ test("general legend snapshots preserve order, hidden state, pane filtering, lif
       rejected_axis_update,
       x_axis_options,
       rejected_update,
+      rejected_rebind,
+      reordered_first,
+      reordered_second,
+      rejected_order,
+      initial_order,
+      final_order,
+      pane_order,
       series_identity_preserved: revenue.id === revenue_id,
+      revenue_data: revenue.data_at(0),
       revenue_options,
       all,
       first_only,
@@ -684,20 +722,27 @@ test("general legend snapshots preserve order, hidden state, pane filtering, lif
   expect(result.rejected_axis_update).toBe("invalid_options");
   expect(result.x_axis_options).toMatchObject({ title: "Updated X", reverse: true, tick_count: null });
   expect(result.rejected_update).toBe("invalid_options");
+  expect(result.rejected_rebind).toBe("invalid_options");
+  expect(result.reordered_first).toBe(true);
+  expect(result.reordered_second).toBe(true);
+  expect(result.rejected_order).toBe(false);
   expect(result.series_identity_preserved).toBe(true);
+  expect(result.initial_order).toHaveLength(3);
+  expect(result.final_order).toEqual([result.initial_order[1], result.initial_order[2], result.initial_order[0]]);
+  expect(result.pane_order).toEqual([result.initial_order[2], result.initial_order[0]]);
+  expect(result.revenue_data).toMatchObject({ row_id: "r", value: 5 });
   expect(result.revenue_options).toMatchObject({ title: "Updated revenue", color: "#654321" });
   expect(result.all.items).toMatchObject([
-    { pane: 1, kind: "xy_line", title: "Updated revenue", color: "#654321", visible: true },
     { pane: 1, kind: "scatter", title: "Hidden samples", color: null, visible: false },
     { pane: 2, kind: "xy_area", title: "Margin", color: "#abcdef", visible: true },
+    { pane: 2, kind: "xy_line", title: "Updated revenue", color: "#654321", visible: true },
   ]);
   expect(result.first_only.items).toMatchObject([
-    { kind: "xy_line", title: "Updated revenue", visible: true },
     { kind: "scatter", title: "Hidden samples", visible: false },
   ]);
   expect(result.after_remove.items).toMatchObject([
-    { kind: "xy_line", title: "Updated revenue" },
     { kind: "xy_area", title: "Margin" },
+    { kind: "xy_line", title: "Updated revenue" },
   ]);
   expect(result.restore_version).toBe(2);
   expect(result.restored).toEqual(result.before_restore);

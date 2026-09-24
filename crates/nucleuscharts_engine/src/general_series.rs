@@ -991,6 +991,52 @@ impl GeneralSeriesRegistry {
         self.series.iter_mut().find(|series| series.id == id)
     }
 
+    fn ids(&self, pane_id: Option<PaneId>) -> Vec<GeneralSeriesId> {
+        self.series
+            .iter()
+            .filter(|series| pane_id.is_none_or(|pane_id| series.pane_id == pane_id))
+            .map(GeneralSeries::id)
+            .collect()
+    }
+
+    fn set_order(&mut self, pane_id: Option<PaneId>, ids: &[GeneralSeriesId]) -> bool {
+        let positions = self
+            .series
+            .iter()
+            .enumerate()
+            .filter(|(_, series)| pane_id.is_none_or(|pane_id| series.pane_id == pane_id))
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if positions.len() != ids.len()
+            || ids.iter().copied().collect::<HashSet<_>>().len() != ids.len()
+        {
+            return false;
+        }
+        let mut current = positions
+            .iter()
+            .map(|&index| {
+                let series = self.series[index].clone();
+                (series.id, series)
+            })
+            .collect::<HashMap<_, _>>();
+        if ids.iter().any(|id| !current.contains_key(id)) {
+            return false;
+        }
+
+        let ordered = ids
+            .iter()
+            .map(|id| {
+                current
+                    .remove(id)
+                    .expect("a validated general series order contains only live ids")
+            })
+            .collect::<Vec<_>>();
+        for (index, series) in positions.into_iter().zip(ordered) {
+            self.series[index] = series;
+        }
+        true
+    }
+
     pub(crate) fn reference_iter(&self) -> impl Iterator<Item = &GeneralReference> {
         self.references.iter()
     }
@@ -1504,18 +1550,49 @@ impl ChartEngine {
         let pane = self
             .pane_index_for_id(current.pane_id)
             .ok_or_else(|| invalid("general series references a stale pane"))?;
-        if options.kind != current.kind
-            || options.pane != pane
-            || options.dataset != current.dataset
-            || options.x_axis_id != current.x_axis_id
-            || options.y_axis_id != current.y_axis_id
+        if options.kind != current.kind || options.dataset != current.dataset {
+            return Err(invalid("general series kind and dataset are structural"));
+        }
+        let current_domain = self
+            .pane_horizontal_domain(pane)
+            .ok_or_else(|| invalid("general series references a stale pane"))?;
+        let target_pane_id = self
+            .pane_stable_id(options.pane)
+            .ok_or_else(|| invalid("general series references a stale target pane"))?;
+        let target_domain = self
+            .pane_horizontal_domain(options.pane)
+            .ok_or_else(|| invalid("general series target pane has no horizontal domain"))?;
+        let current_x = self
+            .general_axis(&current.x_axis_id)
+            .ok_or_else(|| invalid("general series current X axis does not exist"))?;
+        let current_y = self
+            .general_axis(&current.y_axis_id)
+            .ok_or_else(|| invalid("general series current Y axis does not exist"))?;
+        let target_x = self
+            .general_axis(&options.x_axis_id)
+            .ok_or_else(|| invalid("general series target X axis does not exist"))?;
+        let target_y = self
+            .general_axis(&options.y_axis_id)
+            .ok_or_else(|| invalid("general series target Y axis does not exist"))?;
+        if target_x.pane_id() != target_pane_id
+            || target_y.pane_id() != target_pane_id
+            || target_x.dimension() != AxisDimension::X
+            || target_y.dimension() != AxisDimension::Y
         {
             return Err(invalid(
-                "general series kind, pane, dataset, and axis bindings are structural",
+                "general series target axes must be X/Y axes in its target pane",
+            ));
+        }
+        if target_domain != current_domain
+            || target_x.scale() != current_x.scale()
+            || target_y.scale() != current_y.scale()
+        {
+            return Err(invalid(
+                "general series rebinding requires equivalent pane and axis scale semantics",
             ));
         }
         validate_presentation(&options)?;
-        self.validate_layout_compatibility(current.pane_id, &options, Some(id))?;
+        self.validate_layout_compatibility(target_pane_id, &options, Some(id))?;
 
         let registry = self
             .general_series
@@ -1524,7 +1601,13 @@ impl ChartEngine {
         let series = registry
             .get_mut(id)
             .expect("a resolved general series remains live during one mutation");
-        let radius_changed = series.point_radius != options.point_radius;
+        let geometry_binding_changed = series.pane_id != target_pane_id
+            || series.x_axis_id != options.x_axis_id
+            || series.y_axis_id != options.y_axis_id
+            || series.point_radius != options.point_radius;
+        series.pane_id = target_pane_id;
+        series.x_axis_id = options.x_axis_id;
+        series.y_axis_id = options.y_axis_id;
         series.visible = options.visible;
         series.title = options.title;
         series.color = options.color;
@@ -1533,7 +1616,7 @@ impl ChartEngine {
         series.group_id = options.group_id;
         series.stack_id = options.stack_id;
         series.stack_mode = options.stack_mode;
-        if radius_changed {
+        if geometry_binding_changed {
             registry.scatter_spatial.get_mut().remove(&id);
         }
         self.invalidate_frame_all();
@@ -1569,6 +1652,43 @@ impl ChartEngine {
             .filter(|series| series.pane_id == pane_id)
             .map(GeneralSeries::id)
             .collect()
+    }
+
+    #[doc(hidden)]
+    pub fn general_series_order(&self, pane_index: Option<usize>) -> Vec<GeneralSeriesId> {
+        let pane_id = match pane_index {
+            Some(index) => match self.pane_stable_id(index) {
+                Some(pane_id) => Some(pane_id),
+                None => return Vec::new(),
+            },
+            None => None,
+        };
+        self.general_series
+            .as_ref()
+            .map_or_else(Vec::new, |registry| registry.ids(pane_id))
+    }
+
+    #[doc(hidden)]
+    pub fn set_general_series_order(
+        &mut self,
+        pane_index: Option<usize>,
+        ids: Vec<GeneralSeriesId>,
+    ) -> bool {
+        let pane_id = match pane_index {
+            Some(index) => match self.pane_stable_id(index) {
+                Some(pane_id) => Some(pane_id),
+                None => return false,
+            },
+            None => None,
+        };
+        let accepted = match self.general_series.as_mut() {
+            Some(registry) => registry.set_order(pane_id, &ids),
+            None => ids.is_empty(),
+        };
+        if accepted {
+            self.invalidate_frame_all();
+        }
+        accepted
     }
 
     #[doc(hidden)]

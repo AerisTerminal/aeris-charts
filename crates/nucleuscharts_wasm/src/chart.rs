@@ -2547,6 +2547,16 @@ impl NucleusChart {
         self.inner.borrow().general_series_ids(pane)
     }
 
+    /// General-series paint and legend order (bottom first). `pane < 0` selects every pane.
+    pub fn general_series_order_json(&self, pane: i32) -> String {
+        self.inner.borrow().general_series_order_json(pane)
+    }
+
+    /// Reorder every general series in the selected scope. A bad permutation is rejected.
+    pub fn set_general_series_order(&mut self, pane: i32, ids: Vec<u32>) -> bool {
+        self.inner.borrow_mut().set_general_series_order(pane, ids)
+    }
+
     pub fn general_series_catalog_json(&self) -> String {
         self.inner.borrow().general_series_catalog_json()
     }

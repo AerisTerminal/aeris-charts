@@ -659,6 +659,28 @@ impl ChartInner {
             .collect()
     }
 
+    pub fn general_series_order_json(&self, pane: i32) -> String {
+        let ids = self
+            .engine
+            .general_series_order((pane >= 0).then_some(pane as usize))
+            .into_iter()
+            .map(GeneralSeriesId::get)
+            .collect::<Vec<_>>();
+        json!(ids).to_string()
+    }
+
+    pub fn set_general_series_order(&mut self, pane: i32, ids: Vec<u32>) -> bool {
+        let Some(ids) = ids
+            .into_iter()
+            .map(GeneralSeriesId::from_raw)
+            .collect::<Option<Vec<_>>>()
+        else {
+            return false;
+        };
+        self.engine
+            .set_general_series_order((pane >= 0).then_some(pane as usize), ids)
+    }
+
     /// Rehydrate browser handles after an atomic persistence restore.
     pub fn general_series_catalog_json(&self) -> String {
         let series = (0..self.engine.panes.len())

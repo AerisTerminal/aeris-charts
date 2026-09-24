@@ -28,7 +28,7 @@ import type {
   feature_series_kind, frame_stats,
   footprint_bar, footprint_series_api, footprint_series_options, footprint_trade, footprint_trade_columns,
   general_accessibility_snapshot, general_axis_api, general_axis_options, general_axis_presentation_options, general_brush_snapshot, general_legend_snapshot, general_pane_options, general_reference_api, general_reference_options, general_reference_value, general_series_api, general_series_hit,
-  general_series_kind, general_series_options, general_series_presentation_options, general_shared_tooltip_snapshot, general_tooltip_snapshot, general_update_options, general_xy_row,
+  general_series_kind, general_series_options, general_shared_tooltip_snapshot, general_tooltip_snapshot, general_update_options, general_xy_row,
   box_plot_row, bubble_columns, bubble_row, category_box_columns, category_error_columns, category_heatmap_columns, category_range_columns, category_xy_columns, numeric_error_columns, numeric_heatmap_columns, numeric_range_columns, numeric_xy_columns,
   error_bar_row, heatmap_grid_row, range_area_row, temporal_error_columns, temporal_heatmap_columns, temporal_range_columns, temporal_xy_columns,
   ingestion_diagnostics,
@@ -1086,8 +1086,8 @@ class general_series_impl implements general_series_api {
     readonly id: number,
     private readonly dataset: number,
     readonly kind: general_series_kind,
-    readonly x_axis_id: string,
-    readonly y_axis_id: string,
+    private x_axis_id: string,
+    private y_axis_id: string,
     private readonly chart: chart_impl,
   ) {}
 
@@ -1116,11 +1116,13 @@ class general_series_impl implements general_series_api {
     return options;
   }
 
-  apply_options(patch: Partial<general_series_presentation_options>): void {
+  apply_options(patch: Partial<general_series_options>): void {
     const options = { ...this.options(), ...patch };
     parse_general_result<null>(
       this.chart.wasm.update_general_series_options_result_json(this.id, JSON.stringify(options)),
     );
+    this.x_axis_id = options.x_axis_id;
+    this.y_axis_id = options.y_axis_id;
     this.chart.repaint();
   }
 
@@ -4517,6 +4519,25 @@ export class chart_impl implements chart_api {
 
   general_series_handle(id: number): general_series_impl | null {
     return this.general_series_by_id.get(id) ?? null;
+  }
+
+  general_series_order(pane?: number): general_series_api[] {
+    if (pane !== undefined && (!Number.isInteger(pane) || pane < 0)) {
+      throw new nucleuscharts_error("invalid_options", "general series order pane must be a non-negative integer");
+    }
+    const ids = JSON.parse(this.wasm.general_series_order_json(pane ?? -1)) as number[];
+    return ids
+      .map((id) => this.general_series_by_id.get(id))
+      .filter((series): series is general_series_impl => series !== undefined);
+  }
+
+  set_general_series_order(ordered: general_series_api[], pane?: number): boolean {
+    if (pane !== undefined && (!Number.isInteger(pane) || pane < 0)) return false;
+    if (ordered.some((series) => this.general_series_by_id.get(series.id) !== series)) return false;
+    const ids = new Uint32Array(ordered.map((series) => series.id));
+    if (!this.wasm.set_general_series_order(pane ?? -1, ids)) return false;
+    this.repaint();
+    return true;
   }
 
   set_series_order(ordered: series_api[]): boolean {
