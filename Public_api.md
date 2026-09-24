@@ -168,6 +168,10 @@ Numeric and temporal general-axis handles expose `pan`, `zoom`, and `reset_view`
 Temporal anchors use whole JavaScript-safe epoch milliseconds, and temporal ticks are selected and
 formatted as bounded UTC intervals by the engine.
 
+General-axis `grid_visible` projects tick rules into the clipped pane underlay and respects the
+chart-wide horizontal or vertical grid setting. Numeric `zero_line` draws an independent solid rule
+when zero is visible; shared pixel coordinates are deduplicated across multiple axes.
+
 The same handles expose atomic `apply_options` / `applyOptions` methods for mutable axis configuration,
 series presentation, and compatible general-series pane/axis rebinding. Invalid colors, tick policies,
 grouping, stacking, or bindings leave the complete prior object unchanged. General series expose

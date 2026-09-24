@@ -147,6 +147,10 @@ Validation is structural and atomic:
   explicitly whether they extend the domain.
 - Tick placement, collision removal, grid contribution, titles, and label anchors are engine-owned.
   A host formatter may supply text, but it cannot change tick coordinates.
+- `grid_visible` projects that axis's tick coordinates into the clipped pane underlay when the
+  matching chart-wide grid direction is visible. `zero_line` independently draws a solid rule when
+  zero lies inside a numeric domain. Coincident rules are emitted once, with the zero rule taking
+  precedence, so multiple axes do not darken shared coordinates.
 - Temporal axes select a bounded UTC interval from milliseconds through calendar years. Intraday,
   day, month, and year labels use injected locale month names and the same shared `AxisFrame` as
   numeric and category axes; hosts do not run a parallel date-axis layout.

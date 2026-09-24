@@ -279,7 +279,9 @@ export interface general_axis_options {
   min_tick_gap?: number;
   band_padding_inner?: number;
   band_padding_outer?: number;
+  /** Draw a solid zero rule when zero is inside a numeric domain. */
   zero_line?: boolean;
+  /** Draw this axis's ticks as plot grid rules, subject to the chart-wide grid direction. */
   grid_visible?: boolean;
 }
 

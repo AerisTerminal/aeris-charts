@@ -6,7 +6,9 @@ use nucleuscharts_core::scale::general_scale::{
     BandScale, LinearScale, LogScale, PointScale, SymLogScale, DEFAULT_SYMLOG_CONSTANT,
 };
 use nucleuscharts_core::scale::time_tick_marks::{civil_from_timestamp, days_from_civil};
+use nucleuscharts_core::style::DEFAULT_BORDER_RGB;
 use nucleuscharts_render::color::Color;
+use nucleuscharts_render::draw_list::{LineStyle, Prim};
 
 use crate::{
     axis_metrics::{AxisMetrics, AXIS_FONT_SCALE},
@@ -492,6 +494,190 @@ impl ChartEngine {
             width: self.pane_w,
             height: (pane.height - top - bottom).max(1.0),
         })
+    }
+
+    pub(crate) fn append_general_grid_frame(
+        &self,
+        pane_index: usize,
+        hpr: f64,
+        vpr: f64,
+        out: &mut Vec<Prim>,
+    ) {
+        let Some(pane_id) = self.pane_stable_id(pane_index) else {
+            return;
+        };
+        let grid = &self.options.get().grid;
+        let has_rules = self.general_axes.iter().any(|axis| {
+            axis.pane_id == pane_id
+                && axis.visible
+                && (axis.zero_line
+                    || axis.grid_visible
+                        && match axis.dimension {
+                            AxisDimension::X => grid.vert_lines.visible,
+                            AxisDimension::Y => grid.horz_lines.visible,
+                            AxisDimension::Angle | AxisDimension::Radius => false,
+                        })
+        });
+        if !has_rules {
+            return;
+        }
+        let Some(plot) = self.general_plot_rect(pane_index) else {
+            return;
+        };
+        let metrics = self.axis_metrics();
+        let fallback = Color::rgb(
+            DEFAULT_BORDER_RGB.0,
+            DEFAULT_BORDER_RGB.1,
+            DEFAULT_BORDER_RGB.2,
+        );
+        let vertical_color = Color::parse_css(&grid.vert_lines.color).unwrap_or(fallback);
+        let horizontal_color = Color::parse_css(&grid.horz_lines.color).unwrap_or(fallback);
+        let zero_color = Color::parse_css(&self.options.get().right_price_scale.border_color)
+            .unwrap_or(fallback);
+        let vertical_style = crate::line_style_from_u8(grid.vert_lines.style);
+        let horizontal_style = crate::line_style_from_u8(grid.horz_lines.style);
+        let mut vertical_grid = Vec::new();
+        let mut horizontal_grid = Vec::new();
+        let mut vertical_zero = Vec::new();
+        let mut horizontal_zero = Vec::new();
+        let mut seen_vertical_grid = HashSet::new();
+        let mut seen_horizontal_grid = HashSet::new();
+        let mut seen_vertical_zero = HashSet::new();
+        let mut seen_horizontal_zero = HashSet::new();
+
+        for axis in self
+            .general_axes
+            .iter()
+            .filter(|axis| axis.pane_id == pane_id && axis.visible)
+        {
+            let range = match axis.dimension {
+                AxisDimension::X => {
+                    if axis.reverse {
+                        (plot.width, 0.0)
+                    } else {
+                        (0.0, plot.width)
+                    }
+                }
+                AxisDimension::Y => {
+                    let bottom = plot.y + plot.height;
+                    if axis.reverse {
+                        (plot.y, bottom)
+                    } else {
+                        (bottom, plot.y)
+                    }
+                }
+                AxisDimension::Angle | AxisDimension::Radius => continue,
+            };
+            let Some(domain) = self.effective_general_axis_domain(axis) else {
+                continue;
+            };
+
+            if axis.grid_visible
+                && match axis.dimension {
+                    AxisDimension::X => grid.vert_lines.visible,
+                    AxisDimension::Y => grid.horz_lines.visible,
+                    AxisDimension::Angle | AxisDimension::Radius => false,
+                }
+            {
+                for tick in axis_ticks(axis, &domain, range.0, range.1, metrics, &self.month_names)
+                {
+                    match axis.dimension {
+                        AxisDimension::X => {
+                            let coordinate = (tick.coordinate * hpr).round() as i32;
+                            if seen_vertical_grid.insert(coordinate) {
+                                vertical_grid.push(coordinate);
+                            }
+                        }
+                        AxisDimension::Y => {
+                            let coordinate = (tick.coordinate * vpr).round() as i32;
+                            if seen_horizontal_grid.insert(coordinate) {
+                                horizontal_grid.push(coordinate);
+                            }
+                        }
+                        AxisDimension::Angle | AxisDimension::Radius => unreachable!(),
+                    }
+                }
+            }
+
+            if axis.zero_line {
+                let GeneralAxisDomain::Numeric(domain) = domain else {
+                    continue;
+                };
+                if domain[0] > 0.0 || domain[1] < 0.0 {
+                    continue;
+                }
+                let Some(coordinate) = NumericAxisScale::new(axis.scale, domain, range.0, range.1)
+                    .and_then(|scale| scale.coordinate(0.0))
+                else {
+                    continue;
+                };
+                match axis.dimension {
+                    AxisDimension::X => {
+                        let coordinate = (coordinate * hpr).round() as i32;
+                        if seen_vertical_zero.insert(coordinate) {
+                            vertical_zero.push(coordinate);
+                        }
+                    }
+                    AxisDimension::Y => {
+                        let coordinate = (coordinate * vpr).round() as i32;
+                        if seen_horizontal_zero.insert(coordinate) {
+                            horizontal_zero.push(coordinate);
+                        }
+                    }
+                    AxisDimension::Angle | AxisDimension::Radius => unreachable!(),
+                }
+            }
+        }
+
+        let top = (plot.y * vpr).round() as i32;
+        let bottom = ((plot.y + plot.height) * vpr).round() as i32;
+        let right = (plot.width * hpr).round() as i32;
+        let vertical_width = hpr.floor().max(1.0) as i32;
+        let horizontal_width = vpr.floor().max(1.0) as i32;
+        for x in vertical_grid {
+            if !seen_vertical_zero.contains(&x) {
+                out.push(Prim::VLine {
+                    x,
+                    y0: top,
+                    y1: bottom,
+                    width: vertical_width,
+                    style: vertical_style,
+                    color: vertical_color,
+                });
+            }
+        }
+        for y in horizontal_grid {
+            if !seen_horizontal_zero.contains(&y) {
+                out.push(Prim::HLine {
+                    y,
+                    x0: 0,
+                    x1: right,
+                    width: horizontal_width,
+                    style: horizontal_style,
+                    color: horizontal_color,
+                });
+            }
+        }
+        for x in vertical_zero {
+            out.push(Prim::VLine {
+                x,
+                y0: top,
+                y1: bottom,
+                width: vertical_width,
+                style: LineStyle::Solid,
+                color: zero_color,
+            });
+        }
+        for y in horizontal_zero {
+            out.push(Prim::HLine {
+                y,
+                x0: 0,
+                x1: right,
+                width: horizontal_width,
+                style: LineStyle::Solid,
+                color: zero_color,
+            });
+        }
     }
 
     pub(crate) fn append_general_axis_frame<F>(&self, out: &mut AxisFrame, measure: &F)

@@ -140,6 +140,115 @@ fn temporal_general_axis_emits_utc_ticks_and_supports_atomic_runtime_view() {
 }
 
 #[test]
+fn general_grid_and_zero_lines_render_below_data_and_follow_axis_policy() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    chart
+        .apply_options(
+            r##"{
+                "grid": {
+                    "vertLines": { "visible": true, "color": "#010203", "style": 2 },
+                    "horzLines": { "visible": true, "color": "#040506", "style": 1 }
+                },
+                "rightPriceScale": { "borderColor": "#070809" }
+            }"##,
+        )
+        .unwrap();
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    let mut x = GeneralAxisOptions::new("grid-x", pane, AxisDimension::X, GeneralScaleType::Linear);
+    x.domain = GeneralAxisDomain::Numeric([-5.0, 5.0]);
+    chart.add_general_axis(x.clone()).unwrap();
+    let mut y = GeneralAxisOptions::new("grid-y", pane, AxisDimension::Y, GeneralScaleType::Linear);
+    y.domain = GeneralAxisDomain::Numeric([-10.0, 10.0]);
+    chart.add_general_axis(y.clone()).unwrap();
+
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let frame = chart.build_frame();
+    let under = &frame.panes[pane].under;
+    let vertical = Color::parse_css("#010203").unwrap();
+    let horizontal = Color::parse_css("#040506").unwrap();
+    let zero = Color::parse_css("#070809").unwrap();
+    assert!(under.iter().any(|primitive| {
+        matches!(primitive, Prim::VLine { color, style: LineStyle::Dashed, .. } if *color == vertical)
+    }));
+    assert!(under.iter().any(|primitive| {
+        matches!(primitive, Prim::HLine { color, style: LineStyle::Dotted, .. } if *color == horizontal)
+    }));
+    assert_eq!(
+        under
+            .iter()
+            .filter(|primitive| {
+                matches!(primitive, Prim::VLine { color, style: LineStyle::Solid, .. } if *color == zero)
+                    || matches!(primitive, Prim::HLine { color, style: LineStyle::Solid, .. } if *color == zero)
+            })
+            .count(),
+        2
+    );
+    let zero_x = under
+        .iter()
+        .find_map(|primitive| match primitive {
+            Prim::VLine { x, color, .. } if *color == zero => Some(*x),
+            _ => None,
+        })
+        .unwrap();
+    let zero_y = under
+        .iter()
+        .find_map(|primitive| match primitive {
+            Prim::HLine { y, color, .. } if *color == zero => Some(*y),
+            _ => None,
+        })
+        .unwrap();
+    assert!(under.iter().all(|primitive| {
+        !matches!(primitive, Prim::VLine { x, color, .. } if *x == zero_x && *color == vertical)
+            && !matches!(primitive, Prim::HLine { y, color, .. } if *y == zero_y && *color == horizontal)
+    }));
+
+    chart
+        .apply_options(r#"{"grid":{"vertLines":{"visible":false}}}"#)
+        .unwrap();
+    let chart_vertical_disabled = chart.build_frame();
+    assert!(chart_vertical_disabled.panes[pane]
+        .under
+        .iter()
+        .all(|primitive| !matches!(primitive, Prim::VLine { color, .. } if *color == vertical)));
+    assert!(chart_vertical_disabled.panes[pane]
+        .under
+        .iter()
+        .any(|primitive| matches!(primitive, Prim::VLine { color, .. } if *color == zero)));
+    chart
+        .apply_options(r#"{"grid":{"vertLines":{"visible":true}}}"#)
+        .unwrap();
+
+    y.grid_visible = false;
+    y.zero_line = false;
+    chart.update_general_axis_options(y).unwrap();
+    let y_disabled = chart.build_frame();
+    assert!(y_disabled.panes[pane]
+        .under
+        .iter()
+        .all(|primitive| !matches!(primitive, Prim::HLine { color, .. } if *color == horizontal || *color == zero)));
+    assert!(y_disabled.panes[pane]
+        .under
+        .iter()
+        .any(|primitive| matches!(primitive, Prim::VLine { color, .. } if *color == vertical || *color == zero)));
+
+    x.grid_visible = false;
+    x.zero_line = false;
+    chart.update_general_axis_options(x).unwrap();
+    let disabled = chart.build_frame();
+    assert!(disabled.panes[pane].under.iter().all(|primitive| {
+        !matches!(primitive, Prim::VLine { color, .. } | Prim::HLine { color, .. }
+            if *color == vertical || *color == horizontal || *color == zero)
+    }));
+}
+
+#[test]
 fn general_legend_snapshot_preserves_series_order_visibility_filtering_and_removal() {
     let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
     let pane_a = chart

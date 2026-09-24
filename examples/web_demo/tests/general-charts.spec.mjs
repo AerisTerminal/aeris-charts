@@ -350,7 +350,7 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
       horizontal_domain: { type: "continuous", scale: "linear" },
     });
     const x_axis = chart.add_axis({ id: "sample-x", pane: scatter_pane.pane_index(), dimension: "x", scale: "linear" });
-    chart.add_axis({ id: "sample-y", pane: scatter_pane.pane_index(), dimension: "y", scale: "symlog" });
+    const y_axis = chart.add_axis({ id: "sample-y", pane: scatter_pane.pane_index(), dimension: "y", scale: "symlog" });
     const scatter = chart.add_series("scatter", {
       pane: scatter_pane.pane_index(),
       x_axis_id: "sample-x",
@@ -436,6 +436,13 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
     };
 
     const before_custom_label = chart.take_screenshot().toDataURL();
+    x_axis.apply_options({ grid_visible: false, zero_line: false });
+    y_axis.apply_options({ grid_visible: false, zero_line: false });
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const grid_policy_changed = chart.take_screenshot().toDataURL() !== before_custom_label;
+    x_axis.apply_options({ grid_visible: true, zero_line: true });
+    y_axis.apply_options({ grid_visible: true, zero_line: true });
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     scatter.update_data_typed({
       ids: [102],
       labels: ["Zero marker"],
@@ -507,6 +514,7 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
     host.remove();
     return {
       before_remove,
+      grid_policy_changed,
       custom_label_changed,
       updated_custom_label,
       rejected_label,
@@ -547,6 +555,7 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
   expect(result.before_remove.scatter_series).toEqual(["scatter"]);
   expect(result.before_remove.screenshot).toBeGreaterThan(1000);
   expect(result.before_remove.blocked_axis_remove).toBe(false);
+  expect(result.grid_policy_changed).toBe(true);
   expect(result.custom_label_changed).toBe(true);
   expect(result.updated_custom_label).toBe("Zero marker");
   expect(result.rejected_label).toBe("resource_limit");

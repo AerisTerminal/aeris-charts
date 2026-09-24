@@ -1462,6 +1462,7 @@ impl ChartEngine {
                         &mut cache.under.prims,
                     );
                 }
+                self.append_general_grid_frame(pi, hpr, vpr, &mut cache.under.prims);
                 self.build_native_image_watermark_frame(pi, hpr, vpr, &mut cache.under.prims);
                 cache.under.revision = self.frame_invalidation.scene;
                 cache.under.coordinate_revision = self.frame_invalidation.coordinate;

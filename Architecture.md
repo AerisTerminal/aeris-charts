@@ -84,9 +84,11 @@ runtime view is independent of the configured/automatic base domain and can be r
 axis options. Temporal axes use that same runtime-view contract with whole epoch-millisecond anchors and
 emit bounded UTC millisecond-through-calendar-year ticks through the shared `AxisFrame`; locale injection
 supplies month names without moving date math into a host or backend. Polar tick execution remains deferred
-until its owning transform slice is implemented. Grid policy is likewise retained
-for the series/grid increment rather than painting grid rules above data in the axis layer. Financial
-panes allocate no general axis storage and retain their established price/time axis output unchanged.
+until its owning transform slice is implemented. Cartesian grid and numeric zero-line policies execute
+from the same effective domains into the retained pane underlay, below references and series. Axis-local
+grid visibility combines with the chart-wide direction style, coincident device-pixel rules are deduplicated,
+and an enabled zero line replaces a coincident ordinary grid rule. Financial panes allocate no general
+axis storage and retain their established price/time axis output unchanged.
 
 General Cartesian data has a separate engine-owned typed-column store beside `DataLayer`. The first
 storage slice accepts numeric, epoch-millisecond temporal, and interned-category X columns plus numeric Y
