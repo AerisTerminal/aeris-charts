@@ -672,6 +672,107 @@ test("public linear axes render and navigate the complete finite numeric domain"
   ]);
 });
 
+test("public general axes retain typed explicit ticks and formatted labels", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const host = document.createElement("div");
+    Object.assign(host.style, { width: "640px", height: "420px" });
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    chart.resize(640, 420, 1);
+    const pane = chart.add_pane({
+      preserve_empty: true,
+      horizontal_domain: { type: "continuous", scale: "linear" },
+    });
+    const x_axis = chart.add_axis({
+      id: "explicit-x",
+      pane: pane.pane_index(),
+      dimension: "x",
+      scale: "linear",
+      domain: [0, 10],
+      ticks: [
+        { type: "numeric", value: 0, label: "Floor" },
+        { type: "numeric", value: 5 },
+        { type: "numeric", value: 20, label: "Clipped" },
+      ],
+    });
+    chart.add_axis({
+      id: "explicit-y",
+      pane: pane.pane_index(),
+      dimension: "y",
+      scale: "linear",
+      domain: [0, 10],
+    });
+    const scatter = chart.add_series("scatter", {
+      pane: pane.pane_index(), x_axis_id: "explicit-x", y_axis_id: "explicit-y",
+    });
+    scatter.set_data([{ x: 0, y: 1 }, { x: 5, y: 5 }, { x: 10, y: 9 }]);
+
+    const temporal_pane = chart.add_pane({ preserve_empty: true, horizontal_domain: { type: "temporal" } });
+    const jan1 = new Date("2026-01-01T00:00:00.000Z");
+    const jan2 = new Date("2026-01-02T00:00:00.000Z");
+    const temporal_axis = chart.add_axis({
+      id: "explicit-time",
+      pane: temporal_pane.pane_index(),
+      dimension: "x",
+      scale: "temporal",
+      domain: [jan1, jan2],
+      ticks: [{ type: "temporal", value: jan1, label: "Open" }],
+    });
+
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const before = chart.take_screenshot().toDataURL();
+    const initial_token = x_axis.options();
+    x_axis.apply_options({
+      ticks: [
+        { type: "numeric", value: 0, label: "Baseline" },
+        { type: "numeric", value: 10, label: "Ceiling" },
+      ],
+    });
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const changed = before !== chart.take_screenshot().toDataURL();
+    let rejected = null;
+    try {
+      x_axis.apply_options({ tick_count: 2 });
+    } catch (error) {
+      rejected = error.code;
+    }
+    const state = chart.export_state();
+    const output = {
+      initial_ticks: initial_token.ticks,
+      updated_ticks: x_axis.options().ticks,
+      temporal_ticks: temporal_axis.options().ticks,
+      changed,
+      rejected,
+      persisted_ticks: state.axes.find((axis) => axis.id === "explicit-x").ticks,
+    };
+    chart.remove();
+    host.remove();
+    return output;
+  });
+
+  expect(result).toEqual({
+    initial_ticks: [
+      { type: "numeric", value: 0, label: "Floor" },
+      { type: "numeric", value: 5 },
+      { type: "numeric", value: 20, label: "Clipped" },
+    ],
+    updated_ticks: [
+      { type: "numeric", value: 0, label: "Baseline" },
+      { type: "numeric", value: 10, label: "Ceiling" },
+    ],
+    temporal_ticks: [{ type: "temporal", value: 1767225600000, label: "Open" }],
+    changed: true,
+    rejected: "invalid_options",
+    persisted_ticks: [
+      { type: "numeric", value: 0, label: "Baseline" },
+      { type: "numeric", value: 10, label: "Ceiling" },
+    ],
+  });
+});
+
 test("general auto sizing disables cleanly and survives hidden-container reveal", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
 

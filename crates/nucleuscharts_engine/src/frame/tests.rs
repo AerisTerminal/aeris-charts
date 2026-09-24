@@ -7,8 +7,8 @@ use super::conflation::{
 use super::*;
 use crate::{
     AxisDimension, CategoryScaleType, ContinuousScaleType, GeneralAxisDomain, GeneralAxisOptions,
-    GeneralRowId, GeneralRowIdentity, GeneralScaleType, GeneralSeriesKind, GeneralSeriesOptions,
-    GeneralStackMode, GeneralXyInput, HorizontalDomain,
+    GeneralAxisTick, GeneralRowId, GeneralRowIdentity, GeneralScaleType, GeneralSeriesKind,
+    GeneralSeriesOptions, GeneralStackMode, GeneralXyInput, HorizontalDomain,
 };
 use nucleuscharts_core::model::data_layer::DataLayer;
 use nucleuscharts_core::model::plot_list::{PlotList, PlotValues};
@@ -224,6 +224,136 @@ fn complete_finite_numeric_domain_builds_geometry_ticks_and_runtime_views() {
     };
     assert_eq!(panned[0], 0.0);
     assert!((panned[1] / f64::MAX - 1.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn explicit_numeric_ticks_drive_labels_grids_clipping_and_live_updates() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    let mut x =
+        GeneralAxisOptions::new("ticks-x", pane, AxisDimension::X, GeneralScaleType::Linear);
+    x.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+    x.zero_line = false;
+    x.ticks = Some(vec![
+        GeneralAxisTick::Numeric {
+            value: 0.0,
+            label: Some("Start".into()),
+        },
+        GeneralAxisTick::Numeric {
+            value: 5.0,
+            label: None,
+        },
+        GeneralAxisTick::Numeric {
+            value: 20.0,
+            label: Some("Outside".into()),
+        },
+    ]);
+    chart.add_general_axis(x.clone()).unwrap();
+    let mut y =
+        GeneralAxisOptions::new("ticks-y", pane, AxisDimension::Y, GeneralScaleType::Linear);
+    y.domain = GeneralAxisDomain::Numeric([0.0, 1.0]);
+    y.grid_visible = false;
+    y.zero_line = false;
+    chart.add_general_axis(y).unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+    let axis = chart.build_axis_frame(80.0, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    assert!(axis.labels.iter().any(|label| label.text == "Start"));
+    assert!(axis.labels.iter().any(|label| label.text == "5"));
+    assert!(!axis.labels.iter().any(|label| label.text == "Outside"));
+    let frame = chart.build_frame();
+    assert_eq!(
+        frame.panes[pane]
+            .under
+            .iter()
+            .filter(|primitive| matches!(primitive, Prim::VLine { .. }))
+            .count(),
+        2
+    );
+
+    let handle = chart.general_axis("ticks-x").unwrap().handle();
+    x.ticks = Some(vec![GeneralAxisTick::Numeric {
+        value: 10.0,
+        label: Some("End".into()),
+    }]);
+    chart.update_general_axis_options(x).unwrap();
+    assert_eq!(chart.general_axis("ticks-x").unwrap().handle(), handle);
+    let updated = chart.build_axis_frame(80.0, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    assert!(updated.labels.iter().any(|label| label.text == "End"));
+    assert!(!updated.labels.iter().any(|label| label.text == "Start"));
+}
+
+#[test]
+fn explicit_category_and_temporal_ticks_use_typed_values_and_labels() {
+    let mut category = ChartEngine::new(480.0, 280.0, 1.0);
+    let pane = category
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Point,
+            },
+        )
+        .unwrap();
+    let mut axis = GeneralAxisOptions::new(
+        "category-x",
+        pane,
+        AxisDimension::X,
+        GeneralScaleType::Point,
+    );
+    axis.domain = GeneralAxisDomain::Category(vec!["A".into(), "B".into(), "C".into()]);
+    axis.ticks = Some(vec![
+        GeneralAxisTick::Category {
+            value: "B".into(),
+            label: Some("Beta".into()),
+        },
+        GeneralAxisTick::Category {
+            value: "missing".into(),
+            label: Some("Missing".into()),
+        },
+    ]);
+    category.add_general_axis(axis).unwrap();
+    category.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let frame = category.build_axis_frame(80.0, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    assert!(frame.labels.iter().any(|label| label.text == "Beta"));
+    assert!(!frame.labels.iter().any(|label| label.text == "A"));
+    assert!(!frame.labels.iter().any(|label| label.text == "Missing"));
+
+    const JAN_1_2026: i64 = 1_767_225_600_000;
+    const JAN_2_2026: i64 = 1_767_312_000_000;
+    const JAN_3_2026: i64 = 1_767_398_400_000;
+    let mut temporal = ChartEngine::new(480.0, 280.0, 1.0);
+    let pane = temporal
+        .add_pane_with_domain(true, HorizontalDomain::Temporal)
+        .unwrap();
+    let mut axis = GeneralAxisOptions::new(
+        "temporal-x",
+        pane,
+        AxisDimension::X,
+        GeneralScaleType::Temporal,
+    );
+    axis.domain = GeneralAxisDomain::Temporal([JAN_1_2026, JAN_3_2026]);
+    axis.ticks = Some(vec![
+        GeneralAxisTick::Temporal {
+            value: JAN_1_2026,
+            label: Some("Open".into()),
+        },
+        GeneralAxisTick::Temporal {
+            value: JAN_2_2026,
+            label: None,
+        },
+    ]);
+    temporal.add_general_axis(axis).unwrap();
+    temporal.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let frame = temporal.build_axis_frame(80.0, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    assert!(frame.labels.iter().any(|label| label.text == "Open"));
+    assert!(frame.labels.iter().any(|label| label.text == "2 Jan"));
 }
 
 #[test]

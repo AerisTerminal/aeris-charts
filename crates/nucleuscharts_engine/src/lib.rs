@@ -69,9 +69,9 @@ pub use frame::{
 };
 pub use general_axes::{
     AxisDimension, AxisPosition, GeneralAxis, GeneralAxisDomain, GeneralAxisOptions,
-    GeneralScaleType, MAX_GENERAL_AXES, MAX_GENERAL_AXIS_CATEGORIES,
+    GeneralAxisTick, GeneralScaleType, MAX_GENERAL_AXES, MAX_GENERAL_AXIS_CATEGORIES,
     MAX_GENERAL_AXIS_CATEGORY_BYTES, MAX_GENERAL_AXIS_ID_BYTES, MAX_GENERAL_AXIS_TICKS,
-    MAX_GENERAL_AXIS_TITLE_BYTES, MAX_GENERAL_TEMPORAL_MILLISECONDS,
+    MAX_GENERAL_AXIS_TICK_BYTES, MAX_GENERAL_AXIS_TITLE_BYTES, MAX_GENERAL_TEMPORAL_MILLISECONDS,
 };
 #[doc(hidden)]
 pub use general_data::{

@@ -115,6 +115,10 @@ type general_scale_type =
 type numeric_domain = "auto" | readonly [number, number];
 type temporal_domain = "auto" | readonly [Date | number, Date | number];
 type category_domain = "auto" | readonly string[];
+type general_axis_tick =
+  | { type: "numeric"; value: number; label?: string }
+  | { type: "temporal"; value: Date | number; label?: string }
+  | { type: "category"; value: string; label?: string };
 
 interface general_axis_options {
   id: string;
@@ -127,6 +131,7 @@ interface general_axis_options {
   visible?: boolean;
   title?: string;
   tick_count?: number;
+  ticks?: readonly general_axis_tick[];
   min_tick_gap?: number;
   band_padding_inner?: number;
   band_padding_outer?: number;
@@ -145,8 +150,15 @@ Validation is structural and atomic:
   not partially mutate the axis.
 - Automatic domains combine only visible series bound to that axis. Reference components declare
   explicitly whether they extend the domain.
+- On executable Cartesian axes, `ticks` replaces automatic tick selection with at most 512 typed
+  values. Values must match the axis scale and be unique; numeric values are finite, logarithmic values are positive, and temporal
+  values are JavaScript-safe epoch milliseconds. A supplied label is retained as portable engine
+  state and reaches every backend; an omitted label uses the built-in numeric, UTC temporal, or
+  category formatter. Explicit ticks outside the effective domain are clipped. `tick_count` and
+  `ticks` are mutually exclusive so accepted options never carry two competing selection policies.
+  Polar explicit ticks are rejected until polar tick execution is implemented.
 - Tick placement, collision removal, grid contribution, titles, and label anchors are engine-owned.
-  A host formatter may supply text, but it cannot change tick coordinates.
+  A host may preformat an explicit tick label, but it cannot change tick coordinates.
 - `grid_visible` projects that axis's tick coordinates into the clipped pane underlay when the
   matching chart-wide grid direction is visible. `zero_line` independently draws a solid rule when
   zero lies inside a numeric domain. Coincident rules are emitted once, with the zero rule taking

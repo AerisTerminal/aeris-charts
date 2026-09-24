@@ -384,6 +384,7 @@ impl ChartEngine {
                     visible: axis.visible(),
                     title: axis.title().map(str::to_string),
                     tick_count: axis.tick_count(),
+                    ticks: axis.ticks().map(<[_]>::to_vec),
                     min_tick_gap: axis.min_tick_gap(),
                     band_padding_inner: axis.band_padding_inner(),
                     band_padding_outer: axis.band_padding_outer(),
@@ -1329,14 +1330,23 @@ mod tests {
                 },
             )
             .unwrap();
-        chart
-            .add_general_axis(crate::GeneralAxisOptions::new(
-                "category-x",
-                pane,
-                crate::AxisDimension::X,
-                crate::GeneralScaleType::Band,
-            ))
-            .unwrap();
+        let mut category_axis = crate::GeneralAxisOptions::new(
+            "category-x",
+            pane,
+            crate::AxisDimension::X,
+            crate::GeneralScaleType::Band,
+        );
+        category_axis.ticks = Some(vec![
+            crate::GeneralAxisTick::Category {
+                value: "Jan".into(),
+                label: Some("January".into()),
+            },
+            crate::GeneralAxisTick::Category {
+                value: "Feb".into(),
+                label: None,
+            },
+        ]);
+        chart.add_general_axis(category_axis).unwrap();
         chart
             .add_general_axis(crate::GeneralAxisOptions::new(
                 "category-y",
@@ -1388,6 +1398,8 @@ mod tests {
         let document = chart.export_state_json().unwrap();
         let value: serde_json::Value = serde_json::from_str(&document).unwrap();
         assert_eq!(value["schema_version"], 2);
+        assert_eq!(value["axes"][0]["ticks"][0]["label"], "January");
+        assert!(value["axes"][0]["ticks"][1].get("label").is_none());
         assert_eq!(value["series"][0]["group_id"], "sales");
         assert_eq!(value["series"][0]["stack_id"], "share");
         assert_eq!(value["series"][0]["stack_mode"], "Percent");

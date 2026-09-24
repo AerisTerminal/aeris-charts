@@ -168,6 +168,11 @@ Numeric and temporal general-axis handles expose `pan`, `zoom`, and `reset_view`
 Temporal anchors use whole JavaScript-safe epoch milliseconds, and temporal ticks are selected and
 formatted as bounded UTC intervals by the engine.
 
+Executable Cartesian general axes accept bounded typed explicit ticks with optional portable labels. Explicit numeric,
+temporal, and category values drive the same labels and grid coordinates in Canvas2D, WebGPU, GPUI,
+native frames, persistence, and screenshots; omitted labels use the built-in formatter. Explicit
+ticks outside the current view are clipped, and combining `ticks` with `tick_count` is rejected.
+
 General-axis `grid_visible` projects tick rules into the clipped pane underlay and respects the
 chart-wide horizontal or vertical grid setting. Numeric `zero_line` draws an independent solid rule
 when zero is visible; shared pixel coordinates are deduplicated across multiple axes.

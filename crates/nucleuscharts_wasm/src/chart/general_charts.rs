@@ -3,11 +3,11 @@
 use js_sys::{Float64Array, Uint32Array, Uint8Array};
 use nucleuscharts_engine::{
     AxisDimension, AxisPosition, CategoryScaleType, ChartError, ContinuousScaleType,
-    GeneralAxisDomain, GeneralAxisOptions, GeneralBrushRange, GeneralBrushSnapshot,
-    GeneralDatasetId, GeneralHitMode, GeneralReferenceId, GeneralReferenceOptions, GeneralRowId,
-    GeneralRowIdentity, GeneralScaleType, GeneralSeriesId, GeneralSeriesKind, GeneralSeriesOptions,
-    GeneralStackMode, GeneralTooltipSnapshot, GeneralXyInput, HorizontalDomain,
-    MAX_GENERAL_TEMPORAL_MILLISECONDS,
+    GeneralAxisDomain, GeneralAxisOptions, GeneralAxisTick, GeneralBrushRange,
+    GeneralBrushSnapshot, GeneralDatasetId, GeneralHitMode, GeneralReferenceId,
+    GeneralReferenceOptions, GeneralRowId, GeneralRowIdentity, GeneralScaleType, GeneralSeriesId,
+    GeneralSeriesKind, GeneralSeriesOptions, GeneralStackMode, GeneralTooltipSnapshot,
+    GeneralXyInput, HorizontalDomain, MAX_GENERAL_TEMPORAL_MILLISECONDS,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -72,6 +72,8 @@ struct AxisInput {
     title: Option<String>,
     #[serde(default)]
     tick_count: Option<u16>,
+    #[serde(default)]
+    ticks: Option<Vec<GeneralAxisTick>>,
     #[serde(default = "default_tick_gap")]
     min_tick_gap: f64,
     #[serde(default = "default_band_padding")]
@@ -514,6 +516,7 @@ impl ChartInner {
         options.visible = input.visible;
         options.title = input.title;
         options.tick_count = input.tick_count;
+        options.ticks = input.ticks;
         options.min_tick_gap = input.min_tick_gap;
         options.band_padding_inner = input.band_padding_inner;
         options.band_padding_outer = input.band_padding_outer;
@@ -555,6 +558,7 @@ impl ChartInner {
         options.visible = input.visible;
         options.title = input.title;
         options.tick_count = input.tick_count;
+        options.ticks = input.ticks;
         options.min_tick_gap = input.min_tick_gap;
         options.band_padding_inner = input.band_padding_inner;
         options.band_padding_outer = input.band_padding_outer;
@@ -582,6 +586,29 @@ impl ChartInner {
             GeneralAxisDomain::Temporal(value) => json!(value),
             GeneralAxisDomain::Category(value) => json!(value),
         };
+        let ticks = axis.ticks().map(|ticks| {
+            ticks
+                .iter()
+                .map(|tick| match tick {
+                    GeneralAxisTick::Numeric { value, label } => match label {
+                        Some(label) => json!({ "type": "numeric", "value": value, "label": label }),
+                        None => json!({ "type": "numeric", "value": value }),
+                    },
+                    GeneralAxisTick::Temporal { value, label } => match label {
+                        Some(label) => {
+                            json!({ "type": "temporal", "value": value, "label": label })
+                        }
+                        None => json!({ "type": "temporal", "value": value }),
+                    },
+                    GeneralAxisTick::Category { value, label } => match label {
+                        Some(label) => {
+                            json!({ "type": "category", "value": value, "label": label })
+                        }
+                        None => json!({ "type": "category", "value": value }),
+                    },
+                })
+                .collect::<Vec<_>>()
+        });
         json!({
             "id": axis.id(),
             "pane": self.engine.general_axis_pane_index(id),
@@ -593,6 +620,7 @@ impl ChartInner {
             "visible": axis.visible(),
             "title": axis.title(),
             "tick_count": axis.tick_count(),
+            "ticks": ticks,
             "min_tick_gap": axis.min_tick_gap(),
             "band_padding_inner": axis.band_padding_inner(),
             "band_padding_outer": axis.band_padding_outer(),

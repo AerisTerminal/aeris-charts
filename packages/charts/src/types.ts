@@ -265,6 +265,11 @@ export type general_scale_type =
   | "radial_linear"
   | "angular_category";
 
+export type general_axis_tick =
+  | { type: "numeric"; value: number; label?: string }
+  | { type: "temporal"; value: number | Date; label?: string }
+  | { type: "category"; value: string; label?: string };
+
 export interface general_axis_options {
   id: string;
   pane: number;
@@ -276,6 +281,8 @@ export interface general_axis_options {
   visible?: boolean;
   title?: string;
   tick_count?: number;
+  /** Explicit tick values. Optional labels are retained by the engine and shared by every backend. */
+  ticks?: readonly general_axis_tick[];
   min_tick_gap?: number;
   band_padding_inner?: number;
   band_padding_outer?: number;

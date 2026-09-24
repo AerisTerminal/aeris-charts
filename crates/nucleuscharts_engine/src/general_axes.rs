@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 
 use nucleuscharts_core::format::time_formatter::MonthNames;
@@ -21,6 +21,7 @@ pub const MAX_GENERAL_AXES: usize = 128;
 pub const MAX_GENERAL_AXIS_ID_BYTES: usize = 128;
 pub const MAX_GENERAL_AXIS_TITLE_BYTES: usize = 4_096;
 pub const MAX_GENERAL_AXIS_TICKS: u16 = 512;
+pub const MAX_GENERAL_AXIS_TICK_BYTES: usize = 1_048_576;
 pub const MAX_GENERAL_AXIS_CATEGORIES: usize = 65_536;
 pub const MAX_GENERAL_AXIS_CATEGORY_BYTES: usize = 1_048_576;
 pub const MAX_GENERAL_TEMPORAL_MILLISECONDS: i64 = 9_007_199_254_740_991;
@@ -63,6 +64,36 @@ pub enum GeneralAxisDomain {
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum GeneralAxisTick {
+    Numeric {
+        value: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+    },
+    Temporal {
+        value: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+    },
+    Category {
+        value: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+    },
+}
+
+impl GeneralAxisTick {
+    fn label(&self) -> Option<&str> {
+        match self {
+            Self::Numeric { label, .. }
+            | Self::Temporal { label, .. }
+            | Self::Category { label, .. } => label.as_deref(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GeneralAxisOptions {
     pub id: String,
     pub pane: usize,
@@ -74,6 +105,8 @@ pub struct GeneralAxisOptions {
     pub visible: bool,
     pub title: Option<String>,
     pub tick_count: Option<u16>,
+    #[serde(default)]
+    pub ticks: Option<Vec<GeneralAxisTick>>,
     pub min_tick_gap: f64,
     pub band_padding_inner: f64,
     pub band_padding_outer: f64,
@@ -99,6 +132,7 @@ impl GeneralAxisOptions {
             visible: true,
             title: None,
             tick_count: None,
+            ticks: None,
             min_tick_gap: 4.0,
             band_padding_inner: 0.1,
             band_padding_outer: 0.1,
@@ -124,6 +158,7 @@ pub struct GeneralAxis {
     visible: bool,
     title: Option<String>,
     tick_count: Option<u16>,
+    ticks: Option<Vec<GeneralAxisTick>>,
     min_tick_gap: f64,
     band_padding_inner: f64,
     band_padding_outer: f64,
@@ -248,6 +283,10 @@ impl GeneralAxis {
         self.tick_count
     }
 
+    pub fn ticks(&self) -> Option<&[GeneralAxisTick]> {
+        self.ticks.as_deref()
+    }
+
     pub fn min_tick_gap(&self) -> f64 {
         self.min_tick_gap
     }
@@ -271,6 +310,21 @@ impl GeneralAxis {
     fn estimated_bytes(&self) -> usize {
         self.id.capacity()
             + self.title.as_ref().map_or(0, String::capacity)
+            + self.ticks.as_ref().map_or(0, |ticks| {
+                ticks.capacity() * std::mem::size_of::<GeneralAxisTick>()
+                    + ticks
+                        .iter()
+                        .map(|tick| match tick {
+                            GeneralAxisTick::Numeric { label, .. }
+                            | GeneralAxisTick::Temporal { label, .. } => {
+                                label.as_ref().map_or(0, String::capacity)
+                            }
+                            GeneralAxisTick::Category { value, label } => {
+                                value.capacity() + label.as_ref().map_or(0, String::capacity)
+                            }
+                        })
+                        .sum::<usize>()
+            })
             + match &self.domain {
                 GeneralAxisDomain::Category(values) => {
                     values.capacity() * std::mem::size_of::<String>()
@@ -335,6 +389,7 @@ impl GeneralAxisRegistry {
             visible: options.visible,
             title: options.title,
             tick_count: options.tick_count,
+            ticks: options.ticks,
             min_tick_gap: options.min_tick_gap,
             band_padding_inner: options.band_padding_inner,
             band_padding_outer: options.band_padding_outer,
@@ -401,7 +456,7 @@ pub(crate) struct GeneralPlotRect {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct GeneralAxisTick {
+struct AxisTickLayout {
     coordinate: f64,
     label: String,
     align: AxisTextAlign,
@@ -1525,22 +1580,31 @@ fn tick_labels_for_domain(
             let Some(scale) = NumericAxisScale::new(axis.scale, *domain, 0.0, 1.0) else {
                 return Vec::new();
             };
-            format_numeric_ticks(&scale.ticks(axis.tick_count.unwrap_or(6) as usize))
+            numeric_tick_entries(axis, scale, *domain, axis.tick_count.unwrap_or(6) as usize)
+                .into_iter()
+                .filter_map(|(value, label)| {
+                    scale
+                        .coordinate(value)
+                        .filter(|coordinate| (0.0..=1.0).contains(coordinate))
+                        .map(|_| label)
+                })
+                .collect()
         }
         (GeneralScaleType::Band | GeneralScaleType::Point, GeneralAxisDomain::Category(values)) => {
-            values
-                .iter()
-                .take(MAX_GENERAL_AXIS_TICKS as usize)
-                .cloned()
-                .collect()
-        }
-        (GeneralScaleType::Temporal, GeneralAxisDomain::Temporal(domain)) => {
-            let interval = temporal_tick_interval(*domain, axis.tick_count.unwrap_or(6) as usize);
-            temporal_tick_values(*domain, interval)
+            category_tick_entries(axis, values)
                 .into_iter()
-                .map(|value| format_temporal_tick(value, interval, month_names))
+                .map(|(_, label)| label)
                 .collect()
         }
+        (GeneralScaleType::Temporal, GeneralAxisDomain::Temporal(domain)) => temporal_tick_entries(
+            axis,
+            *domain,
+            axis.tick_count.unwrap_or(6) as usize,
+            month_names,
+        )
+        .into_iter()
+        .map(|(_, label)| label)
+        .collect(),
         _ => Vec::new(),
     }
 }
@@ -1552,7 +1616,7 @@ fn axis_ticks(
     range_to: f64,
     metrics: AxisMetrics,
     month_names: &MonthNames,
-) -> Vec<GeneralAxisTick> {
+) -> Vec<AxisTickLayout> {
     match (&axis.scale, domain) {
         (
             GeneralScaleType::Linear
@@ -1573,17 +1637,21 @@ fn axis_ticks(
                 },
                 usize::from,
             );
-            let values = scale.ticks(target);
-            let labels = format_numeric_ticks(&values);
-            values
+            numeric_tick_entries(axis, scale, *domain, target)
                 .into_iter()
-                .zip(labels)
                 .filter_map(|(value, label)| {
-                    scale.coordinate(value).map(|coordinate| GeneralAxisTick {
-                        coordinate,
-                        label,
-                        align: AxisTextAlign::Center,
-                    })
+                    scale
+                        .coordinate(value)
+                        .filter(|coordinate| {
+                            let low = range_from.min(range_to);
+                            let high = range_from.max(range_to);
+                            *coordinate >= low && *coordinate <= high
+                        })
+                        .map(|coordinate| AxisTickLayout {
+                            coordinate,
+                            label,
+                            align: AxisTextAlign::Center,
+                        })
                 })
                 .collect()
         }
@@ -1600,15 +1668,19 @@ fn axis_ticks(
                 },
                 usize::from,
             );
-            let interval = temporal_tick_interval(*domain, target);
-            temporal_tick_values(*domain, interval)
+            temporal_tick_entries(axis, *domain, target, month_names)
                 .into_iter()
-                .filter_map(|value| {
+                .filter_map(|(value, label)| {
                     scale
                         .coordinate(value as f64)
-                        .map(|coordinate| GeneralAxisTick {
+                        .filter(|coordinate| {
+                            let low = range_from.min(range_to);
+                            let high = range_from.max(range_to);
+                            *coordinate >= low && *coordinate <= high
+                        })
+                        .map(|coordinate| AxisTickLayout {
                             coordinate,
-                            label: format_temporal_tick(value, interval, month_names),
+                            label,
                             align: AxisTextAlign::Center,
                         })
                 })
@@ -1641,6 +1713,75 @@ fn axis_ticks(
         }
         _ => Vec::new(),
     }
+}
+
+fn numeric_tick_entries(
+    axis: &GeneralAxis,
+    scale: NumericAxisScale,
+    domain: [f64; 2],
+    target: usize,
+) -> Vec<(f64, String)> {
+    let explicit = axis.ticks.as_ref().map(|ticks| {
+        ticks
+            .iter()
+            .filter_map(|tick| match tick {
+                GeneralAxisTick::Numeric { value, label }
+                    if *value >= domain[0] && *value <= domain[1] =>
+                {
+                    Some((*value, label.as_deref()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    });
+    let values = explicit.as_ref().map_or_else(
+        || scale.ticks(target),
+        |ticks| ticks.iter().map(|(value, _)| *value).collect(),
+    );
+    let automatic = format_numeric_ticks(&values);
+    values
+        .into_iter()
+        .zip(automatic)
+        .enumerate()
+        .map(|(index, (value, automatic))| {
+            let label = explicit
+                .as_ref()
+                .and_then(|ticks| ticks[index].1)
+                .map_or(automatic, str::to_owned);
+            (value, label)
+        })
+        .collect()
+}
+
+fn temporal_tick_entries(
+    axis: &GeneralAxis,
+    domain: [i64; 2],
+    target: usize,
+    month_names: &MonthNames,
+) -> Vec<(i64, String)> {
+    let interval = temporal_tick_interval(domain, target);
+    if let Some(ticks) = axis.ticks.as_ref() {
+        return ticks
+            .iter()
+            .filter_map(|tick| match tick {
+                GeneralAxisTick::Temporal { value, label }
+                    if *value >= domain[0] && *value <= domain[1] =>
+                {
+                    Some((
+                        *value,
+                        label
+                            .clone()
+                            .unwrap_or_else(|| format_temporal_tick(*value, interval, month_names)),
+                    ))
+                }
+                _ => None,
+            })
+            .collect();
+    }
+    temporal_tick_values(domain, interval)
+        .into_iter()
+        .map(|value| (value, format_temporal_tick(value, interval, month_names)))
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1934,10 +2075,22 @@ fn sampled_category_ticks<F>(
     axis: &GeneralAxis,
     values: &[String],
     coordinate: F,
-) -> Vec<GeneralAxisTick>
+) -> Vec<AxisTickLayout>
 where
     F: Fn(usize) -> Option<f64>,
 {
+    if axis.ticks.is_some() {
+        return category_tick_entries(axis, values)
+            .into_iter()
+            .filter_map(|(index, label)| {
+                coordinate(index).map(|coordinate| AxisTickLayout {
+                    coordinate,
+                    label,
+                    align: AxisTextAlign::Center,
+                })
+            })
+            .collect();
+    }
     let limit = axis
         .tick_count
         .map(usize::from)
@@ -1952,7 +2105,7 @@ where
         .enumerate()
         .step_by(stride)
         .filter_map(|(index, label)| {
-            coordinate(index).map(|coordinate| GeneralAxisTick {
+            coordinate(index).map(|coordinate| AxisTickLayout {
                 coordinate,
                 label: label.clone(),
                 align: AxisTextAlign::Center,
@@ -1961,14 +2114,43 @@ where
         .collect()
 }
 
+fn category_tick_entries(axis: &GeneralAxis, values: &[String]) -> Vec<(usize, String)> {
+    let Some(ticks) = axis.ticks.as_ref() else {
+        return values
+            .iter()
+            .take(MAX_GENERAL_AXIS_TICKS as usize)
+            .enumerate()
+            .map(|(index, value)| (index, value.clone()))
+            .collect();
+    };
+    let requested: HashMap<&str, &GeneralAxisTick> = ticks
+        .iter()
+        .filter_map(|tick| match tick {
+            GeneralAxisTick::Category { value, .. } => Some((value.as_str(), tick)),
+            _ => None,
+        })
+        .collect();
+    values
+        .iter()
+        .enumerate()
+        .filter_map(|(index, value)| {
+            let tick = requested.get(value.as_str())?;
+            Some((
+                index,
+                tick.label().map_or_else(|| value.clone(), str::to_owned),
+            ))
+        })
+        .collect()
+}
+
 fn collision_filtered_ticks<F>(
     axis: &GeneralAxis,
-    mut ticks: Vec<GeneralAxisTick>,
+    mut ticks: Vec<AxisTickLayout>,
     measure: &F,
     metrics: AxisMetrics,
     range_from: f64,
     range_to: f64,
-) -> Vec<GeneralAxisTick>
+) -> Vec<AxisTickLayout>
 where
     F: Fn(&str, bool) -> f64,
 {
@@ -2177,6 +2359,7 @@ impl ChartEngine {
         axis.visible = options.visible;
         axis.title = options.title;
         axis.tick_count = options.tick_count;
+        axis.ticks = options.ticks;
         axis.min_tick_gap = options.min_tick_gap;
         axis.band_padding_inner = options.band_padding_inner;
         axis.band_padding_outer = options.band_padding_outer;
@@ -2223,6 +2406,7 @@ fn validate_options(options: &GeneralAxisOptions) -> Result<(), ChartError> {
             "general axis tick_count must be in 1..={MAX_GENERAL_AXIS_TICKS}"
         )));
     }
+    validate_ticks(options)?;
     if !options.min_tick_gap.is_finite() || !(0.0..=10_000.0).contains(&options.min_tick_gap) {
         return Err(invalid(
             "general axis min_tick_gap must be finite and in 0..=10000",
@@ -2240,6 +2424,98 @@ fn validate_options(options: &GeneralAxisOptions) -> Result<(), ChartError> {
     }
     validate_position(options.dimension, options.position)?;
     validate_domain(options.scale, &options.domain)
+}
+
+fn validate_ticks(options: &GeneralAxisOptions) -> Result<(), ChartError> {
+    let Some(ticks) = options.ticks.as_ref() else {
+        return Ok(());
+    };
+    if options.tick_count.is_some() {
+        return Err(invalid(
+            "general axis tick_count and explicit ticks are mutually exclusive",
+        ));
+    }
+    if matches!(
+        options.scale,
+        GeneralScaleType::RadialLinear | GeneralScaleType::AngularCategory
+    ) {
+        return Err(invalid(
+            "explicit ticks require an executable Cartesian axis",
+        ));
+    }
+    if ticks.len() > usize::from(MAX_GENERAL_AXIS_TICKS) {
+        return Err(resource(format!(
+            "general axis explicit ticks exceed {MAX_GENERAL_AXIS_TICKS} entries"
+        )));
+    }
+    let tick_bytes = ticks.iter().try_fold(0usize, |total, tick| {
+        total
+            .checked_add(tick.label().map_or(0, str::len))
+            .and_then(|total| match tick {
+                GeneralAxisTick::Category { value, .. } => total.checked_add(value.len()),
+                _ => Some(total),
+            })
+            .ok_or_else(|| resource("general axis explicit tick byte count overflow"))
+    })?;
+    if tick_bytes > MAX_GENERAL_AXIS_TICK_BYTES {
+        return Err(resource(format!(
+            "general axis explicit ticks exceed {MAX_GENERAL_AXIS_TICK_BYTES} UTF-8 bytes"
+        )));
+    }
+
+    match options.scale {
+        GeneralScaleType::Linear
+        | GeneralScaleType::Logarithmic
+        | GeneralScaleType::SymmetricLog => {
+            let mut seen = HashSet::with_capacity(ticks.len());
+            for tick in ticks {
+                let GeneralAxisTick::Numeric { value, .. } = tick else {
+                    return Err(invalid("numeric axes require numeric explicit ticks"));
+                };
+                if !value.is_finite() {
+                    return Err(invalid("numeric explicit ticks must be finite"));
+                }
+                if options.scale == GeneralScaleType::Logarithmic && *value <= 0.0 {
+                    return Err(invalid("logarithmic explicit ticks must be positive"));
+                }
+                let key = if *value == 0.0 { 0 } else { value.to_bits() };
+                if !seen.insert(key) {
+                    return Err(invalid("general axis explicit tick values must be unique"));
+                }
+            }
+        }
+        GeneralScaleType::Temporal => {
+            let mut seen = HashSet::with_capacity(ticks.len());
+            for tick in ticks {
+                let GeneralAxisTick::Temporal { value, .. } = tick else {
+                    return Err(invalid("temporal axes require temporal explicit ticks"));
+                };
+                if value.unsigned_abs() > MAX_GENERAL_TEMPORAL_MILLISECONDS as u64 {
+                    return Err(invalid(
+                        "temporal explicit ticks must be safe epoch milliseconds",
+                    ));
+                }
+                if !seen.insert(*value) {
+                    return Err(invalid("general axis explicit tick values must be unique"));
+                }
+            }
+        }
+        GeneralScaleType::Band | GeneralScaleType::Point => {
+            let mut seen = HashSet::with_capacity(ticks.len());
+            for tick in ticks {
+                let GeneralAxisTick::Category { value, .. } = tick else {
+                    return Err(invalid("category axes require category explicit ticks"));
+                };
+                if !seen.insert(value.as_str()) {
+                    return Err(invalid("general axis explicit tick values must be unique"));
+                }
+            }
+        }
+        GeneralScaleType::RadialLinear | GeneralScaleType::AngularCategory => {
+            unreachable!("polar explicit ticks are rejected before scale-specific validation")
+        }
+    }
+    Ok(())
 }
 
 fn validate_position(
@@ -2567,6 +2843,53 @@ mod tests {
             assert!(domain[0] <= value && value <= domain[1]);
             assert!(NumericAxisScale::new(scale, domain, 0.0, 100.0).is_some());
         }
+    }
+
+    #[test]
+    fn explicit_ticks_are_typed_bounded_unique_and_unambiguous() {
+        let mut axis =
+            GeneralAxisOptions::new("value", 0, AxisDimension::Y, GeneralScaleType::Linear);
+        axis.ticks = Some(vec![
+            GeneralAxisTick::Numeric {
+                value: 0.0,
+                label: Some("Baseline".into()),
+            },
+            GeneralAxisTick::Numeric {
+                value: 1.0,
+                label: None,
+            },
+        ]);
+        assert!(validate_options(&axis).is_ok());
+
+        axis.tick_count = Some(2);
+        assert!(validate_options(&axis).is_err());
+        axis.tick_count = None;
+        axis.ticks.as_mut().unwrap().push(GeneralAxisTick::Numeric {
+            value: 1.0,
+            label: None,
+        });
+        assert!(validate_options(&axis).is_err());
+
+        axis.ticks = Some(vec![GeneralAxisTick::Temporal {
+            value: 0,
+            label: None,
+        }]);
+        assert!(validate_options(&axis).is_err());
+
+        axis.scale = GeneralScaleType::Logarithmic;
+        axis.ticks = Some(vec![GeneralAxisTick::Numeric {
+            value: 0.0,
+            label: None,
+        }]);
+        assert!(validate_options(&axis).is_err());
+
+        axis.dimension = AxisDimension::Radius;
+        axis.scale = GeneralScaleType::RadialLinear;
+        axis.ticks = Some(vec![GeneralAxisTick::Numeric {
+            value: 1.0,
+            label: None,
+        }]);
+        assert!(validate_options(&axis).is_err());
     }
 
     #[test]

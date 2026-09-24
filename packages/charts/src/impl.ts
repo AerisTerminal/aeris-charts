@@ -857,6 +857,11 @@ function normalize_general_axis_options(options: general_axis_options): general_
   if (Array.isArray(options.domain) && options.scale === "temporal") {
     normalized.domain = options.domain.map((value) => value instanceof Date ? value.getTime() : value);
   }
+  if (options.ticks !== undefined) {
+    normalized.ticks = options.ticks.map((tick) => tick.type === "temporal" && tick.value instanceof Date
+      ? { ...tick, value: tick.value.getTime() }
+      : tick);
+  }
   return normalized as general_axis_options;
 }
 

@@ -78,7 +78,10 @@ multiple axes stack in insertion order, vertical widths use the existing grow-fa
 policy, and the resulting rules, titles, and collision-filtered ticks are emitted through the common
 `AxisFrame`. Each side may reserve at most 45% of the space remaining after financial axes; complete
 strips that do not fit are omitted, preserving a nonzero plot and keeping unscissored axis chrome inside
-the chart. Category selection and numeric tick generation are capped at 512 candidates. Automatic band
+the chart. Category selection and numeric tick generation are capped at 512 candidates. Explicit
+Cartesian numeric, temporal, and category ticks share that cap, reject duplicate or scale-incompatible values,
+and retain optional preformatted labels as portable engine state; out-of-view ticks are clipped by
+the same transform that places generated ticks and grid rules. Automatic band
 and numeric domains now resolve from visible bound general series without rewriting configured axis
 options; hidden series stop contributing immediately. A single extreme numeric value expands inward
 when outward padding would overflow; logarithmic domains use the adjacent positive value when a
