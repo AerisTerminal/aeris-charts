@@ -499,6 +499,10 @@ impl ChartInner {
         .to_string()
     }
 
+    pub fn set_general_axis_visible(&mut self, id: &str, visible: bool) -> bool {
+        self.engine.set_general_axis_visible(id, visible)
+    }
+
     pub fn add_general_reference_result_json(&mut self, options_json: &str) -> String {
         let options = match parse_json::<GeneralReferenceOptions>(options_json) {
             Ok(options) => options,
@@ -2142,6 +2146,11 @@ impl ChartInner {
             return false;
         };
         self.engine.remove_general_series(series) && self.engine.remove_general_dataset(dataset)
+    }
+
+    pub fn set_general_series_visible(&mut self, series: u32, visible: bool) -> bool {
+        GeneralSeriesId::from_raw(series)
+            .is_some_and(|series| self.engine.set_general_series_visible(series, visible))
     }
 
     pub fn general_tooltip_json(&self, series: u32, row: usize) -> String {

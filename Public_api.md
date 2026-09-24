@@ -160,6 +160,10 @@ financial series and need no add-then-remove cleanup. Omitting `initialPane` ret
 financial-time pane and primary candlestick series. Invalid creation options remove every canvas the
 attempt installed before rejecting.
 
+General axis and series handles expose `set_visible(boolean)` and `setVisible(boolean)`. Visibility
+changes preserve the handle and its data while the engine updates domains, interaction snapshots,
+legends, persistence, and the next rendered frame.
+
 ## Experimental surfaces
 
 Custom series, pane/series/canvas primitives, the exported custom-series/primitive feature packs,

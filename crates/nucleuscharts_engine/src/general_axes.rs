@@ -1613,6 +1613,18 @@ impl ChartEngine {
             .collect()
     }
 
+    pub fn set_general_axis_visible(&mut self, id: &str, visible: bool) -> bool {
+        let Some(axis) = self.general_axes.get_mut(id) else {
+            return false;
+        };
+        if axis.visible == visible {
+            return true;
+        }
+        axis.visible = visible;
+        self.invalidate_frame_all();
+        true
+    }
+
     /// Remove an unpopulated general axis. General-series ownership will add the populated-axis
     /// guard at the same registry boundary when those series are introduced.
     pub fn remove_general_axis(&mut self, id: &str) -> bool {

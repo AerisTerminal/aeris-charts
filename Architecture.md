@@ -202,6 +202,8 @@ bounded accessibility, exact/nearest hit, brush, reference-component, and legend
 directly from the live series registry in stable engine order, optionally filtered by pane, and retains hidden
 series with their visibility state rather than maintaining a parallel host registry. Shared tooltip grouping,
 semantic brush selection, and reference domain extension likewise do not create browser-owned semantic mirrors.
+Axis and series handles mutate visibility in place through the engine registry, preserving handle, data, view,
+selection, and ordering identity while shared invalidation updates domains, hits, legends, persistence, and frames.
 The shared browser accessibility
 controller recognizes financial and general handles but keeps their navigation math separate: financial
 series continue to query the time scale, while general series page through at most 512 Rust-owned

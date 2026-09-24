@@ -2513,6 +2513,12 @@ impl NucleusChart {
         self.inner.borrow().general_axis_ids_json(pane)
     }
 
+    pub fn set_general_axis_visible(&mut self, id: &str, visible: bool) -> bool {
+        self.inner
+            .borrow_mut()
+            .set_general_axis_visible(id, visible)
+    }
+
     pub fn add_general_reference_result_json(&mut self, options_json: &str) -> String {
         self.inner
             .borrow_mut()
@@ -3315,6 +3321,12 @@ impl NucleusChart {
         self.inner
             .borrow_mut()
             .remove_general_series(series, dataset)
+    }
+
+    pub fn set_general_series_visible(&mut self, series: u32, visible: bool) -> bool {
+        self.inner
+            .borrow_mut()
+            .set_general_series_visible(series, visible)
     }
 
     pub fn general_tooltip_json(&self, series: u32, row: usize) -> String {

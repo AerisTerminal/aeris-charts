@@ -447,8 +447,10 @@ export interface general_legend_snapshot {
 
 export interface general_axis_api {
   resetView: general_axis_api["reset_view"];
+  setVisible: general_axis_api["set_visible"];
   readonly id: string;
   options(): general_axis_options;
+  set_visible(visible: boolean): void;
   pan(fraction: number): void;
   zoom(factor: number, anchor_value: number): void;
   reset_view(): void;
@@ -456,8 +458,10 @@ export interface general_axis_api {
 }
 
 export interface general_series_api {
+  setVisible: general_series_api["set_visible"];
   readonly id: number;
   readonly kind: general_series_kind;
+  set_visible(visible: boolean): void;
   set_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row)[]): void;
   set_data_typed(columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns): void;
   /** Update existing rows and append missing rows by explicit `id`, atomically. */

@@ -854,6 +854,7 @@ function pack_general_rows(
 
 class general_axis_impl implements general_axis_api {
   resetView(): void { this.reset_view(); }
+  setVisible(...args: Parameters<general_axis_api["set_visible"]>): void { this.set_visible(...args); }
   constructor(
     readonly id: string,
     private readonly handle_token: number,
@@ -871,6 +872,14 @@ class general_axis_impl implements general_axis_api {
 
   options(): general_axis_options {
     return this.current();
+  }
+
+  set_visible(visible: boolean): void {
+    this.current();
+    if (!this.chart.wasm.set_general_axis_visible(this.id, visible)) {
+      throw new nucleuscharts_error("stale_handle", "this general axis has been removed");
+    }
+    this.chart.repaint();
   }
 
   pan(fraction: number): void {
@@ -1040,6 +1049,7 @@ class general_reference_impl implements general_reference_api {
 }
 
 class general_series_impl implements general_series_api {
+  setVisible(...args: Parameters<general_series_api["set_visible"]>): void { this.set_visible(...args); }
   setData(...args: Parameters<general_series_api["set_data"]>): void { this.set_data(...args); }
   setDataTyped(...args: Parameters<general_series_api["set_data_typed"]>): void { this.set_data_typed(...args); }
   updateData(...args: Parameters<general_series_api["update_data"]>): void { this.update_data(...args); }
@@ -1075,6 +1085,14 @@ class general_series_impl implements general_series_api {
     const axis = this.chart.axis(this.x_axis_id);
     if (axis === null) throw new nucleuscharts_error("stale_handle", "this general series X axis has been removed");
     return axis.options().scale;
+  }
+
+  set_visible(visible: boolean): void {
+    this.assert_live();
+    if (!this.chart.wasm.set_general_series_visible(this.id, visible)) {
+      throw new nucleuscharts_error("stale_handle", "this general series has been removed");
+    }
+    this.chart.repaint();
   }
 
   set_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row)[]): void {

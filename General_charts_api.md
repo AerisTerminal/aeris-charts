@@ -392,8 +392,9 @@ transaction. A label is limited to 4,096 UTF-8 bytes, and each dataset to 65,536
 `label: string | null` alongside the raw value.
 
 The current legend surface is metadata-only by design: the browser may render DOM legend controls, but the
-entry set, order, visibility, title, color, kind, and pane identity come from the engine snapshot. Legend-driven
-visibility mutation is a separate control surface and is not implied by the snapshot API.
+entry set, order, visibility, title, color, kind, and pane identity come from the engine snapshot. Axis and
+series handles expose `set_visible`/`setVisible`; legend controls use the series handle and then read the next
+engine snapshot rather than maintaining parallel visibility state.
 
 Reference components are intentionally separate from series data. A reference line binds one X or Y axis and one
 compatible numeric/temporal/category value; a dot binds explicit X and Y axes; a region binds two endpoints on

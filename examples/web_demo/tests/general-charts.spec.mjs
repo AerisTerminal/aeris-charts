@@ -569,8 +569,11 @@ test("general legend snapshots preserve order, hidden state, pane filtering, lif
       preserve_empty: true,
       horizontal_domain: { type: "continuous", scale: "linear" },
     });
-    chart.add_axis({ id: "legend-a-x", pane: first_pane.pane_index(), dimension: "x", scale: "linear" });
+    const x_axis = chart.add_axis({ id: "legend-a-x", pane: first_pane.pane_index(), dimension: "x", scale: "linear" });
     chart.add_axis({ id: "legend-a-y", pane: first_pane.pane_index(), dimension: "y", scale: "linear" });
+    x_axis.set_visible(false);
+    const hidden_axis_visible = x_axis.options().visible;
+    x_axis.setVisible(true);
     const revenue = chart.add_series("xy_line", {
       pane: first_pane.pane_index(),
       x_axis_id: "legend-a-x",
@@ -584,9 +587,9 @@ test("general legend snapshots preserve order, hidden state, pane filtering, lif
       x_axis_id: "legend-a-x",
       y_axis_id: "legend-a-y",
       title: "Hidden samples",
-      visible: false,
     });
     hidden.set_data([{ id: "h", x: 1, y: 3 }]);
+    hidden.set_visible(false);
 
     const second_pane = chart.add_pane({
       preserve_empty: true,
@@ -626,6 +629,7 @@ test("general legend snapshots preserve order, hidden state, pane filtering, lif
     const normalize = (snapshot) => snapshot.items.map(({ series, ...item }) => item);
     const output = {
       invalid_pane,
+      hidden_axis_visible,
       all,
       first_only,
       after_remove,
@@ -641,6 +645,7 @@ test("general legend snapshots preserve order, hidden state, pane filtering, lif
   });
 
   expect(result.invalid_pane).toBe("invalid_options");
+  expect(result.hidden_axis_visible).toBe(false);
   expect(result.all.items).toMatchObject([
     { pane: 1, kind: "xy_line", title: "Revenue", color: "#123456", visible: true },
     { pane: 1, kind: "scatter", title: "Hidden samples", color: null, visible: false },
