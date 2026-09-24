@@ -122,6 +122,8 @@ struct SeriesV2 {
     title: String,
     color: Option<String>,
     point_radius: f64,
+    #[serde(default = "default_general_line_width")]
+    line_width: f64,
     data_labels: bool,
     #[serde(default)]
     group_id: Option<String>,
@@ -142,6 +144,10 @@ struct PaneV1 {
 
 fn default_stretch() -> f64 {
     1.0
+}
+
+fn default_general_line_width() -> f64 {
+    2.0
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -686,6 +692,7 @@ impl ChartEngine {
                     title: series.title().to_string(),
                     color: series.color().map(str::to_string),
                     point_radius: series.point_radius(),
+                    line_width: series.line_width(),
                     data_labels: series.data_labels(),
                     group_id: series.group_id().map(str::to_string),
                     stack_id: series.stack_id().map(str::to_string),
@@ -1209,6 +1216,7 @@ impl ChartEngine {
                 title: series.title,
                 color: series.color,
                 point_radius: series.point_radius,
+                line_width: series.line_width,
                 data_labels: series.data_labels,
                 group_id: series.group_id,
                 stack_id: series.stack_id,

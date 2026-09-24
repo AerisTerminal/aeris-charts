@@ -217,6 +217,8 @@ interface cartesian_series_options {
   visible?: boolean;
   title?: string;
   color?: string;
+  /** Stroke width for line, area, and range-area paths in CSS pixels; defaults to 2. */
+  line_width?: number;
   group_id?: string;
   stack_id?: string;
   stack_mode?: "normal" | "percent";

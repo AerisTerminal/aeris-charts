@@ -99,6 +99,8 @@ struct SeriesInput {
     color: Option<String>,
     #[serde(default = "default_point_radius")]
     point_radius: f64,
+    #[serde(default = "default_line_width")]
+    line_width: f64,
     #[serde(default)]
     data_labels: bool,
     #[serde(default)]
@@ -159,6 +161,10 @@ fn default_point_radius() -> f64 {
     3.0
 }
 
+fn default_line_width() -> f64 {
+    2.0
+}
+
 fn series_options_from_input(
     kind: GeneralSeriesKind,
     dataset: GeneralDatasetId,
@@ -206,6 +212,7 @@ fn series_options_from_input(
     options.title = input.title;
     options.color = input.color;
     options.point_radius = input.point_radius;
+    options.line_width = input.line_width;
     options.data_labels = input.data_labels;
     options.group_id = input.group_id;
     options.stack_id = input.stack_id;
@@ -742,6 +749,7 @@ impl ChartInner {
             "title": series.title(),
             "color": series.color(),
             "point_radius": series.point_radius(),
+            "line_width": series.line_width(),
             "data_labels": series.data_labels(),
             "group_id": series.group_id(),
             "stack_id": series.stack_id(),

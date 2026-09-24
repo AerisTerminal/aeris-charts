@@ -185,7 +185,7 @@ impl ChartEngine {
                                     out.push(Prim::Polyline {
                                         first_point: upper_first,
                                         point_count,
-                                        width: (GENERAL_LINE_WIDTH_CSS * vpr) as f32,
+                                        width: (series.line_width() * vpr) as f32,
                                         style: LineStyle::Solid,
                                         line_type: LineType::Simple,
                                         color,
@@ -249,7 +249,7 @@ impl ChartEngine {
                             out.push(Prim::Polyline {
                                 first_point,
                                 point_count,
-                                width: (GENERAL_LINE_WIDTH_CSS * vpr) as f32,
+                                width: (series.line_width() * vpr) as f32,
                                 style: LineStyle::Solid,
                                 line_type: LineType::Simple,
                                 color,
@@ -310,7 +310,7 @@ impl ChartEngine {
                             out.push(Prim::Polyline {
                                 first_point: upper_first,
                                 point_count,
-                                width: (GENERAL_LINE_WIDTH_CSS * vpr) as f32,
+                                width: (series.line_width() * vpr) as f32,
                                 style: LineStyle::Solid,
                                 line_type: LineType::Simple,
                                 color,
@@ -318,7 +318,7 @@ impl ChartEngine {
                             out.push(Prim::Polyline {
                                 first_point: lower_first,
                                 point_count,
-                                width: (GENERAL_LINE_WIDTH_CSS * vpr) as f32,
+                                width: (series.line_width() * vpr) as f32,
                                 style: LineStyle::Solid,
                                 line_type: LineType::Simple,
                                 color,

@@ -73,6 +73,7 @@ pub struct GeneralSeriesOptions {
     pub title: String,
     pub color: Option<String>,
     pub point_radius: f64,
+    pub line_width: f64,
     pub data_labels: bool,
     pub group_id: Option<String>,
     pub stack_id: Option<String>,
@@ -96,6 +97,7 @@ impl GeneralSeriesOptions {
             title: String::new(),
             color: None,
             point_radius: 3.0,
+            line_width: 2.0,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -119,6 +121,7 @@ impl GeneralSeriesOptions {
             title: String::new(),
             color: None,
             point_radius: 3.0,
+            line_width: 2.0,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -142,6 +145,7 @@ impl GeneralSeriesOptions {
             title: String::new(),
             color: None,
             point_radius: 3.0,
+            line_width: 2.0,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -165,6 +169,7 @@ impl GeneralSeriesOptions {
             title: String::new(),
             color: None,
             point_radius: 4.0,
+            line_width: 2.0,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -188,6 +193,7 @@ impl GeneralSeriesOptions {
             title: String::new(),
             color: None,
             point_radius: 3.0,
+            line_width: 2.0,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -211,6 +217,7 @@ impl GeneralSeriesOptions {
             title: String::new(),
             color: None,
             point_radius: 3.0,
+            line_width: 2.0,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -234,6 +241,7 @@ impl GeneralSeriesOptions {
             title: String::new(),
             color: None,
             point_radius: 3.0,
+            line_width: 2.0,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -257,6 +265,7 @@ impl GeneralSeriesOptions {
             title: String::new(),
             color: None,
             point_radius: 3.0,
+            line_width: 2.0,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -280,6 +289,7 @@ impl GeneralSeriesOptions {
             title: String::new(),
             color: None,
             point_radius: 3.0,
+            line_width: 2.0,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -303,6 +313,7 @@ impl GeneralSeriesOptions {
             title: String::new(),
             color: None,
             point_radius: 3.0,
+            line_width: 2.0,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -323,6 +334,7 @@ pub struct GeneralSeries {
     title: String,
     color: Option<String>,
     point_radius: f64,
+    line_width: f64,
     data_labels: bool,
     group_id: Option<String>,
     stack_id: Option<String>,
@@ -918,6 +930,10 @@ impl GeneralSeries {
         self.point_radius
     }
 
+    pub fn line_width(&self) -> f64 {
+        self.line_width
+    }
+
     pub fn data_labels(&self) -> bool {
         self.data_labels
     }
@@ -1111,6 +1127,7 @@ impl GeneralSeriesRegistry {
             title: options.title,
             color: options.color,
             point_radius: options.point_radius,
+            line_width: options.line_width,
             data_labels: options.data_labels,
             group_id: options.group_id,
             stack_id: options.stack_id,
@@ -6003,6 +6020,11 @@ fn validate_logarithmic_input_y(
 }
 
 fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartError> {
+    if !options.line_width.is_finite() || !(0.5..=32.0).contains(&options.line_width) {
+        return Err(invalid(
+            "general series line_width must be finite and in [0.5, 32]",
+        ));
+    }
     if options.title.len() > MAX_GENERAL_SERIES_TITLE_BYTES {
         return Err(resource(format!(
             "general series title exceeds {MAX_GENERAL_SERIES_TITLE_BYTES} UTF-8 bytes"

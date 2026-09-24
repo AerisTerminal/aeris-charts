@@ -352,6 +352,8 @@ export interface general_series_options {
   color?: string;
   /** Scatter center radius or error-bar cap half-width in CSS pixels. Bubble radii come from sqrt(size). */
   point_radius?: number;
+  /** Stroke width for line, area, and range-area paths in CSS pixels (default 2). */
+  line_width?: number;
   /** Show bounded, engine-placed value labels beside visible marks. */
   data_labels?: boolean;
   /** Bar-only grouping key. Matching columns or horizontal bars share their category band side-by-side. */
@@ -1906,6 +1908,7 @@ export interface chart_state_v2 {
     title: string;
     color: string | null;
     point_radius: number;
+    line_width: number;
     data_labels: boolean;
     group_id: string | null;
     stack_id: string | null;

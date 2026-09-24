@@ -1937,6 +1937,7 @@ fn xy_line_preserves_gaps_hits_rows_and_shared_frame_geometry() {
     options.color = Some("#336699".into());
     options.title = "Trend".into();
     options.data_labels = true;
+    options.line_width = 4.0;
     let series = chart.add_general_series(options).unwrap();
     chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
 
@@ -1964,6 +1965,9 @@ fn xy_line_preserves_gaps_hits_rows_and_shared_frame_geometry() {
         .filter(|primitive| matches!(primitive, Prim::Polyline { point_count: 2, .. }))
         .count();
     assert_eq!(line_primitives, 2);
+    assert!(frame.panes[pane].main.iter().any(|primitive| {
+        matches!(primitive, Prim::Polyline { width, .. } if (*width - 4.0).abs() < f32::EPSILON)
+    }));
     assert!(frame.panes[pane]
         .main
         .iter()
