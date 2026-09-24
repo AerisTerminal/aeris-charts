@@ -593,6 +593,85 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
   ]);
 });
 
+test("public linear axes render and navigate the complete finite numeric domain", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const page_errors = [];
+  page.on("pageerror", (error) => page_errors.push(error.message));
+
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const host = document.createElement("div");
+    Object.assign(host.style, { width: "640px", height: "400px" });
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    chart.resize(640, 400, 1);
+    const pane = chart.add_pane({
+      preserve_empty: true,
+      horizontal_domain: { type: "continuous", scale: "linear" },
+    });
+    const x_axis = chart.add_axis({
+      id: "extreme-x",
+      pane: pane.pane_index(),
+      dimension: "x",
+      scale: "linear",
+      domain: [-Number.MAX_VALUE, Number.MAX_VALUE],
+    });
+    chart.add_axis({
+      id: "extreme-y",
+      pane: pane.pane_index(),
+      dimension: "y",
+      scale: "linear",
+      domain: [-1, 1],
+    });
+    const scatter = chart.add_series("scatter", {
+      pane: pane.pane_index(),
+      x_axis_id: "extreme-x",
+      y_axis_id: "extreme-y",
+      point_radius: 6,
+    });
+    scatter.set_data_typed({
+      ids: [1, 2, 3],
+      x: new Float64Array([-Number.MAX_VALUE, 0, Number.MAX_VALUE]),
+      y: new Float64Array([-0.5, 0, 0.5]),
+    });
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+    const before = chart.take_screenshot().toDataURL();
+    const geometry = pane.get_geometry();
+    const hit_rows = new Set();
+    for (let y = geometry.top; y <= geometry.top + geometry.height; y += 2) {
+      for (let x = 0; x <= geometry.width; x += 2) {
+        const hit = chart.general_hit_test(pane.pane_index(), x, y);
+        if (hit?.series === scatter.id) hit_rows.add(hit.row_id);
+      }
+    }
+
+    x_axis.zoom(2, 0);
+    x_axis.pan(0.5);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const after = chart.take_screenshot().toDataURL();
+    const accessibility = scatter.accessibility_snapshot(0, 10);
+    chart.remove();
+    host.remove();
+    return {
+      before_length: before.length,
+      changed_after_navigation: before !== after,
+      hit_rows: [...hit_rows].sort(),
+      values: accessibility.items.map(({ x_label, value }) => ({ x: Number(x_label), value })),
+    };
+  });
+
+  expect(page_errors).toEqual([]);
+  expect(result.before_length).toBeGreaterThan(1000);
+  expect(result.changed_after_navigation).toBe(true);
+  expect(result.hit_rows).toEqual([1, 2, 3]);
+  expect(result.values).toEqual([
+    { x: -Number.MAX_VALUE, value: -0.5 },
+    { x: 0, value: 0 },
+    { x: Number.MAX_VALUE, value: 0.5 },
+  ]);
+});
+
 test("general series rebind and reorder atomically while preserving legend, data, and V2 restore", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");

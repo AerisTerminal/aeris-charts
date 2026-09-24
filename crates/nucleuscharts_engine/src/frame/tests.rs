@@ -140,6 +140,93 @@ fn temporal_general_axis_emits_utc_ticks_and_supports_atomic_runtime_view() {
 }
 
 #[test]
+fn complete_finite_numeric_domain_builds_geometry_ticks_and_runtime_views() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    let mut x = GeneralAxisOptions::new(
+        "extreme-x",
+        pane,
+        AxisDimension::X,
+        GeneralScaleType::Linear,
+    );
+    x.domain = GeneralAxisDomain::Numeric([-f64::MAX, f64::MAX]);
+    chart.add_general_axis(x).unwrap();
+    let mut y = GeneralAxisOptions::new(
+        "extreme-y",
+        pane,
+        AxisDimension::Y,
+        GeneralScaleType::Linear,
+    );
+    y.domain = GeneralAxisDomain::Numeric([-1.0, 1.0]);
+    chart.add_general_axis(y).unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Numeric {
+            ids: None,
+            x: vec![-f64::MAX, 0.0, f64::MAX],
+            y: vec![-1.0, 0.0, 1.0],
+            y_valid: None,
+        })
+        .unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::scatter(
+            pane,
+            dataset,
+            "extreme-x",
+            "extreme-y",
+        ))
+        .unwrap();
+
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let plot = chart.general_plot_rect(pane).unwrap();
+    let mut geometry = Vec::new();
+    chart.visit_general_scatter_points(chart.general_series(series).unwrap(), |point| {
+        geometry.push(point)
+    });
+    assert_eq!(geometry.len(), 3);
+    assert!(geometry
+        .iter()
+        .all(|point| point.x.is_finite() && point.y.is_finite()));
+    assert!((geometry[0].x - 0.0).abs() < 1e-9);
+    assert!((geometry[1].x - plot.width * 0.5).abs() < 1e-9);
+    assert!((geometry[2].x - plot.width).abs() < 1e-9);
+
+    let axis = chart.build_axis_frame(80.0, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    assert!(axis
+        .labels
+        .iter()
+        .all(|label| label.x.is_finite() && label.y.is_finite()));
+    assert!(axis.labels.iter().any(|label| label.text.contains('e')));
+    let frame = chart.build_frame();
+    assert!(frame.panes[pane]
+        .under
+        .iter()
+        .any(|primitive| { matches!(primitive, Prim::VLine { .. }) }));
+
+    chart.zoom_general_axis("extreme-x", 2.0, 0.0).unwrap();
+    let Some(GeneralAxisDomain::Numeric(zoomed)) = chart.general_axis_effective_domain("extreme-x")
+    else {
+        panic!("numeric zoom must retain a numeric domain");
+    };
+    assert!((zoomed[0] / f64::MAX + 0.5).abs() < f64::EPSILON);
+    assert!((zoomed[1] / f64::MAX - 0.5).abs() < f64::EPSILON);
+
+    chart.pan_general_axis("extreme-x", 0.5).unwrap();
+    let Some(GeneralAxisDomain::Numeric(panned)) = chart.general_axis_effective_domain("extreme-x")
+    else {
+        panic!("numeric pan must retain a numeric domain");
+    };
+    assert_eq!(panned[0], 0.0);
+    assert!((panned[1] / f64::MAX - 1.0).abs() < f64::EPSILON);
+}
+
+#[test]
 fn general_grid_and_zero_lines_render_below_data_and_follow_axis_policy() {
     let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
     chart

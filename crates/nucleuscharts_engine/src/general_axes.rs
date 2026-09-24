@@ -1872,12 +1872,14 @@ fn extend_numeric_bounds(bounds: &mut Option<(f64, f64)>, value: f64) {
     });
 }
 
-fn expanded_numeric_domain(low: f64, high: f64) -> [f64; 2] {
+fn expanded_numeric_domain(low: f64, high: f64) -> Option<[f64; 2]> {
     if low < high {
-        return [low, high];
+        return ascending_numeric_domain(low, high);
     }
     let delta = low.abs().max(1.0) * 0.01;
-    [low - delta, high + delta]
+    ascending_numeric_domain(low - delta, high + delta)
+        .or_else(|| ascending_numeric_domain(low - delta, low))
+        .or_else(|| ascending_numeric_domain(low, high + delta))
 }
 
 fn expanded_numeric_domain_for_scale(
@@ -1885,22 +1887,34 @@ fn expanded_numeric_domain_for_scale(
     low: f64,
     high: f64,
 ) -> Option<[f64; 2]> {
-    if low < high {
-        return Some([low, high]);
-    }
     match scale {
         GeneralScaleType::Logarithmic => {
-            if low <= 0.0 {
+            if low <= 0.0 || !low.is_finite() || !high.is_finite() {
                 return None;
             }
+            if low < high {
+                return Some([low, high]);
+            }
             let factor = 1.01;
-            Some([low / factor, high * factor])
+            let lower = low / factor;
+            let upper = high * factor;
+            ascending_numeric_domain(lower, upper)
+                .or_else(|| ascending_numeric_domain(lower, low))
+                .or_else(|| ascending_numeric_domain(low, upper))
+                .or_else(|| {
+                    let next = f64::from_bits(low.to_bits().saturating_add(1));
+                    ascending_numeric_domain(low, next)
+                })
         }
         GeneralScaleType::Linear | GeneralScaleType::SymmetricLog => {
-            Some(expanded_numeric_domain(low, high))
+            expanded_numeric_domain(low, high)
         }
         _ => None,
     }
+}
+
+fn ascending_numeric_domain(from: f64, to: f64) -> Option<[f64; 2]> {
+    (from.is_finite() && to.is_finite() && from < to).then_some([from, to])
 }
 
 fn expanded_temporal_domain(low: i64, high: i64) -> Option<GeneralAxisDomain> {
@@ -2272,7 +2286,7 @@ fn validate_domain(scale: GeneralScaleType, domain: &GeneralAxisDomain) -> Resul
             ) {
                 return Err(invalid("numeric domain requires a numeric scale"));
             }
-            if !from.is_finite() || !to.is_finite() || from >= to || !(*to - *from).is_finite() {
+            if !from.is_finite() || !to.is_finite() || from >= to {
                 return Err(invalid(
                     "numeric domain bounds must be finite and strictly ascending",
                 ));
@@ -2482,6 +2496,9 @@ mod tests {
         assert!(validate_options(&numeric).is_err());
         numeric.domain = GeneralAxisDomain::Numeric([0.1, 10.0]);
         assert!(validate_options(&numeric).is_ok());
+        numeric.scale = GeneralScaleType::Linear;
+        numeric.domain = GeneralAxisDomain::Numeric([-f64::MAX, f64::MAX]);
+        assert!(validate_options(&numeric).is_ok());
 
         let mut temporal =
             GeneralAxisOptions::new("time", 0, AxisDimension::X, GeneralScaleType::Temporal);
@@ -2533,6 +2550,23 @@ mod tests {
         assert!(format_numeric_ticks(&[1.0e9, 2.0e9])
             .iter()
             .all(|label| label.contains('e')));
+    }
+
+    #[test]
+    fn degenerate_numeric_auto_domains_remain_finite_at_extreme_values() {
+        for (scale, value) in [
+            (GeneralScaleType::Linear, f64::MAX),
+            (GeneralScaleType::Linear, -f64::MAX),
+            (GeneralScaleType::SymmetricLog, f64::MAX),
+            (GeneralScaleType::Logarithmic, f64::MAX),
+            (GeneralScaleType::Logarithmic, f64::from_bits(1)),
+        ] {
+            let domain = expanded_numeric_domain_for_scale(scale, value, value).unwrap();
+            assert!(domain[0].is_finite() && domain[1].is_finite());
+            assert!(domain[0] < domain[1]);
+            assert!(domain[0] <= value && value <= domain[1]);
+            assert!(NumericAxisScale::new(scale, domain, 0.0, 100.0).is_some());
+        }
     }
 
     #[test]

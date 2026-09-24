@@ -251,10 +251,7 @@ impl LinearScale {
     }
 
     pub fn coordinate(&self, value: f64) -> Option<f64> {
-        if !value.is_finite() {
-            return None;
-        }
-        let unit = (value - self.domain_from) / (self.domain_to - self.domain_from);
+        let unit = normalized_unit(value, self.domain_from, self.domain_to)?;
         let coordinate = self.range_from + unit * (self.range_to - self.range_from);
         coordinate.is_finite().then_some(normalize_zero(coordinate))
     }
@@ -270,9 +267,8 @@ impl LinearScale {
         if !coordinate.is_finite() || self.range_from == self.range_to {
             return None;
         }
-        let unit = (coordinate - self.range_from) / (self.range_to - self.range_from);
-        let value = self.domain_from + unit * (self.domain_to - self.domain_from);
-        value.is_finite().then_some(normalize_zero(value))
+        let unit = normalized_unit(coordinate, self.range_from, self.range_to)?;
+        interpolate_unit(self.domain_from, self.domain_to, unit)
     }
 
     /// Generate deterministic 1/2/5 ticks. `target_count` is a density hint, not a promise.
@@ -285,7 +281,17 @@ impl LinearScale {
         let high = self.domain_from.max(self.domain_to);
         // Leave room for both ends when the chosen step divides the domain exactly.
         let count = target_count.min(MAX_GENERAL_TICKS - 1);
-        let raw_step = (high - low) / count as f64;
+        let span = high - low;
+        let raw_step = if span.is_finite() {
+            span / count as f64
+        } else {
+            let scaled_step = high / count as f64 - low / count as f64;
+            if scaled_step.is_finite() {
+                scaled_step
+            } else {
+                f64::MAX
+            }
+        };
         let step = nice_step(raw_step);
         if !step.is_finite() || step <= 0.0 {
             return Vec::new();
@@ -299,7 +305,10 @@ impl LinearScale {
 
         let tolerance = step.abs() * 1e-12;
         let mut ticks = Vec::with_capacity(count.saturating_add(1).min(MAX_GENERAL_TICKS));
-        while tick <= high + tolerance && ticks.len() < MAX_GENERAL_TICKS {
+        while ticks.len() < MAX_GENERAL_TICKS {
+            if tick > high && tick - high > tolerance {
+                break;
+            }
             let value = normalize_zero(tick);
             if ticks.last().is_none_or(|previous| *previous != value) {
                 ticks.push(value);
@@ -454,7 +463,9 @@ impl PointScale {
 }
 
 fn validate_domain(from: f64, to: f64) -> Result<(), ScaleError> {
-    validate_range(from, to)?;
+    if !from.is_finite() || !to.is_finite() {
+        return Err(ScaleError::NonFinite);
+    }
     if from == to {
         return Err(ScaleError::DegenerateDomain);
     }
@@ -512,7 +523,37 @@ fn nice_step(raw_step: f64) -> f64 {
     } else {
         10.0
     };
-    factor * power
+    let step = factor * power;
+    if step.is_finite() {
+        step
+    } else {
+        raw_step
+    }
+}
+
+fn normalized_unit(value: f64, from: f64, to: f64) -> Option<f64> {
+    if !value.is_finite() {
+        return None;
+    }
+    let span = to - from;
+    let offset = value - from;
+    let unit = if span.is_finite() && offset.is_finite() {
+        offset / span
+    } else {
+        (value * 0.5 - from * 0.5) / (to * 0.5 - from * 0.5)
+    };
+    unit.is_finite().then_some(unit)
+}
+
+fn interpolate_unit(from: f64, to: f64, unit: f64) -> Option<f64> {
+    let value = if unit == 0.0 {
+        from
+    } else if unit == 1.0 {
+        to
+    } else {
+        from * (1.0 - unit) + to * unit
+    };
+    value.is_finite().then_some(normalize_zero(value))
 }
 
 fn project_from_start(range_from: f64, range_to: f64, offset: f64) -> f64 {
@@ -552,6 +593,21 @@ mod tests {
         close(reversed.coordinate(15.0).unwrap(), 0.0);
         close(reversed.coordinate(10.0).unwrap(), 50.0);
         close(reversed.invert(25.0).unwrap(), 12.5);
+    }
+
+    #[test]
+    fn linear_maps_the_complete_finite_domain_without_overflow() {
+        let scale = LinearScale::new(-f64::MAX, f64::MAX, -1.0, 1.0).unwrap();
+        assert_eq!(scale.coordinate(-f64::MAX), Some(-1.0));
+        assert_eq!(scale.coordinate(0.0), Some(0.0));
+        assert_eq!(scale.coordinate(f64::MAX), Some(1.0));
+        assert_eq!(scale.invert(-1.0), Some(-f64::MAX));
+        assert_eq!(scale.invert(0.0), Some(0.0));
+        assert_eq!(scale.invert(1.0), Some(f64::MAX));
+        let ticks = scale.ticks(10);
+        assert!(!ticks.is_empty());
+        assert!(ticks.len() <= MAX_GENERAL_TICKS);
+        assert!(ticks.iter().all(|value| value.is_finite()));
     }
 
     #[test]

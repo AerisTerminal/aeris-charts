@@ -46,7 +46,9 @@ General Cartesian scale foundations live beside, rather than inside, the financi
 `LogScale`, and `SymLogScale` map continuous numeric domains and emit bounded deterministic ticks;
 `BandScale` and `PointScale` map caller-owned category indices without retaining labels or allocating
 category state. All five keep their math in `f64`, accept reversed ranges, and have no host or renderer
-dependency. General axes with explicit numeric, temporal, band, or point domains use these scales during
+dependency. Linear normalization, interpolation, and tick selection remain finite for every pair of
+distinct finite domain endpoints, including spans whose direct subtraction overflows. General axes with
+explicit numeric, temporal, band, or point domains use these scales during
 shared layout and axis-frame construction; temporal coordinates reuse the linear transform over validated
 JavaScript-safe epoch milliseconds while the engine owns UTC calendar interval selection and formatting.
 The financial coordinate path does not dispatch through them.
@@ -78,7 +80,9 @@ policy, and the resulting rules, titles, and collision-filtered ticks are emitte
 strips that do not fit are omitted, preserving a nonzero plot and keeping unscissored axis chrome inside
 the chart. Category selection and numeric tick generation are capped at 512 candidates. Automatic band
 and numeric domains now resolve from visible bound general series without rewriting configured axis
-options; hidden series stop contributing immediately. Continuous X/Y axes execute linear, logarithmic,
+options; hidden series stop contributing immediately. A single extreme numeric value expands inward
+when outward padding would overflow; logarithmic domains use the adjacent positive value when a
+percentage expansion rounds back to the same endpoint. Continuous X/Y axes execute linear, logarithmic,
 or symmetric-log transforms consistently for ticks, geometry, hit testing, and runtime pan/zoom; a
 runtime view is independent of the configured/automatic base domain and can be reset without rewriting
 axis options. Temporal axes use that same runtime-view contract with whole epoch-millisecond anchors and
