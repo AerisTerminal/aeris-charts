@@ -76,6 +76,15 @@ pub enum GeneralInterpolation {
     Curved,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum GeneralPointSymbol {
+    #[default]
+    Circle,
+    Square,
+    Diamond,
+    Triangle,
+}
+
 impl GeneralInterpolation {
     pub(crate) fn render_type(self) -> LineType {
         match self {
@@ -112,6 +121,7 @@ pub struct GeneralSeriesOptions {
     pub color: Option<String>,
     pub point_radius: f64,
     pub point_markers: bool,
+    pub point_symbol: GeneralPointSymbol,
     pub line_width: f64,
     pub line_style: GeneralLineStyle,
     pub interpolation: GeneralInterpolation,
@@ -141,6 +151,7 @@ impl GeneralSeriesOptions {
             color: None,
             point_radius: 3.0,
             point_markers: false,
+            point_symbol: GeneralPointSymbol::Circle,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
@@ -170,6 +181,7 @@ impl GeneralSeriesOptions {
             color: None,
             point_radius: 3.0,
             point_markers: false,
+            point_symbol: GeneralPointSymbol::Circle,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
@@ -199,6 +211,7 @@ impl GeneralSeriesOptions {
             color: None,
             point_radius: 3.0,
             point_markers: false,
+            point_symbol: GeneralPointSymbol::Circle,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
@@ -228,6 +241,7 @@ impl GeneralSeriesOptions {
             color: None,
             point_radius: 4.0,
             point_markers: false,
+            point_symbol: GeneralPointSymbol::Circle,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
@@ -257,6 +271,7 @@ impl GeneralSeriesOptions {
             color: None,
             point_radius: 3.0,
             point_markers: false,
+            point_symbol: GeneralPointSymbol::Circle,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
@@ -286,6 +301,7 @@ impl GeneralSeriesOptions {
             color: None,
             point_radius: 3.0,
             point_markers: false,
+            point_symbol: GeneralPointSymbol::Circle,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
@@ -315,6 +331,7 @@ impl GeneralSeriesOptions {
             color: None,
             point_radius: 3.0,
             point_markers: false,
+            point_symbol: GeneralPointSymbol::Circle,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
@@ -344,6 +361,7 @@ impl GeneralSeriesOptions {
             color: None,
             point_radius: 3.0,
             point_markers: false,
+            point_symbol: GeneralPointSymbol::Circle,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
@@ -373,6 +391,7 @@ impl GeneralSeriesOptions {
             color: None,
             point_radius: 3.0,
             point_markers: false,
+            point_symbol: GeneralPointSymbol::Circle,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
@@ -402,6 +421,7 @@ impl GeneralSeriesOptions {
             color: None,
             point_radius: 3.0,
             point_markers: false,
+            point_symbol: GeneralPointSymbol::Circle,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
@@ -428,6 +448,7 @@ pub struct GeneralSeries {
     color: Option<String>,
     point_radius: f64,
     point_markers: bool,
+    point_symbol: GeneralPointSymbol,
     line_width: f64,
     line_style: GeneralLineStyle,
     interpolation: GeneralInterpolation,
@@ -1032,6 +1053,10 @@ impl GeneralSeries {
         self.point_markers
     }
 
+    pub fn point_symbol(&self) -> GeneralPointSymbol {
+        self.point_symbol
+    }
+
     pub fn line_width(&self) -> f64 {
         self.line_width
     }
@@ -1246,6 +1271,7 @@ impl GeneralSeriesRegistry {
             color: options.color,
             point_radius: options.point_radius,
             point_markers: options.point_markers,
+            point_symbol: options.point_symbol,
             line_width: options.line_width,
             line_style: options.line_style,
             interpolation: options.interpolation,
@@ -1756,6 +1782,7 @@ impl ChartEngine {
         series.color = options.color;
         series.point_radius = options.point_radius;
         series.point_markers = options.point_markers;
+        series.point_symbol = options.point_symbol;
         series.line_width = options.line_width;
         series.line_style = options.line_style;
         series.interpolation = options.interpolation;
@@ -4112,9 +4139,14 @@ impl ChartEngine {
                             if series.point_markers {
                                 consider(
                                     geometry.row,
-                                    ((x_css - geometry.x).hypot(y_css - geometry.y)
-                                        - series.point_radius)
-                                        .max(0.0),
+                                    distance_to_point_symbol(
+                                        x_css,
+                                        y_css,
+                                        geometry.x,
+                                        geometry.y,
+                                        series.point_radius,
+                                        series.point_symbol,
+                                    ),
                                 );
                             }
                             run.push(geometry);
@@ -4134,9 +4166,14 @@ impl ChartEngine {
                         if series.point_markers {
                             consider(
                                 geometry.row,
-                                ((x_css - geometry.x).hypot(y_css - geometry.y)
-                                    - series.point_radius)
-                                    .max(0.0),
+                                distance_to_point_symbol(
+                                    x_css,
+                                    y_css,
+                                    geometry.x,
+                                    geometry.y,
+                                    series.point_radius,
+                                    series.point_symbol,
+                                ),
                             );
                         }
                         if geometry.starts_new_run {
@@ -4178,9 +4215,14 @@ impl ChartEngine {
                                 if series.point_markers {
                                     consider(
                                         geometry.row,
-                                        ((x_css - geometry.x).hypot(y_css - geometry.high_y)
-                                            - series.point_radius)
-                                            .max(0.0),
+                                        distance_to_point_symbol(
+                                            x_css,
+                                            y_css,
+                                            geometry.x,
+                                            geometry.high_y,
+                                            series.point_radius,
+                                            series.point_symbol,
+                                        ),
                                     );
                                 }
                                 run.push(geometry);
@@ -4200,9 +4242,14 @@ impl ChartEngine {
                             if series.point_markers {
                                 consider(
                                     geometry.row,
-                                    ((x_css - geometry.x).hypot(y_css - geometry.high_y)
-                                        - series.point_radius)
-                                        .max(0.0),
+                                    distance_to_point_symbol(
+                                        x_css,
+                                        y_css,
+                                        geometry.x,
+                                        geometry.high_y,
+                                        series.point_radius,
+                                        series.point_symbol,
+                                    ),
                                 );
                             }
                             if geometry.starts_new_run {
@@ -4254,9 +4301,14 @@ impl ChartEngine {
                             if series.point_markers {
                                 consider(
                                     geometry.row,
-                                    ((x_css - geometry.x).hypot(y_css - geometry.y)
-                                        - series.point_radius)
-                                        .max(0.0),
+                                    distance_to_point_symbol(
+                                        x_css,
+                                        y_css,
+                                        geometry.x,
+                                        geometry.y,
+                                        series.point_radius,
+                                        series.point_symbol,
+                                    ),
                                 );
                             }
                             run.push(geometry);
@@ -4277,9 +4329,14 @@ impl ChartEngine {
                         if series.point_markers {
                             consider(
                                 geometry.row,
-                                ((x_css - geometry.x).hypot(y_css - geometry.y)
-                                    - series.point_radius)
-                                    .max(0.0),
+                                distance_to_point_symbol(
+                                    x_css,
+                                    y_css,
+                                    geometry.x,
+                                    geometry.y,
+                                    series.point_radius,
+                                    series.point_symbol,
+                                ),
                             );
                         }
                         if geometry.starts_new_run {
@@ -4318,12 +4375,26 @@ impl ChartEngine {
                                 run.clear();
                             }
                             if series.point_markers {
-                                let center_distance = (x_css - geometry.x)
-                                    .hypot(y_css - geometry.low_y)
-                                    .min((x_css - geometry.x).hypot(y_css - geometry.high_y));
                                 consider(
                                     geometry.row,
-                                    (center_distance - series.point_radius).max(0.0),
+                                    distance_to_point_symbol(
+                                        x_css,
+                                        y_css,
+                                        geometry.x,
+                                        geometry.low_y,
+                                        series.point_radius,
+                                        series.point_symbol,
+                                    )
+                                    .min(
+                                        distance_to_point_symbol(
+                                            x_css,
+                                            y_css,
+                                            geometry.x,
+                                            geometry.high_y,
+                                            series.point_radius,
+                                            series.point_symbol,
+                                        ),
+                                    ),
                                 );
                             }
                             run.push(geometry);
@@ -4341,12 +4412,24 @@ impl ChartEngine {
                     let mut previous: Option<GeneralRangePointGeometry> = None;
                     self.visit_general_range_points(series, |geometry| {
                         if series.point_markers {
-                            let center_distance = (x_css - geometry.x)
-                                .hypot(y_css - geometry.low_y)
-                                .min((x_css - geometry.x).hypot(y_css - geometry.high_y));
                             consider(
                                 geometry.row,
-                                (center_distance - series.point_radius).max(0.0),
+                                distance_to_point_symbol(
+                                    x_css,
+                                    y_css,
+                                    geometry.x,
+                                    geometry.low_y,
+                                    series.point_radius,
+                                    series.point_symbol,
+                                )
+                                .min(distance_to_point_symbol(
+                                    x_css,
+                                    y_css,
+                                    geometry.x,
+                                    geometry.high_y,
+                                    series.point_radius,
+                                    series.point_symbol,
+                                )),
                             );
                         }
                         if geometry.starts_new_run {
@@ -4424,7 +4507,21 @@ impl ChartEngine {
                     } + max_distance;
                     let _ = self.with_scatter_spatial_index(series, |index| {
                         index.visit_candidates(x_css, y_css, expansion, |geometry| {
-                            consider(geometry.row, distance_to_circle(x_css, y_css, geometry));
+                            consider(
+                                geometry.row,
+                                distance_to_point_symbol(
+                                    x_css,
+                                    y_css,
+                                    geometry.x,
+                                    geometry.y,
+                                    geometry.radius,
+                                    if series.kind == GeneralSeriesKind::Bubble {
+                                        GeneralPointSymbol::Circle
+                                    } else {
+                                        series.point_symbol
+                                    },
+                                ),
+                            );
                         });
                     });
                 }
@@ -5338,8 +5435,62 @@ fn extend_numeric_pair(bounds: &mut Option<(f64, f64)>, value: f64) {
     });
 }
 
-fn distance_to_circle(x: f64, y: f64, geometry: GeneralScatterGeometry) -> f64 {
-    ((x - geometry.x).hypot(y - geometry.y) - geometry.radius).max(0.0)
+fn distance_to_point_symbol(
+    x: f64,
+    y: f64,
+    center_x: f64,
+    center_y: f64,
+    radius: f64,
+    symbol: GeneralPointSymbol,
+) -> f64 {
+    let dx = x - center_x;
+    let dy = y - center_y;
+    match symbol {
+        GeneralPointSymbol::Circle => (dx.hypot(dy) - radius).max(0.0),
+        GeneralPointSymbol::Square => (dx.abs() - radius)
+            .max(0.0)
+            .hypot((dy.abs() - radius).max(0.0)),
+        GeneralPointSymbol::Diamond => {
+            if dx.abs() + dy.abs() <= radius {
+                return 0.0;
+            }
+            let vertices = [
+                (center_x, center_y - radius),
+                (center_x + radius, center_y),
+                (center_x, center_y + radius),
+                (center_x - radius, center_y),
+            ];
+            vertices
+                .iter()
+                .zip(vertices.iter().cycle().skip(1))
+                .take(vertices.len())
+                .map(|(&(x0, y0), &(x1, y1))| distance_to_segment(x, y, x0, y0, x1, y1).0)
+                .fold(f64::INFINITY, f64::min)
+        }
+        GeneralPointSymbol::Triangle => {
+            let vertices = [
+                (center_x, center_y - radius),
+                (center_x + radius, center_y + radius),
+                (center_x - radius, center_y + radius),
+            ];
+            let cross =
+                |a: (f64, f64), b: (f64, f64)| (b.0 - a.0) * (y - a.1) - (b.1 - a.1) * (x - a.0);
+            let signs = [
+                cross(vertices[0], vertices[1]),
+                cross(vertices[1], vertices[2]),
+                cross(vertices[2], vertices[0]),
+            ];
+            if signs.iter().all(|value| *value >= 0.0) || signs.iter().all(|value| *value <= 0.0) {
+                return 0.0;
+            }
+            vertices
+                .iter()
+                .zip(vertices.iter().cycle().skip(1))
+                .take(vertices.len())
+                .map(|(&(x0, y0), &(x1, y1))| distance_to_segment(x, y, x0, y0, x1, y1).0)
+                .fold(f64::INFINITY, f64::min)
+        }
+    }
 }
 
 fn distance_to_error_bar(x: f64, y: f64, geometry: GeneralErrorBarGeometry) -> f64 {
@@ -6486,6 +6637,19 @@ fn validate_logarithmic_input_y(
 }
 
 fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartError> {
+    if options.point_symbol != GeneralPointSymbol::Circle
+        && !matches!(
+            options.kind,
+            GeneralSeriesKind::XyLine
+                | GeneralSeriesKind::XyArea
+                | GeneralSeriesKind::RangeArea
+                | GeneralSeriesKind::Scatter
+        )
+    {
+        return Err(invalid(
+            "general series point_symbol is supported only by xy_line, xy_area, range_area, and scatter",
+        ));
+    }
     if options.connect_missing
         && !matches!(
             options.kind,

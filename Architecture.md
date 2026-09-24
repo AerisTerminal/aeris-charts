@@ -129,8 +129,10 @@ and accessible but emit no mark or stack contribution. Bar geometry is computed 
 in shared CSS-space semantics, reused by frame painting and exact/nearest hit testing, then lowered to
 ordinary ordered `Rect` primitives. Bounded tooltip and accessibility snapshots come from the same rows.
 Scatter binds independent continuous numeric axes, validates logarithmic positivity, clips geometry to
-the runtime view, and lowers points to ordered `Circle` primitives. Its lazily rebuilt screen-space grid
-is keyed by dataset generation, plot geometry, axis domains/transforms, direction, and point radius; grid
+the runtime view, and lowers persisted circle, square, diamond, or triangle symbols to existing ordered
+primitives. Path point markers share the same symbol contract; bubbles remain area-scaled circles. Exact
+hits follow each symbol boundary. The lazily rebuilt scatter screen-space grid is keyed by dataset
+generation, plot geometry, axis domains/transforms, direction, and point radius; grid
 cell count is capped, retained capacity is attributed to engine memory, and exact/nearest hits inspect
 only intersecting cells while preserving stable series/row tie-breaking. Bubble reuses that point/index
 contract with a required typed size channel, square-root area-to-radius mapping clamped to the shared

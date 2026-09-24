@@ -7,9 +7,9 @@ use super::conflation::{
 use super::*;
 use crate::{
     AxisDimension, CategoryScaleType, ContinuousScaleType, GeneralAxisDomain, GeneralAxisOptions,
-    GeneralAxisTick, GeneralInterpolation, GeneralLineStyle, GeneralRowId, GeneralRowIdentity,
-    GeneralScaleType, GeneralSeriesKind, GeneralSeriesOptions, GeneralStackMode, GeneralXyInput,
-    HorizontalDomain,
+    GeneralAxisTick, GeneralInterpolation, GeneralLineStyle, GeneralPointSymbol, GeneralRowId,
+    GeneralRowIdentity, GeneralScaleType, GeneralSeriesKind, GeneralSeriesOptions,
+    GeneralStackMode, GeneralXyInput, HorizontalDomain,
 };
 use nucleuscharts_core::model::data_layer::DataLayer;
 use nucleuscharts_core::model::plot_list::{PlotList, PlotValues};
@@ -1947,6 +1947,7 @@ fn xy_line_preserves_gaps_hits_rows_and_shared_frame_geometry() {
     options.title = "Trend".into();
     options.data_labels = true;
     options.point_markers = true;
+    options.point_symbol = GeneralPointSymbol::Diamond;
     options.point_radius = 8.0;
     options.line_width = 4.0;
     options.line_style = GeneralLineStyle::Dashed;
@@ -1985,12 +1986,10 @@ fn xy_line_preserves_gaps_hits_rows_and_shared_frame_geometry() {
         frame.panes[pane]
             .main
             .iter()
-            .filter(|primitive| {
-                matches!(primitive, Prim::Circle { radius, fill, .. } if (*radius - 8.0).abs() < f32::EPSILON && *fill == Color::rgb(0x33, 0x66, 0x99))
-            })
+            .filter(|primitive| matches!(primitive, Prim::Triangle { color, .. } if *color == Color::rgb(0x33, 0x66, 0x99)))
             .count(),
-        4,
-        "each valid path row must emit one marker above the stroke"
+        8,
+        "each valid path row must emit one two-triangle diamond above the stroke"
     );
     assert!(frame.panes[pane].main.iter().any(|primitive| {
         matches!(
@@ -2748,6 +2747,7 @@ fn xy_scatter_owns_independent_domains_hits_and_runtime_view() {
     options.color = Some("#654321".into());
     options.title = "Samples".into();
     options.point_radius = 4.0;
+    options.point_symbol = GeneralPointSymbol::Square;
     options.data_labels = true;
     let series = chart.add_general_series(options).unwrap();
 
@@ -2767,7 +2767,7 @@ fn xy_scatter_owns_independent_domains_hits_and_runtime_view() {
         frame.panes[pane]
             .main
             .iter()
-            .filter(|primitive| matches!(primitive, Prim::Circle { fill, .. } if *fill == expected_color))
+            .filter(|primitive| matches!(primitive, Prim::RoundRect { fill, .. } if *fill == expected_color))
             .count(),
         3
     );
@@ -2819,6 +2819,18 @@ fn xy_scatter_owns_independent_domains_hits_and_runtime_view() {
     assert_eq!(hit.series, series);
     assert_eq!(hit.row, 0);
     assert_eq!(hit.distance, 0.0);
+    let square_corner = chart
+        .general_hit_test(
+            pane,
+            first.x + first.radius * 0.9,
+            first.y + first.radius * 0.9,
+            crate::GeneralHitMode::Exact,
+        )
+        .unwrap();
+    assert_eq!(
+        square_corner.row, 0,
+        "hit geometry must match the square mark"
+    );
     let nearest = chart
         .general_hit_test(
             pane,

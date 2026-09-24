@@ -5,9 +5,10 @@ use nucleuscharts_engine::{
     AxisDimension, AxisPosition, CategoryScaleType, ChartError, ContinuousScaleType,
     GeneralAxisDomain, GeneralAxisOptions, GeneralAxisTick, GeneralBrushRange,
     GeneralBrushSnapshot, GeneralDatasetId, GeneralHitMode, GeneralInterpolation, GeneralLineStyle,
-    GeneralReferenceId, GeneralReferenceOptions, GeneralRowId, GeneralRowIdentity,
-    GeneralScaleType, GeneralSeriesId, GeneralSeriesKind, GeneralSeriesOptions, GeneralStackMode,
-    GeneralTooltipSnapshot, GeneralXyInput, HorizontalDomain, MAX_GENERAL_TEMPORAL_MILLISECONDS,
+    GeneralPointSymbol, GeneralReferenceId, GeneralReferenceOptions, GeneralRowId,
+    GeneralRowIdentity, GeneralScaleType, GeneralSeriesId, GeneralSeriesKind, GeneralSeriesOptions,
+    GeneralStackMode, GeneralTooltipSnapshot, GeneralXyInput, HorizontalDomain,
+    MAX_GENERAL_TEMPORAL_MILLISECONDS,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -101,6 +102,8 @@ struct SeriesInput {
     point_radius: f64,
     #[serde(default)]
     point_markers: bool,
+    #[serde(default)]
+    point_symbol: Option<String>,
     #[serde(default = "default_line_width")]
     line_width: f64,
     #[serde(default)]
@@ -199,6 +202,19 @@ fn interpolation(value: Option<&str>) -> Result<GeneralInterpolation, ChartError
     }
 }
 
+fn point_symbol(value: Option<&str>) -> Result<GeneralPointSymbol, ChartError> {
+    match value.unwrap_or("circle") {
+        "circle" => Ok(GeneralPointSymbol::Circle),
+        "square" => Ok(GeneralPointSymbol::Square),
+        "diamond" => Ok(GeneralPointSymbol::Diamond),
+        "triangle" => Ok(GeneralPointSymbol::Triangle),
+        _ => Err(ChartError::new(
+            nucleuscharts_engine::ErrorCode::InvalidOptions,
+            "general series point_symbol must be circle, square, diamond, or triangle",
+        )),
+    }
+}
+
 fn series_options_from_input(
     kind: GeneralSeriesKind,
     dataset: GeneralDatasetId,
@@ -247,6 +263,7 @@ fn series_options_from_input(
     options.color = input.color;
     options.point_radius = input.point_radius;
     options.point_markers = input.point_markers;
+    options.point_symbol = point_symbol(input.point_symbol.as_deref())?;
     options.line_width = input.line_width;
     options.line_style = line_style(input.line_style.as_deref())?;
     options.interpolation = interpolation(input.interpolation.as_deref())?;
@@ -789,6 +806,12 @@ impl ChartInner {
             "color": series.color(),
             "point_radius": series.point_radius(),
             "point_markers": series.point_markers(),
+            "point_symbol": match series.point_symbol() {
+                GeneralPointSymbol::Circle => "circle",
+                GeneralPointSymbol::Square => "square",
+                GeneralPointSymbol::Diamond => "diamond",
+                GeneralPointSymbol::Triangle => "triangle",
+            },
             "line_width": series.line_width(),
             "line_style": match series.line_style() {
                 GeneralLineStyle::Solid => "solid",
@@ -2539,5 +2562,19 @@ mod tests {
             GeneralInterpolation::Curved
         );
         assert!(interpolation(Some("basis")).is_err());
+        assert_eq!(point_symbol(None).unwrap(), GeneralPointSymbol::Circle);
+        assert_eq!(
+            point_symbol(Some("square")).unwrap(),
+            GeneralPointSymbol::Square
+        );
+        assert_eq!(
+            point_symbol(Some("diamond")).unwrap(),
+            GeneralPointSymbol::Diamond
+        );
+        assert_eq!(
+            point_symbol(Some("triangle")).unwrap(),
+            GeneralPointSymbol::Triangle
+        );
+        assert!(point_symbol(Some("star")).is_err());
     }
 }

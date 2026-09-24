@@ -124,6 +124,8 @@ struct SeriesV2 {
     point_radius: f64,
     #[serde(default)]
     point_markers: bool,
+    #[serde(default)]
+    point_symbol: crate::GeneralPointSymbol,
     #[serde(default = "default_general_line_width")]
     line_width: f64,
     #[serde(default)]
@@ -703,6 +705,7 @@ impl ChartEngine {
                     color: series.color().map(str::to_string),
                     point_radius: series.point_radius(),
                     point_markers: series.point_markers(),
+                    point_symbol: series.point_symbol(),
                     line_width: series.line_width(),
                     line_style: series.line_style(),
                     interpolation: series.interpolation(),
@@ -1232,6 +1235,7 @@ impl ChartEngine {
                 color: series.color,
                 point_radius: series.point_radius,
                 point_markers: series.point_markers,
+                point_symbol: series.point_symbol,
                 line_width: series.line_width,
                 line_style: series.line_style,
                 interpolation: series.interpolation,
@@ -1416,6 +1420,7 @@ mod tests {
             crate::GeneralSeriesOptions::xy_line(pane, dataset, "category-x", "category-y");
         line.title = "Category trend".into();
         line.point_markers = true;
+        line.point_symbol = crate::GeneralPointSymbol::Diamond;
         line.point_radius = 7.0;
         line.interpolation = crate::GeneralInterpolation::Curved;
         line.connect_missing = true;
@@ -1436,6 +1441,7 @@ mod tests {
         assert_eq!(value["series"][0]["stack_id"], "share");
         assert_eq!(value["series"][0]["stack_mode"], "Percent");
         assert_eq!(value["series"][1]["point_markers"], true);
+        assert_eq!(value["series"][1]["point_symbol"], "Diamond");
         assert_eq!(value["series"][1]["point_radius"], 7.0);
         assert_eq!(value["series"][1]["interpolation"], "Curved");
         assert_eq!(value["series"][1]["connect_missing"], true);

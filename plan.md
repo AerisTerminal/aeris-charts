@@ -31,10 +31,13 @@ The following narrow R3 visual-configuration slices are implemented and pushed t
   through the shared frame contract.
 - `6a5684b` — `xy_area` accepts an explicit finite `baseline_value`, with shared fill geometry,
   hit-testing, persistence, WASM/TypeScript exposure, and public browser coverage.
-- General line, area, stacked-area, and range-area series accept opt-in circular `point_markers`
+- General line, area, stacked-area, and range-area series accept opt-in `point_markers`
   with configurable radius, shared frame geometry, matching hit targets, atomic live mutation,
   V2 persistence, WASM/TypeScript exposure, and public browser coverage. The same slice repairs
   live mutation of the previously released `line_width`, `line_style`, and `baseline_value` fields.
+- Scatter and opt-in path markers accept persisted `circle`, `square`, `diamond`, and `triangle`
+  symbols, lowered through existing shared primitives with symbol-matched exact hit geometry. Bubble
+  marks remain area-scaled circles.
 - General line, area, stacked-area, and range-area paths accept persisted `linear`, `step`, and
   `curved` interpolation. Shared path and coupled band expansion drive every renderer and matching
   exact/nearest hit geometry, while stacked areas reject mixed interpolation that could open seams.

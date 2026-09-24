@@ -352,8 +352,10 @@ export interface general_series_options {
   color?: string;
   /** Path-marker/scatter radius or error-bar cap half-width in CSS pixels. Bubble radii come from sqrt(size). */
   point_radius?: number;
-  /** Draw circular markers at line, area, or range-area data points (default false). */
+  /** Draw markers at line, area, or range-area data points (default false). */
   point_markers?: boolean;
+  /** Marker shape for scatter and opt-in path markers (default `circle`). */
+  point_symbol?: "circle" | "square" | "diamond" | "triangle";
   /** Stroke width for line, area, and range-area paths in CSS pixels (default 2). */
   line_width?: number;
   /** Stroke pattern for line, area, and range-area paths (default `solid`). */

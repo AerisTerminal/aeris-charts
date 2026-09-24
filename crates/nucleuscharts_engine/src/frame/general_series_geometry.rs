@@ -4,8 +4,8 @@ use nucleuscharts_render::draw_list::{Gradient, IRect, LineStyle, Prim, TextAlig
 
 use crate::general_axes::NumericAxisScale;
 use crate::{
-    AxisDimension, ChartEngine, GeneralAxisDomain, GeneralReferenceOptions, GeneralReferenceValue,
-    GeneralScaleType, GeneralSeriesKind, DEFAULT_LINE_COLOR,
+    AxisDimension, ChartEngine, GeneralAxisDomain, GeneralPointSymbol, GeneralReferenceOptions,
+    GeneralReferenceValue, GeneralScaleType, GeneralSeriesKind, DEFAULT_LINE_COLOR,
 };
 
 use super::PRIMARY;
@@ -18,6 +18,61 @@ const GENERAL_REFERENCE_MARK: Color = Color(PRIMARY.0 & 0xFFFF_FF00 | 0xCC);
 const GENERAL_LINE_WIDTH_CSS: f64 = 2.0;
 const MAX_GENERAL_DATA_LABELS_PER_PANE: usize = 512;
 const MAX_GENERAL_DATA_LABEL_ATTEMPTS_PER_PANE: usize = 4_096;
+
+fn push_general_point_symbol(
+    out: &mut Vec<Prim>,
+    symbol: GeneralPointSymbol,
+    x: f64,
+    y: f64,
+    radius: f64,
+    color: Color,
+) {
+    let (x, y, radius) = (x as f32, y as f32, radius as f32);
+    match symbol {
+        GeneralPointSymbol::Circle => out.push(Prim::Circle {
+            cx: x,
+            cy: y,
+            radius,
+            fill: color,
+            stroke_width: 0.0,
+            stroke: color,
+        }),
+        GeneralPointSymbol::Square => out.push(Prim::RoundRect {
+            x: x - radius,
+            y: y - radius,
+            w: radius * 2.0,
+            h: radius * 2.0,
+            radii: [0.0; 4],
+            fill: color,
+            border_width: 0.0,
+            border_color: color,
+        }),
+        GeneralPointSymbol::Diamond => {
+            let top = [x, y - radius];
+            let right = [x + radius, y];
+            let bottom = [x, y + radius];
+            let left = [x - radius, y];
+            out.push(Prim::Triangle {
+                a: top,
+                b: right,
+                c: bottom,
+                color,
+            });
+            out.push(Prim::Triangle {
+                a: top,
+                b: bottom,
+                c: left,
+                color,
+            });
+        }
+        GeneralPointSymbol::Triangle => out.push(Prim::Triangle {
+            a: [x, y - radius],
+            b: [x + radius, y + radius],
+            c: [x - radius, y + radius],
+            color,
+        }),
+    }
+}
 
 impl ChartEngine {
     pub(super) fn build_general_series_frame(
@@ -204,14 +259,14 @@ impl ChartEngine {
                             upper.push([(geometry.x * hpr) as f32, (geometry.high_y * vpr) as f32]);
                             lower.push([(geometry.x * hpr) as f32, (geometry.low_y * vpr) as f32]);
                             if series.point_markers() {
-                                markers.push(Prim::Circle {
-                                    cx: (geometry.x * hpr) as f32,
-                                    cy: (geometry.high_y * vpr) as f32,
-                                    radius: (series.point_radius() * vpr) as f32,
-                                    fill: color,
-                                    stroke_width: 0.0,
-                                    stroke: color,
-                                });
+                                push_general_point_symbol(
+                                    &mut markers,
+                                    series.point_symbol(),
+                                    geometry.x * hpr,
+                                    geometry.high_y * vpr,
+                                    series.point_radius() * vpr,
+                                    color,
+                                );
                             }
                             push_label(
                                 geometry.row,
@@ -278,14 +333,14 @@ impl ChartEngine {
                         }
                         run.push([(geometry.x * hpr) as f32, (geometry.y * vpr) as f32]);
                         if series.point_markers() {
-                            markers.push(Prim::Circle {
-                                cx: (geometry.x * hpr) as f32,
-                                cy: (geometry.y * vpr) as f32,
-                                radius: (series.point_radius() * vpr) as f32,
-                                fill: color,
-                                stroke_width: 0.0,
-                                stroke: color,
-                            });
+                            push_general_point_symbol(
+                                &mut markers,
+                                series.point_symbol(),
+                                geometry.x * hpr,
+                                geometry.y * vpr,
+                                series.point_radius() * vpr,
+                                color,
+                            );
                         }
                         push_label(
                             geometry.row,
@@ -363,14 +418,14 @@ impl ChartEngine {
                         lower.push([(geometry.x * hpr) as f32, (geometry.low_y * vpr) as f32]);
                         if series.point_markers() {
                             for y in [geometry.low_y, geometry.high_y] {
-                                markers.push(Prim::Circle {
-                                    cx: (geometry.x * hpr) as f32,
-                                    cy: (y * vpr) as f32,
-                                    radius: (series.point_radius() * vpr) as f32,
-                                    fill: color,
-                                    stroke_width: 0.0,
-                                    stroke: color,
-                                });
+                                push_general_point_symbol(
+                                    &mut markers,
+                                    series.point_symbol(),
+                                    geometry.x * hpr,
+                                    y * vpr,
+                                    series.point_radius() * vpr,
+                                    color,
+                                );
                             }
                         }
                         push_label(
@@ -773,14 +828,18 @@ impl ChartEngine {
                         .and_then(Color::parse_css)
                         .unwrap_or(DEFAULT_LINE_COLOR);
                     self.visit_general_scatter_points(series, |geometry| {
-                        out.push(Prim::Circle {
-                            cx: (geometry.x * hpr) as f32,
-                            cy: (geometry.y * vpr) as f32,
-                            radius: (geometry.radius * vpr) as f32,
-                            fill: color,
-                            stroke_width: 0.0,
-                            stroke: color,
-                        });
+                        push_general_point_symbol(
+                            out,
+                            if series.kind() == GeneralSeriesKind::Bubble {
+                                GeneralPointSymbol::Circle
+                            } else {
+                                series.point_symbol()
+                            },
+                            geometry.x * hpr,
+                            geometry.y * vpr,
+                            geometry.radius * vpr,
+                            color,
+                        );
                         push_label(
                             geometry.row,
                             geometry.x,
