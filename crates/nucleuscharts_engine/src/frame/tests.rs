@@ -2059,6 +2059,49 @@ fn xy_line_preserves_gaps_hits_rows_and_shared_frame_geometry() {
         .unwrap();
     assert_eq!(accessibility.items.len(), 5);
     assert_eq!(accessibility.items[2].value, None);
+
+    let mut connected = GeneralSeriesOptions::xy_line(pane, dataset, "line-x", "line-y");
+    connected.connect_missing = true;
+    chart
+        .update_general_series_options(series, connected)
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let mut connected_geometry = Vec::new();
+    chart.visit_general_path_points(chart.general_series(series).unwrap(), |point| {
+        connected_geometry.push(point)
+    });
+    assert_eq!(
+        connected_geometry
+            .iter()
+            .map(|point| point.starts_new_run)
+            .collect::<Vec<_>>(),
+        vec![true, false, false, false],
+        "connect_missing must skip missing rows without losing their queryable identity"
+    );
+    assert_eq!(
+        chart.build_frame().panes[pane]
+            .main
+            .iter()
+            .filter(|primitive| matches!(primitive, Prim::Polyline { point_count: 4, .. }))
+            .count(),
+        1
+    );
+    let connected_midpoint = (
+        (connected_geometry[1].x + connected_geometry[2].x) * 0.5,
+        (connected_geometry[1].y + connected_geometry[2].y) * 0.5,
+    );
+    assert!(chart
+        .general_hit_test(
+            pane,
+            connected_midpoint.0,
+            connected_midpoint.1,
+            crate::GeneralHitMode::Exact,
+        )
+        .is_some());
+
+    let mut invalid = GeneralSeriesOptions::scatter(pane, dataset, "line-x", "line-y");
+    invalid.connect_missing = true;
+    assert!(chart.add_general_series(invalid).is_err());
 }
 
 #[test]
@@ -2543,6 +2586,12 @@ fn xy_area_stacks_by_x_identity_with_normal_and_percent_geometry() {
         GeneralSeriesOptions::xy_area(pane, second_dataset, "stack-area-x", "stack-area-y");
     mismatched.stack_id = Some("total".into());
     mismatched.interpolation = GeneralInterpolation::Step;
+    assert!(chart.add_general_series(mismatched).is_err());
+    let mut mismatched =
+        GeneralSeriesOptions::xy_area(pane, second_dataset, "stack-area-x", "stack-area-y");
+    mismatched.stack_id = Some("total".into());
+    mismatched.interpolation = GeneralInterpolation::Curved;
+    mismatched.connect_missing = true;
     assert!(chart.add_general_series(mismatched).is_err());
 
     assert_eq!(
@@ -3238,6 +3287,28 @@ fn range_area_preserves_gaps_fills_band_hits_rows_and_exposes_bounds() {
     assert_eq!(accessibility.items[1].low, Some(2.0));
     assert_eq!(accessibility.items[1].high, Some(5.0));
 
+    let mut connected = GeneralSeriesOptions::range_area(pane, dataset, "range-x", "range-y");
+    connected.connect_missing = true;
+    chart
+        .update_general_series_options(series, connected)
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let mut connected_geometry = Vec::new();
+    chart.visit_general_range_points(chart.general_series(series).unwrap(), |point| {
+        connected_geometry.push(point)
+    });
+    assert_eq!(
+        connected_geometry
+            .iter()
+            .map(|point| point.starts_new_run)
+            .collect::<Vec<_>>(),
+        vec![true, false, false]
+    );
+    assert!(chart.build_frame().panes[pane]
+        .main
+        .iter()
+        .any(|primitive| matches!(primitive, Prim::BandFill { point_count: 3, .. })));
+
     let before = chart.general_tooltip_snapshot(series, 0).unwrap();
     assert!(chart
         .replace_general_xy_dataset(
@@ -3390,14 +3461,10 @@ fn range_area_maps_temporal_and_category_x_and_log_invalid_bounds_as_gaps() {
             high_valid: None,
         })
         .unwrap();
-    let log_series = log_chart
-        .add_general_series(GeneralSeriesOptions::range_area(
-            log_pane,
-            log_data,
-            "range-log-x",
-            "range-log-y",
-        ))
-        .unwrap();
+    let mut log_options =
+        GeneralSeriesOptions::range_area(log_pane, log_data, "range-log-x", "range-log-y");
+    log_options.connect_missing = true;
+    let log_series = log_chart.add_general_series(log_options).unwrap();
     log_chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
     let mut log_geometry = Vec::new();
     log_chart.visit_general_range_points(log_chart.general_series(log_series).unwrap(), |point| {
@@ -3410,7 +3477,10 @@ fn range_area_maps_temporal_and_category_x_and_log_invalid_bounds_as_gaps() {
             .collect::<Vec<_>>(),
         vec![0, 2]
     );
-    assert!(log_geometry.iter().all(|point| point.starts_new_run));
+    assert!(
+        log_geometry.iter().all(|point| point.starts_new_run),
+        "transform-invalid bounds must remain hard gaps even when missing rows connect"
+    );
     assert_eq!(
         log_chart
             .general_tooltip_snapshot(log_series, 1)

@@ -360,6 +360,8 @@ export interface general_series_options {
   line_style?: "solid" | "dotted" | "dashed";
   /** Path interpolation for line, area, and range-area boundaries (default `linear`). */
   interpolation?: "linear" | "step" | "curved";
+  /** Bridge missing rows in line, area, and range-area paths; transform-invalid rows remain gaps. */
+  connect_missing?: boolean;
   /** Explicit numeric fill baseline for `xy_area`; omitted uses zero when visible, otherwise the edge. */
   baseline_value?: number;
   /** Show bounded, engine-placed value labels beside visible marks. */

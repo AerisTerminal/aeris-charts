@@ -38,6 +38,9 @@ The following narrow R3 visual-configuration slices are implemented and pushed t
 - General line, area, stacked-area, and range-area paths accept persisted `linear`, `step`, and
   `curved` interpolation. Shared path and coupled band expansion drive every renderer and matching
   exact/nearest hit geometry, while stacked areas reject mixed interpolation that could open seams.
+- General line, area, stacked-area, and range-area paths accept opt-in persisted `connect_missing`
+  semantics. Missing rows remain queryable but no longer split connected runs; transform-invalid
+  coordinates remain hard gaps, and stacked members must share one connection policy.
 
 These slices passed the applicable Rust tests, clippy checks (including the WASM target), package
 lint/build/typecheck/package smoke test, Chromium browser tests, formatting checks, and the native

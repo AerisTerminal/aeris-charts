@@ -138,7 +138,8 @@ point-radius bound, and queryable zero/missing sizes that emit no mark. The size
 atomic replacement, explicit-ID updates, bounded retention, accessibility, tooltip snapshots, memory
 accounting, and V2 persistence. `xy_line` and `xy_area` reuse the same
 general dataset/axis ownership across continuous numeric, temporal epoch-millisecond, and category
-band/point X domains. Missing or transform-invalid rows split path runs instead of bridging gaps.
+band/point X domains. Missing rows split path runs by default, while persisted `connect_missing`
+can bridge them without removing their queryable identity. Transform-invalid rows always remain hard gaps.
 Their persisted `linear`, horizontal-then-vertical `step`, and Catmull-Rom `curved` interpolation policy
 travels on the ordered frame primitive and drives both shared lowering and exact/nearest hit geometry.
 `xy_line` lowers each run to the shared point pool plus ordered `Polyline` primitives. `xy_area` adds an
@@ -146,9 +147,9 @@ ordered `AreaFill` before the matching stroke; its zero baseline is clamped into
 falls back to the lower-domain plot edge when a logarithmic Y axis has no zero coordinate. Line hits use
 segment distance, while area hits include the filled trapezoid and both preserve the closest endpoint row
 identity. When `xy_area` has a `stack_id`, visible members with the same pane, X/Y axes, stack ID, and stack
-mode and interpolation align by exact numeric, epoch-millisecond, or category X identity rather than row
-position. Positive and negative values accumulate independently; percent mode normalizes each sign
-independently to `+1`/`-1`.
+mode, interpolation, and missing-row connection policy align by exact numeric, epoch-millisecond, or
+category X identity rather than row position. Positive and negative values accumulate independently;
+percent mode normalizes each sign independently to `+1`/`-1`.
 Cumulative extents participate in Y autoscale, and each layer becomes a variable-bound `BandFill` between
 the preceding stack boundary and the new cumulative boundary while retaining the upper area stroke and row
 interaction identity. `range_area` adds bounded typed low/high columns beside the same X domains, rejects inverted

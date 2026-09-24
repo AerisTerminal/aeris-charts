@@ -225,6 +225,8 @@ interface cartesian_series_options {
   line_style?: "solid" | "dotted" | "dashed";
   /** Shared path interpolation for line, area, and range-area boundaries; defaults to linear. */
   interpolation?: "linear" | "step" | "curved";
+  /** Bridge missing rows in path series; transform-invalid rows remain gaps. Defaults to false. */
+  connect_missing?: boolean;
   /** Explicit numeric fill baseline for `xy_area`; omitted uses zero when visible, otherwise the edge. */
   baseline_value?: number;
   group_id?: string;

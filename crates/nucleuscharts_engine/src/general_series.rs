@@ -115,6 +115,7 @@ pub struct GeneralSeriesOptions {
     pub line_width: f64,
     pub line_style: GeneralLineStyle,
     pub interpolation: GeneralInterpolation,
+    pub connect_missing: bool,
     pub baseline_value: Option<f64>,
     pub data_labels: bool,
     pub group_id: Option<String>,
@@ -143,6 +144,7 @@ impl GeneralSeriesOptions {
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
+            connect_missing: false,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -171,6 +173,7 @@ impl GeneralSeriesOptions {
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
+            connect_missing: false,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -199,6 +202,7 @@ impl GeneralSeriesOptions {
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
+            connect_missing: false,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -227,6 +231,7 @@ impl GeneralSeriesOptions {
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
+            connect_missing: false,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -255,6 +260,7 @@ impl GeneralSeriesOptions {
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
+            connect_missing: false,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -283,6 +289,7 @@ impl GeneralSeriesOptions {
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
+            connect_missing: false,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -311,6 +318,7 @@ impl GeneralSeriesOptions {
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
+            connect_missing: false,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -339,6 +347,7 @@ impl GeneralSeriesOptions {
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
+            connect_missing: false,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -367,6 +376,7 @@ impl GeneralSeriesOptions {
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
+            connect_missing: false,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -395,6 +405,7 @@ impl GeneralSeriesOptions {
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
+            connect_missing: false,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -420,6 +431,7 @@ pub struct GeneralSeries {
     line_width: f64,
     line_style: GeneralLineStyle,
     interpolation: GeneralInterpolation,
+    connect_missing: bool,
     baseline_value: Option<f64>,
     data_labels: bool,
     group_id: Option<String>,
@@ -1032,6 +1044,10 @@ impl GeneralSeries {
         self.interpolation
     }
 
+    pub fn connect_missing(&self) -> bool {
+        self.connect_missing
+    }
+
     pub fn baseline_value(&self) -> Option<f64> {
         self.baseline_value
     }
@@ -1233,6 +1249,7 @@ impl GeneralSeriesRegistry {
             line_width: options.line_width,
             line_style: options.line_style,
             interpolation: options.interpolation,
+            connect_missing: options.connect_missing,
             baseline_value: options.baseline_value,
             data_labels: options.data_labels,
             group_id: options.group_id,
@@ -1652,10 +1669,11 @@ impl ChartEngine {
                     || sibling.y_axis_id != options.y_axis_id
                     || sibling.stack_mode != options.stack_mode
                     || (options.kind == GeneralSeriesKind::XyArea
-                        && sibling.interpolation != options.interpolation)
+                        && (sibling.interpolation != options.interpolation
+                            || sibling.connect_missing != options.connect_missing))
                 {
                     return Err(invalid(
-                        "stacked series must share X/Y axes, group ID, stack mode, and area interpolation",
+                        "stacked series must share X/Y axes, group ID, stack mode, and area path policy",
                     ));
                 }
             }
@@ -1741,6 +1759,7 @@ impl ChartEngine {
         series.line_width = options.line_width;
         series.line_style = options.line_style;
         series.interpolation = options.interpolation;
+        series.connect_missing = options.connect_missing;
         series.baseline_value = options.baseline_value;
         series.data_labels = options.data_labels;
         series.group_id = options.group_id;
@@ -2937,7 +2956,9 @@ impl ChartEngine {
         let mut starts_new_run = true;
         for row in 0..dataset.len() {
             if !dataset.y_is_valid(row) {
-                starts_new_run = true;
+                if !series.connect_missing {
+                    starts_new_run = true;
+                }
                 continue;
             }
             let Some(y) = y_scale.coordinate(dataset.y()[row]) else {
@@ -3098,7 +3119,9 @@ impl ChartEngine {
         let mut starts_new_run = true;
         for (row, &low) in low_values.iter().enumerate().take(dataset.len()) {
             if !dataset.y_is_valid(row) || !dataset.low_is_valid(row) {
-                starts_new_run = true;
+                if !series.connect_missing {
+                    starts_new_run = true;
+                }
                 continue;
             }
             let Some(high_y) = y_scale.coordinate(dataset.y()[row]) else {
@@ -6463,6 +6486,16 @@ fn validate_logarithmic_input_y(
 }
 
 fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartError> {
+    if options.connect_missing
+        && !matches!(
+            options.kind,
+            GeneralSeriesKind::XyLine | GeneralSeriesKind::XyArea | GeneralSeriesKind::RangeArea
+        )
+    {
+        return Err(invalid(
+            "general series connect_missing is supported only by xy_line, xy_area, and range_area",
+        ));
+    }
     if options.interpolation != GeneralInterpolation::Linear
         && !matches!(
             options.kind,

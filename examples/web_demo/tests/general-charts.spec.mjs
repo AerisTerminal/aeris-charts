@@ -593,7 +593,7 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
   ]);
 });
 
-test("general path styles, interpolation, and point markers round-trip through the public browser API", async ({ page }) => {
+test("general path styles, interpolation, missing connections, and point markers round-trip", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   const result = await page.evaluate(async () => {
     const { create_chart } = await import("/dist/nucleuscharts_financial.js");
@@ -615,7 +615,7 @@ test("general path styles, interpolation, and point markers round-trip through t
       series.set_data([{ x: 0, y: 1 }, { x: 1, y: 3 }, { x: 2, y: 2 }]);
       series.apply_options({
         line_width: 4, line_style: "dashed", interpolation: "curved",
-        point_markers: true, point_radius: 7,
+        connect_missing: true, point_markers: true, point_radius: 7,
       });
       return series.options();
     } finally {
@@ -626,6 +626,7 @@ test("general path styles, interpolation, and point markers round-trip through t
   expect(result.line_width).toBe(4);
   expect(result.line_style).toBe("dashed");
   expect(result.interpolation).toBe("curved");
+  expect(result.connect_missing).toBe(true);
   expect(result.point_markers).toBe(true);
   expect(result.point_radius).toBe(7);
 });

@@ -131,6 +131,8 @@ struct SeriesV2 {
     #[serde(default)]
     interpolation: crate::GeneralInterpolation,
     #[serde(default)]
+    connect_missing: bool,
+    #[serde(default)]
     baseline_value: Option<f64>,
     data_labels: bool,
     #[serde(default)]
@@ -704,6 +706,7 @@ impl ChartEngine {
                     line_width: series.line_width(),
                     line_style: series.line_style(),
                     interpolation: series.interpolation(),
+                    connect_missing: series.connect_missing(),
                     baseline_value: series.baseline_value(),
                     data_labels: series.data_labels(),
                     group_id: series.group_id().map(str::to_string),
@@ -1232,6 +1235,7 @@ impl ChartEngine {
                 line_width: series.line_width,
                 line_style: series.line_style,
                 interpolation: series.interpolation,
+                connect_missing: series.connect_missing,
                 baseline_value: series.baseline_value,
                 data_labels: series.data_labels,
                 group_id: series.group_id,
@@ -1414,6 +1418,7 @@ mod tests {
         line.point_markers = true;
         line.point_radius = 7.0;
         line.interpolation = crate::GeneralInterpolation::Curved;
+        line.connect_missing = true;
         chart.add_general_series(line).unwrap();
         let mut area =
             crate::GeneralSeriesOptions::xy_area(pane, dataset, "category-x", "category-y");
@@ -1433,6 +1438,7 @@ mod tests {
         assert_eq!(value["series"][1]["point_markers"], true);
         assert_eq!(value["series"][1]["point_radius"], 7.0);
         assert_eq!(value["series"][1]["interpolation"], "Curved");
+        assert_eq!(value["series"][1]["connect_missing"], true);
         assert_eq!(value["series"][2]["stack_id"], "area-share");
         assert_eq!(value["series"][2]["stack_mode"], "Percent");
         let mut restored = ChartEngine::new(800.0, 500.0, 1.0);

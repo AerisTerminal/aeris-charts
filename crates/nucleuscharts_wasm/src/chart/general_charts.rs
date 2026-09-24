@@ -108,6 +108,8 @@ struct SeriesInput {
     #[serde(default)]
     interpolation: Option<String>,
     #[serde(default)]
+    connect_missing: bool,
+    #[serde(default)]
     baseline_value: Option<f64>,
     #[serde(default)]
     data_labels: bool,
@@ -248,6 +250,7 @@ fn series_options_from_input(
     options.line_width = input.line_width;
     options.line_style = line_style(input.line_style.as_deref())?;
     options.interpolation = interpolation(input.interpolation.as_deref())?;
+    options.connect_missing = input.connect_missing;
     options.baseline_value = input.baseline_value;
     options.data_labels = input.data_labels;
     options.group_id = input.group_id;
@@ -797,6 +800,7 @@ impl ChartInner {
                 GeneralInterpolation::Step => "step",
                 GeneralInterpolation::Curved => "curved",
             },
+            "connect_missing": series.connect_missing(),
             "baseline_value": series.baseline_value(),
             "data_labels": series.data_labels(),
             "group_id": series.group_id(),
