@@ -19,6 +19,16 @@ test("general charts can own the first pane and failed creation leaves no host r
       aria_label: host.getAttribute("aria-label"),
       domain: chart.export_state().panes[0].horizontal_domain,
     };
+    const initial_pane = chart.panes()[0];
+    initial.retired = chart.remove_pane(0);
+    try {
+      initial_pane.pane_index();
+      initial.old_handle_stale = false;
+    } catch (error) {
+      initial.old_handle_stale = error.code === "stale_handle";
+    }
+    initial.replacement_schema = chart.export_state().schema_version;
+    initial.replacement_is_not_removable = chart.remove_pane(0) === false;
     chart.remove();
 
     const rejected_host = document.createElement("div");
@@ -71,6 +81,10 @@ test("general charts can own the first pane and failed creation leaves no host r
       series_count: 0,
       aria_label: "General chart",
       domain: { Category: { scale: "Point" } },
+      retired: true,
+      old_handle_stale: true,
+      replacement_schema: 1,
+      replacement_is_not_removable: true,
     },
     failed: { rejected: true, child_count: 0, inline_position: "" },
     late_failed: { rejected: true, child_count: 0, inline_position: "" },
@@ -232,6 +246,7 @@ test("React adapter keeps chart and series identities across rerenders and dispo
     axis_count: 3,
     general_legend_count: 2,
     child_cleanup: true,
+    general_pane_stale: true,
     disposed: true,
   });
 });

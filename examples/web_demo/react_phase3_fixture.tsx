@@ -185,6 +185,7 @@ export async function exerciseReactAdapter(): Promise<Record<string, unknown>> {
   await wait_until(() => first_chart.axes().length === 0);
   await wait_until(() => first_chart.series_order().length === 0);
   const child_cleanup = first_chart.general_legend_snapshot().items.length === 0;
+  const general_pane_stale = !safely(() => first_pane.pane_index() >= 0);
 
   root.unmount();
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -197,7 +198,7 @@ export async function exerciseReactAdapter(): Promise<Record<string, unknown>> {
   host.remove();
   console.error = original_console_error;
   window.removeEventListener("error", on_window_error);
-  return { ...result, child_cleanup, disposed };
+  return { ...result, child_cleanup, general_pane_stale, disposed };
 }
 
 class FailureBoundary extends React.Component<{

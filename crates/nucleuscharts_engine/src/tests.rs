@@ -5112,6 +5112,41 @@ fn pane_identity_survives_moves_and_never_retargets_after_removal() {
 }
 
 #[test]
+fn empty_preserved_last_pane_retires_into_a_fresh_default_pane() {
+    let mut chart = ChartEngine::new_with_initial_domain(
+        800.0,
+        500.0,
+        1.0,
+        HorizontalDomain::Category {
+            scale: CategoryScaleType::Band,
+        },
+    )
+    .unwrap();
+    let retired = chart.pane_stable_id(0).unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "retired-x",
+            0,
+            AxisDimension::X,
+            GeneralScaleType::Band,
+        ))
+        .unwrap();
+
+    assert!(chart.remove_pane(0));
+    assert_eq!(chart.panes.len(), 1);
+    assert_eq!(chart.pane_index_for_id(retired), None);
+    assert_ne!(chart.pane_stable_id(0), Some(retired));
+    assert_eq!(
+        chart.pane_horizontal_domain(0),
+        Some(HorizontalDomain::FinancialTime)
+    );
+    assert!(chart.general_axis("retired-x").is_none());
+    assert_eq!(chart.general_horizontal_domains.len(), 0);
+    assert!(!chart.pane_preserve_empty(0));
+    assert!(!chart.remove_pane(0), "the replacement is not caller-owned");
+}
+
+#[test]
 fn pane_domains_default_to_financial_time_and_follow_pane_identity() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     assert_eq!(

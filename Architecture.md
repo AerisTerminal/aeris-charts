@@ -557,7 +557,10 @@ Chart construction accepts an explicit first-pane horizontal domain. The engine 
 compatible financial pane plus primary candlestick series or one preserved general pane with no
 financial series; browser hosts do not add a temporary financial pane and remove it afterward.
 Rejected construction removes the canvases installed by that attempt before control returns to the
-caller.
+caller. The engine retains one layout slot at all times. Explicit removal of an empty preserved final
+pane retires its stable and persistence identities, releases its general-domain/axis state, and installs
+a fresh unpreserved financial-time pane in the same slot. The removed handle therefore stales normally,
+and declarative cleanup never needs a temporary keeper pane.
 
 ## Evidence benchmark subsystem
 

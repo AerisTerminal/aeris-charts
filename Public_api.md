@@ -170,7 +170,8 @@ grouping, stacking, or bindings leave the complete prior object unchanged. Gener
 `general_series_order(pane?)` and exact-permutation `set_general_series_order(...)`; this engine order is
 shared by rendering, legends, hit testing, React keyed arrays, and persistence. React `GeneralPane` applies
 these ordinary prop and order changes to existing handles and rolls back a newly acquired pane or series
-when initial installation or a readiness callback fails.
+when initial installation or a readiness callback fails. Removing an owned empty final pane retires its
+stable identity and leaves one fresh default layout slot, so React cleanup does not create a temporary pane.
 
 ## Experimental surfaces
 

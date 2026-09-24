@@ -985,9 +985,10 @@ impl ChartInner {
         }
     }
 
-    /// reference `chart.removePane`: refuses the last remaining pane and stale indices (false).
-    /// The pane's series are NOT removed — they become pane-less (reference `paneForSource` →
-    /// null) and render/scale nowhere until re-assigned; panes below shift one index up.
+    /// reference `chart.removePane`: rejects stale indices and a non-empty final pane. An empty
+    /// preserved final pane is retired and replaced by a fresh default pane so its handle stales
+    /// while the engine retains one layout slot. The pane's series are NOT removed — they become
+    /// pane-less (reference `paneForSource` → null) until re-assigned; panes below shift up.
     pub fn remove_pane(&mut self, index: u32) -> bool {
         self.engine.remove_pane(index as usize)
     }

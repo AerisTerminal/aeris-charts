@@ -2206,19 +2206,45 @@ impl ChartEngine {
         self.pane_horizontal_domain(index) == Some(HorizontalDomain::FinancialTime)
     }
 
-    /// reference chart-model.ts `removePane`: refuses the last remaining pane and out-of-range
-    /// indices (false). The removed pane's series are NOT moved or removed — they become
-    /// pane-less (reference leaves them with `paneForSource` → null): they keep their data but
-    /// render and scale nowhere until re-assigned. Series below shift one pane up.
+    /// reference chart-model.ts `removePane`: rejects out-of-range indices and a non-empty last
+    /// pane. An empty preserved last pane is retired in place and replaced by a fresh default pane,
+    /// preserving the engine's one-pane invariant without keeping the removed identity alive.
+    /// The removed pane's financial series are NOT moved or removed — they become pane-less
+    /// (reference leaves them with `paneForSource` → null): they keep their data but render and
+    /// scale nowhere until re-assigned. Series below shift one pane up.
     pub fn remove_pane(&mut self, index: usize) -> bool {
-        if self.panes.len() <= 1 || index >= self.panes.len() {
+        if index >= self.panes.len() {
+            return false;
+        }
+        let replacing_last = self.panes.len() == 1;
+        if replacing_last
+            && (!self.panes[index].preserve_empty
+                || !self.panes[index].named_scales.is_empty()
+                || self
+                    .series
+                    .iter()
+                    .any(|series| !series.removed && series.pane_index == index))
+        {
             return false;
         }
         let removed_id = self.panes[index].stable_id();
         if removed_id.is_some_and(|pane_id| self.general_series_uses_pane(pane_id)) {
             return false;
         }
-        let removed = self.panes.remove(index);
+        let replacement = if replacing_last {
+            let Some((stable_id, persistent_id)) = self.take_pane_ids() else {
+                return false;
+            };
+            let mut pane = Pane::with_chart_ids(stable_id, persistent_id);
+            self.apply_chart_scale_options(&mut pane);
+            Some(pane)
+        } else {
+            None
+        };
+        let removed = match replacement {
+            Some(replacement) => std::mem::replace(&mut self.panes[index], replacement),
+            None => self.panes.remove(index),
+        };
         self.general_horizontal_domains
             .remove(removed.general_horizontal_domain);
         self.general_axes.remove_pane(removed_id);
@@ -2227,14 +2253,17 @@ impl ChartEngine {
         for s in &mut self.series {
             if s.pane_index == index {
                 s.pane_index = PANELESS;
-            } else if s.pane_index != PANELESS && s.pane_index > index {
+            } else if !replacing_last && s.pane_index != PANELESS && s.pane_index > index {
                 s.pane_index -= 1;
             }
         }
         for drawing in &mut self.drawings {
             if drawing.pane_index == index {
                 drawing.pane_index = PANELESS;
-            } else if drawing.pane_index != PANELESS && drawing.pane_index > index {
+            } else if !replacing_last
+                && drawing.pane_index != PANELESS
+                && drawing.pane_index > index
+            {
                 drawing.pane_index -= 1;
             }
         }

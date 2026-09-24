@@ -3436,9 +3436,10 @@ impl NucleusChart {
         self.inner.borrow_mut().import_state_result_json(document)
     }
 
-    /// reference `chart.removePane`: refuses the last remaining pane and stale indices (false).
-    /// The pane's series become pane-less (they keep data but render/scale nowhere until
-    /// re-assigned); panes below shift one index up. Call `render()` after.
+    /// reference `chart.removePane`: rejects stale indices and a non-empty final pane. An empty
+    /// preserved final pane is retired and replaced by a fresh default pane so its handle stales
+    /// while the engine retains one layout slot. Pane series become pane-less until re-assigned;
+    /// panes below shift one index up. Call `render()` after.
     pub fn remove_pane(&mut self, index: u32) -> bool {
         self.inner.borrow_mut().remove_pane(index)
     }

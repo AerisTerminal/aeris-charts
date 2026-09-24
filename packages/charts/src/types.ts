@@ -2719,9 +2719,10 @@ export interface chart_api {
   general_selected_hit(): general_series_hit | null;
   /**
    * Remove the pane at `index` (reference `IChartApi.removePane`). Returns `false` without changing
-   * anything when the engine refuses (e.g. an out-of-range index or the last pane). Divergence:
-   * reference returns `void`. Live pane handles follow index shifts; a handle for the removed pane
-   * becomes explicitly invalid and can never retarget a replacement pane.
+   * anything when the engine refuses (e.g. an out-of-range index or a non-empty last pane). An
+   * empty preserved last pane is retired and replaced by a fresh default pane so the chart retains
+   * one layout slot. Divergence: reference returns `void`. Live pane handles follow index shifts;
+   * a handle for the removed pane becomes explicitly invalid and can never retarget a replacement.
    */
   remove_pane(index: number): boolean;
   /**

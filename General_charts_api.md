@@ -74,6 +74,11 @@ interface general_pane_options {
 chart.add_pane(options: general_pane_options): pane_api;
 ```
 
+The engine always retains one layout slot. Removing an empty preserved final pane retires that
+pane's stable identity and installs a fresh, unpreserved financial-time default in the same slot;
+the removed handle becomes stale. A populated or unpreserved final pane is rejected. This lets
+declarative owners dispose their pane without manufacturing a temporary keeper pane.
+
 A pane's horizontal-domain type is immutable while the pane contains a series, axis, selection,
 or persisted general dataset. This avoids silently reinterpreting stored coordinates. An empty
 pane may be rebound explicitly in a later API, but remove-and-recreate is sufficient for the first

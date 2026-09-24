@@ -209,11 +209,6 @@ function dispose_pane_runtime(chart: chart_api, runtime: pane_runtime): void {
     // React may dispose the parent chart before child effect cleanup under Strict Mode/unmount.
     return;
   }
-  // The engine always retains at least one pane. React sibling cleanup can remove the ordinary
-  // financial series first, which may collapse its now-empty default pane and leave this owned
-  // general pane as the last one. Seed a temporary ordinary pane so the owned pane can still be
-  // removed exactly; afterwards return the keeper to the engine's normal non-preserved behavior.
-  const keeper = chart.panes().length === 1 ? chart.add_pane(true) : null;
   for (const item of runtime.series.values()) {
     item.handle.remove();
   }
@@ -223,7 +218,6 @@ function dispose_pane_runtime(chart: chart_api, runtime: pane_runtime): void {
   }
   runtime.axes.clear();
   const removed = chart.remove_pane(runtime.pane.pane_index());
-  keeper?.set_preserve_empty_pane(false);
   if (!removed) throw new Error("general pane could not be removed during cleanup");
 }
 
