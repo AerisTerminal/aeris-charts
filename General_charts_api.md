@@ -217,6 +217,8 @@ interface cartesian_series_options {
   visible?: boolean;
   title?: string;
   color?: string;
+  /** Draw circular markers at line, area, or range-area data points; defaults to false. */
+  point_markers?: boolean;
   /** Stroke width for line, area, and range-area paths in CSS pixels; defaults to 2. */
   line_width?: number;
   /** Portable stroke pattern for line, area, and range-area paths; defaults to solid. */

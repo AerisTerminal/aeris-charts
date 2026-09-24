@@ -92,6 +92,7 @@ pub struct GeneralSeriesOptions {
     pub title: String,
     pub color: Option<String>,
     pub point_radius: f64,
+    pub point_markers: bool,
     pub line_width: f64,
     pub line_style: GeneralLineStyle,
     pub baseline_value: Option<f64>,
@@ -118,6 +119,7 @@ impl GeneralSeriesOptions {
             title: String::new(),
             color: None,
             point_radius: 3.0,
+            point_markers: false,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             baseline_value: None,
@@ -144,6 +146,7 @@ impl GeneralSeriesOptions {
             title: String::new(),
             color: None,
             point_radius: 3.0,
+            point_markers: false,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             baseline_value: None,
@@ -170,6 +173,7 @@ impl GeneralSeriesOptions {
             title: String::new(),
             color: None,
             point_radius: 3.0,
+            point_markers: false,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             baseline_value: None,
@@ -196,6 +200,7 @@ impl GeneralSeriesOptions {
             title: String::new(),
             color: None,
             point_radius: 4.0,
+            point_markers: false,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             baseline_value: None,
@@ -222,6 +227,7 @@ impl GeneralSeriesOptions {
             title: String::new(),
             color: None,
             point_radius: 3.0,
+            point_markers: false,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             baseline_value: None,
@@ -248,6 +254,7 @@ impl GeneralSeriesOptions {
             title: String::new(),
             color: None,
             point_radius: 3.0,
+            point_markers: false,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             baseline_value: None,
@@ -274,6 +281,7 @@ impl GeneralSeriesOptions {
             title: String::new(),
             color: None,
             point_radius: 3.0,
+            point_markers: false,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             baseline_value: None,
@@ -300,6 +308,7 @@ impl GeneralSeriesOptions {
             title: String::new(),
             color: None,
             point_radius: 3.0,
+            point_markers: false,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             baseline_value: None,
@@ -326,6 +335,7 @@ impl GeneralSeriesOptions {
             title: String::new(),
             color: None,
             point_radius: 3.0,
+            point_markers: false,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             baseline_value: None,
@@ -352,6 +362,7 @@ impl GeneralSeriesOptions {
             title: String::new(),
             color: None,
             point_radius: 3.0,
+            point_markers: false,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
             baseline_value: None,
@@ -375,6 +386,7 @@ pub struct GeneralSeries {
     title: String,
     color: Option<String>,
     point_radius: f64,
+    point_markers: bool,
     line_width: f64,
     line_style: GeneralLineStyle,
     baseline_value: Option<f64>,
@@ -973,6 +985,10 @@ impl GeneralSeries {
         self.point_radius
     }
 
+    pub fn point_markers(&self) -> bool {
+        self.point_markers
+    }
+
     pub fn line_width(&self) -> f64 {
         self.line_width
     }
@@ -1178,6 +1194,7 @@ impl GeneralSeriesRegistry {
             title: options.title,
             color: options.color,
             point_radius: options.point_radius,
+            point_markers: options.point_markers,
             line_width: options.line_width,
             line_style: options.line_style,
             baseline_value: options.baseline_value,
@@ -1682,6 +1699,10 @@ impl ChartEngine {
         series.title = options.title;
         series.color = options.color;
         series.point_radius = options.point_radius;
+        series.point_markers = options.point_markers;
+        series.line_width = options.line_width;
+        series.line_style = options.line_style;
+        series.baseline_value = options.baseline_value;
         series.data_labels = options.data_labels;
         series.group_id = options.group_id;
         series.stack_id = options.stack_id;
@@ -4014,6 +4035,14 @@ impl ChartEngine {
                 GeneralSeriesKind::XyLine => {
                     let mut previous: Option<GeneralLinePointGeometry> = None;
                     self.visit_general_path_points(series, |geometry| {
+                        if series.point_markers {
+                            consider(
+                                geometry.row,
+                                ((x_css - geometry.x).hypot(y_css - geometry.y)
+                                    - series.point_radius)
+                                    .max(0.0),
+                            );
+                        }
                         if geometry.starts_new_run {
                             previous = Some(geometry);
                             return;
@@ -4038,6 +4067,14 @@ impl ChartEngine {
                     if series.stack_id.is_some() {
                         let mut previous: Option<GeneralRangePointGeometry> = None;
                         self.visit_general_stacked_area_points(series, |geometry| {
+                            if series.point_markers {
+                                consider(
+                                    geometry.row,
+                                    ((x_css - geometry.x).hypot(y_css - geometry.high_y)
+                                        - series.point_radius)
+                                        .max(0.0),
+                                );
+                            }
                             if geometry.starts_new_run {
                                 previous = Some(geometry);
                                 return;
@@ -4071,6 +4108,14 @@ impl ChartEngine {
                     };
                     let mut previous: Option<GeneralLinePointGeometry> = None;
                     self.visit_general_path_points(series, |geometry| {
+                        if series.point_markers {
+                            consider(
+                                geometry.row,
+                                ((x_css - geometry.x).hypot(y_css - geometry.y)
+                                    - series.point_radius)
+                                    .max(0.0),
+                            );
+                        }
                         if geometry.starts_new_run {
                             previous = Some(geometry);
                             return;
@@ -4094,6 +4139,15 @@ impl ChartEngine {
                 GeneralSeriesKind::RangeArea => {
                     let mut previous: Option<GeneralRangePointGeometry> = None;
                     self.visit_general_range_points(series, |geometry| {
+                        if series.point_markers {
+                            let center_distance = (x_css - geometry.x)
+                                .hypot(y_css - geometry.low_y)
+                                .min((x_css - geometry.x).hypot(y_css - geometry.high_y));
+                            consider(
+                                geometry.row,
+                                (center_distance - series.point_radius).max(0.0),
+                            );
+                        }
                         if geometry.starts_new_run {
                             previous = Some(geometry);
                             return;
@@ -6073,6 +6127,16 @@ fn validate_logarithmic_input_y(
 }
 
 fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartError> {
+    if options.point_markers
+        && !matches!(
+            options.kind,
+            GeneralSeriesKind::XyLine | GeneralSeriesKind::XyArea | GeneralSeriesKind::RangeArea
+        )
+    {
+        return Err(invalid(
+            "general series point_markers is supported only by xy_line, xy_area, and range_area",
+        ));
+    }
     if !options.line_width.is_finite() || !(0.5..=32.0).contains(&options.line_width) {
         return Err(invalid(
             "general series line_width must be finite and in [0.5, 32]",
@@ -6142,13 +6206,13 @@ fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartErro
     if options.stack_id.is_none() && options.stack_mode != GeneralStackMode::Normal {
         return Err(invalid("percent stack mode requires a stack ID"));
     }
-    if options.kind == GeneralSeriesKind::Scatter
+    if (options.kind == GeneralSeriesKind::Scatter || options.point_markers)
         && (!options.point_radius.is_finite()
             || !(MIN_GENERAL_POINT_RADIUS..=MAX_GENERAL_POINT_RADIUS)
                 .contains(&options.point_radius))
     {
         return Err(invalid(format!(
-            "scatter point radius must be finite and in {MIN_GENERAL_POINT_RADIUS}..={MAX_GENERAL_POINT_RADIUS} CSS px"
+            "general series point radius must be finite and in {MIN_GENERAL_POINT_RADIUS}..={MAX_GENERAL_POINT_RADIUS} CSS px"
         )));
     }
     Ok(())

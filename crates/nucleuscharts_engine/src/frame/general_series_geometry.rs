@@ -168,6 +168,7 @@ impl ChartEngine {
                         let fill = Color::rgba(color.r(), color.g(), color.b(), 56);
                         let mut upper = Vec::<[f32; 2]>::new();
                         let mut lower = Vec::<[f32; 2]>::new();
+                        let mut markers = Vec::new();
                         let mut flush_run =
                             |upper: &mut Vec<[f32; 2]>, lower: &mut Vec<[f32; 2]>| {
                                 if upper.len() >= 2 && upper.len() == lower.len() {
@@ -201,6 +202,16 @@ impl ChartEngine {
                             }
                             upper.push([(geometry.x * hpr) as f32, (geometry.high_y * vpr) as f32]);
                             lower.push([(geometry.x * hpr) as f32, (geometry.low_y * vpr) as f32]);
+                            if series.point_markers() {
+                                markers.push(Prim::Circle {
+                                    cx: (geometry.x * hpr) as f32,
+                                    cy: (geometry.high_y * vpr) as f32,
+                                    radius: (series.point_radius() * vpr) as f32,
+                                    fill: color,
+                                    stroke_width: 0.0,
+                                    stroke: color,
+                                });
+                            }
                             push_label(
                                 geometry.row,
                                 geometry.x,
@@ -223,12 +234,14 @@ impl ChartEngine {
                             }
                         });
                         flush_run(&mut upper, &mut lower);
+                        out.append(&mut markers);
                         continue;
                     }
                     let baseline_y = is_area
                         .then(|| self.general_path_baseline_y(series))
                         .flatten();
                     let mut run = Vec::<[f32; 2]>::new();
+                    let mut markers = Vec::new();
                     let mut flush_run = |run: &mut Vec<[f32; 2]>| {
                         if run.len() >= 2 {
                             let first_point = points.len() as u32;
@@ -263,6 +276,16 @@ impl ChartEngine {
                             flush_run(&mut run);
                         }
                         run.push([(geometry.x * hpr) as f32, (geometry.y * vpr) as f32]);
+                        if series.point_markers() {
+                            markers.push(Prim::Circle {
+                                cx: (geometry.x * hpr) as f32,
+                                cy: (geometry.y * vpr) as f32,
+                                radius: (series.point_radius() * vpr) as f32,
+                                fill: color,
+                                stroke_width: 0.0,
+                                stroke: color,
+                            });
+                        }
                         push_label(
                             geometry.row,
                             geometry.x,
@@ -285,6 +308,7 @@ impl ChartEngine {
                         }
                     });
                     flush_run(&mut run);
+                    out.append(&mut markers);
                 }
                 GeneralSeriesKind::RangeArea => {
                     let color = series
@@ -294,6 +318,7 @@ impl ChartEngine {
                     let fill = Color::rgba(color.r(), color.g(), color.b(), 56);
                     let mut upper = Vec::<[f32; 2]>::new();
                     let mut lower = Vec::<[f32; 2]>::new();
+                    let mut markers = Vec::new();
                     let mut flush_run = |upper: &mut Vec<[f32; 2]>, lower: &mut Vec<[f32; 2]>| {
                         if upper.len() >= 2 && upper.len() == lower.len() {
                             let upper_first = points.len() as u32;
@@ -334,6 +359,18 @@ impl ChartEngine {
                         }
                         upper.push([(geometry.x * hpr) as f32, (geometry.high_y * vpr) as f32]);
                         lower.push([(geometry.x * hpr) as f32, (geometry.low_y * vpr) as f32]);
+                        if series.point_markers() {
+                            for y in [geometry.low_y, geometry.high_y] {
+                                markers.push(Prim::Circle {
+                                    cx: (geometry.x * hpr) as f32,
+                                    cy: (y * vpr) as f32,
+                                    radius: (series.point_radius() * vpr) as f32,
+                                    fill: color,
+                                    stroke_width: 0.0,
+                                    stroke: color,
+                                });
+                            }
+                        }
                         push_label(
                             geometry.row,
                             geometry.x,
@@ -356,6 +393,7 @@ impl ChartEngine {
                         }
                     });
                     flush_run(&mut upper, &mut lower);
+                    out.append(&mut markers);
                 }
                 GeneralSeriesKind::ErrorBar => {
                     let color = series

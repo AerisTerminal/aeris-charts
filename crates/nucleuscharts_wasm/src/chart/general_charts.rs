@@ -99,6 +99,8 @@ struct SeriesInput {
     color: Option<String>,
     #[serde(default = "default_point_radius")]
     point_radius: f64,
+    #[serde(default)]
+    point_markers: bool,
     #[serde(default = "default_line_width")]
     line_width: f64,
     #[serde(default)]
@@ -228,6 +230,7 @@ fn series_options_from_input(
     options.title = input.title;
     options.color = input.color;
     options.point_radius = input.point_radius;
+    options.point_markers = input.point_markers;
     options.line_width = input.line_width;
     options.line_style = line_style(input.line_style.as_deref())?;
     options.baseline_value = input.baseline_value;
@@ -767,6 +770,7 @@ impl ChartInner {
             "title": series.title(),
             "color": series.color(),
             "point_radius": series.point_radius(),
+            "point_markers": series.point_markers(),
             "line_width": series.line_width(),
             "line_style": match series.line_style() {
                 GeneralLineStyle::Solid => "solid",

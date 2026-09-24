@@ -122,6 +122,8 @@ struct SeriesV2 {
     title: String,
     color: Option<String>,
     point_radius: f64,
+    #[serde(default)]
+    point_markers: bool,
     #[serde(default = "default_general_line_width")]
     line_width: f64,
     #[serde(default)]
@@ -696,6 +698,7 @@ impl ChartEngine {
                     title: series.title().to_string(),
                     color: series.color().map(str::to_string),
                     point_radius: series.point_radius(),
+                    point_markers: series.point_markers(),
                     line_width: series.line_width(),
                     line_style: series.line_style(),
                     baseline_value: series.baseline_value(),
@@ -1222,6 +1225,7 @@ impl ChartEngine {
                 title: series.title,
                 color: series.color,
                 point_radius: series.point_radius,
+                point_markers: series.point_markers,
                 line_width: series.line_width,
                 line_style: series.line_style,
                 baseline_value: series.baseline_value,
@@ -1403,6 +1407,8 @@ mod tests {
         let mut line =
             crate::GeneralSeriesOptions::xy_line(pane, dataset, "category-x", "category-y");
         line.title = "Category trend".into();
+        line.point_markers = true;
+        line.point_radius = 7.0;
         chart.add_general_series(line).unwrap();
         let mut area =
             crate::GeneralSeriesOptions::xy_area(pane, dataset, "category-x", "category-y");
@@ -1419,6 +1425,8 @@ mod tests {
         assert_eq!(value["series"][0]["group_id"], "sales");
         assert_eq!(value["series"][0]["stack_id"], "share");
         assert_eq!(value["series"][0]["stack_mode"], "Percent");
+        assert_eq!(value["series"][1]["point_markers"], true);
+        assert_eq!(value["series"][1]["point_radius"], 7.0);
         assert_eq!(value["series"][2]["stack_id"], "area-share");
         assert_eq!(value["series"][2]["stack_mode"], "Percent");
         let mut restored = ChartEngine::new(800.0, 500.0, 1.0);

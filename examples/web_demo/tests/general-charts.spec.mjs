@@ -593,7 +593,7 @@ test("public category-column and XY-scatter slices share the chart lifecycle", a
   ]);
 });
 
-test("general path stroke styles round-trip through the public browser API", async ({ page }) => {
+test("general path stroke styles and point markers round-trip through the public browser API", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   const result = await page.evaluate(async () => {
     const { create_chart } = await import("/dist/nucleuscharts_financial.js");
@@ -610,9 +610,12 @@ test("general path stroke styles round-trip through the public browser API", asy
       chart.add_axis({ id: "style-y", pane: pane.pane_index(), dimension: "y", scale: "linear" });
       const series = chart.add_series("xy_line", {
         pane: pane.pane_index(), x_axis_id: "style-x", y_axis_id: "style-y",
-        line_width: 4, line_style: "dashed",
+        line_width: 2, line_style: "solid",
       });
       series.set_data([{ x: 0, y: 1 }, { x: 1, y: 3 }, { x: 2, y: 2 }]);
+      series.apply_options({
+        line_width: 4, line_style: "dashed", point_markers: true, point_radius: 7,
+      });
       return series.options();
     } finally {
       chart.remove();
@@ -621,6 +624,8 @@ test("general path stroke styles round-trip through the public browser API", asy
   });
   expect(result.line_width).toBe(4);
   expect(result.line_style).toBe("dashed");
+  expect(result.point_markers).toBe(true);
+  expect(result.point_radius).toBe(7);
 });
 
 test("general area baselines round-trip through the public browser API", async ({ page }) => {

@@ -31,6 +31,10 @@ The following narrow R3 visual-configuration slices are implemented and pushed t
   through the shared frame contract.
 - `6a5684b` — `xy_area` accepts an explicit finite `baseline_value`, with shared fill geometry,
   hit-testing, persistence, WASM/TypeScript exposure, and public browser coverage.
+- General line, area, stacked-area, and range-area series accept opt-in circular `point_markers`
+  with configurable radius, shared frame geometry, matching hit targets, atomic live mutation,
+  V2 persistence, WASM/TypeScript exposure, and public browser coverage. The same slice repairs
+  live mutation of the previously released `line_width`, `line_style`, and `baseline_value` fields.
 
 These slices passed the applicable Rust tests, clippy checks (including the WASM target), package
 lint/build/typecheck/package smoke test, Chromium browser tests, formatting checks, and the native

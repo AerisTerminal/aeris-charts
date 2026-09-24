@@ -582,6 +582,10 @@ fn general_legend_snapshot_preserves_series_order_visibility_filtering_and_remov
     let mut rebound = GeneralSeriesOptions::xy_line(pane_b, datasets[0], "b-x", "b-y");
     rebound.title = "Rebound revenue".into();
     rebound.color = Some("#654321".into());
+    rebound.point_markers = true;
+    rebound.point_radius = 7.0;
+    rebound.line_width = 4.0;
+    rebound.line_style = GeneralLineStyle::Dotted;
     chart.update_general_series_options(first, rebound).unwrap();
     let rebound = chart.general_series(first).unwrap();
     assert_eq!(chart.general_series_pane_index(first), Some(pane_b));
@@ -589,6 +593,10 @@ fn general_legend_snapshot_preserves_series_order_visibility_filtering_and_remov
     assert_eq!(rebound.y_axis_id(), "b-y");
     assert_eq!(rebound.dataset(), datasets[0]);
     assert_eq!(rebound.title(), "Rebound revenue");
+    assert!(rebound.point_markers());
+    assert_eq!(rebound.point_radius(), 7.0);
+    assert_eq!(rebound.line_width(), 4.0);
+    assert_eq!(rebound.line_style(), GeneralLineStyle::Dotted);
 
     chart
         .add_general_axis(GeneralAxisOptions::new(
@@ -1937,6 +1945,8 @@ fn xy_line_preserves_gaps_hits_rows_and_shared_frame_geometry() {
     options.color = Some("#336699".into());
     options.title = "Trend".into();
     options.data_labels = true;
+    options.point_markers = true;
+    options.point_radius = 8.0;
     options.line_width = 4.0;
     options.line_style = GeneralLineStyle::Dashed;
     let series = chart.add_general_series(options).unwrap();
@@ -1969,6 +1979,17 @@ fn xy_line_preserves_gaps_hits_rows_and_shared_frame_geometry() {
     assert!(frame.panes[pane].main.iter().any(|primitive| {
         matches!(primitive, Prim::Polyline { width, .. } if (*width - 4.0).abs() < f32::EPSILON)
     }));
+    assert_eq!(
+        frame.panes[pane]
+            .main
+            .iter()
+            .filter(|primitive| {
+                matches!(primitive, Prim::Circle { radius, fill, .. } if (*radius - 8.0).abs() < f32::EPSILON && *fill == Color::rgb(0x33, 0x66, 0x99))
+            })
+            .count(),
+        4,
+        "each valid path row must emit one marker above the stroke"
+    );
     assert!(frame.panes[pane].main.iter().any(|primitive| {
         matches!(
             primitive,
@@ -1996,6 +2017,11 @@ fn xy_line_preserves_gaps_hits_rows_and_shared_frame_geometry() {
     assert_eq!(hit.series, series);
     assert_eq!(hit.row, 0);
     assert_eq!(hit.distance, 0.0);
+
+    let marker_only_hit = chart
+        .general_hit_test(pane, first.x - 6.0, first.y, crate::GeneralHitMode::Exact)
+        .unwrap();
+    assert_eq!(marker_only_hit.row, 0, "marker geometry must be hittable");
 
     let gap_midpoint = (
         (geometry[1].x + geometry[2].x) * 0.5,
