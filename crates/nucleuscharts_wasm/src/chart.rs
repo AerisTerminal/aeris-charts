@@ -1393,28 +1393,35 @@ impl NucleusChart {
 
         // Size once now so the first paint is correct even before the observer first fires.
         let rect = container.get_bounding_client_rect();
-        let (css_w, css_h) = (rect.width().max(1.0), rect.height().max(1.0));
-        let dpr = web_sys::window()
-            .map(|w| w.device_pixel_ratio())
-            .unwrap_or(1.0);
-        apply_device_size(
-            &self.inner,
-            self.gpu_pane.as_ref().expect("HTML canvas checked above"),
-            self.fallback_pane
-                .as_ref()
-                .expect("HTML canvas checked above"),
-            self.overlay.as_ref().expect("HTML canvas checked above"),
-            css_w,
-            css_h,
-            (css_w * dpr).round(),
-            (css_h * dpr).round(),
-        );
+        if rect.width() >= 2.0 && rect.height() >= 2.0 {
+            let (css_w, css_h) = (rect.width(), rect.height());
+            let dpr = web_sys::window()
+                .map(|w| w.device_pixel_ratio())
+                .unwrap_or(1.0);
+            apply_device_size(
+                &self.inner,
+                self.gpu_pane.as_ref().expect("HTML canvas checked above"),
+                self.fallback_pane
+                    .as_ref()
+                    .expect("HTML canvas checked above"),
+                self.overlay.as_ref().expect("HTML canvas checked above"),
+                css_w,
+                css_h,
+                (css_w * dpr).round(),
+                (css_h * dpr).round(),
+            );
+        }
 
         self._resize = Some(ResizeBinding {
             observer,
             _callback: callback,
         });
         Ok(())
+    }
+
+    /// Disconnect the engine-owned resize observer so manual sizing becomes authoritative again.
+    pub fn disable_auto_resize(&mut self) {
+        self._resize = None;
     }
 
     /// Adds a series and returns its id. `kind`: 0 candles, 1 bars, 2 line, 3 area, 4 histogram.

@@ -672,6 +672,73 @@ test("public linear axes render and navigate the complete finite numeric domain"
   ]);
 });
 
+test("general auto sizing disables cleanly and survives hidden-container reveal", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const host = document.createElement("div");
+    Object.assign(host.style, { width: "320px", height: "180px" });
+    document.body.appendChild(host);
+    const chart = await create_chart(host, {
+      backend: "canvas2d",
+      autoSize: true,
+      initialPane: { horizontal_domain: { type: "continuous", scale: "linear" } },
+    });
+    const settle = () => new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 20)));
+    });
+    const size = () => {
+      const canvas = host.querySelector("canvas");
+      return [Number.parseFloat(canvas.style.width), Number.parseFloat(canvas.style.height)];
+    };
+
+    await settle();
+    const initial = size();
+    chart.resize(222, 111, 1);
+    const ignored_manual_resize = size();
+
+    chart.apply_options({ autoSize: false });
+    chart.resize(222, 111, 1);
+    host.style.width = "500px";
+    host.style.height = "300px";
+    await settle();
+    const disabled = { active: chart.auto_size_active(), size: size() };
+
+    host.style.display = "none";
+    chart.apply_options({ autoSize: true });
+    await settle();
+    const reenabled_hidden = { active: chart.auto_size_active(), size: size() };
+
+    host.style.display = "block";
+    await settle();
+    const first_reveal = size();
+    host.style.display = "none";
+    window.dispatchEvent(new Event("orientationchange"));
+    await settle();
+    const hidden_again = size();
+    host.style.display = "block";
+    host.style.width = "280px";
+    host.style.height = "160px";
+    await settle();
+    const revealed = size();
+
+    chart.remove();
+    host.remove();
+    return { initial, ignored_manual_resize, disabled, reenabled_hidden, first_reveal, hidden_again, revealed };
+  });
+
+  expect(result).toEqual({
+    initial: [320, 180],
+    ignored_manual_resize: [320, 180],
+    disabled: { active: false, size: [222, 111] },
+    reenabled_hidden: { active: true, size: [222, 111] },
+    first_reveal: [500, 300],
+    hidden_again: [500, 300],
+    revealed: [280, 160],
+  });
+});
+
 test("general series rebind and reorder atomically while preserving legend, data, and V2 restore", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   await page.waitForFunction(() => window.__chart?.backend?.() === "canvas2d");

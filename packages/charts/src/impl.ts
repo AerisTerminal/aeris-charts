@@ -3675,7 +3675,9 @@ export class chart_impl implements chart_api {
   private readonly dpr_change_handler = (): void => {
     if (this.removed || !this.auto_size) return;
     const bounds = this.container.getBoundingClientRect();
-    this.resize(bounds.width, bounds.height, window.devicePixelRatio || 1);
+    if (bounds.width >= 2 && bounds.height >= 2) {
+      this.apply_size(bounds.width, bounds.height, window.devicePixelRatio || 1);
+    }
     this.bind_dpr_watcher();
   };
   /** Crosshair position tracked TS-side (for crosshair-less screenshots); `null` when hidden. */
@@ -5563,18 +5565,18 @@ export class chart_impl implements chart_api {
     for (const h of this.options_change_subs) h(options);
   }
 
-  /**
-   * reference `autoSize`: enabling hands sizing to the engine's ResizeObserver; the flag is tracked
-   * TS-side for `auto_size_active()`. The engine has no disable hook yet, so turning it off is
-   * tracked here only (the engine keeps observing until teardown).
-   */
+  /** reference `autoSize`: the engine owns container sizing only while this option is active. */
   private set_auto_size(on: boolean): void {
-    if (on && !this.auto_size && !this.removed) {
+    if (on === this.auto_size || this.removed) return;
+    if (on) {
       this.wasm.enable_auto_resize(this.container);
+      this.auto_size = true;
+      this.bind_dpr_watcher();
+    } else {
+      this.wasm.disable_auto_resize();
+      this.auto_size = false;
+      this.unbind_dpr_watcher();
     }
-    this.auto_size = on;
-    if (on) this.bind_dpr_watcher();
-    else this.unbind_dpr_watcher();
   }
 
   nudge_selected_drawing(dx: number, dy: number, anchor: number | null): boolean {
@@ -5983,8 +5985,12 @@ export class chart_impl implements chart_api {
   }
 
   resize(width: number, height: number, dpr?: number): void {
-    const ratio = dpr ?? window.devicePixelRatio ?? 1;
-    this.pixel_ratio = Math.max(ratio, Number.EPSILON);
+    if (this.auto_size) return;
+    this.apply_size(width, height, dpr ?? window.devicePixelRatio ?? 1);
+  }
+
+  private apply_size(width: number, height: number, dpr: number): void {
+    this.pixel_ratio = Math.max(dpr, Number.EPSILON);
     const bitmap_width = Math.max(1, Math.round(width * this.pixel_ratio));
     const bitmap_height = Math.max(1, Math.round(height * this.pixel_ratio));
     for (const canvas of [this.gpu_pane, this.fallback_pane, this.plugin_canvas, this.overlay]) {
