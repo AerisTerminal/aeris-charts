@@ -2265,14 +2265,18 @@ fn xy_area_emits_fill_and_stroke_runs_and_hits_the_filled_region() {
             y_valid: Some(vec![1, 1, 0, 1, 1]),
         })
         .unwrap();
-    let series = chart
-        .add_general_series(GeneralSeriesOptions::xy_area(
-            pane, dataset, "area-x", "area-y",
-        ))
-        .unwrap();
+    let mut options = GeneralSeriesOptions::xy_area(pane, dataset, "area-x", "area-y");
+    options.baseline_value = Some(1.5);
+    let series = chart.add_general_series(options).unwrap();
     chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
 
     let frame = chart.build_frame();
+    let expected_baseline = chart
+        .general_path_baseline_y(chart.general_series(series).unwrap())
+        .unwrap();
+    assert!(frame.panes[pane].main.iter().any(|primitive| {
+        matches!(primitive, Prim::AreaFill { base_y, .. } if ((*base_y as f64) - expected_baseline).abs() < f64::EPSILON)
+    }));
     assert_eq!(
         frame.panes[pane]
             .main

@@ -94,6 +94,7 @@ pub struct GeneralSeriesOptions {
     pub point_radius: f64,
     pub line_width: f64,
     pub line_style: GeneralLineStyle,
+    pub baseline_value: Option<f64>,
     pub data_labels: bool,
     pub group_id: Option<String>,
     pub stack_id: Option<String>,
@@ -119,6 +120,7 @@ impl GeneralSeriesOptions {
             point_radius: 3.0,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
+            baseline_value: None,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -144,6 +146,7 @@ impl GeneralSeriesOptions {
             point_radius: 3.0,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
+            baseline_value: None,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -169,6 +172,7 @@ impl GeneralSeriesOptions {
             point_radius: 3.0,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
+            baseline_value: None,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -194,6 +198,7 @@ impl GeneralSeriesOptions {
             point_radius: 4.0,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
+            baseline_value: None,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -219,6 +224,7 @@ impl GeneralSeriesOptions {
             point_radius: 3.0,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
+            baseline_value: None,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -244,6 +250,7 @@ impl GeneralSeriesOptions {
             point_radius: 3.0,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
+            baseline_value: None,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -269,6 +276,7 @@ impl GeneralSeriesOptions {
             point_radius: 3.0,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
+            baseline_value: None,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -294,6 +302,7 @@ impl GeneralSeriesOptions {
             point_radius: 3.0,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
+            baseline_value: None,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -319,6 +328,7 @@ impl GeneralSeriesOptions {
             point_radius: 3.0,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
+            baseline_value: None,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -344,6 +354,7 @@ impl GeneralSeriesOptions {
             point_radius: 3.0,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
+            baseline_value: None,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -366,6 +377,7 @@ pub struct GeneralSeries {
     point_radius: f64,
     line_width: f64,
     line_style: GeneralLineStyle,
+    baseline_value: Option<f64>,
     data_labels: bool,
     group_id: Option<String>,
     stack_id: Option<String>,
@@ -969,6 +981,10 @@ impl GeneralSeries {
         self.line_style
     }
 
+    pub fn baseline_value(&self) -> Option<f64> {
+        self.baseline_value
+    }
+
     pub fn data_labels(&self) -> bool {
         self.data_labels
     }
@@ -1164,6 +1180,7 @@ impl GeneralSeriesRegistry {
             point_radius: options.point_radius,
             line_width: options.line_width,
             line_style: options.line_style,
+            baseline_value: options.baseline_value,
             data_labels: options.data_labels,
             group_id: options.group_id,
             stack_id: options.stack_id,
@@ -3112,7 +3129,7 @@ impl ChartEngine {
         let scale = NumericAxisScale::new(y_axis.scale(), y_domain, y_range.0, y_range.1)?;
         Some(
             scale
-                .coordinate(0.0)
+                .coordinate(series.baseline_value.unwrap_or(0.0))
                 .unwrap_or(y_range.0)
                 .clamp(plot.y, plot_bottom),
         )
@@ -6060,6 +6077,16 @@ fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartErro
         return Err(invalid(
             "general series line_width must be finite and in [0.5, 32]",
         ));
+    }
+    if let Some(value) = options.baseline_value {
+        if !value.is_finite() {
+            return Err(invalid("general series baseline_value must be finite"));
+        }
+        if options.kind != GeneralSeriesKind::XyArea {
+            return Err(invalid(
+                "general series baseline_value is supported only by xy_area",
+            ));
+        }
     }
     if options.title.len() > MAX_GENERAL_SERIES_TITLE_BYTES {
         return Err(resource(format!(

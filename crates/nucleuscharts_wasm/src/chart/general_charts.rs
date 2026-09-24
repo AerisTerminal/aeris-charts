@@ -104,6 +104,8 @@ struct SeriesInput {
     #[serde(default)]
     line_style: Option<String>,
     #[serde(default)]
+    baseline_value: Option<f64>,
+    #[serde(default)]
     data_labels: bool,
     #[serde(default)]
     group_id: Option<String>,
@@ -228,6 +230,7 @@ fn series_options_from_input(
     options.point_radius = input.point_radius;
     options.line_width = input.line_width;
     options.line_style = line_style(input.line_style.as_deref())?;
+    options.baseline_value = input.baseline_value;
     options.data_labels = input.data_labels;
     options.group_id = input.group_id;
     options.stack_id = input.stack_id;
@@ -770,6 +773,7 @@ impl ChartInner {
                 GeneralLineStyle::Dotted => "dotted",
                 GeneralLineStyle::Dashed => "dashed",
             },
+            "baseline_value": series.baseline_value(),
             "data_labels": series.data_labels(),
             "group_id": series.group_id(),
             "stack_id": series.stack_id(),

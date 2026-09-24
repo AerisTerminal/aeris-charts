@@ -623,6 +623,35 @@ test("general path stroke styles round-trip through the public browser API", asy
   expect(result.line_style).toBe("dashed");
 });
 
+test("general area baselines round-trip through the public browser API", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const host = document.createElement("div");
+    Object.assign(host.style, { width: "640px", height: "360px" });
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    try {
+      const pane = chart.add_pane({
+        preserve_empty: true,
+        horizontal_domain: { type: "continuous", scale: "linear" },
+      });
+      chart.add_axis({ id: "baseline-x", pane: pane.pane_index(), dimension: "x", scale: "linear" });
+      chart.add_axis({ id: "baseline-y", pane: pane.pane_index(), dimension: "y", scale: "linear" });
+      const series = chart.add_series("xy_area", {
+        pane: pane.pane_index(), x_axis_id: "baseline-x", y_axis_id: "baseline-y",
+        baseline_value: 1.5,
+      });
+      series.set_data([{ x: 0, y: 1 }, { x: 1, y: 3 }, { x: 2, y: 2 }]);
+      return series.options();
+    } finally {
+      chart.remove();
+      host.remove();
+    }
+  });
+  expect(result.baseline_value).toBe(1.5);
+});
+
 test("public linear axes render and navigate the complete finite numeric domain", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   const page_errors = [];

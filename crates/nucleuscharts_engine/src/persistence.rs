@@ -126,6 +126,8 @@ struct SeriesV2 {
     line_width: f64,
     #[serde(default)]
     line_style: crate::GeneralLineStyle,
+    #[serde(default)]
+    baseline_value: Option<f64>,
     data_labels: bool,
     #[serde(default)]
     group_id: Option<String>,
@@ -696,6 +698,7 @@ impl ChartEngine {
                     point_radius: series.point_radius(),
                     line_width: series.line_width(),
                     line_style: series.line_style(),
+                    baseline_value: series.baseline_value(),
                     data_labels: series.data_labels(),
                     group_id: series.group_id().map(str::to_string),
                     stack_id: series.stack_id().map(str::to_string),
@@ -1221,6 +1224,7 @@ impl ChartEngine {
                 point_radius: series.point_radius,
                 line_width: series.line_width,
                 line_style: series.line_style,
+                baseline_value: series.baseline_value,
                 data_labels: series.data_labels,
                 group_id: series.group_id,
                 stack_id: series.stack_id,

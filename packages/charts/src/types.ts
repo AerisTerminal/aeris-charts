@@ -356,6 +356,8 @@ export interface general_series_options {
   line_width?: number;
   /** Stroke pattern for line, area, and range-area paths (default `solid`). */
   line_style?: "solid" | "dotted" | "dashed";
+  /** Explicit numeric fill baseline for `xy_area`; omitted uses zero when visible, otherwise the edge. */
+  baseline_value?: number;
   /** Show bounded, engine-placed value labels beside visible marks. */
   data_labels?: boolean;
   /** Bar-only grouping key. Matching columns or horizontal bars share their category band side-by-side. */
@@ -1912,6 +1914,7 @@ export interface chart_state_v2 {
     point_radius: number;
     line_width: number;
     line_style: "solid" | "dotted" | "dashed";
+    baseline_value: number | null;
     data_labels: boolean;
     group_id: string | null;
     stack_id: string | null;
