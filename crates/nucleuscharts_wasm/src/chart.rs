@@ -4687,11 +4687,17 @@ type SharedGpuWaiters = Rc<RefCell<Vec<futures_channel::oneshot::Sender<SharedGp
 
 /// Slot for the page-wide shared GPU context. `Pending` serializes concurrent `create_chart`
 /// calls so exactly one adapter/device request is ever in flight; waiters are woken with the
-/// outcome. A `Ready` context whose device was later lost is discarded and recreated on demand.
+/// outcome. An unavailable adapter is memoized until page reload so each virtualized chart does
+/// not repeat the same failed browser request. Other initialization errors remain retryable; a
+/// `Ready` context whose device was later lost is discarded and recreated on demand.
 enum SharedGpuSlot {
     Empty,
     Pending(SharedGpuWaiters),
     Ready(Rc<SharedGpu>),
+    AdapterUnavailable {
+        error: BackendStartupFailure,
+        force_fallback_adapter: bool,
+    },
 }
 
 thread_local! {
@@ -4702,11 +4708,24 @@ enum SharedGpuAction {
     Ready(Rc<SharedGpu>),
     Wait(futures_channel::oneshot::Receiver<SharedGpuResult>),
     Create(SharedGpuWaiters),
+    AdapterUnavailable(BackendStartupFailure),
 }
 
 async fn shared_gpu(force_fallback_adapter: bool) -> Result<Rc<SharedGpu>, BackendStartupFailure> {
     let action = SHARED_GPU.with(|slot| {
         let mut slot = slot.borrow_mut();
+        if let SharedGpuSlot::AdapterUnavailable {
+            error,
+            force_fallback_adapter: attempted_fallback,
+        } = &*slot
+        {
+            if *attempted_fallback == force_fallback_adapter {
+                return SharedGpuAction::AdapterUnavailable(error.clone());
+            }
+            // Explicit fallback-adapter diagnostics must not inherit a failure from the normal
+            // adapter request (or poison subsequent normal requests with their own result).
+            *slot = SharedGpuSlot::Empty;
+        }
         if let SharedGpuSlot::Ready(shared) = &*slot {
             if !shared.device_lost.load(Ordering::Acquire) {
                 return SharedGpuAction::Ready(Rc::clone(shared));
@@ -4727,10 +4746,14 @@ async fn shared_gpu(force_fallback_adapter: bool) -> Result<Rc<SharedGpu>, Backe
                 SharedGpuAction::Create(waiters)
             }
             SharedGpuSlot::Ready(_) => unreachable!("ready slot handled above"),
+            SharedGpuSlot::AdapterUnavailable { .. } => {
+                unreachable!("adapter failure handled above")
+            }
         }
     });
     match action {
         SharedGpuAction::Ready(shared) => Ok(shared),
+        SharedGpuAction::AdapterUnavailable(error) => Err(error),
         SharedGpuAction::Wait(rx) => rx.await.map_err(|_| {
             BackendStartupFailure::initialization("shared GPU init dropped".to_string())
         })?,
@@ -4740,6 +4763,12 @@ async fn shared_gpu(force_fallback_adapter: bool) -> Result<Rc<SharedGpu>, Backe
                 let mut slot = slot.borrow_mut();
                 match &result {
                     Ok(shared) => *slot = SharedGpuSlot::Ready(Rc::clone(shared)),
+                    Err(error) if error.is_adapter_unavailable() => {
+                        *slot = SharedGpuSlot::AdapterUnavailable {
+                            error: error.clone(),
+                            force_fallback_adapter,
+                        };
+                    }
                     Err(_) => *slot = SharedGpuSlot::Empty,
                 }
             });

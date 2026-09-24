@@ -174,72 +174,29 @@ test("style reset follows a live theme switch and restores semantic series defau
   expect(state.series.line_width).toBe(3);
 });
 
-test("attribution logo uses the intended final-pane placement and surface contrast", async ({ page }) => {
+test("charts never inject product attribution chrome", async ({ page }) => {
   await open_demo(page);
   const result = await page.evaluate(() => {
     const chart = window.__chart;
+    const before = document.querySelectorAll(".nucleuscharts-attribution-logo").length;
     chart.apply_options({
       layout: {
+        // Legacy callers may still send this key at runtime. It must remain inert.
         attributionLogo: true,
         background: { type: "solid", color: "#ffffff" },
         textColor: "#141414",
       },
     });
-    const read = () => {
-      const logo = document.querySelector(".nucleuscharts-attribution-logo");
-      if (!(logo instanceof HTMLDivElement)) return null;
-      const pane = chart.panes().at(-1).get_geometry();
-      const svg = logo.querySelector("svg");
-      const path = svg?.querySelector("path") ?? null;
-      return {
-        left: Number.parseFloat(logo.style.left),
-        top: Number.parseFloat(logo.style.top),
-        width: logo.getBoundingClientRect().width,
-        height: logo.getBoundingClientRect().height,
-        pane,
-        tone: logo.dataset.logoTone,
-        fill: path?.getAttribute("fill") ?? null,
-        stroke: path?.getAttribute("stroke") ?? null,
-        stroke_width: path?.getAttribute("stroke-width") ?? null,
-        vector_effect: path?.getAttribute("vector-effect") ?? null,
-      };
-    };
-
-    const light = read();
-    chart.apply_options({
-      layout: {
-        background: { type: "solid", color: "#141414" },
-        textColor: "#f0f0f0",
-      },
-    });
-    const dark = read();
-
     chart.add_pane(true);
-    const multi_pane = read();
+    chart.render();
+    const after = document.querySelectorAll(".nucleuscharts-attribution-logo").length;
     chart.remove_pane(chart.panes().length - 1);
-
-    chart.apply_options({ layout: { attributionLogo: false } });
-    const hidden_count = document.querySelectorAll(".nucleuscharts-attribution-logo").length;
-    chart.apply_options({ layout: { attributionLogo: true } });
-    const restored_count = document.querySelectorAll(".nucleuscharts-attribution-logo").length;
-    return { light, dark, multi_pane, hidden_count, restored_count };
+    return { before, after, layout: chart.options().layout };
   });
 
-  for (const state of [result.light, result.dark, result.multi_pane]) {
-    expect(state).not.toBeNull();
-    expect(state.left).toBeCloseTo(state.pane.left + 10, 5);
-    expect(state.top + state.height).toBeCloseTo(state.pane.top + state.pane.height - 10, 5);
-    expect(state.height).toBeCloseTo(19, 5);
-    // Chromium quantizes fractional CSS widths to 1/64 px.
-    expect(state.width).toBeCloseTo((221 / 48) * 19, 1);
-    expect(state.stroke_width).toBe("1");
-    expect(state.vector_effect).toBe("non-scaling-stroke");
-  }
-  expect(result.light).toMatchObject({ tone: "dark", fill: "#141414", stroke: "#ffffff" });
-  expect(result.dark).toMatchObject({ tone: "light", fill: "#F0F0F0", stroke: "#141414" });
-  expect(result.multi_pane.tone).toBe("light");
-  expect(result.hidden_count).toBe(0);
-  expect(result.restored_count).toBe(1);
+  expect(result.before).toBe(0);
+  expect(result.after).toBe(0);
+  expect(result.layout.attributionLogo).toBeUndefined();
 });
 
 test("demo controls have readable headings and usable desktop and phone targets", async ({ page }) => {

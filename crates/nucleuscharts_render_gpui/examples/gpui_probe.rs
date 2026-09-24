@@ -19,12 +19,11 @@
 
 use std::{
     collections::HashMap,
-    sync::OnceLock,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use gpui::{
-    canvas, div, prelude::*, px, relative, rgb, size, svg, AnyElement, App, Bounds, Context,
+    canvas, div, prelude::*, px, relative, rgb, size, AnyElement, App, Bounds, Context,
     CursorStyle, Entity, FocusHandle, Focusable, KeyDownEvent, KeyUpEvent, ModifiersChangedEvent,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PinchEvent, Render, ScrollDelta,
     ScrollHandle, ScrollWheelEvent, Subscription, Window, WindowBounds, WindowOptions,
@@ -211,21 +210,13 @@ const TOOLBAR_FEATURE_MANIFEST: &[&str] = &[
     "workspace:split-horizontal,split-vertical,shortcuts,maximize,restore,close,cap,usage,active,resize",
     "drawing:trend,h-line,h-ray,v-line,rect,text,path,brush,clear,color,style,width,label,text-color,size,weight,italic",
     "crosshair:mode,color,width,style,label-background,labels",
-    "chart:theme,grid,grid-color,grid-style,font-family,font-size,attribution",
+    "chart:theme,grid,grid-color,grid-style,font-family,font-size",
     "series-chrome:price-line,extent,style,last-value,title-visible,title-text,countdown,bid-ask",
     "axes:border-visible,border-color,text-color,separator",
     "watermark:visible,text,color,size",
     "interaction:axis-scaling,mouse-kinetic,reset-view",
     "native-visual-approximations:day-bands,position-band,autoscale-band,markers,vertical-line",
 ];
-
-const ATTRIBUTION_LOGO_HEIGHT: f32 = 19.0;
-const ATTRIBUTION_LOGO_WIDTH: f32 = 221.0 / 48.0 * ATTRIBUTION_LOGO_HEIGHT;
-const ATTRIBUTION_LOGO_INSET: f32 = 10.0;
-const AXIUSFLOW_DARK_LOGO: &[u8] =
-    include_bytes!("../../../packages/charts/src/assets/logos/axiusflow_dark.svg");
-const AXIUSFLOW_LIGHT_LOGO: &[u8] =
-    include_bytes!("../../../packages/charts/src/assets/logos/axiusflow_light.svg");
 
 /// Column-major OHLC, in the shape `ChartEngine::set_series_data` takes.
 #[derive(Clone)]
@@ -2563,87 +2554,6 @@ impl Probe {
     }
 }
 
-fn attribution_outline(source: &'static [u8], dark: bool) -> &'static [u8] {
-    static DARK: OnceLock<Vec<u8>> = OnceLock::new();
-    static LIGHT: OnceLock<Vec<u8>> = OnceLock::new();
-    let outline = if dark { &DARK } else { &LIGHT };
-    outline.get_or_init(|| {
-        let fill = if dark { "#141414" } else { "#F0F0F0" };
-        String::from_utf8_lossy(source)
-            .replace(
-                &format!("fill=\"{fill}\""),
-                "fill=\"none\" stroke=\"currentColor\" stroke-width=\"1\" stroke-linejoin=\"round\" vector-effect=\"non-scaling-stroke\"",
-            )
-            .into_bytes()
-    })
-}
-
-/// Build the host-owned Axiusflow mark as retained GPUI chrome. The engine owns the option and pane
-/// geometry; the native host owns only this cached SVG element, mirroring the browser DOM seam.
-fn attribution_logo_element(probe: &Probe) -> Option<AnyElement> {
-    probe
-        .engine
-        .options
-        .get()
-        .layout
-        .attribution_logo
-        .then_some(())?;
-    let pane = probe.engine.panes.last()?;
-    let background = Color::parse_css(&probe.engine.options.get().layout.background.color);
-    let text = Color::parse_css(&probe.engine.options.get().layout.text_color);
-    let light_background = background
-        .map(|color| color.luminance() > 160.0)
-        .or_else(|| text.map(|color| color.luminance() < 160.0))
-        .unwrap_or(false);
-    let (data, outline, fill, outline_color) = if light_background {
-        (
-            AXIUSFLOW_DARK_LOGO,
-            attribution_outline(AXIUSFLOW_DARK_LOGO, true),
-            0x141414,
-            0xffffff,
-        )
-    } else {
-        (
-            AXIUSFLOW_LIGHT_LOGO,
-            attribution_outline(AXIUSFLOW_LIGHT_LOGO, false),
-            0xf0f0f0,
-            0x141414,
-        )
-    };
-    Some(
-        div()
-            .absolute()
-            .left(px(probe.engine.pane_left as f32))
-            .top(px(pane.top as f32))
-            .w(px(probe.engine.pane_w as f32))
-            .h(px(pane.height as f32))
-            .overflow_hidden()
-            .child(
-                div()
-                    .absolute()
-                    .left(px(ATTRIBUTION_LOGO_INSET))
-                    .bottom(px(ATTRIBUTION_LOGO_INSET))
-                    .w(px(ATTRIBUTION_LOGO_WIDTH))
-                    .h(px(ATTRIBUTION_LOGO_HEIGHT))
-                    .child(
-                        svg()
-                            .absolute()
-                            .size_full()
-                            .data(outline)
-                            .text_color(rgb(outline_color)),
-                    )
-                    .child(
-                        svg()
-                            .absolute()
-                            .size_full()
-                            .data(data)
-                            .text_color(rgb(fill)),
-                    ),
-            )
-            .into_any_element(),
-    )
-}
-
 /// Build and paint one frame. Split out so both closures can hold disjoint borrows of `Probe`.
 fn paint_probe(probe: &mut Probe, bounds: Bounds<gpui::Pixels>, window: &mut Window, cx: &mut App) {
     if probe
@@ -2721,8 +2631,6 @@ impl Render for Probe {
         let background = Color::parse_css(&self.engine.options.get().layout.background.color)
             .unwrap_or(Color::rgb(fallback.0, fallback.1, fallback.2));
         let background = nucleuscharts_render_gpui::backend::to_hsla(background);
-        let attribution = attribution_logo_element(self);
-
         let focus = self
             .focus_handle
             .as_ref()
@@ -2776,7 +2684,6 @@ impl Render for Probe {
                 )
                 .size_full(),
             )
-            .children(attribution)
     }
 }
 
@@ -2912,7 +2819,6 @@ enum DemoAction {
     GridStyle,
     Font,
     FontSize,
-    Attribution,
     PriceLine,
     PriceLineExtent,
     PriceLineStyle,
@@ -3373,15 +3279,6 @@ impl InteractiveDemo {
                 p.engine.options.apply_str(&format!(r#"{{"layout":{{"fontSize":{size}}}}}"#)).unwrap();
                 p.renderer.invalidate_caches();
             }),
-            DemoAction::Attribution => self.update_root(cx, |p| {
-                let visible = !p.engine.options.get().layout.attribution_logo;
-                p.engine
-                    .options
-                    .apply_str(&format!(
-                        r#"{{"layout":{{"attributionLogo":{visible}}}}}"#
-                    ))
-                    .expect("attribution visibility toggle is valid");
-            }),
             DemoAction::PriceLine => self.update_active(cx, |p| {
                 let index = p.displayed_series_index();
                 p.engine.series[index].price_line_visible =
@@ -3551,9 +3448,6 @@ impl InteractiveDemo {
             DemoAction::GridColor => root
                 .as_ref()
                 .is_some_and(|chart| chart.read(cx).style_pins.grid_color.is_some()),
-            DemoAction::Attribution => root
-                .as_ref()
-                .is_some_and(|chart| chart.read(cx).engine.options.get().layout.attribution_logo),
             DemoAction::PriceLine => active.as_ref().is_some_and(|chart| {
                 let probe = chart.read(cx);
                 probe.engine.series[probe.displayed_series_index()].price_line_visible
@@ -4067,7 +3961,6 @@ impl Render for InteractiveDemo {
                     b("grid style", DemoAction::GridStyle),
                     b("font family", DemoAction::Font),
                     b("font size", DemoAction::FontSize),
-                    b("attribution", DemoAction::Attribution),
                 ],
             ),
             self.group(
@@ -5105,16 +4998,6 @@ mod semantic_regressions {
             .series
             .iter()
             .all(|series| series.id != state.series_id || series.removed));
-    }
-
-    #[test]
-    fn attribution_logo_defaults_on_and_has_a_non_scaling_outline() {
-        let probe = Probe::new_interactive(8);
-        assert!(probe.engine.options.get().layout.attribution_logo);
-        let outline = std::str::from_utf8(attribution_outline(AXIUSFLOW_DARK_LOGO, true)).unwrap();
-        assert!(outline.contains("fill=\"none\""));
-        assert!(outline.contains("stroke-width=\"1\""));
-        assert!(outline.contains("vector-effect=\"non-scaling-stroke\""));
     }
 
     #[test]

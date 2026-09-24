@@ -63,9 +63,9 @@ pub use footprint::{
     FootprintVisualOptions, FootprintWorkStats,
 };
 pub use frame::{
-    AxisBand, AxisFrame, AxisIcon, AxisLabel, AxisLabelCorners, AxisTextAlign, AxisTextMidpoint,
-    ChartFrame, FrameBuildStats, FrameDrawingSegment, FramePane, FramePaneSegments,
-    FrameSeriesSegment,
+    AxisBand, AxisFrame, AxisIcon, AxisLabel, AxisLabelCorners, AxisRotatedLabel, AxisTextAlign,
+    AxisTextMidpoint, ChartFrame, FrameBuildStats, FrameDrawingSegment, FramePane,
+    FramePaneSegments, FrameSeriesSegment,
 };
 pub use general_axes::{
     AxisDimension, AxisPosition, GeneralAxis, GeneralAxisDomain, GeneralAxisOptions,

@@ -609,6 +609,19 @@ pub struct AxisLabel {
     pub border: Option<(f64, Color)>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct AxisRotatedLabel {
+    pub text: String,
+    pub x: f64,
+    pub y: f64,
+    pub color: Color,
+    pub align: AxisTextAlign,
+    pub font_scale: f64,
+    pub bold: bool,
+    /// Clockwise radians around the aligned `(x, y)` anchor.
+    pub angle: f64,
+}
+
 /// A backend-neutral rectangle painted beneath axis chrome and labels. Rectangle drawings use
 /// this for the official plugin's 15 CSS px price/time-axis pane shading.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -633,6 +646,7 @@ pub struct AxisIcon {
 pub struct AxisFrame {
     pub bands: Vec<AxisBand>,
     pub labels: Vec<AxisLabel>,
+    pub rotated_labels: Vec<AxisRotatedLabel>,
     /// Original SVG pixels, retained at the current DPR/font size.
     pub crosshair_action_icon: Option<AxisIcon>,
     pub separators: Vec<f64>,

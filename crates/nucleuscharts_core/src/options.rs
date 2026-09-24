@@ -229,8 +229,6 @@ pub struct LayoutOptions {
     pub font_size: f64,
     #[serde(rename = "fontFamily")]
     pub font_family: String,
-    #[serde(rename = "attributionLogo")]
-    pub attribution_logo: bool,
     pub panes: PanesOptions,
 }
 
@@ -244,7 +242,6 @@ impl Default for LayoutOptions {
             bearish_color: DEFAULT_MARKET_DOWN_CSS.into(),
             font_size: 12.0,
             font_family: default_font_family(),
-            attribution_logo: true,
             panes: PanesOptions::default(),
         }
     }
@@ -536,7 +533,11 @@ impl ChartOptionsStore {
     /// (options are always an object at the root).
     pub fn apply(&mut self, patch: &Value) {
         if patch.is_object() {
-            deep_merge(&mut self.value, patch);
+            let mut patch = patch.clone();
+            if let Some(layout) = patch.get_mut("layout").and_then(Value::as_object_mut) {
+                layout.remove("attributionLogo");
+            }
+            deep_merge(&mut self.value, &patch);
             self.typed = serde_json::from_value(self.value.clone()).unwrap_or_default();
             self.generation = self.generation.wrapping_add(1);
         }
@@ -923,10 +924,19 @@ mod tests {
     #[test]
     fn scalar_and_bool_replace() {
         let mut store = ChartOptionsStore::new();
-        store.apply(&json!({ "layout": { "fontSize": 16, "attributionLogo": false } }));
+        store.apply(&json!({ "layout": { "fontSize": 16 } }));
         let o = store.get();
         assert_eq!(o.layout.font_size, 16.0);
-        assert!(!o.layout.attribution_logo);
+    }
+
+    #[test]
+    fn retired_attribution_option_is_not_retained() {
+        let mut store = ChartOptionsStore::new();
+        store.apply(&json!({
+            "layout": { "attributionLogo": true, "fontSize": 15 }
+        }));
+        assert_eq!(store.get().layout.font_size, 15.0);
+        assert!(store.value()["layout"].get("attributionLogo").is_none());
     }
 
     #[test]

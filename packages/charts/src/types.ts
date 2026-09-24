@@ -1226,12 +1226,6 @@ export interface chart_options {
     bearishColor: string;
     fontSize: number;
     fontFamily: string;
-    /**
-     * Show the Axiusflow attribution mark in the bottom-left of the final pane (reference
-     * `layout.attributionLogo`, default `true`). Browser charts choose the supplied dark/light
-     * wordmark and its opposite-tone outline from the resolved chart background.
-     */
-    attributionLogo: boolean;
     panes: {
       separatorColor: string;
       /** Hover band for an interactive pane separator. */

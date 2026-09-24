@@ -8,9 +8,9 @@ use nucleuscharts_render::color::Color;
 
 use crate::{
     axis_metrics::{AxisMetrics, AXIS_FONT_SCALE},
-    AxisBand, AxisFrame, AxisLabel, AxisLabelCorners, AxisTextAlign, AxisTextMidpoint,
-    CategoryScaleType, ChartEngine, ChartError, ContinuousScaleType, ErrorCode, HorizontalDomain,
-    PaneId, PriceScaleSide,
+    AxisBand, AxisFrame, AxisLabel, AxisLabelCorners, AxisRotatedLabel, AxisTextAlign,
+    AxisTextMidpoint, CategoryScaleType, ChartEngine, ChartError, ContinuousScaleType, ErrorCode,
+    HorizontalDomain, PaneId, PriceScaleSide,
 };
 
 pub const MAX_GENERAL_AXES: usize = 128;
@@ -400,6 +400,7 @@ pub(crate) struct GeneralPlotRect {
 struct GeneralAxisTick {
     coordinate: f64,
     label: String,
+    align: AxisTextAlign,
 }
 
 impl ChartEngine {
@@ -407,6 +408,7 @@ impl ChartEngine {
     where
         F: Fn(&str, bool) -> f64,
     {
+        let metrics = self.axis_metrics();
         let fallback = AxisMetrics::price_strip_width(AxisMetrics::DEFAULT_TEXT_WIDTH, 0.0);
         let effective_domains: Vec<_> = self
             .general_axes
@@ -429,17 +431,15 @@ impl ChartEngine {
                 .into_iter()
                 .map(|label| measure(&label, false))
                 .fold(0.0_f64, f64::max);
-            let title_width = axis
-                .title
-                .as_deref()
-                .map_or(0.0, |title| measure(title, false));
-            let measured = AxisMetrics::price_strip_width(
-                widest_tick
-                    .max(title_width)
-                    .max(AxisMetrics::DEFAULT_TEXT_WIDTH),
+            let tick_strip = AxisMetrics::price_strip_width(
+                widest_tick.max(AxisMetrics::DEFAULT_TEXT_WIDTH),
                 0.0,
             )
             .max(fallback);
+            // A vertical general-axis title owns a dedicated rotated-text lane rather than
+            // competing with tick labels for the same horizontal strip. This keeps long titles
+            // from inflating the tick area and prevents the title from covering the center tick.
+            let measured = tick_strip + vertical_axis_title_lane(axis, metrics);
             axis.layout_thickness = if allow_shrink || axis.layout_thickness <= 0.0 {
                 measured
             } else {
@@ -637,32 +637,61 @@ impl ChartEngine {
                     continue;
                 };
                 let ticks = axis_ticks(axis, &domain, range.0, range.1, metrics);
-                let ticks = collision_filtered_ticks(axis, ticks, measure, metrics);
+                let ticks =
+                    collision_filtered_ticks(axis, ticks, measure, metrics, range.0, range.1);
                 for tick in ticks {
-                    if axis.dimension == AxisDimension::Y
-                        && axis.title.is_some()
-                        && (tick.coordinate - label_y).abs() < metrics.axis + axis.min_tick_gap
-                    {
-                        continue;
-                    }
                     let (x, y) = match axis.dimension {
                         AxisDimension::X => (tick.coordinate, label_y),
                         AxisDimension::Y => (label_x, tick.coordinate),
                         AxisDimension::Angle | AxisDimension::Radius => unreachable!(),
                     };
-                    out.labels
-                        .push(plain_axis_label(tick.label, x, y, text_color, align));
-                }
-                if let Some(title) = axis.title.as_ref() {
-                    let (x, y) = match position {
-                        AxisPosition::Top => (label_x, strip_y + metrics.axis / 2.0 + 2.0),
-                        AxisPosition::Bottom => {
-                            (label_x, strip_y + strip_h - metrics.axis / 2.0 - 2.0)
-                        }
-                        AxisPosition::Left | AxisPosition::Right => (label_x, label_y),
+                    let tick_align = if axis.dimension == AxisDimension::X {
+                        tick.align
+                    } else {
+                        align
                     };
                     out.labels
-                        .push(plain_axis_label(title.clone(), x, y, text_color, align));
+                        .push(plain_axis_label(tick.label, x, y, text_color, tick_align));
+                }
+                if let Some(title) = axis.title.as_ref() {
+                    match position {
+                        AxisPosition::Top => out.labels.push(plain_axis_label(
+                            title.clone(),
+                            label_x,
+                            strip_y + metrics.axis / 2.0 + 2.0,
+                            text_color,
+                            AxisTextAlign::Center,
+                        )),
+                        AxisPosition::Bottom => out.labels.push(plain_axis_label(
+                            title.clone(),
+                            label_x,
+                            strip_y + strip_h - metrics.axis / 2.0 - 2.0,
+                            text_color,
+                            AxisTextAlign::Center,
+                        )),
+                        AxisPosition::Left | AxisPosition::Right => {
+                            let lane = vertical_axis_title_lane(axis, metrics);
+                            let x = if position == AxisPosition::Left {
+                                strip_x + lane / 2.0
+                            } else {
+                                strip_x + strip_w - lane / 2.0
+                            };
+                            out.rotated_labels.push(AxisRotatedLabel {
+                                text: title.clone(),
+                                x,
+                                y: label_y,
+                                color: text_color,
+                                align: AxisTextAlign::Center,
+                                font_scale: AXIS_FONT_SCALE,
+                                bold: false,
+                                angle: if position == AxisPosition::Left {
+                                    -std::f64::consts::FRAC_PI_2
+                                } else {
+                                    std::f64::consts::FRAC_PI_2
+                                },
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -1227,6 +1256,15 @@ fn vertical_axis_thickness(axis: &GeneralAxis) -> f64 {
     ))
 }
 
+fn vertical_axis_title_lane(axis: &GeneralAxis, metrics: AxisMetrics) -> f64 {
+    if axis.title.is_some() {
+        // Rotated titles need one text-height lane plus breathing room from the tick column.
+        metrics.axis + 8.0
+    } else {
+        0.0
+    }
+}
+
 fn horizontal_axis_thickness(axis: &GeneralAxis, metrics: AxisMetrics) -> f64 {
     let rows = if axis.title.is_some() { 2.0 } else { 1.0 };
     (1.0 + AxisMetrics::TICK_LENGTH + 4.0 + rows * (metrics.axis + 4.0)).ceil()
@@ -1243,11 +1281,7 @@ fn tick_labels_for_domain(axis: &GeneralAxis, domain: &GeneralAxisDomain) -> Vec
             let Some(scale) = NumericAxisScale::new(axis.scale, *domain, 0.0, 1.0) else {
                 return Vec::new();
             };
-            scale
-                .ticks(axis.tick_count.unwrap_or(6) as usize)
-                .into_iter()
-                .map(format_numeric_tick)
-                .collect()
+            format_numeric_ticks(&scale.ticks(axis.tick_count.unwrap_or(6) as usize))
         }
         (GeneralScaleType::Band | GeneralScaleType::Point, GeneralAxisDomain::Category(values)) => {
             values
@@ -1287,13 +1321,16 @@ fn axis_ticks(
                 },
                 usize::from,
             );
-            scale
-                .ticks(target)
+            let values = scale.ticks(target);
+            let labels = format_numeric_ticks(&values);
+            values
                 .into_iter()
-                .filter_map(|value| {
+                .zip(labels)
+                .filter_map(|(value, label)| {
                     scale.coordinate(value).map(|coordinate| GeneralAxisTick {
                         coordinate,
-                        label: format_numeric_tick(value),
+                        label,
+                        align: AxisTextAlign::Center,
                     })
                 })
                 .collect()
@@ -1403,6 +1440,7 @@ where
             coordinate(index).map(|coordinate| GeneralAxisTick {
                 coordinate,
                 label: label.clone(),
+                align: AxisTextAlign::Center,
             })
         })
         .collect()
@@ -1413,30 +1451,105 @@ fn collision_filtered_ticks<F>(
     mut ticks: Vec<GeneralAxisTick>,
     measure: &F,
     metrics: AxisMetrics,
+    range_from: f64,
+    range_to: f64,
 ) -> Vec<GeneralAxisTick>
 where
     F: Fn(&str, bool) -> f64,
 {
     ticks.sort_by(|left, right| left.coordinate.total_cmp(&right.coordinate));
     let mut previous_end = f64::NEG_INFINITY;
-    ticks.retain(|tick| {
-        let extent = if axis.dimension == AxisDimension::X {
-            measure(&tick.label, false) / 2.0
+    let range_start = range_from.min(range_to);
+    let range_end = range_from.max(range_to);
+    ticks.retain_mut(|tick| {
+        let (start, end) = if axis.dimension == AxisDimension::X {
+            let width = measure(&tick.label, false);
+            if !width.is_finite() || width <= 0.0 || width > range_end - range_start {
+                return false;
+            }
+            let half = width / 2.0;
+            if tick.coordinate - half < range_start {
+                tick.align = AxisTextAlign::Left;
+                (tick.coordinate, tick.coordinate + width)
+            } else if tick.coordinate + half > range_end {
+                tick.align = AxisTextAlign::Right;
+                (tick.coordinate - width, tick.coordinate)
+            } else {
+                tick.align = AxisTextAlign::Center;
+                (tick.coordinate - half, tick.coordinate + half)
+            }
         } else {
-            metrics.axis / 2.0
+            let extent = metrics.axis / 2.0;
+            (tick.coordinate - extent, tick.coordinate + extent)
         };
-        let start = tick.coordinate - extent;
         let keep = start >= previous_end + axis.min_tick_gap;
         if keep {
-            previous_end = tick.coordinate + extent;
+            previous_end = end;
         }
         keep
     });
     ticks
 }
 
-fn format_numeric_tick(value: f64) -> String {
-    value.to_string()
+fn format_numeric_ticks(values: &[f64]) -> Vec<String> {
+    if values.is_empty() {
+        return Vec::new();
+    }
+    let mut positive_steps = values
+        .windows(2)
+        .map(|pair| (pair[1] - pair[0]).abs())
+        .filter(|step| step.is_finite() && *step > 0.0);
+    let step = positive_steps
+        .next()
+        .map(|first| positive_steps.fold(first, f64::min));
+    let max_abs = values
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite())
+        .map(f64::abs)
+        .fold(0.0_f64, f64::max);
+    let scientific = max_abs >= 1.0e9
+        || (max_abs > 0.0 && max_abs < 1.0e-4)
+        || step.is_some_and(|value| value < 1.0e-6);
+    if scientific {
+        return values
+            .iter()
+            .map(|value| {
+                let normalized = if value.abs() < f64::EPSILON {
+                    0.0
+                } else {
+                    *value
+                };
+                format!("{normalized:.3e}")
+            })
+            .collect();
+    }
+
+    let precision = step.map_or(0, numeric_tick_precision);
+    values
+        .iter()
+        .map(|value| {
+            let zero_epsilon = step.unwrap_or(1.0).abs() * 1.0e-9;
+            if value.abs() <= zero_epsilon {
+                "0".to_owned()
+            } else {
+                format!("{value:.precision$}")
+            }
+        })
+        .collect()
+}
+
+fn numeric_tick_precision(step: f64) -> usize {
+    if !step.is_finite() || step <= 0.0 {
+        return 0;
+    }
+    for precision in 0..=6 {
+        let scaled = step * 10_f64.powi(precision as i32);
+        if (scaled - scaled.round()).abs() <= scaled.abs().max(1.0) * 1.0e-9 {
+            return precision;
+        }
+    }
+    6
 }
 
 fn plain_axis_label(text: String, x: f64, y: f64, color: Color, align: AxisTextAlign) -> AxisLabel {
@@ -1842,5 +1955,24 @@ mod tests {
         assert!(validate_position(AxisDimension::X, Some(AxisPosition::Top)).is_ok());
         assert!(validate_position(AxisDimension::X, Some(AxisPosition::Left)).is_err());
         assert!(validate_position(AxisDimension::Radius, Some(AxisPosition::Right)).is_err());
+    }
+
+    #[test]
+    fn numeric_tick_labels_use_one_stable_precision_per_axis() {
+        assert_eq!(
+            format_numeric_ticks(&[0.0, 0.25, 0.5, 0.75, 1.0]),
+            ["0", "0.25", "0.50", "0.75", "1.00"]
+        );
+        assert_eq!(
+            format_numeric_ticks(&[40.0, 50.0, 60.0, 70.0]),
+            ["40", "50", "60", "70"]
+        );
+        assert_eq!(
+            format_numeric_ticks(&[-0.5, 0.0, 0.5]),
+            ["-0.5", "0", "0.5"]
+        );
+        assert!(format_numeric_ticks(&[1.0e9, 2.0e9])
+            .iter()
+            .all(|label| label.contains('e')));
     }
 }

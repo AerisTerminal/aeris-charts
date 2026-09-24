@@ -48,12 +48,19 @@ fn explicit_general_axes_reserve_layout_and_emit_shared_axis_frame() {
     );
 
     let frame = chart.build_axis_frame(80.0, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
-    for expected in ["Jan", "Feb", "Mar", "Month", "Revenue", "0", "100"] {
+    for expected in ["Jan", "Feb", "Mar", "Month", "0", "100"] {
         assert!(
             frame.labels.iter().any(|label| label.text == expected),
             "missing general-axis label {expected:?}"
         );
     }
+    let revenue_title = frame
+        .rotated_labels
+        .iter()
+        .find(|label| label.text == "Revenue")
+        .expect("vertical general-axis title must be a rotated label");
+    assert_eq!(revenue_title.align, AxisTextAlign::Center);
+    assert_eq!(revenue_title.angle, -std::f64::consts::FRAC_PI_2);
     assert!(
         frame.bands.len() >= 2,
         "both general axes emit shared chrome"
@@ -63,6 +70,9 @@ fn explicit_general_axes_reserve_layout_and_emit_shared_axis_frame() {
     assert!(primitives
         .iter()
         .any(|primitive| matches!(primitive, Prim::Text { text, .. } if text == "Jan")));
+    assert!(primitives
+        .iter()
+        .any(|primitive| matches!(primitive, Prim::RotatedText { text, .. } if text == "Revenue")));
     assert!(primitives
         .iter()
         .any(|primitive| matches!(primitive, Prim::Rect { .. })));

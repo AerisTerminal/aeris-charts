@@ -506,15 +506,9 @@ The browser package's official-feature modules are thin lifecycle and platform a
 engine owners. They normalize public data/options, translate pointer or keyboard events, decode
 browser images, and create optional DOM chrome; they do not simulate financial geometry. Tooltip
 guides/value lookup, accessibility focus geometry, drawings, bands, price lines, overlay
-labels, image placement, and every specialized series frame are constructed in Rust. The built-in
-Axiusflow attribution mark is intentionally host chrome at a conventional attribution
-widget rather than becoming a second scene-graph primitive: the engine remains canonical for the
-`layout.attributionLogo` option and final-pane geometry, while the browser inlines the packaged
-dark/light SVG wordmarks and the interactive GPUI host submits those same packaged SVGs directly.
-Both keep the mark 19 CSS px tall and 10 CSS px from the final pane's left/bottom content edges.
-Background luminance chooses the wordmark and an opposite-tone non-scaling outline, so custom chart
-surfaces cannot erase it. It is excluded from engine frames, canvas-only `take_screenshot()`
-captures, persistence, and headless/offscreen renderers. Feature handles release their engine primitive
+labels, image placement, and every specialized series frame are constructed in Rust. The engine and
+its browser/native hosts do not inject product attribution or branding into chart surfaces. Feature
+handles release their engine primitive
 plus any host subscription,
 timer, or DOM node exactly once; none of that runtime state enters engine persistence.
 
@@ -546,6 +540,8 @@ Each browser chart owns reusable WebGPU vertex buffers for its retained semantic
 The shared text atlas treats one render as a transaction: slots referenced or inserted in the current frame cannot be recycled until that frame completes. Atlas pressure after the frame has accepted text defers the reset to the next frame; the browser renders the pressured frame through Canvas2D rather than submit stale UVs. A reset increments the atlas epoch, invalidating retained textured groups and text-cache entries before the next WebGPU submission.
 
 Browser WebGPU shares one page-wide adapter/device/queue and atlas while retaining per-chart surfaces. Device loss is therefore a shared generation event, not ownership of the chart that first created the device: every live chart listener wakes and falls back, while disposed charts have no listener. Headless chart data is preserved through fallback.
+
+The browser package's default `auto` backend prefers WebGPU but keeps Canvas2D available when the browser exposes no usable adapter; `navigator.gpu` alone is not proof of adapter availability. A failed adapter request is cached for that page session so independently mounted charts and viewport remounts do not repeatedly probe an unavailable adapter. Device-initialization failures remain retryable, explicit fallback-adapter diagnostics are isolated from the ordinary adapter result, and a reload permits a new adapter probe after browser or driver settings change. The General dashboard reports the actual backend and fallback reason rather than rejecting charts when WebGPU is unavailable.
 
 ## Evidence benchmark subsystem
 

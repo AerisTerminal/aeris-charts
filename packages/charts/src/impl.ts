@@ -50,8 +50,6 @@ import {
   is_feature_series_kind, is_footprint_series_kind,
 } from "./types.js";
 import { default_theme_name, theme_options, theme_palette, type theme_name } from "./theme.js";
-import axiusflow_dark_logo from "./assets/logos/axiusflow_dark.svg";
-import axiusflow_light_logo from "./assets/logos/axiusflow_light.svg";
 
 // ---------------------------------------------------------------------------------------------
 // Implementation
@@ -358,15 +356,6 @@ function parse_rgb(css: string): [number, number, number] | null {
   const rgba = parse_rgba(css);
   return rgba === null || rgba.slice(0, 3).some(Number.isNaN) ? null : [rgba[0], rgba[1], rgba[2]];
 }
-
-function color_luminance(css: string): number | null {
-  const rgb = parse_rgb(css);
-  return rgb === null ? null : 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2];
-}
-
-const ATTRIBUTION_LOGO_HEIGHT = 19;
-const ATTRIBUTION_LOGO_WIDTH = (221 / 48) * ATTRIBUTION_LOGO_HEIGHT;
-const ATTRIBUTION_LOGO_INSET = 10;
 
 /**
  * Parse a CSS color to the engine's packed per-point color word, 0xRRGGBBAA (alpha preserved).
@@ -3620,9 +3609,6 @@ export class chart_impl implements chart_api {
   private readonly series_removed_subs = new Set<series_change_handler>();
   private readonly options_change_subs = new Set<options_change_handler>();
   private readonly delta_tooltip_range_listeners = new Set<() => void>();
-  private attribution_logo_element: HTMLDivElement | null = null;
-  private attribution_logo_tone: "dark" | "light" | null = null;
-  private attribution_logo_geometry = "";
   private last_visible_logical_range: logical_range | null;
   private last_visible_time_range: time_range | null;
   private last_ts_width: number;
@@ -3940,8 +3926,6 @@ export class chart_impl implements chart_api {
       this.wasm.enable_auto_resize(container);
       this.bind_dpr_watcher();
     }
-    this.sync_attribution_logo_style();
-    this.position_attribution_logo();
     // Canvas primitives (Phase C-e): the engine's own ResizeObserver (registered first, above)
     // re-renders on container resizes; this one re-runs the package-side canvas pass on the
     // settled frame so plugin content tracks the new size/DPR. The microtask defers past ALL
@@ -3951,100 +3935,6 @@ export class chart_impl implements chart_api {
       queueMicrotask(() => this.run_canvas_primitives());
     });
     this.plugin_resize_observer.observe(container);
-  }
-
-  /**
-   * Browser-host attribution chrome follows the public reference's attribution widget: a 19px-tall
-   * inline SVG with an opposite-tone outline. The supplied Axiusflow dark/light wordmarks remain
-   * the fill source; only the outline is derived at runtime so a custom chart surface cannot erase
-   * the mark. Background luminance owns the choice, with layout text as the fallback for an
-   * unparseable custom CSS color.
-   */
-  private sync_attribution_logo_style(): void {
-    if (this.removed) return;
-    const options = this.options() as chart_options;
-    if (!options.layout.attributionLogo) {
-      this.attribution_logo_element?.remove();
-      this.attribution_logo_element = null;
-      this.attribution_logo_tone = null;
-      this.attribution_logo_geometry = "";
-      return;
-    }
-
-    const background_luminance = color_luminance(options.layout.background.color);
-    const text_luminance = color_luminance(options.layout.textColor);
-    const light_background = background_luminance !== null
-      ? background_luminance > 160
-      : text_luminance !== null
-        ? text_luminance < 160
-        : false;
-    const tone: "dark" | "light" = light_background ? "dark" : "light";
-
-    let element = this.attribution_logo_element;
-    if (element === null) {
-      element = document.createElement("div");
-      element.className = "nucleuscharts-attribution-logo";
-      element.setAttribute("role", "img");
-      element.setAttribute("aria-label", "Axiusflow");
-      element.style.position = "absolute";
-      element.style.width = `${ATTRIBUTION_LOGO_WIDTH}px`;
-      element.style.height = `${ATTRIBUTION_LOGO_HEIGHT}px`;
-      element.style.margin = "0";
-      element.style.padding = "0";
-      element.style.border = "0";
-      element.style.zIndex = "3";
-      element.style.pointerEvents = "none";
-      element.style.userSelect = "none";
-      this.container.appendChild(element);
-      this.attribution_logo_element = element;
-    }
-
-    if (this.attribution_logo_tone === tone) return;
-    element.innerHTML = tone === "dark" ? axiusflow_dark_logo : axiusflow_light_logo;
-    element.dataset.logoTone = tone;
-    const svg = element.querySelector("svg");
-    if (svg !== null) {
-      svg.setAttribute("aria-hidden", "true");
-      svg.style.display = "block";
-      svg.style.width = `${ATTRIBUTION_LOGO_WIDTH}px`;
-      svg.style.height = `${ATTRIBUTION_LOGO_HEIGHT}px`;
-      svg.style.overflow = "visible";
-      const stroke = light_background ? "#ffffff" : "#141414";
-      for (const path of svg.querySelectorAll("path")) {
-        path.setAttribute("stroke", stroke);
-        path.setAttribute("stroke-width", "1");
-        path.setAttribute("stroke-linejoin", "round");
-        path.setAttribute("paint-order", "stroke fill");
-        path.setAttribute("vector-effect", "non-scaling-stroke");
-      }
-    }
-    this.attribution_logo_tone = tone;
-  }
-
-  /** Pin the mark 10 CSS px from the bottom-left of the final pane cell. */
-  private position_attribution_logo(): void {
-    const element = this.attribution_logo_element;
-    if (element === null || this.removed) return;
-    const pane_count = this.wasm.pane_count();
-    if (pane_count === 0) {
-      element.style.display = "none";
-      return;
-    }
-    const geometry = JSON.parse(this.wasm.pane_geometry_json(pane_count - 1)) as Partial<pane_geometry>;
-    const left = (geometry.left ?? 0) + ATTRIBUTION_LOGO_INSET;
-    const top = (geometry.top ?? 0) + (geometry.height ?? 0)
-      - ATTRIBUTION_LOGO_INSET - ATTRIBUTION_LOGO_HEIGHT;
-    if (!Number.isFinite(left) || !Number.isFinite(top) || (geometry.height ?? 0) <= 0) {
-      element.style.display = "none";
-      return;
-    }
-    const key = `${left}:${top}`;
-    if (this.attribution_logo_geometry !== key) {
-      element.style.left = `${left}px`;
-      element.style.top = `${top}px`;
-      this.attribution_logo_geometry = key;
-    }
-    element.style.display = "block";
   }
 
   /** Internal package boundary. Every post-disposal operation fails with one stable error. */
@@ -4142,7 +4032,6 @@ export class chart_impl implements chart_api {
     }
     if (!this.removed) {
       this.wasm.render();
-      this.position_attribution_logo();
       // The text editor tracks its anchor through the change that drove this repaint
       // (wheel zoom/scroll, pinch, resize, data update) — before plugin passes composite.
       this.text_editor_reposition?.();
@@ -5593,7 +5482,6 @@ export class chart_impl implements chart_api {
     })) {
       this.wasm.apply_options(JSON.stringify(engine_options));
     }
-    this.sync_attribution_logo_style();
     this.repaint();
     for (const h of this.options_change_subs) h(options);
   }
@@ -5985,7 +5873,6 @@ export class chart_impl implements chart_api {
 
   reset_style_to_defaults(): void {
     this.wasm.reset_style_to_defaults(this.selected_theme === "light");
-    this.sync_attribution_logo_style();
     this.sync_countdown_timer();
     this.repaint();
   }
@@ -6143,8 +6030,6 @@ export class chart_impl implements chart_api {
     this.drawing_created_subs.clear();
     this.accessibility_handle?.detach();
     this.accessibility_handle = null;
-    this.attribution_logo_element?.remove();
-    this.attribution_logo_element = null;
     wasm.dispose();
     wasm.free();
     this.wasm_instance = null;

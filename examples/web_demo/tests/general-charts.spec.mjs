@@ -1,5 +1,137 @@
 import { test, expect } from "@playwright/test";
 
+test("general dashboard showcases every released Cartesian example", async ({ page, browserName }) => {
+  const page_errors = [];
+  page.on("pageerror", (error) => page_errors.push(error.message));
+  const backend_query = browserName === "chromium" ? "" : "&backend=canvas2d";
+  await page.goto(`/?theme=dark&demo=general${backend_query}`);
+  await page.waitForFunction(() => window.__generalDashboard?.ready === true);
+  await expect(page.locator("#general_workspace")).toBeVisible();
+  await expect(page.locator("#chart_wrap")).toBeHidden();
+  await expect(page.locator("#general_workspace .general-chart-card").first()).toHaveAttribute("data-mounted", "true");
+
+  const result = await page.evaluate(() => ({
+    errors: window.__generalDashboard.errors,
+    summary: window.__generalDashboard.summary,
+    active: window.__generalDashboard.active_summary(),
+    cards: document.querySelectorAll("#general_workspace .general-chart-card").length,
+    ready: document.getElementById("general_metric_ready")?.textContent,
+    runtime: document.getElementById("general_runtime_badge")?.textContent,
+    mode: document.getElementById("workspace")?.dataset.demoMode,
+  }));
+
+  expect(page_errors).toEqual([]);
+  expect(result.errors).toEqual([]);
+  expect(result.cards).toBe(13);
+  expect(result.mode).toBe("general");
+  expect(Number(result.ready)).toBeGreaterThan(0);
+  expect(Number(result.ready)).toBeLessThan(13);
+  if (browserName === "chromium") {
+    expect(result.runtime).toContain("WebGPU");
+    expect(result.active.every((entry) => entry.backend === "webgpu")).toBe(true);
+    expect(result.active.every((entry) => entry.backend_status.active_backend === "webgpu")).toBe(true);
+  } else {
+    expect(result.runtime).toContain("Canvas2D");
+    expect(result.active.every((entry) => entry.backend === "canvas2d")).toBe(true);
+  }
+  expect(result.summary).toHaveLength(13);
+  expect(result.active.every((entry) => entry.pane_count === 1 && entry.pane_index === 0)).toBe(true);
+  expect(result.summary.map((entry) => entry.label)).toEqual([
+    "xy_line",
+    "xy_area",
+    "column",
+    "grouped columns",
+    "stacked columns",
+    "horizontal_bar",
+    "scatter",
+    "bubble",
+    "range_area",
+    "error_bar",
+    "box_plot",
+    "heatmap_grid",
+    "stacked area",
+  ]);
+  expect(new Set(result.summary.flatMap((entry) => entry.series_kinds))).toEqual(new Set([
+    "xy_line", "xy_area", "column", "horizontal_bar", "scatter", "bubble", "range_area", "error_bar", "box_plot", "heatmap_grid",
+  ]));
+
+  const first_host = page.locator("#general_workspace .general-chart-host").first();
+  await first_host.hover();
+  const scroll_before = await page.locator("#general_workspace").evaluate((element) => element.scrollTop);
+  await page.mouse.wheel(0, 420);
+  await expect.poll(() => page.locator("#general_workspace").evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(scroll_before);
+
+  await page.getByRole("button", { name: "Bars" }).click();
+  await expect(page.locator("#general_workspace .general-chart-card:not([hidden])")).toHaveCount(4);
+  await page.getByRole("button", { name: "All" }).click();
+  await expect(page.locator("#general_workspace .general-chart-card:not([hidden])")).toHaveCount(13);
+  const last = page.locator("#general_workspace .general-chart-card").last();
+  await last.scrollIntoViewIfNeeded();
+  await expect(last).toHaveAttribute("data-mounted", "true");
+  await page.waitForTimeout(500);
+  expect(await page.locator('#general_workspace .general-chart-card[data-mounted="true"]').count()).toBeLessThanOrEqual(4);
+
+  // Product attribution is not part of the chart surface. The hosts contain canvases/tooltips only;
+  // legacy attribution options are retired and cannot inject a mark back into general charts.
+  expect(await page.locator("#general_workspace .nucleuscharts-attribution-logo").count()).toBe(0);
+  expect(await page.locator("#general_workspace .general-chart-host svg").count()).toBe(0);
+  expect(await page.locator("#general_workspace .general-chart-host").evaluateAll((hosts) =>
+    hosts.every((host) => !/axiusflow|powered by/i.test(host.textContent ?? "")))).toBe(true);
+
+  await page.getByRole("button", { name: "Financial" }).click();
+  await expect(page.locator("#chart_wrap")).toBeVisible();
+  await expect(page.locator("#general_workspace")).toBeHidden();
+});
+
+test("general dashboard keeps rendering when WebGPU has no adapter and does not retry on each card", async ({ page, browserName }) => {
+  test.skip(browserName !== "chromium", "WebGPU adapter interception is Chromium-specific");
+  const fallback_warnings = [];
+  const page_errors = [];
+  page.on("console", (message) => {
+    if (message.type() === "warning" && message.text().startsWith("nucleuscharts: WebGPU fallback")) {
+      fallback_warnings.push(message.text());
+    }
+  });
+  page.on("pageerror", (error) => page_errors.push(error.message));
+  await page.addInitScript(() => {
+    window.__adapter_requests = 0;
+    const gpu = navigator.gpu;
+    if (gpu) {
+      Object.defineProperty(gpu, "requestAdapter", {
+        configurable: true,
+        value: async () => {
+          window.__adapter_requests += 1;
+          return null;
+        },
+      });
+    }
+  });
+  await page.goto("/?demo=general&theme=dark");
+  await page.waitForFunction(() => window.__generalDashboard?.ready === true);
+  await expect(page.locator("#general_workspace .general-chart-card").first()).toHaveAttribute("data-mounted", "true");
+
+  const before = await page.evaluate(() => ({
+    requests: window.__adapter_requests,
+    errors: window.__generalDashboard.errors,
+    active: window.__generalDashboard.active_summary(),
+    badge: document.getElementById("general_runtime_badge")?.textContent,
+  }));
+  expect(before.requests).toBe(2); // HighPerformance + default, once for the entire page.
+  expect(before.errors).toEqual([]);
+  expect(before.active.length).toBeGreaterThan(0);
+  expect(before.active.every(({ backend, backend_status }) =>
+    backend === "canvas2d" && backend_status.reason === "adapter_unavailable")).toBe(true);
+  expect(before.badge).toContain("WebGPU fallback (adapter_unavailable)");
+
+  const last = page.locator("#general_workspace .general-chart-card").last();
+  await last.scrollIntoViewIfNeeded();
+  await expect(last).toHaveAttribute("data-mounted", "true");
+  expect(await page.evaluate(() => window.__adapter_requests)).toBe(before.requests);
+  expect(fallback_warnings).toHaveLength(1);
+  expect(page_errors).toEqual([]);
+});
+
 test("React adapter keeps chart and series identities across rerenders and disposes under StrictMode", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
   const result = await page.evaluate(async () => {

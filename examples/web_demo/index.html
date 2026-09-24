@@ -8,6 +8,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <title>Nucleus Charts — @axiusflowhq/financial demo</title>
 <link rel="stylesheet" href="./dist/nucleuscharts.css" />
+<link rel="stylesheet" href="./general_dashboard.css" />
 <style>
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; overflow: hidden; background: var(--surface); }
@@ -19,7 +20,7 @@
   button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
   h1, h2 { text-wrap: balance; }
   p, .hint { text-wrap: pretty; }
-  #wrap { height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+  #wrap { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   #bar { z-index: 20; background: var(--surface); border-bottom: var(--border-width) solid var(--border); }
   #app_bar { min-height: 64px; padding: 8px 16px; display: flex; gap: 12px; align-items: center; min-width: 0; }
   .brand-lockup { display: flex; align-items: center; gap: 10px; min-width: 176px; }
@@ -28,6 +29,10 @@
   .brand-copy { display: grid; line-height: 1.25; }
   .brand { font-size: 13px; font-weight: 650; }
   .lab-title { margin-top: 2px; color: var(--text-secondary); font-size: 11px; }
+  #demo_mode_switch { display: flex; gap: 2px; padding: 3px; background: var(--surface-secondary); border: var(--border-width) solid var(--border); border-radius: 9px; }
+  #demo_mode_switch button { height: 32px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); font-size: 11px; font-weight: 600; }
+  #demo_mode_switch button:hover { background: var(--hover-bg); color: var(--text-primary); }
+  #demo_mode_switch button[aria-pressed="true"] { background: var(--surface); color: var(--primary); box-shadow: 0 0 0 var(--border-width) var(--border-secondary); }
   .market-summary { display: flex; align-items: center; gap: 10px; min-width: 0; padding-left: 16px; border-left: var(--border-width) solid var(--border); }
   .market-symbol { font-size: 13px; font-weight: 600; white-space: nowrap; }
   .market-meta { color: var(--text-secondary); font-size: 11px; white-space: nowrap; }
@@ -45,7 +50,7 @@
   .icon-button:hover, #quick_actions button:hover, #tool_rail button:hover { color: var(--icon-active); background: var(--hover-bg); }
   .icon-button:active, #quick_actions button:active, #tool_rail button:active { background: var(--active-bg); }
   .icon-button svg, #quick_actions svg, #tool_rail svg { width: 20px; height: 20px; }
-  #status { max-width: 120px; overflow: hidden; color: var(--text-secondary); font-size: 11px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+  #status { min-width: 0; max-width: 120px; overflow: hidden; color: var(--text-secondary); font-size: 11px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
   #theme_toggle { position: relative; }
   #theme_toggle [data-theme-icon] { position: absolute; display: grid; place-items: center; inset: 0; transition: opacity 300ms cubic-bezier(.2,0,0,1), scale 300ms cubic-bezier(.2,0,0,1), filter 300ms cubic-bezier(.2,0,0,1); }
   #theme_toggle [data-theme-icon="dark"], [data-theme="light"] #theme_toggle [data-theme-icon="light"] { opacity: 0; scale: .25; filter: blur(4px); }
@@ -53,6 +58,17 @@
 
   #workspace { display: grid; grid-template-columns: 76px minmax(0, 1fr) 360px; min-width: 0; min-height: 0; }
   #workspace[data-inspector-open="false"] { grid-template-columns: 76px minmax(0, 1fr); }
+  #workspace[data-demo-mode="general"] { grid-template-columns: minmax(0, 1fr); }
+  #workspace[data-demo-mode="general"] > #tool_rail,
+  #workspace[data-demo-mode="general"] > #inspector,
+  #workspace[data-demo-mode="general"] > #chart_wrap,
+  #workspace[data-demo-mode="general"] > #mobile_backdrop { display: none; }
+  #workspace[data-demo-mode="general"] > #general_workspace { display: block; }
+  [data-demo-mode="general"] .market-summary,
+  [data-demo-mode="general"] #comparison_controls,
+  [data-demo-mode="general"] #quick_actions,
+  [data-demo-mode="general"] #status,
+  [data-demo-mode="general"] #inspector_toggle { display: none; }
   #tool_rail { z-index: 12; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 8px; background: var(--surface); border-right: var(--border-width) solid var(--border); }
   #tool_rail button { width: 60px; min-height: 56px; gap: 4px; padding: 8px 2px; border-radius: var(--radius-default); font-size: 10px; }
   #tool_rail button[aria-current="true"] { color: var(--primary); background: color-mix(in srgb, var(--primary) 10%, transparent); border-color: color-mix(in srgb, var(--primary) 25%, transparent); }
@@ -114,6 +130,7 @@
   [data-runtime-chrome="hidden"] #workspace { grid-template-columns: minmax(0, 1fr); }
   [data-runtime-chrome="hidden"] #tool_rail, [data-runtime-chrome="hidden"] #inspector { display: none; }
   [data-runtime-chrome="hidden"] #chart_wrap { grid-column: 1; }
+  [data-runtime-chrome="hidden"] #demo_mode_switch { display: none; }
   @media (max-width: 1200px) { .market-meta, #status { display: none; } }
   @media (max-width: 1080px) {
     #workspace { grid-template-columns: 76px minmax(0, 1fr) 320px; }
@@ -159,6 +176,10 @@
         <span class="brand-mark" aria-hidden="true"><span data-icon="activity"></span></span>
         <span class="brand-copy"><span class="brand">Nucleus Charts</span><span class="lab-title">Market lab</span></span>
       </div>
+      <nav id="demo_mode_switch" aria-label="Demo workspace">
+        <button id="demo_mode_financial" type="button" aria-pressed="true">Financial</button>
+        <button id="demo_mode_general" type="button" aria-pressed="false">General</button>
+      </nav>
       <div class="market-summary" aria-label="Demo instrument">
         <span class="market-symbol">NCL · 1H</span>
         <span class="market-price" id="market_price">—</span>
@@ -185,7 +206,7 @@
     </div>
   </header>
 
-  <div id="workspace" data-inspector-open="true">
+  <div id="workspace" data-inspector-open="true" data-demo-mode="financial">
     <nav id="tool_rail" aria-label="Chart workspace sections">
       <button type="button" data-scroll-target="feature_lab_group" aria-label="Feature lab" title="Feature lab" aria-current="true"><span data-icon="lab"></span></button>
       <button type="button" data-scroll-target="type_group" aria-label="Series" title="Series"><span data-icon="candles"></span></button>
@@ -469,6 +490,32 @@
       <div id="chart_container"></div>
       <div id="legend">O — H — L — C —</div>
     </main>
+    <main id="general_workspace" aria-label="General charts workspace">
+      <section class="general-hero">
+        <div>
+          <span class="general-eyebrow">General charts</span>
+          <h1>Analytics dashboard</h1>
+          <p>Every released Cartesian series runs here through the same Nucleus engine and package lifecycle as the financial workspace.</p>
+        </div>
+        <div class="general-runtime-badge" id="general_runtime_badge">Waiting for viewport…</div>
+      </section>
+      <section class="general-metrics" aria-label="General dashboard summary">
+        <div class="general-metric"><strong>13</strong><span>live examples</span></div>
+        <div class="general-metric"><strong>10</strong><span>series kinds</span></div>
+        <div class="general-metric"><strong>4</strong><span>composition patterns</span></div>
+        <div class="general-metric"><strong id="general_metric_ready">0</strong><span>live charts active</span></div>
+      </section>
+      <div class="general-error" id="general_dashboard_error" role="alert"></div>
+      <div class="general-toolbar" aria-label="General chart filters">
+        <span>Show</span>
+        <button type="button" data-general-filter="all" aria-pressed="true">All</button>
+        <button type="button" data-general-filter="trend" aria-pressed="false">Trends</button>
+        <button type="button" data-general-filter="bar" aria-pressed="false">Bars</button>
+        <button type="button" data-general-filter="distribution" aria-pressed="false">Distribution</button>
+        <button type="button" data-general-filter="dense" aria-pressed="false">Dense data</button>
+      </div>
+      <section class="general-chart-grid" id="general_chart_grid" aria-label="General chart examples"></section>
+    </main>
     <div id="mobile_backdrop" aria-hidden="true"></div>
   </div>
 </div>
@@ -483,6 +530,7 @@ import { marker_fixture, volume_fixture } from "./fixture_features.js";
 import { custom_ohlc_pane_view } from "./fixture_custom_series.js";
 import { vert_line_canvas_primitive } from "./fixture_canvas_plugin.js";
 import { install_demo_catalogs } from "./demo_catalogs.js";
+import { install_general_dashboard } from "./general_dashboard.js";
 
 const container = document.getElementById("chart_container");
 const status = document.getElementById("status");
@@ -518,6 +566,7 @@ const runtime_test = query.get("runtimeTest");
 const requested_spacing = Number.parseFloat(query.get("spacing") ?? "");
 const requested_dpr = Number.parseFloat(query.get("dpr") ?? "");
 const theme_param = query.get("theme");
+const requested_demo_mode = query.get("demo") === "general" ? "general" : "financial";
 const THEME_STORAGE_KEY = "nucleuscharts.demo.theme";
 function stored_demo_theme() {
   try {
@@ -627,6 +676,43 @@ if (parity_fixture !== null) {
   );
 }
 window.__chart = chart; // debug/test handle
+
+const workspace = document.getElementById("workspace");
+const financial_mode_button = document.getElementById("demo_mode_financial");
+const general_mode_button = document.getElementById("demo_mode_general");
+const lab_title = document.querySelector(".lab-title");
+let general_dashboard = null;
+
+function ensure_general_dashboard() {
+  if (general_dashboard !== null) return general_dashboard;
+  general_dashboard = install_general_dashboard({
+    root: document.getElementById("general_workspace"),
+    backend: requested_backend,
+    theme: document.documentElement.dataset.theme ?? requested_theme,
+    active: false,
+  });
+  return general_dashboard;
+}
+
+function set_demo_mode(mode) {
+  const general = mode === "general";
+  document.documentElement.dataset.demoMode = general ? "general" : "financial";
+  workspace.dataset.demoMode = general ? "general" : "financial";
+  financial_mode_button.setAttribute("aria-pressed", String(!general));
+  general_mode_button.setAttribute("aria-pressed", String(general));
+  lab_title.textContent = general ? "General lab" : "Market lab";
+  if (general) {
+    const dashboard = ensure_general_dashboard();
+    dashboard.set_theme(document.documentElement.dataset.theme ?? requested_theme);
+    dashboard.set_active(true);
+  } else {
+    general_dashboard?.set_active(false);
+  }
+}
+
+financial_mode_button.addEventListener("click", () => set_demo_mode("financial"));
+general_mode_button.addEventListener("click", () => set_demo_mode("general"));
+set_demo_mode(runtime_test === null ? requested_demo_mode : "financial");
 
 const data = generate_data(parity_fixture?.bar_count ?? 1000, parity_fixture ?? {});
 const last_bar = data[data.length - 1];
@@ -1690,6 +1776,7 @@ document.getElementById("theme_select").addEventListener("change", (e) => {
   }
   sync_page_theme(e.target.value);
   persist_demo_theme(e.target.value);
+  general_dashboard?.set_theme(e.target.value);
   sync_chart_controls_from_engine();
 });
 function sync_chart_controls_from_engine() {

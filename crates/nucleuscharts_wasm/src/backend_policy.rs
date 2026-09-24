@@ -25,6 +25,11 @@ pub(crate) struct BackendStartupFailure {
 }
 
 impl BackendStartupFailure {
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn is_adapter_unavailable(&self) -> bool {
+        self.reason == "adapter_unavailable"
+    }
+
     pub(crate) fn adapter(detail: String) -> Self {
         Self {
             stage: "adapter_acquisition",

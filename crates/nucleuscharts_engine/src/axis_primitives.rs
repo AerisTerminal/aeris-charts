@@ -233,6 +233,24 @@ impl ChartEngine {
         {
             append_text(label, output);
         }
+        for label in &axis_frame.rotated_labels {
+            output.push(Prim::RotatedText {
+                x: (label.x * dpr) as f32,
+                y: (label.y * dpr) as f32,
+                text: label.text.clone(),
+                color: label.color,
+                size: (layout.font_size * label.font_scale * dpr) as f32,
+                family: layout.font_family.clone(),
+                align: match label.align {
+                    AxisTextAlign::Left => TextAlign::Left,
+                    AxisTextAlign::Right => TextAlign::Right,
+                    AxisTextAlign::Center => TextAlign::Center,
+                },
+                weight: if label.bold { 700 } else { 400 },
+                italic: false,
+                angle: label.angle as f32,
+            });
+        }
 
         let mut last_attach: Option<(u32, f64)> = None;
         for label in axis_frame
