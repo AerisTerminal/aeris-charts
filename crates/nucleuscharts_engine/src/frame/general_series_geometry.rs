@@ -19,6 +19,10 @@ const GENERAL_LINE_WIDTH_CSS: f64 = 2.0;
 const MAX_GENERAL_DATA_LABELS_PER_PANE: usize = 512;
 const MAX_GENERAL_DATA_LABEL_ATTEMPTS_PER_PANE: usize = 4_096;
 
+fn opacity_alpha(opacity: f64) -> u8 {
+    (opacity.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
 fn push_general_point_symbol(
     out: &mut Vec<Prim>,
     symbol: GeneralPointSymbol,
@@ -220,7 +224,12 @@ impl ChartEngine {
                         .unwrap_or(DEFAULT_LINE_COLOR);
                     let is_area = series.kind() == GeneralSeriesKind::XyArea;
                     if is_area && series.stack_id().is_some() {
-                        let fill = Color::rgba(color.r(), color.g(), color.b(), 56);
+                        let fill = Color::rgba(
+                            color.r(),
+                            color.g(),
+                            color.b(),
+                            opacity_alpha(series.fill_opacity() * (7.0 / 9.0)),
+                        );
                         let mut upper = Vec::<[f32; 2]>::new();
                         let mut lower = Vec::<[f32; 2]>::new();
                         let mut markers = Vec::new();
@@ -310,8 +319,18 @@ impl ChartEngine {
                                     base_y: (base_y * vpr) as f32,
                                     line_type: series.interpolation().render_type(),
                                     gradient: Gradient {
-                                        top: Color::rgba(color.r(), color.g(), color.b(), 72),
-                                        bottom: Color::rgba(color.r(), color.g(), color.b(), 24),
+                                        top: Color::rgba(
+                                            color.r(),
+                                            color.g(),
+                                            color.b(),
+                                            opacity_alpha(series.fill_opacity()),
+                                        ),
+                                        bottom: Color::rgba(
+                                            color.r(),
+                                            color.g(),
+                                            color.b(),
+                                            opacity_alpha(series.fill_opacity() / 3.0),
+                                        ),
                                     },
                                 });
                             }
@@ -371,7 +390,12 @@ impl ChartEngine {
                         .color()
                         .and_then(Color::parse_css)
                         .unwrap_or(DEFAULT_LINE_COLOR);
-                    let fill = Color::rgba(color.r(), color.g(), color.b(), 56);
+                    let fill = Color::rgba(
+                        color.r(),
+                        color.g(),
+                        color.b(),
+                        opacity_alpha(series.fill_opacity() * (7.0 / 9.0)),
+                    );
                     let mut upper = Vec::<[f32; 2]>::new();
                     let mut lower = Vec::<[f32; 2]>::new();
                     let mut markers = Vec::new();

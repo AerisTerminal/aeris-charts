@@ -24,6 +24,7 @@ pub const MAX_GENERAL_BRUSH_ITEMS: usize = 4_096;
 pub const MAX_GENERAL_SHARED_TOOLTIP_ITEMS: usize = 512;
 pub const MIN_GENERAL_POINT_RADIUS: f64 = 1.0;
 pub const MAX_GENERAL_POINT_RADIUS: f64 = 64.0;
+pub const DEFAULT_GENERAL_FILL_OPACITY: f64 = 72.0 / 255.0;
 const SCATTER_GRID_BASE_CELL_CSS: f64 = 32.0;
 const MAX_SCATTER_GRID_CELLS: usize = 65_536;
 
@@ -126,6 +127,7 @@ pub struct GeneralSeriesOptions {
     pub line_style: GeneralLineStyle,
     pub interpolation: GeneralInterpolation,
     pub connect_missing: bool,
+    pub fill_opacity: f64,
     pub baseline_value: Option<f64>,
     pub data_labels: bool,
     pub group_id: Option<String>,
@@ -156,6 +158,7 @@ impl GeneralSeriesOptions {
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
+            fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -186,6 +189,7 @@ impl GeneralSeriesOptions {
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
+            fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -216,6 +220,7 @@ impl GeneralSeriesOptions {
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
+            fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -246,6 +251,7 @@ impl GeneralSeriesOptions {
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
+            fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -276,6 +282,7 @@ impl GeneralSeriesOptions {
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
+            fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -306,6 +313,7 @@ impl GeneralSeriesOptions {
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
+            fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -336,6 +344,7 @@ impl GeneralSeriesOptions {
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
+            fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -366,6 +375,7 @@ impl GeneralSeriesOptions {
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
+            fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -396,6 +406,7 @@ impl GeneralSeriesOptions {
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
+            fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -426,6 +437,7 @@ impl GeneralSeriesOptions {
             line_style: GeneralLineStyle::Solid,
             interpolation: GeneralInterpolation::Linear,
             connect_missing: false,
+            fill_opacity: DEFAULT_GENERAL_FILL_OPACITY,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -453,6 +465,7 @@ pub struct GeneralSeries {
     line_style: GeneralLineStyle,
     interpolation: GeneralInterpolation,
     connect_missing: bool,
+    fill_opacity: f64,
     baseline_value: Option<f64>,
     data_labels: bool,
     group_id: Option<String>,
@@ -1073,6 +1086,10 @@ impl GeneralSeries {
         self.connect_missing
     }
 
+    pub fn fill_opacity(&self) -> f64 {
+        self.fill_opacity
+    }
+
     pub fn baseline_value(&self) -> Option<f64> {
         self.baseline_value
     }
@@ -1276,6 +1293,7 @@ impl GeneralSeriesRegistry {
             line_style: options.line_style,
             interpolation: options.interpolation,
             connect_missing: options.connect_missing,
+            fill_opacity: options.fill_opacity,
             baseline_value: options.baseline_value,
             data_labels: options.data_labels,
             group_id: options.group_id,
@@ -1787,6 +1805,7 @@ impl ChartEngine {
         series.line_style = options.line_style;
         series.interpolation = options.interpolation;
         series.connect_missing = options.connect_missing;
+        series.fill_opacity = options.fill_opacity;
         series.baseline_value = options.baseline_value;
         series.data_labels = options.data_labels;
         series.group_id = options.group_id;
@@ -6637,6 +6656,21 @@ fn validate_logarithmic_input_y(
 }
 
 fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartError> {
+    if !options.fill_opacity.is_finite() || !(0.0..=1.0).contains(&options.fill_opacity) {
+        return Err(invalid(
+            "general series fill_opacity must be finite and in [0, 1]",
+        ));
+    }
+    if options.fill_opacity != DEFAULT_GENERAL_FILL_OPACITY
+        && !matches!(
+            options.kind,
+            GeneralSeriesKind::XyArea | GeneralSeriesKind::RangeArea
+        )
+    {
+        return Err(invalid(
+            "general series fill_opacity is supported only by xy_area and range_area",
+        ));
+    }
     if options.point_symbol != GeneralPointSymbol::Circle
         && !matches!(
             options.kind,

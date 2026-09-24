@@ -229,6 +229,8 @@ interface cartesian_series_options {
   interpolation?: "linear" | "step" | "curved";
   /** Bridge missing rows in path series; transform-invalid rows remain gaps. Defaults to false. */
   connect_missing?: boolean;
+  /** Area fill opacity from 0 through 1; defaults to 72 / 255. */
+  fill_opacity?: number;
   /** Explicit numeric fill baseline for `xy_area`; omitted uses zero when visible, otherwise the edge. */
   baseline_value?: number;
   group_id?: string;

@@ -364,6 +364,8 @@ export interface general_series_options {
   interpolation?: "linear" | "step" | "curved";
   /** Bridge missing rows in line, area, and range-area paths; transform-invalid rows remain gaps. */
   connect_missing?: boolean;
+  /** Area fill opacity from 0 through 1 (default `72 / 255`). */
+  fill_opacity?: number;
   /** Explicit numeric fill baseline for `xy_area`; omitted uses zero when visible, otherwise the edge. */
   baseline_value?: number;
   /** Show bounded, engine-placed value labels beside visible marks. */

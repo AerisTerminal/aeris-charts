@@ -44,6 +44,12 @@ The following narrow R3 visual-configuration slices are implemented and pushed t
 - General line, area, stacked-area, and range-area paths accept opt-in persisted `connect_missing`
   semantics. Missing rows remain queryable but no longer split connected runs; transform-invalid
   coordinates remain hard gaps, and stacked members must share one connection policy.
+- Area and range-area fills accept bounded persisted `fill_opacity` values from the browser API;
+  the shared frame applies the value to ordinary, stacked, and coupled-band fills while preserving
+  the existing gradient relationship. Rust persistence, WASM serialization, TypeScript options,
+  and Chromium/Firefox/WebKit round-trip coverage are complete. The slice was verified with the
+  workspace tests, workspace and WASM clippy, package lint/build/typecheck/package smoke test,
+  and the general-chart browser matrix (88 passed, 2 skipped).
 
 These slices passed the applicable Rust tests, clippy checks (including the WASM target), package
 lint/build/typecheck/package smoke test, Chromium browser tests, formatting checks, and the native
@@ -314,6 +320,9 @@ Reference examples demonstrate visual configurability; high-density fixtures dem
 
 Depends on R1-R3. Ship usable legends/tooltips, titles/labels, references, keyboard/touch brush controls,
 selection and linked-chart synchronization. Complete localization, overflow, focus and export behavior.
+Linked-chart synchronization and frame image export are shared engine contracts delivered first for
+financial charts as [Expansion.md](Expansion.md) PD5 and PD6. R4 extends those same contracts to
+general domains and chrome; it does not build a second synchronization or export path.
 
 Exit: consumers build an interactive dashboard from published APIs without demo-owned semantic logic.
 Legend toggles preserve identity, brushing survives resize, synchronization handles unequal datasets

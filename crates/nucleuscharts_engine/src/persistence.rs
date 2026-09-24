@@ -134,6 +134,8 @@ struct SeriesV2 {
     interpolation: crate::GeneralInterpolation,
     #[serde(default)]
     connect_missing: bool,
+    #[serde(default = "default_general_fill_opacity")]
+    fill_opacity: f64,
     #[serde(default)]
     baseline_value: Option<f64>,
     data_labels: bool,
@@ -160,6 +162,10 @@ fn default_stretch() -> f64 {
 
 fn default_general_line_width() -> f64 {
     2.0
+}
+
+fn default_general_fill_opacity() -> f64 {
+    crate::DEFAULT_GENERAL_FILL_OPACITY
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -710,6 +716,7 @@ impl ChartEngine {
                     line_style: series.line_style(),
                     interpolation: series.interpolation(),
                     connect_missing: series.connect_missing(),
+                    fill_opacity: series.fill_opacity(),
                     baseline_value: series.baseline_value(),
                     data_labels: series.data_labels(),
                     group_id: series.group_id().map(str::to_string),
@@ -1240,6 +1247,7 @@ impl ChartEngine {
                 line_style: series.line_style,
                 interpolation: series.interpolation,
                 connect_missing: series.connect_missing,
+                fill_opacity: series.fill_opacity,
                 baseline_value: series.baseline_value,
                 data_labels: series.data_labels,
                 group_id: series.group_id,
@@ -1428,6 +1436,7 @@ mod tests {
         let mut area =
             crate::GeneralSeriesOptions::xy_area(pane, dataset, "category-x", "category-y");
         area.title = "Category area".into();
+        area.fill_opacity = 0.5;
         area.stack_id = Some("area-share".into());
         area.stack_mode = crate::GeneralStackMode::Percent;
         chart.add_general_series(area).unwrap();
@@ -1446,6 +1455,7 @@ mod tests {
         assert_eq!(value["series"][1]["interpolation"], "Curved");
         assert_eq!(value["series"][1]["connect_missing"], true);
         assert_eq!(value["series"][2]["stack_id"], "area-share");
+        assert_eq!(value["series"][2]["fill_opacity"], 0.5);
         assert_eq!(value["series"][2]["stack_mode"], "Percent");
         let mut restored = ChartEngine::new(800.0, 500.0, 1.0);
         let result = restored.import_state_json(&document).unwrap();

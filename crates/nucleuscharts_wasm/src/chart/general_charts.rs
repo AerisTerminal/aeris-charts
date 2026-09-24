@@ -8,7 +8,7 @@ use nucleuscharts_engine::{
     GeneralPointSymbol, GeneralReferenceId, GeneralReferenceOptions, GeneralRowId,
     GeneralRowIdentity, GeneralScaleType, GeneralSeriesId, GeneralSeriesKind, GeneralSeriesOptions,
     GeneralStackMode, GeneralTooltipSnapshot, GeneralXyInput, HorizontalDomain,
-    MAX_GENERAL_TEMPORAL_MILLISECONDS,
+    DEFAULT_GENERAL_FILL_OPACITY, MAX_GENERAL_TEMPORAL_MILLISECONDS,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -112,6 +112,8 @@ struct SeriesInput {
     interpolation: Option<String>,
     #[serde(default)]
     connect_missing: bool,
+    #[serde(default = "default_fill_opacity")]
+    fill_opacity: f64,
     #[serde(default)]
     baseline_value: Option<f64>,
     #[serde(default)]
@@ -176,6 +178,10 @@ fn default_point_radius() -> f64 {
 
 fn default_line_width() -> f64 {
     2.0
+}
+
+fn default_fill_opacity() -> f64 {
+    DEFAULT_GENERAL_FILL_OPACITY
 }
 
 fn line_style(value: Option<&str>) -> Result<GeneralLineStyle, ChartError> {
@@ -268,6 +274,7 @@ fn series_options_from_input(
     options.line_style = line_style(input.line_style.as_deref())?;
     options.interpolation = interpolation(input.interpolation.as_deref())?;
     options.connect_missing = input.connect_missing;
+    options.fill_opacity = input.fill_opacity;
     options.baseline_value = input.baseline_value;
     options.data_labels = input.data_labels;
     options.group_id = input.group_id;
@@ -824,6 +831,7 @@ impl ChartInner {
                 GeneralInterpolation::Curved => "curved",
             },
             "connect_missing": series.connect_missing(),
+            "fill_opacity": series.fill_opacity(),
             "baseline_value": series.baseline_value(),
             "data_labels": series.data_labels(),
             "group_id": series.group_id(),

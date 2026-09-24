@@ -3223,6 +3223,7 @@ fn range_area_preserves_gaps_fills_band_hits_rows_and_exposes_bounds() {
     options.color = Some("#446688".into());
     options.title = "Interval".into();
     options.interpolation = GeneralInterpolation::Curved;
+    options.fill_opacity = 0.5;
     let series = chart.add_general_series(options).unwrap();
     chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
 
@@ -3258,8 +3259,9 @@ fn range_area_preserves_gaps_fills_band_hits_rows_and_exposes_bounds() {
                 Prim::BandFill {
                     point_count: 2,
                     line_type: LineType::Curved,
+                    fill,
                     ..
-                }
+                } if fill.a() == 99
             ))
             .count(),
         1
