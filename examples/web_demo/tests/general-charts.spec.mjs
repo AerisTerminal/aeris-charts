@@ -2352,7 +2352,7 @@ test("xy_line and xy_area span general domains and restore through V2", async ({
       preserve_empty: true,
       horizontal_domain: { type: "temporal" },
     });
-    chart.add_axis({ id: "time-x", pane: temporal_pane.pane_index(), dimension: "x", scale: "temporal" });
+    const temporal_axis = chart.add_axis({ id: "time-x", pane: temporal_pane.pane_index(), dimension: "x", scale: "temporal" });
     chart.add_axis({ id: "time-y", pane: temporal_pane.pane_index(), dimension: "y", scale: "linear" });
     const temporal_line = chart.add_series("xy_line", {
       pane: temporal_pane.pane_index(),
@@ -2379,6 +2379,15 @@ test("xy_line and xy_area span general domains and restore through V2", async ({
       temporal_rejection = error.code;
     }
     const temporal_after_rejection = temporal_line.accessibility_snapshot(0, 10);
+    temporal_axis.zoom(2, 1_700_000_060_000);
+    temporal_axis.pan(0.25);
+    let temporal_view_rejection = null;
+    try {
+      temporal_axis.zoom(2, 1_700_000_060_000.5);
+    } catch (error) {
+      temporal_view_rejection = error.code;
+    }
+    temporal_axis.reset_view();
 
     const category_pane = chart.add_pane({
       preserve_empty: true,
@@ -2445,6 +2454,7 @@ test("xy_line and xy_area span general domains and restore through V2", async ({
       category_accessibility: category_line.accessibility_snapshot(0, 10),
       area_accessibility: category_area.accessibility_snapshot(0, 10),
       temporal_rejection,
+      temporal_view_rejection,
       hit,
       screenshot: chart.take_screenshot().toDataURL().length,
     };
@@ -2462,6 +2472,7 @@ test("xy_line and xy_area span general domains and restore through V2", async ({
   expect(result.numeric_gap).toMatchObject({ row_id: "gap", x_label: "2", value: null });
   expect(result.numeric_accessibility.items.map((item) => item.value)).toEqual([0, 1, null, 3, 4]);
   expect(result.temporal_rejection).toBe("invalid_data");
+  expect(result.temporal_view_rejection).toBe("invalid_options");
   expect(result.temporal_accessibility.items).toMatchObject([
     { row_id: 1, x_label: "1700000000000", value: 10 },
     { row_id: 2, x_label: "1700000060000", value: 13 },

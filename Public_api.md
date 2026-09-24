@@ -164,6 +164,10 @@ General axis and series handles expose `set_visible(boolean)` and `setVisible(bo
 changes preserve the handle and its data while the engine updates domains, interaction snapshots,
 legends, persistence, and the next rendered frame.
 
+Numeric and temporal general-axis handles expose `pan`, `zoom`, and `reset_view`/`resetView`.
+Temporal anchors use whole JavaScript-safe epoch milliseconds, and temporal ticks are selected and
+formatted as bounded UTC intervals by the engine.
+
 The same handles expose atomic `apply_options` / `applyOptions` methods for mutable axis configuration,
 series presentation, and compatible general-series pane/axis rebinding. Invalid colors, tick policies,
 grouping, stacking, or bindings leave the complete prior object unchanged. General series expose

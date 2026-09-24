@@ -147,6 +147,9 @@ Validation is structural and atomic:
   explicitly whether they extend the domain.
 - Tick placement, collision removal, grid contribution, titles, and label anchors are engine-owned.
   A host formatter may supply text, but it cannot change tick coordinates.
+- Temporal axes select a bounded UTC interval from milliseconds through calendar years. Intraday,
+  day, month, and year labels use injected locale month names and the same shared `AxisFrame` as
+  numeric and category axes; hosts do not run a parallel date-axis layout.
 
 The first implementation should expose `chart.add_axis(options)`, `chart.axis(id)`,
 `chart.axes(pane?)`, and `chart.remove_axis(id)`. Removing a populated axis is rejected. A series
@@ -408,6 +411,11 @@ labels, grouping, stack identity, stack mode, and compatible pane/axis rebinding
 pane to have the same horizontal-domain semantics and the target X/Y axes to retain the current scale types.
 Each update validates a complete candidate before commit, preserves handles and data, and leaves prior state
 intact on rejection. Kind and dataset changes remain structural.
+
+Numeric and temporal axis handles expose `pan(fraction)`, `zoom(factor, anchor_value)`, and
+`reset_view()`/`resetView()`. A temporal zoom anchor is a whole JavaScript-safe epoch millisecond.
+Runtime views retain the typed temporal domain, reject out-of-range or collapsing transforms atomically,
+and leave the configured or automatic base domain available for reset.
 
 `chart.general_series_order(pane?)` returns live handles in the engine's stable bottom-first order.
 `chart.set_general_series_order(handles, pane?)` atomically accepts only an exact permutation of every live

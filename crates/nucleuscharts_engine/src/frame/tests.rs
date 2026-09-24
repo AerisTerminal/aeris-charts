@@ -79,6 +79,67 @@ fn explicit_general_axes_reserve_layout_and_emit_shared_axis_frame() {
 }
 
 #[test]
+fn temporal_general_axis_emits_utc_ticks_and_supports_atomic_runtime_view() {
+    const JAN_1_2026: i64 = 1_767_225_600_000;
+    const JAN_2_2026: i64 = 1_767_312_000_000;
+    const JAN_3_2026: i64 = 1_767_398_400_000;
+
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(true, HorizontalDomain::Temporal)
+        .unwrap();
+    let mut x = GeneralAxisOptions::new("time", pane, AxisDimension::X, GeneralScaleType::Temporal);
+    x.domain = GeneralAxisDomain::Temporal([JAN_1_2026, JAN_3_2026]);
+    chart.add_general_axis(x).unwrap();
+    let mut y = GeneralAxisOptions::new("value", pane, AxisDimension::Y, GeneralScaleType::Linear);
+    y.domain = GeneralAxisDomain::Numeric([0.0, 10.0]);
+    chart.add_general_axis(y).unwrap();
+    let mut short = std::array::from_fn(|index| format!("M{}", index + 1));
+    short[0] = "Ene".into();
+    let long = std::array::from_fn(|index| format!("Month {}", index + 1));
+    chart.set_month_names(short, long);
+
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let frame = chart.build_axis_frame(80.0, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    assert!(frame
+        .labels
+        .iter()
+        .any(|label| label.text == "1 Ene" || label.text == "2 Ene"));
+    assert!(frame.labels.iter().any(|label| label.text.contains(':')));
+
+    chart
+        .zoom_general_axis("time", 2.0, JAN_2_2026 as f64)
+        .unwrap();
+    assert_eq!(
+        chart.general_axis_effective_domain("time"),
+        Some(GeneralAxisDomain::Temporal([
+            1_767_268_800_000,
+            1_767_355_200_000
+        ]))
+    );
+    chart.pan_general_axis("time", 0.25).unwrap();
+    let panned = GeneralAxisDomain::Temporal([1_767_290_400_000, 1_767_376_800_000]);
+    assert_eq!(
+        chart.general_axis_effective_domain("time"),
+        Some(panned.clone())
+    );
+
+    assert!(chart
+        .zoom_general_axis("time", 2.0, JAN_2_2026 as f64 + 0.5)
+        .is_err());
+    assert!(chart
+        .zoom_general_axis("time", 1.0e20, JAN_2_2026 as f64)
+        .is_err());
+    assert_eq!(chart.general_axis_effective_domain("time"), Some(panned));
+
+    assert!(chart.reset_general_axis_view("time"));
+    assert_eq!(
+        chart.general_axis_effective_domain("time"),
+        Some(GeneralAxisDomain::Temporal([JAN_1_2026, JAN_3_2026]))
+    );
+}
+
+#[test]
 fn general_legend_snapshot_preserves_series_order_visibility_filtering_and_removal() {
     let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
     let pane_a = chart

@@ -44,6 +44,35 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+/// Days since the Unix epoch for a proleptic-Gregorian civil date. Returns `None` for an invalid
+/// month/day or arithmetic overflow. This is the inverse of [`civil_from_timestamp`] at UTC
+/// midnight and keeps calendar-aligned temporal axes independent of platform date libraries.
+pub fn days_from_civil(year: i64, month: u32, day: u32) -> Option<i64> {
+    if !(1..=12).contains(&month) {
+        return None;
+    }
+    let leap = year.rem_euclid(4) == 0 && (year.rem_euclid(100) != 0 || year.rem_euclid(400) == 0);
+    let days_in_month = match month {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    if day == 0 || day > days_in_month {
+        return None;
+    }
+
+    let adjusted_year = year.checked_sub(i64::from(month <= 2))?;
+    let era = adjusted_year.div_euclid(400);
+    let year_of_era = adjusted_year - era * 400;
+    let shifted_month = i64::from(month) + if month > 2 { -3 } else { 9 };
+    let day_of_year = (153 * shifted_month + 2) / 5 + i64::from(day) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era.checked_mul(146_097)?
+        .checked_add(day_of_era)?
+        .checked_sub(719_468)
+}
+
 /// (year, month 1-12, day 1-31) of a UTC timestamp in seconds.
 pub fn civil_from_timestamp(ts: i64) -> (i64, u32, u32) {
     civil_from_days(ts.div_euclid(86_400))
@@ -276,6 +305,17 @@ mod tests {
         assert_eq!(civil_from_timestamp(1_582_934_400), (2020, 2, 29));
         // pre-epoch
         assert_eq!(civil_from_timestamp(-86_400), (1969, 12, 31));
+        for &(year, month, day) in &[
+            (1970, 1, 1),
+            (1969, 12, 31),
+            (2020, 2, 29),
+            (-400, 3, 1),
+            (285_000, 12, 31),
+        ] {
+            let days = days_from_civil(year, month, day).unwrap();
+            assert_eq!(civil_from_timestamp(days * 86_400), (year, month, day));
+        }
+        assert_eq!(days_from_civil(2021, 2, 29), None);
     }
 
     #[test]

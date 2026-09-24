@@ -46,8 +46,10 @@ General Cartesian scale foundations live beside, rather than inside, the financi
 `LogScale`, and `SymLogScale` map continuous numeric domains and emit bounded deterministic ticks;
 `BandScale` and `PointScale` map caller-owned category indices without retaining labels or allocating
 category state. All five keep their math in `f64`, accept reversed ranges, and have no host or renderer
-dependency. General axes with explicit numeric, band, or point domains use these scales during shared
-layout and axis-frame construction; the financial coordinate path does not dispatch through them.
+dependency. General axes with explicit numeric, temporal, band, or point domains use these scales during
+shared layout and axis-frame construction; temporal coordinates reuse the linear transform over validated
+JavaScript-safe epoch milliseconds while the engine owns UTC calendar interval selection and formatting.
+The financial coordinate path does not dispatch through them.
 Existing financial charts therefore continue to instantiate only `TimeScaleCore` and `PriceScaleCore`
 and pay no retained-memory cost for these foundations.
 
@@ -79,8 +81,10 @@ and numeric domains now resolve from visible bound general series without rewrit
 options; hidden series stop contributing immediately. Continuous X/Y axes execute linear, logarithmic,
 or symmetric-log transforms consistently for ticks, geometry, hit testing, and runtime pan/zoom; a
 runtime view is independent of the configured/automatic base domain and can be reset without rewriting
-axis options. Temporal and polar tick execution remains deferred until their owning transform slices are
-implemented; their validated state is not silently rendered as linear. Grid policy is likewise retained
+axis options. Temporal axes use that same runtime-view contract with whole epoch-millisecond anchors and
+emit bounded UTC millisecond-through-calendar-year ticks through the shared `AxisFrame`; locale injection
+supplies month names without moving date math into a host or backend. Polar tick execution remains deferred
+until its owning transform slice is implemented. Grid policy is likewise retained
 for the series/grid increment rather than painting grid rules above data in the axis layer. Financial
 panes allocate no general axis storage and retain their established price/time axis output unchanged.
 

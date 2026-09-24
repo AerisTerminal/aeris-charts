@@ -1,9 +1,11 @@
 use std::collections::HashSet;
 use std::num::NonZeroU32;
 
+use nucleuscharts_core::format::time_formatter::MonthNames;
 use nucleuscharts_core::scale::general_scale::{
     BandScale, LinearScale, LogScale, PointScale, SymLogScale, DEFAULT_SYMLOG_CONSTANT,
 };
+use nucleuscharts_core::scale::time_tick_marks::{civil_from_timestamp, days_from_civil};
 use nucleuscharts_render::color::Color;
 
 use crate::{
@@ -127,7 +129,7 @@ pub struct GeneralAxis {
     grid_visible: bool,
     /// Runtime viewport for continuous axes. Configured/auto domain remains canonical and this is
     /// reset independently, matching the financial distinction between data range and visible range.
-    view_domain: Option<[f64; 2]>,
+    view_domain: Option<GeneralAxisDomain>,
     /// Negotiated strip width for vertical axes. Horizontal strip heights are derived from the
     /// shared font metrics because they do not depend on glyph advance.
     layout_thickness: f64,
@@ -409,6 +411,7 @@ impl ChartEngine {
         F: Fn(&str, bool) -> f64,
     {
         let metrics = self.axis_metrics();
+        let month_names = &self.month_names;
         let fallback = AxisMetrics::price_strip_width(AxisMetrics::DEFAULT_TEXT_WIDTH, 0.0);
         let effective_domains: Vec<_> = self
             .general_axes
@@ -426,7 +429,7 @@ impl ChartEngine {
             let widest_tick = effective_domains
                 .iter()
                 .find(|(handle, _)| *handle == axis.handle)
-                .map(|(_, domain)| tick_labels_for_domain(axis, domain))
+                .map(|(_, domain)| tick_labels_for_domain(axis, domain, month_names))
                 .unwrap_or_default()
                 .into_iter()
                 .map(|label| measure(&label, false))
@@ -636,7 +639,7 @@ impl ChartEngine {
                 let Some(domain) = self.effective_general_axis_domain(axis) else {
                     continue;
                 };
-                let ticks = axis_ticks(axis, &domain, range.0, range.1, metrics);
+                let ticks = axis_ticks(axis, &domain, range.0, range.1, metrics, &self.month_names);
                 let ticks =
                     collision_filtered_ticks(axis, ticks, measure, metrics, range.0, range.1);
                 for tick in ticks {
@@ -716,8 +719,8 @@ impl ChartEngine {
         &self,
         axis: &GeneralAxis,
     ) -> Option<GeneralAxisDomain> {
-        if let Some(view) = axis.view_domain {
-            return Some(GeneralAxisDomain::Numeric(view));
+        if let Some(view) = axis.view_domain.as_ref() {
+            return Some(view.clone());
         }
         self.base_general_axis_domain(axis)
     }
@@ -1108,27 +1111,44 @@ impl ChartEngine {
             let axis = self.general_axis(id).ok_or_else(|| {
                 ChartError::new(ErrorCode::InvalidHandle, "general axis is stale")
             })?;
-            let GeneralAxisDomain::Numeric(domain) = self
+            let domain = self
                 .effective_general_axis_domain(axis)
-                .ok_or_else(|| invalid("general axis has no numeric domain to pan"))?
-            else {
-                return Err(invalid("only numeric general axes can pan"));
-            };
+                .ok_or_else(|| invalid("general axis has no domain to pan"))?;
             (axis.scale, domain)
         };
-        let scale = NumericAxisScale::new(scale_type, domain, 0.0, 1.0)
-            .ok_or_else(|| invalid("general axis numeric transform is invalid"))?;
-        let from = scale
-            .invert(fraction)
-            .ok_or_else(|| invalid("general axis pan exceeds the numeric transform"))?;
-        let to = scale
-            .invert(1.0 + fraction)
-            .ok_or_else(|| invalid("general axis pan exceeds the numeric transform"))?;
+        let view =
+            match domain {
+                GeneralAxisDomain::Numeric(domain) => {
+                    let scale = NumericAxisScale::new(scale_type, domain, 0.0, 1.0)
+                        .ok_or_else(|| invalid("general axis numeric transform is invalid"))?;
+                    let from = scale
+                        .invert(fraction)
+                        .ok_or_else(|| invalid("general axis pan exceeds the numeric transform"))?;
+                    let to = scale
+                        .invert(1.0 + fraction)
+                        .ok_or_else(|| invalid("general axis pan exceeds the numeric transform"))?;
+                    GeneralAxisDomain::Numeric([from.min(to), from.max(to)])
+                }
+                GeneralAxisDomain::Temporal(domain) => {
+                    let scale = temporal_linear_scale(domain, 0.0, 1.0)
+                        .ok_or_else(|| invalid("general axis temporal transform is invalid"))?;
+                    let from = scale.invert(fraction).ok_or_else(|| {
+                        invalid("general axis pan exceeds the temporal transform")
+                    })?;
+                    let to = scale.invert(1.0 + fraction).ok_or_else(|| {
+                        invalid("general axis pan exceeds the temporal transform")
+                    })?;
+                    GeneralAxisDomain::Temporal(temporal_domain_from_f64(from, to).ok_or_else(
+                        || invalid("general axis pan exceeds safe epoch milliseconds"),
+                    )?)
+                }
+                _ => return Err(invalid("only numeric and temporal general axes can pan")),
+            };
         let axis = self
             .general_axes
             .get_mut(id)
             .ok_or_else(|| ChartError::new(ErrorCode::InvalidHandle, "general axis is stale"))?;
-        axis.view_domain = Some([from.min(to), from.max(to)]);
+        axis.view_domain = Some(view);
         self.invalidate_frame_all();
         Ok(())
     }
@@ -1149,33 +1169,67 @@ impl ChartEngine {
             let axis = self.general_axis(id).ok_or_else(|| {
                 ChartError::new(ErrorCode::InvalidHandle, "general axis is stale")
             })?;
-            let GeneralAxisDomain::Numeric(domain) = self
+            let domain = self
                 .effective_general_axis_domain(axis)
-                .ok_or_else(|| invalid("general axis has no numeric domain to zoom"))?
-            else {
-                return Err(invalid("only numeric general axes can zoom"));
-            };
+                .ok_or_else(|| invalid("general axis has no domain to zoom"))?;
             (axis.scale, domain)
         };
-        let scale = NumericAxisScale::new(scale_type, domain, 0.0, 1.0)
-            .ok_or_else(|| invalid("general axis numeric transform is invalid"))?;
-        let anchor = scale
-            .coordinate(anchor_value)
-            .filter(|value| (0.0..=1.0).contains(value))
-            .ok_or_else(|| invalid("general axis zoom anchor must be inside the visible domain"))?;
-        let from_unit = anchor + (0.0 - anchor) / factor;
-        let to_unit = anchor + (1.0 - anchor) / factor;
-        let from = scale
-            .invert(from_unit)
-            .ok_or_else(|| invalid("general axis zoom exceeds the numeric transform"))?;
-        let to = scale
-            .invert(to_unit)
-            .ok_or_else(|| invalid("general axis zoom exceeds the numeric transform"))?;
+        let view =
+            match domain {
+                GeneralAxisDomain::Numeric(domain) => {
+                    let scale = NumericAxisScale::new(scale_type, domain, 0.0, 1.0)
+                        .ok_or_else(|| invalid("general axis numeric transform is invalid"))?;
+                    let anchor = scale
+                        .coordinate(anchor_value)
+                        .filter(|value| (0.0..=1.0).contains(value))
+                        .ok_or_else(|| {
+                            invalid("general axis zoom anchor must be inside the visible domain")
+                        })?;
+                    let from_unit = anchor + (0.0 - anchor) / factor;
+                    let to_unit = anchor + (1.0 - anchor) / factor;
+                    let from = scale.invert(from_unit).ok_or_else(|| {
+                        invalid("general axis zoom exceeds the numeric transform")
+                    })?;
+                    let to = scale.invert(to_unit).ok_or_else(|| {
+                        invalid("general axis zoom exceeds the numeric transform")
+                    })?;
+                    GeneralAxisDomain::Numeric([from.min(to), from.max(to)])
+                }
+                GeneralAxisDomain::Temporal(domain) => {
+                    if anchor_value.fract() != 0.0
+                        || anchor_value.abs() > MAX_GENERAL_TEMPORAL_MILLISECONDS as f64
+                    {
+                        return Err(invalid(
+                        "general temporal axis zoom anchor must be a safe whole epoch millisecond",
+                    ));
+                    }
+                    let scale = temporal_linear_scale(domain, 0.0, 1.0)
+                        .ok_or_else(|| invalid("general axis temporal transform is invalid"))?;
+                    let anchor = scale
+                        .coordinate(anchor_value)
+                        .filter(|value| (0.0..=1.0).contains(value))
+                        .ok_or_else(|| {
+                            invalid("general axis zoom anchor must be inside the visible domain")
+                        })?;
+                    let from_unit = anchor + (0.0 - anchor) / factor;
+                    let to_unit = anchor + (1.0 - anchor) / factor;
+                    let from = scale.invert(from_unit).ok_or_else(|| {
+                        invalid("general axis zoom exceeds the temporal transform")
+                    })?;
+                    let to = scale.invert(to_unit).ok_or_else(|| {
+                        invalid("general axis zoom exceeds the temporal transform")
+                    })?;
+                    GeneralAxisDomain::Temporal(temporal_domain_from_f64(from, to).ok_or_else(
+                        || invalid("general axis zoom exceeds safe epoch milliseconds"),
+                    )?)
+                }
+                _ => return Err(invalid("only numeric and temporal general axes can zoom")),
+            };
         let axis = self
             .general_axes
             .get_mut(id)
             .ok_or_else(|| ChartError::new(ErrorCode::InvalidHandle, "general axis is stale"))?;
-        axis.view_domain = Some([from.min(to), from.max(to)]);
+        axis.view_domain = Some(view);
         self.invalidate_frame_all();
         Ok(())
     }
@@ -1270,7 +1324,11 @@ fn horizontal_axis_thickness(axis: &GeneralAxis, metrics: AxisMetrics) -> f64 {
     (1.0 + AxisMetrics::TICK_LENGTH + 4.0 + rows * (metrics.axis + 4.0)).ceil()
 }
 
-fn tick_labels_for_domain(axis: &GeneralAxis, domain: &GeneralAxisDomain) -> Vec<String> {
+fn tick_labels_for_domain(
+    axis: &GeneralAxis,
+    domain: &GeneralAxisDomain,
+    month_names: &MonthNames,
+) -> Vec<String> {
     match (&axis.scale, domain) {
         (
             GeneralScaleType::Linear
@@ -1290,6 +1348,13 @@ fn tick_labels_for_domain(axis: &GeneralAxis, domain: &GeneralAxisDomain) -> Vec
                 .cloned()
                 .collect()
         }
+        (GeneralScaleType::Temporal, GeneralAxisDomain::Temporal(domain)) => {
+            let interval = temporal_tick_interval(*domain, axis.tick_count.unwrap_or(6) as usize);
+            temporal_tick_values(*domain, interval)
+                .into_iter()
+                .map(|value| format_temporal_tick(value, interval, month_names))
+                .collect()
+        }
         _ => Vec::new(),
     }
 }
@@ -1300,6 +1365,7 @@ fn axis_ticks(
     range_from: f64,
     range_to: f64,
     metrics: AxisMetrics,
+    month_names: &MonthNames,
 ) -> Vec<GeneralAxisTick> {
     match (&axis.scale, domain) {
         (
@@ -1335,6 +1401,33 @@ fn axis_ticks(
                 })
                 .collect()
         }
+        (GeneralScaleType::Temporal, GeneralAxisDomain::Temporal(domain)) => {
+            let Some(scale) = temporal_linear_scale(*domain, range_from, range_to) else {
+                return Vec::new();
+            };
+            let span = (range_to - range_from).abs();
+            let target = axis.tick_count.map_or_else(
+                || {
+                    (span / (metrics.axis + axis.min_tick_gap + 8.0))
+                        .floor()
+                        .clamp(2.0, 10.0) as usize
+                },
+                usize::from,
+            );
+            let interval = temporal_tick_interval(*domain, target);
+            temporal_tick_values(*domain, interval)
+                .into_iter()
+                .filter_map(|value| {
+                    scale
+                        .coordinate(value as f64)
+                        .map(|coordinate| GeneralAxisTick {
+                            coordinate,
+                            label: format_temporal_tick(value, interval, month_names),
+                            align: AxisTextAlign::Center,
+                        })
+                })
+                .collect()
+        }
         (GeneralScaleType::Band, GeneralAxisDomain::Category(values)) => {
             let Ok(scale) = BandScale::new(
                 values.len(),
@@ -1361,6 +1454,228 @@ fn axis_ticks(
             sampled_category_ticks(axis, values, |index| scale.coordinate(index))
         }
         _ => Vec::new(),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TemporalTickInterval {
+    Fixed(i64),
+    Months(i64),
+    Years(i64),
+}
+
+impl TemporalTickInterval {
+    fn approximate_milliseconds(self) -> i64 {
+        const DAY: i64 = 86_400_000;
+        match self {
+            Self::Fixed(milliseconds) => milliseconds,
+            Self::Months(months) => months.saturating_mul(30 * DAY),
+            Self::Years(years) => years.saturating_mul(365 * DAY),
+        }
+    }
+}
+
+fn temporal_linear_scale(domain: [i64; 2], range_from: f64, range_to: f64) -> Option<LinearScale> {
+    LinearScale::new(domain[0] as f64, domain[1] as f64, range_from, range_to).ok()
+}
+
+fn temporal_domain_from_f64(from: f64, to: f64) -> Option<[i64; 2]> {
+    if !from.is_finite() || !to.is_finite() {
+        return None;
+    }
+    let from = from.round();
+    let to = to.round();
+    let limit = MAX_GENERAL_TEMPORAL_MILLISECONDS as f64;
+    if from.abs() > limit || to.abs() > limit || from >= to {
+        return None;
+    }
+    Some([from as i64, to as i64])
+}
+
+fn temporal_tick_interval(domain: [i64; 2], target: usize) -> TemporalTickInterval {
+    const FIXED: [i64; 22] = [
+        1,
+        5,
+        10,
+        50,
+        100,
+        250,
+        500,
+        1_000,
+        5_000,
+        15_000,
+        30_000,
+        60_000,
+        300_000,
+        900_000,
+        1_800_000,
+        3_600_000,
+        10_800_000,
+        21_600_000,
+        43_200_000,
+        86_400_000,
+        172_800_000,
+        1_209_600_000,
+    ];
+    let span = domain[1] - domain[0];
+    let divisor = i64::try_from(target.saturating_sub(1).max(1)).unwrap_or(1);
+    let desired = (span + divisor - 1) / divisor;
+    if let Some(interval) = FIXED.into_iter().find(|interval| *interval >= desired) {
+        return TemporalTickInterval::Fixed(interval);
+    }
+    for interval in [
+        TemporalTickInterval::Months(1),
+        TemporalTickInterval::Months(3),
+        TemporalTickInterval::Months(6),
+        TemporalTickInterval::Years(1),
+        TemporalTickInterval::Years(2),
+        TemporalTickInterval::Years(5),
+        TemporalTickInterval::Years(10),
+        TemporalTickInterval::Years(25),
+        TemporalTickInterval::Years(50),
+        TemporalTickInterval::Years(100),
+    ] {
+        if interval.approximate_milliseconds() >= desired {
+            return interval;
+        }
+    }
+
+    let year_milliseconds = 365 * 86_400_000;
+    let desired_years = ((desired + year_milliseconds - 1) / year_milliseconds).max(1);
+    let mut magnitude = 1_i64;
+    while magnitude <= desired_years / 10 {
+        magnitude = magnitude.saturating_mul(10);
+    }
+    for multiplier in [1_i64, 2, 5, 10] {
+        let step = magnitude.saturating_mul(multiplier);
+        if step >= desired_years {
+            return TemporalTickInterval::Years(step);
+        }
+    }
+    TemporalTickInterval::Years(desired_years)
+}
+
+fn temporal_tick_values(domain: [i64; 2], interval: TemporalTickInterval) -> Vec<i64> {
+    const DAY: i64 = 86_400_000;
+    let mut values = Vec::new();
+    let mut push_until_end = |mut value: i64, step: i64| {
+        while value <= domain[1] && values.len() < usize::from(MAX_GENERAL_AXIS_TICKS) {
+            if value >= domain[0] {
+                values.push(value);
+            }
+            let Some(next) = value.checked_add(step) else {
+                break;
+            };
+            value = next;
+        }
+    };
+
+    match interval {
+        TemporalTickInterval::Fixed(step) => {
+            let first = domain[0].div_euclid(step).checked_mul(step);
+            if let Some(first) = first.and_then(|value| {
+                if value < domain[0] {
+                    value.checked_add(step)
+                } else {
+                    Some(value)
+                }
+            }) {
+                push_until_end(first, step);
+            }
+        }
+        TemporalTickInterval::Months(step) => {
+            let (year, month, _) = civil_from_timestamp(domain[0].div_euclid(1_000));
+            let Some(total_month) = year
+                .checked_mul(12)
+                .and_then(|value| value.checked_add(i64::from(month) - 1))
+            else {
+                return values;
+            };
+            let aligned = total_month.div_euclid(step).saturating_mul(step);
+            let mut current_month = aligned;
+            if calendar_month_milliseconds(current_month).is_none_or(|value| value < domain[0]) {
+                current_month = current_month.saturating_add(step);
+            }
+            if calendar_month_milliseconds(current_month).is_some() {
+                while values.len() < usize::from(MAX_GENERAL_AXIS_TICKS) {
+                    let Some(value) = calendar_month_milliseconds(current_month) else {
+                        break;
+                    };
+                    if value > domain[1] {
+                        break;
+                    }
+                    values.push(value);
+                    let Some(next) = current_month.checked_add(step) else {
+                        break;
+                    };
+                    current_month = next;
+                }
+            }
+        }
+        TemporalTickInterval::Years(step) => {
+            let (year, _, _) = civil_from_timestamp(domain[0].div_euclid(1_000));
+            let aligned = year.div_euclid(step).saturating_mul(step);
+            let first_year = days_from_civil(aligned, 1, 1)
+                .and_then(|days| days.checked_mul(DAY))
+                .filter(|value| *value >= domain[0])
+                .map_or_else(|| aligned.saturating_add(step), |_| aligned);
+            let mut current_year = first_year;
+            while values.len() < usize::from(MAX_GENERAL_AXIS_TICKS) {
+                let Some(value) =
+                    days_from_civil(current_year, 1, 1).and_then(|days| days.checked_mul(DAY))
+                else {
+                    break;
+                };
+                if value > domain[1] {
+                    break;
+                }
+                values.push(value);
+                let Some(next) = current_year.checked_add(step) else {
+                    break;
+                };
+                current_year = next;
+            }
+        }
+    }
+    values
+}
+
+fn calendar_month_milliseconds(total_month: i64) -> Option<i64> {
+    let year = total_month.div_euclid(12);
+    let month = u32::try_from(total_month.rem_euclid(12) + 1).ok()?;
+    days_from_civil(year, month, 1)?.checked_mul(86_400_000)
+}
+
+fn format_temporal_tick(
+    epoch_ms: i64,
+    interval: TemporalTickInterval,
+    month_names: &MonthNames,
+) -> String {
+    let seconds = epoch_ms.div_euclid(1_000);
+    let (year, month, day) = civil_from_timestamp(seconds);
+    let seconds_of_day = seconds.rem_euclid(86_400);
+    let hour = seconds_of_day / 3_600;
+    let minute = seconds_of_day.rem_euclid(3_600) / 60;
+    let second = seconds_of_day.rem_euclid(60);
+    let month_name = &month_names.short[(month - 1) as usize];
+    match interval {
+        TemporalTickInterval::Fixed(step) if step < 1_000 => {
+            let millisecond = epoch_ms.rem_euclid(1_000);
+            format!("{hour:02}:{minute:02}:{second:02}.{millisecond:03}")
+        }
+        TemporalTickInterval::Fixed(step) if step < 60_000 => {
+            format!("{hour:02}:{minute:02}:{second:02}")
+        }
+        TemporalTickInterval::Fixed(step) if step < 86_400_000 => {
+            if seconds_of_day == 0 {
+                format!("{day} {month_name}")
+            } else {
+                format!("{hour:02}:{minute:02}")
+            }
+        }
+        TemporalTickInterval::Fixed(_) => format!("{day} {month_name}"),
+        TemporalTickInterval::Months(_) => format!("{month_name} {year}"),
+        TemporalTickInterval::Years(_) => year.to_string(),
     }
 }
 
@@ -2032,5 +2347,40 @@ mod tests {
         assert!(format_numeric_ticks(&[1.0e9, 2.0e9])
             .iter()
             .all(|label| label.contains('e')));
+    }
+
+    #[test]
+    fn temporal_ticks_are_calendar_aligned_bounded_and_locale_aware() {
+        let months = MonthNames::english();
+        let quarter = TemporalTickInterval::Months(3);
+        let values = temporal_tick_values([1_767_225_600_000, 1_783_036_800_000], quarter);
+        assert_eq!(
+            values,
+            [1_767_225_600_000, 1_775_001_600_000, 1_782_864_000_000]
+        );
+        assert_eq!(
+            values
+                .iter()
+                .map(|value| format_temporal_tick(*value, quarter, &months))
+                .collect::<Vec<_>>(),
+            ["Jan 2026", "Apr 2026", "Jul 2026"]
+        );
+
+        let full_safe_range = temporal_tick_values(
+            [
+                -MAX_GENERAL_TEMPORAL_MILLISECONDS,
+                MAX_GENERAL_TEMPORAL_MILLISECONDS,
+            ],
+            temporal_tick_interval(
+                [
+                    -MAX_GENERAL_TEMPORAL_MILLISECONDS,
+                    MAX_GENERAL_TEMPORAL_MILLISECONDS,
+                ],
+                usize::from(MAX_GENERAL_AXIS_TICKS),
+            ),
+        );
+        assert!(!full_safe_range.is_empty());
+        assert!(full_safe_range.len() <= usize::from(MAX_GENERAL_AXIS_TICKS));
+        assert!(full_safe_range.windows(2).all(|pair| pair[0] < pair[1]));
     }
 }
