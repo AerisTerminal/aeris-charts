@@ -773,6 +773,90 @@ test("public general axes retain typed explicit ticks and formatted labels", asy
   });
 });
 
+test("public category axes zoom by identity, pan by visible window, and reset", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const host = document.createElement("div");
+    Object.assign(host.style, { width: "640px", height: "420px" });
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    chart.resize(640, 420, 1);
+    const pane = chart.add_pane({
+      preserve_empty: true,
+      horizontal_domain: { type: "category", scale: "band" },
+    });
+    const axis = chart.add_axis({
+      id: "category-nav-x",
+      pane: pane.pane_index(),
+      dimension: "x",
+      scale: "band",
+      domain: ["A", "B", "C", "D", "E", "F"],
+    });
+    chart.add_axis({
+      id: "category-nav-y", pane: pane.pane_index(), dimension: "y", scale: "linear", domain: [0, 10],
+    });
+    const columns = chart.add_series("column", {
+      pane: pane.pane_index(), x_axis_id: "category-nav-x", y_axis_id: "category-nav-y",
+    });
+    columns.set_data(["A", "B", "C", "D", "E", "F"].map((x, index) => ({ x, y: index + 1 })));
+    const settle = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+    await settle();
+    const before = chart.take_screenshot().toDataURL();
+    axis.zoom(2, "C");
+    await settle();
+    const zoomed = chart.take_screenshot().toDataURL();
+    axis.pan(0.34);
+    await settle();
+    const panned = chart.take_screenshot().toDataURL();
+    let rejected = null;
+    try {
+      axis.zoom(2, "A");
+    } catch (error) {
+      rejected = error.code;
+    }
+    await settle();
+    const after_rejection = chart.take_screenshot().toDataURL();
+    axis.resetView();
+    await settle();
+    const reset = chart.take_screenshot().toDataURL();
+    const accessibility = chart.accessibility();
+    accessibility.refresh();
+    accessibility.focus(pane.pane_index());
+    document.activeElement.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "ArrowRight", bubbles: true, cancelable: true,
+    }));
+    await settle();
+    const keyboard_before = chart.take_screenshot().toDataURL();
+    document.activeElement.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "=", bubbles: true, cancelable: true,
+    }));
+    await settle();
+    const keyboard_after = chart.take_screenshot().toDataURL();
+    chart.remove();
+    host.remove();
+    return {
+      zoom_changed: zoomed !== before,
+      pan_changed: panned !== zoomed,
+      rejection_preserved_view: after_rejection === panned,
+      reset_restored_frame: reset === before,
+      keyboard_zoom_changed: keyboard_after !== keyboard_before,
+      rejected,
+    };
+  });
+
+  expect(result).toEqual({
+    zoom_changed: true,
+    pan_changed: true,
+    rejection_preserved_view: true,
+    reset_restored_frame: true,
+    keyboard_zoom_changed: true,
+    rejected: "invalid_options",
+  });
+});
+
 test("general auto sizing disables cleanly and survives hidden-container reveal", async ({ page }) => {
   await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
 

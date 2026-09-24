@@ -772,12 +772,18 @@ class PaneAccessibility {
   private zoom(zoom_in: boolean): void {
     const active = this.active_series();
     if (is_general_series(active)) {
-      if (active.kind !== "scatter" && active.kind !== "bubble" && active.kind !== "xy_line" && active.kind !== "xy_area" && active.kind !== "range_area" && active.kind !== "error_bar") return;
       const item = this.general_item(this.point_index);
-      const anchor = item === undefined ? 0 : Number(item.x_label);
-      if (!Number.isFinite(anchor)) return;
       const axis = this.controller.chart.axes(this.pane_index).find((candidate) => candidate.id === active.x_axis_id);
-      if (axis === undefined || !["linear", "log", "symlog"].includes(axis.options().scale)) return;
+      if (axis === undefined) return;
+      const scale = axis.options().scale;
+      if ((scale === "band" || scale === "point") && item !== undefined) {
+        axis.zoom(zoom_in ? 1.25 : 0.8, item.x_label);
+        this.update_focus_ring();
+        return;
+      }
+      if (active.kind !== "scatter" && active.kind !== "bubble" && active.kind !== "xy_line" && active.kind !== "xy_area" && active.kind !== "range_area" && active.kind !== "error_bar") return;
+      const anchor = item === undefined ? 0 : Number(item.x_label);
+      if (!Number.isFinite(anchor) || !["linear", "log", "symlog"].includes(scale)) return;
       axis.zoom(zoom_in ? 1.25 : 0.8, anchor);
       this.update_focus_ring();
       return;

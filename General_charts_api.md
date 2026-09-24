@@ -428,10 +428,13 @@ pane to have the same horizontal-domain semantics and the target X/Y axes to ret
 Each update validates a complete candidate before commit, preserves handles and data, and leaves prior state
 intact on rejection. Kind and dataset changes remain structural.
 
-Numeric and temporal axis handles expose `pan(fraction)`, `zoom(factor, anchor_value)`, and
-`reset_view()`/`resetView()`. A temporal zoom anchor is a whole JavaScript-safe epoch millisecond.
-Runtime views retain the typed temporal domain, reject out-of-range or collapsing transforms atomically,
-and leave the configured or automatic base domain available for reset.
+Numeric, temporal, and category axis handles expose `pan(fraction)`, `zoom(factor, anchor_value)`, and
+`reset_view()`/`resetView()`. A temporal zoom anchor is a whole JavaScript-safe epoch millisecond;
+a category anchor is its string identity in the current visible window. Category pan shifts by a
+rounded fraction of the visible category count and clamps at the base-domain ends. Category views
+retain a bounded index window rather than copied labels, so automatic-domain changes cannot leave
+stale category identities in the viewport. Runtime views reject invalid anchors or collapsing
+transforms atomically and leave the configured or automatic base domain available for reset.
 
 `chart.general_series_order(pane?)` returns live handles in the engine's stable bottom-first order.
 `chart.set_general_series_order(handles, pane?)` atomically accepts only an exact permutation of every live

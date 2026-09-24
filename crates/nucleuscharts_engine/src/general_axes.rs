@@ -164,12 +164,20 @@ pub struct GeneralAxis {
     band_padding_outer: f64,
     zero_line: bool,
     grid_visible: bool,
-    /// Runtime viewport for continuous axes. Configured/auto domain remains canonical and this is
-    /// reset independently, matching the financial distinction between data range and visible range.
-    view_domain: Option<GeneralAxisDomain>,
+    /// Runtime viewport. Configured/auto domain remains canonical and this is reset independently,
+    /// matching the financial distinction between data range and visible range. Category views use
+    /// an index window so automatic-domain changes never retain stale category strings.
+    view_domain: Option<GeneralAxisView>,
     /// Negotiated strip width for vertical axes. Horizontal strip heights are derived from the
     /// shared font metrics because they do not depend on glyph advance.
     layout_thickness: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum GeneralAxisView {
+    Numeric([f64; 2]),
+    Temporal([i64; 2]),
+    Category { start: usize, len: usize },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -960,8 +968,29 @@ impl ChartEngine {
         &self,
         axis: &GeneralAxis,
     ) -> Option<GeneralAxisDomain> {
-        if let Some(view) = axis.view_domain.as_ref() {
-            return Some(view.clone());
+        match axis.view_domain.as_ref() {
+            Some(GeneralAxisView::Numeric(domain)) => {
+                return Some(GeneralAxisDomain::Numeric(*domain));
+            }
+            Some(GeneralAxisView::Temporal(domain)) => {
+                return Some(GeneralAxisDomain::Temporal(*domain));
+            }
+            Some(GeneralAxisView::Category { start, len }) => {
+                let GeneralAxisDomain::Category(categories) =
+                    self.base_general_axis_domain(axis)?
+                else {
+                    return None;
+                };
+                if categories.is_empty() {
+                    return None;
+                }
+                let len = (*len).clamp(1, categories.len());
+                let start = (*start).min(categories.len() - len);
+                return Some(GeneralAxisDomain::Category(
+                    categories[start..start + len].to_vec(),
+                ));
+            }
+            None => {}
         }
         self.base_general_axis_domain(axis)
     }
@@ -1368,7 +1397,7 @@ impl ChartEngine {
                     let to = scale
                         .invert(1.0 + fraction)
                         .ok_or_else(|| invalid("general axis pan exceeds the numeric transform"))?;
-                    GeneralAxisDomain::Numeric([from.min(to), from.max(to)])
+                    GeneralAxisView::Numeric([from.min(to), from.max(to)])
                 }
                 GeneralAxisDomain::Temporal(domain) => {
                     let scale = temporal_linear_scale(domain, 0.0, 1.0)
@@ -1379,11 +1408,39 @@ impl ChartEngine {
                     let to = scale.invert(1.0 + fraction).ok_or_else(|| {
                         invalid("general axis pan exceeds the temporal transform")
                     })?;
-                    GeneralAxisDomain::Temporal(temporal_domain_from_f64(from, to).ok_or_else(
+                    GeneralAxisView::Temporal(temporal_domain_from_f64(from, to).ok_or_else(
                         || invalid("general axis pan exceeds safe epoch milliseconds"),
                     )?)
                 }
-                _ => return Err(invalid("only numeric and temporal general axes can pan")),
+                GeneralAxisDomain::Category(categories) => {
+                    if !matches!(scale_type, GeneralScaleType::Band | GeneralScaleType::Point) {
+                        return Err(invalid("category pan requires a band or point axis"));
+                    }
+                    let axis = self.general_axis(id).expect("the axis was resolved above");
+                    let GeneralAxisDomain::Category(base) = self
+                        .base_general_axis_domain(axis)
+                        .ok_or_else(|| invalid("general category axis has no base domain"))?
+                    else {
+                        return Err(invalid("general category axis has no category domain"));
+                    };
+                    let len = categories.len();
+                    if len == 0 || base.is_empty() {
+                        return Err(invalid("general category axis has no domain to pan"));
+                    }
+                    let current_start = category_view_start(axis, base.len(), len);
+                    let shifted = current_start as f64 + fraction * len as f64;
+                    if !shifted.is_finite() {
+                        return Err(invalid("general category axis pan exceeds its domain"));
+                    }
+                    let max_start = base.len().saturating_sub(len);
+                    GeneralAxisView::Category {
+                        start: shifted.round().clamp(0.0, max_start as f64) as usize,
+                        len,
+                    }
+                }
+                GeneralAxisDomain::Auto => {
+                    return Err(invalid("general axis has no domain to pan"));
+                }
             };
         let axis = self
             .general_axes
@@ -1434,7 +1491,7 @@ impl ChartEngine {
                     let to = scale.invert(to_unit).ok_or_else(|| {
                         invalid("general axis zoom exceeds the numeric transform")
                     })?;
-                    GeneralAxisDomain::Numeric([from.min(to), from.max(to)])
+                    GeneralAxisView::Numeric([from.min(to), from.max(to)])
                 }
                 GeneralAxisDomain::Temporal(domain) => {
                     if anchor_value.fract() != 0.0
@@ -1460,17 +1517,83 @@ impl ChartEngine {
                     let to = scale.invert(to_unit).ok_or_else(|| {
                         invalid("general axis zoom exceeds the temporal transform")
                     })?;
-                    GeneralAxisDomain::Temporal(temporal_domain_from_f64(from, to).ok_or_else(
+                    GeneralAxisView::Temporal(temporal_domain_from_f64(from, to).ok_or_else(
                         || invalid("general axis zoom exceeds safe epoch milliseconds"),
                     )?)
                 }
-                _ => return Err(invalid("only numeric and temporal general axes can zoom")),
+                GeneralAxisDomain::Category(_) => {
+                    return Err(invalid(
+                        "category axes require a category identity zoom anchor",
+                    ));
+                }
+                GeneralAxisDomain::Auto => {
+                    return Err(invalid("general axis has no domain to zoom"));
+                }
             };
         let axis = self
             .general_axes
             .get_mut(id)
             .ok_or_else(|| ChartError::new(ErrorCode::InvalidHandle, "general axis is stale"))?;
         axis.view_domain = Some(view);
+        self.invalidate_frame_all();
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn zoom_general_category_axis(
+        &mut self,
+        id: &str,
+        factor: f64,
+        anchor_value: &str,
+    ) -> Result<(), ChartError> {
+        if !factor.is_finite() || factor <= 0.0 {
+            return Err(invalid(
+                "general category axis zoom requires a positive finite factor",
+            ));
+        }
+        let (start, current_len, next_len, anchor_index, max_start) = {
+            let axis = self.general_axis(id).ok_or_else(|| {
+                ChartError::new(ErrorCode::InvalidHandle, "general axis is stale")
+            })?;
+            if !matches!(axis.scale, GeneralScaleType::Band | GeneralScaleType::Point) {
+                return Err(invalid("category zoom requires a band or point axis"));
+            }
+            let GeneralAxisDomain::Category(base) = self
+                .base_general_axis_domain(axis)
+                .ok_or_else(|| invalid("general category axis has no domain to zoom"))?
+            else {
+                return Err(invalid("general category axis has no category domain"));
+            };
+            let current_len = match axis.view_domain.as_ref() {
+                Some(GeneralAxisView::Category { len, .. }) => (*len).clamp(1, base.len()),
+                _ => base.len(),
+            };
+            let start = category_view_start(axis, base.len(), current_len);
+            let anchor_index = base
+                .iter()
+                .position(|value| value == anchor_value)
+                .filter(|index| *index >= start && *index < start + current_len)
+                .ok_or_else(|| {
+                    invalid("general category axis zoom anchor must be inside the visible domain")
+                })?;
+            let next_len = ((current_len as f64 / factor).round() as usize).clamp(1, base.len());
+            let max_start = base.len().saturating_sub(next_len);
+            (start, current_len, next_len, anchor_index, max_start)
+        };
+        let relative = if current_len <= 1 {
+            0.5
+        } else {
+            (anchor_index - start) as f64 / (current_len - 1) as f64
+        };
+        let proposed_start = anchor_index as f64 - relative * (next_len - 1) as f64;
+        let axis = self
+            .general_axes
+            .get_mut(id)
+            .ok_or_else(|| ChartError::new(ErrorCode::InvalidHandle, "general axis is stale"))?;
+        axis.view_domain = Some(GeneralAxisView::Category {
+            start: proposed_start.round().clamp(0.0, max_start as f64) as usize,
+            len: next_len,
+        });
         self.invalidate_frame_all();
         Ok(())
     }
@@ -1484,6 +1607,15 @@ impl ChartEngine {
             self.invalidate_frame_all();
         }
         true
+    }
+}
+
+fn category_view_start(axis: &GeneralAxis, base_len: usize, view_len: usize) -> usize {
+    match axis.view_domain.as_ref() {
+        Some(GeneralAxisView::Category { start, .. }) => {
+            (*start).min(base_len.saturating_sub(view_len))
+        }
+        _ => 0,
     }
 }
 
@@ -2890,6 +3022,73 @@ mod tests {
             label: None,
         }]);
         assert!(validate_options(&axis).is_err());
+    }
+
+    #[test]
+    fn category_views_zoom_by_identity_pan_by_window_and_reset() {
+        let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+        let pane = chart
+            .add_pane_with_domain(
+                true,
+                HorizontalDomain::Category {
+                    scale: CategoryScaleType::Point,
+                },
+            )
+            .unwrap();
+        let mut options = GeneralAxisOptions::new(
+            "category-x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Point,
+        );
+        options.domain = GeneralAxisDomain::Category(
+            ["A", "B", "C", "D", "E", "F"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+        );
+        chart.add_general_axis(options).unwrap();
+
+        chart
+            .zoom_general_category_axis("category-x", 2.0, "C")
+            .unwrap();
+        assert_eq!(
+            chart.general_axis_effective_domain("category-x"),
+            Some(GeneralAxisDomain::Category(vec![
+                "B".into(),
+                "C".into(),
+                "D".into(),
+            ]))
+        );
+
+        chart.pan_general_axis("category-x", 0.34).unwrap();
+        assert_eq!(
+            chart.general_axis_effective_domain("category-x"),
+            Some(GeneralAxisDomain::Category(vec![
+                "C".into(),
+                "D".into(),
+                "E".into(),
+            ]))
+        );
+        let before_rejection = chart.general_axis_effective_domain("category-x");
+        assert!(chart
+            .zoom_general_category_axis("category-x", 2.0, "A")
+            .is_err());
+        assert_eq!(
+            chart.general_axis_effective_domain("category-x"),
+            before_rejection
+        );
+
+        assert!(chart.reset_general_axis_view("category-x"));
+        assert_eq!(
+            chart.general_axis_effective_domain("category-x"),
+            Some(GeneralAxisDomain::Category(
+                ["A", "B", "C", "D", "E", "F"]
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+            ))
+        );
     }
 
     #[test]

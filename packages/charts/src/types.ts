@@ -474,10 +474,10 @@ export interface general_axis_api {
   options(): general_axis_options;
   apply_options(options: Partial<general_axis_presentation_options>): void;
   set_visible(visible: boolean): void;
-  /** Shift a numeric or temporal view by a fraction of its current visible span. */
+  /** Shift a numeric, temporal, or category view by a fraction of its current visible span. */
   pan(fraction: number): void;
-  /** Zoom around a domain value; temporal anchors are whole JavaScript-safe epoch milliseconds. */
-  zoom(factor: number, anchor_value: number): void;
+  /** Zoom around a domain value; temporal anchors are epoch milliseconds and category anchors are identities. */
+  zoom(factor: number, anchor_value: number | string): void;
   reset_view(): void;
   remove(): boolean;
 }

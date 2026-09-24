@@ -1299,6 +1299,83 @@ fn category_column_series_owns_auto_domains_geometry_and_lifecycle() {
 }
 
 #[test]
+fn automatic_category_views_clamp_to_replaced_registry_without_stale_labels() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Band,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "category-x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Band,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "category-y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Category {
+            ids: None,
+            categories: ["A", "B", "C", "D", "E", "F"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            category_indices: (0..6).collect(),
+            y: vec![1.0; 6],
+            y_valid: None,
+        })
+        .unwrap();
+    chart
+        .add_general_series(GeneralSeriesOptions::column(
+            pane,
+            dataset,
+            "category-x",
+            "category-y",
+        ))
+        .unwrap();
+    chart
+        .zoom_general_category_axis("category-x", 2.0, "C")
+        .unwrap();
+    assert_eq!(
+        chart.general_axis_effective_domain("category-x"),
+        Some(GeneralAxisDomain::Category(vec![
+            "B".into(),
+            "C".into(),
+            "D".into(),
+        ]))
+    );
+
+    chart
+        .replace_general_xy_dataset(
+            dataset,
+            GeneralXyInput::Category {
+                ids: None,
+                categories: vec!["D".into(), "E".into()],
+                category_indices: vec![0, 1],
+                y: vec![2.0, 3.0],
+                y_valid: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        chart.general_axis_effective_domain("category-x"),
+        Some(GeneralAxisDomain::Category(vec!["D".into(), "E".into()]))
+    );
+}
+
+#[test]
 fn grouped_columns_share_each_band_without_overlap_and_keep_hit_identity() {
     let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
     let pane = chart

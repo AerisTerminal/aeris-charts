@@ -168,6 +168,11 @@ Numeric and temporal general-axis handles expose `pan`, `zoom`, and `reset_view`
 Temporal anchors use whole JavaScript-safe epoch milliseconds, and temporal ticks are selected and
 formatted as bounded UTC intervals by the engine.
 
+Category general-axis handles use the same view lifecycle. `zoom` anchors on a visible category
+identity, `pan` shifts by a fraction of the visible category window, and `reset_view` restores the
+configured or automatic category registry. Automatic registry changes clamp the retained index
+window instead of keeping stale category strings.
+
 Executable Cartesian general axes accept bounded typed explicit ticks with optional portable labels. Explicit numeric,
 temporal, and category values drive the same labels and grid coordinates in Canvas2D, WebGPU, GPUI,
 native frames, persistence, and screenshots; omitted labels use the built-in formatter. Explicit

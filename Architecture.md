@@ -97,6 +97,10 @@ grid visibility combines with the chart-wide direction style, coincident device-
 and an enabled zero line replaces a coincident ordinary grid rule. Financial panes allocate no general
 axis storage and retain their established price/time axis output unchanged.
 
+Category runtime views are bounded index windows over the current configured or automatic registry.
+Zoom anchors use a category identity in the visible window, pan advances by a rounded visible-window
+fraction, and registry changes clamp the window without retaining stale category strings.
+
 General Cartesian data has a separate engine-owned typed-column store beside `DataLayer`. The first
 storage slice accepts numeric, epoch-millisecond temporal, and interned-category X columns plus numeric Y
 values, explicit validity, and stable generated or caller-provided row identities. Installation and

@@ -912,9 +912,19 @@ class general_axis_impl implements general_axis_api {
     this.chart.repaint();
   }
 
-  zoom(factor: number, anchor_value: number): void {
-    this.current();
-    parse_general_result<null>(this.chart.wasm.zoom_general_axis_result_json(this.id, factor, anchor_value));
+  zoom(factor: number, anchor_value: number | string): void {
+    const options = this.current();
+    const category = options.scale === "band" || options.scale === "point";
+    if (category !== (typeof anchor_value === "string")) {
+      throw new nucleuscharts_error(
+        "invalid_options",
+        category ? "category axis zoom requires a string anchor" : "continuous axis zoom requires a numeric anchor",
+      );
+    }
+    const result = category
+      ? this.chart.wasm.zoom_general_category_axis_result_json(this.id, factor, anchor_value as string)
+      : this.chart.wasm.zoom_general_axis_result_json(this.id, factor, anchor_value as number);
+    parse_general_result<null>(result);
     this.chart.repaint();
   }
 

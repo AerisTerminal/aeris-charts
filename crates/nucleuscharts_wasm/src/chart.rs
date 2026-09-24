@@ -2614,6 +2614,22 @@ impl NucleusChart {
         }
     }
 
+    pub fn zoom_general_category_axis_result_json(
+        &mut self,
+        id: &str,
+        factor: f64,
+        anchor_value: &str,
+    ) -> String {
+        match self
+            .inner
+            .borrow_mut()
+            .zoom_general_category_axis(id, factor, anchor_value)
+        {
+            Ok(()) => serde_json::json!({ "ok": true, "result": null }).to_string(),
+            Err(error) => serde_json::json!({ "ok": false, "error": { "code": error.code().name(), "message": error.message() } }).to_string(),
+        }
+    }
+
     pub fn reset_general_axis_view(&mut self, id: &str) -> bool {
         self.inner.borrow_mut().reset_general_axis_view(id)
     }
