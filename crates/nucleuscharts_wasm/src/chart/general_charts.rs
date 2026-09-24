@@ -4,7 +4,7 @@ use js_sys::{Float64Array, Uint32Array, Uint8Array};
 use nucleuscharts_engine::{
     AxisDimension, AxisPosition, CategoryScaleType, ChartError, ContinuousScaleType,
     GeneralAxisDomain, GeneralAxisOptions, GeneralAxisTick, GeneralBrushRange,
-    GeneralBrushSnapshot, GeneralDatasetId, GeneralHitMode, GeneralReferenceId,
+    GeneralBrushSnapshot, GeneralDatasetId, GeneralHitMode, GeneralLineStyle, GeneralReferenceId,
     GeneralReferenceOptions, GeneralRowId, GeneralRowIdentity, GeneralScaleType, GeneralSeriesId,
     GeneralSeriesKind, GeneralSeriesOptions, GeneralStackMode, GeneralTooltipSnapshot,
     GeneralXyInput, HorizontalDomain, MAX_GENERAL_TEMPORAL_MILLISECONDS,
@@ -102,6 +102,8 @@ struct SeriesInput {
     #[serde(default = "default_line_width")]
     line_width: f64,
     #[serde(default)]
+    line_style: Option<String>,
+    #[serde(default)]
     data_labels: bool,
     #[serde(default)]
     group_id: Option<String>,
@@ -165,6 +167,18 @@ fn default_line_width() -> f64 {
     2.0
 }
 
+fn line_style(value: Option<&str>) -> Result<GeneralLineStyle, ChartError> {
+    match value.unwrap_or("solid") {
+        "solid" => Ok(GeneralLineStyle::Solid),
+        "dotted" => Ok(GeneralLineStyle::Dotted),
+        "dashed" => Ok(GeneralLineStyle::Dashed),
+        _ => Err(ChartError::new(
+            nucleuscharts_engine::ErrorCode::InvalidOptions,
+            "general series line_style must be solid, dotted, or dashed",
+        )),
+    }
+}
+
 fn series_options_from_input(
     kind: GeneralSeriesKind,
     dataset: GeneralDatasetId,
@@ -213,6 +227,7 @@ fn series_options_from_input(
     options.color = input.color;
     options.point_radius = input.point_radius;
     options.line_width = input.line_width;
+    options.line_style = line_style(input.line_style.as_deref())?;
     options.data_labels = input.data_labels;
     options.group_id = input.group_id;
     options.stack_id = input.stack_id;
@@ -750,6 +765,11 @@ impl ChartInner {
             "color": series.color(),
             "point_radius": series.point_radius(),
             "line_width": series.line_width(),
+            "line_style": match series.line_style() {
+                GeneralLineStyle::Solid => "solid",
+                GeneralLineStyle::Dotted => "dotted",
+                GeneralLineStyle::Dashed => "dashed",
+            },
             "data_labels": series.data_labels(),
             "group_id": series.group_id(),
             "stack_id": series.stack_id(),
@@ -2463,5 +2483,19 @@ mod tests {
         assert_eq!(parse_ids(r#"[1,"row"]"#).unwrap().unwrap().len(), 2);
         assert!(axis_domain(GeneralScaleType::Linear, Some(json!([0.0, 1.0]))).is_some());
         assert!(axis_domain(GeneralScaleType::Linear, Some(json!(["bad", 1.0]))).is_none());
+    }
+
+    #[test]
+    fn general_line_styles_are_portable_and_reject_unknown_values() {
+        assert_eq!(line_style(None).unwrap(), GeneralLineStyle::Solid);
+        assert_eq!(
+            line_style(Some("dotted")).unwrap(),
+            GeneralLineStyle::Dotted
+        );
+        assert_eq!(
+            line_style(Some("dashed")).unwrap(),
+            GeneralLineStyle::Dashed
+        );
+        assert!(line_style(Some("large_dashed")).is_err());
     }
 }

@@ -186,7 +186,7 @@ impl ChartEngine {
                                         first_point: upper_first,
                                         point_count,
                                         width: (series.line_width() * vpr) as f32,
-                                        style: LineStyle::Solid,
+                                        style: series.line_style().render_style(),
                                         line_type: LineType::Simple,
                                         color,
                                     });
@@ -250,7 +250,7 @@ impl ChartEngine {
                                 first_point,
                                 point_count,
                                 width: (series.line_width() * vpr) as f32,
-                                style: LineStyle::Solid,
+                                style: series.line_style().render_style(),
                                 line_type: LineType::Simple,
                                 color,
                             });
@@ -311,7 +311,7 @@ impl ChartEngine {
                                 first_point: upper_first,
                                 point_count,
                                 width: (series.line_width() * vpr) as f32,
-                                style: LineStyle::Solid,
+                                style: series.line_style().render_style(),
                                 line_type: LineType::Simple,
                                 color,
                             });
@@ -319,7 +319,7 @@ impl ChartEngine {
                                 first_point: lower_first,
                                 point_count,
                                 width: (series.line_width() * vpr) as f32,
-                                style: LineStyle::Solid,
+                                style: series.line_style().render_style(),
                                 line_type: LineType::Simple,
                                 color,
                             });

@@ -4,6 +4,7 @@ use std::num::NonZeroU32;
 
 use nucleuscharts_core::scale::general_scale::{BandScale, LinearScale, PointScale};
 use nucleuscharts_render::color::Color;
+use nucleuscharts_render::draw_list::LineStyle;
 
 use crate::general_axes::NumericAxisScale;
 use crate::{
@@ -48,6 +49,24 @@ pub enum GeneralStackMode {
     Percent,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum GeneralLineStyle {
+    #[default]
+    Solid,
+    Dotted,
+    Dashed,
+}
+
+impl GeneralLineStyle {
+    pub(crate) fn render_style(self) -> LineStyle {
+        match self {
+            Self::Solid => LineStyle::Solid,
+            Self::Dotted => LineStyle::Dotted,
+            Self::Dashed => LineStyle::Dashed,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct GeneralSeriesId(NonZeroU32);
 
@@ -74,6 +93,7 @@ pub struct GeneralSeriesOptions {
     pub color: Option<String>,
     pub point_radius: f64,
     pub line_width: f64,
+    pub line_style: GeneralLineStyle,
     pub data_labels: bool,
     pub group_id: Option<String>,
     pub stack_id: Option<String>,
@@ -98,6 +118,7 @@ impl GeneralSeriesOptions {
             color: None,
             point_radius: 3.0,
             line_width: 2.0,
+            line_style: GeneralLineStyle::Solid,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -122,6 +143,7 @@ impl GeneralSeriesOptions {
             color: None,
             point_radius: 3.0,
             line_width: 2.0,
+            line_style: GeneralLineStyle::Solid,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -146,6 +168,7 @@ impl GeneralSeriesOptions {
             color: None,
             point_radius: 3.0,
             line_width: 2.0,
+            line_style: GeneralLineStyle::Solid,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -170,6 +193,7 @@ impl GeneralSeriesOptions {
             color: None,
             point_radius: 4.0,
             line_width: 2.0,
+            line_style: GeneralLineStyle::Solid,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -194,6 +218,7 @@ impl GeneralSeriesOptions {
             color: None,
             point_radius: 3.0,
             line_width: 2.0,
+            line_style: GeneralLineStyle::Solid,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -218,6 +243,7 @@ impl GeneralSeriesOptions {
             color: None,
             point_radius: 3.0,
             line_width: 2.0,
+            line_style: GeneralLineStyle::Solid,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -242,6 +268,7 @@ impl GeneralSeriesOptions {
             color: None,
             point_radius: 3.0,
             line_width: 2.0,
+            line_style: GeneralLineStyle::Solid,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -266,6 +293,7 @@ impl GeneralSeriesOptions {
             color: None,
             point_radius: 3.0,
             line_width: 2.0,
+            line_style: GeneralLineStyle::Solid,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -290,6 +318,7 @@ impl GeneralSeriesOptions {
             color: None,
             point_radius: 3.0,
             line_width: 2.0,
+            line_style: GeneralLineStyle::Solid,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -314,6 +343,7 @@ impl GeneralSeriesOptions {
             color: None,
             point_radius: 3.0,
             line_width: 2.0,
+            line_style: GeneralLineStyle::Solid,
             data_labels: false,
             group_id: None,
             stack_id: None,
@@ -335,6 +365,7 @@ pub struct GeneralSeries {
     color: Option<String>,
     point_radius: f64,
     line_width: f64,
+    line_style: GeneralLineStyle,
     data_labels: bool,
     group_id: Option<String>,
     stack_id: Option<String>,
@@ -934,6 +965,10 @@ impl GeneralSeries {
         self.line_width
     }
 
+    pub fn line_style(&self) -> GeneralLineStyle {
+        self.line_style
+    }
+
     pub fn data_labels(&self) -> bool {
         self.data_labels
     }
@@ -1128,6 +1163,7 @@ impl GeneralSeriesRegistry {
             color: options.color,
             point_radius: options.point_radius,
             line_width: options.line_width,
+            line_style: options.line_style,
             data_labels: options.data_labels,
             group_id: options.group_id,
             stack_id: options.stack_id,

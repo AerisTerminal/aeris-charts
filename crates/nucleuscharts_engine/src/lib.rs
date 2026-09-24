@@ -84,9 +84,9 @@ pub use general_data::{
 pub use general_series::{
     GeneralAccessibilityItem, GeneralAccessibilitySnapshot, GeneralBrushRange,
     GeneralBrushSnapshot, GeneralHitMode, GeneralLegendItem, GeneralLegendSnapshot,
-    GeneralReference, GeneralReferenceId, GeneralReferenceOptions, GeneralReferenceValue,
-    GeneralSeries, GeneralSeriesHit, GeneralSeriesId, GeneralSeriesKind, GeneralSeriesOptions,
-    GeneralSharedTooltipSnapshot, GeneralStackMode, GeneralTooltipSnapshot,
+    GeneralLineStyle, GeneralReference, GeneralReferenceId, GeneralReferenceOptions,
+    GeneralReferenceValue, GeneralSeries, GeneralSeriesHit, GeneralSeriesId, GeneralSeriesKind,
+    GeneralSeriesOptions, GeneralSharedTooltipSnapshot, GeneralStackMode, GeneralTooltipSnapshot,
     MAX_GENERAL_ACCESSIBILITY_ITEMS, MAX_GENERAL_BRUSH_ITEMS, MAX_GENERAL_POINT_RADIUS,
     MAX_GENERAL_REFERENCES, MAX_GENERAL_SERIES, MAX_GENERAL_SERIES_COLOR_BYTES,
     MAX_GENERAL_SERIES_GROUP_ID_BYTES, MAX_GENERAL_SERIES_STACK_ID_BYTES,

@@ -219,6 +219,8 @@ interface cartesian_series_options {
   color?: string;
   /** Stroke width for line, area, and range-area paths in CSS pixels; defaults to 2. */
   line_width?: number;
+  /** Portable stroke pattern for line, area, and range-area paths; defaults to solid. */
+  line_style?: "solid" | "dotted" | "dashed";
   group_id?: string;
   stack_id?: string;
   stack_mode?: "normal" | "percent";

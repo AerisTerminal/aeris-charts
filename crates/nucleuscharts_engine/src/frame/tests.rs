@@ -7,8 +7,8 @@ use super::conflation::{
 use super::*;
 use crate::{
     AxisDimension, CategoryScaleType, ContinuousScaleType, GeneralAxisDomain, GeneralAxisOptions,
-    GeneralAxisTick, GeneralRowId, GeneralRowIdentity, GeneralScaleType, GeneralSeriesKind,
-    GeneralSeriesOptions, GeneralStackMode, GeneralXyInput, HorizontalDomain,
+    GeneralAxisTick, GeneralLineStyle, GeneralRowId, GeneralRowIdentity, GeneralScaleType,
+    GeneralSeriesKind, GeneralSeriesOptions, GeneralStackMode, GeneralXyInput, HorizontalDomain,
 };
 use nucleuscharts_core::model::data_layer::DataLayer;
 use nucleuscharts_core::model::plot_list::{PlotList, PlotValues};
@@ -1938,6 +1938,7 @@ fn xy_line_preserves_gaps_hits_rows_and_shared_frame_geometry() {
     options.title = "Trend".into();
     options.data_labels = true;
     options.line_width = 4.0;
+    options.line_style = GeneralLineStyle::Dashed;
     let series = chart.add_general_series(options).unwrap();
     chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
 
@@ -1967,6 +1968,15 @@ fn xy_line_preserves_gaps_hits_rows_and_shared_frame_geometry() {
     assert_eq!(line_primitives, 2);
     assert!(frame.panes[pane].main.iter().any(|primitive| {
         matches!(primitive, Prim::Polyline { width, .. } if (*width - 4.0).abs() < f32::EPSILON)
+    }));
+    assert!(frame.panes[pane].main.iter().any(|primitive| {
+        matches!(
+            primitive,
+            Prim::Polyline {
+                style: LineStyle::Dashed,
+                ..
+            }
+        )
     }));
     assert!(frame.panes[pane]
         .main
