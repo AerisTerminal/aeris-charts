@@ -13,12 +13,30 @@ financial data and coordinate paths while completing general charting as a first
 The browser package remains `@axiusflowhq/financial` with an optional `/react` entry. Package naming
 or distribution changes require a compatibility decision; this plan does not introduce another product.
 
-This revision is an architecture review and future delivery contract, dated 2026-09-23. It does not
-claim that the fixes below are implemented or that runtime gates were rerun. The working tree already
-contained general-chart and demo changes during review; those changes are not release evidence.
+This revision is an architecture review and future delivery contract, dated 2026-09-23, with the
+implementation status below updated on 2026-09-24. It does not claim that the open work below is
+implemented. The working tree's earlier general-chart and demo changes were not release evidence;
+the completed slices listed below have since been committed and verified.
 [Architecture.md](Architecture.md) describes current ownership and execution. This document specifies
 the target and acceptance gates. [General_charts_api.md](General_charts_api.md) mixes implemented
 contracts with proposals and must be reconciled as part of R0 below.
+
+## Current implementation status (2026-09-24)
+
+The following narrow R3 visual-configuration slices are implemented and pushed to `github/main`:
+
+- `d17a39f` — general-series `line_width` is configurable through the engine, WASM, TypeScript,
+  persistence, and public browser API.
+- `819bcbb` — general path `line_style` supports portable `solid`, `dotted`, and `dashed` rendering
+  through the shared frame contract.
+- `6a5684b` — `xy_area` accepts an explicit finite `baseline_value`, with shared fill geometry,
+  hit-testing, persistence, WASM/TypeScript exposure, and public browser coverage.
+
+These slices passed the applicable Rust tests, clippy checks (including the WASM target), package
+lint/build/typecheck/package smoke test, Chromium browser tests, formatting checks, and the native
+release performance gate. They do not close R3: the phase still requires the rest of the Cartesian
+visual/data matrix and its complete acceptance evidence. R0-R8 remain open, and no competitive
+parity or release-completion claim should be inferred from these completed slices.
 
 ## Review conclusion and corrected status
 
