@@ -71,7 +71,9 @@ export async function create_chart(
   // state out of the headless engine. The plugin overlay is plain package-owned DOM (no wasm
   // involvement): it never takes input (gestures live on the top overlay), and the package
   // paints it after each engine frame.
-  if (getComputedStyle(container).position === "static") {
+  const previous_container_position = container.style.position;
+  const assigned_relative_position = getComputedStyle(container).position === "static";
+  if (assigned_relative_position) {
     container.style.position = "relative";
   }
   const gpu_pane = document.createElement("canvas");
@@ -116,6 +118,7 @@ export async function create_chart(
   const force_fallback_adapter = (
     options as (deep_partial<chart_options> & { __force_webgpu_fallback_adapter?: boolean }) | undefined
   )?.__force_webgpu_fallback_adapter === true;
+  const initial_horizontal_domain = options?.initialPane?.horizontal_domain ?? { type: "financial_time" };
   const wasm = await wasm_create_chart(
     gpu_pane,
     fallback_pane,
@@ -126,70 +129,89 @@ export async function create_chart(
     options?.backend === "canvas2d",
     simulate_adapter_failure,
     force_fallback_adapter,
-  );
-  // Default style settings first (theme.ts), explicit options second — the engine deep-merges
-  // successive patches, so caller options always win over the theme palette. `theme`,
-  // `handle_scroll`, `handle_scale`, `kinetic_scroll`, `tracking_mode`, backend selection/test
-  // flags, and `layout.panes.enableResize` are package-level keys and are not forwarded to the
-  // engine's options store (gestures/backend ownership live entirely in TS/WASM host code).
-  const { theme, handle_scroll, handle_scale, kinetic_scroll, wheel_behavior, tracking_mode, localization, accessibility, ...rest } =
-    (options ?? {}) as deep_partial<chart_options> & {
-      tracking_mode?: tracking_mode_options;
-    };
-  let engine_options: Record<string, unknown> = rest;
-  delete engine_options.backend;
-  delete engine_options.__simulate_webgpu_adapter_failure;
-  delete engine_options.__force_webgpu_fallback_adapter;
-  let panes_resize: boolean | undefined;
-  const panes = (rest.layout as { panes?: { enableResize?: boolean } } | undefined)?.panes;
-  if (panes?.enableResize !== undefined) {
-    const { enableResize, ...panes_rest } = panes;
-    engine_options = { ...rest, layout: { ...(rest.layout as object), panes: panes_rest } };
-    panes_resize = enableResize;
-  }
-  const selected_theme = (theme ?? default_theme_name) as theme_name;
-  // Named theme helpers carry package-level identity for live apply_options/reset semantics. The
-  // engine only receives the palette projection, never the package-only `theme` key.
-  wasm.apply_options(JSON.stringify(theme_options(theme_palette(selected_theme))));
-  if (Object.keys(engine_options).length > 0) {
-    wasm.apply_options(JSON.stringify(engine_options));
-  }
-  const auto_size = options?.autoSize === true;
-  const chart = new chart_impl(
-    wasm,
-    container,
-    gpu_pane,
-    fallback_pane,
-    plugin_canvas,
-    overlay,
-    auto_size,
-    selected_theme,
-  );
-  if (
-    handle_scroll !== undefined || handle_scale !== undefined || kinetic_scroll !== undefined ||
-    tracking_mode !== undefined
-  ) {
-    chart.apply_gesture_options(handle_scroll, handle_scale, kinetic_scroll, tracking_mode);
-  }
-  if (wheel_behavior !== undefined) chart.apply_options({ wheel_behavior });
-  if (panes_resize !== undefined) {
-    chart.apply_panes_resize(panes_resize);
-  }
-  if (localization !== undefined) {
-    // deep_partial recurses into the callback signatures; the fields are already optional, so the
-    // concrete localization_options shape is what apply_localization expects.
-    chart.apply_localization(localization as localization_options);
-  }
-  if (accessibility !== false) {
-    enable_accessibility(
-      chart,
-      accessibility === undefined || accessibility === true
-        ? {}
-        : accessibility as accessibility_options,
+    JSON.stringify(initial_horizontal_domain),
+  ).catch((error: unknown) => {
+    for (const canvas of [gpu_pane, fallback_pane, plugin_canvas, overlay]) canvas.remove();
+    if (assigned_relative_position) container.style.position = previous_container_position;
+    throw error;
+  });
+  let chart: chart_impl | null = null;
+  try {
+    // Default style settings first (theme.ts), explicit options second — the engine deep-merges
+    // successive patches, so caller options always win over the theme palette. `theme`,
+    // `handle_scroll`, `handle_scale`, `kinetic_scroll`, `tracking_mode`, backend selection/test
+    // flags, and `layout.panes.enableResize` are package-level keys and are not forwarded to the
+    // engine's options store (gestures/backend ownership live entirely in TS/WASM host code).
+    const { theme, initialPane, handle_scroll, handle_scale, kinetic_scroll, wheel_behavior, tracking_mode, localization, accessibility, ...rest } =
+      (options ?? {}) as deep_partial<chart_options> & {
+        tracking_mode?: tracking_mode_options;
+      };
+    let engine_options: Record<string, unknown> = rest;
+    delete engine_options.backend;
+    delete engine_options.__simulate_webgpu_adapter_failure;
+    delete engine_options.__force_webgpu_fallback_adapter;
+    let panes_resize: boolean | undefined;
+    const panes = (rest.layout as { panes?: { enableResize?: boolean } } | undefined)?.panes;
+    if (panes?.enableResize !== undefined) {
+      const { enableResize, ...panes_rest } = panes;
+      engine_options = { ...rest, layout: { ...(rest.layout as object), panes: panes_rest } };
+      panes_resize = enableResize;
+    }
+    const selected_theme = (theme ?? default_theme_name) as theme_name;
+    // Named theme helpers carry package-level identity for live apply_options/reset semantics. The
+    // engine only receives the palette projection, never the package-only `theme` key.
+    wasm.apply_options(JSON.stringify(theme_options(theme_palette(selected_theme))));
+    if (Object.keys(engine_options).length > 0) {
+      wasm.apply_options(JSON.stringify(engine_options));
+    }
+    const auto_size = options?.autoSize === true;
+    chart = new chart_impl(
+      wasm,
+      container,
+      gpu_pane,
+      fallback_pane,
+      plugin_canvas,
+      overlay,
+      auto_size,
+      selected_theme,
+      initialPane !== undefined && initial_horizontal_domain.type !== "financial_time",
     );
+    if (
+      handle_scroll !== undefined || handle_scale !== undefined || kinetic_scroll !== undefined ||
+      tracking_mode !== undefined
+    ) {
+      chart.apply_gesture_options(handle_scroll, handle_scale, kinetic_scroll, tracking_mode);
+    }
+    if (wheel_behavior !== undefined) chart.apply_options({ wheel_behavior });
+    if (panes_resize !== undefined) {
+      chart.apply_panes_resize(panes_resize);
+    }
+    if (localization !== undefined) {
+      // deep_partial recurses into the callback signatures; the fields are already optional, so the
+      // concrete localization_options shape is what apply_localization expects.
+      chart.apply_localization(localization as localization_options);
+    }
+    if (accessibility !== false) {
+      enable_accessibility(
+        chart,
+        accessibility === undefined || accessibility === true
+          ? {}
+          : accessibility as accessibility_options,
+      );
+    }
+    chart.render();
+    return chart;
+  } catch (error) {
+    if (chart !== null) {
+      chart.remove();
+    } else {
+      wasm.dispose();
+      wasm.free();
+      for (const canvas of [gpu_pane, fallback_pane, plugin_canvas, overlay]) canvas.remove();
+    }
+    if (assigned_relative_position) container.style.position = previous_container_position;
+    throw error;
   }
-  chart.render();
-  return chart;
 }
 
 /** Camel-case alias of {@link create_chart}; both return the same chart API. */

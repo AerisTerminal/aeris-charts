@@ -1,5 +1,82 @@
 import { test, expect } from "@playwright/test";
 
+test("general charts can own the first pane and failed creation leaves no host resources", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const host = document.createElement("div");
+    host.style.width = "640px";
+    host.style.height = "320px";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, {
+      backend: "canvas2d",
+      autoSize: false,
+      initialPane: { horizontal_domain: { type: "category", scale: "point" } },
+    });
+    const initial = {
+      pane_count: chart.panes().length,
+      series_count: chart.panes()[0].get_series().length,
+      aria_label: host.getAttribute("aria-label"),
+      domain: chart.export_state().panes[0].horizontal_domain,
+    };
+    chart.remove();
+
+    const rejected_host = document.createElement("div");
+    rejected_host.style.width = "320px";
+    rejected_host.style.height = "180px";
+    document.body.appendChild(rejected_host);
+    let rejected = false;
+    try {
+      await create_chart(rejected_host, {
+        backend: "canvas2d",
+        initialPane: { horizontal_domain: { type: "unsupported" } },
+      });
+    } catch {
+      rejected = true;
+    }
+    const failed = {
+      rejected,
+      child_count: rejected_host.childElementCount,
+      inline_position: rejected_host.style.position,
+    };
+    const late_rejected_host = document.createElement("div");
+    late_rejected_host.style.width = "320px";
+    late_rejected_host.style.height = "180px";
+    document.body.appendChild(late_rejected_host);
+    let late_rejected = false;
+    try {
+      const late_options = { backend: "canvas2d" };
+      Object.defineProperty(late_options, "localization", {
+        enumerable: true,
+        get() { throw new Error("late creation failure"); },
+      });
+      await create_chart(late_rejected_host, late_options);
+    } catch {
+      late_rejected = true;
+    }
+    const late_failed = {
+      rejected: late_rejected,
+      child_count: late_rejected_host.childElementCount,
+      inline_position: late_rejected_host.style.position,
+    };
+    host.remove();
+    rejected_host.remove();
+    late_rejected_host.remove();
+    return { initial, failed, late_failed };
+  });
+
+  expect(result).toEqual({
+    initial: {
+      pane_count: 1,
+      series_count: 0,
+      aria_label: "General chart",
+      domain: { Category: { scale: "Point" } },
+    },
+    failed: { rejected: true, child_count: 0, inline_position: "" },
+    late_failed: { rejected: true, child_count: 0, inline_position: "" },
+  });
+});
+
 test("general dashboard showcases every released Cartesian example", async ({ page, browserName }) => {
   const page_errors = [];
   page.on("pageerror", (error) => page_errors.push(error.message));

@@ -223,6 +223,19 @@ fn horizontal_domain(input: DomainInput) -> HorizontalDomain {
     }
 }
 
+pub(super) fn parse_initial_horizontal_domain(
+    options_json: &str,
+) -> Result<HorizontalDomain, ChartError> {
+    serde_json::from_str::<DomainInput>(options_json)
+        .map(horizontal_domain)
+        .map_err(|error| {
+            ChartError::new(
+                nucleuscharts_engine::ErrorCode::InvalidOptions,
+                format!("invalid initial horizontal domain: {error}"),
+            )
+        })
+}
+
 fn dimension(value: &str) -> Option<AxisDimension> {
     match value {
         "x" => Some(AxisDimension::X),

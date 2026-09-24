@@ -1577,19 +1577,45 @@ pub struct ChartEngine {
 
 impl ChartEngine {
     pub fn new(css_width: f64, css_height: f64, dpr: f64) -> Self {
+        Self::new_with_initial_domain(css_width, css_height, dpr, HorizontalDomain::FinancialTime)
+            .expect("the default financial domain requires no bounded registry entry")
+    }
+
+    /// Construct the chart with its canonical first-pane domain. Financial charts retain the
+    /// historical primary candlestick series; general charts start with one preserved general pane
+    /// and no hidden financial series or transient financial topology.
+    pub fn new_with_initial_domain(
+        css_width: f64,
+        css_height: f64,
+        dpr: f64,
+        initial_domain: HorizontalDomain,
+    ) -> Result<Self, ChartError> {
+        let mut general_horizontal_domains = domains::HorizontalDomainRegistry::new();
+        let initial_binding = general_horizontal_domains.register(initial_domain)?;
+        let mut initial_pane = Pane::with_chart_ids(PaneId(NonZeroU32::MIN), 1);
+        initial_pane.general_horizontal_domain = initial_binding;
+        initial_pane.preserve_empty = !initial_domain.is_financial_time();
         let mut data = DataLayer::new();
-        let main = data.add_series();
+        let (series, series_order) = if initial_domain.is_financial_time() {
+            let main = data.add_series();
+            (
+                vec![SeriesEntry::new(main, SeriesKind::Candlestick)].into(),
+                vec![main],
+            )
+        } else {
+            (Vec::<SeriesEntry>::new().into(), Vec::new())
+        };
         data.begin_merged_time_transaction();
-        Self {
+        Ok(Self {
             time_scale: TimeScaleCore::new(TimeScaleOptions::default()),
-            panes: vec![Pane::with_chart_ids(PaneId(NonZeroU32::MIN), 1)],
+            panes: vec![initial_pane],
             price_formatter: PriceFormatter::default(),
             data,
-            series: vec![SeriesEntry::new(main, SeriesKind::Candlestick)].into(),
+            series,
             tick_marks: TimeTickMarks::new(),
             next_pane_id: 2,
             next_persistent_pane_id: 2,
-            general_horizontal_domains: domains::HorizontalDomainRegistry::new(),
+            general_horizontal_domains,
             general_axes: general_axes::GeneralAxisRegistry::new(),
             general_data: None,
             general_series: None,
@@ -1630,7 +1656,7 @@ impl ChartEngine {
             synced_first_time: None,
             date_format: DEFAULT_DATE_FORMAT.to_string(),
             month_names: MonthNames::default(),
-            series_order: vec![main],
+            series_order,
             series_order_explicit: false,
             hovered_series: None,
             selection: None,
@@ -1657,7 +1683,7 @@ impl ChartEngine {
             retained_frame: frame::RetainedFrame::default(),
             frame_build_stats: FrameBuildStats::default(),
             lod_work: Cell::new(LodWorkStats::default()),
-        }
+        })
     }
 
     #[doc(hidden)]

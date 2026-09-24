@@ -543,6 +543,12 @@ Browser WebGPU shares one page-wide adapter/device/queue and atlas while retaini
 
 The browser package's default `auto` backend prefers WebGPU but keeps Canvas2D available when the browser exposes no usable adapter; `navigator.gpu` alone is not proof of adapter availability. A failed adapter request is cached for that page session so independently mounted charts and viewport remounts do not repeatedly probe an unavailable adapter. Device-initialization failures remain retryable, explicit fallback-adapter diagnostics are isolated from the ordinary adapter result, and a reload permits a new adapter probe after browser or driver settings change. The General dashboard reports the actual backend and fallback reason rather than rejecting charts when WebGPU is unavailable.
 
+Chart construction accepts an explicit first-pane horizontal domain. The engine creates either the
+compatible financial pane plus primary candlestick series or one preserved general pane with no
+financial series; browser hosts do not add a temporary financial pane and remove it afterward.
+Rejected construction removes the canvases installed by that attempt before control returns to the
+caller.
+
 ## Evidence benchmark subsystem
 
 `benchmarks/` is development and release evidence infrastructure outside every production crate and the published package. Its single Node entry point builds the actual release package, drives the public browser API through the existing Playwright demo host, generates deterministic versioned OHLCV data, validates versioned JSON results, compares explicit baselines, applies centralized budgets, and emits human- and website-readable artifacts. The browser page is served by `examples/web_demo/test_server.mjs` only for automation; it is not part of the npm package.

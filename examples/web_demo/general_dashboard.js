@@ -198,6 +198,7 @@ async function mount_example(example, card) {
     // must still render the same chart through the engine's Canvas2D fallback.
     backend: requested_backend,
     theme: active_theme,
+    initialPane: { horizontal_domain: example.horizontal_domain },
     grid: { vertLines: { visible: false }, horzLines: { visible: false } },
     // This page is a vertically scrolling dashboard. Wheel/pinch gestures belong to the page,
     // otherwise every chart card traps the user's scroll and makes the workspace feel frozen.
@@ -215,8 +216,7 @@ async function mount_example(example, card) {
     },
     kinetic_scroll: false,
   });
-  const pane = chart.add_pane({ preserve_empty: true, horizontal_domain: example.horizontal_domain });
-  chart.remove_pane(0);
+  const pane = chart.panes()[0];
   const pane_index = pane.pane_index();
   for (const axis of example.axes) chart.add_axis({ ...axis, pane: pane_index });
 

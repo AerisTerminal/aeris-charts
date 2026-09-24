@@ -5169,6 +5169,32 @@ fn pane_domains_default_to_financial_time_and_follow_pane_identity() {
 }
 
 #[test]
+fn initial_general_domain_has_one_preserved_pane_and_no_financial_series() {
+    let chart = ChartEngine::new_with_initial_domain(
+        800.0,
+        500.0,
+        1.0,
+        HorizontalDomain::Category {
+            scale: CategoryScaleType::Point,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(chart.panes.len(), 1);
+    assert!(chart.panes[0].preserve_empty);
+    assert_eq!(
+        chart.pane_horizontal_domain(0),
+        Some(HorizontalDomain::Category {
+            scale: CategoryScaleType::Point
+        })
+    );
+    assert!(chart.series_entries().is_empty());
+    assert!(chart.series_order.is_empty());
+    assert_eq!(chart.data_layer().series_count(), 0);
+    assert_eq!(chart.general_horizontal_domains.len(), 1);
+}
+
+#[test]
 fn general_data_is_lazy_atomic_and_releases_capacity_when_empty() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     assert_eq!(chart.general_dataset_count(), 0);

@@ -248,6 +248,11 @@ export interface general_pane_options {
   horizontal_domain: horizontal_domain_options;
 }
 
+/** Creation-time topology for the chart's canonical first pane. */
+export interface initial_pane_options {
+  horizontal_domain: horizontal_domain_options;
+}
+
 export type axis_dimension = "x" | "y" | "angle" | "radius";
 export type axis_position = "top" | "bottom" | "left" | "right";
 export type general_scale_type =
@@ -1215,6 +1220,12 @@ export interface tracking_mode_options {
 }
 
 export interface chart_options {
+  /**
+   * Domain of the canonical first pane. Omit for the compatible financial-time chart with its
+   * primary candlestick series. A general domain creates one preserved pane with no hidden
+   * financial series or transient pane removal.
+   */
+  initialPane: initial_pane_options;
   layout: {
     background: { type: string; color: string };
     textColor: string;

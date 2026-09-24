@@ -666,8 +666,12 @@ pub async fn create_chart(
     force_canvas2d: bool,
     simulate_adapter_failure: bool,
     force_fallback_adapter: bool,
+    initial_horizontal_domain_json: String,
 ) -> Result<NucleusChart, JsValue> {
     console_error_panic_hook::set_once();
+    let initial_horizontal_domain =
+        general_charts::parse_initial_horizontal_domain(&initial_horizontal_domain_json)
+            .map_err(|error| JsValue::from_str(error.message()))?;
 
     // Keep handles to all canvas elements so the engine can own device-pixel resizing
     // (create_surface takes the pane canvas by value; the clone is just a JS reference).
@@ -728,7 +732,13 @@ pub async fn create_chart(
         backend_status,
         bitmap_w,
         bitmap_h,
-        engine: ChartEngine::new(css_width, css_height, dpr),
+        engine: ChartEngine::new_with_initial_domain(
+            css_width,
+            css_height,
+            dpr,
+            initial_horizontal_domain,
+        )
+        .map_err(|error| JsValue::from_str(error.message()))?,
         input: GestureResolver::default(),
         frame: nucleuscharts_engine::ChartFrame::default(),
         axis_frame: AxisFrame::default(),

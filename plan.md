@@ -193,7 +193,7 @@ Unify pointer, touch and keyboard commands for general selection, brushing and v
 axis-versus-item tooltip membership from the correct oriented domain, including horizontal bars,
 duplicate values, missing rows and mixed series. Synchronization uses semantic values or declared
 index matching with explicit mismatch policy. A bounded host coordinator may route events between
-independent charts; each receiving engine resolves its own semantics. Origin/revision tracking must
+independent charts; each receiving engine resolves its own semantics. Source/revision tracking must
 prevent loops and disposal must remove subscriptions.
 
 Customization receives bounded read-only snapshots or returns validated styles/marks through an

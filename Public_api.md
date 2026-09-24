@@ -154,6 +154,12 @@ series options, not a separate primitive or rendering implementation.
 Chart surfaces do not inject product attribution or branding. `layout` contains only visual chart
 configuration; there is no attribution-logo option in the public chart contract.
 
+`create_chart(container, { initialPane: { horizontal_domain } })` constructs the canonical first
+pane with continuous, temporal, category, or polar semantics. General-first charts contain no hidden
+financial series and need no add-then-remove cleanup. Omitting `initialPane` retains the compatible
+financial-time pane and primary candlestick series. Invalid creation options remove every canvas the
+attempt installed before rejecting.
+
 ## Experimental surfaces
 
 Custom series, pane/series/canvas primitives, the exported custom-series/primitive feature packs,

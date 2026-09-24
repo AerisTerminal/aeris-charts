@@ -3904,6 +3904,7 @@ export class chart_impl implements chart_api {
     private readonly overlay: HTMLCanvasElement,
     auto_size: boolean,
     private selected_theme: theme_name = default_theme_name,
+    initial_general = false,
   ) {
     this.wasm_instance = wasm;
     const plugin_ctx = plugin_canvas.getContext("2d");
@@ -3919,7 +3920,7 @@ export class chart_impl implements chart_api {
     this.auto_size = auto_size;
     this.container.setAttribute("role", "group");
     if (!this.container.hasAttribute("aria-label")) {
-      this.container.setAttribute("aria-label", "Financial chart");
+      this.container.setAttribute("aria-label", initial_general ? "General chart" : "Financial chart");
     }
     this.detach_gestures = install_gestures(this);
     if (auto_size) {
