@@ -534,6 +534,7 @@ impl ChartEngine {
                     ]
                 }));
                 out.push(Prim::BandFill {
+                    line_type: LineType::Simple,
                     upper_first,
                     lower_first,
                     point_count: rows.len() as u32,

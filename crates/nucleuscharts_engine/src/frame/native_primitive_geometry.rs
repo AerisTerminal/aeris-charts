@@ -130,6 +130,7 @@ impl ChartEngine {
             });
             // The official renderer strokes `lines` before filling `region`.
             out.push(Prim::BandFill {
+                line_type: LineType::Simple,
                 upper_first,
                 lower_first,
                 point_count: count,

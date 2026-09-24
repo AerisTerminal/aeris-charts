@@ -129,6 +129,8 @@ struct SeriesV2 {
     #[serde(default)]
     line_style: crate::GeneralLineStyle,
     #[serde(default)]
+    interpolation: crate::GeneralInterpolation,
+    #[serde(default)]
     baseline_value: Option<f64>,
     data_labels: bool,
     #[serde(default)]
@@ -701,6 +703,7 @@ impl ChartEngine {
                     point_markers: series.point_markers(),
                     line_width: series.line_width(),
                     line_style: series.line_style(),
+                    interpolation: series.interpolation(),
                     baseline_value: series.baseline_value(),
                     data_labels: series.data_labels(),
                     group_id: series.group_id().map(str::to_string),
@@ -1228,6 +1231,7 @@ impl ChartEngine {
                 point_markers: series.point_markers,
                 line_width: series.line_width,
                 line_style: series.line_style,
+                interpolation: series.interpolation,
                 baseline_value: series.baseline_value,
                 data_labels: series.data_labels,
                 group_id: series.group_id,
@@ -1409,6 +1413,7 @@ mod tests {
         line.title = "Category trend".into();
         line.point_markers = true;
         line.point_radius = 7.0;
+        line.interpolation = crate::GeneralInterpolation::Curved;
         chart.add_general_series(line).unwrap();
         let mut area =
             crate::GeneralSeriesOptions::xy_area(pane, dataset, "category-x", "category-y");
@@ -1427,6 +1432,7 @@ mod tests {
         assert_eq!(value["series"][0]["stack_mode"], "Percent");
         assert_eq!(value["series"][1]["point_markers"], true);
         assert_eq!(value["series"][1]["point_radius"], 7.0);
+        assert_eq!(value["series"][1]["interpolation"], "Curved");
         assert_eq!(value["series"][2]["stack_id"], "area-share");
         assert_eq!(value["series"][2]["stack_mode"], "Percent");
         let mut restored = ChartEngine::new(800.0, 500.0, 1.0);

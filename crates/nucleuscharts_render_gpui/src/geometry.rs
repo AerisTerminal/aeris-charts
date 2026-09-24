@@ -210,6 +210,9 @@ pub struct Scratch {
     points: Vec<LinePoint>,
     /// Curve expansion of the window, reused across prims.
     expanded: Vec<LinePoint>,
+    /// Coupled curve expansions for band boundaries.
+    band_upper: Vec<LinePoint>,
+    band_lower: Vec<LinePoint>,
     /// Area tessellation output.
     area: AreaMesh,
     /// `[f32; 2]` staging for polygons, discs, rings and band fills.
@@ -223,6 +226,8 @@ impl Scratch {
     pub fn capacity_bytes(&self) -> usize {
         self.points.capacity() * std::mem::size_of::<LinePoint>()
             + self.expanded.capacity() * std::mem::size_of::<LinePoint>()
+            + self.band_upper.capacity() * std::mem::size_of::<LinePoint>()
+            + self.band_lower.capacity() * std::mem::size_of::<LinePoint>()
             + self.area.vertices.capacity()
                 * std::mem::size_of::<nucleuscharts_render::line::LineVertex>()
             + self.verts.capacity() * std::mem::size_of::<[f32; 2]>()
@@ -680,6 +685,7 @@ pub(crate) fn band_fill_mesh(
     upper_first: u32,
     lower_first: u32,
     count: u32,
+    line_type: LineType,
 ) -> (u32, u32) {
     let at = |first: u32, i: u32| -> Option<[f32; 2]> {
         points.get(first as usize + i as usize).copied()
@@ -687,13 +693,44 @@ pub(crate) fn band_fill_mesh(
     if count < 2 || at(upper_first, count - 1).is_none() || at(lower_first, count - 1).is_none() {
         return (pool.len() as u32, 0);
     }
-    scratch.verts.clear();
-    for i in 0..count - 1 {
-        let (u0, u1) = (at(upper_first, i), at(upper_first, i + 1));
-        let (l0, l1) = (at(lower_first, i), at(lower_first, i + 1));
-        let (Some(u0), Some(u1), Some(l0), Some(l1)) = (u0, u1, l0, l1) else {
+    scratch.points.clear();
+    scratch.expanded.clear();
+    for i in 0..count {
+        let (Some(upper), Some(lower)) = (at(upper_first, i), at(lower_first, i)) else {
             break;
         };
+        scratch.points.push(LinePoint {
+            x: f64::from(upper[0]),
+            y: f64::from(upper[1]),
+        });
+        scratch.expanded.push(LinePoint {
+            x: f64::from(lower[0]),
+            y: f64::from(lower[1]),
+        });
+    }
+    nucleuscharts_render::line::expand_band_into(
+        &scratch.points,
+        &scratch.expanded,
+        line_type,
+        1.0,
+        1.0,
+        &mut scratch.band_upper,
+        &mut scratch.band_lower,
+    );
+    let expanded_count = scratch.band_upper.len().min(scratch.band_lower.len());
+    if expanded_count < 2 {
+        return (pool.len() as u32, 0);
+    }
+    scratch.verts.clear();
+    for i in 0..expanded_count - 1 {
+        let upper = scratch.band_upper[i];
+        let next_upper = scratch.band_upper[i + 1];
+        let lower = scratch.band_lower[i];
+        let next_lower = scratch.band_lower[i + 1];
+        let u0 = [upper.x as f32, upper.y as f32];
+        let u1 = [next_upper.x as f32, next_upper.y as f32];
+        let l0 = [lower.x as f32, lower.y as f32];
+        let l1 = [next_lower.x as f32, next_lower.y as f32];
         scratch.verts.extend([u0, l0, l1, u0, l1, u1]);
     }
     push_vertices(pool, scratch.verts.iter().copied())
@@ -987,7 +1024,15 @@ mod tests {
         // Upper edge at rows 0..4, lower edge at rows 4..8 of one shared pool.
         let mut pts: Vec<[f32; 2]> = (0..4).map(|i| [i as f32, 0.0]).collect();
         pts.extend((0..4).map(|i| [i as f32, 5.0]));
-        let (_, count) = band_fill_mesh(&mut Scratch::default(), &mut pool, &pts, 0, 4, 4);
+        let (_, count) = band_fill_mesh(
+            &mut Scratch::default(),
+            &mut pool,
+            &pts,
+            0,
+            4,
+            4,
+            LineType::Simple,
+        );
         assert_eq!(count, 3 * 6, "3 segments x 2 triangles x 3 vertices");
     }
 
@@ -996,7 +1041,16 @@ mod tests {
         let mut pool = Vec::new();
         let one = [[0.0f32, 0.0]];
         assert_eq!(
-            band_fill_mesh(&mut Scratch::default(), &mut pool, &one, 0, 0, 1).1,
+            band_fill_mesh(
+                &mut Scratch::default(),
+                &mut pool,
+                &one,
+                0,
+                0,
+                1,
+                LineType::Simple,
+            )
+            .1,
             0
         );
     }

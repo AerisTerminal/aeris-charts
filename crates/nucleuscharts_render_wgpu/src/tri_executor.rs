@@ -12,8 +12,8 @@
 
 use nucleuscharts_render::draw_list::{LineType, Prim};
 use nucleuscharts_render::line::{
-    build_area_fill, build_disc, build_line_stroke, AreaMesh, LineParams, LinePoint, LineVertex,
-    StrokeMesh,
+    build_area_fill, build_disc, build_line_stroke, expand_band, AreaMesh, LineParams, LinePoint,
+    LineVertex, StrokeMesh,
 };
 
 use crate::tri_pipeline::TriVertex;
@@ -253,10 +253,12 @@ pub fn geom_prim_to_tris(prim: &Prim, points: &[[f32; 2]], out: &mut Vec<TriVert
             upper_first,
             lower_first,
             point_count,
+            line_type,
             fill,
         } => {
             let upper = pool_slice(points, *upper_first, *point_count);
             let lower = pool_slice(points, *lower_first, *point_count);
+            let (upper, lower) = expand_band(&upper, &lower, *line_type);
             let n = upper.len().min(lower.len());
             if n < 2 {
                 return;

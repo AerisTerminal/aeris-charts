@@ -1,6 +1,6 @@
 use nucleuscharts_core::scale::general_scale::{BandScale, LinearScale, PointScale};
 use nucleuscharts_render::color::Color;
-use nucleuscharts_render::draw_list::{Gradient, IRect, LineStyle, LineType, Prim, TextAlign};
+use nucleuscharts_render::draw_list::{Gradient, IRect, LineStyle, Prim, TextAlign};
 
 use crate::general_axes::NumericAxisScale;
 use crate::{
@@ -181,6 +181,7 @@ impl ChartEngine {
                                         upper_first,
                                         lower_first,
                                         point_count,
+                                        line_type: series.interpolation().render_type(),
                                         fill,
                                     });
                                     out.push(Prim::Polyline {
@@ -188,7 +189,7 @@ impl ChartEngine {
                                         point_count,
                                         width: (series.line_width() * vpr) as f32,
                                         style: series.line_style().render_style(),
-                                        line_type: LineType::Simple,
+                                        line_type: series.interpolation().render_type(),
                                         color,
                                     });
                                 } else {
@@ -252,7 +253,7 @@ impl ChartEngine {
                                     first_point,
                                     point_count,
                                     base_y: (base_y * vpr) as f32,
-                                    line_type: LineType::Simple,
+                                    line_type: series.interpolation().render_type(),
                                     gradient: Gradient {
                                         top: Color::rgba(color.r(), color.g(), color.b(), 72),
                                         bottom: Color::rgba(color.r(), color.g(), color.b(), 24),
@@ -264,7 +265,7 @@ impl ChartEngine {
                                 point_count,
                                 width: (series.line_width() * vpr) as f32,
                                 style: series.line_style().render_style(),
-                                line_type: LineType::Simple,
+                                line_type: series.interpolation().render_type(),
                                 color,
                             });
                         } else {
@@ -330,6 +331,7 @@ impl ChartEngine {
                                 upper_first,
                                 lower_first,
                                 point_count,
+                                line_type: series.interpolation().render_type(),
                                 fill,
                             });
                             out.push(Prim::Polyline {
@@ -337,7 +339,7 @@ impl ChartEngine {
                                 point_count,
                                 width: (series.line_width() * vpr) as f32,
                                 style: series.line_style().render_style(),
-                                line_type: LineType::Simple,
+                                line_type: series.interpolation().render_type(),
                                 color,
                             });
                             out.push(Prim::Polyline {
@@ -345,7 +347,7 @@ impl ChartEngine {
                                 point_count,
                                 width: (series.line_width() * vpr) as f32,
                                 style: series.line_style().render_style(),
-                                line_type: LineType::Simple,
+                                line_type: series.interpolation().render_type(),
                                 color,
                             });
                         } else {

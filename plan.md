@@ -35,6 +35,9 @@ The following narrow R3 visual-configuration slices are implemented and pushed t
   with configurable radius, shared frame geometry, matching hit targets, atomic live mutation,
   V2 persistence, WASM/TypeScript exposure, and public browser coverage. The same slice repairs
   live mutation of the previously released `line_width`, `line_style`, and `baseline_value` fields.
+- General line, area, stacked-area, and range-area paths accept persisted `linear`, `step`, and
+  `curved` interpolation. Shared path and coupled band expansion drive every renderer and matching
+  exact/nearest hit geometry, while stacked areas reject mixed interpolation that could open seams.
 
 These slices passed the applicable Rust tests, clippy checks (including the WASM target), package
 lint/build/typecheck/package smoke test, Chromium browser tests, formatting checks, and the native

@@ -372,6 +372,7 @@ impl ChartEngine {
             let close_first = points.len() as u32;
             points.extend_from_slice(&closes);
             out.push(Prim::BandFill {
+                line_type: LineType::Simple,
                 upper_first: high_first,
                 lower_first: close_first,
                 point_count: highs.len() as u32,
@@ -382,6 +383,7 @@ impl ChartEngine {
             let low_first = points.len() as u32;
             points.extend_from_slice(&lows);
             out.push(Prim::BandFill {
+                line_type: LineType::Simple,
                 upper_first: close_again,
                 lower_first: low_first,
                 point_count: lows.len() as u32,
@@ -534,6 +536,7 @@ impl ChartEngine {
                 let lower = points.len() as u32;
                 points.extend_from_slice(&previous);
                 out.push(Prim::BandFill {
+                    line_type: LineType::Simple,
                     upper_first: upper,
                     lower_first: lower,
                     point_count: cumulative.len() as u32,

@@ -4,7 +4,8 @@ use std::num::NonZeroU32;
 
 use nucleuscharts_core::scale::general_scale::{BandScale, LinearScale, PointScale};
 use nucleuscharts_render::color::Color;
-use nucleuscharts_render::draw_list::LineStyle;
+use nucleuscharts_render::draw_list::{LineStyle, LineType};
+use nucleuscharts_render::line::{expand_band_into, expand_line_into, LinePoint};
 
 use crate::general_axes::NumericAxisScale;
 use crate::{
@@ -67,6 +68,24 @@ impl GeneralLineStyle {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum GeneralInterpolation {
+    #[default]
+    Linear,
+    Step,
+    Curved,
+}
+
+impl GeneralInterpolation {
+    pub(crate) fn render_type(self) -> LineType {
+        match self {
+            Self::Linear => LineType::Simple,
+            Self::Step => LineType::WithSteps,
+            Self::Curved => LineType::Curved,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct GeneralSeriesId(NonZeroU32);
 
@@ -95,6 +114,7 @@ pub struct GeneralSeriesOptions {
     pub point_markers: bool,
     pub line_width: f64,
     pub line_style: GeneralLineStyle,
+    pub interpolation: GeneralInterpolation,
     pub baseline_value: Option<f64>,
     pub data_labels: bool,
     pub group_id: Option<String>,
@@ -122,6 +142,7 @@ impl GeneralSeriesOptions {
             point_markers: false,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
+            interpolation: GeneralInterpolation::Linear,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -149,6 +170,7 @@ impl GeneralSeriesOptions {
             point_markers: false,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
+            interpolation: GeneralInterpolation::Linear,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -176,6 +198,7 @@ impl GeneralSeriesOptions {
             point_markers: false,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
+            interpolation: GeneralInterpolation::Linear,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -203,6 +226,7 @@ impl GeneralSeriesOptions {
             point_markers: false,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
+            interpolation: GeneralInterpolation::Linear,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -230,6 +254,7 @@ impl GeneralSeriesOptions {
             point_markers: false,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
+            interpolation: GeneralInterpolation::Linear,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -257,6 +282,7 @@ impl GeneralSeriesOptions {
             point_markers: false,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
+            interpolation: GeneralInterpolation::Linear,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -284,6 +310,7 @@ impl GeneralSeriesOptions {
             point_markers: false,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
+            interpolation: GeneralInterpolation::Linear,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -311,6 +338,7 @@ impl GeneralSeriesOptions {
             point_markers: false,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
+            interpolation: GeneralInterpolation::Linear,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -338,6 +366,7 @@ impl GeneralSeriesOptions {
             point_markers: false,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
+            interpolation: GeneralInterpolation::Linear,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -365,6 +394,7 @@ impl GeneralSeriesOptions {
             point_markers: false,
             line_width: 2.0,
             line_style: GeneralLineStyle::Solid,
+            interpolation: GeneralInterpolation::Linear,
             baseline_value: None,
             data_labels: false,
             group_id: None,
@@ -389,6 +419,7 @@ pub struct GeneralSeries {
     point_markers: bool,
     line_width: f64,
     line_style: GeneralLineStyle,
+    interpolation: GeneralInterpolation,
     baseline_value: Option<f64>,
     data_labels: bool,
     group_id: Option<String>,
@@ -997,6 +1028,10 @@ impl GeneralSeries {
         self.line_style
     }
 
+    pub fn interpolation(&self) -> GeneralInterpolation {
+        self.interpolation
+    }
+
     pub fn baseline_value(&self) -> Option<f64> {
         self.baseline_value
     }
@@ -1197,6 +1232,7 @@ impl GeneralSeriesRegistry {
             point_markers: options.point_markers,
             line_width: options.line_width,
             line_style: options.line_style,
+            interpolation: options.interpolation,
             baseline_value: options.baseline_value,
             data_labels: options.data_labels,
             group_id: options.group_id,
@@ -1615,9 +1651,11 @@ impl ChartEngine {
                 if sibling.x_axis_id != options.x_axis_id
                     || sibling.y_axis_id != options.y_axis_id
                     || sibling.stack_mode != options.stack_mode
+                    || (options.kind == GeneralSeriesKind::XyArea
+                        && sibling.interpolation != options.interpolation)
                 {
                     return Err(invalid(
-                        "stacked series must share X/Y axes, group ID, and stack mode",
+                        "stacked series must share X/Y axes, group ID, stack mode, and area interpolation",
                     ));
                 }
             }
@@ -1702,6 +1740,7 @@ impl ChartEngine {
         series.point_markers = options.point_markers;
         series.line_width = options.line_width;
         series.line_style = options.line_style;
+        series.interpolation = options.interpolation;
         series.baseline_value = options.baseline_value;
         series.data_labels = options.data_labels;
         series.group_id = options.group_id;
@@ -4033,6 +4072,40 @@ impl ChartEngine {
             };
             match series.kind {
                 GeneralSeriesKind::XyLine => {
+                    if series.interpolation != GeneralInterpolation::Linear {
+                        let mut run = Vec::new();
+                        self.visit_general_path_points(series, |geometry| {
+                            if geometry.starts_new_run {
+                                if let Some((row, distance)) = distance_to_interpolated_line(
+                                    x_css,
+                                    y_css,
+                                    &run,
+                                    series.interpolation.render_type(),
+                                ) {
+                                    consider(row, (distance - 3.0).max(0.0));
+                                }
+                                run.clear();
+                            }
+                            if series.point_markers {
+                                consider(
+                                    geometry.row,
+                                    ((x_css - geometry.x).hypot(y_css - geometry.y)
+                                        - series.point_radius)
+                                        .max(0.0),
+                                );
+                            }
+                            run.push(geometry);
+                        });
+                        if let Some((row, distance)) = distance_to_interpolated_line(
+                            x_css,
+                            y_css,
+                            &run,
+                            series.interpolation.render_type(),
+                        ) {
+                            consider(row, (distance - 3.0).max(0.0));
+                        }
+                        continue;
+                    }
                     let mut previous: Option<GeneralLinePointGeometry> = None;
                     self.visit_general_path_points(series, |geometry| {
                         if series.point_markers {
@@ -4065,6 +4138,40 @@ impl ChartEngine {
                 }
                 GeneralSeriesKind::XyArea => {
                     if series.stack_id.is_some() {
+                        if series.interpolation != GeneralInterpolation::Linear {
+                            let mut run = Vec::new();
+                            self.visit_general_stacked_area_points(series, |geometry| {
+                                if geometry.starts_new_run {
+                                    if let Some((row, distance)) = distance_to_interpolated_band(
+                                        x_css,
+                                        y_css,
+                                        &run,
+                                        series.interpolation.render_type(),
+                                    ) {
+                                        consider(row, distance);
+                                    }
+                                    run.clear();
+                                }
+                                if series.point_markers {
+                                    consider(
+                                        geometry.row,
+                                        ((x_css - geometry.x).hypot(y_css - geometry.high_y)
+                                            - series.point_radius)
+                                            .max(0.0),
+                                    );
+                                }
+                                run.push(geometry);
+                            });
+                            if let Some((row, distance)) = distance_to_interpolated_band(
+                                x_css,
+                                y_css,
+                                &run,
+                                series.interpolation.render_type(),
+                            ) {
+                                consider(row, distance);
+                            }
+                            continue;
+                        }
                         let mut previous: Option<GeneralRangePointGeometry> = None;
                         self.visit_general_stacked_area_points(series, |geometry| {
                             if series.point_markers {
@@ -4106,6 +4213,42 @@ impl ChartEngine {
                     let Some(baseline_y) = self.general_path_baseline_y(series) else {
                         continue;
                     };
+                    if series.interpolation != GeneralInterpolation::Linear {
+                        let mut run = Vec::new();
+                        self.visit_general_path_points(series, |geometry| {
+                            if geometry.starts_new_run {
+                                if let Some((row, distance)) = distance_to_interpolated_area(
+                                    x_css,
+                                    y_css,
+                                    &run,
+                                    baseline_y,
+                                    series.interpolation.render_type(),
+                                ) {
+                                    consider(row, distance);
+                                }
+                                run.clear();
+                            }
+                            if series.point_markers {
+                                consider(
+                                    geometry.row,
+                                    ((x_css - geometry.x).hypot(y_css - geometry.y)
+                                        - series.point_radius)
+                                        .max(0.0),
+                                );
+                            }
+                            run.push(geometry);
+                        });
+                        if let Some((row, distance)) = distance_to_interpolated_area(
+                            x_css,
+                            y_css,
+                            &run,
+                            baseline_y,
+                            series.interpolation.render_type(),
+                        ) {
+                            consider(row, distance);
+                        }
+                        continue;
+                    }
                     let mut previous: Option<GeneralLinePointGeometry> = None;
                     self.visit_general_path_points(series, |geometry| {
                         if series.point_markers {
@@ -4137,6 +4280,41 @@ impl ChartEngine {
                     });
                 }
                 GeneralSeriesKind::RangeArea => {
+                    if series.interpolation != GeneralInterpolation::Linear {
+                        let mut run = Vec::new();
+                        self.visit_general_range_points(series, |geometry| {
+                            if geometry.starts_new_run {
+                                if let Some((row, distance)) = distance_to_interpolated_band(
+                                    x_css,
+                                    y_css,
+                                    &run,
+                                    series.interpolation.render_type(),
+                                ) {
+                                    consider(row, distance);
+                                }
+                                run.clear();
+                            }
+                            if series.point_markers {
+                                let center_distance = (x_css - geometry.x)
+                                    .hypot(y_css - geometry.low_y)
+                                    .min((x_css - geometry.x).hypot(y_css - geometry.high_y));
+                                consider(
+                                    geometry.row,
+                                    (center_distance - series.point_radius).max(0.0),
+                                );
+                            }
+                            run.push(geometry);
+                        });
+                        if let Some((row, distance)) = distance_to_interpolated_band(
+                            x_css,
+                            y_css,
+                            &run,
+                            series.interpolation.render_type(),
+                        ) {
+                            consider(row, distance);
+                        }
+                        continue;
+                    }
                     let mut previous: Option<GeneralRangePointGeometry> = None;
                     self.visit_general_range_points(series, |geometry| {
                         if series.point_markers {
@@ -5288,6 +5466,164 @@ fn distance_to_segment(x: f64, y: f64, x0: f64, y0: f64, x1: f64, y1: f64) -> (f
     ((x - nearest_x).hypot(y - nearest_y), position)
 }
 
+fn nearest_line_row(points: &[GeneralLinePointGeometry], x: f64, y: f64) -> Option<usize> {
+    points
+        .iter()
+        .min_by(|left, right| {
+            (left.x - x)
+                .hypot(left.y - y)
+                .total_cmp(&(right.x - x).hypot(right.y - y))
+        })
+        .map(|point| point.row)
+}
+
+fn nearest_band_row(points: &[GeneralRangePointGeometry], x: f64, y: f64) -> Option<usize> {
+    points
+        .iter()
+        .min_by(|left, right| {
+            let left_y = (left.low_y + left.high_y) * 0.5;
+            let right_y = (right.low_y + right.high_y) * 0.5;
+            (left.x - x)
+                .hypot(left_y - y)
+                .total_cmp(&(right.x - x).hypot(right_y - y))
+        })
+        .map(|point| point.row)
+}
+
+fn distance_to_interpolated_line(
+    x: f64,
+    y: f64,
+    points: &[GeneralLinePointGeometry],
+    line_type: LineType,
+) -> Option<(usize, f64)> {
+    if points.len() < 2 {
+        return None;
+    }
+    let source = points
+        .iter()
+        .map(|point| LinePoint {
+            x: point.x,
+            y: point.y,
+        })
+        .collect::<Vec<_>>();
+    let mut expanded = Vec::new();
+    expand_line_into(&source, line_type, 1.0, 1.0, &mut expanded);
+    let mut best = (f64::INFINITY, 0.0, 0.0);
+    for pair in expanded.windows(2) {
+        let (distance, position) =
+            distance_to_segment(x, y, pair[0].x, pair[0].y, pair[1].x, pair[1].y);
+        if distance < best.0 {
+            best = (
+                distance,
+                pair[0].x + (pair[1].x - pair[0].x) * position,
+                pair[0].y + (pair[1].y - pair[0].y) * position,
+            );
+        }
+    }
+    nearest_line_row(points, best.1, best.2).map(|row| (row, best.0))
+}
+
+fn distance_to_interpolated_area(
+    x: f64,
+    y: f64,
+    points: &[GeneralLinePointGeometry],
+    baseline_y: f64,
+    line_type: LineType,
+) -> Option<(usize, f64)> {
+    if points.len() < 2 {
+        return None;
+    }
+    let source = points
+        .iter()
+        .map(|point| LinePoint {
+            x: point.x,
+            y: point.y,
+        })
+        .collect::<Vec<_>>();
+    let mut expanded = Vec::new();
+    expand_line_into(&source, line_type, 1.0, 1.0, &mut expanded);
+    let mut best = (f64::INFINITY, 0.0, 0.0);
+    for pair in expanded.windows(2) {
+        let (distance, position) =
+            distance_to_area_segment(x, y, pair[0].x, pair[0].y, pair[1].x, pair[1].y, baseline_y);
+        if distance < best.0 {
+            best = (
+                distance,
+                pair[0].x + (pair[1].x - pair[0].x) * position,
+                pair[0].y + (pair[1].y - pair[0].y) * position,
+            );
+        }
+    }
+    nearest_line_row(points, best.1, best.2).map(|row| (row, best.0))
+}
+
+fn distance_to_interpolated_band(
+    x: f64,
+    y: f64,
+    points: &[GeneralRangePointGeometry],
+    line_type: LineType,
+) -> Option<(usize, f64)> {
+    if points.len() < 2 {
+        return None;
+    }
+    let upper = points
+        .iter()
+        .map(|point| LinePoint {
+            x: point.x,
+            y: point.high_y,
+        })
+        .collect::<Vec<_>>();
+    let lower = points
+        .iter()
+        .map(|point| LinePoint {
+            x: point.x,
+            y: point.low_y,
+        })
+        .collect::<Vec<_>>();
+    let mut expanded_upper = Vec::new();
+    let mut expanded_lower = Vec::new();
+    expand_band_into(
+        &upper,
+        &lower,
+        line_type,
+        1.0,
+        1.0,
+        &mut expanded_upper,
+        &mut expanded_lower,
+    );
+    let mut best = (f64::INFINITY, 0.0, 0.0);
+    for index in 0..expanded_upper
+        .len()
+        .min(expanded_lower.len())
+        .saturating_sub(1)
+    {
+        let upper_from = expanded_upper[index];
+        let upper_to = expanded_upper[index + 1];
+        let lower_from = expanded_lower[index];
+        let lower_to = expanded_lower[index + 1];
+        let (distance, position) = distance_to_band_segment(
+            x,
+            y,
+            upper_from.x,
+            lower_from.y,
+            upper_from.y,
+            upper_to.x,
+            lower_to.y,
+            upper_to.y,
+        );
+        if distance < best.0 {
+            let low_y = lower_from.y + (lower_to.y - lower_from.y) * position;
+            let high_y = upper_from.y + (upper_to.y - upper_from.y) * position;
+            best = (
+                distance,
+                upper_from.x + (upper_to.x - upper_from.x) * position,
+                (low_y + high_y) * 0.5,
+            );
+        }
+    }
+    nearest_band_row(points, best.1, best.2).map(|row| (row, best.0))
+}
+
 fn heatmap_center_bounds(
     center: f64,
     centers: &[f64],
@@ -6127,6 +6463,16 @@ fn validate_logarithmic_input_y(
 }
 
 fn validate_presentation(options: &GeneralSeriesOptions) -> Result<(), ChartError> {
+    if options.interpolation != GeneralInterpolation::Linear
+        && !matches!(
+            options.kind,
+            GeneralSeriesKind::XyLine | GeneralSeriesKind::XyArea | GeneralSeriesKind::RangeArea
+        )
+    {
+        return Err(invalid(
+            "general series interpolation is supported only by xy_line, xy_area, and range_area",
+        ));
+    }
     if options.point_markers
         && !matches!(
             options.kind,

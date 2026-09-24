@@ -7,8 +7,9 @@ use super::conflation::{
 use super::*;
 use crate::{
     AxisDimension, CategoryScaleType, ContinuousScaleType, GeneralAxisDomain, GeneralAxisOptions,
-    GeneralAxisTick, GeneralLineStyle, GeneralRowId, GeneralRowIdentity, GeneralScaleType,
-    GeneralSeriesKind, GeneralSeriesOptions, GeneralStackMode, GeneralXyInput, HorizontalDomain,
+    GeneralAxisTick, GeneralInterpolation, GeneralLineStyle, GeneralRowId, GeneralRowIdentity,
+    GeneralScaleType, GeneralSeriesKind, GeneralSeriesOptions, GeneralStackMode, GeneralXyInput,
+    HorizontalDomain,
 };
 use nucleuscharts_core::model::data_layer::DataLayer;
 use nucleuscharts_core::model::plot_list::{PlotList, PlotValues};
@@ -1949,6 +1950,7 @@ fn xy_line_preserves_gaps_hits_rows_and_shared_frame_geometry() {
     options.point_radius = 8.0;
     options.line_width = 4.0;
     options.line_style = GeneralLineStyle::Dashed;
+    options.interpolation = GeneralInterpolation::Curved;
     let series = chart.add_general_series(options).unwrap();
     chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
 
@@ -1995,6 +1997,7 @@ fn xy_line_preserves_gaps_hits_rows_and_shared_frame_geometry() {
             primitive,
             Prim::Polyline {
                 style: LineStyle::Dashed,
+                line_type: LineType::Curved,
                 ..
             }
         )
@@ -2056,6 +2059,140 @@ fn xy_line_preserves_gaps_hits_rows_and_shared_frame_geometry() {
         .unwrap();
     assert_eq!(accessibility.items.len(), 5);
     assert_eq!(accessibility.items[2].value, None);
+}
+
+#[test]
+fn general_path_interpolation_drives_frame_geometry_and_exact_hits() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Continuous {
+                scale: ContinuousScaleType::Linear,
+            },
+        )
+        .unwrap();
+    let mut x =
+        GeneralAxisOptions::new("curve-x", pane, AxisDimension::X, GeneralScaleType::Linear);
+    x.domain = GeneralAxisDomain::Numeric([0.0, 3.0]);
+    chart.add_general_axis(x).unwrap();
+    let mut y =
+        GeneralAxisOptions::new("curve-y", pane, AxisDimension::Y, GeneralScaleType::Linear);
+    y.domain = GeneralAxisDomain::Numeric([-3.0, 3.0]);
+    chart.add_general_axis(y).unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::Numeric {
+            ids: None,
+            x: vec![0.0, 1.0, 2.0, 3.0],
+            y: vec![0.0, 3.0, -3.0, 0.0],
+            y_valid: None,
+        })
+        .unwrap();
+    let mut options = GeneralSeriesOptions::xy_line(pane, dataset, "curve-x", "curve-y");
+    options.interpolation = GeneralInterpolation::Step;
+    let series = chart.add_general_series(options).unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+
+    let mut geometry = Vec::new();
+    chart.visit_general_path_points(chart.general_series(series).unwrap(), |point| {
+        geometry.push(point)
+    });
+    let step_probe = ((geometry[0].x + geometry[1].x) * 0.5, geometry[0].y);
+    assert_eq!(
+        chart
+            .general_hit_test(
+                pane,
+                step_probe.0,
+                step_probe.1,
+                crate::GeneralHitMode::Exact
+            )
+            .unwrap()
+            .series,
+        series
+    );
+    assert!(chart.build_frame().panes[pane]
+        .main
+        .iter()
+        .any(|primitive| {
+            matches!(
+                primitive,
+                Prim::Polyline {
+                    line_type: LineType::WithSteps,
+                    ..
+                }
+            )
+        }));
+
+    let mut curved = GeneralSeriesOptions::xy_line(pane, dataset, "curve-x", "curve-y");
+    curved.interpolation = GeneralInterpolation::Curved;
+    chart.update_general_series_options(series, curved).unwrap();
+    assert_eq!(
+        chart.general_series(series).unwrap().interpolation(),
+        GeneralInterpolation::Curved
+    );
+    let mut curved_geometry = Vec::new();
+    chart.visit_general_path_points(chart.general_series(series).unwrap(), |point| {
+        curved_geometry.push(point)
+    });
+    let source = curved_geometry
+        .iter()
+        .map(|point| nucleuscharts_render::line::LinePoint {
+            x: point.x,
+            y: point.y,
+        })
+        .collect::<Vec<_>>();
+    let expanded = nucleuscharts_render::line::expand_line(&source, LineType::Curved);
+    let curve_probe = expanded
+        .iter()
+        .copied()
+        .max_by(|left, right| {
+            let distance = |point: nucleuscharts_render::line::LinePoint| {
+                source
+                    .windows(2)
+                    .map(|pair| {
+                        let dx = pair[1].x - pair[0].x;
+                        let dy = pair[1].y - pair[0].y;
+                        let length_squared = dx * dx + dy * dy;
+                        let position = (((point.x - pair[0].x) * dx + (point.y - pair[0].y) * dy)
+                            / length_squared)
+                            .clamp(0.0, 1.0);
+                        (point.x - (pair[0].x + dx * position))
+                            .hypot(point.y - (pair[0].y + dy * position))
+                    })
+                    .fold(f64::INFINITY, f64::min)
+            };
+            distance(*left).total_cmp(&distance(*right))
+        })
+        .unwrap();
+    let curve_hit = chart
+        .general_hit_test(
+            pane,
+            curve_probe.x,
+            curve_probe.y,
+            crate::GeneralHitMode::Exact,
+        )
+        .unwrap();
+    assert_eq!(curve_hit.distance, 0.0);
+    assert_eq!(
+        curve_hit.series, series,
+        "curved hit testing must follow the rendered spline"
+    );
+    assert!(chart.build_frame().panes[pane]
+        .main
+        .iter()
+        .any(|primitive| {
+            matches!(
+                primitive,
+                Prim::Polyline {
+                    line_type: LineType::Curved,
+                    ..
+                }
+            )
+        }));
+
+    let mut invalid = GeneralSeriesOptions::scatter(pane, dataset, "curve-x", "curve-y");
+    invalid.interpolation = GeneralInterpolation::Step;
+    assert!(chart.add_general_series(invalid).is_err());
 }
 
 #[test]
@@ -2293,6 +2430,7 @@ fn xy_area_emits_fill_and_stroke_runs_and_hits_the_filled_region() {
         .unwrap();
     let mut options = GeneralSeriesOptions::xy_area(pane, dataset, "area-x", "area-y");
     options.baseline_value = Some(1.5);
+    options.interpolation = GeneralInterpolation::Step;
     let series = chart.add_general_series(options).unwrap();
     chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
 
@@ -2301,7 +2439,7 @@ fn xy_area_emits_fill_and_stroke_runs_and_hits_the_filled_region() {
         .general_path_baseline_y(chart.general_series(series).unwrap())
         .unwrap();
     assert!(frame.panes[pane].main.iter().any(|primitive| {
-        matches!(primitive, Prim::AreaFill { base_y, .. } if ((*base_y as f64) - expected_baseline).abs() < f64::EPSILON)
+        matches!(primitive, Prim::AreaFill { base_y, line_type: LineType::WithSteps, .. } if ((*base_y as f64) - expected_baseline).abs() < f64::EPSILON)
     }));
     assert_eq!(
         frame.panes[pane]
@@ -2394,11 +2532,18 @@ fn xy_area_stacks_by_x_identity_with_normal_and_percent_geometry() {
     let mut first =
         GeneralSeriesOptions::xy_area(pane, first_dataset, "stack-area-x", "stack-area-y");
     first.stack_id = Some("total".into());
+    first.interpolation = GeneralInterpolation::Curved;
     let first = chart.add_general_series(first).unwrap();
     let mut second =
         GeneralSeriesOptions::xy_area(pane, second_dataset, "stack-area-x", "stack-area-y");
     second.stack_id = Some("total".into());
+    second.interpolation = GeneralInterpolation::Curved;
     let second = chart.add_general_series(second).unwrap();
+    let mut mismatched =
+        GeneralSeriesOptions::xy_area(pane, second_dataset, "stack-area-x", "stack-area-y");
+    mismatched.stack_id = Some("total".into());
+    mismatched.interpolation = GeneralInterpolation::Step;
+    assert!(chart.add_general_series(mismatched).is_err());
 
     assert_eq!(
         chart.general_axis_effective_domain("stack-area-y"),
@@ -2426,7 +2571,14 @@ fn xy_area_stacks_by_x_identity_with_normal_and_percent_geometry() {
         frame.panes[pane]
             .main
             .iter()
-            .filter(|primitive| matches!(primitive, Prim::BandFill { point_count: 3, .. }))
+            .filter(|primitive| matches!(
+                primitive,
+                Prim::BandFill {
+                    point_count: 3,
+                    line_type: LineType::Curved,
+                    ..
+                }
+            ))
             .count(),
         2
     );
@@ -3009,6 +3161,7 @@ fn range_area_preserves_gaps_fills_band_hits_rows_and_exposes_bounds() {
     let mut options = GeneralSeriesOptions::range_area(pane, dataset, "range-x", "range-y");
     options.color = Some("#446688".into());
     options.title = "Interval".into();
+    options.interpolation = GeneralInterpolation::Curved;
     let series = chart.add_general_series(options).unwrap();
     chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
 
@@ -3039,7 +3192,14 @@ fn range_area_preserves_gaps_fills_band_hits_rows_and_exposes_bounds() {
         frame.panes[pane]
             .main
             .iter()
-            .filter(|primitive| matches!(primitive, Prim::BandFill { point_count: 2, .. }))
+            .filter(|primitive| matches!(
+                primitive,
+                Prim::BandFill {
+                    point_count: 2,
+                    line_type: LineType::Curved,
+                    ..
+                }
+            ))
             .count(),
         1
     );

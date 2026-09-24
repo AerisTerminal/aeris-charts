@@ -139,20 +139,26 @@ atomic replacement, explicit-ID updates, bounded retention, accessibility, toolt
 accounting, and V2 persistence. `xy_line` and `xy_area` reuse the same
 general dataset/axis ownership across continuous numeric, temporal epoch-millisecond, and category
 band/point X domains. Missing or transform-invalid rows split path runs instead of bridging gaps.
+Their persisted `linear`, horizontal-then-vertical `step`, and Catmull-Rom `curved` interpolation policy
+travels on the ordered frame primitive and drives both shared lowering and exact/nearest hit geometry.
 `xy_line` lowers each run to the shared point pool plus ordered `Polyline` primitives. `xy_area` adds an
 ordered `AreaFill` before the matching stroke; its zero baseline is clamped into linear/symlog plots and
 falls back to the lower-domain plot edge when a logarithmic Y axis has no zero coordinate. Line hits use
 segment distance, while area hits include the filled trapezoid and both preserve the closest endpoint row
 identity. When `xy_area` has a `stack_id`, visible members with the same pane, X/Y axes, stack ID, and stack
-mode align by exact numeric, epoch-millisecond, or category X identity rather than row position. Positive and
-negative values accumulate independently; percent mode normalizes each sign independently to `+1`/`-1`.
+mode and interpolation align by exact numeric, epoch-millisecond, or category X identity rather than row
+position. Positive and negative values accumulate independently; percent mode normalizes each sign
+independently to `+1`/`-1`.
 Cumulative extents participate in Y autoscale, and each layer becomes a variable-bound `BandFill` between
 the preceding stack boundary and the new cumulative boundary while retaining the upper area stroke and row
 interaction identity. `range_area` adds bounded typed low/high columns beside the same X domains, rejects inverted
 complete bounds atomically, treats either missing or transform-invalid bound as a run break, and emits one
 ordered `BandFill` plus its two boundary polylines from shared geometry. Band hit testing returns the nearest
 contributing row, while tooltip/accessibility snapshots expose both bounds. Replacement, explicit-ID updates,
-retention, memory accounting, and V2 persistence keep both channels aligned. Numeric and temporal
+retention, memory accounting, and V2 persistence keep both channels aligned. `BandFill` carries the same
+interpolation policy as its boundary strokes; shared coupled expansion chooses one bounded subdivision sequence
+for both edges so Canvas2D, WebGPU, GPUI, native painting, and band hit testing cannot open seams or disagree.
+Numeric and temporal
 `error_bar` support four independent optional bound channels around center XY values; temporal X
 centers and bounds are validated whole JavaScript-safe epoch milliseconds and contribute to temporal
 autoscale. Category band/point error bars center on a category and keep only the two Y-bound channels.

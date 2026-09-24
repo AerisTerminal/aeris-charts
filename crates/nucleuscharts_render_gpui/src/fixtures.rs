@@ -200,6 +200,7 @@ pub fn tessellated(dpr: f32) -> Fixture {
         points.push([(20.0 + t * 440.0) * dpr, (270.0 - t * 10.0) * dpr]);
     }
     prims.push(Prim::BandFill {
+        line_type: LineType::Simple,
         upper_first,
         lower_first,
         point_count: 12,

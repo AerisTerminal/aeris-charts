@@ -200,6 +200,7 @@ fn lower_prim(
             upper_first,
             lower_first,
             point_count,
+            line_type,
             fill,
         } => {
             let range = band_fill_mesh(
@@ -209,6 +210,7 @@ fn lower_prim(
                 *upper_first,
                 *lower_first,
                 *point_count,
+                *line_type,
             );
             push_mesh(plan, metrics, range, Paint::Solid(*fill));
         }
@@ -1057,6 +1059,7 @@ mod tests {
             (
                 "BandFill",
                 Prim::BandFill {
+                    line_type: LineType::Simple,
                     upper_first: 0,
                     lower_first: 3,
                     point_count: 3,

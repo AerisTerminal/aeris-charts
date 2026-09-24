@@ -6,7 +6,7 @@
 //! per segment) plus round-join fans at interior vertices; the area fill is a triangle strip
 //! between the polyline and a base level. The backend feathers edges for AA.
 //!
-//! Line type Simple is implemented; WithSteps/Curved land with the corresponding pane views.
+//! Simple, stepped, and curved line types share the same bounded expansion math across executors.
 
 use crate::color::Color;
 use crate::draw_list::LineType;
@@ -252,6 +252,106 @@ pub fn expand_line(points: &[LinePoint], line_type: LineType) -> Vec<LinePoint> 
     let mut out = Vec::new();
     expand_line_into(points, line_type, 1.0, 1.0, &mut out);
     out
+}
+
+/// Expand two aligned band boundaries with identical sample positions so the resulting points
+/// remain pairwise suitable for a triangle strip. Curved sampling uses the longer of the two
+/// boundary intervals to choose one shared subdivision count.
+pub fn expand_band_into(
+    upper: &[LinePoint],
+    lower: &[LinePoint],
+    line_type: LineType,
+    hpr: f64,
+    vpr: f64,
+    out_upper: &mut Vec<LinePoint>,
+    out_lower: &mut Vec<LinePoint>,
+) {
+    out_upper.clear();
+    out_lower.clear();
+    let count = upper.len().min(lower.len());
+    let upper = &upper[..count];
+    let lower = &lower[..count];
+    match line_type {
+        LineType::Simple => {
+            out_upper.extend_from_slice(upper);
+            out_lower.extend_from_slice(lower);
+        }
+        LineType::WithSteps => {
+            out_upper.reserve(count.saturating_mul(2));
+            out_lower.reserve(count.saturating_mul(2));
+            for index in 0..count {
+                if index > 0 {
+                    out_upper.push(LinePoint {
+                        x: upper[index].x,
+                        y: upper[index - 1].y,
+                    });
+                    out_lower.push(LinePoint {
+                        x: lower[index].x,
+                        y: lower[index - 1].y,
+                    });
+                }
+                out_upper.push(upper[index]);
+                out_lower.push(lower[index]);
+            }
+        }
+        LineType::Curved => {
+            if count < 3 {
+                out_upper.extend_from_slice(upper);
+                out_lower.extend_from_slice(lower);
+                return;
+            }
+            out_upper.push(upper[0]);
+            out_lower.push(lower[0]);
+            for index in 0..count - 1 {
+                let upper_len = ((upper[index + 1].x - upper[index].x) * hpr)
+                    .hypot((upper[index + 1].y - upper[index].y) * vpr);
+                let lower_len = ((lower[index + 1].x - lower[index].x) * hpr)
+                    .hypot((lower[index + 1].y - lower[index].y) * vpr);
+                let segments = curve_segments_for(upper_len.max(lower_len));
+                for sample in 1..=segments {
+                    let t = sample as f64 / segments as f64;
+                    let interpolate = |points: &[LinePoint]| LinePoint {
+                        x: catmull_rom(
+                            points[index.saturating_sub(1)].x,
+                            points[index].x,
+                            points[index + 1].x,
+                            points[(index + 2).min(count - 1)].x,
+                            t,
+                        ),
+                        y: catmull_rom(
+                            points[index.saturating_sub(1)].y,
+                            points[index].y,
+                            points[index + 1].y,
+                            points[(index + 2).min(count - 1)].y,
+                            t,
+                        ),
+                    };
+                    out_upper.push(interpolate(upper));
+                    out_lower.push(interpolate(lower));
+                }
+            }
+        }
+    }
+}
+
+/// Allocating convenience wrapper over [`expand_band_into`] for device-space points.
+pub fn expand_band(
+    upper: &[LinePoint],
+    lower: &[LinePoint],
+    line_type: LineType,
+) -> (Vec<LinePoint>, Vec<LinePoint>) {
+    let mut out_upper = Vec::new();
+    let mut out_lower = Vec::new();
+    expand_band_into(
+        upper,
+        lower,
+        line_type,
+        1.0,
+        1.0,
+        &mut out_upper,
+        &mut out_lower,
+    );
+    (out_upper, out_lower)
 }
 
 /// Builds a stroke mesh over `points` (single color). `visible_range` is `[from, to)` row
@@ -625,6 +725,31 @@ mod tests {
         expand_line_into(&pts, LineType::Curved, 2.0, 2.0, &mut out);
         // 14.1 media px = 28.3 device px per interval -> ceil(28.3 / 4) = 8 segments
         assert_eq!(out.len(), 2 * 8 + 1);
+    }
+
+    #[test]
+    fn band_expansion_keeps_step_and_curve_boundaries_pairwise_aligned() {
+        let upper = [
+            LinePoint { x: 0.0, y: 0.0 },
+            LinePoint { x: 10.0, y: 20.0 },
+            LinePoint { x: 20.0, y: 0.0 },
+        ];
+        let lower = [
+            LinePoint { x: 0.0, y: 30.0 },
+            LinePoint { x: 10.0, y: 35.0 },
+            LinePoint { x: 20.0, y: 25.0 },
+        ];
+        for line_type in [LineType::WithSteps, LineType::Curved] {
+            let (expanded_upper, expanded_lower) = expand_band(&upper, &lower, line_type);
+            assert_eq!(expanded_upper.len(), expanded_lower.len());
+            assert!(expanded_upper.len() > upper.len());
+            assert!(expanded_upper
+                .iter()
+                .zip(&expanded_lower)
+                .all(|(upper, lower)| (upper.x - lower.x).abs() < f64::EPSILON));
+            assert_eq!(expanded_upper.first().unwrap().x, 0.0);
+            assert_eq!(expanded_upper.last().unwrap().x, 20.0);
+        }
     }
 
     #[test]

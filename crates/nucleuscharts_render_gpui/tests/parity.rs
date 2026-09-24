@@ -484,6 +484,7 @@ fn tessellated_prims_take_the_path_route_on_both_backends() {
         (
             "BandFill",
             Prim::BandFill {
+                line_type: LineType::Curved,
                 upper_first: 0,
                 lower_first: 3,
                 point_count: 3,

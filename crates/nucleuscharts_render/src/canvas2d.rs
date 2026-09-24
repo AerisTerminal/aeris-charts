@@ -14,7 +14,7 @@
 
 use crate::color::Color;
 use crate::draw_list::{text_font_spec, IRect, LineStyle, LineType, Prim, RasterImage, TextAlign};
-use crate::line::{expand_line, LinePoint};
+use crate::line::{expand_band, expand_line, LinePoint};
 
 /// Abstract 2D drawing target: the subset of `CanvasRenderingContext2D` this executor needs.
 /// Coordinates are bitmap-space (device px), matching the IR. Concrete impls wrap web-sys or a
@@ -300,6 +300,7 @@ pub fn execute(
                 upper_first,
                 lower_first,
                 point_count,
+                line_type,
                 fill,
             } => {
                 let upper = pool_slice(points, *upper_first, *point_count);
@@ -307,6 +308,7 @@ pub fn execute(
                 if upper.len() < 2 || lower.len() < 2 {
                     continue;
                 }
+                let (upper, lower) = expand_band(&upper, &lower, *line_type);
                 target.set_fill_solid(*fill);
                 target.begin_path();
                 target.move_to(upper[0].x as f32, upper[0].y as f32);

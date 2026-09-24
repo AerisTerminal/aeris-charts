@@ -4,10 +4,10 @@ use js_sys::{Float64Array, Uint32Array, Uint8Array};
 use nucleuscharts_engine::{
     AxisDimension, AxisPosition, CategoryScaleType, ChartError, ContinuousScaleType,
     GeneralAxisDomain, GeneralAxisOptions, GeneralAxisTick, GeneralBrushRange,
-    GeneralBrushSnapshot, GeneralDatasetId, GeneralHitMode, GeneralLineStyle, GeneralReferenceId,
-    GeneralReferenceOptions, GeneralRowId, GeneralRowIdentity, GeneralScaleType, GeneralSeriesId,
-    GeneralSeriesKind, GeneralSeriesOptions, GeneralStackMode, GeneralTooltipSnapshot,
-    GeneralXyInput, HorizontalDomain, MAX_GENERAL_TEMPORAL_MILLISECONDS,
+    GeneralBrushSnapshot, GeneralDatasetId, GeneralHitMode, GeneralInterpolation, GeneralLineStyle,
+    GeneralReferenceId, GeneralReferenceOptions, GeneralRowId, GeneralRowIdentity,
+    GeneralScaleType, GeneralSeriesId, GeneralSeriesKind, GeneralSeriesOptions, GeneralStackMode,
+    GeneralTooltipSnapshot, GeneralXyInput, HorizontalDomain, MAX_GENERAL_TEMPORAL_MILLISECONDS,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -106,6 +106,8 @@ struct SeriesInput {
     #[serde(default)]
     line_style: Option<String>,
     #[serde(default)]
+    interpolation: Option<String>,
+    #[serde(default)]
     baseline_value: Option<f64>,
     #[serde(default)]
     data_labels: bool,
@@ -183,6 +185,18 @@ fn line_style(value: Option<&str>) -> Result<GeneralLineStyle, ChartError> {
     }
 }
 
+fn interpolation(value: Option<&str>) -> Result<GeneralInterpolation, ChartError> {
+    match value.unwrap_or("linear") {
+        "linear" => Ok(GeneralInterpolation::Linear),
+        "step" => Ok(GeneralInterpolation::Step),
+        "curved" => Ok(GeneralInterpolation::Curved),
+        _ => Err(ChartError::new(
+            nucleuscharts_engine::ErrorCode::InvalidOptions,
+            "general series interpolation must be linear, step, or curved",
+        )),
+    }
+}
+
 fn series_options_from_input(
     kind: GeneralSeriesKind,
     dataset: GeneralDatasetId,
@@ -233,6 +247,7 @@ fn series_options_from_input(
     options.point_markers = input.point_markers;
     options.line_width = input.line_width;
     options.line_style = line_style(input.line_style.as_deref())?;
+    options.interpolation = interpolation(input.interpolation.as_deref())?;
     options.baseline_value = input.baseline_value;
     options.data_labels = input.data_labels;
     options.group_id = input.group_id;
@@ -776,6 +791,11 @@ impl ChartInner {
                 GeneralLineStyle::Solid => "solid",
                 GeneralLineStyle::Dotted => "dotted",
                 GeneralLineStyle::Dashed => "dashed",
+            },
+            "interpolation": match series.interpolation() {
+                GeneralInterpolation::Linear => "linear",
+                GeneralInterpolation::Step => "step",
+                GeneralInterpolation::Curved => "curved",
             },
             "baseline_value": series.baseline_value(),
             "data_labels": series.data_labels(),
@@ -2505,5 +2525,15 @@ mod tests {
             GeneralLineStyle::Dashed
         );
         assert!(line_style(Some("large_dashed")).is_err());
+        assert_eq!(interpolation(None).unwrap(), GeneralInterpolation::Linear);
+        assert_eq!(
+            interpolation(Some("step")).unwrap(),
+            GeneralInterpolation::Step
+        );
+        assert_eq!(
+            interpolation(Some("curved")).unwrap(),
+            GeneralInterpolation::Curved
+        );
+        assert!(interpolation(Some("basis")).is_err());
     }
 }
