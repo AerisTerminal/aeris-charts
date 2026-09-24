@@ -1625,6 +1625,52 @@ impl ChartEngine {
         true
     }
 
+    pub fn update_general_axis_options(
+        &mut self,
+        options: GeneralAxisOptions,
+    ) -> Result<(), ChartError> {
+        let current = self.general_axis(&options.id).cloned().ok_or_else(|| {
+            ChartError::new(ErrorCode::InvalidHandle, "general axis handle is stale")
+        })?;
+        let pane = self
+            .pane_index_for_id(current.pane_id)
+            .ok_or_else(|| invalid("general axis references a stale pane"))?;
+        if options.pane != pane
+            || options.dimension != current.dimension
+            || options.scale != current.scale
+        {
+            return Err(invalid(
+                "general axis pane, dimension, and scale are structural",
+            ));
+        }
+        let horizontal_domain = self
+            .pane_horizontal_domain(pane)
+            .ok_or_else(|| invalid("general axis pane has no horizontal domain"))?;
+        validate_options(&options)?;
+        validate_compatibility(horizontal_domain, &options)?;
+
+        let axis = self
+            .general_axes
+            .get_mut(&options.id)
+            .expect("a resolved general axis remains live during one mutation");
+        if axis.domain != options.domain {
+            axis.view_domain = None;
+        }
+        axis.position = resolved_position(options.dimension, options.position);
+        axis.domain = options.domain;
+        axis.reverse = options.reverse;
+        axis.visible = options.visible;
+        axis.title = options.title;
+        axis.tick_count = options.tick_count;
+        axis.min_tick_gap = options.min_tick_gap;
+        axis.band_padding_inner = options.band_padding_inner;
+        axis.band_padding_outer = options.band_padding_outer;
+        axis.zero_line = options.zero_line;
+        axis.grid_visible = options.grid_visible;
+        self.invalidate_frame_all();
+        Ok(())
+    }
+
     /// Remove an unpopulated general axis. General-series ownership will add the populated-axis
     /// guard at the same registry boundary when those series are introduced.
     pub fn remove_general_axis(&mut self, id: &str) -> bool {

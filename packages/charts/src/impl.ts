@@ -27,8 +27,8 @@ import type {
   ema_ribbon_options, ema_ribbon_periods,
   feature_series_kind, frame_stats,
   footprint_bar, footprint_series_api, footprint_series_options, footprint_trade, footprint_trade_columns,
-  general_accessibility_snapshot, general_axis_api, general_axis_options, general_brush_snapshot, general_legend_snapshot, general_pane_options, general_reference_api, general_reference_options, general_reference_value, general_series_api, general_series_hit,
-  general_series_kind, general_series_options, general_shared_tooltip_snapshot, general_tooltip_snapshot, general_update_options, general_xy_row,
+  general_accessibility_snapshot, general_axis_api, general_axis_options, general_axis_presentation_options, general_brush_snapshot, general_legend_snapshot, general_pane_options, general_reference_api, general_reference_options, general_reference_value, general_series_api, general_series_hit,
+  general_series_kind, general_series_options, general_series_presentation_options, general_shared_tooltip_snapshot, general_tooltip_snapshot, general_update_options, general_xy_row,
   box_plot_row, bubble_columns, bubble_row, category_box_columns, category_error_columns, category_heatmap_columns, category_range_columns, category_xy_columns, numeric_error_columns, numeric_heatmap_columns, numeric_range_columns, numeric_xy_columns,
   error_bar_row, heatmap_grid_row, range_area_row, temporal_error_columns, temporal_heatmap_columns, temporal_range_columns, temporal_xy_columns,
   ingestion_diagnostics,
@@ -852,7 +852,16 @@ function pack_general_rows(
   return { ids, labels, categories, category_indices, y, y_valid };
 }
 
+function normalize_general_axis_options(options: general_axis_options): general_axis_options {
+  const normalized = { ...options } as general_axis_options & { domain?: unknown };
+  if (Array.isArray(options.domain) && options.scale === "temporal") {
+    normalized.domain = options.domain.map((value) => value instanceof Date ? value.getTime() : value);
+  }
+  return normalized as general_axis_options;
+}
+
 class general_axis_impl implements general_axis_api {
+  applyOptions(...args: Parameters<general_axis_api["apply_options"]>): void { this.apply_options(...args); }
   resetView(): void { this.reset_view(); }
   setVisible(...args: Parameters<general_axis_api["set_visible"]>): void { this.set_visible(...args); }
   constructor(
@@ -872,6 +881,16 @@ class general_axis_impl implements general_axis_api {
 
   options(): general_axis_options {
     return this.current();
+  }
+
+  apply_options(patch: Partial<general_axis_presentation_options>): void {
+    const options = { ...this.current(), ...patch };
+    parse_general_result<null>(
+      this.chart.wasm.update_general_axis_result_json(
+        JSON.stringify(normalize_general_axis_options(options)),
+      ),
+    );
+    this.chart.repaint();
   }
 
   set_visible(visible: boolean): void {
@@ -1049,6 +1068,7 @@ class general_reference_impl implements general_reference_api {
 }
 
 class general_series_impl implements general_series_api {
+  applyOptions(...args: Parameters<general_series_api["apply_options"]>): void { this.apply_options(...args); }
   setVisible(...args: Parameters<general_series_api["set_visible"]>): void { this.set_visible(...args); }
   setData(...args: Parameters<general_series_api["set_data"]>): void { this.set_data(...args); }
   setDataTyped(...args: Parameters<general_series_api["set_data_typed"]>): void { this.set_data_typed(...args); }
@@ -1085,6 +1105,23 @@ class general_series_impl implements general_series_api {
     const axis = this.chart.axis(this.x_axis_id);
     if (axis === null) throw new nucleuscharts_error("stale_handle", "this general series X axis has been removed");
     return axis.options().scale;
+  }
+
+  options(): general_series_options {
+    this.assert_live();
+    const options = JSON.parse(this.chart.wasm.general_series_options_json(this.id)) as general_series_options | null;
+    if (options === null) {
+      throw new nucleuscharts_error("stale_handle", "this general series has been removed");
+    }
+    return options;
+  }
+
+  apply_options(patch: Partial<general_series_presentation_options>): void {
+    const options = { ...this.options(), ...patch };
+    parse_general_result<null>(
+      this.chart.wasm.update_general_series_options_result_json(this.id, JSON.stringify(options)),
+    );
+    this.chart.repaint();
   }
 
   set_visible(visible: boolean): void {
@@ -5732,10 +5769,7 @@ export class chart_impl implements chart_api {
   }
 
   add_axis(options: general_axis_options): general_axis_api {
-    const normalized = { ...options } as general_axis_options & { domain?: unknown };
-    if (Array.isArray(options.domain) && options.scale === "temporal") {
-      normalized.domain = options.domain.map((value) => value instanceof Date ? value.getTime() : value);
-    }
+    const normalized = normalize_general_axis_options(options);
     const created = parse_general_result<{ id: string; handle_token: number }>(
       this.wasm.add_general_axis_result_json(JSON.stringify(normalized)),
     );

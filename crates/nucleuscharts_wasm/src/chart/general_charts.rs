@@ -157,6 +157,84 @@ fn default_point_radius() -> f64 {
     3.0
 }
 
+fn series_options_from_input(
+    kind: GeneralSeriesKind,
+    dataset: GeneralDatasetId,
+    input: SeriesInput,
+) -> Result<GeneralSeriesOptions, ChartError> {
+    let mut options = match kind {
+        GeneralSeriesKind::XyLine => {
+            GeneralSeriesOptions::xy_line(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+        }
+        GeneralSeriesKind::XyArea => {
+            GeneralSeriesOptions::xy_area(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+        }
+        GeneralSeriesKind::RangeArea => {
+            GeneralSeriesOptions::range_area(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+        }
+        GeneralSeriesKind::ErrorBar => {
+            GeneralSeriesOptions::error_bar(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+        }
+        GeneralSeriesKind::Column => {
+            GeneralSeriesOptions::column(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+        }
+        GeneralSeriesKind::HorizontalBar => GeneralSeriesOptions::horizontal_bar(
+            input.pane,
+            dataset,
+            input.x_axis_id,
+            input.y_axis_id,
+        ),
+        GeneralSeriesKind::BoxPlot => {
+            GeneralSeriesOptions::box_plot(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+        }
+        GeneralSeriesKind::HeatmapGrid => GeneralSeriesOptions::heatmap_grid(
+            input.pane,
+            dataset,
+            input.x_axis_id,
+            input.y_axis_id,
+        ),
+        GeneralSeriesKind::Scatter => {
+            GeneralSeriesOptions::scatter(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+        }
+        GeneralSeriesKind::Bubble => {
+            GeneralSeriesOptions::bubble(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+        }
+    };
+    options.visible = input.visible;
+    options.title = input.title;
+    options.color = input.color;
+    options.point_radius = input.point_radius;
+    options.data_labels = input.data_labels;
+    options.group_id = input.group_id;
+    options.stack_id = input.stack_id;
+    options.stack_mode = match input.stack_mode.as_deref().unwrap_or("normal") {
+        "normal" => GeneralStackMode::Normal,
+        "percent" => GeneralStackMode::Percent,
+        _ => {
+            return Err(ChartError::new(
+                nucleuscharts_engine::ErrorCode::InvalidOptions,
+                "general series stack_mode must be normal or percent",
+            ))
+        }
+    };
+    Ok(options)
+}
+
+fn series_kind_name(kind: GeneralSeriesKind) -> &'static str {
+    match kind {
+        GeneralSeriesKind::XyLine => "xy_line",
+        GeneralSeriesKind::XyArea => "xy_area",
+        GeneralSeriesKind::RangeArea => "range_area",
+        GeneralSeriesKind::ErrorBar => "error_bar",
+        GeneralSeriesKind::Column => "column",
+        GeneralSeriesKind::HorizontalBar => "horizontal_bar",
+        GeneralSeriesKind::BoxPlot => "box_plot",
+        GeneralSeriesKind::HeatmapGrid => "heatmap_grid",
+        GeneralSeriesKind::Scatter => "scatter",
+        GeneralSeriesKind::Bubble => "bubble",
+    }
+}
+
 fn result_ok(value: Value) -> String {
     json!({ "ok": true, "result": value }).to_string()
 }
@@ -453,6 +531,41 @@ impl ChartInner {
         }
     }
 
+    pub fn update_general_axis_result_json(&mut self, options_json: &str) -> String {
+        let input = match parse_json::<AxisInput>(options_json) {
+            Ok(input) => input,
+            Err(error) => return error,
+        };
+        let Some(dimension) = dimension(&input.dimension) else {
+            return input_error("unknown general axis dimension");
+        };
+        let Some(position) = position(input.position.as_deref()) else {
+            return input_error("unknown general axis position");
+        };
+        let Some(scale) = scale(&input.scale) else {
+            return input_error("unknown general axis scale");
+        };
+        let Some(domain) = axis_domain(scale, input.domain) else {
+            return input_error("general axis domain does not match its scale");
+        };
+        let mut options = GeneralAxisOptions::new(input.id, input.pane, dimension, scale);
+        options.position = position;
+        options.domain = domain;
+        options.reverse = input.reverse;
+        options.visible = input.visible;
+        options.title = input.title;
+        options.tick_count = input.tick_count;
+        options.min_tick_gap = input.min_tick_gap;
+        options.band_padding_inner = input.band_padding_inner;
+        options.band_padding_outer = input.band_padding_outer;
+        options.zero_line = input.zero_line;
+        options.grid_visible = input.grid_visible;
+        match self.engine.update_general_axis_options(options) {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
+    }
+
     pub fn general_axis_handle_token(&self, id: &str) -> u32 {
         self.engine
             .general_axis(id)
@@ -557,22 +670,63 @@ impl ChartInner {
                     "dataset": series.dataset().get(),
                     "x_axis_id": series.x_axis_id(),
                     "y_axis_id": series.y_axis_id(),
-                    "kind": match series.kind() {
-                        GeneralSeriesKind::XyLine => "xy_line",
-                        GeneralSeriesKind::XyArea => "xy_area",
-                        GeneralSeriesKind::RangeArea => "range_area",
-                        GeneralSeriesKind::ErrorBar => "error_bar",
-                        GeneralSeriesKind::Column => "column",
-                        GeneralSeriesKind::HorizontalBar => "horizontal_bar",
-                        GeneralSeriesKind::BoxPlot => "box_plot",
-                        GeneralSeriesKind::HeatmapGrid => "heatmap_grid",
-                        GeneralSeriesKind::Scatter => "scatter",
-                        GeneralSeriesKind::Bubble => "bubble",
-                    },
+                    "kind": series_kind_name(series.kind()),
                 })
             })
             .collect::<Vec<_>>();
         json!(series).to_string()
+    }
+
+    pub fn general_series_options_json(&self, series: u32) -> String {
+        let Some(id) = GeneralSeriesId::from_raw(series) else {
+            return "null".to_owned();
+        };
+        let Some(series) = self.engine.general_series(id) else {
+            return "null".to_owned();
+        };
+        json!({
+            "pane": self.engine.general_series_pane_index(id),
+            "x_axis_id": series.x_axis_id(),
+            "y_axis_id": series.y_axis_id(),
+            "visible": series.visible(),
+            "title": series.title(),
+            "color": series.color(),
+            "point_radius": series.point_radius(),
+            "data_labels": series.data_labels(),
+            "group_id": series.group_id(),
+            "stack_id": series.stack_id(),
+            "stack_mode": match series.stack_mode() {
+                GeneralStackMode::Normal => "normal",
+                GeneralStackMode::Percent => "percent",
+            },
+        })
+        .to_string()
+    }
+
+    pub fn update_general_series_options_result_json(
+        &mut self,
+        series: u32,
+        options_json: &str,
+    ) -> String {
+        let Some(id) = GeneralSeriesId::from_raw(series) else {
+            return input_error("general series handle is stale");
+        };
+        let input = match parse_json::<SeriesInput>(options_json) {
+            Ok(input) => input,
+            Err(error) => return error,
+        };
+        let Some(current) = self.engine.general_series(id) else {
+            return input_error("general series handle is stale");
+        };
+        let (kind, dataset) = (current.kind(), current.dataset());
+        let options = match series_options_from_input(kind, dataset, input) {
+            Ok(options) => options,
+            Err(error) => return result_error(&error),
+        };
+        match self.engine.update_general_series_options(id, options) {
+            Ok(()) => result_ok(Value::Null),
+            Err(error) => result_error(&error),
+        }
     }
 
     pub fn general_legend_snapshot_json(&self, pane: i32) -> String {
@@ -830,66 +984,11 @@ impl ChartInner {
             Ok(dataset) => dataset,
             Err(error) => return result_error(&error),
         };
-        let mut options = match kind {
-            GeneralSeriesKind::XyLine => {
-                GeneralSeriesOptions::xy_line(input.pane, dataset, input.x_axis_id, input.y_axis_id)
-            }
-            GeneralSeriesKind::XyArea => {
-                GeneralSeriesOptions::xy_area(input.pane, dataset, input.x_axis_id, input.y_axis_id)
-            }
-            GeneralSeriesKind::RangeArea => GeneralSeriesOptions::range_area(
-                input.pane,
-                dataset,
-                input.x_axis_id,
-                input.y_axis_id,
-            ),
-            GeneralSeriesKind::ErrorBar => GeneralSeriesOptions::error_bar(
-                input.pane,
-                dataset,
-                input.x_axis_id,
-                input.y_axis_id,
-            ),
-            GeneralSeriesKind::Column => {
-                GeneralSeriesOptions::column(input.pane, dataset, input.x_axis_id, input.y_axis_id)
-            }
-            GeneralSeriesKind::HorizontalBar => GeneralSeriesOptions::horizontal_bar(
-                input.pane,
-                dataset,
-                input.x_axis_id,
-                input.y_axis_id,
-            ),
-            GeneralSeriesKind::BoxPlot => GeneralSeriesOptions::box_plot(
-                input.pane,
-                dataset,
-                input.x_axis_id,
-                input.y_axis_id,
-            ),
-            GeneralSeriesKind::HeatmapGrid => GeneralSeriesOptions::heatmap_grid(
-                input.pane,
-                dataset,
-                input.x_axis_id,
-                input.y_axis_id,
-            ),
-            GeneralSeriesKind::Scatter => {
-                GeneralSeriesOptions::scatter(input.pane, dataset, input.x_axis_id, input.y_axis_id)
-            }
-            GeneralSeriesKind::Bubble => {
-                GeneralSeriesOptions::bubble(input.pane, dataset, input.x_axis_id, input.y_axis_id)
-            }
-        };
-        options.visible = input.visible;
-        options.title = input.title;
-        options.color = input.color;
-        options.point_radius = input.point_radius;
-        options.data_labels = input.data_labels;
-        options.group_id = input.group_id;
-        options.stack_id = input.stack_id;
-        options.stack_mode = match input.stack_mode.as_deref().unwrap_or("normal") {
-            "normal" => GeneralStackMode::Normal,
-            "percent" => GeneralStackMode::Percent,
-            _ => {
+        let options = match series_options_from_input(kind, dataset, input) {
+            Ok(options) => options,
+            Err(error) => {
                 self.engine.remove_general_dataset(dataset);
-                return input_error("general series stack_mode must be normal or percent");
+                return result_error(&error);
             }
         };
         match self.engine.add_general_series(options) {

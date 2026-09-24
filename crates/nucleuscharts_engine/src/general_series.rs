@@ -1427,7 +1427,7 @@ impl ChartEngine {
         }
         validate_dataset_for_series(options.kind, dataset, &x_axis, &y_axis)?;
         validate_presentation(&options)?;
-        self.validate_layout_compatibility(pane_id, &options)?;
+        self.validate_layout_compatibility(pane_id, &options, None)?;
         let id = if let Some(registry) = self.general_series.as_mut() {
             registry.insert(pane_id, options)?
         } else {
@@ -1444,6 +1444,7 @@ impl ChartEngine {
         &self,
         pane_id: PaneId,
         options: &GeneralSeriesOptions,
+        ignored: Option<GeneralSeriesId>,
     ) -> Result<(), ChartError> {
         if matches!(
             options.kind,
@@ -1451,7 +1452,8 @@ impl ChartEngine {
         ) {
             if let Some(group_id) = options.group_id.as_deref() {
                 for sibling in self.general_series_iter().filter(|series| {
-                    series.kind == options.kind
+                    Some(series.id) != ignored
+                        && series.kind == options.kind
                         && series.pane_id == pane_id
                         && series.group_id() == Some(group_id)
                 }) {
@@ -1471,7 +1473,8 @@ impl ChartEngine {
 
         if let Some(stack_id) = options.stack_id.as_deref() {
             for sibling in self.general_series_iter().filter(|series| {
-                series.kind == options.kind
+                Some(series.id) != ignored
+                    && series.kind == options.kind
                     && series.pane_id == pane_id
                     && series.group_id() == options.group_id.as_deref()
                     && series.stack_id() == Some(stack_id)
@@ -1490,8 +1493,61 @@ impl ChartEngine {
     }
 
     #[doc(hidden)]
+    pub fn update_general_series_options(
+        &mut self,
+        id: GeneralSeriesId,
+        options: GeneralSeriesOptions,
+    ) -> Result<(), ChartError> {
+        let current = self.general_series(id).cloned().ok_or_else(|| {
+            ChartError::new(ErrorCode::InvalidHandle, "general series handle is stale")
+        })?;
+        let pane = self
+            .pane_index_for_id(current.pane_id)
+            .ok_or_else(|| invalid("general series references a stale pane"))?;
+        if options.kind != current.kind
+            || options.pane != pane
+            || options.dataset != current.dataset
+            || options.x_axis_id != current.x_axis_id
+            || options.y_axis_id != current.y_axis_id
+        {
+            return Err(invalid(
+                "general series kind, pane, dataset, and axis bindings are structural",
+            ));
+        }
+        validate_presentation(&options)?;
+        self.validate_layout_compatibility(current.pane_id, &options, Some(id))?;
+
+        let registry = self
+            .general_series
+            .as_mut()
+            .expect("a resolved general series has a registry");
+        let series = registry
+            .get_mut(id)
+            .expect("a resolved general series remains live during one mutation");
+        let radius_changed = series.point_radius != options.point_radius;
+        series.visible = options.visible;
+        series.title = options.title;
+        series.color = options.color;
+        series.point_radius = options.point_radius;
+        series.data_labels = options.data_labels;
+        series.group_id = options.group_id;
+        series.stack_id = options.stack_id;
+        series.stack_mode = options.stack_mode;
+        if radius_changed {
+            registry.scatter_spatial.get_mut().remove(&id);
+        }
+        self.invalidate_frame_all();
+        Ok(())
+    }
+
+    #[doc(hidden)]
     pub fn general_series(&self, id: GeneralSeriesId) -> Option<&GeneralSeries> {
         self.general_series.as_ref()?.get(id)
+    }
+
+    #[doc(hidden)]
+    pub fn general_series_pane_index(&self, id: GeneralSeriesId) -> Option<usize> {
+        self.pane_index_for_id(self.general_series(id)?.pane_id)
     }
 
     #[doc(hidden)]

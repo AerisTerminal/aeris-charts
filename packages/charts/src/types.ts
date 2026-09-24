@@ -283,6 +283,12 @@ export interface general_axis_options {
   grid_visible?: boolean;
 }
 
+/** Options that can change without replacing an axis or its scale/domain family. */
+export type general_axis_presentation_options = Omit<
+  general_axis_options,
+  "id" | "pane" | "dimension" | "scale"
+>;
+
 export type general_reference_value = number | string | Date;
 
 export type general_reference_options =
@@ -346,6 +352,12 @@ export interface general_series_options {
   /** Bar/xy_area stack normalization. `percent` requires `stack_id`. */
   stack_mode?: "normal" | "percent";
 }
+
+/** Options that can change without replacing a general series or its dataset/axis bindings. */
+export type general_series_presentation_options = Omit<
+  general_series_options,
+  "pane" | "x_axis_id" | "y_axis_id"
+>;
 
 export interface general_update_options {
   /** Keep only the newest rows after this transaction. Omit to retain the full dataset. */
@@ -446,10 +458,12 @@ export interface general_legend_snapshot {
 }
 
 export interface general_axis_api {
+  applyOptions: general_axis_api["apply_options"];
   resetView: general_axis_api["reset_view"];
   setVisible: general_axis_api["set_visible"];
   readonly id: string;
   options(): general_axis_options;
+  apply_options(options: Partial<general_axis_presentation_options>): void;
   set_visible(visible: boolean): void;
   pan(fraction: number): void;
   zoom(factor: number, anchor_value: number): void;
@@ -458,9 +472,12 @@ export interface general_axis_api {
 }
 
 export interface general_series_api {
+  applyOptions: general_series_api["apply_options"];
   setVisible: general_series_api["set_visible"];
   readonly id: number;
   readonly kind: general_series_kind;
+  options(): general_series_options;
+  apply_options(options: Partial<general_series_presentation_options>): void;
   set_visible(visible: boolean): void;
   set_data(data: readonly (general_xy_row | bubble_row | range_area_row | error_bar_row | box_plot_row | heatmap_grid_row)[]): void;
   set_data_typed(columns: numeric_xy_columns | temporal_xy_columns | category_xy_columns | bubble_columns | numeric_range_columns | temporal_range_columns | category_range_columns | numeric_error_columns | temporal_error_columns | category_error_columns | category_box_columns | category_heatmap_columns | numeric_heatmap_columns | temporal_heatmap_columns): void;

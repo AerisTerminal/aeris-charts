@@ -204,6 +204,11 @@ series with their visibility state rather than maintaining a parallel host regis
 semantic brush selection, and reference domain extension likewise do not create browser-owned semantic mirrors.
 Axis and series handles mutate visibility in place through the engine registry, preserving handle, data, view,
 selection, and ordering identity while shared invalidation updates domains, hits, legends, persistence, and frames.
+Their browser `apply_options` transactions also update mutable axis configuration and series presentation in
+place after validating the complete candidate. Invalid candidates leave the live object unchanged; axis
+pane/dimension/scale and series pane/dataset/axis bindings remain structural until the dedicated rebinding
+transaction validates their dependants. React uses these mutations for ordinary prop changes and releases a
+new pane or series if initial data installation or a readiness callback throws.
 The shared browser accessibility
 controller recognizes financial and general handles but keeps their navigation math separate: financial
 series continue to query the time scale, while general series page through at most 512 Rust-owned

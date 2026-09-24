@@ -154,12 +154,14 @@ export interface GeneralPaneProps {
 
 interface axis_runtime {
   handle: general_axis_api;
-  signature: string;
+  structure_signature: string;
+  presentation_signature: string;
 }
 
 interface series_runtime {
   handle: general_series_api;
-  signature: string;
+  binding_signature: string;
+  presentation_signature: string;
   data: GeneralSeriesSpec["data"];
 }
 
@@ -171,6 +173,33 @@ interface pane_runtime {
 
 function stable_signature(value: unknown): string {
   return JSON.stringify(value, (_key, item: unknown) => item instanceof Date ? item.getTime() : item);
+}
+
+function general_series_bindings(options: GeneralSeriesSpec["options"]): object {
+  return { x_axis_id: options.x_axis_id, y_axis_id: options.y_axis_id };
+}
+
+function general_axis_structure(axis: GeneralAxisSpec): object {
+  return { dimension: axis.dimension, scale: axis.scale };
+}
+
+function general_axis_presentation(
+  axis: GeneralAxisSpec,
+): Omit<GeneralAxisSpec, "id" | "dimension" | "scale"> {
+  const { id, dimension, scale, ...presentation } = axis;
+  void id;
+  void dimension;
+  void scale;
+  return presentation;
+}
+
+function general_series_presentation(
+  options: GeneralSeriesSpec["options"],
+): Omit<GeneralSeriesSpec["options"], "x_axis_id" | "y_axis_id"> {
+  const { x_axis_id, y_axis_id, ...presentation } = options;
+  void x_axis_id;
+  void y_axis_id;
+  return presentation;
 }
 
 function dispose_pane_runtime(chart: chart_api, runtime: pane_runtime): void {
@@ -229,7 +258,13 @@ export function GeneralPane({ options, axes, series, onPaneReady, onSeriesReady 
     const pane = chart.addPane({ preserve_empty: true, horizontal_domain: options.horizontal_domain });
     const runtime: pane_runtime = { pane, axes: new Map(), series: new Map() };
     runtime_ref.current = runtime;
-    ready_ref.current?.(pane);
+    try {
+      ready_ref.current?.(pane);
+    } catch (error) {
+      runtime_ref.current = null;
+      dispose_pane_runtime(chart, runtime);
+      throw error;
+    }
     set_generation((value) => value + 1);
     return () => {
       if (runtime_ref.current === runtime) runtime_ref.current = null;
@@ -248,7 +283,19 @@ export function GeneralPane({ options, axes, series, onPaneReady, onSeriesReady 
 
     for (const [id, current] of runtime.axes) {
       const desired = desired_axes.get(id);
-      if (desired === undefined || stable_signature(desired) !== current.signature) changed_axes.add(id);
+      if (
+        desired === undefined
+        || stable_signature(general_axis_structure(desired)) !== current.structure_signature
+      ) {
+        changed_axes.add(id);
+      } else {
+        const presentation = general_axis_presentation(desired);
+        const presentation_signature = stable_signature(presentation);
+        if (presentation_signature !== current.presentation_signature) {
+          current.handle.applyOptions(presentation);
+          current.presentation_signature = presentation_signature;
+        }
+      }
     }
 
     for (const [key, current] of runtime.series) {
@@ -257,11 +304,18 @@ export function GeneralPane({ options, axes, series, onPaneReady, onSeriesReady 
         && (changed_axes.has(desired.options.x_axis_id) || changed_axes.has(desired.options.y_axis_id));
       const changed = desired === undefined
         || desired.kind !== current.handle.kind
-        || stable_signature(desired.options) !== current.signature
+        || stable_signature(general_series_bindings(desired.options)) !== current.binding_signature
         || depends_on_changed_axis;
       if (changed) {
         current.handle.remove();
         runtime.series.delete(key);
+      } else {
+        const presentation = general_series_presentation(desired.options);
+        const presentation_signature = stable_signature(presentation);
+        if (presentation_signature !== current.presentation_signature) {
+          current.handle.applyOptions(presentation);
+          current.presentation_signature = presentation_signature;
+        }
       }
     }
 
@@ -276,17 +330,32 @@ export function GeneralPane({ options, axes, series, onPaneReady, onSeriesReady 
     for (const axis of axes) {
       if (runtime.axes.has(axis.id)) continue;
       const handle = chart.addAxis({ ...axis, pane });
-      runtime.axes.set(axis.id, { handle, signature: stable_signature(axis) });
+      runtime.axes.set(axis.id, {
+        handle,
+        structure_signature: stable_signature(general_axis_structure(axis)),
+        presentation_signature: stable_signature(general_axis_presentation(axis)),
+      });
     }
 
     for (const desired of series) {
       let current = runtime.series.get(desired.key);
       if (current === undefined) {
         const handle = chart.addSeries(desired.kind, { ...desired.options, pane });
-        handle.setData(desired.data);
-        current = { handle, signature: stable_signature(desired.options), data: desired.data };
-        runtime.series.set(desired.key, current);
-        series_ready_ref.current?.(desired.key, handle);
+        try {
+          handle.setData(desired.data);
+          current = {
+            handle,
+            binding_signature: stable_signature(general_series_bindings(desired.options)),
+            presentation_signature: stable_signature(general_series_presentation(desired.options)),
+            data: desired.data,
+          };
+          runtime.series.set(desired.key, current);
+          series_ready_ref.current?.(desired.key, handle);
+        } catch (error) {
+          runtime.series.delete(desired.key);
+          handle.remove();
+          throw error;
+        }
       } else if (current.data !== desired.data) {
         current.handle.setData(desired.data);
         current.data = desired.data;

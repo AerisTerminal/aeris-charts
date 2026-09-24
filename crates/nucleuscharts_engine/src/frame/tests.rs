@@ -1072,6 +1072,26 @@ fn percent_stacked_columns_normalize_each_category_and_validate_stack_contract()
     second.stack_id = Some("share".into());
     second.stack_mode = GeneralStackMode::Percent;
     let second = chart.add_general_series(second).unwrap();
+    let mut updated = GeneralSeriesOptions::column(pane, dataset_b, "percent-x", "percent-y");
+    updated.stack_id = Some("share".into());
+    updated.stack_mode = GeneralStackMode::Percent;
+    updated.title = "Updated share".into();
+    updated.color = Some("#123456".into());
+    chart
+        .update_general_series_options(second, updated)
+        .unwrap();
+    let updated = chart.general_series(second).unwrap();
+    assert_eq!(updated.title(), "Updated share");
+    assert_eq!(updated.color(), Some("#123456"));
+
+    let mut rejected = GeneralSeriesOptions::column(pane, dataset_b, "percent-x", "percent-y");
+    rejected.stack_id = Some("share".into());
+    assert!(chart
+        .update_general_series_options(second, rejected)
+        .is_err());
+    let unchanged = chart.general_series(second).unwrap();
+    assert_eq!(unchanged.title(), "Updated share");
+    assert_eq!(unchanged.stack_mode(), GeneralStackMode::Percent);
     let mut incompatible_mode =
         GeneralSeriesOptions::column(pane, dataset_b, "percent-x", "percent-y");
     incompatible_mode.stack_id = Some("share".into());

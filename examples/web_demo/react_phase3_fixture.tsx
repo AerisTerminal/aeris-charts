@@ -67,11 +67,19 @@ export async function exerciseReactAdapter(): Promise<Record<string, unknown>> {
   let general: general_series_api | null = null;
   let pane: pane_api | null = null;
 
-  const render = (financial_close: number, revenue_value: number, show_children = true) => {
+  const render = (
+    financial_close: number,
+    revenue_value: number,
+    show_children = true,
+    title = "Revenue",
+  ) => {
+    const render_axes = axes.map((axis) => axis.id === "revenue"
+      ? { ...axis, title: title === "Revenue" ? "Revenue axis" : "Updated revenue axis" }
+      : axis);
     const general_series: readonly GeneralSeriesSpec[] = [{
       key: "revenue",
       kind: "column",
-      options: { x_axis_id: "month", y_axis_id: "revenue", title: "Revenue" },
+      options: { x_axis_id: "month", y_axis_id: "revenue", title, color: title === "Revenue" ? "#2563eb" : "#dc2626" },
       data: [{ id: "jan", x: "Jan", y: revenue_value }],
     }];
     root.render(
@@ -89,7 +97,7 @@ export async function exerciseReactAdapter(): Promise<Record<string, unknown>> {
             />
             <GeneralPane
               options={pane_options}
-              axes={axes}
+              axes={render_axes}
               series={general_series}
               onPaneReady={(value) => { pane = value; }}
               onSeriesReady={(_key, value) => { general = value; }}
@@ -122,9 +130,11 @@ export async function exerciseReactAdapter(): Promise<Record<string, unknown>> {
   const general_id = first_general.id;
   const pane_index = first_pane.paneIndex();
 
-  render(3, 57);
+  render(3, 57, true, "Updated revenue");
   await wait_until(() => safely(() => (financial as series_api).data()[0]?.close === 3));
   await wait_until(() => safely(() => (general as general_series_api).dataAt(0)?.value === 57));
+  await wait_until(() => safely(() => (general as general_series_api).options().title === "Updated revenue"));
+  await wait_until(() => safely(() => first_chart.axis("revenue")?.options().title === "Updated revenue axis"));
 
   const result = {
     same_chart: chart === first_chart,
@@ -132,6 +142,9 @@ export async function exerciseReactAdapter(): Promise<Record<string, unknown>> {
     same_general_handle: general === first_general,
     same_financial_id: (financial as series_api).id === financial_id,
     same_general_id: (general as general_series_api).id === general_id,
+    updated_general_title: (general as general_series_api).options().title,
+    updated_general_color: (general as general_series_api).options().color,
+    updated_axis_title: first_chart.axis("revenue")?.options().title,
     pane_index_stable: (pane as pane_api).paneIndex() === pane_index,
     pane_count: first_chart.panes().length,
     axis_count: first_chart.axes(pane_index).length,
@@ -156,4 +169,69 @@ export async function exerciseReactAdapter(): Promise<Record<string, unknown>> {
   console.error = original_console_error;
   window.removeEventListener("error", on_window_error);
   return { ...result, child_cleanup, disposed };
+}
+
+class FailureBoundary extends React.Component<{
+  children: React.ReactNode;
+  onFailure: (error: Error) => void;
+}, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: Error): void {
+    this.props.onFailure(error);
+  }
+
+  render(): React.ReactNode {
+    return this.state.failed ? null : this.props.children;
+  }
+}
+
+/** Prove a rejected first data install cannot strand an untracked engine series or pane. */
+export async function exerciseReactFailureCleanup(): Promise<Record<string, unknown>> {
+  const host = document.createElement("div");
+  host.style.cssText = "width:720px;height:480px";
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  let chart: chart_api | null = null;
+  let failure: Error | null = null;
+  const invalid_series: readonly GeneralSeriesSpec[] = [{
+    key: "invalid",
+    kind: "column",
+    options: { x_axis_id: "month", y_axis_id: "revenue" },
+    data: [{ id: "bad", x: 7 as unknown as string, y: 42 }],
+  }];
+  const original_console_error = console.error;
+  console.error = () => {};
+  try {
+    root.render(
+      <NucleusChart
+        options={{ backend: "canvas2d", autoSize: false, accessibility: false }}
+        onChartReady={(value) => { chart = value; }}
+      >
+        <FailureBoundary onFailure={(error) => { failure = error; }}>
+          <GeneralPane options={pane_options} axes={axes} series={invalid_series} />
+        </FailureBoundary>
+      </NucleusChart>,
+    );
+    await wait_until(() => chart !== null && failure !== null);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const live = chart as chart_api;
+    const result = {
+      failure: (failure as Error).message,
+      pane_count: live.panes().length,
+      axis_count: live.axes().length,
+      legend_count: live.general_legend_snapshot().items.length,
+    };
+    root.unmount();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    return result;
+  } finally {
+    console.error = original_console_error;
+    root.unmount();
+    host.remove();
+  }
 }

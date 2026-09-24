@@ -2500,6 +2500,12 @@ impl NucleusChart {
             .add_general_axis_result_json(options_json)
     }
 
+    pub fn update_general_axis_result_json(&mut self, options_json: &str) -> String {
+        self.inner
+            .borrow_mut()
+            .update_general_axis_result_json(options_json)
+    }
+
     pub fn general_axis_json(&self, id: &str) -> String {
         self.inner.borrow().general_axis_json(id)
     }
@@ -2543,6 +2549,20 @@ impl NucleusChart {
 
     pub fn general_series_catalog_json(&self) -> String {
         self.inner.borrow().general_series_catalog_json()
+    }
+
+    pub fn general_series_options_json(&self, series: u32) -> String {
+        self.inner.borrow().general_series_options_json(series)
+    }
+
+    pub fn update_general_series_options_result_json(
+        &mut self,
+        series: u32,
+        options_json: &str,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .update_general_series_options_result_json(series, options_json)
     }
 
     /// Engine-owned general-series legend metadata. `pane < 0` selects every pane.

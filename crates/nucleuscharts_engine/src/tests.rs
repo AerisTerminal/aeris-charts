@@ -5412,6 +5412,32 @@ fn general_axis_failures_are_atomic_and_pane_removal_releases_axes() {
     );
     assert_eq!(chart.general_axes(None).len(), 1);
 
+    let handle = chart.general_axis("time-x").unwrap().handle();
+    let mut update =
+        GeneralAxisOptions::new("time-x", pane, AxisDimension::X, GeneralScaleType::Temporal);
+    update.title = Some("Updated time".into());
+    update.reverse = true;
+    chart.update_general_axis_options(update).unwrap();
+    let updated = chart.general_axis("time-x").unwrap();
+    assert_eq!(updated.handle(), handle);
+    assert_eq!(updated.title(), Some("Updated time"));
+    assert!(updated.reverse());
+
+    let mut rejected =
+        GeneralAxisOptions::new("time-x", pane, AxisDimension::X, GeneralScaleType::Temporal);
+    rejected.tick_count = Some(0);
+    assert_eq!(
+        chart
+            .update_general_axis_options(rejected)
+            .unwrap_err()
+            .code(),
+        ErrorCode::InvalidOptions
+    );
+    let unchanged = chart.general_axis("time-x").unwrap();
+    assert_eq!(unchanged.handle(), handle);
+    assert_eq!(unchanged.title(), Some("Updated time"));
+    assert!(unchanged.reverse());
+
     assert!(chart.remove_pane(pane));
     assert_eq!(chart.general_axes.len(), 0);
     assert!(chart.general_axis("time-x").is_none());

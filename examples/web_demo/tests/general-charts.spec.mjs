@@ -221,6 +221,9 @@ test("React adapter keeps chart and series identities across rerenders and dispo
     same_general_handle: true,
     same_financial_id: true,
     same_general_id: true,
+    updated_general_title: "Updated revenue",
+    updated_general_color: "#dc2626",
+    updated_axis_title: "Updated revenue axis",
     pane_index_stable: true,
     pane_count: 2,
     axis_count: 2,
@@ -228,6 +231,16 @@ test("React adapter keeps chart and series identities across rerenders and dispo
     child_cleanup: true,
     disposed: true,
   });
+});
+
+test("React general-series installation rolls back rejected initial data", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const fixture = await import("/dist/react_phase3_fixture.js");
+    return fixture.exerciseReactFailureCleanup();
+  });
+  expect(result.failure).toContain("category X values must be strings");
+  expect(result).toMatchObject({ pane_count: 1, axis_count: 0, legend_count: 0 });
 });
 
 test("camel-case aliases share the original chart and series handles", async ({ page }) => {
@@ -571,6 +584,14 @@ test("general legend snapshots preserve order, hidden state, pane filtering, lif
     });
     const x_axis = chart.add_axis({ id: "legend-a-x", pane: first_pane.pane_index(), dimension: "x", scale: "linear" });
     chart.add_axis({ id: "legend-a-y", pane: first_pane.pane_index(), dimension: "y", scale: "linear" });
+    x_axis.applyOptions({ title: "Updated X", reverse: true });
+    let rejected_axis_update = null;
+    try {
+      x_axis.apply_options({ tick_count: 0 });
+    } catch (error) {
+      rejected_axis_update = error.code;
+    }
+    const x_axis_options = x_axis.options();
     x_axis.set_visible(false);
     const hidden_axis_visible = x_axis.options().visible;
     x_axis.setVisible(true);
@@ -582,6 +603,15 @@ test("general legend snapshots preserve order, hidden state, pane filtering, lif
       color: "#123456",
     });
     revenue.set_data([{ id: "r", x: 1, y: 2 }]);
+    const revenue_id = revenue.id;
+    revenue.applyOptions({ title: "Updated revenue", color: "#654321" });
+    let rejected_update = null;
+    try {
+      revenue.apply_options({ color: "not-a-color" });
+    } catch (error) {
+      rejected_update = error.code;
+    }
+    const revenue_options = revenue.options();
     const hidden = chart.add_series("scatter", {
       pane: first_pane.pane_index(),
       x_axis_id: "legend-a-x",
@@ -630,6 +660,11 @@ test("general legend snapshots preserve order, hidden state, pane filtering, lif
     const output = {
       invalid_pane,
       hidden_axis_visible,
+      rejected_axis_update,
+      x_axis_options,
+      rejected_update,
+      series_identity_preserved: revenue.id === revenue_id,
+      revenue_options,
       all,
       first_only,
       after_remove,
@@ -646,17 +681,22 @@ test("general legend snapshots preserve order, hidden state, pane filtering, lif
 
   expect(result.invalid_pane).toBe("invalid_options");
   expect(result.hidden_axis_visible).toBe(false);
+  expect(result.rejected_axis_update).toBe("invalid_options");
+  expect(result.x_axis_options).toMatchObject({ title: "Updated X", reverse: true, tick_count: null });
+  expect(result.rejected_update).toBe("invalid_options");
+  expect(result.series_identity_preserved).toBe(true);
+  expect(result.revenue_options).toMatchObject({ title: "Updated revenue", color: "#654321" });
   expect(result.all.items).toMatchObject([
-    { pane: 1, kind: "xy_line", title: "Revenue", color: "#123456", visible: true },
+    { pane: 1, kind: "xy_line", title: "Updated revenue", color: "#654321", visible: true },
     { pane: 1, kind: "scatter", title: "Hidden samples", color: null, visible: false },
     { pane: 2, kind: "xy_area", title: "Margin", color: "#abcdef", visible: true },
   ]);
   expect(result.first_only.items).toMatchObject([
-    { kind: "xy_line", title: "Revenue", visible: true },
+    { kind: "xy_line", title: "Updated revenue", visible: true },
     { kind: "scatter", title: "Hidden samples", visible: false },
   ]);
   expect(result.after_remove.items).toMatchObject([
-    { kind: "xy_line", title: "Revenue" },
+    { kind: "xy_line", title: "Updated revenue" },
     { kind: "xy_area", title: "Margin" },
   ]);
   expect(result.restore_version).toBe(2);

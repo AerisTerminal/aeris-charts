@@ -164,6 +164,11 @@ General axis and series handles expose `set_visible(boolean)` and `setVisible(bo
 changes preserve the handle and its data while the engine updates domains, interaction snapshots,
 legends, persistence, and the next rendered frame.
 
+The same handles expose atomic `apply_options` / `applyOptions` methods for mutable axis configuration
+and series presentation. Invalid colors, tick policies, grouping, or stacking leave the complete prior
+object unchanged. React `GeneralPane` applies these ordinary prop changes to the existing handles and
+rolls back a newly acquired pane or series when initial installation or a readiness callback fails.
+
 ## Experimental surfaces
 
 Custom series, pane/series/canvas primitives, the exported custom-series/primitive feature packs,

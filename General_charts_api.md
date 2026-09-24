@@ -396,6 +396,13 @@ entry set, order, visibility, title, color, kind, and pane identity come from th
 series handles expose `set_visible`/`setVisible`; legend controls use the series handle and then read the next
 engine snapshot rather than maintaining parallel visibility state.
 
+Axis and series handles also expose `apply_options`/`applyOptions`. Axis updates cover domain, direction,
+position, visibility, title, tick spacing/count, band padding, zero line, and grid policy; changing a configured
+domain resets only that axis's runtime view. Series updates cover visibility, title, color, point radius, data
+labels, grouping, stack identity, and stack mode. Each update validates a complete candidate before commit,
+preserves handles and data, and leaves prior state intact on rejection. Pane/domain-family and axis-binding
+changes remain structural and are not accepted by these methods.
+
 Reference components are intentionally separate from series data. A reference line binds one X or Y axis and one
 compatible numeric/temporal/category value; a dot binds explicit X and Y axes; a region binds two endpoints on
 each axis. Styling is bounded engine-owned state. `extend_domain: false` is the default semantic: the reference is
