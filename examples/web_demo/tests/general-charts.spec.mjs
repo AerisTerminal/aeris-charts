@@ -113,10 +113,10 @@ test("general dashboard showcases every released Cartesian example", async ({ pa
 
   expect(page_errors).toEqual([]);
   expect(result.errors).toEqual([]);
-  expect(result.cards).toBe(13);
+  expect(result.cards).toBe(14);
   expect(result.mode).toBe("general");
   expect(Number(result.ready)).toBeGreaterThan(0);
-  expect(Number(result.ready)).toBeLessThan(13);
+  expect(Number(result.ready)).toBeLessThan(14);
   if (browserName === "chromium") {
     expect(result.runtime).toContain("WebGPU");
     expect(result.active.every((entry) => entry.backend === "webgpu")).toBe(true);
@@ -125,7 +125,7 @@ test("general dashboard showcases every released Cartesian example", async ({ pa
     expect(result.runtime).toContain("Canvas2D");
     expect(result.active.every((entry) => entry.backend === "canvas2d")).toBe(true);
   }
-  expect(result.summary).toHaveLength(13);
+  expect(result.summary).toHaveLength(14);
   expect(result.active.every((entry) => entry.pane_count === 1 && entry.pane_index === 0)).toBe(true);
   expect(result.summary.map((entry) => entry.label)).toEqual([
     "xy_line",
@@ -137,13 +137,14 @@ test("general dashboard showcases every released Cartesian example", async ({ pa
     "scatter",
     "bubble",
     "range_area",
+    "range_bar",
     "error_bar",
     "box_plot",
     "heatmap_grid",
     "stacked area",
   ]);
   expect(new Set(result.summary.flatMap((entry) => entry.series_kinds))).toEqual(new Set([
-    "xy_line", "xy_area", "column", "horizontal_bar", "scatter", "bubble", "range_area", "error_bar", "box_plot", "heatmap_grid",
+    "xy_line", "xy_area", "column", "horizontal_bar", "scatter", "bubble", "range_area", "range_bar", "error_bar", "box_plot", "heatmap_grid",
   ]));
 
   const first_host = page.locator("#general_workspace .general-chart-host").first();
@@ -154,9 +155,9 @@ test("general dashboard showcases every released Cartesian example", async ({ pa
     .toBeGreaterThan(scroll_before);
 
   await page.getByRole("button", { name: "Bars" }).click();
-  await expect(page.locator("#general_workspace .general-chart-card:not([hidden])")).toHaveCount(4);
+  await expect(page.locator("#general_workspace .general-chart-card:not([hidden])")).toHaveCount(5);
   await page.getByRole("button", { name: "All" }).click();
-  await expect(page.locator("#general_workspace .general-chart-card:not([hidden])")).toHaveCount(13);
+  await expect(page.locator("#general_workspace .general-chart-card:not([hidden])")).toHaveCount(14);
   const last = page.locator("#general_workspace .general-chart-card").last();
   await last.scrollIntoViewIfNeeded();
   await expect(last).toHaveAttribute("data-mounted", "true");
@@ -2714,6 +2715,51 @@ test("range_area spans numeric, temporal, and category domains through the brows
   expect(result.restore_version).toBe(2);
   expect(result.restored_ranges).toEqual(result.before_restore);
   expect(result.screenshot).toBeGreaterThan(1000);
+});
+
+test("range_bar renders category low/high rectangles with exact browser hits", async ({ page }) => {
+  await page.goto("/?backend=canvas2d&forceFallbackAdapter=1");
+  const result = await page.evaluate(async () => {
+    const { create_chart } = await import("/dist/nucleuscharts_financial.js");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:640px;height:420px;z-index:10000";
+    document.body.appendChild(host);
+    const chart = await create_chart(host, { backend: "canvas2d", autoSize: false });
+    chart.resize(640, 420, 1);
+    const pane = chart.add_pane({ preserve_empty: true, horizontal_domain: { type: "category", scale: "band" } });
+    chart.add_axis({ id: "range-bar-x", pane: pane.pane_index(), dimension: "x", scale: "band" });
+    chart.add_axis({ id: "range-bar-y", pane: pane.pane_index(), dimension: "y", scale: "linear" });
+    const series = chart.add_series("range_bar", {
+      pane: pane.pane_index(), x_axis_id: "range-bar-x", y_axis_id: "range-bar-y",
+    });
+    series.set_data([
+      { id: "a", x: "A", low: 1, high: 3 },
+      { id: "b", x: "B", low: 2, high: 5 },
+    ]);
+    chart.resize(640, 420, 1);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const snapshot = series.data_at(0);
+    const state = chart.export_state();
+    const restored_host = document.createElement("div");
+    restored_host.style.cssText = "position:fixed;left:-10000px;top:0;width:640px;height:420px";
+    document.body.appendChild(restored_host);
+    const restored = await create_chart(restored_host, { backend: "canvas2d", autoSize: false });
+    restored.resize(640, 420, 1);
+    const restore_result = restored.import_state(state);
+    const restored_series = restored.panes()[1]?.get_series().find((candidate) => candidate.kind === "range_bar")
+      ?? restored.panes()[0]?.get_series().find((candidate) => candidate.kind === "range_bar");
+    const restored_snapshot = restored_series?.data_at(0);
+    restored.remove();
+    restored_host.remove();
+    chart.remove();
+    host.remove();
+    return { kind: series.kind, snapshot, restore_version: restore_result.schema_version, restored_kind: restored_series?.kind, restored_snapshot };
+  });
+  expect(result.kind).toBe("range_bar");
+  expect(result.snapshot).toMatchObject({ low: 1, high: 3 });
+  expect(result.restore_version).toBe(2);
+  expect(result.restored_kind).toBe("range_bar");
+  expect(result.restored_snapshot).toMatchObject({ low: 1, high: 3 });
 });
 
 test("xy_line and xy_area span general domains and restore through V2", async ({ page }) => {

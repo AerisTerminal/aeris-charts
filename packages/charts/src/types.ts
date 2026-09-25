@@ -42,7 +42,7 @@ export type series_kind =
   | "custom";
 
 /** General Cartesian series currently available through the shared chart engine. */
-export type general_series_kind = "xy_line" | "xy_area" | "range_area" | "error_bar" | "column" | "horizontal_bar" | "box_plot" | "heatmap_grid" | "scatter" | "bubble";
+export type general_series_kind = "xy_line" | "xy_area" | "range_area" | "range_bar" | "error_bar" | "column" | "horizontal_bar" | "box_plot" | "heatmap_grid" | "scatter" | "bubble";
 export type general_row_id = string | number;
 
 export interface general_xy_row {
@@ -1907,6 +1907,7 @@ export interface chart_state_v2 {
       | "XyLine"
       | "XyArea"
       | "RangeArea"
+      | "RangeBar"
       | "ErrorBar"
       | "Column"
       | "HorizontalBar"

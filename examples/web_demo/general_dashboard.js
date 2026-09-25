@@ -106,6 +106,18 @@ const examples = [
     ] }],
   },
   {
+    title: "Delivery windows", description: "Category range bars show low/high delivery estimates as exact rectangular marks.", label: "range_bar", category: "bar",
+    horizontal_domain: { type: "category", scale: "band" },
+    axes: [
+      { id: "x", dimension: "x", scale: "band", title: "Team", grid_visible: false },
+      { id: "y", dimension: "y", scale: "linear", title: "Days", grid_visible: true },
+    ],
+    series: [{ kind: "range_bar", title: "Delivery", color: palette.amber, data: [
+      { x: "Core", low: 4, high: 9 }, { x: "Growth", low: 7, high: 13 },
+      { x: "Platform", low: 3, high: 8 }, { x: "Data", low: 9, high: 16 },
+    ] }],
+  },
+  {
     title: "Experiment uncertainty", description: "Category-centered error bars show measured values with Y confidence bounds.", label: "error_bar", category: "distribution",
     horizontal_domain: { type: "category", scale: "point" }, axes: axes("point", "Variant", "Conversion"),
     series: [{ kind: "error_bar", title: "Conversion", color: palette.coral, point_radius: 6, data: [

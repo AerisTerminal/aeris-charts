@@ -781,7 +781,7 @@ class PaneAccessibility {
         this.update_focus_ring();
         return;
       }
-      if (active.kind !== "scatter" && active.kind !== "bubble" && active.kind !== "xy_line" && active.kind !== "xy_area" && active.kind !== "range_area" && active.kind !== "error_bar") return;
+      if (active.kind !== "scatter" && active.kind !== "bubble" && active.kind !== "xy_line" && active.kind !== "xy_area" && active.kind !== "range_area" && active.kind !== "range_bar" && active.kind !== "error_bar") return;
       const anchor = item === undefined ? 0 : Number(item.x_label);
       if (!Number.isFinite(anchor) || !["linear", "log", "symlog"].includes(scale)) return;
       axis.zoom(zoom_in ? 1.25 : 0.8, anchor);
@@ -877,7 +877,7 @@ class PaneAccessibility {
       if (series.kind === "bubble" && item.size !== null) {
         values = `${values}, size ${item.size.toLocaleString(this.controller.locale())}`;
       }
-      if (series.kind === "range_area" && item.low !== null && item.high !== null) {
+      if ((series.kind === "range_area" || series.kind === "range_bar") && item.low !== null && item.high !== null) {
         values = item.label === null
           ? `${this.format_value(item.low, series)} to ${this.format_value(item.high, series)}`
           : `${item.label}, ${this.format_value(item.low, series)} to ${this.format_value(item.high, series)}`;
@@ -1068,7 +1068,7 @@ class PaneAccessibility {
       const visible = this.focused && this.controller.options.show_focus_indicator
         && item !== undefined && item.value !== null
         && (active.kind !== "bubble" || (item.size !== null && item.size > 0))
-        && (active.kind !== "range_area" || (item.low !== null && item.high !== null))
+        && (active.kind !== "range_area" && active.kind !== "range_bar" || (item.low !== null && item.high !== null))
         && (active.kind !== "box_plot"
           || (item.low !== null && item.q1 !== null && item.q3 !== null && item.high !== null))
         && (active.kind !== "heatmap_grid" || item.y_label !== null);

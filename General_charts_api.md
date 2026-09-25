@@ -181,6 +181,7 @@ type general_series_kind =
   | "xy_line"
   | "xy_area"
   | "range_area"
+  | "range_bar"
   | "column"
   | "horizontal_bar"
   | "scatter"
@@ -208,6 +209,11 @@ cumulative boundary. `stack_mode: "normal"` uses independent positive/negative a
 while `stack_mode: "percent"` normalizes positive and negative totals independently to `+1`/`-1`.
 Both bar orientations reuse ordered `Rect` primitives, exact rectangle hits, bounded labels, snapshots,
 typed/object updates, and V2 persistence.
+
+`range_bar` uses the aligned low/high dataset contract with a category X axis and numeric Y axis.
+Each complete row lowers to one category-width rectangle spanning its low/high values; missing or
+invalid bounds remain queryable but emit no geometry. Range bars use exact rectangle hits and the
+same persistence and update paths as range areas.
 
 ```ts
 interface cartesian_series_options {

@@ -385,6 +385,46 @@ impl ChartEngine {
                     flush_run(&mut run);
                     out.append(&mut markers);
                 }
+                GeneralSeriesKind::RangeBar => {
+                    let color = series
+                        .color()
+                        .and_then(Color::parse_css)
+                        .unwrap_or(DEFAULT_LINE_COLOR);
+                    self.visit_general_range_bars(series, |geometry| {
+                        let left = (geometry.left * hpr).round() as i32;
+                        let right = (geometry.right * hpr).round() as i32;
+                        let top = (geometry.top * vpr).round() as i32;
+                        let bottom = (geometry.bottom * vpr).round() as i32;
+                        if right <= left || bottom <= top {
+                            return;
+                        }
+                        out.push(Prim::Rect {
+                            rect: IRect {
+                                x: left,
+                                y: top,
+                                w: right - left,
+                                h: bottom - top,
+                            },
+                            color,
+                        });
+                        let (hovered, selected) =
+                            self.general_row_interaction(series.id(), geometry.row);
+                        if hovered || selected {
+                            interaction[usize::from(selected)] = Some(Prim::RectFrame {
+                                rect: IRect {
+                                    x: left,
+                                    y: top,
+                                    w: right - left,
+                                    h: bottom - top,
+                                },
+                                border: ((if selected { 2.0 } else { 1.0 }) * hpr.min(vpr))
+                                    .round()
+                                    .max(1.0) as i32,
+                                color: if selected { PRIMARY } else { GENERAL_HOVER },
+                            });
+                        }
+                    });
+                }
                 GeneralSeriesKind::RangeArea => {
                     let color = series
                         .color()

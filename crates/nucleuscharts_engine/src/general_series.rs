@@ -33,6 +33,7 @@ pub enum GeneralSeriesKind {
     XyLine,
     XyArea,
     RangeArea,
+    RangeBar,
     ErrorBar,
     Column,
     HorizontalBar,
@@ -227,6 +228,17 @@ impl GeneralSeriesOptions {
             stack_id: None,
             stack_mode: GeneralStackMode::Normal,
         }
+    }
+
+    pub fn range_bar(
+        pane: usize,
+        dataset: GeneralDatasetId,
+        x_axis_id: impl Into<String>,
+        y_axis_id: impl Into<String>,
+    ) -> Self {
+        let mut options = Self::range_area(pane, dataset, x_axis_id, y_axis_id);
+        options.kind = GeneralSeriesKind::RangeBar;
+        options
     }
 
     pub fn error_bar(
@@ -1501,6 +1513,25 @@ impl ChartEngine {
                     ));
                 }
             }
+            GeneralSeriesKind::RangeBar => {
+                if pane_domain
+                    != (HorizontalDomain::Category {
+                        scale: crate::CategoryScaleType::Band,
+                    })
+                    || dataset_kind != GeneralXKind::Category
+                    || x_axis.scale() != GeneralScaleType::Band
+                    || !matches!(
+                        y_axis.scale(),
+                        GeneralScaleType::Linear
+                            | GeneralScaleType::Logarithmic
+                            | GeneralScaleType::SymmetricLog
+                    )
+                {
+                    return Err(invalid(
+                        "range_bar requires a category-band pane, category X data, a band X axis, and a numeric Y axis",
+                    ));
+                }
+            }
             GeneralSeriesKind::Column => {
                 if pane_domain
                     != (HorizontalDomain::Category {
@@ -2452,6 +2483,115 @@ impl ChartEngine {
                 top,
                 bottom,
             });
+        }
+    }
+
+    pub(crate) fn visit_general_range_bars<F>(&self, series: &GeneralSeries, mut visit: F)
+    where
+        F: FnMut(GeneralColumnGeometry),
+    {
+        if !series.visible || series.kind != GeneralSeriesKind::RangeBar {
+            return;
+        }
+        let Some(pane_index) = self.pane_index_for_id(series.pane_id) else {
+            return;
+        };
+        let Some(plot) = self.general_plot_rect(pane_index) else {
+            return;
+        };
+        let Some(dataset) = self.general_dataset(series.dataset) else {
+            return;
+        };
+        let (Some(categories), Some(category_indices), Some(low)) = (
+            dataset.categories(),
+            dataset.category_indices(),
+            dataset.low(),
+        ) else {
+            return;
+        };
+        let (Some(x_axis), Some(y_axis)) = (
+            self.general_axis(&series.x_axis_id),
+            self.general_axis(&series.y_axis_id),
+        ) else {
+            return;
+        };
+        let Some(GeneralAxisDomain::Category(axis_categories)) =
+            self.effective_general_axis_domain(x_axis)
+        else {
+            return;
+        };
+        let Some(GeneralAxisDomain::Numeric([y_from, y_to])) =
+            self.effective_general_axis_domain(y_axis)
+        else {
+            return;
+        };
+        let x_range = if x_axis.reverse() {
+            (plot.width, 0.0)
+        } else {
+            (0.0, plot.width)
+        };
+        let Ok(x_scale) = BandScale::new(
+            axis_categories.len(),
+            x_range.0,
+            x_range.1,
+            x_axis.band_padding_inner(),
+            x_axis.band_padding_outer(),
+            0.5,
+        ) else {
+            return;
+        };
+        let plot_bottom = plot.y + plot.height;
+        let y_range = if y_axis.reverse() {
+            (plot.y, plot_bottom)
+        } else {
+            (plot_bottom, plot.y)
+        };
+        let Some(y_scale) =
+            NumericAxisScale::new(y_axis.scale(), [y_from, y_to], y_range.0, y_range.1)
+        else {
+            return;
+        };
+        let axis_lookup: HashMap<&str, usize> = axis_categories
+            .iter()
+            .enumerate()
+            .map(|(index, category)| (category.as_str(), index))
+            .collect();
+        for row in 0..dataset.len() {
+            if !dataset.low_is_valid(row) || !dataset.y_is_valid(row) || low[row] > dataset.y()[row]
+            {
+                continue;
+            }
+            let Some(category) = usize::try_from(category_indices[row])
+                .ok()
+                .and_then(|i| categories.get(i))
+            else {
+                continue;
+            };
+            let Some(&axis_index) = axis_lookup.get(category.as_str()) else {
+                continue;
+            };
+            let Some((left, right)) = x_scale.bounds(axis_index) else {
+                continue;
+            };
+            let bar_left = left.min(right).clamp(0.0, plot.width);
+            let bar_right = left.max(right).clamp(0.0, plot.width);
+            let Some(low_y) = y_scale.coordinate(low[row]) else {
+                continue;
+            };
+            let Some(high_y) = y_scale.coordinate(dataset.y()[row]) else {
+                continue;
+            };
+            let top = low_y.min(high_y).clamp(plot.y, plot_bottom);
+            let bottom = low_y.max(high_y).clamp(plot.y, plot_bottom);
+            if bar_right > bar_left && bottom > top {
+                visit(GeneralColumnGeometry {
+                    row,
+                    left: bar_left,
+                    right: bar_right,
+                    top,
+                    bottom,
+                });
+            }
         }
     }
 
@@ -4489,6 +4629,9 @@ impl ChartEngine {
                 GeneralSeriesKind::Column => self.visit_general_columns(series, |geometry| {
                     consider(geometry.row, distance_to_rect(x_css, y_css, geometry));
                 }),
+                GeneralSeriesKind::RangeBar => self.visit_general_range_bars(series, |geometry| {
+                    consider(geometry.row, distance_to_rect(x_css, y_css, geometry));
+                }),
                 GeneralSeriesKind::HorizontalBar => {
                     self.visit_general_horizontal_bars(series, |geometry| {
                         consider(geometry.row, distance_to_rect(x_css, y_css, geometry));
@@ -6075,7 +6218,7 @@ fn validate_dataset_for_series(
                 ));
             }
         }
-        GeneralSeriesKind::RangeArea => {
+        GeneralSeriesKind::RangeArea | GeneralSeriesKind::RangeBar => {
             let expected_x = match x_axis.scale() {
                 GeneralScaleType::Linear
                 | GeneralScaleType::Logarithmic
@@ -6438,7 +6581,7 @@ fn validate_input_for_series(
                 ));
             }
         }
-        GeneralSeriesKind::RangeArea => {
+        GeneralSeriesKind::RangeArea | GeneralSeriesKind::RangeBar => {
             let expected_x = match x_axis.scale() {
                 GeneralScaleType::Linear
                 | GeneralScaleType::Logarithmic

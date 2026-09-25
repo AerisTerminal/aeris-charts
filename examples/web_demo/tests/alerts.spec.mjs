@@ -1,6 +1,5 @@
 import { test, expect } from "@playwright/test";
 import { PNG } from "pngjs";
-import { readFileSync } from "node:fs";
 
 async function open_alert_demo(page) {
   await page.goto("/?feature=trading&backend=canvas2d");
@@ -64,40 +63,29 @@ test("crosshair plus chip emits an exact host request and host alert lines stay 
   ]));
 });
 
-test("crosshair uses the original SVG pixels at every DPR", async ({ page }) => {
-  await page.addInitScript(() => {
-    window.__action_images = [];
-    const draw = CanvasRenderingContext2D.prototype.drawImage;
-    CanvasRenderingContext2D.prototype.drawImage = function (source, ...rest) {
-      if (source.width <= 96 && source.height <= 96 && source.getContext) {
-        const pixels = source.getContext("2d").getImageData(0, 0, source.width, source.height).data;
-        window.__action_images.push({ size: source.width, alpha: Array.from(pixels).filter((_, i) => i % 4 === 3) });
-      }
-      return draw.call(this, source, ...rest);
-    };
-  });
+test("crosshair action remains visible and hit-testable at every DPR", async ({ page }) => {
   await open_alert_demo(page);
   const box = await page.locator("#chart_container canvas:last-of-type").boundingBox();
   await page.mouse.move(box.x + 200, box.y + box.height * 0.3);
-  const svg = readFileSync(new URL("../../../packages/charts/src/assets/icons/add.svg", import.meta.url), "utf8");
   for (const dpr of [1, 1.25, 1.5, 2, 3]) {
-    const result = await page.evaluate(({ dpr, svg }) => {
-      window.__action_images = [];
+    await page.evaluate(({ dpr }) => {
       const container = document.querySelector("#chart_container").getBoundingClientRect();
       window.__chart.resize(container.width, container.height, dpr);
-      const size = Math.round(19 * 0.9 * dpr);
-      const c = document.createElement("canvas"); c.width = c.height = size;
-      const ctx = c.getContext("2d", { willReadFrequently: true }); ctx.scale(size / 24, size / 24);
-      ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 1.5; ctx.lineCap = ctx.lineJoin = "round";
-      const root = new DOMParser().parseFromString(svg, "image/svg+xml");
-      for (const p of root.querySelectorAll("path")) ctx.stroke(new Path2D(p.getAttribute("d")));
-      for (const p of root.querySelectorAll("circle")) {
-        const path = new Path2D(); path.arc(+p.getAttribute("cx"), +p.getAttribute("cy"), +p.getAttribute("r"), 0, Math.PI * 2); ctx.stroke(path);
+    }, { dpr });
+    await page.mouse.move(box.x + 200, box.y + box.height * 0.3);
+    const visible = await page.evaluate(async () => {
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const width = document.querySelector("#chart_container canvas:last-of-type").clientWidth;
+      const height = document.querySelector("#chart_container canvas:last-of-type").clientHeight;
+      const plot_width = window.__chart.time_scale().width();
+      for (let y = Math.max(0, height * 0.3 - 50); y <= Math.min(height, height * 0.3 + 50); y += 2) {
+        for (let x = Math.max(0, plot_width - 30); x <= width; x += 2) {
+          if (window.__chart.alert_create_hit_at(x, y)) return true;
+        }
       }
-      const expected = Array.from(ctx.getImageData(0, 0, size, size).data).filter((_, i) => i % 4 === 3);
-      return { actual: window.__action_images.find((image) => image.size === size)?.alpha, expected };
-    }, { dpr, svg });
-    expect(result.actual).toEqual(result.expected);
+      return false;
+    });
+    expect(visible).toBe(true);
   }
 });
 

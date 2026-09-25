@@ -236,6 +236,9 @@ fn series_options_from_input(
         GeneralSeriesKind::RangeArea => {
             GeneralSeriesOptions::range_area(input.pane, dataset, input.x_axis_id, input.y_axis_id)
         }
+        GeneralSeriesKind::RangeBar => {
+            GeneralSeriesOptions::range_bar(input.pane, dataset, input.x_axis_id, input.y_axis_id)
+        }
         GeneralSeriesKind::ErrorBar => {
             GeneralSeriesOptions::error_bar(input.pane, dataset, input.x_axis_id, input.y_axis_id)
         }
@@ -297,6 +300,7 @@ fn series_kind_name(kind: GeneralSeriesKind) -> &'static str {
         GeneralSeriesKind::XyLine => "xy_line",
         GeneralSeriesKind::XyArea => "xy_area",
         GeneralSeriesKind::RangeArea => "range_area",
+        GeneralSeriesKind::RangeBar => "range_bar",
         GeneralSeriesKind::ErrorBar => "error_bar",
         GeneralSeriesKind::Column => "column",
         GeneralSeriesKind::HorizontalBar => "horizontal_bar",
@@ -883,6 +887,7 @@ impl ChartInner {
                         GeneralSeriesKind::XyLine => "xy_line",
                         GeneralSeriesKind::XyArea => "xy_area",
                         GeneralSeriesKind::RangeArea => "range_area",
+                        GeneralSeriesKind::RangeBar => "range_bar",
                         GeneralSeriesKind::ErrorBar => "error_bar",
                         GeneralSeriesKind::Column => "column",
                         GeneralSeriesKind::HorizontalBar => "horizontal_bar",
@@ -906,11 +911,11 @@ impl ChartInner {
             Err(error) => return error,
         };
         let (kind, empty) = match kind {
-            "xy_line" | "xy_area" | "range_area" => {
+            "xy_line" | "xy_area" | "range_area" | "range_bar" => {
                 let Some(domain) = self.engine.pane_horizontal_domain(input.pane) else {
                     return input_error(format!("{kind} references a stale pane"));
                 };
-                let is_range = kind == "range_area";
+                let is_range = matches!(kind, "range_area" | "range_bar");
                 let empty = match (domain, is_range) {
                     (HorizontalDomain::Continuous { .. }, false) => GeneralXyInput::Numeric {
                         ids: None,
@@ -967,6 +972,8 @@ impl ChartInner {
                         GeneralSeriesKind::XyArea
                     } else if kind == "range_area" {
                         GeneralSeriesKind::RangeArea
+                    } else if kind == "range_bar" {
+                        GeneralSeriesKind::RangeBar
                     } else {
                         GeneralSeriesKind::XyLine
                     },

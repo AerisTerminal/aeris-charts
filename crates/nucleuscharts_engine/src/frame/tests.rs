@@ -3341,6 +3341,138 @@ fn range_area_preserves_gaps_fills_band_hits_rows_and_exposes_bounds() {
 }
 
 #[test]
+fn range_bar_uses_category_band_rectangles_and_exact_hits() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: crate::CategoryScaleType::Band,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "range-bar-x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Band,
+        ))
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "range-bar-y",
+            pane,
+            AxisDimension::Y,
+            GeneralScaleType::Linear,
+        ))
+        .unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::RangeCategory {
+            ids: None,
+            categories: vec!["A".into(), "B".into()],
+            category_indices: vec![0, 1],
+            low: vec![1.0, 2.0],
+            low_valid: None,
+            high: vec![3.0, 5.0],
+            high_valid: None,
+        })
+        .unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::range_bar(
+            pane,
+            dataset,
+            "range-bar-x",
+            "range-bar-y",
+        ))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    assert_eq!(
+        {
+            let mut bars = Vec::new();
+            chart.visit_general_range_bars(chart.general_series(series).unwrap(), |bar| {
+                bars.push(bar)
+            });
+            bars.len()
+        },
+        2
+    );
+    let frame = chart.build_frame();
+    assert!(frame.panes[pane]
+        .main
+        .iter()
+        .any(|primitive| matches!(primitive, Prim::Rect { .. })));
+    let mut bars = Vec::new();
+    chart.visit_general_range_bars(chart.general_series(series).unwrap(), |bar| bars.push(bar));
+    assert_eq!(bars.len(), 2);
+    let hit = chart
+        .general_hit_test(
+            pane,
+            (bars[0].left + bars[0].right) * 0.5,
+            (bars[0].top + bars[0].bottom) * 0.5,
+            crate::GeneralHitMode::Exact,
+        )
+        .unwrap();
+    assert_eq!(hit.series, series);
+    assert_eq!(hit.row, 0);
+}
+
+#[test]
+fn range_bar_uses_bound_numeric_axis_transform() {
+    let mut chart = ChartEngine::new(640.0, 400.0, 1.0);
+    let pane = chart
+        .add_pane_with_domain(
+            true,
+            HorizontalDomain::Category {
+                scale: CategoryScaleType::Band,
+            },
+        )
+        .unwrap();
+    chart
+        .add_general_axis(GeneralAxisOptions::new(
+            "range-log-x",
+            pane,
+            AxisDimension::X,
+            GeneralScaleType::Band,
+        ))
+        .unwrap();
+    let mut y = GeneralAxisOptions::new(
+        "range-log-y",
+        pane,
+        AxisDimension::Y,
+        GeneralScaleType::Logarithmic,
+    );
+    y.domain = GeneralAxisDomain::Numeric([1.0, 100.0]);
+    chart.add_general_axis(y).unwrap();
+    let dataset = chart
+        .create_general_xy_dataset(GeneralXyInput::RangeCategory {
+            ids: None,
+            categories: vec!["A".into()],
+            category_indices: vec![0],
+            low: vec![1.0],
+            low_valid: None,
+            high: vec![10.0],
+            high_valid: None,
+        })
+        .unwrap();
+    let series = chart
+        .add_general_series(GeneralSeriesOptions::range_bar(
+            pane,
+            dataset,
+            "range-log-x",
+            "range-log-y",
+        ))
+        .unwrap();
+    chart.recompute_layout_with_measure(true, |text, _| text.len() as f64 * 7.0, |_, _| 0.0);
+    let plot = chart.general_plot_rect(pane).unwrap();
+    let mut bars = Vec::new();
+    chart.visit_general_range_bars(chart.general_series(series).unwrap(), |bar| bars.push(bar));
+    assert_eq!(bars.len(), 1);
+    assert!((bars[0].top - (plot.y + plot.height * 0.5)).abs() < 1e-9);
+    assert!((bars[0].bottom - (plot.y + plot.height)).abs() < 1e-9);
+}
+
+#[test]
 fn range_area_maps_temporal_and_category_x_and_log_invalid_bounds_as_gaps() {
     let mut temporal = ChartEngine::new(640.0, 400.0, 1.0);
     let temporal_pane = temporal

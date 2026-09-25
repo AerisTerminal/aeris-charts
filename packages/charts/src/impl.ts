@@ -646,7 +646,7 @@ function pack_general_rows(
       min, min_valid, q1, q1_valid, median, median_valid, q3, q3_valid, max, max_valid,
     };
   }
-  const is_range = kind === "range_area";
+  const is_range = kind === "range_area" || kind === "range_bar";
   const y = new Float64Array(data.length);
   let y_valid: Uint8Array | undefined;
   const low = is_range ? new Float64Array(data.length) : undefined;
@@ -655,7 +655,7 @@ function pack_general_rows(
     const row = data[index]!;
     const value = is_range ? (row as range_area_row).high : (row as general_xy_row).y;
     if (value === undefined) {
-      throw new nucleuscharts_error("invalid_data", "range_area rows require low and high fields");
+      throw new nucleuscharts_error("invalid_data", `${kind} rows require low and high fields`);
     }
     if (value === null) {
       y_valid ??= new Uint8Array(data.length).fill(1);
@@ -666,7 +666,7 @@ function pack_general_rows(
     if (is_range) {
       const low_value = (row as range_area_row).low;
       if (low_value === undefined) {
-        throw new nucleuscharts_error("invalid_data", "range_area rows require low and high fields");
+        throw new nucleuscharts_error("invalid_data", `${kind} rows require low and high fields`);
       }
       if (low_value === null) {
         low_valid ??= new Uint8Array(data.length).fill(1);
@@ -1186,8 +1186,8 @@ class general_series_impl implements general_series_api {
     if (this.kind === "bubble" && (!("x" in columns) || !("size" in columns))) {
       throw new nucleuscharts_error("invalid_data", "bubble requires numeric XY columns with a size channel");
     }
-    if (this.kind === "range_area" && !("low" in columns)) {
-      throw new nucleuscharts_error("invalid_data", "range_area requires low and high columns");
+    if ((this.kind === "range_area" || this.kind === "range_bar") && !("low" in columns)) {
+      throw new nucleuscharts_error("invalid_data", `${this.kind} requires low and high columns`);
     }
     if (this.kind === "error_bar" && !("y_low" in columns)) {
       throw new nucleuscharts_error("invalid_data", "error_bar requires numeric, temporal, or category error-bound columns");
@@ -1350,8 +1350,8 @@ class general_series_impl implements general_series_api {
     if (this.kind === "bubble" && (!("x" in columns) || !("size" in columns))) {
       throw new nucleuscharts_error("invalid_data", "bubble requires numeric XY columns with a size channel");
     }
-    if (this.kind === "range_area" && !("low" in columns)) {
-      throw new nucleuscharts_error("invalid_data", "range_area requires low and high columns");
+    if ((this.kind === "range_area" || this.kind === "range_bar") && !("low" in columns)) {
+      throw new nucleuscharts_error("invalid_data", `${this.kind} requires low and high columns`);
     }
     if (this.kind === "error_bar" && !("y_low" in columns)) {
       throw new nucleuscharts_error("invalid_data", "error_bar requires numeric, temporal, or category error-bound columns");
@@ -4342,6 +4342,7 @@ export class chart_impl implements chart_api {
       kind === "xy_line"
       || kind === "xy_area"
       || kind === "range_area"
+      || kind === "range_bar"
       || kind === "error_bar"
       || kind === "column"
       || kind === "horizontal_bar"

@@ -1184,7 +1184,11 @@ impl ChartEngine {
                             include_zero = true;
                             continue;
                         }
-                        if series.kind() == crate::GeneralSeriesKind::RangeArea {
+                        if matches!(
+                            series.kind(),
+                            crate::GeneralSeriesKind::RangeArea
+                                | crate::GeneralSeriesKind::RangeBar
+                        ) {
                             let Some(low_values) = dataset.low() else {
                                 continue;
                             };

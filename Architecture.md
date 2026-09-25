@@ -112,7 +112,7 @@ dataset capacity.
 
 The released Phase 2 Cartesian bindings are category-band columns, horizontal bars, box plots, category/category
 plus numeric/numeric and temporal/numeric heatmaps, numeric XY scatter/bubble marks, numeric/temporal/category
-error bars, and `xy_line`, `xy_area`, and `range_area`. General
+error bars, and `xy_line`, `xy_area`, `range_area`, and category-band `range_bar`. General
 series have monotonic chart-local identities, stable pane/axis/dataset ownership, bounded title/color
 state, and lazy registry allocation. Populated axes and datasets cannot be removed out from under a
 series, and a pane containing a general series cannot be removed until that series is detached. Visible
