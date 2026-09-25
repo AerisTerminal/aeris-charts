@@ -3,7 +3,9 @@
 
 use super::inner_render::measure_text_ctx;
 use super::*;
-use aeris_charts_engine::{ChartEngine, IndicatorInputSource, IndicatorKind, IndicatorOutputStyle};
+use aeris_charts_engine::{
+    ChartEngine, IndicatorInputSource, IndicatorKind, IndicatorOutputStyle, VwapReset,
+};
 
 impl ChartInner {
     pub fn set_series_area_brush_state(&mut self, id: u32, state_json: &str) -> bool {
@@ -141,6 +143,11 @@ impl ChartInner {
             },
             "atr" => IndicatorKind::Atr { period },
             "vwap" => IndicatorKind::Vwap,
+            "vwap_bands" => IndicatorKind::VwapBands {
+                reset: VwapReset::Session,
+                standard_deviation: deviation,
+                percent: 10.0,
+            },
             "wma" => IndicatorKind::Wma { period },
             _ => return "null".into(),
         };
@@ -285,6 +292,30 @@ impl ChartInner {
         self.engine
             .add_vwap(source_id as SeriesId, volume)
             .unwrap_or(u32::MAX)
+    }
+
+    pub fn add_vwap_bands(
+        &mut self,
+        source_id: u32,
+        volume_source: i32,
+        reset: &str,
+        standard_deviation: f64,
+        percent: f64,
+    ) -> Vec<u32> {
+        let reset = match reset {
+            "session" => VwapReset::Session,
+            "weekly" => VwapReset::Weekly,
+            "monthly" => VwapReset::Monthly,
+            _ => return Vec::new(),
+        };
+        let volume = (volume_source >= 0).then_some(volume_source as SeriesId);
+        self.engine.add_vwap_bands(
+            source_id as SeriesId,
+            volume,
+            reset,
+            standard_deviation,
+            percent,
+        )
     }
 
     pub fn add_wma(&mut self, source_id: u32, period: u32) -> u32 {

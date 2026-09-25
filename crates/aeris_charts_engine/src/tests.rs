@@ -1713,6 +1713,48 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
                 times, source[1], source[2], source[3], &volume,
             )]
         }
+        IndicatorKind::VwapBands {
+            reset,
+            standard_deviation,
+            percent,
+        } => {
+            let volume = binding
+                .volume_source
+                .and_then(|id| chart.data.series_data(id))
+                .map(|(volume_times, values)| {
+                    let mut aligned = vec![1.0; times.len()];
+                    let mut volume_row = 0;
+                    for (source_row, &time) in times.iter().enumerate() {
+                        while volume_row < volume_times.len() && volume_times[volume_row] < time {
+                            volume_row += 1;
+                        }
+                        if volume_times.get(volume_row) == Some(&time) {
+                            aligned[source_row] = values[3][volume_row];
+                        }
+                    }
+                    aligned
+                })
+                .unwrap_or_default();
+            let points = aeris_charts_indicators::vwap_bands(
+                times,
+                source[1],
+                source[2],
+                source[3],
+                &volume,
+                aeris_charts_indicators::VwapBandsOptions {
+                    reset,
+                    standard_deviation,
+                    percent,
+                },
+            );
+            vec![
+                points.iter().map(|point| point.basis).collect(),
+                points.iter().map(|point| point.standard_upper).collect(),
+                points.iter().map(|point| point.standard_lower).collect(),
+                points.iter().map(|point| point.percent_upper).collect(),
+                points.iter().map(|point| point.percent_lower).collect(),
+            ]
+        }
         IndicatorKind::Wma { period } => vec![aeris_charts_indicators::wma(source[3], period)],
     };
 
@@ -2024,6 +2066,35 @@ fn vwap_volume_input_aligns_by_timestamp_instead_of_row_position() {
     for (actual, expected) in actual.iter().zip(expected) {
         assert!((actual - expected.unwrap()).abs() < 1e-12);
     }
+}
+
+#[test]
+fn vwap_bands_are_engine_owned_five_outputs_and_rebuild_equivalent() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let volume = chart.add_series(SeriesKind::Histogram);
+    let times = [1_704_067_200.0, 1_704_153_600.0, 1_706_745_600.0];
+    let close = [10.0, 14.0, 20.0];
+    chart
+        .set_series_data(0, &times, &close, &close, &close, &close)
+        .unwrap();
+    chart
+        .set_series_data(
+            volume,
+            &times,
+            &[1.0, 3.0, 2.0],
+            &[1.0, 3.0, 2.0],
+            &[1.0, 3.0, 2.0],
+            &[1.0, 3.0, 2.0],
+        )
+        .unwrap();
+    let outputs = chart.add_vwap_bands(0, Some(volume), VwapReset::Monthly, 1.0, 10.0);
+    assert_eq!(outputs.len(), 5);
+    assert_eq!(chart.indicator_info(outputs[0]).unwrap().kind, "vwap_bands");
+    let basis = chart.data.series_data(outputs[0]).unwrap().1[3].to_vec();
+    assert_eq!(basis, vec![10.0, 13.0, 20.0]);
+    let binding = chart.indicators.len() - 1;
+    chart.update_series_bar(0, times[1], [15.0; 4]);
+    assert_indicator_binding_matches_full(&chart, binding);
 }
 
 #[test]

@@ -213,7 +213,7 @@ retention evicts both), and PD10 budgets hold on GPUI.
       ohlc4, hlcc4, any indicator output); multi-input bindings with typed validation; typed
       parameter schemas and output descriptors; per-output style persisted; study bindings in the
       next persistence schema version.
-- [ ] **OF9** VWAP standard-deviation and percent bands with session, weekly and monthly reset.
+- [x] **OF9** VWAP standard-deviation and percent bands with session, weekly and monthly reset.
 - [ ] **CT1** Hollow candles, columns, high-low bars, step line, line with markers.
 - [ ] **CT2** Heikin Ashi with real OHLC exposed separately for trading and crosshair.
 - [ ] **CT6** Symbol comparison overlays with a shared comparison anchor and per-symbol legend
@@ -239,9 +239,11 @@ engine, WASM shell and TypeScript package expose the explicit-source path and bo
 existing convenience methods remain close-based. Indicator outputs now also expose and atomically
 replace a compact engine-owned style snapshot, preserving per-output presentation independently
 of binding kind. VWAP's optional volume input now aligns by exact timestamp and keeps missing rows
-on the documented unit-weight fallback. Typed multi-input validation, style-document persistence,
-the next persistence schema, VWAP bands, chart-type additions and the I1 catalog remain open until
-the whole batch is implemented and reference fixtures are added.
+on the documented unit-weight fallback. OF9 now adds five engine-owned VWAP-band outputs with
+session, weekly and monthly reset keys, weighted population-deviation bands and percentage bands;
+pure-math and incremental rebuild tests cover the monthly reference path. Typed multi-input
+validation, style-document persistence, the next persistence schema, chart-type additions and the
+I1 catalog remain open until the whole batch is implemented and reference fixtures are added.
 
 ### B5 — Non-time bars and replay
 

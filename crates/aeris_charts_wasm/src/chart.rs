@@ -2188,6 +2188,24 @@ impl AerisChart {
         self.inner.borrow_mut().add_vwap(source_id, volume_source)
     }
 
+    /// Add VWAP basis, standard-deviation and percentage bands. `reset` is session, weekly, or monthly.
+    pub fn add_vwap_bands(
+        &mut self,
+        source_id: u32,
+        volume_source: i32,
+        reset: &str,
+        standard_deviation: f64,
+        percent: f64,
+    ) -> Vec<u32> {
+        self.inner.borrow_mut().add_vwap_bands(
+            source_id,
+            volume_source,
+            reset,
+            standard_deviation,
+            percent,
+        )
+    }
+
     /// Add a weighted moving-average line on the source's pane.
     pub fn add_wma(&mut self, source_id: u32, period: u32) -> u32 {
         self.inner.borrow_mut().add_wma(source_id, period)

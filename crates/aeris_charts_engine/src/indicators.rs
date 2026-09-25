@@ -122,6 +122,11 @@ pub enum IndicatorKind {
         period: usize,
     },
     Vwap,
+    VwapBands {
+        reset: aeris_charts_indicators::VwapReset,
+        standard_deviation: f64,
+        percent: f64,
+    },
     Wma {
         period: usize,
     },
@@ -226,6 +231,9 @@ pub struct IndicatorParameters {
     pub signal: Option<usize>,
     pub k_period: Option<usize>,
     pub d_period: Option<usize>,
+    pub reset: Option<aeris_charts_indicators::VwapReset>,
+    pub standard_deviation: Option<f64>,
+    pub percent: Option<f64>,
 }
 
 impl ChartEngine {
@@ -434,6 +442,21 @@ impl ChartEngine {
                             },
                         ),
                         IndicatorKind::Vwap => ("vwap", 0, None, IndicatorParameters::default()),
+                        IndicatorKind::VwapBands {
+                            reset,
+                            standard_deviation,
+                            percent,
+                        } => (
+                            "vwap_bands",
+                            0,
+                            None,
+                            IndicatorParameters {
+                                reset: Some(reset),
+                                standard_deviation: Some(standard_deviation),
+                                percent: Some(percent),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
                         IndicatorKind::Wma { period } => (
                             "wma",
                             period,
@@ -596,6 +619,26 @@ impl ChartEngine {
             .next()
     }
 
+    /// Add session/weekly/monthly VWAP basis, standard-deviation and percentage bands.
+    pub fn add_vwap_bands(
+        &mut self,
+        source: SeriesId,
+        volume_source: Option<SeriesId>,
+        reset: aeris_charts_indicators::VwapReset,
+        standard_deviation: f64,
+        percent: f64,
+    ) -> Vec<SeriesId> {
+        self.add_indicator_kind(
+            source,
+            IndicatorKind::VwapBands {
+                reset,
+                standard_deviation,
+                percent,
+            },
+            volume_source,
+        )
+    }
+
     /// Add a weighted moving-average line (linear weights, recent heaviest) on the source's pane.
     pub fn add_wma(&mut self, source: SeriesId, period: usize) -> Option<SeriesId> {
         self.add_indicator_kind(source, IndicatorKind::Wma { period }, None)
@@ -652,6 +695,7 @@ impl ChartEngine {
             | IndicatorKind::EmaRibbon { .. }
             | IndicatorKind::Bollinger { .. }
             | IndicatorKind::Vwap
+            | IndicatorKind::VwapBands { .. }
             | IndicatorKind::Wma { .. } => {}
         }
         ids
@@ -741,6 +785,28 @@ impl ChartEngine {
                     max: None,
                 });
             }
+            IndicatorKind::VwapBands {
+                reset,
+                standard_deviation,
+                percent,
+            } => {
+                parameters.push(IndicatorParameterDescriptor {
+                    name: "reset".into(),
+                    parameter_type: IndicatorParameterType::Source,
+                    default: serde_json::json!(reset),
+                    min: None,
+                    max: None,
+                });
+                parameters.push(number("standard_deviation", standard_deviation));
+                parameters.push(number("percent", percent));
+                parameters.push(IndicatorParameterDescriptor {
+                    name: "volume_source".into(),
+                    parameter_type: IndicatorParameterType::Series,
+                    default: serde_json::Value::Null,
+                    min: None,
+                    max: None,
+                });
+            }
         }
         let output_count = incremental_state(kind).output_count();
         IndicatorSchema {
@@ -820,7 +886,7 @@ impl ChartEngine {
     ) -> Vec<SeriesId> {
         if self.series_entry(source).is_none()
             || match &kind {
-                IndicatorKind::Vwap => {
+                IndicatorKind::Vwap | IndicatorKind::VwapBands { .. } => {
                     volume_source.is_some_and(|id| self.series_entry(id).is_none())
                 }
                 _ => volume_source.is_some(),
@@ -839,7 +905,7 @@ impl ChartEngine {
                 IndicatorKind::Stochastic { k_period, d_period } => {
                     *k_period == 0 || *d_period == 0
                 }
-                IndicatorKind::Vwap => false,
+                IndicatorKind::Vwap | IndicatorKind::VwapBands { .. } => false,
             }
         {
             return Vec::new();
@@ -1161,6 +1227,7 @@ fn indicator_kind_name(kind: &IndicatorKind) -> &'static str {
         IndicatorKind::Stochastic { .. } => "stochastic",
         IndicatorKind::Atr { .. } => "atr",
         IndicatorKind::Vwap => "vwap",
+        IndicatorKind::VwapBands { .. } => "vwap_bands",
         IndicatorKind::Wma { .. } => "wma",
     }
 }
@@ -1184,6 +1251,15 @@ fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators::Increment
         }
         IndicatorKind::Atr { period } => aeris_charts_indicators::IncrementalState::atr(period),
         IndicatorKind::Vwap => aeris_charts_indicators::IncrementalState::vwap(),
+        IndicatorKind::VwapBands {
+            reset,
+            standard_deviation,
+            percent,
+        } => aeris_charts_indicators::IncrementalState::vwap_bands(
+            reset,
+            standard_deviation,
+            percent,
+        ),
         IndicatorKind::Wma { period } => aeris_charts_indicators::IncrementalState::wma(period),
     }
 }
@@ -1231,6 +1307,7 @@ fn indicator_title(kind: &IndicatorKind) -> String {
         }
         IndicatorKind::Atr { period } => format!("ATR {period}"),
         IndicatorKind::Vwap => "VWAP".to_string(),
+        IndicatorKind::VwapBands { .. } => "VWAP Bands".to_string(),
         IndicatorKind::Wma { period } => format!("WMA {period}"),
     }
 }
@@ -1279,6 +1356,9 @@ fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static 
         IndicatorKind::Stochastic { .. } => ["%K", "%D"][output_index],
         IndicatorKind::Atr { .. } => "ATR",
         IndicatorKind::Vwap => "VWAP",
+        IndicatorKind::VwapBands { .. } => {
+            ["Basis", "Std Upper", "Std Lower", "% Upper", "% Lower"][output_index]
+        }
         IndicatorKind::Wma { .. } => "WMA",
     }
 }

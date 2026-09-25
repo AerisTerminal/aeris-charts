@@ -322,6 +322,73 @@ pub fn vwap(
     out
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VwapReset {
+    Session,
+    Weekly,
+    Monthly,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VwapBandsPoint {
+    pub basis: Option<f64>,
+    pub standard_upper: Option<f64>,
+    pub standard_lower: Option<f64>,
+    pub percent_upper: Option<f64>,
+    pub percent_lower: Option<f64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VwapBandsOptions {
+    pub reset: VwapReset,
+    pub standard_deviation: f64,
+    pub percent: f64,
+}
+
+/// Session/weekly/monthly VWAP with population standard-deviation and percentage bands.
+pub fn vwap_bands(
+    times: &[i64],
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    volumes: &[f64],
+    options: VwapBandsOptions,
+) -> Vec<VwapBandsPoint> {
+    let n = closes
+        .len()
+        .min(highs.len())
+        .min(lows.len())
+        .min(times.len());
+    let mut out = vec![
+        VwapBandsPoint {
+            basis: None,
+            standard_upper: None,
+            standard_lower: None,
+            percent_upper: None,
+            percent_lower: None,
+        };
+        n
+    ];
+    let mut state = VwapBandsState::default();
+    for row in 0..n {
+        out[row] = vwap_bands_step(
+            &mut state,
+            VwapBandsSample {
+                time_unix_seconds: times[row],
+                high: highs[row],
+                low: lows[row],
+                close: closes[row],
+                volume: volumes.get(row).copied(),
+            },
+            options.reset,
+            options.standard_deviation,
+            options.percent,
+        );
+    }
+    out
+}
+
 /// Borrowed canonical source columns used by the private rolling runtime. The engine owns the
 /// source storage; this crate owns only formula state and derived output.
 #[derive(Clone, Copy)]
@@ -1089,6 +1156,24 @@ struct VwapState {
     initialized: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct VwapBandsState {
+    period: i64,
+    cumulative_pv: f64,
+    cumulative_pv2: f64,
+    cumulative_volume: f64,
+    initialized: bool,
+}
+
+#[derive(Clone, Copy)]
+struct VwapBandsSample {
+    time_unix_seconds: i64,
+    high: f64,
+    low: f64,
+    close: f64,
+    volume: Option<f64>,
+}
+
 fn atr_step(state: &mut AtrState, sample: AtrSample, period: usize) -> Option<f64> {
     let previous_close = state.previous_close.replace(sample.close)?;
     let tr = (sample.high - sample.low)
@@ -1127,6 +1212,70 @@ fn vwap_step(state: &mut VwapState, sample: VwapSample) -> f64 {
     } else {
         typical
     }
+}
+
+fn vwap_bands_step(
+    state: &mut VwapBandsState,
+    sample: VwapBandsSample,
+    reset: VwapReset,
+    standard_deviation: f64,
+    percent: f64,
+) -> VwapBandsPoint {
+    let period = vwap_period_key(sample.time_unix_seconds, reset);
+    if !state.initialized || state.period != period {
+        *state = VwapBandsState {
+            period,
+            initialized: true,
+            ..VwapBandsState::default()
+        };
+    }
+    let typical = (sample.high + sample.low + sample.close) / 3.0;
+    let volume = sample.volume.unwrap_or(1.0).max(0.0);
+    state.cumulative_pv += typical * volume;
+    state.cumulative_pv2 += typical * typical * volume;
+    state.cumulative_volume += volume;
+    let basis = if state.cumulative_volume > 0.0 {
+        state.cumulative_pv / state.cumulative_volume
+    } else {
+        typical
+    };
+    let variance = if state.cumulative_volume > 0.0 {
+        (state.cumulative_pv2 / state.cumulative_volume - basis * basis).max(0.0)
+    } else {
+        0.0
+    };
+    let spread = variance.sqrt() * standard_deviation.max(0.0);
+    let percent = percent.max(0.0) / 100.0;
+    VwapBandsPoint {
+        basis: Some(basis),
+        standard_upper: Some(basis + spread),
+        standard_lower: Some(basis - spread),
+        percent_upper: Some(basis * (1.0 + percent)),
+        percent_lower: Some(basis * (1.0 - percent)),
+    }
+}
+
+fn vwap_period_key(seconds: i64, reset: VwapReset) -> i64 {
+    let days = seconds.div_euclid(86_400);
+    match reset {
+        VwapReset::Session => days,
+        VwapReset::Weekly => days.div_euclid(7),
+        VwapReset::Monthly => month_key(days),
+    }
+}
+
+// Proleptic Gregorian month key from Unix days (Howard Hinnant's civil-from-days reduction).
+fn month_key(days: i64) -> i64 {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 }.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096).div_euclid(365);
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2).div_euclid(153);
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    let year = year + i64::from(month <= 2);
+    year * 12 + month
 }
 
 #[derive(Clone, Debug)]
@@ -1169,6 +1318,12 @@ enum IncrementalKind {
     },
     Vwap {
         state: RecursiveHistory<VwapState>,
+    },
+    VwapBands {
+        reset: VwapReset,
+        standard_deviation: f64,
+        percent: f64,
+        state: RecursiveHistory<VwapBandsState>,
     },
     Wma {
         period: usize,
@@ -1280,6 +1435,18 @@ impl IncrementalState {
         )
     }
 
+    pub fn vwap_bands(reset: VwapReset, standard_deviation: f64, percent: f64) -> Self {
+        Self::new(
+            IncrementalKind::VwapBands {
+                reset,
+                standard_deviation,
+                percent,
+                state: RecursiveHistory::new(),
+            },
+            5,
+        )
+    }
+
     pub fn wma(period: usize) -> Self {
         Self::new(IncrementalKind::Wma { period }, 1)
     }
@@ -1334,6 +1501,7 @@ impl IncrementalState {
             }
             IncrementalKind::Atr { state, .. } => state.bytes(),
             IncrementalKind::Vwap { state } => state.bytes(),
+            IncrementalKind::VwapBands { state, .. } => state.bytes(),
             IncrementalKind::Sma { .. }
             | IncrementalKind::Bollinger { .. }
             | IncrementalKind::Wma { .. } => 0,
@@ -1625,6 +1793,46 @@ impl IncrementalState {
                 }
                 state.finish(n, tail, before_tail);
             }
+            IncrementalKind::VwapBands {
+                reset,
+                standard_deviation,
+                percent,
+                state,
+            } => {
+                let (start, mut accumulator) = state.begin(n, requested);
+                self.last_work_rows = n - start;
+                let mut tail = None;
+                let mut before_tail = None;
+                for row in start..n {
+                    let previous = accumulator;
+                    let point = vwap_bands_step(
+                        &mut accumulator,
+                        VwapBandsSample {
+                            time_unix_seconds: input.times[row],
+                            high: input.high[row],
+                            low: input.low[row],
+                            close: input.close[row],
+                            volume: input.volume.get(row).copied(),
+                        },
+                        *reset,
+                        *standard_deviation,
+                        *percent,
+                    );
+                    state.checkpoint(row, accumulator);
+                    if row >= self.output_from[0] {
+                        self.outputs[0].push(point.basis.expect("VWAP basis"));
+                        self.outputs[1].push(point.standard_upper.expect("VWAP upper band"));
+                        self.outputs[2].push(point.standard_lower.expect("VWAP lower band"));
+                        self.outputs[3].push(point.percent_upper.expect("VWAP percent upper band"));
+                        self.outputs[4].push(point.percent_lower.expect("VWAP percent lower band"));
+                    }
+                    if row + 1 == n {
+                        tail = Some(accumulator);
+                        before_tail = (row > 0).then_some(previous);
+                    }
+                }
+                state.finish(n, tail, before_tail);
+            }
             IncrementalKind::Wma { period } => {
                 self.last_work_rows = n - self.output_from[0];
                 let denominator = (*period * (*period + 1)) as f64 / 2.0;
@@ -1676,7 +1884,7 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
             0,
             0,
         ],
-        IncrementalKind::Vwap { .. } => [0; MAX_OUTPUTS],
+        IncrementalKind::Vwap { .. } | IncrementalKind::VwapBands { .. } => [0; MAX_OUTPUTS],
     }
 }
 
@@ -2436,6 +2644,29 @@ mod tests {
         // Empty volume slice = unit weights (cumulative typical mean).
         let u = vwap(&times[..2], &highs[..2], &lows[..2], &closes[..2], &[]);
         assert!((u[1].unwrap() - 15.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn vwap_bands_reset_by_month_and_match_weighted_reference() {
+        let points = vwap_bands(
+            &[1_704_067_200, 1_704_153_600, 1_706_745_600], // 2024-01-01, Jan-02, Feb-01
+            &[10.0, 14.0, 20.0],
+            &[10.0, 14.0, 20.0],
+            &[10.0, 14.0, 20.0],
+            &[1.0, 3.0, 2.0],
+            VwapBandsOptions {
+                reset: VwapReset::Monthly,
+                standard_deviation: 1.0,
+                percent: 10.0,
+            },
+        );
+        assert_eq!(points[0].basis, Some(10.0));
+        assert_eq!(points[1].basis, Some(13.0));
+        assert_eq!(points[2].basis, Some(20.0));
+        assert!((points[1].standard_upper.unwrap() - (13.0 + 3.0_f64.sqrt())).abs() < 1e-12);
+        assert!((points[1].standard_lower.unwrap() - (13.0 - 3.0_f64.sqrt())).abs() < 1e-12);
+        assert_eq!(points[2].percent_upper, Some(22.0));
+        assert_eq!(points[2].percent_lower, Some(18.0));
     }
 
     #[derive(Clone, Copy)]
