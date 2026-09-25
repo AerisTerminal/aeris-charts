@@ -163,6 +163,7 @@ fn financial_product_compatibility_fixture_survives_shared_frame_mutations() {
     assert!(chart.add_atr(0, 14).is_some());
     assert!(chart.add_vwap(0, Some(histogram)).is_some());
     assert!(chart.add_obv(0, histogram).is_some());
+    assert!(chart.add_cmf(0, histogram, 14).is_some());
     assert!(chart.add_wma(0, 9).is_some());
     assert_eq!(
         chart
@@ -205,6 +206,7 @@ fn financial_product_compatibility_fixture_survives_shared_frame_mutations() {
             IndicatorKind::Atr { period: 14 },
             IndicatorKind::Vwap,
             IndicatorKind::Obv,
+            IndicatorKind::Cmf { period: 14 },
             IndicatorKind::Wma { period: 9 },
         ]
     );
@@ -1666,9 +1668,12 @@ fn add_test_indicator(
     chart.add_indicator_kind(
         0,
         kind.clone(),
-        matches!(kind, IndicatorKind::Vwap | IndicatorKind::Obv)
-            .then_some(volume)
-            .flatten(),
+        matches!(
+            kind,
+            IndicatorKind::Vwap | IndicatorKind::Obv | IndicatorKind::Cmf { .. }
+        )
+        .then_some(volume)
+        .flatten(),
     )
 }
 
@@ -1833,6 +1838,28 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
                 .unwrap_or_default();
             vec![aeris_charts_indicators::obv(source[3], &volume)]
         }
+        IndicatorKind::Cmf { period } => {
+            let volume = binding
+                .volume_source
+                .and_then(|id| chart.data.series_data(id))
+                .map(|(volume_times, values)| {
+                    let mut aligned = vec![0.0; times.len()];
+                    let mut volume_row = 0;
+                    for (source_row, &time) in times.iter().enumerate() {
+                        while volume_row < volume_times.len() && volume_times[volume_row] < time {
+                            volume_row += 1;
+                        }
+                        if volume_times.get(volume_row) == Some(&time) {
+                            aligned[source_row] = values[3][volume_row];
+                        }
+                    }
+                    aligned
+                })
+                .unwrap_or_default();
+            vec![aeris_charts_indicators::cmf(
+                source[1], source[2], source[3], &volume, period,
+            )]
+        }
         IndicatorKind::VwapBands {
             reset,
             standard_deviation,
@@ -1891,8 +1918,12 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
             expected.iter().map(|(time, _)| *time).collect::<Vec<_>>()
         );
         assert_eq!(actual[3].len(), expected.len());
-        for (&actual, (_, expected)) in actual[3].iter().zip(expected) {
-            assert!((actual - expected).abs() < 1e-10, "{actual} != {expected}");
+        for (index, (&actual, (_, expected))) in actual[3].iter().zip(expected).enumerate() {
+            assert!(
+                (actual - expected).abs() < 1e-10,
+                "{:?} row {index}: {actual} != {expected}",
+                binding.kind,
+            );
         }
     }
 }
@@ -1922,6 +1953,7 @@ fn every_indicator_engine_path_matches_full_recomputation() {
         IndicatorKind::Atr { period: 5 },
         IndicatorKind::Vwap,
         IndicatorKind::Obv,
+        IndicatorKind::Cmf { period: 5 },
         IndicatorKind::Wma { period: 5 },
         IndicatorKind::Keltner {
             period: 5,

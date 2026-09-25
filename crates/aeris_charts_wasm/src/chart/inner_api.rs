@@ -170,6 +170,7 @@ impl ChartInner {
             "atr" => IndicatorKind::Atr { period },
             "vwap" => IndicatorKind::Vwap,
             "obv" => IndicatorKind::Obv,
+            "cmf" => IndicatorKind::Cmf { period },
             "vwap_bands" => IndicatorKind::VwapBands {
                 reset: VwapReset::Session,
                 standard_deviation: deviation,
@@ -438,6 +439,19 @@ impl ChartInner {
         }
         self.engine
             .add_obv(source_id as SeriesId, volume_source as SeriesId)
+            .unwrap_or(u32::MAX)
+    }
+
+    pub fn add_cmf(&mut self, source_id: u32, volume_source: i32, period: u32) -> u32 {
+        if volume_source < 0 {
+            return u32::MAX;
+        }
+        self.engine
+            .add_cmf(
+                source_id as SeriesId,
+                volume_source as SeriesId,
+                period as usize,
+            )
             .unwrap_or(u32::MAX)
     }
 

@@ -844,6 +844,44 @@ pub fn obv(closes: &[f64], volumes: &[f64]) -> Vec<Option<f64>> {
     out
 }
 
+/// Chaikin money flow over a rolling window. Each bar contributes its close location value times
+/// non-negative volume; zero-volume windows return zero rather than a fictitious flow signal.
+pub fn cmf(
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    volumes: &[f64],
+    period: usize,
+) -> Vec<Option<f64>> {
+    let n = highs
+        .len()
+        .min(lows.len())
+        .min(closes.len())
+        .min(volumes.len());
+    let mut out = vec![None; n];
+    if period == 0 {
+        return out;
+    }
+    for (row, slot) in out.iter_mut().enumerate().skip(period.saturating_sub(1)) {
+        let start = row + 1 - period;
+        let mut flow = 0.0;
+        let mut volume = 0.0;
+        for index in start..=row {
+            let bar_volume = volumes[index].max(0.0);
+            let range = highs[index] - lows[index];
+            let location = if range != 0.0 {
+                ((closes[index] - lows[index]) - (highs[index] - closes[index])) / range
+            } else {
+                0.0
+            };
+            flow += location * bar_volume;
+            volume += bar_volume;
+        }
+        *slot = Some(if volume > 0.0 { flow / volume } else { 0.0 });
+    }
+    out
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VwapReset {
@@ -2269,6 +2307,9 @@ enum IncrementalKind {
     Obv {
         state: RecursiveHistory<ObvState>,
     },
+    Cmf {
+        period: usize,
+    },
     VwapBands {
         reset: VwapReset,
         standard_deviation: f64,
@@ -2511,6 +2552,10 @@ impl IncrementalState {
         )
     }
 
+    pub fn cmf(period: usize) -> Self {
+        Self::new(IncrementalKind::Cmf { period }, 1)
+    }
+
     pub fn vwap_bands(reset: VwapReset, standard_deviation: f64, percent: f64) -> Self {
         Self::new(
             IncrementalKind::VwapBands {
@@ -2586,6 +2631,7 @@ impl IncrementalState {
             IncrementalKind::Ichimoku => 0,
             IncrementalKind::Vwap { state } => state.bytes(),
             IncrementalKind::Obv { state } => state.bytes(),
+            IncrementalKind::Cmf { .. } => 0,
             IncrementalKind::VwapBands { state, .. } => state.bytes(),
             IncrementalKind::Sma { .. }
             | IncrementalKind::Bollinger { .. }
@@ -3175,6 +3221,12 @@ impl IncrementalState {
                 }
                 state.finish(n, tail, before_tail);
             }
+            IncrementalKind::Cmf { period } => {
+                let start = self.output_from[0];
+                self.last_work_rows = n - start;
+                let values = cmf(input.high, input.low, input.close, input.volume, *period);
+                self.outputs[0].extend(values.into_iter().skip(start).flatten());
+            }
             IncrementalKind::VwapBands {
                 reset,
                 standard_deviation,
@@ -3320,6 +3372,7 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
             0,
             0,
         ],
+        IncrementalKind::Cmf { period } => [period.saturating_sub(1), 0, 0, 0, 0],
         IncrementalKind::Vwap { .. }
         | IncrementalKind::Obv { .. }
         | IncrementalKind::VwapBands { .. } => [0; MAX_OUTPUTS],
@@ -4336,6 +4389,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn cmf_weights_close_location_by_volume() {
+        let values = cmf(
+            &[12.0, 14.0, 13.0],
+            &[8.0, 10.0, 9.0],
+            &[10.0, 13.0, 10.0],
+            &[2.0, 4.0, 2.0],
+            2,
+        );
+        assert_eq!(values[0], None);
+        assert!((values[1].unwrap() - (1.0 / 3.0)).abs() < 1e-12);
+        assert!((values[2].unwrap() - (1.0 / 6.0)).abs() < 1e-12);
+    }
+
     #[derive(Clone, Copy)]
     enum TestKind {
         Sma,
@@ -4365,6 +4432,7 @@ mod tests {
         Atr,
         Vwap,
         Obv,
+        Cmf,
         Wma,
     }
 
@@ -4456,6 +4524,7 @@ mod tests {
                 input.volume,
             )],
             TestKind::Obv => vec![obv(input.close, input.volume)],
+            TestKind::Cmf => vec![cmf(input.high, input.low, input.close, input.volume, 5)],
             TestKind::Wma => vec![wma(input.close, 5)],
         }
     }
@@ -4528,6 +4597,7 @@ mod tests {
             (TestKind::Atr, IncrementalState::atr(5)),
             (TestKind::Vwap, IncrementalState::vwap()),
             (TestKind::Obv, IncrementalState::obv()),
+            (TestKind::Cmf, IncrementalState::cmf(5)),
             (TestKind::Wma, IncrementalState::wma(5)),
         ];
         let mut times = (0..40).map(|index| index * 3_600).collect::<Vec<_>>();
