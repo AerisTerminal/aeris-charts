@@ -21,14 +21,14 @@ with the evidence required in **Verification and evidence policy**.
 
 ## Status at a glance
 
-Updated 2026-09-24. Plan baseline dated 2026-09-23.
+Updated 2026-09-25. Plan baseline dated 2026-09-23.
 
 | Phase | Scope | Status | Done so far | Next |
 | --- | --- | --- | --- | --- |
 | R0 | Auditable competitive baseline | **Open** | — | Pin Recharts version, map the matrix, reconcile docs |
 | R1 | Lifecycle and mutable object foundations | **Open** | — | Standalone general creation, in-place mutations, failure cleanup |
 | R2 | Scales, axes and responsive layout | **Open** | — | Temporal ticks and views, grid and zero lines, multiple axes |
-| R3 | Cartesian visual and data semantics | **In progress** | 8 visual-configuration slices (see **Delivered work**) | Bars and stacks, gradients, error and range bars, composition, per-item styling |
+| R3 | Cartesian visual and data semantics | **In progress** | 9 delivered R3 slices (see **Delivered work**) | Bars and stacks, gradients, error bars, composition, per-item styling |
 | R4 | Components and interaction | **Open** | — | Legend, tooltip, brush, selection, sync (shared with Expansion.md PD5), export (PD6) |
 | R5 | React and framework-neutral authoring | **Open** | — | Composable components over complete mutations |
 | R6 | Polar families and transitions | **Open** | — | Polar transforms, pie/donut, radar, radial bar, polar area, animation |
@@ -56,10 +56,10 @@ All items below are implemented and pushed to `github/main`. They belong to R3.
 | 5 | Persisted marker symbols `circle`, `square`, `diamond`, `triangle` for scatter and path markers, with symbol-matched exact hit geometry. Bubble marks remain area-scaled circles | — | Slice gates below |
 | 6 | Persisted `linear`, `step`, `curved` interpolation on line, area, stacked-area and range-area; shared path and coupled-band expansion on every renderer with matching exact/nearest hits; stacked areas reject mixed interpolation | — | Slice gates below |
 | 7 | Opt-in persisted `connect_missing` on the same families. Missing rows stay queryable but no longer split runs; transform-invalid coordinates remain hard gaps; stacked members share one policy | — | Slice gates below |
-| 8 | Bounded persisted `fill_opacity` on area and range-area fills (ordinary, stacked, coupled-band), preserving the gradient relationship; Rust persistence, WASM serialization, TypeScript options, Chromium/Firefox/WebKit round-trip coverage | — | Workspace tests, workspace and WASM clippy, package lint/build/typecheck/smoke test, general-chart browser matrix (88 passed, 2 skipped) |
-| 9 | Category `range_bar` series with low/high bounds, shared rectangle geometry and exact hits, typed/object browser ingestion, persistence-compatible kind mapping, accessibility text, and browser/native regression coverage | — | Engine tests (including logarithmic Y geometry), workspace tests/clippy/WASM clippy, package lint/build/typecheck/pack smoke, native release perf gate, and Chromium/Firefox/WebKit browser coverage (range-bar and dashboard checks passed) |
+| 8 | Bounded persisted `fill_opacity` on area and range-area fills (ordinary, stacked, coupled-band), preserving the gradient relationship; Rust persistence, WASM serialization, TypeScript options, Chromium/Firefox/WebKit round-trip coverage | `1db0dfe` | Workspace tests, workspace and WASM clippy, package lint/build/typecheck/smoke test, general-chart browser matrix (88 passed, 2 skipped) |
+| 9 | Category `range_bar` series with low/high bounds, shared rectangle geometry and exact hits, typed/object browser ingestion, persistence-compatible kind mapping, accessibility text, and browser/native regression coverage | `3fe3b22` | Engine tests (including logarithmic Y geometry), workspace tests/clippy/WASM clippy, package lint/build/typecheck/pack smoke, native release perf gate, and the full Chromium/Firefox/WebKit browser suite (363 passed, 15 skipped) |
 
-Slice gates for items 1–7: applicable Rust tests, clippy (including the WASM target), package
+Slice gates for delivered R3 items: applicable Rust tests, clippy (including the WASM target), package
 lint/build/typecheck/package smoke test, Chromium browser tests, formatting checks and the native
 release performance gate.
 
@@ -81,7 +81,7 @@ remain valuable and must be preserved.
 | Failed React installation | `GeneralPane` creates a handle, calls `setData`, then records ownership | A failed initial data install can leave an untracked series. Add rollback and failure-path lifecycle tests; review callback exceptions and cleanup ordering | R1, R5 |
 | Temporal axes | `general_axes.rs::axis_ticks`, `tick_labels_for_domain`, `pan_general_axis`, `zoom_general_axis` | Temporal data and geometry exist, but temporal ticks fall through to empty output and pan/zoom reject nonnumeric domains. Complete the temporal coordinate contract | R2 |
 | Grid and zero lines | `GeneralAxis` stores policies; `persistence.rs` serializes them | Accepted options have no general grid execution. Implement shared frame output and observable toggle tests | R2 |
-| Visual configuration | `GeneralSeriesOptions`, `frame/general_series_geometry.rs` | Surface is narrow. Audit and implement documented styles and geometry choices end to end (items 1–8 above began this) | R3 |
+| Visual configuration | `GeneralSeriesOptions`, `frame/general_series_geometry.rs` | Surface is narrow. Audit and implement documented styles and geometry choices end to end (the delivered slices above began this) | R3 |
 | Shared components | Legend, shared-tooltip, brush and reference snapshots in `general_series.rs` | Snapshots alone do not establish a complete interactive legend, tooltip, brush or export experience | R4 |
 | React reconciliation | `packages/charts/src/react.ts::GeneralPane` | Changed series options recreate series; changed axes recreate dependent series; configuration arrays instead of component composition. Complete engine mutation and declarative authoring | R5 |
 | Chart breadth | `GeneralSeriesKind` has Cartesian variants only | Polar and hierarchy/flow families are open. Funnel, treemap, Sankey and sunburst are in the competitive target, not an indefinite backlog | R6, R7 |
@@ -280,7 +280,7 @@ platform capabilities beyond the competitor's browser rendering model.
 | Capability | Status | Required outcome | Phase |
 | --- | --- | --- | --- |
 | Standalone and composed charts | Partial | General-only, financial-only and mixed panes; compatible overlays, explicit axes, deterministic ordering and lifecycle | R1, R3 |
-| Line, area, range and scatter/bubble | Partial (items 1–8 delivered) | Linear/step/curved interpolation, gap/connection policy, baselines, symbols, active marks, fills/strokes and error bounds | R3 |
+| Line, area, range and scatter/bubble | Partial (items 1–8 delivered; range bars are tracked below) | Linear/step/curved interpolation, gap/connection policy, baselines, symbols, active marks, fills/strokes and error bounds | R3 |
 | Bars and stacks | Partial (range bars delivered) | Both orientations, groups, sizing/gaps, corners, per-item styling, mixed signs, range bars, stack order and required offset modes | R3 |
 | Box plots and heatmaps | Partial | Preserve existing extra families; complete color domains, legends, missing values and interaction | R3 |
 | Scales and axes | Partial | Numeric/log/symlog, temporal, category/point, reversed/multiple axes, explicit/auto domains, ticks, formatting, overflow and grid policy | R2 |
