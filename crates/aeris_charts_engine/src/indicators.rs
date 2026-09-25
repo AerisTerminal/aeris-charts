@@ -133,6 +133,7 @@ pub enum IndicatorKind {
         period: usize,
         multiplier: f64,
     },
+    Ichimoku,
     EmaRibbon {
         periods: [usize; aeris_charts_indicators::MAX_OUTPUTS],
     },
@@ -511,6 +512,9 @@ impl ChartEngine {
                                 ..IndicatorParameters::default()
                             },
                         ),
+                        IndicatorKind::Ichimoku => {
+                            ("ichimoku", 0, None, IndicatorParameters::default())
+                        }
                         IndicatorKind::EmaRibbon { periods } => (
                             "ema_ribbon",
                             periods[output_index],
@@ -713,6 +717,10 @@ impl ChartEngine {
         )
         .into_iter()
         .next()
+    }
+
+    pub fn add_ichimoku(&mut self, source: SeriesId) -> Vec<SeriesId> {
+        self.add_indicator_kind(source, IndicatorKind::Ichimoku, None)
     }
 
     /// Add five exponential moving averages as one binding in fastest-to-slowest output order.
@@ -921,6 +929,7 @@ impl ChartEngine {
             | IndicatorKind::Bollinger { .. }
             | IndicatorKind::ParabolicSar
             | IndicatorKind::SuperTrend { .. }
+            | IndicatorKind::Ichimoku
             | IndicatorKind::Vwap
             | IndicatorKind::VwapBands { .. }
             | IndicatorKind::Wma { .. } => {}
@@ -1010,6 +1019,7 @@ impl ChartEngine {
                 parameters.push(integer("period", period));
                 parameters.push(number("multiplier", multiplier));
             }
+            IndicatorKind::Ichimoku => {}
             IndicatorKind::Macd { fast, slow, signal } => {
                 parameters.push(integer("fast", fast));
                 parameters.push(integer("slow", slow));
@@ -1172,6 +1182,7 @@ impl ChartEngine {
                 IndicatorKind::SuperTrend { period, multiplier } => {
                     *period == 0 || !multiplier.is_finite() || *multiplier < 0.0
                 }
+                IndicatorKind::Ichimoku => false,
                 IndicatorKind::Macd { fast, slow, signal } => {
                     *fast == 0 || *slow == 0 || *signal == 0
                 }
@@ -1514,6 +1525,7 @@ fn indicator_kind_name(kind: &IndicatorKind) -> &'static str {
         IndicatorKind::AdxDmi { .. } => "adx_dmi",
         IndicatorKind::ParabolicSar => "parabolic_sar",
         IndicatorKind::SuperTrend { .. } => "supertrend",
+        IndicatorKind::Ichimoku => "ichimoku",
         IndicatorKind::EmaRibbon { .. } => "ema_ribbon",
         IndicatorKind::Bollinger { .. } => "bollinger",
         IndicatorKind::Rsi { .. } => "rsi",
@@ -1551,6 +1563,7 @@ fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators::Increment
         IndicatorKind::SuperTrend { period, multiplier } => {
             aeris_charts_indicators::IncrementalState::supertrend(period, multiplier)
         }
+        IndicatorKind::Ichimoku => aeris_charts_indicators::IncrementalState::ichimoku(),
         IndicatorKind::EmaRibbon { periods } => {
             aeris_charts_indicators::IncrementalState::ema_ribbon(periods)
         }
@@ -1623,6 +1636,7 @@ fn indicator_title(kind: &IndicatorKind) -> String {
         IndicatorKind::SuperTrend { period, multiplier } => {
             format!("SuperTrend {period} {}", params(*multiplier))
         }
+        IndicatorKind::Ichimoku => "Ichimoku".to_string(),
         IndicatorKind::EmaRibbon { periods } => format!(
             "EMA Ribbon {} {} {} {} {}",
             periods[0], periods[1], periods[2], periods[3], periods[4]
@@ -1688,6 +1702,9 @@ fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static 
         IndicatorKind::AdxDmi { .. } => ["+DI", "-DI", "ADX"][output_index],
         IndicatorKind::ParabolicSar => "SAR",
         IndicatorKind::SuperTrend { .. } => "SuperTrend",
+        IndicatorKind::Ichimoku => {
+            ["Conversion", "Base", "Leading A", "Leading B", "Lagging"][output_index]
+        }
         IndicatorKind::EmaRibbon { .. } => {
             ["EMA 1", "EMA 2", "EMA 3", "EMA 4", "EMA 5"][output_index]
         }

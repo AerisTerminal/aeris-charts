@@ -4920,6 +4920,13 @@ export class chart_impl implements chart_api {
     );
   }
 
+  add_ichimoku(source: series_api, options?: Partial<series_options>): [series_api, series_api, series_api, series_api, series_api] {
+    const ids = this.wasm.add_ichimoku(source.id);
+    if (ids.length !== 5) throw new AerisChartsError("invalid_options", "invalid Ichimoku configuration");
+    const outputs = Array.from(ids).map((id) => this.indicator_series(id, options));
+    return outputs as [series_api, series_api, series_api, series_api, series_api];
+  }
+
   subscribe_crosshair_move(handler: mouse_event_handler): void {
     this.crosshair_subs.add(handler);
   }

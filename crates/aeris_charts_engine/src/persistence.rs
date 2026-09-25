@@ -363,6 +363,7 @@ fn incremental_output_count(kind: &IndicatorKind) -> usize {
         | IndicatorKind::AdxDmi { .. } => 3,
         IndicatorKind::ParabolicSar => 1,
         IndicatorKind::SuperTrend { .. } => 1,
+        IndicatorKind::Ichimoku => 5,
         IndicatorKind::EmaRibbon { .. } => aeris_charts_indicators::MAX_OUTPUTS,
         IndicatorKind::Bollinger { .. } => 3,
         IndicatorKind::Macd { .. } => 3,
@@ -419,6 +420,7 @@ fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
         IndicatorKind::SuperTrend { period, multiplier } => {
             *period > 0 && multiplier.is_finite() && *multiplier >= 0.0
         }
+        IndicatorKind::Ichimoku => true,
         IndicatorKind::EmaRibbon { periods } => periods.iter().all(|period| *period > 0),
         IndicatorKind::Bollinger { period, deviation } => *period > 0 && deviation.is_finite(),
         IndicatorKind::Macd { fast, slow, signal } => *fast > 0 && *slow > 0 && *signal > 0,
@@ -2014,6 +2016,21 @@ mod tests {
                 multiplier: 2.5,
             }
         );
+    }
+
+    #[test]
+    fn ichimoku_persistence_round_trips_five_outputs() {
+        let mut chart = settled_chart();
+        let outputs = chart.add_ichimoku(0);
+        assert_eq!(outputs.len(), 5);
+        let document = chart.export_state_json().unwrap();
+
+        let mut restored = settled_chart();
+        restored.import_state_json(&document).unwrap();
+        let bindings = restored.indicator_bindings();
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].kind, crate::IndicatorKind::Ichimoku);
+        assert_eq!(bindings[0].outputs.len(), 5);
     }
 
     #[test]

@@ -2153,6 +2153,10 @@ impl AerisChart {
             .add_supertrend(source_id, period, multiplier)
     }
 
+    pub fn add_ichimoku(&mut self, source_id: u32) -> Vec<u32> {
+        self.inner.borrow_mut().add_ichimoku(source_id)
+    }
+
     /// Add one five-output EMA ribbon on the source pane.
     pub fn add_ema_ribbon(
         &mut self,

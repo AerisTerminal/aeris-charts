@@ -155,6 +155,7 @@ fn financial_product_compatibility_fixture_survives_shared_frame_mutations() {
     assert_eq!(chart.add_adx_dmi(0, 14).len(), 3);
     assert!(chart.add_parabolic_sar(0).is_some());
     assert!(chart.add_supertrend(0, 14, 3.0).is_some());
+    assert_eq!(chart.add_ichimoku(0).len(), 5);
     assert!(chart.add_rsi(0, 14).is_some());
     assert_eq!(chart.add_macd(0, 12, 26, 9).len(), 3);
     assert_eq!(chart.add_stochastic(0, 14, 3).len(), 2);
@@ -187,6 +188,7 @@ fn financial_product_compatibility_fixture_survives_shared_frame_mutations() {
                 period: 14,
                 multiplier: 3.0,
             },
+            IndicatorKind::Ichimoku,
             IndicatorKind::Rsi { period: 14 },
             IndicatorKind::Macd {
                 fast: 12,
@@ -1718,6 +1720,16 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
                 source[1], source[2], source[3], period, multiplier,
             )]
         }
+        IndicatorKind::Ichimoku => {
+            let points = aeris_charts_indicators::ichimoku(source[1], source[2], source[3]);
+            vec![
+                points.iter().map(|point| point.conversion).collect(),
+                points.iter().map(|point| point.base).collect(),
+                points.iter().map(|point| point.leading_a).collect(),
+                points.iter().map(|point| point.leading_b).collect(),
+                points.iter().map(|point| point.lagging).collect(),
+            ]
+        }
         IndicatorKind::EmaRibbon { periods } => periods
             .into_iter()
             .map(|period| aeris_charts_indicators::ema(source[3], period))
@@ -1872,6 +1884,7 @@ fn every_indicator_engine_path_matches_full_recomputation() {
             period: 5,
             multiplier: 3.0,
         },
+        IndicatorKind::Ichimoku,
     ];
     for kind in kinds {
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);

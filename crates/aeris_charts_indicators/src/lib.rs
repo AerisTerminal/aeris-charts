@@ -78,6 +78,47 @@ pub fn supertrend(
     out
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct IchimokuPoint {
+    pub conversion: Option<f64>,
+    pub base: Option<f64>,
+    pub leading_a: Option<f64>,
+    pub leading_b: Option<f64>,
+    pub lagging: Option<f64>,
+}
+
+/// Ichimoku cloud with the conventional 9/26/52 periods. Values are aligned to the source row;
+/// hosts that need visual displacement can apply it without changing canonical study data.
+pub fn ichimoku(highs: &[f64], lows: &[f64], closes: &[f64]) -> Vec<IchimokuPoint> {
+    let n = highs.len().min(lows.len()).min(closes.len());
+    let mut out = vec![
+        IchimokuPoint {
+            conversion: None,
+            base: None,
+            leading_a: None,
+            leading_b: None,
+            lagging: None,
+        };
+        n
+    ];
+    for (row, output) in out.iter_mut().enumerate() {
+        let conversion = rolling_midpoint(highs, lows, row, 9);
+        let base = rolling_midpoint(highs, lows, row, 26);
+        let leading_b = rolling_midpoint(highs, lows, row, 52);
+        let leading_a = conversion
+            .zip(base)
+            .map(|(conversion, base)| (conversion + base) * 0.5);
+        *output = IchimokuPoint {
+            conversion,
+            base,
+            leading_a,
+            leading_b,
+            lagging: closes.get(row).copied(),
+        };
+    }
+    out
+}
+
 /// Simple moving average. The first `period - 1` values are warm-up `None` entries.
 pub fn sma(values: &[f64], period: usize) -> Vec<Option<f64>> {
     if period == 0 {
@@ -1861,6 +1902,22 @@ fn supertrend_step(
     }
 }
 
+fn rolling_midpoint(highs: &[f64], lows: &[f64], row: usize, period: usize) -> Option<f64> {
+    if row + 1 < period {
+        return None;
+    }
+    let start = row + 1 - period;
+    let high = highs[start..=row]
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max);
+    let low = lows[start..=row]
+        .iter()
+        .copied()
+        .fold(f64::INFINITY, f64::min);
+    Some((high + low) * 0.5)
+}
+
 fn vwap_step(state: &mut VwapState, sample: VwapSample) -> f64 {
     let day = sample.time_unix_seconds.div_euclid(86_400);
     if !state.initialized || state.day != day {
@@ -1995,6 +2052,7 @@ enum IncrementalKind {
         multiplier: f64,
         state: RecursiveHistory<SuperTrendState>,
     },
+    Ichimoku,
     EmaRibbon {
         periods: [usize; MAX_OUTPUTS],
         states: Box<[RecursiveHistory<EmaState>; MAX_OUTPUTS]>,
@@ -2162,6 +2220,10 @@ impl IncrementalState {
         )
     }
 
+    pub fn ichimoku() -> Self {
+        Self::new(IncrementalKind::Ichimoku, 5)
+    }
+
     pub fn ema_ribbon(periods: [usize; MAX_OUTPUTS]) -> Self {
         Self::new(
             IncrementalKind::EmaRibbon {
@@ -2302,6 +2364,7 @@ impl IncrementalState {
             IncrementalKind::AdxDmi { state, .. } => state.bytes(),
             IncrementalKind::ParabolicSar { state } => state.bytes(),
             IncrementalKind::SuperTrend { state, .. } => state.bytes(),
+            IncrementalKind::Ichimoku => 0,
             IncrementalKind::Vwap { state } => state.bytes(),
             IncrementalKind::VwapBands { state, .. } => state.bytes(),
             IncrementalKind::Sma { .. }
@@ -2461,6 +2524,26 @@ impl IncrementalState {
                     self.outputs[0].push(point.upper.expect("Donchian upper after warmup"));
                     self.outputs[1].push(point.middle.expect("Donchian middle after warmup"));
                     self.outputs[2].push(point.lower.expect("Donchian lower after warmup"));
+                }
+            }
+            IncrementalKind::Ichimoku => {
+                let points = ichimoku(input.high, input.low, input.close);
+                self.last_work_rows = n;
+                for (output_index, start) in
+                    self.output_from[..self.output_count].iter().enumerate()
+                {
+                    for &point in points.iter().skip(*start).take(n - *start) {
+                        let value = match output_index {
+                            0 => point.conversion,
+                            1 => point.base,
+                            2 => point.leading_a,
+                            3 => point.leading_b,
+                            4 => point.lagging,
+                            _ => unreachable!("Ichimoku output index"),
+                        };
+                        self.outputs[output_index]
+                            .push(value.expect("Ichimoku output after warmup"));
+                    }
                 }
             }
             IncrementalKind::Keltner {
@@ -2910,6 +2993,7 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
         }
         IncrementalKind::ParabolicSar { .. } => [0, 0, 0, 0, 0],
         IncrementalKind::SuperTrend { period, .. } => [*period, 0, 0, 0, 0],
+        IncrementalKind::Ichimoku => [8, 25, 25, 51, 0],
         IncrementalKind::EmaRibbon { periods, .. } => {
             periods.map(|period| period.saturating_sub(1))
         }
@@ -3057,6 +3141,25 @@ mod tests {
                 lower: Some(2.0),
             }
         );
+    }
+
+    #[test]
+    fn ichimoku_reports_conventional_warmups_and_aligned_lagging_close() {
+        let highs = (0..60).map(|value| value as f64 + 10.0).collect::<Vec<_>>();
+        let lows = (0..60).map(|value| value as f64).collect::<Vec<_>>();
+        let closes = (0..60).map(|value| value as f64 + 0.5).collect::<Vec<_>>();
+        let points = ichimoku(&highs, &lows, &closes);
+
+        assert!(points[..8].iter().all(|point| point.conversion.is_none()));
+        assert!(points[..25].iter().all(|point| point.base.is_none()));
+        assert!(points[..25].iter().all(|point| point.leading_a.is_none()));
+        assert!(points[..51].iter().all(|point| point.leading_b.is_none()));
+        assert!(points.iter().all(|point| point.lagging.is_some()));
+        assert_eq!(points[8].conversion, Some(9.0));
+        assert_eq!(points[25].base, Some(17.5));
+        assert_eq!(points[25].leading_a, Some(21.75));
+        assert_eq!(points[51].leading_b, Some(30.5));
+        assert_eq!(points[59].lagging, Some(59.5));
     }
 
     #[test]
@@ -3892,6 +3995,7 @@ mod tests {
         AdxDmi,
         ParabolicSar,
         SuperTrend,
+        Ichimoku,
         EmaRibbon,
         Bollinger,
         Rsi,
@@ -3938,6 +4042,16 @@ mod tests {
             }
             TestKind::ParabolicSar => vec![parabolic_sar(input.high, input.low)],
             TestKind::SuperTrend => vec![supertrend(input.high, input.low, input.close, 5, 3.0)],
+            TestKind::Ichimoku => {
+                let points = ichimoku(input.high, input.low, input.close);
+                vec![
+                    points.iter().map(|point| point.conversion).collect(),
+                    points.iter().map(|point| point.base).collect(),
+                    points.iter().map(|point| point.leading_a).collect(),
+                    points.iter().map(|point| point.leading_b).collect(),
+                    points.iter().map(|point| point.lagging).collect(),
+                ]
+            }
             TestKind::EmaRibbon => [3, 5, 8, 13, 21]
                 .into_iter()
                 .map(|period| ema(input.close, period))
@@ -4026,6 +4140,7 @@ mod tests {
             (TestKind::AdxDmi, IncrementalState::adx_dmi(5)),
             (TestKind::ParabolicSar, IncrementalState::parabolic_sar()),
             (TestKind::SuperTrend, IncrementalState::supertrend(5, 3.0)),
+            (TestKind::Ichimoku, IncrementalState::ichimoku()),
             (
                 TestKind::EmaRibbon,
                 IncrementalState::ema_ribbon([3, 5, 8, 13, 21]),
