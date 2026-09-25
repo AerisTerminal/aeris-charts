@@ -194,7 +194,9 @@ frame encoding and verifies every resolved dense text run is scheduled. Neither 
 native window shaping or actual GPU present time; `gpui_probe` now accepts
 `AERIS_CHARTS_PROBE_FEATURE=footprint` for that real-window capture and reports the shaped-run
 cache. WebGPU executor timing,
-screenshot/accessibility evidence, and the final full gate remain open until the batch is closed.
+and accessibility review remain open until the batch is closed. The screenshot harness now accepts
+`AERIS_CHARTS_GPUI_FEATURE=footprint` and emits a DPR-aware PNG plus metadata for the dense
+12-bar fixture; the capture has been exercised on the current Windows display.
 
 **Exit:** the F2 exit criterion passes (footprint and CVD share one tape, a late trade updates both,
 retention evicts both), and PD10 budgets hold on GPUI.

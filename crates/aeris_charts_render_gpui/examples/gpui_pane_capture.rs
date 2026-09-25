@@ -13,7 +13,10 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use aeris_charts_engine::ChartFrame;
+use aeris_charts_engine::{
+    AggressorSide, ChartEngine, ChartFrame, FootprintAggregationOptions, FootprintBarAggregation,
+    FootprintImbalanceOptions, FootprintSeriesOptions, FootprintTrade,
+};
 use aeris_charts_render_gpui::{AerisViewport, GpuiChartRenderer, PreparedAerisFrame};
 use gpui::{
     canvas, div, prelude::*, px, size, App, Bounds, Context, Entity, Render, Window, WindowBounds,
@@ -50,13 +53,23 @@ struct Capture {
 impl Capture {
     fn new(scale_factor: f32, output: PathBuf, metadata: PathBuf, window_title: String) -> Self {
         let fixture = aeris_charts_native::engine_scene::parity_fixture();
+        let feature = std::env::var("AERIS_CHARTS_GPUI_FEATURE").unwrap_or_else(|_| "base".into());
         assert!(
-            (scale_factor as f64 - fixture.pixel_ratio).abs() <= 1e-4,
-            "the shared D1 pixel gate requires physical GPUI DPR {}, but this monitor reports {}; run it on a Windows display configured to {}%",
-            fixture.pixel_ratio,
-            scale_factor,
-            (fixture.pixel_ratio * 100.0).round()
+            matches!(
+                feature.as_str(),
+                "base" | "markers" | "trading" | "footprint"
+            ),
+            "AERIS_CHARTS_GPUI_FEATURE must be base, markers, trading, or footprint"
         );
+        if feature != "footprint" {
+            assert!(
+                (scale_factor as f64 - fixture.pixel_ratio).abs() <= 1e-4,
+                "the shared D1 pixel gate requires physical GPUI DPR {}, but this monitor reports {}; run it on a Windows display configured to {}%",
+                fixture.pixel_ratio,
+                scale_factor,
+                (fixture.pixel_ratio * 100.0).round()
+            );
+        }
 
         let theme = std::env::var("AERIS_CHARTS_GPUI_THEME").unwrap_or_else(|_| "light".into());
         assert!(
@@ -70,13 +83,11 @@ impl Capture {
                     .parse::<f64>()
                     .expect("AERIS_CHARTS_GPUI_BAR_SPACING must be numeric")
             });
-        let feature = std::env::var("AERIS_CHARTS_GPUI_FEATURE").unwrap_or_else(|_| "base".into());
-        assert!(
-            matches!(feature.as_str(), "base" | "markers" | "trading"),
-            "AERIS_CHARTS_GPUI_FEATURE must be base, markers, or trading"
-        );
-
         let mut engine = aeris_charts_native::engine_scene::parity_engine();
+        if feature == "footprint" {
+            install_footprint_fixture(&mut engine, fixture.end_time);
+            engine.dpr = scale_factor as f64;
+        }
         if theme == "dark" {
             let surface = aeris_charts_core::style::DARK_SURFACE_CSS;
             let text = aeris_charts_core::style::DARK_AXIS_TEXT_CSS;
@@ -162,9 +173,18 @@ impl Capture {
             expected_width,
             expected_height
         );
-        let spacing_label =
-            spacing.map_or_else(|| "fit".into(), |value| value.to_string().replace('.', "_"));
-        let case_name = format!("dpr-1_5-spacing-{spacing_label}-{theme}-{feature}");
+        let spacing_label = spacing.map_or_else(
+            || (feature == "footprint").then_some("72".to_owned()),
+            |value| Some(value.to_string().replace('.', "_")),
+        );
+        let spacing_label = spacing_label.as_deref().unwrap_or("fit");
+        let case_name = format!(
+            "dpr-{}_spacing-{}-{}-{}",
+            (scale_factor * 100.0).round() as u32,
+            spacing_label,
+            theme,
+            feature
+        );
 
         Self {
             renderer: GpuiChartRenderer::new(),
@@ -264,14 +284,15 @@ impl Capture {
             ));
         }
 
-        let spacing_json = self
-            .spacing
-            .map_or_else(|| "null".into(), |value| value.to_string());
+        let spacing_json = self.spacing.map_or_else(
+            || (self.feature == "footprint").then_some("72".to_owned()),
+            |value| Some(value.to_string()),
+        );
         let metadata = format!(
             concat!(
                 "{{\n",
                 "  \"schema\": 1,\n",
-                "  \"fixture\": \"candles-1000-default-light\",\n",
+                "  \"fixture\": \"{}\",\n",
                 "  \"case\": \"{}\",\n",
                 "  \"scope\": \"pane\",\n",
                 "  \"theme\": \"{}\",\n",
@@ -285,9 +306,14 @@ impl Capture {
                 "  \"capture\": \"{}\"\n",
                 "}}\n"
             ),
+            if self.feature == "footprint" {
+                "footprint-12bar-dense"
+            } else {
+                "candles-1000-default-light"
+            },
             self.case_name,
             self.theme,
-            spacing_json,
+            spacing_json.as_deref().unwrap_or("null"),
             self.feature,
             self.frame.width,
             self.frame.height,
@@ -308,6 +334,70 @@ impl Capture {
         );
         Ok(())
     }
+}
+
+fn install_footprint_fixture(engine: &mut ChartEngine, end_time: i64) {
+    engine
+        .options
+        .apply_str(
+            r##"{
+                "layout":{"background":{"type":"solid","color":"#ffffff"},"textColor":"#191919"},
+                "grid":{"vertLines":{"color":"#d6dcde","visible":true},"horzLines":{"color":"#d6dcde","visible":true}},
+                "leftPriceScale":{"borderColor":"#2b2b43","textColor":"#191919"},
+                "rightPriceScale":{"borderColor":"#2b2b43","textColor":"#191919"},
+                "timeScale":{"borderColor":"#2b2b43"}
+            }"##,
+        )
+        .expect("light footprint capture options are valid");
+    let series_id = engine
+        .add_footprint_series(FootprintSeriesOptions {
+            aggregation: FootprintAggregationOptions {
+                tick_size: 0.25,
+                bars: FootprintBarAggregation::Time {
+                    interval_micros: 3_600_000_000,
+                    anchor_micros: 0,
+                },
+                imbalance: FootprintImbalanceOptions {
+                    ratio: 3.0,
+                    minimum_volume: 20.0,
+                    consecutive_levels: 3,
+                },
+            },
+            visual: Default::default(),
+        })
+        .expect("footprint capture options are valid");
+    let first = end_time - 11 * 3_600;
+    let mut trades = Vec::with_capacity(12 * 11 * 2);
+    let mut trade_id = 1_u64;
+    for bar in 0..12 {
+        let center = 400 + (bar as i64 % 3) - 1;
+        for level in 0..11 {
+            let price = (center + level as i64 - 5) as f64 * 0.25;
+            let timestamp = (first + bar as i64 * 3_600) * 1_000_000 + level as i64 * 10_000;
+            let volume = 10.0 + (level % 7) as f64 * 3.0;
+            for (offset, aggressor) in [(0_i64, AggressorSide::Sell), (1, AggressorSide::Buy)] {
+                trades.push(FootprintTrade {
+                    timestamp_micros: timestamp + offset,
+                    price,
+                    volume,
+                    aggressor,
+                    bid: None,
+                    ask: None,
+                    sequence: Some((level * 2 + offset as usize) as u64),
+                    trade_id: Some(trade_id),
+                    conditions: 0,
+                    session_id: Some(1),
+                });
+                trade_id += 1;
+            }
+        }
+    }
+    engine
+        .set_footprint_trades(series_id, trades)
+        .expect("footprint capture tape is valid");
+    engine.set_series_visible(0, false);
+    engine.set_bar_spacing(72.0);
+    engine.scroll_to_real_time();
 }
 
 impl Render for Capture {
