@@ -17,7 +17,10 @@
 
 use std::time::Instant;
 
-use aeris_charts_engine::{ChartEngine, SeriesKind};
+use aeris_charts_engine::{
+    AggressorSide, ChartEngine, FootprintAggregationOptions, FootprintBarAggregation,
+    FootprintSeriesOptions, FootprintTrade, SeriesKind,
+};
 use aeris_charts_render_gpui::{GpuiChartRenderer, PreparedAerisFrame};
 
 /// Chart size and DPR the gate is quoted at: a dense visible range on a fractional DPR.
@@ -84,6 +87,75 @@ fn build_fixture(source_points: usize) -> Fixture {
         engine,
         source_points,
     }
+}
+
+/// A deliberately dense numbers-bar fixture: 20 visible one-minute bars, eleven price levels,
+/// and both bid/ask prints at every level. The spacing and tick size keep the renderer in its
+/// detailed LOD so every cell emits the same text primitives that a live order-flow chart does.
+fn build_dense_footprint_fixture() -> ChartEngine {
+    const BARS: usize = 20;
+    const LEVELS: usize = 11;
+    const TICK_SIZE: f64 = 0.25;
+    const INTERVAL_MICROS: i64 = 60_000_000;
+    let mut engine = ChartEngine::new(CSS_W, CSS_H, DPR);
+    let footprint = engine
+        .add_footprint_series(FootprintSeriesOptions {
+            aggregation: FootprintAggregationOptions {
+                tick_size: TICK_SIZE,
+                bars: FootprintBarAggregation::Time {
+                    interval_micros: INTERVAL_MICROS as u64,
+                    anchor_micros: 1_600_000_000_000_000,
+                },
+                ..FootprintAggregationOptions::default()
+            },
+            visual: Default::default(),
+        })
+        .expect("dense footprint options are valid");
+    engine.set_series_visible(0, false);
+    engine.set_bar_spacing(72.0);
+    engine.set_right_offset(0.0);
+
+    let first = 1_600_000_000_000_000i64;
+    let mut trades = Vec::with_capacity(BARS * LEVELS * 2);
+    let mut trade_id = 1u64;
+    for bar in 0..BARS {
+        let center = 400 + (bar as i64 % 3) - 1;
+        for level in 0..LEVELS {
+            let price = (center + level as i64 - LEVELS as i64 / 2) as f64 * TICK_SIZE;
+            let timestamp = first + bar as i64 * INTERVAL_MICROS + level as i64 * 10_000;
+            let volume = 10.0 + (level % 7) as f64 * 3.0;
+            for (offset, aggressor) in [(0usize, AggressorSide::Sell), (1, AggressorSide::Buy)] {
+                trades.push(FootprintTrade {
+                    timestamp_micros: timestamp + offset as i64,
+                    price,
+                    volume,
+                    aggressor,
+                    bid: None,
+                    ask: None,
+                    sequence: Some((level * 2 + offset) as u64),
+                    trade_id: Some(trade_id),
+                    conditions: 0,
+                    session_id: Some(1),
+                });
+                trade_id += 1;
+            }
+        }
+    }
+    engine
+        .set_footprint_trades(footprint, trades)
+        .expect("dense footprint trades are valid");
+    engine.css_width = CSS_W;
+    engine.css_height = CSS_H;
+    engine.dpr = DPR;
+    let content_h = (CSS_H - engine.time_axis_height()).max(1.0);
+    engine.layout_panes(content_h);
+    engine.time_scale.set_width(CSS_W);
+    engine.fit_content();
+    // Re-assert the detail spacing after fit_content, which intentionally chooses a compact view.
+    engine.set_bar_spacing(72.0);
+    engine.set_right_offset(0.0);
+    engine.crosshair = Some((CSS_W / 2.0, CSS_H / 2.0));
+    engine
 }
 
 fn percentile(sorted: &[u64], p: f64) -> f64 {
@@ -174,6 +246,41 @@ fn main() {
         );
         let _ = fixture.source_points;
     }
+
+    let mut footprint = build_dense_footprint_fixture();
+    let frame = footprint.build_frame();
+    let prepared = PreparedAerisFrame::new(&frame);
+    let mut renderer = GpuiChartRenderer::new();
+    let first = renderer
+        .plan_frame(&prepared, DPR as f32)
+        .expect("dense footprint frame plans");
+    for _ in 0..10 {
+        renderer.plan_frame(&prepared, DPR as f32).unwrap();
+    }
+    let mut samples = Vec::with_capacity(iters);
+    for _ in 0..iters {
+        let started = Instant::now();
+        let metrics = renderer.plan_frame(&prepared, DPR as f32).unwrap();
+        samples.push(started.elapsed().as_nanos() as u64);
+        assert_eq!(metrics.prims, first.prims, "footprint prim count drifted");
+        assert_eq!(
+            metrics.text_runs, first.text_runs,
+            "footprint text count drifted"
+        );
+    }
+    samples.sort_unstable();
+    let p99 = percentile(&samples, 0.99);
+    let pass = p99 <= P99_BUDGET_MS;
+    all_pass &= pass;
+    println!(
+        "dense footprint  {:>7} prims  {:>6} text  p50 {:>7.3} ms  p95 {:>7.3} ms  p99 {:>7.3} ms  {:>6}",
+        first.prims,
+        first.text_runs,
+        percentile(&samples, 0.50),
+        percentile(&samples, 0.95),
+        p99,
+        if pass { "PASS" } else { "FAIL" }
+    );
 
     println!(
         "\noverall: {}",

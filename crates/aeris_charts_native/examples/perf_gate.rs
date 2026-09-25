@@ -27,6 +27,8 @@ use aeris_charts_engine::{
     GeneralSeriesOptions, GeneralXyInput, GestureResolver, HorizontalDomain, InputDevice,
     InputTarget, PointerSample, SeriesKind, TradeBubbleOptions, TradeStudyOptions,
 };
+use aeris_charts_render::draw_list::Prim;
+use aeris_charts_render_wgpu::{prims_to_group, DrawGroup, TexQuadInstance};
 
 /// Parallel `(times, open, high, low, close)` columns.
 type OhlcColumns = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
@@ -100,6 +102,78 @@ fn gen_footprint_trades(
         }
     }
     trades
+}
+
+/// Measure the WebGPU adapter's CPU-side primitive scheduling for a dense numbers bar. The real
+/// atlas rasterizer and GPU present are host/device concerns; this gate covers the bounded frame
+/// encoding work that runs before those submissions and keeps text runs in prim order.
+fn dense_footprint_wgpu_scene_ms() -> (usize, usize, f64) {
+    const BARS: usize = 20;
+    const TRADES_PER_BAR: usize = 22;
+    const RUNS: usize = 30;
+    let mut chart = ChartEngine::new(1600.0, 800.0, 1.0);
+    let footprint = chart
+        .add_footprint_series(FootprintSeriesOptions::default())
+        .expect("default footprint options are valid");
+    chart.set_series_visible(0, false);
+    chart
+        .set_footprint_trades(footprint, gen_footprint_trades(0, BARS, TRADES_PER_BAR))
+        .expect("dense footprint trades are valid");
+    chart.time_scale.set_width(1600.0);
+    chart.fit_content();
+    chart.set_bar_spacing(72.0);
+    let frame = chart.build_frame();
+    let pane = &frame.panes[0];
+    let text_count = pane
+        .main
+        .iter()
+        .filter(|prim| matches!(prim, Prim::Text { .. } | Prim::RotatedText { .. }))
+        .count();
+    let mut group = DrawGroup::default();
+    let mut resolve_text = |prim: &Prim| -> Option<TexQuadInstance> {
+        let (x, y) = match prim {
+            Prim::Text { x, y, .. } | Prim::RotatedText { x, y, .. } => (*x, *y),
+            _ => return None,
+        };
+        Some(TexQuadInstance {
+            rect: [x, y, 2.0, 2.0],
+            uv: [0.0, 0.0, 0.5, 0.5],
+            color: [0.0, 0.0, 0.0, 1.0],
+        })
+    };
+    let mut resolve_image = |_prim: &Prim| None;
+    for _ in 0..5 {
+        group.clear();
+        prims_to_group(
+            &pane.main,
+            &pane.points,
+            &mut group,
+            &mut resolve_text,
+            &mut resolve_image,
+        );
+    }
+    let mut samples = Vec::with_capacity(RUNS);
+    let mut text_instances = 0;
+    for _ in 0..RUNS {
+        group.clear();
+        let started = Instant::now();
+        prims_to_group(
+            &pane.main,
+            &pane.points,
+            &mut group,
+            &mut resolve_text,
+            &mut resolve_image,
+        );
+        samples.push(started.elapsed().as_nanos() as u64);
+        text_instances = group.tex_quads.len();
+    }
+    samples.sort_unstable();
+    let p99_index = ((samples.len() as f64 - 1.0) * 0.99).round() as usize;
+    (
+        text_count,
+        text_instances,
+        samples[p99_index] as f64 / 1_000_000.0,
+    )
 }
 
 fn main() {
@@ -345,6 +419,23 @@ fn main() {
     );
     let d_pass =
         d_load_pass && d_live_pass && d_correction_pass && d_frame_pass && d_retention_pass;
+
+    let (dense_text_prims, dense_text_instances, dense_wgpu_p99_ms) =
+        dense_footprint_wgpu_scene_ms();
+    println!(
+        "Target J — dense footprint WebGPU frame encoding ({} text prims, {} atlas instances):",
+        dense_text_prims, dense_text_instances
+    );
+    let j_text_count = dense_text_prims == dense_text_instances;
+    println!(
+        "  [{}] text-run scheduling preserves all resolved runs",
+        if j_text_count { "PASS" } else { "FAIL" }
+    );
+    let j_scene = report(
+        "WebGPU dense text frame encoding p99",
+        dense_wgpu_p99_ms,
+        2.0,
+    );
 
     // Profile work is measured through the real frame path, including timestamp matching.
     let volume = load_chart.add_series(SeriesKind::Histogram);
@@ -781,6 +872,8 @@ fn main() {
         && b_pass
         && c_pass
         && d_pass
+        && j_text_count
+        && j_scene
         && e_refresh
         && e_cached
         && f_frame
