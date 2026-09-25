@@ -129,6 +129,10 @@ pub enum IndicatorKind {
         period: usize,
     },
     ParabolicSar,
+    SuperTrend {
+        period: usize,
+        multiplier: f64,
+    },
     EmaRibbon {
         periods: [usize; aeris_charts_indicators::MAX_OUTPUTS],
     },
@@ -497,6 +501,16 @@ impl ChartEngine {
                         IndicatorKind::ParabolicSar => {
                             ("parabolic_sar", 0, None, IndicatorParameters::default())
                         }
+                        IndicatorKind::SuperTrend { period, multiplier } => (
+                            "supertrend",
+                            period,
+                            Some(multiplier),
+                            IndicatorParameters {
+                                period: Some(period),
+                                deviation: Some(multiplier),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
                         IndicatorKind::EmaRibbon { periods } => (
                             "ema_ribbon",
                             periods[output_index],
@@ -684,6 +698,21 @@ impl ChartEngine {
         self.add_indicator_kind(source, IndicatorKind::ParabolicSar, None)
             .into_iter()
             .next()
+    }
+
+    pub fn add_supertrend(
+        &mut self,
+        source: SeriesId,
+        period: usize,
+        multiplier: f64,
+    ) -> Option<SeriesId> {
+        self.add_indicator_kind(
+            source,
+            IndicatorKind::SuperTrend { period, multiplier },
+            None,
+        )
+        .into_iter()
+        .next()
     }
 
     /// Add five exponential moving averages as one binding in fastest-to-slowest output order.
@@ -891,6 +920,7 @@ impl ChartEngine {
             | IndicatorKind::EmaRibbon { .. }
             | IndicatorKind::Bollinger { .. }
             | IndicatorKind::ParabolicSar
+            | IndicatorKind::SuperTrend { .. }
             | IndicatorKind::Vwap
             | IndicatorKind::VwapBands { .. }
             | IndicatorKind::Wma { .. } => {}
@@ -976,6 +1006,10 @@ impl ChartEngine {
             }
             IndicatorKind::AdxDmi { period } => parameters.push(integer("period", period)),
             IndicatorKind::ParabolicSar => {}
+            IndicatorKind::SuperTrend { period, multiplier } => {
+                parameters.push(integer("period", period));
+                parameters.push(number("multiplier", multiplier));
+            }
             IndicatorKind::Macd { fast, slow, signal } => {
                 parameters.push(integer("fast", fast));
                 parameters.push(integer("slow", slow));
@@ -1135,6 +1169,9 @@ impl ChartEngine {
                 }
                 IndicatorKind::AdxDmi { period } => *period == 0,
                 IndicatorKind::ParabolicSar => false,
+                IndicatorKind::SuperTrend { period, multiplier } => {
+                    *period == 0 || !multiplier.is_finite() || *multiplier < 0.0
+                }
                 IndicatorKind::Macd { fast, slow, signal } => {
                     *fast == 0 || *slow == 0 || *signal == 0
                 }
@@ -1476,6 +1513,7 @@ fn indicator_kind_name(kind: &IndicatorKind) -> &'static str {
         IndicatorKind::Keltner { .. } => "keltner",
         IndicatorKind::AdxDmi { .. } => "adx_dmi",
         IndicatorKind::ParabolicSar => "parabolic_sar",
+        IndicatorKind::SuperTrend { .. } => "supertrend",
         IndicatorKind::EmaRibbon { .. } => "ema_ribbon",
         IndicatorKind::Bollinger { .. } => "bollinger",
         IndicatorKind::Rsi { .. } => "rsi",
@@ -1510,6 +1548,9 @@ fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators::Increment
             aeris_charts_indicators::IncrementalState::adx_dmi(period)
         }
         IndicatorKind::ParabolicSar => aeris_charts_indicators::IncrementalState::parabolic_sar(),
+        IndicatorKind::SuperTrend { period, multiplier } => {
+            aeris_charts_indicators::IncrementalState::supertrend(period, multiplier)
+        }
         IndicatorKind::EmaRibbon { periods } => {
             aeris_charts_indicators::IncrementalState::ema_ribbon(periods)
         }
@@ -1579,6 +1620,9 @@ fn indicator_title(kind: &IndicatorKind) -> String {
         }
         IndicatorKind::AdxDmi { period } => format!("ADX/DMI {period}"),
         IndicatorKind::ParabolicSar => "Parabolic SAR".to_string(),
+        IndicatorKind::SuperTrend { period, multiplier } => {
+            format!("SuperTrend {period} {}", params(*multiplier))
+        }
         IndicatorKind::EmaRibbon { periods } => format!(
             "EMA Ribbon {} {} {} {} {}",
             periods[0], periods[1], periods[2], periods[3], periods[4]
@@ -1643,6 +1687,7 @@ fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static 
         IndicatorKind::Keltner { .. } => ["Upper", "Basis", "Lower"][output_index],
         IndicatorKind::AdxDmi { .. } => ["+DI", "-DI", "ADX"][output_index],
         IndicatorKind::ParabolicSar => "SAR",
+        IndicatorKind::SuperTrend { .. } => "SuperTrend",
         IndicatorKind::EmaRibbon { .. } => {
             ["EMA 1", "EMA 2", "EMA 3", "EMA 4", "EMA 5"][output_index]
         }

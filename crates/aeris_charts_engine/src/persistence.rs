@@ -362,6 +362,7 @@ fn incremental_output_count(kind: &IndicatorKind) -> usize {
         | IndicatorKind::Keltner { .. }
         | IndicatorKind::AdxDmi { .. } => 3,
         IndicatorKind::ParabolicSar => 1,
+        IndicatorKind::SuperTrend { .. } => 1,
         IndicatorKind::EmaRibbon { .. } => aeris_charts_indicators::MAX_OUTPUTS,
         IndicatorKind::Bollinger { .. } => 3,
         IndicatorKind::Macd { .. } => 3,
@@ -415,6 +416,9 @@ fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
         }
         IndicatorKind::AdxDmi { period } => *period > 0,
         IndicatorKind::ParabolicSar => true,
+        IndicatorKind::SuperTrend { period, multiplier } => {
+            *period > 0 && multiplier.is_finite() && *multiplier >= 0.0
+        }
         IndicatorKind::EmaRibbon { periods } => periods.iter().all(|period| *period > 0),
         IndicatorKind::Bollinger { period, deviation } => *period > 0 && deviation.is_finite(),
         IndicatorKind::Macd { fast, slow, signal } => *fast > 0 && *slow > 0 && *signal > 0,
@@ -1993,6 +1997,23 @@ mod tests {
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].kind, crate::IndicatorKind::ParabolicSar);
         assert_eq!(bindings[0].outputs, vec![output]);
+    }
+
+    #[test]
+    fn supertrend_persistence_round_trips_parameters() {
+        let mut chart = settled_chart();
+        chart.add_supertrend(0, 3, 2.5).unwrap();
+        let document = chart.export_state_json().unwrap();
+
+        let mut restored = settled_chart();
+        restored.import_state_json(&document).unwrap();
+        assert_eq!(
+            restored.indicator_bindings()[0].kind,
+            crate::IndicatorKind::SuperTrend {
+                period: 3,
+                multiplier: 2.5,
+            }
+        );
     }
 
     #[test]

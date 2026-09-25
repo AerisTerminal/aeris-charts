@@ -49,6 +49,35 @@ pub fn parabolic_sar(highs: &[f64], lows: &[f64]) -> Vec<Option<f64>> {
     out
 }
 
+/// SuperTrend line using Wilder ATR and a midpoint-based volatility multiplier.
+pub fn supertrend(
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    period: usize,
+    multiplier: f64,
+) -> Vec<Option<f64>> {
+    let n = highs.len().min(lows.len()).min(closes.len());
+    let mut out = vec![None; n];
+    if period == 0 {
+        return out;
+    }
+    let mut state = SuperTrendState::default();
+    for row in 0..n {
+        out[row] = supertrend_step(
+            &mut state,
+            DirectionalSample {
+                high: highs[row],
+                low: lows[row],
+                close: closes[row],
+            },
+            period,
+            multiplier,
+        );
+    }
+    out
+}
+
 /// Simple moving average. The first `period - 1` values are warm-up `None` entries.
 pub fn sma(values: &[f64], period: usize) -> Vec<Option<f64>> {
     if period == 0 {
@@ -1488,6 +1517,16 @@ struct ParabolicSarState {
     before_previous_low: Option<f64>,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct SuperTrendState {
+    atr: AtrState,
+    previous_close: Option<f64>,
+    final_upper: f64,
+    final_lower: f64,
+    trend_up: bool,
+    initialized: bool,
+}
+
 impl Default for ParabolicSarState {
     fn default() -> Self {
         Self {
@@ -1772,6 +1811,56 @@ fn parabolic_sar_step(
     candidate
 }
 
+fn supertrend_step(
+    state: &mut SuperTrendState,
+    sample: DirectionalSample,
+    period: usize,
+    multiplier: f64,
+) -> Option<f64> {
+    let atr = atr_step(
+        &mut state.atr,
+        AtrSample {
+            high: sample.high,
+            low: sample.low,
+            close: sample.close,
+        },
+        period,
+    );
+    let previous_close = state.previous_close.replace(sample.close);
+    let atr = atr?;
+    let midpoint = (sample.high + sample.low) * 0.5;
+    let spread = atr * multiplier.max(0.0);
+    let basic_upper = midpoint + spread;
+    let basic_lower = midpoint - spread;
+    if !state.initialized {
+        state.initialized = true;
+        state.trend_up = true;
+        state.final_upper = basic_upper;
+        state.final_lower = basic_lower;
+        return Some(basic_lower);
+    }
+    let previous_close = previous_close.unwrap_or(sample.close);
+    if basic_upper < state.final_upper || previous_close > state.final_upper {
+        state.final_upper = basic_upper;
+    }
+    if basic_lower > state.final_lower || previous_close < state.final_lower {
+        state.final_lower = basic_lower;
+    }
+    if state.trend_up {
+        if sample.close < state.final_lower {
+            state.trend_up = false;
+            Some(state.final_upper)
+        } else {
+            Some(state.final_lower)
+        }
+    } else if sample.close > state.final_upper {
+        state.trend_up = true;
+        Some(state.final_lower)
+    } else {
+        Some(state.final_upper)
+    }
+}
+
 fn vwap_step(state: &mut VwapState, sample: VwapSample) -> f64 {
     let day = sample.time_unix_seconds.div_euclid(86_400);
     if !state.initialized || state.day != day {
@@ -1900,6 +1989,11 @@ enum IncrementalKind {
     },
     ParabolicSar {
         state: RecursiveHistory<ParabolicSarState>,
+    },
+    SuperTrend {
+        period: usize,
+        multiplier: f64,
+        state: RecursiveHistory<SuperTrendState>,
     },
     EmaRibbon {
         periods: [usize; MAX_OUTPUTS],
@@ -2057,6 +2151,17 @@ impl IncrementalState {
         )
     }
 
+    pub fn supertrend(period: usize, multiplier: f64) -> Self {
+        Self::new(
+            IncrementalKind::SuperTrend {
+                period,
+                multiplier,
+                state: RecursiveHistory::new(),
+            },
+            1,
+        )
+    }
+
     pub fn ema_ribbon(periods: [usize; MAX_OUTPUTS]) -> Self {
         Self::new(
             IncrementalKind::EmaRibbon {
@@ -2196,6 +2301,7 @@ impl IncrementalState {
             IncrementalKind::Keltner { state, .. } => state.bytes(),
             IncrementalKind::AdxDmi { state, .. } => state.bytes(),
             IncrementalKind::ParabolicSar { state } => state.bytes(),
+            IncrementalKind::SuperTrend { state, .. } => state.bytes(),
             IncrementalKind::Vwap { state } => state.bytes(),
             IncrementalKind::VwapBands { state, .. } => state.bytes(),
             IncrementalKind::Sma { .. }
@@ -2439,6 +2545,38 @@ impl IncrementalState {
                     state.checkpoint(row, accumulator);
                     if row >= self.output_from[0] {
                         self.outputs[0].push(value);
+                    }
+                    if row + 1 == n {
+                        tail = Some(accumulator);
+                        before_tail = (row > 0).then_some(previous);
+                    }
+                }
+                state.finish(n, tail, before_tail);
+            }
+            IncrementalKind::SuperTrend {
+                period,
+                multiplier,
+                state,
+            } => {
+                let (start, mut accumulator) = state.begin(n, requested);
+                self.last_work_rows = n - start;
+                let mut tail = None;
+                let mut before_tail = None;
+                for row in start..n {
+                    let previous = accumulator;
+                    let value = supertrend_step(
+                        &mut accumulator,
+                        DirectionalSample {
+                            high: input.high[row],
+                            low: input.low[row],
+                            close: input.close[row],
+                        },
+                        *period,
+                        *multiplier,
+                    );
+                    state.checkpoint(row, accumulator);
+                    if row >= self.output_from[0] {
+                        self.outputs[0].push(value.expect("SuperTrend after warmup"));
                     }
                     if row + 1 == n {
                         tail = Some(accumulator);
@@ -2771,6 +2909,7 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
             [*period, *period, start, 0, 0]
         }
         IncrementalKind::ParabolicSar { .. } => [0, 0, 0, 0, 0],
+        IncrementalKind::SuperTrend { period, .. } => [*period, 0, 0, 0, 0],
         IncrementalKind::EmaRibbon { periods, .. } => {
             periods.map(|period| period.saturating_sub(1))
         }
@@ -3687,6 +3826,18 @@ mod tests {
     }
 
     #[test]
+    fn supertrend_warms_up_with_atr_and_stays_finite() {
+        let closes = [10.0, 11.0, 12.0, 11.0, 13.0, 14.0];
+        let highs = closes.iter().map(|value| value + 1.0).collect::<Vec<_>>();
+        let lows = closes.iter().map(|value| value - 1.0).collect::<Vec<_>>();
+        let values = supertrend(&highs, &lows, &closes, 2, 3.0);
+        assert!(values[1].is_none());
+        assert!(values[2..]
+            .iter()
+            .all(|value| value.is_some_and(f64::is_finite)));
+    }
+
+    #[test]
     fn vwap_weights_by_volume_and_resets_each_utc_day() {
         // Day 0: tp 10 @ vol 1, tp 20 @ vol 3 → (10 + 60) / 4 = 17.5; day 1 restarts at tp 30.
         let times = [0, 3_600, 86_400];
@@ -3740,6 +3891,7 @@ mod tests {
         Keltner,
         AdxDmi,
         ParabolicSar,
+        SuperTrend,
         EmaRibbon,
         Bollinger,
         Rsi,
@@ -3785,6 +3937,7 @@ mod tests {
                 ]
             }
             TestKind::ParabolicSar => vec![parabolic_sar(input.high, input.low)],
+            TestKind::SuperTrend => vec![supertrend(input.high, input.low, input.close, 5, 3.0)],
             TestKind::EmaRibbon => [3, 5, 8, 13, 21]
                 .into_iter()
                 .map(|period| ema(input.close, period))
@@ -3872,6 +4025,7 @@ mod tests {
             (TestKind::Keltner, IncrementalState::keltner(5, 2.0)),
             (TestKind::AdxDmi, IncrementalState::adx_dmi(5)),
             (TestKind::ParabolicSar, IncrementalState::parabolic_sar()),
+            (TestKind::SuperTrend, IncrementalState::supertrend(5, 3.0)),
             (
                 TestKind::EmaRibbon,
                 IncrementalState::ema_ribbon([3, 5, 8, 13, 21]),

@@ -2147,6 +2147,12 @@ impl AerisChart {
         self.inner.borrow_mut().add_parabolic_sar(source_id)
     }
 
+    pub fn add_supertrend(&mut self, source_id: u32, period: u32, multiplier: f64) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_supertrend(source_id, period, multiplier)
+    }
+
     /// Add one five-output EMA ribbon on the source pane.
     pub fn add_ema_ribbon(
         &mut self,

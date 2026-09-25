@@ -140,6 +140,10 @@ impl ChartInner {
             },
             "adx_dmi" => IndicatorKind::AdxDmi { period },
             "parabolic_sar" => IndicatorKind::ParabolicSar,
+            "supertrend" => IndicatorKind::SuperTrend {
+                period,
+                multiplier: deviation,
+            },
             "ema_ribbon" => IndicatorKind::EmaRibbon {
                 periods: [period; 5],
             },
@@ -271,6 +275,12 @@ impl ChartInner {
     pub fn add_parabolic_sar(&mut self, source_id: u32) -> u32 {
         self.engine
             .add_parabolic_sar(source_id as SeriesId)
+            .unwrap_or(u32::MAX)
+    }
+
+    pub fn add_supertrend(&mut self, source_id: u32, period: u32, multiplier: f64) -> u32 {
+        self.engine
+            .add_supertrend(source_id as SeriesId, period as usize, multiplier)
             .unwrap_or(u32::MAX)
     }
 

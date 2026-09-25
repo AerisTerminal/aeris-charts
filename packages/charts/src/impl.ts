@@ -4913,6 +4913,13 @@ export class chart_impl implements chart_api {
     return this.indicator_series(this.wasm.add_parabolic_sar(source.id), options);
   }
 
+  add_supertrend(source: series_api, period: number, multiplier = 3, options?: Partial<series_options>): series_api {
+    return this.indicator_series(
+      this.wasm.add_supertrend(source.id, Math.max(1, Math.floor(period)), multiplier),
+      options,
+    );
+  }
+
   subscribe_crosshair_move(handler: mouse_event_handler): void {
     this.crosshair_subs.add(handler);
   }

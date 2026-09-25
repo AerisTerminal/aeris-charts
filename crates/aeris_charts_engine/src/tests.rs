@@ -154,6 +154,7 @@ fn financial_product_compatibility_fixture_survives_shared_frame_mutations() {
     assert_eq!(chart.add_keltner(0, 20, 2.0).len(), 3);
     assert_eq!(chart.add_adx_dmi(0, 14).len(), 3);
     assert!(chart.add_parabolic_sar(0).is_some());
+    assert!(chart.add_supertrend(0, 14, 3.0).is_some());
     assert!(chart.add_rsi(0, 14).is_some());
     assert_eq!(chart.add_macd(0, 12, 26, 9).len(), 3);
     assert_eq!(chart.add_stochastic(0, 14, 3).len(), 2);
@@ -182,6 +183,10 @@ fn financial_product_compatibility_fixture_survives_shared_frame_mutations() {
             },
             IndicatorKind::AdxDmi { period: 14 },
             IndicatorKind::ParabolicSar,
+            IndicatorKind::SuperTrend {
+                period: 14,
+                multiplier: 3.0,
+            },
             IndicatorKind::Rsi { period: 14 },
             IndicatorKind::Macd {
                 fast: 12,
@@ -1708,6 +1713,11 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
         IndicatorKind::ParabolicSar => {
             vec![aeris_charts_indicators::parabolic_sar(source[1], source[2])]
         }
+        IndicatorKind::SuperTrend { period, multiplier } => {
+            vec![aeris_charts_indicators::supertrend(
+                source[1], source[2], source[3], period, multiplier,
+            )]
+        }
         IndicatorKind::EmaRibbon { periods } => periods
             .into_iter()
             .map(|period| aeris_charts_indicators::ema(source[3], period))
@@ -1858,6 +1868,10 @@ fn every_indicator_engine_path_matches_full_recomputation() {
         },
         IndicatorKind::AdxDmi { period: 5 },
         IndicatorKind::ParabolicSar,
+        IndicatorKind::SuperTrend {
+            period: 5,
+            multiplier: 3.0,
+        },
     ];
     for kind in kinds {
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
