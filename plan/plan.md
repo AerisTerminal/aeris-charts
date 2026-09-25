@@ -48,7 +48,7 @@ Notes:
   and its exit criteria pass.
 - No phase and no coverage-matrix row is verified yet. No competitive parity or release-completion
   claim should be inferred from delivered slices.
-- Work proceeds in large batches per **Work cadence** in [AGENTS.md](AGENTS.md).
+- Work proceeds in large batches per **Work cadence** in [AGENTS.md](../AGENTS.md).
 
 ## Delivered work
 
@@ -93,7 +93,7 @@ remain valuable and must be preserved.
 | React reconciliation | `packages/charts/src/react.ts::GeneralPane` | Changed series options recreate series; changed axes recreate dependent series; configuration arrays instead of component composition. Complete engine mutation and declarative authoring | R5 |
 | Chart breadth | `GeneralSeriesKind` has Cartesian variants only | Polar and hierarchy/flow families are open. Funnel, treemap, Sankey and sunburst are in the competitive target, not an indefinite backlog | R6, R7 |
 | Documentation | Prior plan examples and `Architecture.md` | Prior scatter example omitted required axis bindings. Architecture places engine-owned general behavior under the core heading and overgeneralizes retained React updates. Correct wording without presenting future code as current | R0 |
-| API docs mix | [General_charts_api.md](General_charts_api.md) | Mixes implemented contracts with proposals | R0 |
+| API docs mix | [General_charts_api.md](../docs/General_charts_api.md) | Mixes implemented contracts with proposals | R0 |
 
 These are not an exhaustive defect audit. Coverage-matrix rows are required coverage to audit, not
 assertions that every listed feature is absent.
@@ -102,7 +102,7 @@ assertions that every listed feature is absent.
 
 All phases are open unless marked otherwise in **Status at a glance**. Existing implementation
 counts toward a phase only after its required behavior is demonstrated. Deliver work in large
-dependency-complete batches as defined in **Work cadence** in [AGENTS.md](AGENTS.md): a batch covers
+dependency-complete batches as defined in **Work cadence** in [AGENTS.md](../AGENTS.md): a batch covers
 a whole capability area, such as the R2 axis contract or all remaining R3 bar and stack semantics,
 rather than one option at a time. Do not delay fixes until a large framework rewrite, and do not
 skip foundation work to add a demo chart.
@@ -314,7 +314,7 @@ Keep one public library, one `ChartEngine` and one ordered frame contract. Prese
 financial data and coordinate paths while completing general charting as a first-class capability.
 The browser package is `@aeristerminal/aeris-charts` with an optional `/react` entry. Package naming
 or distribution changes require a compatibility decision; this plan does not introduce another
-product. [Architecture.md](Architecture.md) describes current ownership and execution; this document
+product. [Architecture.md](../docs/Architecture.md) describes current ownership and execution; this document
 specifies the target and acceptance gates.
 
 The existing shared-engine direction is sound. Replacing it with a browser-only renderer or making
@@ -493,7 +493,7 @@ Verification cadence:
 - **Phase closure:** coverage-matrix verification, manual screenshots, accessibility review,
   competitor comparisons and recorded benchmarks.
 
-Run the complete gates required by [AGENTS.md](AGENTS.md) at the end of each batch, before
+Run the complete gates required by [AGENTS.md](../AGENTS.md) at the end of each batch, before
 committing code:
 
 ```text

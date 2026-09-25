@@ -20,7 +20,7 @@ Headless means Aeris owns semantics and pixels inside the chart, never applicati
 
 A feature is not delivered until a host can build its complete UI from typed engine APIs without
 reimplementing chart math, and every executor (GPUI, WebGPU, Canvas2D, native) renders it from the
-same ordered frame. [Architecture.md](Architecture.md) remains the authority for current ownership;
+same ordered frame. [Architecture.md](../docs/Architecture.md) remains the authority for current ownership;
 [plan.md](plan.md) covers general (non-financial) chart families. Both plans share one
 `ChartEngine` and one frame contract and proceed independently. As of 2026-09-25 this plan is the
 active program; plan.md is paused after its R3 range-bar batch.
@@ -35,7 +35,7 @@ Source-confirmed on 2026-09-24. This is the starting point, not a claim of compl
 
 | Area | Present today | Evidence |
 | --- | --- | --- |
-| Footprint | Trade tape per series; aggressor classification (host side → quote → tick rule); bid/ask/unknown/total per level; Bid×Ask, Total and Delta cell modes; POC; diagonal and stacked imbalances; final/max/min delta; session cumulative delta per bar; three LODs; late-event and correction rebuild | `engine/src/footprint.rs`, `frame/footprint_geometry.rs`, [Footprint.md](Footprint.md) |
+| Footprint | Trade tape per series; aggressor classification (host side → quote → tick rule); bid/ask/unknown/total per level; Bid×Ask, Total and Delta cell modes; POC; diagonal and stacked imbalances; final/max/min delta; session cumulative delta per bar; three LODs; late-event and correction rebuild | `engine/src/footprint.rs`, `frame/footprint_geometry.rs`, [Footprint.md](../docs/Footprint.md) |
 | Footprint bar policies | Time, trade-count and volume aggregation in Rust; only whole-second time bars are chart-integrated | `FootprintBarAggregation`, Footprint.md §3 |
 | Volume profile | Visible-range profile computed from OHLCV candles; rows, value area, POC; at most 16 per chart; runtime-only | `engine/src/volume_profile.rs`, `indicators/src/volume_profile.rs` |
 | Series types | Candlestick, bar, line, area, histogram, baseline, custom, feature (grouped/stacked bars, heatmap, HLC area, pretty histogram, background shade, stacked area, whisker box), footprint | `SeriesKind`, `FeatureSeriesKind` |
@@ -77,7 +77,7 @@ Source-confirmed on 2026-09-24. This is the starting point, not a claim of compl
   every executor before a feature is complete.
 - **No invented data.** Nothing guesses aggressor sides, fabricates timestamps for non-time bars, or
   rounds off-grid prices. Unknowns stay unknown and are reported.
-- Follow [AGENTS.md](AGENTS.md): no speculative crates, traits, plugin registries or feature flags.
+- Follow [AGENTS.md](../AGENTS.md): no speculative crates, traits, plugin registries or feature flags.
   Extract modules only when a real responsibility justifies it.
 
 ## Foundations
@@ -618,7 +618,7 @@ For every catalog item:
 - Performance evidence in release builds added to `perf_gate`: tip update cost independent of
   history length, frame work bounded by visible bars/levels/buckets, steady-state allocation,
   retained memory under retention caps, and depth-update soak for F3.
-- The complete gates in [AGENTS.md](AGENTS.md) before each commit, and Architecture.md updated in
+- The complete gates in [AGENTS.md](../AGENTS.md) before each commit, and Architecture.md updated in
   the same commit as any ownership or data-flow change.
 
 ## Definition of completion

@@ -259,9 +259,11 @@ for crosshair lines, and muted for crosshair-label surfaces.
 - `crates/aeris_charts_native` — deterministic native rendering and performance verification.
 - `packages/charts` — TypeScript browser package.
 - `examples/web_demo` — browser integration and parity test host; it is not a published package.
+- `docs` — architecture, public API, domain-model, crate, and contribution documentation.
+- `plan` — active product and expansion plans.
 
-See [Architecture.md](Architecture.md) for ownership, data flow, and backend boundaries.
-See [Public_api.md](Public_api.md) for supported/experimental surfaces, persistence, errors, and
+See [Architecture.md](docs/Architecture.md) for ownership, data flow, and backend boundaries.
+See [Public_api.md](docs/Public_api.md) for supported/experimental surfaces, persistence, errors, and
 version policy. Published Rust crates use coordinated versions and retain matching local path
 dependencies inside this workspace.
 
@@ -281,6 +283,7 @@ npm run test:pack
 ```
 
 The complete verification gates are documented in [AGENTS.md](AGENTS.md) and enforced by CI.
+Contribution requirements are documented in [CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
 ## Performance evidence
 

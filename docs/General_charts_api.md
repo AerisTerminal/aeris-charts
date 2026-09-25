@@ -2,7 +2,7 @@
 
 ## Status and purpose
 
-This document began as the Phase 0 API proposal for the all-in-one architecture in `plan.md` and
+This document began as the Phase 0 API proposal for the all-in-one architecture in [`plan.md`](../plan/plan.md) and
 remains the contract for unfinished chart families. The current package implements the Phase 2 Cartesian
 families: category columns and horizontal bars, category-band box plots, category/category plus
 numeric/numeric and temporal/numeric heatmap grids, numeric XY scatter/bubble marks, numeric/temporal/category error bars,
