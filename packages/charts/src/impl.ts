@@ -4810,6 +4810,13 @@ export class chart_impl implements chart_api {
     );
   }
 
+  add_mfi(source: series_api, period: number, volume_source: series_api, options?: Partial<series_options>): series_api {
+    return this.indicator_series(
+      this.wasm.add_mfi(source.id, volume_source.id, Math.max(1, Math.floor(period))),
+      options,
+    );
+  }
+
   add_vwap_bands(
     source: series_api,
     reset: vwap_reset = "session",

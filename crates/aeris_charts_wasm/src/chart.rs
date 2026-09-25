@@ -2287,6 +2287,13 @@ impl AerisChart {
             .add_cmf(source_id, volume_source, period)
     }
 
+    /// Add money flow index in its own oscillator pane.
+    pub fn add_mfi(&mut self, source_id: u32, volume_source: i32, period: u32) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_mfi(source_id, volume_source, period)
+    }
+
     /// Add VWAP basis, standard-deviation and percentage bands. `reset` is session, weekly, or monthly.
     pub fn add_vwap_bands(
         &mut self,

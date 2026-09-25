@@ -177,6 +177,9 @@ pub enum IndicatorKind {
     Cmf {
         period: usize,
     },
+    Mfi {
+        period: usize,
+    },
     VwapBands {
         reset: aeris_charts_indicators::VwapReset,
         standard_deviation: f64,
@@ -654,6 +657,15 @@ impl ChartEngine {
                                 ..IndicatorParameters::default()
                             },
                         ),
+                        IndicatorKind::Mfi { period } => (
+                            "mfi",
+                            period,
+                            None,
+                            IndicatorParameters {
+                                period: Some(period),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
                         IndicatorKind::VwapBands {
                             reset,
                             standard_deviation,
@@ -980,6 +992,18 @@ impl ChartEngine {
             .next()
     }
 
+    /// Add money flow index in its own oscillator pane.
+    pub fn add_mfi(
+        &mut self,
+        source: SeriesId,
+        volume_source: SeriesId,
+        period: usize,
+    ) -> Option<SeriesId> {
+        self.add_indicator_kind(source, IndicatorKind::Mfi { period }, Some(volume_source))
+            .into_iter()
+            .next()
+    }
+
     /// Add session/weekly/monthly VWAP basis, standard-deviation and percentage bands.
     pub fn add_vwap_bands(
         &mut self,
@@ -1087,6 +1111,11 @@ impl ChartEngine {
                 }
             }
             IndicatorKind::Cmf { .. } => {
+                if !ids.is_empty() {
+                    self.place_outputs_in_oscillator_pane(&ids);
+                }
+            }
+            IndicatorKind::Mfi { .. } => {
                 if !ids.is_empty() {
                     self.place_outputs_in_oscillator_pane(&ids);
                 }
@@ -1245,6 +1274,16 @@ impl ChartEngine {
                     max: None,
                 });
             }
+            IndicatorKind::Mfi { period } => {
+                parameters.push(integer("period", period));
+                parameters.push(IndicatorParameterDescriptor {
+                    name: "volume_source".into(),
+                    parameter_type: IndicatorParameterType::Series,
+                    default: serde_json::Value::Null,
+                    min: None,
+                    max: None,
+                });
+            }
             IndicatorKind::Vwma { period } => {
                 parameters.push(integer("period", period));
                 parameters.push(IndicatorParameterDescriptor {
@@ -1356,12 +1395,14 @@ impl ChartEngine {
     ) -> Vec<SeriesId> {
         if self.series_entry(source).is_none()
             || match &kind {
-                IndicatorKind::Obv | IndicatorKind::Cmf { .. } => volume_source.is_none_or(|id| {
-                    id == source
-                        || self
-                            .series_entry(id)
-                            .is_none_or(|series| !series.kind.stores_scalar_values())
-                }),
+                IndicatorKind::Obv | IndicatorKind::Cmf { .. } | IndicatorKind::Mfi { .. } => {
+                    volume_source.is_none_or(|id| {
+                        id == source
+                            || self
+                                .series_entry(id)
+                                .is_none_or(|series| !series.kind.stores_scalar_values())
+                    })
+                }
                 IndicatorKind::Vwap
                 | IndicatorKind::VwapBands { .. }
                 | IndicatorKind::Vwma { .. } => volume_source.is_some_and(|id| {
@@ -1414,6 +1455,7 @@ impl ChartEngine {
                 IndicatorKind::Vwap => false,
                 IndicatorKind::Obv => false,
                 IndicatorKind::Cmf { period } => *period == 0,
+                IndicatorKind::Mfi { period } => *period == 0,
                 IndicatorKind::VwapBands {
                     standard_deviation,
                     percent,
@@ -1589,7 +1631,9 @@ impl ChartEngine {
                             values[3],
                             matches!(
                                 &self.indicators[index].kind,
-                                IndicatorKind::Obv | IndicatorKind::Cmf { .. }
+                                IndicatorKind::Obv
+                                    | IndicatorKind::Cmf { .. }
+                                    | IndicatorKind::Mfi { .. }
                             )
                             .then_some(0.0)
                             .unwrap_or(1.0),
@@ -1787,6 +1831,7 @@ fn indicator_kind_name(kind: &IndicatorKind) -> &'static str {
         IndicatorKind::Vwap => "vwap",
         IndicatorKind::Obv => "obv",
         IndicatorKind::Cmf { .. } => "cmf",
+        IndicatorKind::Mfi { .. } => "mfi",
         IndicatorKind::VwapBands { .. } => "vwap_bands",
         IndicatorKind::Wma { .. } => "wma",
     }
@@ -1845,6 +1890,7 @@ fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators::Increment
         IndicatorKind::Vwap => aeris_charts_indicators::IncrementalState::vwap(),
         IndicatorKind::Obv => aeris_charts_indicators::IncrementalState::obv(),
         IndicatorKind::Cmf { period } => aeris_charts_indicators::IncrementalState::cmf(period),
+        IndicatorKind::Mfi { period } => aeris_charts_indicators::IncrementalState::mfi(period),
         IndicatorKind::VwapBands {
             reset,
             standard_deviation,
@@ -1933,6 +1979,7 @@ fn indicator_title(kind: &IndicatorKind) -> String {
         IndicatorKind::Vwap => "VWAP".to_string(),
         IndicatorKind::Obv => "OBV".to_string(),
         IndicatorKind::Cmf { period } => format!("CMF {period}"),
+        IndicatorKind::Mfi { period } => format!("MFI {period}"),
         IndicatorKind::VwapBands { .. } => "VWAP Bands".to_string(),
         IndicatorKind::Wma { period } => format!("WMA {period}"),
     }
@@ -2003,6 +2050,7 @@ fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static 
         IndicatorKind::Vwap => "VWAP",
         IndicatorKind::Obv => "OBV",
         IndicatorKind::Cmf { .. } => "CMF",
+        IndicatorKind::Mfi { .. } => "MFI",
         IndicatorKind::VwapBands { .. } => {
             ["Basis", "Std Upper", "Std Lower", "% Upper", "% Lower"][output_index]
         }

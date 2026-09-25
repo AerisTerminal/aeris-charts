@@ -882,6 +882,52 @@ pub fn cmf(
     out
 }
 
+/// Money flow index over a rolling window, using typical price and non-negative volume. The first
+/// comparable window begins after `period` direction observations; a flat or zero-flow window is
+/// neutral at 50.
+pub fn mfi(
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    volumes: &[f64],
+    period: usize,
+) -> Vec<Option<f64>> {
+    let n = highs
+        .len()
+        .min(lows.len())
+        .min(closes.len())
+        .min(volumes.len());
+    let mut out = vec![None; n];
+    if period == 0 || n <= period {
+        return out;
+    }
+    let typical = |row: usize| (highs[row] + lows[row] + closes[row]) / 3.0;
+    for (row, slot) in out.iter_mut().enumerate().skip(period) {
+        let start = row + 1 - period;
+        let mut positive = 0.0;
+        let mut negative = 0.0;
+        for (index, &bar_volume) in volumes.iter().enumerate().take(row + 1).skip(start) {
+            let previous = typical(index - 1);
+            let flow = typical(index) * bar_volume.max(0.0);
+            if typical(index) > previous {
+                positive += flow;
+            } else if typical(index) < previous {
+                negative += flow;
+            }
+        }
+        *slot = Some(if negative == 0.0 {
+            if positive == 0.0 {
+                50.0
+            } else {
+                100.0
+            }
+        } else {
+            100.0 - 100.0 / (1.0 + positive / negative)
+        });
+    }
+    out
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VwapReset {
@@ -2310,6 +2356,9 @@ enum IncrementalKind {
     Cmf {
         period: usize,
     },
+    Mfi {
+        period: usize,
+    },
     VwapBands {
         reset: VwapReset,
         standard_deviation: f64,
@@ -2556,6 +2605,10 @@ impl IncrementalState {
         Self::new(IncrementalKind::Cmf { period }, 1)
     }
 
+    pub fn mfi(period: usize) -> Self {
+        Self::new(IncrementalKind::Mfi { period }, 1)
+    }
+
     pub fn vwap_bands(reset: VwapReset, standard_deviation: f64, percent: f64) -> Self {
         Self::new(
             IncrementalKind::VwapBands {
@@ -2632,6 +2685,7 @@ impl IncrementalState {
             IncrementalKind::Vwap { state } => state.bytes(),
             IncrementalKind::Obv { state } => state.bytes(),
             IncrementalKind::Cmf { .. } => 0,
+            IncrementalKind::Mfi { .. } => 0,
             IncrementalKind::VwapBands { state, .. } => state.bytes(),
             IncrementalKind::Sma { .. }
             | IncrementalKind::Bollinger { .. }
@@ -3227,6 +3281,12 @@ impl IncrementalState {
                 let values = cmf(input.high, input.low, input.close, input.volume, *period);
                 self.outputs[0].extend(values.into_iter().skip(start).flatten());
             }
+            IncrementalKind::Mfi { period } => {
+                let start = self.output_from[0];
+                self.last_work_rows = n - start;
+                let values = mfi(input.high, input.low, input.close, input.volume, *period);
+                self.outputs[0].extend(values.into_iter().skip(start).flatten());
+            }
             IncrementalKind::VwapBands {
                 reset,
                 standard_deviation,
@@ -3373,6 +3433,7 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
             0,
         ],
         IncrementalKind::Cmf { period } => [period.saturating_sub(1), 0, 0, 0, 0],
+        IncrementalKind::Mfi { period } => [*period, 0, 0, 0, 0],
         IncrementalKind::Vwap { .. }
         | IncrementalKind::Obv { .. }
         | IncrementalKind::VwapBands { .. } => [0; MAX_OUTPUTS],
@@ -4403,6 +4464,21 @@ mod tests {
         assert!((values[2].unwrap() - (1.0 / 6.0)).abs() < 1e-12);
     }
 
+    #[test]
+    fn mfi_uses_directional_money_flow_windows() {
+        let values = mfi(
+            &[10.0, 11.0, 12.0, 11.0],
+            &[10.0, 11.0, 12.0, 11.0],
+            &[10.0, 11.0, 12.0, 11.0],
+            &[1.0, 2.0, 3.0, 4.0],
+            2,
+        );
+        assert_eq!(values[0], None);
+        assert_eq!(values[1], None);
+        assert_eq!(values[2], Some(100.0));
+        assert!((values[3].unwrap() - (100.0 - 100.0 / (1.0 + 36.0 / 44.0))).abs() < 1e-12);
+    }
+
     #[derive(Clone, Copy)]
     enum TestKind {
         Sma,
@@ -4433,6 +4509,7 @@ mod tests {
         Vwap,
         Obv,
         Cmf,
+        Mfi,
         Wma,
     }
 
@@ -4525,6 +4602,7 @@ mod tests {
             )],
             TestKind::Obv => vec![obv(input.close, input.volume)],
             TestKind::Cmf => vec![cmf(input.high, input.low, input.close, input.volume, 5)],
+            TestKind::Mfi => vec![mfi(input.high, input.low, input.close, input.volume, 5)],
             TestKind::Wma => vec![wma(input.close, 5)],
         }
     }
@@ -4598,6 +4676,7 @@ mod tests {
             (TestKind::Vwap, IncrementalState::vwap()),
             (TestKind::Obv, IncrementalState::obv()),
             (TestKind::Cmf, IncrementalState::cmf(5)),
+            (TestKind::Mfi, IncrementalState::mfi(5)),
             (TestKind::Wma, IncrementalState::wma(5)),
         ];
         let mut times = (0..40).map(|index| index * 3_600).collect::<Vec<_>>();
