@@ -1979,6 +1979,41 @@ fn vwap_volume_catchup_and_replacement_resume_at_the_affected_row() {
 }
 
 #[test]
+fn vwap_volume_input_aligns_by_timestamp_instead_of_row_position() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let volume = chart.add_series(SeriesKind::Histogram);
+    let source_times = [0.0, 60.0, 120.0, 180.0];
+    let source = [10.0, 20.0, 30.0, 40.0];
+    chart
+        .set_series_data(0, &source_times, &source, &source, &source, &source)
+        .unwrap();
+    // The volume rows are deliberately shifted and sparse. Row-position pairing would apply
+    // 5.0 to time 0 and 7.0 to time 60; timestamp pairing applies unit weight to both gaps.
+    chart
+        .set_series_data(
+            volume,
+            &[60.0, 180.0],
+            &[5.0, 7.0],
+            &[5.0, 7.0],
+            &[5.0, 7.0],
+            &[5.0, 7.0],
+        )
+        .unwrap();
+    let vwap = chart.add_vwap(0, Some(volume)).unwrap();
+    let actual = chart.data.series_data(vwap).unwrap().1[3].to_vec();
+    let expected = aeris_charts_indicators::vwap(
+        &[0, 60, 120, 180],
+        &source,
+        &source,
+        &source,
+        &[1.0, 5.0, 1.0, 7.0],
+    );
+    for (actual, expected) in actual.iter().zip(expected) {
+        assert!((actual - expected.unwrap()).abs() < 1e-12);
+    }
+}
+
+#[test]
 fn chained_indicators_propagate_every_source_change_and_remove_together() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     let times = (0..20).map(|index| index as f64 * 60.0).collect::<Vec<_>>();

@@ -238,9 +238,10 @@ output identities when a binding is rebound, and publishes typed parameter/outpu
 engine, WASM shell and TypeScript package expose the explicit-source path and bounded schema query;
 existing convenience methods remain close-based. Indicator outputs now also expose and atomically
 replace a compact engine-owned style snapshot, preserving per-output presentation independently
-of binding kind. Multi-input validation, style-document persistence, the next persistence schema,
-VWAP bands, chart-type additions and the I1 catalog remain open until the whole batch is implemented
-and reference fixtures are added.
+of binding kind. VWAP's optional volume input now aligns by exact timestamp and keeps missing rows
+on the documented unit-weight fallback. Typed multi-input validation, style-document persistence,
+the next persistence schema, VWAP bands, chart-type additions and the I1 catalog remain open until
+the whole batch is implemented and reference fixtures are added.
 
 ### B5 — Non-time bars and replay
 

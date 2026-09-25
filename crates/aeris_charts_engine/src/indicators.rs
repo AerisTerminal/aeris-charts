@@ -983,7 +983,13 @@ impl ChartEngine {
             let selected_close = selected_input(source_input, values);
             let volume = volume_source
                 .and_then(|id| self.data.series_data(id))
-                .map_or(&[][..], |(_, values)| values[3]);
+                .map_or(Cow::Borrowed(&[][..]), |(volume_times, values)| {
+                    if volume_times == times {
+                        Cow::Borrowed(values[3])
+                    } else {
+                        Cow::Owned(align_volume_to_source_times(times, volume_times, values[3]))
+                    }
+                });
             let binding = &mut self.indicators[index];
             binding.runtime.rebuild_from(
                 aeris_charts_indicators::IndicatorInput {
@@ -992,7 +998,7 @@ impl ChartEngine {
                     high: values[1],
                     low: values[2],
                     close: selected_close.as_ref(),
-                    volume,
+                    volume: volume.as_ref(),
                 },
                 if full_replace { 0 } else { from },
             );
@@ -1120,6 +1126,28 @@ fn selected_input<'a>(source: IndicatorInputSource, values: [&'a [f64]; 4]) -> C
                 .collect(),
         ),
     }
+}
+
+/// Align an optional volume input to the source timeline without retaining a second canonical
+/// timeline. Missing timestamps intentionally use the indicator layer's unit-weight fallback.
+fn align_volume_to_source_times(
+    source_times: &[i64],
+    volume_times: &[i64],
+    values: &[f64],
+) -> Vec<f64> {
+    let mut aligned = vec![1.0; source_times.len()];
+    let mut volume_row = 0;
+    for (source_row, &source_time) in source_times.iter().enumerate() {
+        while volume_row < volume_times.len() && volume_times[volume_row] < source_time {
+            volume_row += 1;
+        }
+        if volume_times.get(volume_row) == Some(&source_time) {
+            if let Some(&volume) = values.get(volume_row) {
+                aligned[source_row] = volume;
+            }
+        }
+    }
+    aligned
 }
 
 fn indicator_kind_name(kind: &IndicatorKind) -> &'static str {
