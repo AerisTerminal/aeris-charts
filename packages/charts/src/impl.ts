@@ -4718,6 +4718,10 @@ export class chart_impl implements chart_api {
     return this.indicator_series(this.wasm.add_rma(source.id, Math.max(1, Math.floor(period))), options);
   }
 
+  add_hma(source: series_api, period: number, options?: Partial<series_options>): series_api {
+    return this.indicator_series(this.wasm.add_hma(source.id, Math.max(1, Math.floor(period))), options);
+  }
+
   add_ema_ribbon(
     source: series_api,
     periods: ema_ribbon_periods = [5, 10, 20, 50, 200],

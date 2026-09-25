@@ -129,6 +129,55 @@ pub fn rma(values: &[f64], period: usize) -> Vec<Option<f64>> {
     smma(values, period)
 }
 
+/// Hull moving average: `WMA(2 * WMA(source, period / 2) - WMA(source, period), sqrt(period))`.
+/// Periods use the conventional floored half and square-root lengths, each clamped to one.
+pub fn hma(values: &[f64], period: usize) -> Vec<Option<f64>> {
+    if period == 0 {
+        return vec![None; values.len()];
+    }
+    let mut out = vec![None; values.len()];
+    let output_start = period
+        .saturating_sub(1)
+        .saturating_add((period as f64).sqrt() as usize)
+        .saturating_sub(1);
+    for (row, output) in out.iter_mut().enumerate().skip(output_start) {
+        *output = hma_at(values, row, period);
+    }
+    out
+}
+
+fn wma_at(values: &[f64], row: usize, period: usize) -> Option<f64> {
+    if period == 0 || row.saturating_add(1) < period {
+        return None;
+    }
+    let denominator = (period * (period + 1)) as f64 / 2.0;
+    let start = row + 1 - period;
+    Some(
+        values[start..=row]
+            .iter()
+            .enumerate()
+            .map(|(weight, value)| (weight + 1) as f64 * value)
+            .sum::<f64>()
+            / denominator,
+    )
+}
+
+fn hma_at(values: &[f64], row: usize, period: usize) -> Option<f64> {
+    let half_period = (period / 2).max(1);
+    let smoothing_period = ((period as f64).sqrt() as usize).max(1);
+    let raw_start = row + 1 - smoothing_period;
+    let denominator = (smoothing_period * (smoothing_period + 1)) as f64 / 2.0;
+    let weighted = (raw_start..=row)
+        .enumerate()
+        .map(|(weight, raw_row)| {
+            let half = wma_at(values, raw_row, half_period)?;
+            let full = wma_at(values, raw_row, period)?;
+            Some((weight + 1) as f64 * (2.0 * half - full))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(weighted.into_iter().sum::<f64>() / denominator)
+}
+
 /// Bollinger Bands using a simple moving-average center and population standard deviation.
 pub fn bollinger(values: &[f64], period: usize, deviation: f64) -> Vec<BollingerPoint> {
     if period == 0 {
@@ -1422,6 +1471,9 @@ enum IncrementalKind {
         period: usize,
         state: RecursiveHistory<SmmaState>,
     },
+    Hma {
+        period: usize,
+    },
     EmaRibbon {
         periods: [usize; MAX_OUTPUTS],
         states: Box<[RecursiveHistory<EmaState>; MAX_OUTPUTS]>,
@@ -1530,6 +1582,10 @@ impl IncrementalState {
             },
             1,
         )
+    }
+
+    pub fn hma(period: usize) -> Self {
+        Self::new(IncrementalKind::Hma { period }, 1)
     }
 
     pub fn ema_ribbon(periods: [usize; MAX_OUTPUTS]) -> Self {
@@ -1672,7 +1728,8 @@ impl IncrementalState {
             IncrementalKind::VwapBands { state, .. } => state.bytes(),
             IncrementalKind::Sma { .. }
             | IncrementalKind::Bollinger { .. }
-            | IncrementalKind::Wma { .. } => 0,
+            | IncrementalKind::Wma { .. }
+            | IncrementalKind::Hma { .. } => 0,
         }
     }
 
@@ -1790,6 +1847,14 @@ impl IncrementalState {
                     }
                 }
                 state.finish(n, tail, before_tail);
+            }
+            IncrementalKind::Hma { period } => {
+                let start = self.output_from[0];
+                self.last_work_rows = n - start;
+                for row in start..n {
+                    self.outputs[0]
+                        .push(hma_at(&input.close[..n], row, *period).expect("HMA after warmup"));
+                }
             }
             IncrementalKind::EmaRibbon { periods, states } => {
                 for (output_index, (&period, state)) in
@@ -2087,6 +2152,19 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
             [period.saturating_mul(3).saturating_sub(3), 0, 0, 0, 0]
         }
         IncrementalKind::Smma { period, .. } => [period.saturating_sub(1), 0, 0, 0, 0],
+        IncrementalKind::Hma { period } => {
+            let smoothing = ((*period as f64).sqrt() as usize).max(1);
+            [
+                period
+                    .saturating_sub(1)
+                    .saturating_add(smoothing)
+                    .saturating_sub(1),
+                0,
+                0,
+                0,
+                0,
+            ]
+        }
         IncrementalKind::EmaRibbon { periods, .. } => {
             periods.map(|period| period.saturating_sub(1))
         }
@@ -2175,6 +2253,14 @@ mod tests {
             }
         }
         assert_eq!(rma(&values, 3), smma(&values, 3));
+    }
+
+    #[test]
+    fn hma_combines_half_full_and_smoothing_wmas() {
+        assert_eq!(
+            hma(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0], 4),
+            vec![None, None, None, None, Some(5.0), Some(6.0), Some(7.0)]
+        );
     }
 
     #[test]
@@ -2945,6 +3031,7 @@ mod tests {
         Dema,
         Tema,
         Smma,
+        Hma,
         EmaRibbon,
         Bollinger,
         Rsi,
@@ -2962,6 +3049,7 @@ mod tests {
             TestKind::Dema => vec![dema(input.close, 5)],
             TestKind::Tema => vec![tema(input.close, 5)],
             TestKind::Smma => vec![smma(input.close, 5)],
+            TestKind::Hma => vec![hma(input.close, 5)],
             TestKind::EmaRibbon => [3, 5, 8, 13, 21]
                 .into_iter()
                 .map(|period| ema(input.close, period))
@@ -3039,6 +3127,7 @@ mod tests {
             (TestKind::Dema, IncrementalState::dema(5)),
             (TestKind::Tema, IncrementalState::tema(5)),
             (TestKind::Smma, IncrementalState::smma(5)),
+            (TestKind::Hma, IncrementalState::hma(5)),
             (
                 TestKind::EmaRibbon,
                 IncrementalState::ema_ribbon([3, 5, 8, 13, 21]),
