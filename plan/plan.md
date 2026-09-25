@@ -8,16 +8,17 @@ Trading and order-flow work lives in [Expansion.md](Expansion.md); both plans sh
 
 How to read this file:
 
-1. **Status at a glance** — where every phase stands today.
-2. **Delivered work** — what is implemented, with evidence.
-3. **Known gaps** — source-confirmed problems and the phase that fixes each.
-4. **Phases R0–R8** — remaining work as checklists, with exit criteria.
-5. **Parity coverage matrix** — the capability rows that define parity.
-6. **Scope, architecture rules, verification and completion** — the standing rules.
+1. **Status at a glance** — where every phase and batch stands today.
+2. **How work is delivered** — the batch, gate and commit rules.
+3. **Delivered work** — what is implemented, with evidence.
+4. **Known gaps** — source-confirmed problems and the phase that fixes each.
+5. **Phases R0–R8** — remaining work as checklists, with exit criteria.
+6. **Parity coverage matrix** — the capability rows that define parity.
+7. **Scope, architecture rules, verification and completion** — the standing rules.
 
 Keep this file current: when a batch lands, tick its checklist items, add it to **Delivered work**
-with its commit, and update the status table. A phase or matrix row changes to **Verified** only
-with the evidence required in **Verification and evidence policy**.
+with its commit, and update the status table in the same commit. A phase or matrix row changes to
+**Verified** only with the evidence required in **Verification and evidence policy**.
 
 ## Status at a glance
 
@@ -25,22 +26,21 @@ Updated 2026-09-25. Plan baseline dated 2026-09-23.
 
 > **Paused 2026-09-25.** General-chart work is paused after the R3 range-bar batch (`3fe3b22`,
 > recorded in `e063e9c`) so trading and order-flow work in [Expansion.md](Expansion.md) proceeds
-> first. Do not start new R0–R8 batches during the pause. Fixes to delivered general-chart behavior,
+> first. Do not start new G1–G8 batches during the pause. Fixes to delivered general-chart behavior,
 > and shared work required by Expansion.md (cross-chart sync PD5 and image export PD6, which R4
-> later extends), remain allowed. Resume with R0 when the maintainer lifts the pause, because the
-> trading journal will need the general charts, then continue in dependency order.
+> later extends), remain allowed. Resume with G1 (R0 and R1) when the maintainer lifts the pause,
+> because the trading journal will need the general charts, then continue in dependency order.
 
-| Phase | Scope | Status | Done so far | Next |
-| --- | --- | --- | --- | --- |
-| R0 | Auditable competitive baseline | **Open (paused)** | — | Resume point: pin Recharts version, map the matrix, reconcile docs |
-| R1 | Lifecycle and mutable object foundations | **Open** | — | Standalone general creation, in-place mutations, failure cleanup |
-| R2 | Scales, axes and responsive layout | **Open** | — | Temporal ticks and views, grid and zero lines, multiple axes |
-| R3 | Cartesian visual and data semantics | **In progress (paused)** | 9 delivered R3 slices (see **Delivered work**) | Bars and stacks, gradients, error bars, composition, per-item styling |
-| R4 | Components and interaction | **Open** | — | Legend, tooltip, brush, selection, sync (shared with Expansion.md PD5), export (PD6) |
-| R5 | React and framework-neutral authoring | **Open** | — | Composable components over complete mutations |
-| R6 | Polar families and transitions | **Open** | — | Polar transforms, pie/donut, radar, radial bar, polar area, animation |
-| R7 | Hierarchy and flow families | **Open** | — | Funnel, treemap, Sankey, sunburst |
-| R8 | Parity closure and release readiness | **Open** | — | Full matrix verification against the pinned competitor |
+| Batch | Phase | Scope | Status | Done so far | Next |
+| --- | --- | --- | --- | --- | --- |
+| G1 | R0 + R1 | Competitive baseline, lifecycle and mutable object foundations | **Open (paused)** | — | Resume point: pin Recharts version, map the matrix, standalone creation, in-place mutations, failure cleanup |
+| G2 | R2 | Scales, axes and responsive layout | **Open** | — | Temporal ticks and views, grid and zero lines, multiple axes |
+| G3 | R3 | Cartesian visual and data semantics (remainder) | **In progress (paused)** | 9 delivered R3 slices (see **Delivered work**) | Bars and stacks, gradients, error bars, composition, per-item styling |
+| G4 | R4 | Components and interaction | **Open** | — | Legend, tooltip, brush, selection, sync (extends Expansion.md PD5), export (PD6) |
+| G5 | R5 | React and framework-neutral authoring | **Open** | — | Composable components over complete mutations |
+| G6 | R6 | Polar families and transitions | **Open** | — | Polar transforms, pie/donut, radar, radial bar, polar area, animation |
+| G7 | R7 | Hierarchy and flow families | **Open** | — | Funnel, treemap, Sankey, sunburst |
+| G8 | R8 | Parity closure and release readiness | **Open** | — | Full matrix verification against the pinned competitor |
 
 Notes:
 
@@ -48,7 +48,33 @@ Notes:
   and its exit criteria pass.
 - No phase and no coverage-matrix row is verified yet. No competitive parity or release-completion
   claim should be inferred from delivered slices.
-- Work proceeds in large batches per **Work cadence** in [AGENTS.md](../AGENTS.md).
+
+## How work is delivered
+
+Work proceeds in **large batches**, as defined in **Work cadence** in [AGENTS.md](../AGENTS.md).
+Each batch is one row of the status table: a whole phase (R0 and R1 ship together as G1), not one
+option or one series family at a time. Delivered items 1–9 were single-option slices; that cadence
+is retired.
+
+- **Implement the whole batch first.** Build every checklist item in the phase, with its regression
+  tests and fixtures written as each item is built. Do not stop between items for full gates,
+  commits or pushes.
+- **Focused checks while implementing.** `cargo check`, unit tests and `cargo clippy` for touched
+  crates, and frame fixtures for the affected families. Nothing broader.
+- **One full gate at the end.** Run the complete gates in **Verification and evidence policy** once,
+  plus Playwright when the batch changes browser-facing behavior and GPUI parity/replay when it
+  changes GPUI execution. Fix every failure and rerun until green. If the cause is unclear, rerun
+  focused checks item by item.
+- **One commit and push per batch.** Commit with a structured message listing delivered checklist
+  items and verification, then push `main`. Never commit a batch with a failing or skipped required
+  gate.
+- **Update this file in the same commit.** Tick the checklist, update **Delivered work** and the
+  status table, and update `docs/Architecture.md` when ownership or execution paths changed.
+- **Manual evidence at phase closure, not per batch.** Screenshots, accessibility review,
+  competitor comparisons and recorded benchmarks are collected once, when the phase closes.
+
+A batch may be split into two commits only when it is too large to review as one, and each part
+must pass the full gate on its own.
 
 ## Delivered work
 
@@ -66,7 +92,7 @@ All items below are implemented and pushed to `github/main`. They belong to R3.
 | 8 | Bounded persisted `fill_opacity` on area and range-area fills (ordinary, stacked, coupled-band), preserving the gradient relationship; Rust persistence, WASM serialization, TypeScript options, Chromium/Firefox/WebKit round-trip coverage | `1db0dfe` | Workspace tests, workspace and WASM clippy, package lint/build/typecheck/smoke test, general-chart browser matrix (88 passed, 2 skipped) |
 | 9 | Category `range_bar` series with low/high bounds, shared rectangle geometry and exact hits, typed/object browser ingestion, persistence-compatible kind mapping, accessibility text, and browser/native regression coverage | `3fe3b22` | Engine tests (including logarithmic Y geometry), workspace tests/clippy/WASM clippy, package lint/build/typecheck/pack smoke, native release perf gate, and the full Chromium/Firefox/WebKit browser suite (363 passed, 15 skipped) |
 
-Slice gates for delivered R3 items: applicable Rust tests, clippy (including the WASM target), package
+Slice gates for delivered R3 items (historical; remaining work uses batch gates): applicable Rust tests, clippy (including the WASM target), package
 lint/build/typecheck/package smoke test, Chromium browser tests, formatting checks and the native
 release performance gate.
 
@@ -101,15 +127,14 @@ assertions that every listed feature is absent.
 ## Phases
 
 All phases are open unless marked otherwise in **Status at a glance**. Existing implementation
-counts toward a phase only after its required behavior is demonstrated. Deliver work in large
-dependency-complete batches as defined in **Work cadence** in [AGENTS.md](../AGENTS.md): a batch covers
-a whole capability area, such as the R2 axis contract or all remaining R3 bar and stack semantics,
-rather than one option at a time. Do not delay fixes until a large framework rewrite, and do not
-skip foundation work to add a demo chart.
+counts toward a phase only after its required behavior is demonstrated. Each phase is delivered as
+one batch (see **How work is delivered**); its last checklist item is the batch gate, commit and
+push. Do not delay fixes until a large framework rewrite, and do not skip foundation work to add a
+demo chart.
 
 ### R0 — Auditable competitive baseline
 
-**Depends on:** nothing. **Status:** open.
+**Batch:** G1, together with R1. **Depends on:** nothing. **Status:** open, paused.
 
 - [ ] Pin the Recharts release and source revision; retain the existing financial competitor
       baseline.
@@ -130,13 +155,14 @@ paths accompany future status changes. Unverified rows stay open.
 
 ### R1 — Lifecycle and mutable object foundations
 
-**Depends on:** R0. **Status:** open.
+**Batch:** G1, together with R0. **Depends on:** R0. **Status:** open.
 
 - [ ] Initial general-domain creation through the canonical constructor.
 - [ ] Last-pane ownership defined together with adapter ownership.
 - [ ] Atomic in-place axis and series mutations through all public boundaries.
 - [ ] Failed installation and cleanup fixed.
 - [ ] Visibility and ordering affect domains, legends, hits and exports consistently.
+- [ ] G1 full gate green (R0 and R1 items); batch committed and pushed.
 
 **Exit:** standalone general and mixed charts can create, update, rebind, reorder, hide, remove and
 restore through actual browser and native paths. Invalid operations leave prior state intact.
@@ -145,7 +171,7 @@ mount and dispose release resources.
 
 ### R2 — Scale, axis and responsive layout contracts
 
-**Depends on:** R1. **Status:** open.
+**Batch:** G2. **Depends on:** R1. **Status:** open.
 
 - [ ] Temporal ticks, formatting and view operations.
 - [ ] Category behavior, including zoom/pan and duplicate labels.
@@ -157,6 +183,7 @@ mount and dispose release resources.
 - [ ] Axis titles.
 - [ ] Small-container behavior.
 - [ ] Every reviewed silent-option gap corrected.
+- [ ] G2 full gate green; batch committed and pushed.
 
 **Exit:** deterministic domain and coordinate round trips and frame fixtures cover all supported
 scale and orientation combinations. Browser resize, font, DPR, pointer and keyboard view tests agree
@@ -165,7 +192,8 @@ enforced bound.
 
 ### R3 — Cartesian visual and data semantics
 
-**Depends on:** R1–R2. **Status:** in progress, paused (see **Status at a glance**).
+**Batch:** G3 (all remaining items in one batch). **Depends on:** R1–R2. **Status:** in progress,
+paused (see **Status at a glance**).
 
 - [x] Line width (item 1).
 - [x] Line dash styles (item 2).
@@ -184,6 +212,7 @@ enforced bound.
 - [ ] Composition of families on shared axes.
 - [ ] Audit existing box plot, heatmap and bubble behavior rather than rewriting completed storage
       and geometry.
+- [ ] G3 full gate green; batch committed and pushed.
 
 **Exit:** each family passes object and typed ingestion, atomic updates, missing, duplicate and
 extreme data, visibility and stack changes, exact and nearest hits, labels, accessibility,
@@ -192,7 +221,7 @@ fixtures demonstrate bounded work.
 
 ### R4 — Chart components and interaction
 
-**Depends on:** R1–R3. **Status:** open.
+**Batch:** G4. **Depends on:** R1–R3. **Status:** open.
 
 - [ ] Usable default legends and tooltips.
 - [ ] Titles and labels.
@@ -203,6 +232,7 @@ fixtures demonstrate bounded work.
       charts as [Expansion.md](Expansion.md) PD5.
 - [ ] Frame image export, extending the shared contract delivered first as Expansion.md PD6.
 - [ ] Localization, overflow and focus behavior.
+- [ ] G4 full gate green; batch committed and pushed.
 
 R4 extends the PD5 and PD6 contracts to general domains and chrome; it does not build a second
 synchronization or export path.
@@ -214,12 +244,13 @@ snapshots.
 
 ### R5 — React and framework-neutral authoring
 
-**Depends on:** R1–R4. **Status:** open.
+**Batch:** G5. **Depends on:** R1–R4. **Status:** open.
 
 - [ ] Composable components and typed data mapping over canonical handles.
 - [ ] Controlled and uncontrolled behavior where applicable, events and documented defaults.
 - [ ] Migration recipes from Recharts.
 - [ ] Equivalent imperative composition for hosts that do not use React.
+- [ ] G5 full gate green; batch committed and pushed.
 
 **Exit:** packed-consumer examples cover standalone, composed, synchronized and financial/general
 charts. Prop changes retain engine identities; failure, Strict Mode and concurrent lifecycle tests
@@ -228,7 +259,7 @@ repository paths.
 
 ### R6 — Polar families and shared transitions
 
-**Depends on:** R2–R5. **Status:** open.
+**Batch:** G6. **Depends on:** R2–R5. **Status:** open.
 
 - [ ] Angular and radial transforms with shared sector and polygon geometry.
 - [ ] Pie and donut.
@@ -237,6 +268,7 @@ repository paths.
 - [ ] Polar area.
 - [ ] Shared general transitions for every family, including existing Cartesian families, with
       interruption and reduced-motion behavior.
+- [ ] G6 full gate green; batch committed and pushed.
 
 **Exit:** all polar variants cover degenerate, zero and missing data, angles and radii, label
 collision, legends, selection, keyboard navigation, persistence and every executor. Fixed-clock
@@ -245,12 +277,13 @@ animation scheduling.
 
 ### R7 — Hierarchy and flow families
 
-**Depends on:** the lifecycle, layout and primitive contracts above. **Status:** open.
+**Batch:** G7. **Depends on:** the lifecycle, layout and primitive contracts above. **Status:** open.
 
 - [ ] Funnel.
 - [ ] Treemap.
 - [ ] Sankey.
 - [ ] Sunburst, using shared polar geometry where appropriate.
+- [ ] G7 full gate green; batch committed and pushed.
 
 Each is a dedicated engine layout family with typed validated inputs; do not reuse incompatible XY
 storage merely to avoid a proper owner.
@@ -262,7 +295,7 @@ required for competitive closure.
 
 ### R8 — Parity closure and release readiness
 
-**Depends on:** R0–R7. **Status:** open.
+**Batch:** G8. **Depends on:** R0–R7. **Status:** open.
 
 - [ ] Run the complete matrix against the pinned competitor.
 - [ ] Demonstrate financial-only, general-only and combined workloads.
@@ -270,6 +303,7 @@ required for competitive closure.
 - [ ] Export, backend fallback and device-recovery evidence.
 - [ ] Clean-install evidence.
 - [ ] Recheck upstream scope; record and assess new upstream features explicitly.
+- [ ] G8 full gate green; release evidence committed and pushed.
 
 **Exit:** every required matrix row is verified or has a maintainer-approved, clearly documented
 semantic alternative that satisfies the user task. No required family remains demand-deferred.

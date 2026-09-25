@@ -83,10 +83,10 @@ A passing unit test that bypasses the real host or executor path is not sufficie
 Delivery speed matters. Work in large, coherent batches and verify each batch completely once,
 instead of stopping to run the complete gates after every small change.
 
-- **Batch.** A batch is a coherent capability area that is dependency-complete on its own, for
-  example a full plan phase section, several related coverage-matrix rows, or one `plan/Expansion.md`
-  foundation with its dependent items. Implement every slice in the batch before running the
-  complete gates. Do not pause between slices for complete gates, commits, or pushes.
+- **Batch.** A batch is one row of a plan's status table: a `plan/Expansion.md` batch (B1–B9) or a
+  `plan/plan.md` batch (G1–G8). Each is a dependency-complete capability area, never a single
+  option or item. Implement every slice in the batch before running the complete gates. Do not
+  pause between slices for complete gates, commits, or pushes.
 - **While implementing.** Run only focused checks for what changed: `cargo check`, unit tests and
   `cargo clippy` for the touched crates, and the frame fixtures of the affected families. Write the
   regression tests and fixtures for each slice as it is built so the batch gate exercises them.

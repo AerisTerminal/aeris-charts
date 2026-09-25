@@ -1,15 +1,327 @@
 # Aeris Charts Trading Expansion Plan
 
-## Decision and scope
-
 Aeris Charts will become a complete **headless** professional trading chart engine: order flow,
 market depth, non-time bars, a professional indicator catalog, and a drawing system whose every
 tool is as configurable as the tools in mature trading platforms. The primary consumer is the
 Aeris Terminal GPUI platform; browser hosts consume the same engine through WASM.
 
-Headless means Aeris owns semantics and pixels inside the chart, never application chrome:
+This is the **active program** (since 2026-09-25). [plan.md](plan.md) covers general
+(non-financial) chart families and is paused. Both plans share one `ChartEngine` and one frame
+contract.
 
-| Aeris owns | Hosts own |
+How to read this file:
+
+1. **Status at a glance**: where every batch stands.
+2. **How work is delivered**: the batch, gate and commit rules.
+3. **Batches B1–B9**: the work itself, as checklists with exit criteria.
+4. **Scope and ownership**: what the engine owns, what hosts own, what is out of scope.
+5. **Current baseline**: what exists today.
+6. **Architecture principles**: standing rules for every batch.
+7. **Specifications**: detailed requirements for foundations F1–F6 and platform contracts PD1–PD10.
+8. **Catalogs**: order-flow (OF), chart-type (CT), indicator (I) and drawing items.
+9. **Verification and completion**: evidence required per item and for the whole plan.
+
+Item IDs (F, OF, CT, I, PD) are stable and referenced by the platform roadmap
+(`plan/trading_platform_feature_roadmap.md` in the Aeris Terminal repository). Batches group those
+items; they do not renumber them.
+
+## Status at a glance
+
+Updated 2026-09-25. Baseline source-confirmed 2026-09-24.
+
+| Batch | Scope | Unblocks on the platform | Status |
+| --- | --- | --- | --- |
+| B1 | Platform chart contracts: PD1, PD3, PD4, PD5, PD6, PD7 | Risk warnings on order lines, economic events and risk windows, trade review markers, linked charts, journal images, fundamentals | **Next** |
+| B2 | Drawing model and customization: F5, schema conventions, existing tools | Configurable drawings, templates, drawing sync across cells | Open |
+| B3 | Shared tape and order flow: F2, OF1, OF2, OF11, OF12, PD10 | Footprint, CVD, delta, big-trade bubbles | Open |
+| B4 | Study inputs and core indicators: F4, OF9, CT1, CT2, CT6, I1 | Professional indicator set, VWAP bands, Heikin Ashi, comparisons | Open |
+| B5 | Non-time bars and replay: F1, OF14, CT3, CT4, PD2 | Tick/volume/range charts, session replay, trade review playback | Open |
+| B6 | Depth: F3, OF15–OF18, PD8, PD9 | Liquidity heatmap, order-level markers, depth studies | Open |
+| B7 | Profiles and resampling: F6, OF3–OF8, OF10, CT5 | Session/composite profiles, TPO, anchored VWAP, multi-timeframe studies | Open |
+| B8 | Drawing catalog expansion | Full professional drawing toolset | Open |
+| B9 | Breadth and extension: I2, I3, I4, OF13 | Remaining indicators, custom studies, auction markers | Open |
+
+Ordering: B1–B3 serve the platform's first phase and are independent of each other. B4 must land
+before B7 (OF10 needs F4), B2 before B7 and B8 (they need F5), B3 before B5 and B6 (replay and the
+heatmap reuse the shared tape), and B5 before B6 (depth extends the replay checkpoints). Change the
+order only when platform priorities change, and record it here.
+
+## How work is delivered
+
+Work proceeds in **large batches**, as defined in **Work cadence** in [AGENTS.md](../AGENTS.md). A
+batch is one whole row of the status table, not one item or option.
+
+- **Implement the whole batch first.** Build every checklist item in the batch, with its regression
+  tests and fixtures written as each item is built. Do not stop between items for full gates,
+  commits or pushes.
+- **Focused checks while implementing.** `cargo check`, unit tests and `cargo clippy` for touched
+  crates, and frame fixtures for the affected families. Nothing broader.
+- **One full gate at the end.** Run the complete gates from AGENTS.md once, plus Playwright when the
+  batch changes browser-facing behavior and GPUI parity/replay when it changes GPUI execution. Fix
+  every failure and rerun until green. If the cause is unclear, rerun focused checks item by item.
+- **One commit and push per batch.** Commit with a structured message listing delivered item IDs and
+  verification, then push `main`. Never commit a batch with a failing or skipped required gate.
+- **Update this file in the same commit.** Tick the batch's checklist, set its status, and update
+  `docs/Architecture.md` when ownership, data flow or execution paths changed.
+- **Manual evidence at milestones, not per batch.** Themed and overflow screenshots, accessibility
+  review, competitor comparisons and recorded benchmarks are collected when B3, B6 and B9 close.
+
+A batch may be split into two commits only when it is too large to review as one, and each part
+must pass the full gate on its own.
+
+## Batches
+
+Each checklist item refers to its specification or catalog entry for the detailed requirement.
+An item is ticked only when it works through the real host and executor paths (Rust, WASM and
+TypeScript, and the GPUI host), not when engine unit tests alone pass.
+
+### B1 — Platform chart contracts
+
+**Scope:** PD1, PD3, PD4, PD5, PD6, PD7. **Depends on:** the existing trading layer, workspace and
+series paths. **Status:** next.
+
+These extend existing layers without new foundations, and the platform needs them first.
+
+- [ ] **PD1** Host annotations on working orders and positions: bounded list, semantic tones,
+      tooltip text, shared layout with the existing chips, deterministic overflow collapse, exact
+      hit-testing, caps and atomic rejection of invalid annotations.
+- [ ] **PD4** Execution marker variants (circle, arrow, triangle, optional size by quantity) and
+      round-trip connectors with host result labels colored by outcome, identifier hit-testing and
+      caps.
+- [ ] **PD3** Host event layer: typed event markers and shaded time windows on price and study
+      panes, LOD collapse, hit-testing to host identifiers, caps, and exclusion from drawing
+      persistence and undo history.
+- [ ] **PD7** Sparse fundamental series: confirm or extend `LineType::WithSteps` step-after
+      semantics, add column/histogram presentation in its own pane, and add as-of release labels.
+      Replay no-look-ahead is verified in B5.
+- [ ] **PD5** Cross-chart synchronization: read and set external crosshair and visible time range,
+      semantic events with source and revision, echo-loop prevention, and subscription removal on
+      disposal. Built once so plan.md R4 can reuse it for general charts.
+- [ ] **PD6** Native and GPUI image export: RGBA output at a requested size and scale, optional
+      crosshair and trading layer, the same composition rules as the browser `take_screenshot`, and
+      no disturbance to live state or frame pacing. Works for financial and general panes.
+- [ ] `docs/Architecture.md` updated for the new host contracts.
+- [ ] Full gate green; batch committed and pushed.
+
+**Exit:** every PD exit criterion above passes on GPUI and in the browser, and live-rate updates to
+annotations do not rebuild unrelated trading geometry.
+
+### B2 — Drawing model and customization
+
+**Scope:** F5 and the typed schema conventions shared with F4. **Depends on:** nothing new.
+**Status:** open.
+
+This fixes the biggest customization gap before new tools are added, so B8 builds on the final
+model.
+
+- [ ] Record reference behavior for the drawing family and a release performance baseline for
+      drawings.
+- [ ] Typed schema conventions (parameter and property descriptors: name, type, range, default)
+      shared by drawings and studies.
+- [ ] Drawing split into a common core plus a typed per-kind option block; property exceptions
+      recorded per tool in the catalog.
+- [ ] Identity and state: stable ID, name, group, revision, visible, locked, z-order operations,
+      per-interval visibility.
+- [ ] Stroke, line ends, extension and fill properties from the F5 contract.
+- [ ] One shared text layout path (measurement, alignment, placement, box, clipping, wrap) used by
+      every tool; the existing trend-line text becomes one instance of it.
+- [ ] Toggleable labels and statistics per tool, with label positions.
+- [ ] Numeric anchor read/write, scale and pane binding, and magnet modes (off, weak, strong).
+- [ ] Level-list contract (values, colors, visibility, styles, fills between levels) ready for B8
+      level tools.
+- [ ] Atomic property patches validated against the schema; each property change is one undo/redo
+      entry.
+- [ ] Style templates as data: per-tool default overrides, named templates, validation,
+      export/import.
+- [ ] Management: object tree snapshot, multi-select, group move/lock/hide, clone, copy/paste
+      payloads, bulk remove, and cross-cell sync through revisioned payloads without echo loops.
+- [ ] All ten existing tools migrated to the contract.
+- [ ] Lossless persistence migration from V1/V2 drawings.
+- [ ] Executor parity fixtures for text on lines, shapes and level tools.
+- [ ] `docs/Architecture.md` updated; full gate green; batch committed and pushed.
+
+**Exit:** the F5 exit criterion passes: every existing tool supports the common contract, a host
+builds a generic property panel from schemas alone, and old layouts migrate.
+
+### B3 — Shared tape and order flow
+
+**Scope:** F2, OF1, OF2, OF11, OF12, PD10. **Depends on:** the existing footprint.
+**Status:** open.
+
+- [ ] Record reference behavior and release baselines for footprint and tape-derived studies.
+- [ ] **F2** Chart-level trade stream handle keyed by host instrument stream; footprint rebound to
+      it; classification once per event; revisions; per-dependent incremental state with a rebuild
+      path; memory telemetry per stream and per dependent. Checkpoints are designed so F1 bars and
+      PD2 seeks can use them.
+- [ ] **OF1** Cumulative volume delta pane (candles or line; session, continuous and anchored
+      reset).
+- [ ] **OF2** Bar delta histogram, delta %, max/min delta and buy/sell/unknown volume split.
+- [ ] **OF11** Large-trade bubbles and volume dots with size by volume, color by side, threshold
+      filters and consecutive-print aggregation, on a bounded marker primitive path.
+- [ ] **OF12** Footprint variants: profile-in-bar, volume ladder, horizontal imbalance, delta-only
+      and bid/ask histogram cells.
+- [ ] **PD10** Release benchmarks for dense footprint text on GPUI and WebGPU; shared caching of
+      repeated numeric runs where measurement shows shaping dominates; budgets added to `perf_gate`.
+- [ ] Early F1 design note in `docs/Architecture.md` so later work does not assume the second-based
+      axis.
+- [ ] Full gate green; batch committed and pushed.
+- [ ] Milestone evidence: screenshots, accessibility review and recorded benchmarks for order flow.
+
+**Exit:** the F2 exit criterion passes (footprint and CVD share one tape, a late trade updates both,
+retention evicts both), and PD10 budgets hold on GPUI.
+
+### B4 — Study inputs and core indicators
+
+**Scope:** F4, OF9, CT1, CT2, CT6, indicator tier I1. **Depends on:** B2 schema conventions.
+**Status:** open.
+
+- [ ] **F4** `IndicatorInput` gains open; selectable sources (open, high, low, close, hl2, hlc3,
+      ohlc4, hlcc4, any indicator output); multi-input bindings with typed validation; typed
+      parameter schemas and output descriptors; per-output style persisted; study bindings in the
+      next persistence schema version.
+- [ ] **OF9** VWAP standard-deviation and percent bands with session, weekly and monthly reset.
+- [ ] **CT1** Hollow candles, columns, high-low bars, step line, line with markers.
+- [ ] **CT2** Heikin Ashi with real OHLC exposed separately for trading and crosshair.
+- [ ] **CT6** Symbol comparison overlays with a shared comparison anchor and per-symbol legend
+      values.
+- [ ] **I1 moving averages:** HMA, VWMA, DEMA, TEMA, SMMA/RMA.
+- [ ] **I1 trend:** ADX/DMI, Parabolic SAR, SuperTrend, Ichimoku.
+- [ ] **I1 channels and volatility:** Keltner Channels, Donchian Channels, standard deviation.
+- [ ] **I1 oscillators:** CCI, Williams %R, Stochastic RSI, ROC/Momentum, MFI.
+- [ ] **I1 volume:** Volume study with MA, OBV, CMF.
+- [ ] **I1 levels:** pivot points (standard, Fibonacci, Camarilla, Woodie, DeMark), ZigZag.
+- [ ] Every indicator has incremental state, rebuild equivalence, a typed schema, persistence and an
+      independently computed reference fixture.
+- [ ] `docs/Architecture.md` updated; full gate green; batch committed and pushed.
+
+**Exit:** the F4 exit criterion passes (RSI of hlc3, SMA of that RSI and a Bollinger band fill
+round-trip through persistence and render identically on every executor) and every I1 fixture
+matches its reference.
+
+### B5 — Non-time bars and replay
+
+**Scope:** F1, OF14, CT3, CT4, PD2 for bars and tape. **Depends on:** B3. **Status:** open.
+
+This is the largest architectural change in the plan.
+
+- [ ] **F1** Bar-sequence domain: each logical index is a bar with open and close time in
+      microseconds; labels, crosshair, ticks and gaps derive from bar times; drawings, alerts,
+      trading lines and markers store bar plus time and rebase on prepend and rebuild; declared
+      rules for which series may share a non-time pane.
+- [ ] One shared tick, volume and range aggregator used by candles and footprint; footprint
+      trade-count and volume policies become chart-integrated.
+- [ ] **OF14 / CT3** Tick, volume and range candles, with footprint on the same bars.
+- [ ] **CT4** Renko (fixed box or ATR), Line Break, Kagi, Point & Figure.
+- [ ] **PD2** Replay clock supplied by the host; replay cursor; masking of everything after the
+      clock in every series, study, footprint cell and marker; checkpoint-based seek backward with
+      reported cost; bulk ordered ingest for trades and bars; live and replay share code paths.
+- [ ] PD7 no-look-ahead verified in replay fixtures.
+- [ ] `perf_gate` covers tip append without rebuilding closed bars and 100× replay with flat memory.
+- [ ] `docs/Architecture.md` updated; full gate green; batch committed and pushed.
+
+**Exit:** the F1 and PD2 exit criteria pass: many-bars-per-second and gap fixtures render on every
+executor, drawings survive prepend and rebuild, and seek-back equals a fresh load to the same
+clock.
+
+### B6 — Depth
+
+**Scope:** F3, OF15, OF16, OF17, OF18, PD8, PD9, PD2 for depth. **Depends on:** B3 and B5.
+**Status:** open.
+
+- [ ] **F3** Order-book model: snapshot and incremental level ingest with tick-grid validation,
+      sequence-gap detection with typed resync requests, bounded live book, time-bucketed history
+      ring, queries (best bid/ask, size at price, cumulative depth, imbalance), and typed columnar
+      WASM ingest.
+- [ ] **PD8** Optional per-level order counts in depth ingest; typed microstructure event markers
+      (iceberg refill, pulled liquidity, size cluster, sweep) with caps and LOD collapse. Detection
+      stays in the platform.
+- [ ] **OF15 / PD9** Liquidity heatmap with color scaling, thresholds and trades overlaid, lowered to
+      a texture/image primitive with incremental live-edge column updates on every executor.
+- [ ] **OF16** DOM ladder data model for non-Aeris hosts.
+- [ ] **OF17** Depth studies: book imbalance, cumulative depth curve, minimum-size and
+      distance-from-touch filters.
+- [ ] **OF18** Time-and-sales view model for non-Aeris hosts.
+- [ ] **PD2** Replay extended to depth checkpoints and heatmap buckets.
+- [ ] `perf_gate` covers depth-update soak, heatmap frame and upload budgets.
+- [ ] `docs/Architecture.md` updated; full gate green; batch committed and pushed.
+- [ ] Milestone evidence: screenshots, accessibility review and recorded benchmarks for depth.
+
+**Exit:** the F3, PD8 and PD9 exit criteria pass: deterministic book replay, gap fixtures request
+resync, flat memory under soak, and the heatmap holds the target refresh rate on GPUI within parity
+tolerance of the rectangle reference.
+
+### B7 — Profiles and resampling
+
+**Scope:** F6, OF3–OF8, OF10, CT5. **Depends on:** B2, B3 and B4. **Status:** open.
+
+- [ ] **F6** Engine-owned OHLCV resampling with host-supplied session boundaries and explicit
+      timezone policy.
+- [ ] **OF3** Session, daily, weekly and composite volume profiles with developing POC/VAH/VAL.
+- [ ] **OF4** Fixed-range volume profile drawing.
+- [ ] **OF5** Anchored volume profile drawing.
+- [ ] **OF6** Naked POC and value-area extension until touched.
+- [ ] **OF7** Delta profile and bid/ask split profile.
+- [ ] **OF8** TPO / Market Profile: letters or blocks, initial balance, single prints, POC, value
+      area, split/merge sessions.
+- [ ] **OF10** Anchored VWAP drawing with bands.
+- [ ] **CT5** Higher-timeframe overlay candles.
+- [ ] Multi-timeframe study inputs (for example a daily RSI on a 5-minute chart).
+- [ ] `docs/Architecture.md` updated; full gate green; batch committed and pushed.
+
+**Exit:** tape and candle-mode profiles match reference fixtures, session boundaries come only from
+the host, and multi-timeframe studies rebuild deterministically.
+
+### B8 — Drawing catalog expansion
+
+**Scope:** every tool in the drawing catalog not yet delivered. **Depends on:** B2.
+**Status:** open.
+
+Every tool implements the F5 contract with schema, persistence, hit-testing and executor parity.
+
+- [ ] Lines: ray, extended line, info line, trend angle, cross line, arrow line.
+- [ ] Channels: parallel, regression trend, flat top/bottom, disjoint.
+- [ ] Fibonacci: retracement, trend-based extension, channel, time zones, trend-based time, speed
+      resistance fan and arcs, circles, spiral, wedge.
+- [ ] Pitchforks: Andrews, Schiff, modified Schiff, inside, pitchfan.
+- [ ] Projection and measuring: forecast, bars pattern, price range, date range, date and price
+      range, projection.
+- [ ] Annotations: anchored text, note, price note, callout, comment, price label, signpost, flag,
+      arrow markers, bounded icon stamps.
+- [ ] Gann: box, square, square fixed, fan.
+- [ ] Patterns: XABCD, cypher, ABCD, head and shoulders, triangle, three drives.
+- [ ] Elliott waves: impulse, correction, triangle, double and triple combinations with degree
+      labels.
+- [ ] Cycles: cyclic lines, time cycles, sine line.
+- [ ] Shapes: rotated rectangle, ellipse, circle, triangle, arc, curve, double curve, polyline,
+      highlighter, with shared geometry on every executor.
+- [ ] Full gate green; batch committed and pushed.
+
+**Exit:** every catalog tool is placeable, editable through its schema, persisted and identical on
+every executor.
+
+### B9 — Breadth and extension
+
+**Scope:** I2, I3, I4, OF13. **Depends on:** B3 and B4. **Status:** open.
+
+- [ ] **I2** Breadth indicator tier (see Indicator catalog).
+- [ ] **I3** Structure tier: swing points, structure breaks, fair value gaps, order blocks,
+      session and previous-period levels, opening range.
+- [ ] **I4** Typed custom study API in Rust and TypeScript: inputs, parameters, outputs,
+      incremental update and rebuild; the engine owns scheduling, bounds, styles, persistence and
+      rendering.
+- [ ] **OF13** Unfinished auctions, absorption and exhaustion markers with documented,
+      parameterized, deterministic rules.
+- [ ] `docs/Architecture.md` updated; full gate green; batch committed and pushed.
+- [ ] Milestone evidence: screenshots, accessibility review, competitor comparison and recorded
+      benchmarks for the whole plan.
+
+**Exit:** the Definition of completion below is met.
+
+## Scope and ownership
+
+Headless means Aeris Charts owns semantics and pixels inside the chart, never application chrome:
+
+| Aeris Charts owns | Hosts own |
 | --- | --- |
 | Validated data models (trades, depth, bars), aggregation, classification and derived studies | Market-data subscriptions, provider normalization, reconnection and resync requests |
 | Indicator and order-flow math, incremental updates, bounded caches | Symbol search, watchlists, exchange calendars and session definitions |
@@ -20,14 +332,25 @@ Headless means Aeris owns semantics and pixels inside the chart, never applicati
 
 A feature is not delivered until a host can build its complete UI from typed engine APIs without
 reimplementing chart math, and every executor (GPUI, WebGPU, Canvas2D, native) renders it from the
-same ordered frame. [Architecture.md](../docs/Architecture.md) remains the authority for current ownership;
-[plan.md](plan.md) covers general (non-financial) chart families. Both plans share one
-`ChartEngine` and one frame contract and proceed independently. As of 2026-09-25 this plan is the
-active program; plan.md is paused after its R3 range-bar batch.
+same ordered frame. [Architecture.md](../docs/Architecture.md) remains the authority for current
+ownership.
+
+Aeris Terminal's `market_runtime` is the canonical owner of order books, trades and order-level
+(market-by-order) state. Engine stores such as F2 and F3 are chart-side projections of the
+platform's publications, never a second canonical market model. Aeris Terminal also owns these
+outside the chart, so they are not engine work for that host:
+
+- **DOM ladder.** A GPUI widget fed by the platform's canonical order book. OF16 remains for other
+  hosts, such as browser consumers.
+- **Time and sales.** Rendered by the platform from its own trade tape. OF18 remains for other
+  hosts.
+- **Trading lock for risk lockouts.** The host stops forwarding trading gestures
+  (`trading_drag_start_at` and related calls), rejects drained `take_trading_intents`, and shows the
+  lock in its own chrome. No engine state is required.
 
 Out of scope: a Pine-style scripting language, a bundled UI kit, broker connectivity, datafeed
-adapters, and news/fundamental data. Custom studies are covered by a typed extension API (I4)
-rather than an interpreter.
+adapters, and news/fundamental data fetching. Custom studies are covered by the typed extension
+API (I4) rather than an interpreter.
 
 ## Current baseline
 
@@ -45,21 +368,21 @@ Source-confirmed on 2026-09-24. This is the starting point, not a claim of compl
 | Drawing styling | One flat `Drawing` struct for every kind. Stroke color/width/style shared. Fill, border, axis labels and bands are rectangle-only. Text alignment and `+ Add text` exist only on the trend line; box background/border only on the text tool | `Drawing`, `frame/drawings.rs` |
 | Drawing management | Selection, drag, undo/redo. No lock, hide, z-order, grouping, naming, per-interval visibility, templates or multi-select | `drawings.rs` |
 | Trading and alerts | Positions, orders, brackets/OCO, drag intents, bracket from position drawing; alert lines (host evaluates) | `trading.rs`, `alerts.rs` |
-| Workspace | Split-grid of chart cells with stable identities | `workspace.rs` |
-| Persistence | V1 panes and built-in drawings; V2 adds general datasets/series; indicators and profiles are recreated by hosts | `persistence.rs` |
-| Order book / depth | **Absent.** No Level 2 model, DOM, or liquidity heatmap. The feature heatmap accepts only host-precomputed cells and lowers each cell to its own rectangle primitive | `FeatureSeriesKind::Heatmap`, `HeatmapCell` |
-| Non-time bars | **Absent on chart.** The shared time axis has one logical row per UTC second | Footprint.md §3 |
+| Trading labels | Order and position chips are engine-formatted (quantity, kind, PnL); no host-supplied label or badge text | `trading_geometry.rs` |
 | Markers and executions | Series markers (circle, square, arrow up/down with optional text, size and price); point markers on line/area; trading executions drawn as B/S circles | `Marker`, `set_series_markers`, `frame/series_geometry.rs`, `TradingExecution`, `frame/trading_geometry.rs` |
 | Line and scale variants | Stepped lines (`LineType::WithSteps`); hollow candles through transparent body colors; percentage and indexed-to-100 price scales; price lines with host titles | `draw_list.rs`, `price_scale_core.rs`, `PriceLine` |
 | Native primitives | Series-attached vertical line, text and image watermarks, volume-profile handle | `native_primitives.rs` |
 | General charts | Step interpolation, bubble, heatmap grid, column, axis-bound reference regions (general panes only, not the financial time axis) | `general_series.rs` |
+| Workspace | Split-grid of chart cells with stable identities | `workspace.rs` |
+| Persistence | V1 panes and built-in drawings; V2 adds general datasets/series; indicators and profiles are recreated by hosts | `persistence.rs` |
 | Telemetry | WASM `frame_stats` (CPU/GPU ms, draw calls, rebuild counters, buffer traffic); `ChartEngine::memory_usage` structural attribution | `wasm/src/telemetry.rs`, `EngineMemoryUsage` |
 | Image export | Browser `take_screenshot` only; no native or GPUI image export | `packages/charts/src/types.ts` |
-| Trading labels | Order and position chips are engine-formatted (quantity, kind, PnL); no host-supplied label or badge text | `trading_geometry.rs` |
+| Order book / depth | **Absent.** No Level 2 model, DOM, or liquidity heatmap. The feature heatmap accepts only host-precomputed cells and lowers each cell to its own rectangle primitive | `FeatureSeriesKind::Heatmap`, `HeatmapCell` |
+| Non-time bars | **Absent on chart.** The shared time axis has one logical row per UTC second | Footprint.md §3 |
 | Cross-chart sync | **Absent.** Workspace cells never share crosshair, visible range or state | `workspace.rs` |
 | Replay | **Absent.** No playback cursor or future masking; hosts can only replace and append data | — |
 
-## Architecture principles for this expansion
+## Architecture principles
 
 - **One source of truth per market fact.** A trade tape or depth book is stored once per
   instrument stream and shared by every study and series derived from it. No study copies raw
@@ -72,20 +395,19 @@ Source-confirmed on 2026-09-24. This is the starting point, not a claim of compl
 - **Typed, not stringly.** Each study and drawing kind has a typed option struct with validation and
   defaults. Hosts receive typed schemas (name, type, range, default) to generate their property
   panels; the engine never renders dialogs.
-- **Shared geometry, not per-backend features.** New shapes (ellipses, arcs, arrows, gradient-free
-  level fills, bubbles) are lowered to existing or new backend-neutral primitives implemented by
-  every executor before a feature is complete.
+- **Shared geometry, not per-backend features.** New shapes (ellipses, arcs, arrows, level fills,
+  bubbles) are lowered to existing or new backend-neutral primitives implemented by every executor
+  before a feature is complete.
 - **No invented data.** Nothing guesses aggressor sides, fabricates timestamps for non-time bars, or
   rounds off-grid prices. Unknowns stay unknown and are reported.
-- Follow [AGENTS.md](../AGENTS.md): no speculative crates, traits, plugin registries or feature flags.
-  Extract modules only when a real responsibility justifies it.
+- Follow [AGENTS.md](../AGENTS.md): no speculative crates, traits, plugin registries or feature
+  flags. Extract modules only when a real responsibility justifies it.
 
-## Foundations
+## Specifications
 
-These unblock most of the catalog. Each foundation ships with a public API, tests through the real
-host paths, and an Architecture.md update.
+### Foundations
 
-### F1 — Logical bar identity for non-time bars
+#### F1 — Logical bar identity for non-time bars
 
 **Problem.** The time axis maps one logical row to one UTC second. Tick, volume, range, Renko,
 Kagi, Point & Figure and Line Break bars can produce several bars within one second, or bars
@@ -111,7 +433,7 @@ whose position is not a function of time at all. Footprint.md already forbids fa
 and gap fixtures pass; drawings survive history prepend and rebuild; performance gate shows tip
 append without rebuilding closed bars.
 
-### F2 — Shared trade tape and tape-derived studies
+#### F2 — Shared trade tape and tape-derived studies
 
 **Problem.** The footprint series owns its tape. CVD, delta histograms, trade bubbles, tape-based
 volume profiles and VWAP-from-trades must read the same classified trades without duplicating them.
@@ -129,7 +451,7 @@ volume profiles and VWAP-from-trades must read the same classified trades withou
 **Exit.** A footprint series and a CVD study share one tape (verified by memory telemetry), a late
 trade updates both consistently, and retention evicts tape and derived state together.
 
-### F3 — Order-book (Level 2) depth model
+#### F3 — Order-book (Level 2) depth model
 
 **Problem.** A liquidity heatmap and DOM ladder need historical and live resting liquidity per
 price level. No such model exists; the current heatmap series only accepts precomputed cells.
@@ -148,7 +470,7 @@ price level. No such model exists; the current heatmap series only accepts preco
 **Exit.** Deterministic replay of a recorded snapshot-plus-update stream yields identical book
 states; gap fixtures request resync; memory stays flat under a sustained update soak.
 
-### F4 — Study input model
+#### F4 — Study input model
 
 **Problem.** Indicators only receive high, low, close and volume, and always use close as the price
 source. Professional studies need open, selectable sources and multi-input bindings.
@@ -169,7 +491,7 @@ source. Professional studies need open, selectable sources and multi-input bindi
 **Exit.** An RSI of hlc3, an SMA of that RSI, and a Bollinger band fill round-trip through
 persistence and render identically on every executor.
 
-### F5 — Drawing model and customization contract
+#### F5 — Drawing model and customization contract
 
 **Problem.** One flat struct serves every tool; fill, border, labels and bands are
 rectangle-specific; text layout is hard-coded to the trend line and text tool. This cannot scale to
@@ -178,8 +500,6 @@ rectangle-specific; text layout is hard-coded to the trend line and text tool. T
 **Required outcome.** A drawing becomes a common core plus a typed per-kind option block. The
 common contract applies to **every** tool unless a property is meaningless for its geometry, and
 that exception is recorded in the tool's catalog entry.
-
-Common properties:
 
 | Group | Properties |
 | --- | --- |
@@ -217,7 +537,7 @@ Engine responsibilities around the contract:
 builds a generic property panel from schemas alone; persistence migrates old layouts; executor
 parity fixtures cover text placement on lines, shapes and level tools.
 
-### F6 — Engine-owned OHLCV resampling
+#### F6 — Engine-owned OHLCV resampling
 
 Hosts own feeds, but higher-timeframe views and multi-timeframe studies need deterministic
 aggregation of a lower-timeframe source into higher-timeframe bars with host-supplied session
@@ -225,110 +545,14 @@ boundaries. This powers multi-timeframe study inputs, session and weekly profile
 chart types without host-side re-aggregation. Timezone and session policy come from the host
 explicitly; the engine never uses the browser timezone.
 
-## Order-flow catalog
+### Platform contracts
 
-Each item names its data source and dependency. "Candle" means the item also works in a
-candle-only approximation mode that is clearly labeled as such; tape items never silently fall back.
+The Aeris Terminal roadmap adds risk controls, session replay, trade review, order-level analytics
+and fundamentals context. Rule evaluation, recording storage, data fetching and every panel or
+dialog stay in the platform. These items are what the engine must provide so the platform renders
+those features from typed APIs without reimplementing chart math.
 
-| ID | Item | Source | Depends on | Notes |
-| --- | --- | --- | --- | --- |
-| OF1 | Cumulative volume delta (CVD) pane: candles or line, session/continuous/anchored reset | Tape | F2 | Session delta already exists inside footprint bars; expose it as a proper series |
-| OF2 | Bar delta histogram, delta %, max/min delta, volume split (buy/sell/unknown) histogram | Tape | F2 | |
-| OF3 | Session, daily, weekly, composite volume profiles with developing POC/VAH/VAL lines | Tape (candle mode available) | F2, F6 | Replaces candle-only approximation for tape users |
-| OF4 | Fixed-range volume profile drawing | Tape or candle | F2, F5 | Drawing whose statistics come from the engine |
-| OF5 | Anchored volume profile drawing | Tape or candle | F2, F5 | |
-| OF6 | Naked (virgin) POC and value-area level extension until touched | Tape | OF3 | |
-| OF7 | Delta profile and bid/ask split profile | Tape | OF3 | |
-| OF8 | TPO / Market Profile: letters or blocks, initial balance, single prints, POC, value area, split/merge sessions | Candle or tape | F6 | Period and session boundaries are host-supplied |
-| OF9 | VWAP standard-deviation and percent bands; session/weekly/monthly reset | Candle or tape | F4 | Extends existing VWAP |
-| OF10 | Anchored VWAP drawing with bands | Candle or tape | F4, F5 | |
-| OF11 | Large-trade bubbles and volume dots: size by volume, color by side, threshold filters, aggregation of consecutive prints | Tape | F2 | New bounded marker primitive path |
-| OF12 | Footprint variants: profile-in-bar, volume ladder, horizontal imbalance mode, delta-only, bid/ask histogram cells | Tape | F2 | Extends existing footprint LOD |
-| OF13 | Unfinished auctions, absorption and exhaustion markers with explicit documented rules | Tape | OF12 | Rules must be deterministic and parameterized, never heuristic black boxes |
-| OF14 | Tick, volume and range candles; footprint on the same bars | Tape | F1 | Trade-count and volume aggregators already exist |
-| OF15 | Liquidity heatmap (resting depth over time) with color scaling, thresholds, and trades overlaid | Depth + tape | F3, OF11 | Bounded by visible time buckets × visible price rows |
-| OF16 | DOM ladder data model: price ladder, bid/ask size, recent volume at price, own orders | Depth + trading | F3 | Engine exposes snapshot and geometry; ladder as chart-side panel primitive |
-| OF17 | Depth-derived studies: book imbalance, cumulative depth curve, minimum-size and distance-from-touch filters | Depth | F3 | |
-| OF18 | Time and sales data view model (bounded recent prints with filters) | Tape | F2 | Host renders the list; engine provides the filtered bounded window |
-
-## Chart types
-
-| ID | Type | Depends on |
-| --- | --- | --- |
-| CT1 | Hollow candles, columns, high-low bars, step line, line with markers | — |
-| CT2 | Heikin Ashi (derived series with real OHLC exposed separately for trading and crosshair) | F4 |
-| CT3 | Tick, volume and range bars | F1 |
-| CT4 | Renko (box size fixed or ATR), Line Break, Kagi, Point & Figure | F1 |
-| CT5 | Higher-timeframe overlay candles on a lower-timeframe chart | F6 |
-| CT6 | Symbol comparison overlays: several instruments on one pane, shared comparison anchor bar, per-symbol legend values | — (percentage and indexed-to-100 scale modes already exist in `price_scale_core.rs`) |
-
-## Indicator catalog
-
-Current: SMA, EMA, EMA ribbon, WMA, Bollinger, RSI, MACD, Stochastic, ATR, VWAP. Deliver in tiers;
-each indicator ships with incremental state, rebuild tests, typed schema, persistence and a
-reference-value fixture computed independently.
-
-| Tier | Indicators |
-| --- | --- |
-| I1 — core professional set | Volume (as a study with MA), OBV, ADX/DMI, Parabolic SAR, SuperTrend, Ichimoku, Keltner Channels, Donchian Channels, CCI, Williams %R, Stochastic RSI, ROC/Momentum, MFI, CMF, HMA, VWMA, DEMA, TEMA, SMMA/RMA, standard deviation, pivot points (standard, Fibonacci, Camarilla, Woodie, DeMark), ZigZag |
-| I2 — breadth | Aroon, Awesome Oscillator, Chande Momentum, Chaikin Oscillator, Coppock, DPO, Elder Force, Ease of Movement, Fisher Transform, Historical Volatility, KST, Klinger, Linear Regression channel/curve, Mass Index, Ultimate Oscillator, TRIX, TSI, Vortex, Envelopes, ALMA, KAMA, McGinley Dynamic, Chop Zone/Choppiness, Bollinger %B and Bandwidth, ATR bands, Accumulation/Distribution, Price Volume Trend, Volume Oscillator, Relative Volume |
-| I3 — structure | Swing highs/lows, market structure breaks, fair value gaps, order blocks, session highs/lows, previous day/week/month levels, opening range |
-| I4 — extension API | Typed custom study API in Rust and TypeScript: declare inputs, parameters and outputs; provide incremental update and rebuild functions; engine owns scheduling, bounds, styles, persistence and rendering |
-
-Multi-timeframe inputs (a daily RSI on a 5-minute chart) depend on F6. Alert conditions on study
-outputs remain host-evaluated; the engine exposes the values and crossing snapshots.
-
-## Drawing tool catalog
-
-Every tool implements the F5 common contract. Placement types refer to `DrawingPlacement` in
-`drawings/tools.rs`; new placement kinds are added only when a tool genuinely needs one.
-
-| Family | Tools |
-| --- | --- |
-| Lines | Trend line ✓, ray, extended line, info line (price/bars/percent/angle), trend angle, horizontal line ✓, horizontal ray ✓, vertical line ✓, cross line, arrow line |
-| Channels | Parallel channel, regression trend (with deviation settings), flat top/bottom, disjoint channel |
-| Pitchforks | Andrews, Schiff, modified Schiff, inside pitchfork, pitchfan |
-| Fibonacci | Retracement, trend-based extension, channel, time zones, trend-based time, speed resistance fan, speed resistance arcs, circles, spiral, wedge |
-| Gann | Gann box, square, square fixed, fan |
-| Patterns | XABCD, cypher, ABCD, head and shoulders, triangle pattern, three drives |
-| Elliott waves | Impulse (12345), correction (ABC), triangle (ABCDE), double and triple combination, with degree labels |
-| Cycles | Cyclic lines, time cycles, sine line |
-| Projection and measuring | Long position ✓, short position ✓, forecast, bars pattern (ghost copy), price range, date range, date and price range, projection |
-| Volume-based | Fixed-range volume profile (OF4), anchored volume profile (OF5), anchored VWAP (OF10) |
-| Shapes | Rectangle ✓, rotated rectangle, ellipse, circle, triangle, arc, curve, double curve, polyline, path ✓, brush ✓, highlighter |
-| Annotations | Text ✓, anchored text (screen-anchored), note, price note, callout, comment, price label, signpost, flag mark, arrow markers (up/down/left/right), icon/emoji stamp from a host-provided bounded image set |
-
-Management features (part of F5, not per tool): object tree snapshot (order, groups, names,
-visibility, lock), multi-select, group operations, clone, copy/paste payloads, templates, sync
-across workspace cells, and bulk remove.
-
-## Platform-driven requirements
-
-The Aeris platform roadmap (`plan/trading_platform_feature_roadmap.md` in the platform
-repository) adds risk controls, session replay, trade review, order-level analytics and
-fundamentals context. Most of that work is host-owned: canonical market and account state, rule
-evaluation, recording storage, data fetching and every panel or dialog stay in the platform. The
-items below are what the engine must provide so the platform can render those features from typed
-APIs without reimplementing chart math. They follow the same principles, verification and
-headless boundary as the rest of this plan.
-
-Aeris's `market_runtime` remains the canonical owner of order books, trades and order-level
-(market-by-order) state. Engine stores such as F2 and F3 are chart-side projections fed from the
-platform's publications, never a second canonical market model.
-
-Aeris owns these outside the chart, so they are not engine work for this host:
-
-- **DOM ladder.** Aeris's DOM is its own GPUI widget (`terminal_ui`, fed by the platform's
-  canonical order book). OF16 remains in this plan for other hosts, such as browser consumers, but
-  it is not an Aeris prerequisite.
-- **Time and sales.** Aeris renders its panel from its own trade tape. OF18 is likewise for
-  other hosts.
-- **Trading lock for risk lockouts.** The host already controls chart trading: it forwards
-  gestures (`trading_drag_start_at` and related calls) and drains `take_trading_intents`. When a
-  lock is active, the host stops forwarding trading gestures, rejects intents and shows the lock in
-  its own chrome. No engine state is required.
-
-### PD1 — Host annotations on trading objects
+#### PD1 — Host annotations on trading objects
 
 **Problem.** Order and position chips show only engine-formatted quantity, kind and PnL. The
 platform needs to show estimated queue position, fill likelihood, rule warnings ("breaks daily loss
@@ -347,7 +571,7 @@ limit at stop") and copier status on the same objects.
 **Exit.** An order line with two annotations renders identically on every executor, hit-tests to
 the right annotation, and updates at live tick rates without rebuilding unrelated trading geometry.
 
-### PD2 — Replay playback contract
+#### PD2 — Replay playback contract
 
 **Problem.** Session replay feeds recorded trades, depth and bars into charts at 1× to 100× speed,
 seeks backward, and must never show data from after the replay clock.
@@ -366,7 +590,7 @@ seeks backward, and must never show data from after the replay clock.
 **Exit.** A recorded session replays at 100× with bounded frame work and flat memory in
 `perf_gate`, seek-back equals a fresh load to the same clock, and no fixture shows post-clock data.
 
-### PD3 — Host event layer on the time axis
+#### PD3 — Host event layer on the time axis
 
 **Problem.** Economic releases, platform risk windows (no trading two minutes around a release),
 session opens and contract roll dates must appear on charts. Drawings are user-editable and
@@ -383,7 +607,7 @@ persisted, so they are the wrong owner for host-generated context.
 **Exit.** Event markers and windows render identically on every executor, survive history prepend
 and resampling, and never enter drawing persistence or undo history.
 
-### PD4 — Execution markers and round trips
+#### PD4 — Execution markers and round trips
 
 **Problem.** Trade review needs every fill, grouped into entry-to-exit round trips with their result,
 directly on the chart.
@@ -399,16 +623,14 @@ directly on the chart.
 **Exit.** A day with many round trips renders at every LOD without overlapping labels beyond the
 documented collapse rule, and hit-testing selects the correct round trip on every executor.
 
-### PD5 — Cross-chart synchronization
+#### PD5 — Cross-chart synchronization
 
 **Problem.** Linked charts (same symbol at several timeframes, or linked symbol groups) must share
 crosshair position and optionally visible time range. `workspace.rs` deliberately shares no state.
 
-**Shared contract.** This is the same capability as the linked-chart synchronization in
-[plan.md](plan.md) R4. It is built once in the shared engine layer and follows plan.md's
-synchronization rules, so financial and general charts use one mechanism. The financial slice is
-delivered here first; plan.md R4 later extends the same contract to general domains rather than
-adding a second one.
+**Shared contract.** This is the same capability as linked-chart synchronization in
+[plan.md](plan.md) R4. It is built once in the shared engine layer, delivered here first for
+financial charts, and later extended by R4 to general domains rather than duplicated.
 
 **Required outcome.**
 
@@ -423,18 +645,17 @@ adding a second one.
 - Symbol linking remains host-owned; the engine exposes only crosshair and range primitives.
 
 **Exit.** Two charts with different timeframes track one crosshair and one time range with no
-feedback oscillation, on GPUI and in the browser. The event and coordinator contract needs no
-financial-only fields that would block its reuse in plan.md R4.
+feedback oscillation, on GPUI and in the browser. The contract needs no financial-only fields that
+would block its reuse in plan.md R4.
 
-### PD6 — Native and GPUI image export
+#### PD6 — Native and GPUI image export
 
 **Problem.** The platform journal attaches chart images to trades. Only the browser package can
 export images today.
 
-**Shared contract.** Image export is one frame-level capability for every chart kind. It also
-serves as the frame-rendered image export required by [plan.md](plan.md) (R4 export behavior and
-the "equivalent frame exports" coverage row). General panes use the same path; they do not get a
-separate exporter. State exports (persistence) remain a separate gate, as plan.md requires.
+**Shared contract.** Image export is one frame-level capability for every chart kind and also
+serves plan.md's frame-rendered export (R4 and the "equivalent frame exports" coverage row). State
+exports (persistence) remain a separate gate.
 
 **Required outcome.**
 
@@ -448,7 +669,7 @@ separate exporter. State exports (persistence) remain a separate gate, as plan.m
 **Exit.** Exported images match on-screen output within the existing parity tolerances for a
 financial chart and a general Cartesian chart.
 
-### PD7 — Sparse fundamental series on intraday charts
+#### PD7 — Sparse fundamental series on intraday charts
 
 **Problem.** Weekly and monthly context (EIA inventories, CFTC Commitments of Traders, USDA
 reports) must be shown beside intraday prices without look-ahead: a value becomes visible only from
@@ -466,17 +687,17 @@ its release time.
 **Exit.** A weekly series on a one-minute chart changes value exactly at each release bar, with no
 interpolation and no look-ahead in fixtures and replay (PD2).
 
-### PD8 — Order-level depth inputs and microstructure events on the chart
+#### PD8 — Order-level depth inputs and microstructure events on the chart
 
-**Problem.** Rithmic supplies CME market-by-order data. Aeris's adapter already assembles an
-order-level book but publishes aggregated levels. Queue position, iceberg detection, pulled
-liquidity and order-size clustering are computed platform-side. The DOM shows them in Aeris's
-own widget; the chart must show them on price panes and the liquidity heatmap.
+**Problem.** Rithmic supplies CME market-by-order data. Aeris Terminal's adapter already assembles
+an order-level book but publishes aggregated levels. Queue position, iceberg detection, pulled
+liquidity and order-size clustering are computed platform-side. The DOM shows them in the
+platform's own widget; the chart must show them on price panes and the liquidity heatmap.
 
 **Required outcome.**
 
-- F3 depth ingest accepts the optional per-level order count Aeris already carries, so heatmap
-  cells and tooltips can show order counts beside size.
+- F3 depth ingest accepts the optional per-level order count the platform already carries, so
+  heatmap cells and tooltips can show order counts beside size.
 - A typed microstructure event marker (kind: iceberg refill, pulled liquidity, size cluster, sweep;
   price, time, size and host label) rendered in price panes and on the heatmap (OF15), with caps and
   LOD collapse.
@@ -487,7 +708,7 @@ own widget; the chart must show them on price panes and the liquidity heatmap.
 **Exit.** A recorded order-level stream renders heatmap order counts and event markers identically
 on every executor, and markers stay aligned with heatmap buckets after replay seeks.
 
-### PD9 — Depth heatmap rendering budget
+#### PD9 — Depth heatmap rendering budget
 
 **Problem.** OF15 at full resolution means thousands of price rows by hundreds of time buckets.
 Lowering each cell to a rectangle, as the feature heatmap does today, will not hold high refresh
@@ -505,11 +726,11 @@ rates on dense books.
 **Exit.** A dense recorded book renders at the target refresh rate on GPUI with bounded upload per
 frame, and results match the rectangle-based reference within parity tolerance.
 
-### PD10 — Dense footprint text budget
+#### PD10 — Dense footprint text budget
 
 **Problem.** Detailed footprint cells update many numeric text runs per frame during fast markets.
-GPUI glyph shaping and atlas cost at that density is unmeasured. (Aeris's DOM ladder is a
-platform widget, so its text performance is platform work, not part of this item.)
+GPUI glyph shaping and atlas cost at that density is unmeasured. (The Aeris Terminal DOM ladder is
+a platform widget, so its text performance is platform work.)
 
 **Required outcome.**
 
@@ -520,93 +741,107 @@ platform widget, so its text performance is platform work, not part of this item
 **Exit.** Documented frame budgets for a reference footprint view are met on GPUI and guarded by
 `perf_gate`.
 
-### Platform feature to engine prerequisite map
+#### Platform feature to engine prerequisite map
 
-| Platform feature | Engine prerequisites |
+| Platform feature | Engine prerequisites | Batch |
+| --- | --- | --- |
+| Chart trading and brackets | Existing trading layer; PD1 | B1 |
+| Prop-firm rules, pre-trade checks, lockouts | PD1 for warnings on order lines; the lock itself is host-owned | B1 |
+| Economic calendar and risk windows | PD3 | B1 |
+| Fundamentals dashboards on charts | PD7; existing panes, histogram and stepped lines | B1 |
+| Linked charts and symbol groups | PD5 | B1 |
+| Footprint, volume profile and CVD panels | Existing footprint and profile; F2, OF1–OF3, OF12, PD10 | B3, B7 |
+| Big-trade bubbles and sweeps | F2, OF11; PD8 for sweep markers | B3, B6 |
+| Custom studies and study scene objects | I4, F4; platform study roadmap Phases F–G | B4, B9 |
+| Tick, volume and range charts | F1, OF14, CT3 | B5 |
+| Session replay and trade review | PD2, PD4, PD6; F1 for sub-second tape display | B1, B5 |
+| Liquidity heatmap | F3, OF15, PD8, PD9 | B6 |
+| Queue position, icebergs, pulled liquidity on charts | PD8; PD1 for queue position on the order line | B1, B6 |
+| DOM ladder and time and sales | None; Aeris Terminal platform widgets | — |
+
+## Catalogs
+
+### Order-flow catalog
+
+Each item names its data source and dependency. "Candle" means the item also works in a
+candle-only approximation mode that is clearly labeled as such; tape items never silently fall back.
+
+| ID | Item | Source | Depends on | Batch | Notes |
+| --- | --- | --- | --- | --- | --- |
+| OF1 | Cumulative volume delta (CVD) pane: candles or line, session/continuous/anchored reset | Tape | F2 | B3 | Session delta already exists inside footprint bars; expose it as a proper series |
+| OF2 | Bar delta histogram, delta %, max/min delta, volume split (buy/sell/unknown) histogram | Tape | F2 | B3 | |
+| OF3 | Session, daily, weekly, composite volume profiles with developing POC/VAH/VAL lines | Tape (candle mode available) | F2, F6 | B7 | Replaces candle-only approximation for tape users |
+| OF4 | Fixed-range volume profile drawing | Tape or candle | F2, F5 | B7 | Drawing whose statistics come from the engine |
+| OF5 | Anchored volume profile drawing | Tape or candle | F2, F5 | B7 | |
+| OF6 | Naked (virgin) POC and value-area level extension until touched | Tape | OF3 | B7 | |
+| OF7 | Delta profile and bid/ask split profile | Tape | OF3 | B7 | |
+| OF8 | TPO / Market Profile: letters or blocks, initial balance, single prints, POC, value area, split/merge sessions | Candle or tape | F6 | B7 | Period and session boundaries are host-supplied |
+| OF9 | VWAP standard-deviation and percent bands; session/weekly/monthly reset | Candle or tape | F4 | B4 | Extends existing VWAP |
+| OF10 | Anchored VWAP drawing with bands | Candle or tape | F4, F5 | B7 | |
+| OF11 | Large-trade bubbles and volume dots: size by volume, color by side, threshold filters, aggregation of consecutive prints | Tape | F2 | B3 | New bounded marker primitive path |
+| OF12 | Footprint variants: profile-in-bar, volume ladder, horizontal imbalance mode, delta-only, bid/ask histogram cells | Tape | F2 | B3 | Extends existing footprint LOD |
+| OF13 | Unfinished auctions, absorption and exhaustion markers with explicit documented rules | Tape | OF12 | B9 | Rules must be deterministic and parameterized, never heuristic black boxes |
+| OF14 | Tick, volume and range candles; footprint on the same bars | Tape | F1 | B5 | Trade-count and volume aggregators already exist |
+| OF15 | Liquidity heatmap (resting depth over time) with color scaling, thresholds, and trades overlaid | Depth + tape | F3, OF11 | B6 | Bounded by visible time buckets × visible price rows |
+| OF16 | DOM ladder data model: price ladder, bid/ask size, recent volume at price, own orders | Depth + trading | F3 | B6 | For non-Aeris hosts; chart-side panel primitive |
+| OF17 | Depth-derived studies: book imbalance, cumulative depth curve, minimum-size and distance-from-touch filters | Depth | F3 | B6 | |
+| OF18 | Time and sales data view model (bounded recent prints with filters) | Tape | F2 | B6 | For non-Aeris hosts; host renders the list |
+
+### Chart types
+
+| ID | Type | Depends on | Batch |
+| --- | --- | --- | --- |
+| CT1 | Hollow candles, columns, high-low bars, step line, line with markers | — | B4 |
+| CT2 | Heikin Ashi (derived series with real OHLC exposed separately for trading and crosshair) | F4 | B4 |
+| CT3 | Tick, volume and range bars | F1 | B5 |
+| CT4 | Renko (box size fixed or ATR), Line Break, Kagi, Point & Figure | F1 | B5 |
+| CT5 | Higher-timeframe overlay candles on a lower-timeframe chart | F6 | B7 |
+| CT6 | Symbol comparison overlays: several instruments on one pane, shared comparison anchor bar, per-symbol legend values | — (percentage and indexed-to-100 scale modes already exist in `price_scale_core.rs`) | B4 |
+
+### Indicator catalog
+
+Current: SMA, EMA, EMA ribbon, WMA, Bollinger, RSI, MACD, Stochastic, ATR, VWAP. Each new indicator
+ships with incremental state, rebuild tests, typed schema, persistence and an independently
+computed reference-value fixture.
+
+| Tier | Batch | Indicators |
+| --- | --- | --- |
+| I1 — core professional set | B4 | Volume (as a study with MA), OBV, ADX/DMI, Parabolic SAR, SuperTrend, Ichimoku, Keltner Channels, Donchian Channels, CCI, Williams %R, Stochastic RSI, ROC/Momentum, MFI, CMF, HMA, VWMA, DEMA, TEMA, SMMA/RMA, standard deviation, pivot points (standard, Fibonacci, Camarilla, Woodie, DeMark), ZigZag |
+| I2 — breadth | B9 | Aroon, Awesome Oscillator, Chande Momentum, Chaikin Oscillator, Coppock, DPO, Elder Force, Ease of Movement, Fisher Transform, Historical Volatility, KST, Klinger, Linear Regression channel/curve, Mass Index, Ultimate Oscillator, TRIX, TSI, Vortex, Envelopes, ALMA, KAMA, McGinley Dynamic, Chop Zone/Choppiness, Bollinger %B and Bandwidth, ATR bands, Accumulation/Distribution, Price Volume Trend, Volume Oscillator, Relative Volume |
+| I3 — structure | B9 | Swing highs/lows, market structure breaks, fair value gaps, order blocks, session highs/lows, previous day/week/month levels, opening range |
+| I4 — extension API | B9 | Typed custom study API in Rust and TypeScript: declare inputs, parameters and outputs; provide incremental update and rebuild functions; engine owns scheduling, bounds, styles, persistence and rendering |
+
+Multi-timeframe inputs (a daily RSI on a 5-minute chart) depend on F6 (B7). Alert conditions on
+study outputs remain host-evaluated; the engine exposes the values and crossing snapshots.
+
+### Drawing tool catalog
+
+Every tool implements the F5 common contract. Placement types refer to `DrawingPlacement` in
+`drawings/tools.rs`; new placement kinds are added only when a tool genuinely needs one. ✓ marks
+tools that exist today and are migrated in B2; everything else is delivered in B8, except the
+volume-based tools, which are delivered in B7.
+
+| Family | Tools |
 | --- | --- |
-| Footprint, volume profile and CVD panels | Existing footprint and profile; F2, OF1–OF3, OF12, PD10 |
-| Big-trade bubbles and sweeps | F2, OF11; PD8 for sweep markers |
-| Liquidity heatmap | F3, OF15, PD8, PD9 |
-| Queue position, icebergs, pulled liquidity on charts | PD8; PD1 for queue position on the order line |
-| Tick, volume and range charts | F1, OF14, CT3 |
-| Chart trading and brackets | Existing trading layer; PD1 |
-| Prop-firm rules, pre-trade checks, lockouts | PD1 for warnings on order lines; the lock itself is host-owned |
-| Session replay and trade review | PD2, PD4, PD6; F1 for sub-second tape display |
-| Economic calendar and risk windows | PD3 |
-| Fundamentals dashboards on charts | PD7; existing panes, histogram and stepped lines |
-| Linked charts and symbol groups | PD5 |
-| Custom studies and study scene objects | I4, F4; platform study roadmap Phases F–G |
-| DOM ladder and time and sales | None; Aeris platform widgets |
+| Lines | Trend line ✓, ray, extended line, info line (price/bars/percent/angle), trend angle, horizontal line ✓, horizontal ray ✓, vertical line ✓, cross line, arrow line |
+| Channels | Parallel channel, regression trend (with deviation settings), flat top/bottom, disjoint channel |
+| Pitchforks | Andrews, Schiff, modified Schiff, inside pitchfork, pitchfan |
+| Fibonacci | Retracement, trend-based extension, channel, time zones, trend-based time, speed resistance fan, speed resistance arcs, circles, spiral, wedge |
+| Gann | Gann box, square, square fixed, fan |
+| Patterns | XABCD, cypher, ABCD, head and shoulders, triangle pattern, three drives |
+| Elliott waves | Impulse (12345), correction (ABC), triangle (ABCDE), double and triple combination, with degree labels |
+| Cycles | Cyclic lines, time cycles, sine line |
+| Projection and measuring | Long position ✓, short position ✓, forecast, bars pattern (ghost copy), price range, date range, date and price range, projection |
+| Volume-based | Fixed-range volume profile (OF4), anchored volume profile (OF5), anchored VWAP (OF10) |
+| Shapes | Rectangle ✓, rotated rectangle, ellipse, circle, triangle, arc, curve, double curve, polyline, path ✓, brush ✓, highlighter |
+| Annotations | Text ✓, anchored text (screen-anchored), note, price note, callout, comment, price label, signpost, flag mark, arrow markers (up/down/left/right), icon/emoji stamp from a host-provided bounded image set |
 
-## Delivery sequence
-
-Each phase ends only when its exit criteria pass through the real host and executor paths.
-
-### E0 — Baseline and reference fixtures
-
-Pin reference behavior for each catalog family from public documentation and observed behavior
-(no copied implementation code or assets; see the licensing rule in AGENTS.md). Record current
-release performance baselines for footprint, drawings and indicators. Deliver typed schema
-conventions (parameter and property descriptors) used by F4 and F5.
-
-### E1 — Drawing model and customization (F5) with existing tools
-
-Migrate the ten existing tools to the common contract first: shared text layout on every tool,
-state/lock/z-order, labels and stats, templates, multi-select, persistence migration. This fixes
-today's biggest customization gap before adding tools, so new tools are built on the final model.
-
-### E2 — Shared tape and first order-flow studies (F2, OF1, OF2, OF9, OF11)
-
-CVD, delta histograms, VWAP bands and trade bubbles from the shared tape. These reuse the existing
-footprint classification and are the fastest route to usable order flow.
-
-### E3 — Study input model and indicator tier I1 (F4, CT1, CT2)
-
-Selectable sources, typed schemas and persisted bindings, then the I1 indicator set, Heikin Ashi
-and the simple chart types.
-
-### E4 — Non-time bars (F1, OF14, CT3, CT4)
-
-Logical bar identity, tick/volume/range bars, footprint on those bars, then Renko, Line Break,
-Kagi and Point & Figure.
-
-### E5 — Profiles and resampling (F6, OF3–OF8, OF10, CT5)
-
-Session and composite profiles, developing levels, naked POCs, TPO, fixed-range and anchored
-profile drawings, anchored VWAP drawing, higher-timeframe overlays and multi-timeframe study inputs.
-
-### E6 — Depth (F3, OF15–OF18)
-
-Order-book model, liquidity heatmap, DOM ladder model, depth studies, time-and-sales view model.
-
-### E7 — Drawing catalog expansion
-
-Lines and channels, Fibonacci, pitchforks, measuring tools and annotations first (highest daily
-use), then Gann, patterns, Elliott waves, cycles and remaining shapes.
-
-### E8 — Breadth and extension
-
-Indicator tiers I2 and I3, custom study API (I4), comparison overlays (CT6), footprint variants and
-auction/absorption markers (OF12, OF13).
-
-### E9 — Platform-driven requirements (PD1–PD10)
-
-These are scheduled by platform need rather than as one block:
-
-- PD1 and PD4 extend the existing trading layer and can start immediately. The platform's risk
-  warnings and trade review depend on them.
-- PD3, PD5, PD6 and PD7 are independent of the other foundations and can run beside E1–E3.
-- PD2 must be designed with F1, F2 and F3 so checkpoints support fast seeks from the start; it is
-  delivered after E2 and extended when E4 and E6 land.
-- PD8 and PD9 are part of E6 and its exit criteria. PD10 runs with E2 and OF12 footprint work.
-
-Phases E1 and E2 are independent and can run in parallel. E4 is the largest architectural change
-and should begin design during E2 so later phases do not build on the second-based axis
-assumption.
+Management features (object tree, multi-select, group operations, clone, copy/paste, templates,
+cross-cell sync, bulk remove) belong to F5 and ship in B2, not per tool.
 
 ## Verification and evidence
 
-For every catalog item:
+Every checklist item needs, before its batch closes:
 
 - Deterministic engine tests for math, including an independently computed reference fixture,
   edge cases (empty, one bar, gaps, unknown sides, off-grid rejections, corrections) and rebuild
@@ -618,15 +853,18 @@ For every catalog item:
 - Performance evidence in release builds added to `perf_gate`: tip update cost independent of
   history length, frame work bounded by visible bars/levels/buckets, steady-state allocation,
   retained memory under retention caps, and depth-update soak for F3.
-- The complete gates in [AGENTS.md](../AGENTS.md) before each commit, and Architecture.md updated in
-  the same commit as any ownership or data-flow change.
+
+The complete gates in [AGENTS.md](../AGENTS.md) run once at the end of each batch, before its commit.
+`docs/Architecture.md` is updated in the same commit as any ownership or data-flow change.
+Reference behavior comes from public documentation and observed behavior only; no copied
+implementation code or assets (see the licensing rule in AGENTS.md).
 
 ## Definition of completion
 
-Aeris is a complete headless trading chart engine for this plan when a host can build a
-professional order-flow and technical-analysis workstation — footprint, CVD, profiles, TPO,
-liquidity heatmap, DOM, non-time bars, the I1–I3 indicator catalog, the full drawing catalog
-with per-tool customization, and the platform-driven annotation, replay, event, execution, sync,
-export, fundamentals and order-level display contracts (PD1–PD10) — using only typed engine APIs, with identical results across every
-backend, bounded resources, deterministic persistence, and measured performance evidence. Until
-then, report delivered items and remaining gaps precisely against the catalog IDs above.
+Aeris Charts is a complete headless trading chart engine for this plan when a host can build a
+professional order-flow and technical-analysis workstation using only typed engine APIs. That means
+footprint, CVD, profiles, TPO, liquidity heatmap, DOM, non-time bars, the I1–I3 indicator catalog,
+the full drawing catalog with per-tool customization, and the platform contracts PD1–PD10, with
+identical results across every backend, bounded resources, deterministic persistence, and measured
+performance evidence. Until then, report delivered items and remaining gaps precisely against the
+batch checklists and catalog IDs above.
