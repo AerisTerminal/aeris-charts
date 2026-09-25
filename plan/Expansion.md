@@ -17,7 +17,7 @@ How to read this file:
 4. **Scope and ownership**: what the engine owns, what hosts own, what is out of scope.
 5. **Current baseline**: what exists today.
 6. **Architecture principles**: standing rules for every batch.
-7. **Specifications**: detailed requirements for foundations F1–F6 and platform contracts PD1–PD10.
+7. **Specifications**: detailed requirements for foundations F1–F6 and platform contracts PD1–PD11.
 8. **Catalogs**: order-flow (OF), chart-type (CT), indicator (I) and drawing items.
 9. **Verification and completion**: evidence required per item and for the whole plan.
 
@@ -31,7 +31,7 @@ Updated 2026-09-25. Baseline source-confirmed 2026-09-24.
 
 | Batch | Scope | Unblocks on the platform | Status |
 | --- | --- | --- | --- |
-| B1 | Platform chart contracts: PD1, PD3, PD4, PD5, PD6, PD7 | Risk warnings on order lines, economic events and risk windows, trade review markers, linked charts, journal images, fundamentals | **Next** |
+| B1 | Platform chart contracts: PD11, PD1, PD3, PD4, PD5, PD6, PD7 | Multi-account chart trading, trailing and break-even stops, risk warnings on order lines, economic events and risk windows, trade review markers, linked charts, journal images, fundamentals | **Next** |
 | B2 | Drawing model and customization: F5, schema conventions, existing tools | Configurable drawings, templates, drawing sync across cells | Open |
 | B3 | Shared tape and order flow: F2, OF1, OF2, OF11, OF12, PD10 | Footprint, CVD, delta, big-trade bubbles | Open |
 | B4 | Study inputs and core indicators: F4, OF9, CT1, CT2, CT6, I1 | Professional indicator set, VWAP bands, Heikin Ashi, comparisons | Open |
@@ -77,11 +77,19 @@ TypeScript, and the GPUI host), not when engine unit tests alone pass.
 
 ### B1 — Platform chart contracts
 
-**Scope:** PD1, PD3, PD4, PD5, PD6, PD7. **Depends on:** the existing trading layer, workspace and
-series paths. **Status:** next.
+**Scope:** PD11, PD1, PD3, PD4, PD5, PD6, PD7. **Depends on:** the existing trading layer,
+workspace and series paths. **Status:** next.
 
-These extend existing layers without new foundations, and the platform needs them first.
+These extend existing layers without new foundations, and the platform needs them first. The
+trading layer (`trading.rs`, `frame/trading_geometry.rs`) already renders positions, working
+orders and executions, supports drag and keyboard modify, brackets from drawings, and
+host-resolved intents. Aeris Terminal can wire basic chart trading against it today; B1 corrects
+it for the platform's multi-account runtime rather than rebuilding it.
 
+- [ ] **PD11** Trading layer alignment: optional account identifier on trading objects and
+      intents with a host-set visible-account filter, trailing-stop and break-even presentation
+      from host-supplied trigger prices, exact tick-index prices on intents, and a documented
+      order-state contract with fixtures.
 - [ ] **PD1** Host annotations on working orders and positions: bounded list, semantic tones,
       tooltip text, shared layout with the existing chips, deterministic overflow collapse, exact
       hit-testing, caps and atomic rejection of invalid annotations.
@@ -741,11 +749,44 @@ a platform widget, so its text performance is platform work.)
 **Exit.** Documented frame budgets for a reference footprint view are met on GPUI and guarded by
 `perf_gate`.
 
+#### PD11 — Trading layer alignment with the platform runtime
+
+**Problem.** The existing trading layer was built for a single implicit account with four order
+kinds. Aeris Terminal's trading runtime has several simulated and live accounts, a trade copier,
+fixed-point prices, and bracket templates with trailing and break-even stops. Without these
+corrections the host must encode accounts in identifiers and approximate trailing stops as plain
+stops.
+
+**Required outcome.**
+
+- `WorkingOrder`, `TradingPosition`, `TradingExecution` and `TradingIntent` carry an optional
+  host account identifier (bounded, validated like other identifiers). The host sets a visible
+  account filter (one, several or all); hidden objects are neither rendered nor hit-tested.
+  Intents created from drawings or empty space carry the host-set active account; intents on an
+  existing object carry that object's account.
+- Trailing stops and break-even-armed stops are presentation variants of stop orders: the host
+  supplies the current trigger price and the trail offset or arm state; the engine renders the
+  variant and never computes trailing or arming itself. Local-versus-server management is shown
+  through PD1 annotations.
+- Price-bearing intents also report the price as an integer tick index from the instrument tick
+  size, so fixed-point hosts convert without floating-point rounding. Behavior without a tick size
+  is unchanged.
+- The order-state contract is documented: pending modify shows the requested price until the host
+  resolves the intent, rejected intents return to the last host-confirmed price, and partially
+  filled and pending-cancel states render distinctly. Fixtures cover each transition.
+- All additions are optional fields with serde defaults; existing snapshots and hosts keep
+  working unchanged.
+
+**Exit.** A chart showing two accounts' orders filters to one account, hit-tests only visible
+objects, renders a trailing stop from host-supplied trigger updates, and emits drag intents whose
+tick index round-trips exactly to the host's fixed-point price on every executor.
+
 #### Platform feature to engine prerequisite map
 
 | Platform feature | Engine prerequisites | Batch |
 | --- | --- | --- |
-| Chart trading and brackets | Existing trading layer; PD1 | B1 |
+| Basic chart trading (orders, positions, drag to modify, brackets from drawings) | Existing trading layer; host wiring only | — |
+| Multi-account chart trading, copier, trailing and break-even stops | PD11 | B1 |
 | Prop-firm rules, pre-trade checks, lockouts | PD1 for warnings on order lines; the lock itself is host-owned | B1 |
 | Economic calendar and risk windows | PD3 | B1 |
 | Fundamentals dashboards on charts | PD7; existing panes, histogram and stepped lines | B1 |
@@ -864,7 +905,7 @@ implementation code or assets (see the licensing rule in AGENTS.md).
 Aeris Charts is a complete headless trading chart engine for this plan when a host can build a
 professional order-flow and technical-analysis workstation using only typed engine APIs. That means
 footprint, CVD, profiles, TPO, liquidity heatmap, DOM, non-time bars, the I1–I3 indicator catalog,
-the full drawing catalog with per-tool customization, and the platform contracts PD1–PD10, with
+the full drawing catalog with per-tool customization, and the platform contracts PD1–PD11, with
 identical results across every backend, bounded resources, deterministic persistence, and measured
 performance evidence. Until then, report delivered items and remaining gaps precisely against the
 batch checklists and catalog IDs above.
