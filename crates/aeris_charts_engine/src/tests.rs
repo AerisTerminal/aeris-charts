@@ -152,6 +152,7 @@ fn financial_product_compatibility_fixture_survives_shared_frame_mutations() {
     assert_eq!(chart.add_ema_ribbon(0, [3, 5, 8, 13, 21]).len(), 5);
     assert_eq!(chart.add_bollinger(0, 20, 2.0).len(), 3);
     assert_eq!(chart.add_keltner(0, 20, 2.0).len(), 3);
+    assert_eq!(chart.add_adx_dmi(0, 14).len(), 3);
     assert!(chart.add_rsi(0, 14).is_some());
     assert_eq!(chart.add_macd(0, 12, 26, 9).len(), 3);
     assert_eq!(chart.add_stochastic(0, 14, 3).len(), 2);
@@ -178,6 +179,7 @@ fn financial_product_compatibility_fixture_survives_shared_frame_mutations() {
                 period: 20,
                 multiplier: 2.0,
             },
+            IndicatorKind::AdxDmi { period: 14 },
             IndicatorKind::Rsi { period: 14 },
             IndicatorKind::Macd {
                 fast: 12,
@@ -1693,6 +1695,14 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
                 points.iter().map(|point| point.lower).collect(),
             ]
         }
+        IndicatorKind::AdxDmi { period } => {
+            let points = aeris_charts_indicators::adx_dmi(source[1], source[2], source[3], period);
+            vec![
+                points.iter().map(|point| point.plus_di).collect(),
+                points.iter().map(|point| point.minus_di).collect(),
+                points.iter().map(|point| point.adx).collect(),
+            ]
+        }
         IndicatorKind::EmaRibbon { periods } => periods
             .into_iter()
             .map(|period| aeris_charts_indicators::ema(source[3], period))
@@ -1841,6 +1851,7 @@ fn every_indicator_engine_path_matches_full_recomputation() {
             period: 5,
             multiplier: 2.0,
         },
+        IndicatorKind::AdxDmi { period: 5 },
     ];
     for kind in kinds {
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
@@ -3048,6 +3059,9 @@ fn generic_indicator_creation_rejects_invalid_definitions_atomically() {
             },
             None,
         )
+        .is_empty());
+    assert!(chart
+        .add_indicator_kind(0, IndicatorKind::AdxDmi { period: 0 }, None)
         .is_empty());
     assert!(chart
         .add_indicator_kind(stale, IndicatorKind::Sma { period: 2 }, None)

@@ -2139,6 +2139,10 @@ impl AerisChart {
             .add_keltner(source_id, period, multiplier)
     }
 
+    pub fn add_adx_dmi(&mut self, source_id: u32, period: u32) -> Vec<u32> {
+        self.inner.borrow_mut().add_adx_dmi(source_id, period)
+    }
+
     /// Add one five-output EMA ribbon on the source pane.
     pub fn add_ema_ribbon(
         &mut self,

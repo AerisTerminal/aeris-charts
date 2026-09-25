@@ -4899,6 +4899,16 @@ export class chart_impl implements chart_api {
     ];
   }
 
+  add_adx_dmi(source: series_api, period: number, options?: Partial<series_options>): [series_api, series_api, series_api] {
+    const ids = this.wasm.add_adx_dmi(source.id, Math.max(1, Math.floor(period)));
+    if (ids.length !== 3) throw new AerisChartsError("invalid_options", "invalid ADX/DMI configuration");
+    return [
+      this.indicator_series(ids[0]!, options),
+      this.indicator_series(ids[1]!, options),
+      this.indicator_series(ids[2]!, options),
+    ];
+  }
+
   subscribe_crosshair_move(handler: mouse_event_handler): void {
     this.crosshair_subs.add(handler);
   }

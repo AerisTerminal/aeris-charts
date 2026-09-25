@@ -29,6 +29,13 @@ pub struct KeltnerPoint {
     pub lower: Option<f64>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AdxDmiPoint {
+    pub plus_di: Option<f64>,
+    pub minus_di: Option<f64>,
+    pub adx: Option<f64>,
+}
+
 /// Simple moving average. The first `period - 1` values are warm-up `None` entries.
 pub fn sma(values: &[f64], period: usize) -> Vec<Option<f64>> {
     if period == 0 {
@@ -258,6 +265,36 @@ pub fn keltner(
                 lower: Some(middle - spread),
             };
         }
+    }
+    out
+}
+
+/// Wilder's directional movement index and ADX. The first directional values are available after
+/// `period` price changes; ADX is seeded after a further `period - 1` DX values.
+pub fn adx_dmi(highs: &[f64], lows: &[f64], closes: &[f64], period: usize) -> Vec<AdxDmiPoint> {
+    let n = highs.len().min(lows.len()).min(closes.len());
+    let mut out = vec![
+        AdxDmiPoint {
+            plus_di: None,
+            minus_di: None,
+            adx: None,
+        };
+        n
+    ];
+    if period == 0 {
+        return out;
+    }
+    let mut state = AdxDmiState::default();
+    for row in 0..n {
+        out[row] = adx_dmi_step(
+            &mut state,
+            DirectionalSample {
+                high: highs[row],
+                low: lows[row],
+                close: closes[row],
+            },
+            period,
+        );
     }
     out
 }
@@ -1409,10 +1446,34 @@ struct KeltnerState {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+struct AdxDmiState {
+    previous_high: Option<f64>,
+    previous_low: Option<f64>,
+    previous_close: Option<f64>,
+    seen: usize,
+    tr_sum: f64,
+    plus_sum: f64,
+    minus_sum: f64,
+    tr_value: f64,
+    plus_value: f64,
+    minus_value: f64,
+    dx_seen: usize,
+    dx_sum: f64,
+    adx: f64,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
 struct MacdState {
     fast: EmaState,
     slow: EmaState,
     signal: EmaState,
+}
+
+#[derive(Clone, Copy)]
+struct DirectionalSample {
+    high: f64,
+    low: f64,
+    close: f64,
 }
 
 fn indexed_rsi_step(state: &mut IndexedRsiState, sample: f64, period: usize) -> Option<f64> {
@@ -1531,6 +1592,87 @@ fn keltner_step(
             middle: None,
             lower: None,
         },
+    }
+}
+
+fn adx_dmi_step(state: &mut AdxDmiState, sample: DirectionalSample, period: usize) -> AdxDmiPoint {
+    let Some(previous_high) = state.previous_high.replace(sample.high) else {
+        state.previous_low = Some(sample.low);
+        state.previous_close = Some(sample.close);
+        return AdxDmiPoint {
+            plus_di: None,
+            minus_di: None,
+            adx: None,
+        };
+    };
+    let previous_low = state.previous_low.replace(sample.low).unwrap_or(sample.low);
+    let previous_close = state
+        .previous_close
+        .replace(sample.close)
+        .unwrap_or(sample.close);
+    let up_move = sample.high - previous_high;
+    let down_move = previous_low - sample.low;
+    let plus = if up_move > down_move && up_move > 0.0 {
+        up_move
+    } else {
+        0.0
+    };
+    let minus = if down_move > up_move && down_move > 0.0 {
+        down_move
+    } else {
+        0.0
+    };
+    let true_range = (sample.high - sample.low)
+        .max((sample.high - previous_close).abs())
+        .max((sample.low - previous_close).abs());
+    state.seen += 1;
+    if state.seen <= period {
+        state.tr_sum += true_range;
+        state.plus_sum += plus;
+        state.minus_sum += minus;
+        if state.seen < period {
+            return AdxDmiPoint {
+                plus_di: None,
+                minus_di: None,
+                adx: None,
+            };
+        }
+        state.tr_value = state.tr_sum / period as f64;
+        state.plus_value = state.plus_sum / period as f64;
+        state.minus_value = state.minus_sum / period as f64;
+    } else {
+        state.tr_value = (state.tr_value * (period as f64 - 1.0) + true_range) / period as f64;
+        state.plus_value = (state.plus_value * (period as f64 - 1.0) + plus) / period as f64;
+        state.minus_value = (state.minus_value * (period as f64 - 1.0) + minus) / period as f64;
+    }
+    let (plus_di, minus_di, dx) = if state.tr_value > 0.0 {
+        let plus_di = 100.0 * state.plus_value / state.tr_value;
+        let minus_di = 100.0 * state.minus_value / state.tr_value;
+        let denominator = plus_di + minus_di;
+        let dx = if denominator > 0.0 {
+            100.0 * (plus_di - minus_di).abs() / denominator
+        } else {
+            0.0
+        };
+        (plus_di, minus_di, dx)
+    } else {
+        (0.0, 0.0, 0.0)
+    };
+    state.dx_seen += 1;
+    let adx = if state.dx_seen <= period {
+        state.dx_sum += dx;
+        (state.dx_seen == period).then(|| {
+            state.adx = state.dx_sum / period as f64;
+            state.adx
+        })
+    } else {
+        state.adx = (state.adx * (period as f64 - 1.0) + dx) / period as f64;
+        Some(state.adx)
+    };
+    AdxDmiPoint {
+        plus_di: Some(plus_di),
+        minus_di: Some(minus_di),
+        adx,
     }
 }
 
@@ -1655,6 +1797,10 @@ enum IncrementalKind {
         period: usize,
         multiplier: f64,
         state: RecursiveHistory<KeltnerState>,
+    },
+    AdxDmi {
+        period: usize,
+        state: RecursiveHistory<AdxDmiState>,
     },
     EmaRibbon {
         periods: [usize; MAX_OUTPUTS],
@@ -1787,6 +1933,16 @@ impl IncrementalState {
             IncrementalKind::Keltner {
                 period,
                 multiplier,
+                state: RecursiveHistory::new(),
+            },
+            3,
+        )
+    }
+
+    pub fn adx_dmi(period: usize) -> Self {
+        Self::new(
+            IncrementalKind::AdxDmi {
+                period,
                 state: RecursiveHistory::new(),
             },
             3,
@@ -1930,6 +2086,7 @@ impl IncrementalState {
             }
             IncrementalKind::Atr { state, .. } => state.bytes(),
             IncrementalKind::Keltner { state, .. } => state.bytes(),
+            IncrementalKind::AdxDmi { state, .. } => state.bytes(),
             IncrementalKind::Vwap { state } => state.bytes(),
             IncrementalKind::VwapBands { state, .. } => state.bytes(),
             IncrementalKind::Sma { .. }
@@ -2117,6 +2274,37 @@ impl IncrementalState {
                         self.outputs[0].push(point.upper.expect("Keltner upper after warmup"));
                         self.outputs[1].push(point.middle.expect("Keltner middle after warmup"));
                         self.outputs[2].push(point.lower.expect("Keltner lower after warmup"));
+                    }
+                    if row + 1 == n {
+                        tail = Some(accumulator);
+                        before_tail = (row > 0).then_some(previous);
+                    }
+                }
+                state.finish(n, tail, before_tail);
+            }
+            IncrementalKind::AdxDmi { period, state } => {
+                let (start, mut accumulator) = state.begin(n, requested);
+                self.last_work_rows = n - start;
+                let mut tail = None;
+                let mut before_tail = None;
+                for row in start..n {
+                    let previous = accumulator;
+                    let point = adx_dmi_step(
+                        &mut accumulator,
+                        DirectionalSample {
+                            high: input.high[row],
+                            low: input.low[row],
+                            close: input.close[row],
+                        },
+                        *period,
+                    );
+                    state.checkpoint(row, accumulator);
+                    if row >= self.output_from[0] {
+                        self.outputs[0].push(point.plus_di.expect("+DI after warmup"));
+                        self.outputs[1].push(point.minus_di.expect("-DI after warmup"));
+                    }
+                    if row >= self.output_from[2] {
+                        self.outputs[2].push(point.adx.expect("ADX after warmup"));
                     }
                     if row + 1 == n {
                         tail = Some(accumulator);
@@ -2444,6 +2632,10 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
             0,
         ],
         IncrementalKind::Keltner { period, .. } => [*period, *period, *period, 0, 0],
+        IncrementalKind::AdxDmi { period, .. } => {
+            let start = period.saturating_add(period.saturating_sub(1));
+            [*period, *period, start, 0, 0]
+        }
         IncrementalKind::EmaRibbon { periods, .. } => {
             periods.map(|period| period.saturating_sub(1))
         }
@@ -3329,6 +3521,27 @@ mod tests {
     }
 
     #[test]
+    fn adx_dmi_seeds_directional_values_then_adx() {
+        let highs = [10.0, 12.0, 14.0, 13.0, 15.0, 16.0];
+        let lows = [8.0, 9.0, 11.0, 10.0, 12.0, 13.0];
+        let closes = [9.0, 11.0, 13.0, 11.0, 14.0, 15.0];
+        let points = adx_dmi(&highs, &lows, &closes, 2);
+        assert!(points[1].plus_di.is_none());
+        assert!(points[2].plus_di.is_some());
+        assert!(points[2].minus_di.is_some());
+        assert!(points[2].adx.is_none());
+        assert!(points[3].adx.is_some());
+        assert!(points.iter().skip(2).all(|point| {
+            point
+                .plus_di
+                .is_some_and(|value| (0.0..=100.0).contains(&value))
+                && point
+                    .minus_di
+                    .is_some_and(|value| (0.0..=100.0).contains(&value))
+        }));
+    }
+
+    #[test]
     fn vwap_weights_by_volume_and_resets_each_utc_day() {
         // Day 0: tp 10 @ vol 1, tp 20 @ vol 3 → (10 + 60) / 4 = 17.5; day 1 restarts at tp 30.
         let times = [0, 3_600, 86_400];
@@ -3380,6 +3593,7 @@ mod tests {
         StandardDeviation,
         Donchian,
         Keltner,
+        AdxDmi,
         EmaRibbon,
         Bollinger,
         Rsi,
@@ -3414,6 +3628,14 @@ mod tests {
                     points.iter().map(|point| point.upper).collect(),
                     points.iter().map(|point| point.middle).collect(),
                     points.iter().map(|point| point.lower).collect(),
+                ]
+            }
+            TestKind::AdxDmi => {
+                let points = adx_dmi(input.high, input.low, input.close, 5);
+                vec![
+                    points.iter().map(|point| point.plus_di).collect(),
+                    points.iter().map(|point| point.minus_di).collect(),
+                    points.iter().map(|point| point.adx).collect(),
                 ]
             }
             TestKind::EmaRibbon => [3, 5, 8, 13, 21]
@@ -3501,6 +3723,7 @@ mod tests {
             ),
             (TestKind::Donchian, IncrementalState::donchian(5)),
             (TestKind::Keltner, IncrementalState::keltner(5, 2.0)),
+            (TestKind::AdxDmi, IncrementalState::adx_dmi(5)),
             (
                 TestKind::EmaRibbon,
                 IncrementalState::ema_ribbon([3, 5, 8, 13, 21]),

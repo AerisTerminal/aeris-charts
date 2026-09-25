@@ -125,6 +125,9 @@ pub enum IndicatorKind {
         period: usize,
         multiplier: f64,
     },
+    AdxDmi {
+        period: usize,
+    },
     EmaRibbon {
         periods: [usize; aeris_charts_indicators::MAX_OUTPUTS],
     },
@@ -481,6 +484,15 @@ impl ChartEngine {
                                 ..IndicatorParameters::default()
                             },
                         ),
+                        IndicatorKind::AdxDmi { period } => (
+                            "adx_dmi",
+                            period,
+                            None,
+                            IndicatorParameters {
+                                period: Some(period),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
                         IndicatorKind::EmaRibbon { periods } => (
                             "ema_ribbon",
                             periods[output_index],
@@ -658,6 +670,10 @@ impl ChartEngine {
         multiplier: f64,
     ) -> Vec<SeriesId> {
         self.add_indicator_kind(source, IndicatorKind::Keltner { period, multiplier }, None)
+    }
+
+    pub fn add_adx_dmi(&mut self, source: SeriesId, period: usize) -> Vec<SeriesId> {
+        self.add_indicator_kind(source, IndicatorKind::AdxDmi { period }, None)
     }
 
     /// Add five exponential moving averages as one binding in fastest-to-slowest output order.
@@ -847,6 +863,11 @@ impl ChartEngine {
                     self.place_outputs_in_oscillator_pane(&ids);
                 }
             }
+            IndicatorKind::AdxDmi { .. } => {
+                if !ids.is_empty() {
+                    self.place_outputs_in_oscillator_pane(&ids);
+                }
+            }
             IndicatorKind::Sma { .. }
             | IndicatorKind::Ema { .. }
             | IndicatorKind::Dema { .. }
@@ -942,6 +963,7 @@ impl ChartEngine {
                 parameters.push(integer("period", period));
                 parameters.push(number("multiplier", multiplier));
             }
+            IndicatorKind::AdxDmi { period } => parameters.push(integer("period", period)),
             IndicatorKind::Macd { fast, slow, signal } => {
                 parameters.push(integer("fast", fast));
                 parameters.push(integer("slow", slow));
@@ -1099,6 +1121,7 @@ impl ChartEngine {
                 IndicatorKind::Keltner { period, multiplier } => {
                     *period == 0 || !multiplier.is_finite() || *multiplier < 0.0
                 }
+                IndicatorKind::AdxDmi { period } => *period == 0,
                 IndicatorKind::Macd { fast, slow, signal } => {
                     *fast == 0 || *slow == 0 || *signal == 0
                 }
@@ -1438,6 +1461,7 @@ fn indicator_kind_name(kind: &IndicatorKind) -> &'static str {
         IndicatorKind::StandardDeviation { .. } => "standard_deviation",
         IndicatorKind::Donchian { .. } => "donchian",
         IndicatorKind::Keltner { .. } => "keltner",
+        IndicatorKind::AdxDmi { .. } => "adx_dmi",
         IndicatorKind::EmaRibbon { .. } => "ema_ribbon",
         IndicatorKind::Bollinger { .. } => "bollinger",
         IndicatorKind::Rsi { .. } => "rsi",
@@ -1467,6 +1491,9 @@ fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators::Increment
         }
         IndicatorKind::Keltner { period, multiplier } => {
             aeris_charts_indicators::IncrementalState::keltner(period, multiplier)
+        }
+        IndicatorKind::AdxDmi { period } => {
+            aeris_charts_indicators::IncrementalState::adx_dmi(period)
         }
         IndicatorKind::EmaRibbon { periods } => {
             aeris_charts_indicators::IncrementalState::ema_ribbon(periods)
@@ -1535,6 +1562,7 @@ fn indicator_title(kind: &IndicatorKind) -> String {
         IndicatorKind::Keltner { period, multiplier } => {
             format!("Keltner {period} {}", params(*multiplier))
         }
+        IndicatorKind::AdxDmi { period } => format!("ADX/DMI {period}"),
         IndicatorKind::EmaRibbon { periods } => format!(
             "EMA Ribbon {} {} {} {} {}",
             periods[0], periods[1], periods[2], periods[3], periods[4]
@@ -1597,6 +1625,7 @@ fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static 
         IndicatorKind::StandardDeviation { .. } => "Std Dev",
         IndicatorKind::Donchian { .. } => ["Upper", "Basis", "Lower"][output_index],
         IndicatorKind::Keltner { .. } => ["Upper", "Basis", "Lower"][output_index],
+        IndicatorKind::AdxDmi { .. } => ["+DI", "-DI", "ADX"][output_index],
         IndicatorKind::EmaRibbon { .. } => {
             ["EMA 1", "EMA 2", "EMA 3", "EMA 4", "EMA 5"][output_index]
         }

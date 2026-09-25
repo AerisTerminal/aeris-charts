@@ -222,7 +222,8 @@ retention evicts both), and PD10 budgets hold on GPUI.
 - [x] **I1 Hull moving-average slice:** HMA with pure, incremental, schema, persistence and package coverage.
 - [x] **I1 moving average slice:** DEMA with pure, incremental, schema, persistence and package coverage.
 - [x] **I1 Wilder moving-average slice:** SMMA/RMA with pure, incremental, schema, persistence and package coverage.
-- [ ] **I1 trend:** ADX/DMI, Parabolic SAR, SuperTrend, Ichimoku.
+- [ ] **I1 trend:** Parabolic SAR, SuperTrend, Ichimoku.
+- [x] **I1 trend slice:** ADX/DMI with pure, incremental, schema, persistence and package coverage.
 - [x] **I1 channels and volatility:** Keltner Channels.
 - [x] **I1 volatility slice:** population standard deviation with pure, incremental, schema, persistence and package coverage.
 - [x] **I1 channel slice:** Donchian Channels with pure, incremental, schema, persistence and package coverage.
@@ -253,8 +254,9 @@ validation now rejects invalid VWAP volume bindings atomically. Financial persis
 round-trips ordered study dependencies, scalar inputs, volume references and per-output styles while
 leaving market data host-owned. Chart-type additions, the remaining F4 exit fixtures and the I1
 catalog remain open until the whole batch is implemented. DEMA, TEMA, SMMA/RMA, HMA, VWMA,
-standard deviation, Donchian Channels and Keltner Channels are now exposed through the engine, WASM
-and TypeScript APIs, with pure and incremental rebuild coverage; the remaining I1 catalog is still open.
+standard deviation, Donchian Channels, Keltner Channels and ADX/DMI are now exposed through the
+engine, WASM and TypeScript APIs, with pure and incremental rebuild coverage; the remaining I1
+catalog is still open.
 
 ### B5 — Non-time bars and replay
 
@@ -420,7 +422,7 @@ Source-confirmed on 2026-09-24. This is the starting point, not a claim of compl
 | Footprint bar policies | Time, trade-count and volume aggregation in Rust; only whole-second time bars are chart-integrated | `FootprintBarAggregation`, Footprint.md §3 |
 | Volume profile | Visible-range profile computed from OHLCV candles; rows, value area, POC; at most 16 per chart; runtime-only | `engine/src/volume_profile.rs`, `indicators/src/volume_profile.rs` |
 | Series types | Candlestick, bar, line, area, histogram, baseline, custom, feature (grouped/stacked bars, heatmap, HLC area, pretty histogram, background shade, stacked area, whisker box), footprint | `SeriesKind`, `FeatureSeriesKind` |
-| Indicators | SMA, EMA, DEMA, TEMA, SMMA/RMA, HMA, VWMA, standard deviation, Donchian Channels, Keltner Channels, EMA ribbon, WMA, Bollinger, RSI, MACD, Stochastic, ATR, VWAP; incremental state; outputs are ordinary series, so indicator-on-indicator chaining already works | `engine/src/indicators.rs`, `indicators/src/lib.rs` |
+| Indicators | SMA, EMA, DEMA, TEMA, SMMA/RMA, HMA, VWMA, standard deviation, Donchian Channels, Keltner Channels, ADX/DMI, EMA ribbon, WMA, Bollinger, RSI, MACD, Stochastic, ATR, VWAP; incremental state; outputs are ordinary series, so indicator-on-indicator chaining already works | `engine/src/indicators.rs`, `indicators/src/lib.rs` |
 | Indicator input | `IndicatorInput` carries times, high, low, close and volume only; no open, no selectable price source (hl2, hlc3, ohlc4) | `IndicatorInput` |
 | Drawing tools | Trend line, horizontal line, horizontal ray, vertical line, rectangle, text, brush, path, long position, short position; static tool catalog; magnet; straighten; bounded undo/redo | `drawings/tools.rs`, `drawings.rs` |
 | Drawing styling | Common drawing contract with typed kind-option projections, stroke caps/extensions/fill, shared text/label layout, interval visibility, magnet modes and bounded level lists | `drawing_contract.rs`, `Drawing`, `frame/drawings.rs` |
@@ -891,7 +893,7 @@ candle-only approximation mode that is clearly labeled as such; tape items never
 
 ### Indicator catalog
 
-Current: SMA, EMA, DEMA, TEMA, SMMA/RMA, HMA, VWMA, standard deviation, Donchian Channels, Keltner Channels, EMA ribbon, WMA, Bollinger, RSI, MACD, Stochastic, ATR, VWAP. Each new indicator
+Current: SMA, EMA, DEMA, TEMA, SMMA/RMA, HMA, VWMA, standard deviation, Donchian Channels, Keltner Channels, ADX/DMI, EMA ribbon, WMA, Bollinger, RSI, MACD, Stochastic, ATR, VWAP. Each new indicator
 ships with incremental state, rebuild tests, typed schema, persistence and an independently
 computed reference-value fixture.
 
