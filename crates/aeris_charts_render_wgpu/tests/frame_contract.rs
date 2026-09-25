@@ -7,7 +7,7 @@
 use aeris_charts_engine::{
     marker_pos, marker_shape, AxisDimension, CategoryScaleType, ChartEngine, ContinuousScaleType,
     GeneralAxisOptions, GeneralScaleType, GeneralSeriesOptions, GeneralXyInput, HorizontalDomain,
-    Marker, PriceLine, SeriesKind,
+    IndicatorInputSource, IndicatorKind, IndicatorOutputStyle, Marker, PriceLine, SeriesKind,
 };
 use aeris_charts_render::canvas2d::{execute, Canvas2d, Viewport};
 use aeris_charts_render::color::Color;
@@ -133,6 +133,26 @@ fn fixture() -> ChartEngine {
         .set_series_data(0, &times, &open, &high, &low, &close)
         .unwrap();
     chart.series[0].kind = SeriesKind::Line;
+    let rsi = chart
+        .add_indicator_kind_with_input(
+            0,
+            IndicatorInputSource::Hlc3,
+            IndicatorKind::Rsi { period: 3 },
+            None,
+        )
+        .into_iter()
+        .next()
+        .expect("RSI output");
+    let sma = chart.add_sma(rsi, 2).expect("SMA output");
+    let bands = chart.add_bollinger(sma, 2, 2.0);
+    assert!(chart.set_indicator_output_style(
+        bands[0],
+        IndicatorOutputStyle {
+            area_top_color: Some("rgba(20, 120, 220, 0.24)".into()),
+            area_bottom_color: Some("rgba(20, 120, 220, 0.04)".into()),
+            ..IndicatorOutputStyle::default()
+        }
+    ));
     chart.series[0].point_markers = true;
     chart.series[0].last_price_animation = true;
     chart.series[0].markers.push(Marker {

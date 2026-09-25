@@ -214,8 +214,9 @@ retention evicts both), and PD10 budgets hold on GPUI.
       parameter schemas and output descriptors; per-output style persisted; study bindings in the
       next persistence schema version.
 - [x] **F4 exit fixture slice:** RSI of hlc3, SMA of RSI and Bollinger fill values/styles and the
-      resulting engine frame round-trip through persistence; cross-executor render parity remains
-      part of the aggregate F4 exit.
+      resulting engine frame round-trip through persistence; Canvas2D/WebGPU and Canvas2D/GPUI
+      draw-stream parity fixtures cover the chain, while full render parity remains part of the
+      aggregate F4 exit.
 - [x] **OF9** VWAP standard-deviation and percent bands with session, weekly and monthly reset.
 - [ ] **CT1** Hollow candles, columns, high-low bars, step line, line with markers.
 - [ ] **CT2** Heikin Ashi with real OHLC exposed separately for trading and crosshair.

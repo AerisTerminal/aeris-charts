@@ -21,9 +21,9 @@
 use aeris_charts_engine::{
     AxisDimension, CategoryScaleType, ChartEngine, ContinuousScaleType, GeneralAxisDomain,
     GeneralAxisOptions, GeneralReferenceOptions, GeneralReferenceValue, GeneralScaleType,
-    GeneralSeriesOptions, GeneralXyInput, HorizontalDomain, OrderId, OrderKind, OrderRole,
-    OrderSide, OrderStatus, PositionId, PositionSide, SeriesKind, TradingPosition,
-    TradingPriceScale, WorkingOrder,
+    GeneralSeriesOptions, GeneralXyInput, HorizontalDomain, IndicatorInputSource, IndicatorKind,
+    IndicatorOutputStyle, OrderId, OrderKind, OrderRole, OrderSide, OrderStatus, PositionId,
+    PositionSide, SeriesKind, TradingPosition, TradingPriceScale, WorkingOrder,
 };
 use aeris_charts_render::canvas2d::{execute as canvas_execute, Canvas2d, Viewport};
 use aeris_charts_render::color::Color;
@@ -720,6 +720,27 @@ fn real_engine_frame(dpr: f64) -> ChartEngine {
         .set_series_data(0, &times, &open, &high, &low, &close)
         .expect("candles load");
     engine.series[0].kind = SeriesKind::Candlestick;
+
+    let rsi = engine
+        .add_indicator_kind_with_input(
+            0,
+            IndicatorInputSource::Hlc3,
+            IndicatorKind::Rsi { period: 3 },
+            None,
+        )
+        .into_iter()
+        .next()
+        .expect("RSI output");
+    let sma = engine.add_sma(rsi, 2).expect("SMA output");
+    let bands = engine.add_bollinger(sma, 2, 2.0);
+    assert!(engine.set_indicator_output_style(
+        bands[0],
+        IndicatorOutputStyle {
+            area_top_color: Some("rgba(20, 120, 220, 0.24)".into()),
+            area_bottom_color: Some("rgba(20, 120, 220, 0.04)".into()),
+            ..IndicatorOutputStyle::default()
+        }
+    ));
 
     // A line, an area and a histogram, so the tessellated and gradient routes are all populated.
     for kind in [SeriesKind::Line, SeriesKind::Area, SeriesKind::Histogram] {
