@@ -22,7 +22,8 @@ A feature is not delivered until a host can build its complete UI from typed eng
 reimplementing chart math, and every executor (GPUI, WebGPU, Canvas2D, native) renders it from the
 same ordered frame. [Architecture.md](Architecture.md) remains the authority for current ownership;
 [plan.md](plan.md) covers general (non-financial) chart families. Both plans share one
-`ChartEngine` and one frame contract and proceed independently.
+`ChartEngine` and one frame contract and proceed independently. As of 2026-09-25 this plan is the
+active program; plan.md is paused after its R3 range-bar batch.
 
 Out of scope: a Pine-style scripting language, a bundled UI kit, broker connectivity, datafeed
 adapters, and news/fundamental data. Custom studies are covered by a typed extension API (I4)

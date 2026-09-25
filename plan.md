@@ -23,12 +23,19 @@ with the evidence required in **Verification and evidence policy**.
 
 Updated 2026-09-25. Plan baseline dated 2026-09-23.
 
+> **Paused 2026-09-25.** General-chart work is paused after the R3 range-bar batch (`3fe3b22`,
+> recorded in `e063e9c`) so trading and order-flow work in [Expansion.md](Expansion.md) proceeds
+> first. Do not start new R0–R8 batches during the pause. Fixes to delivered general-chart behavior,
+> and shared work required by Expansion.md (cross-chart sync PD5 and image export PD6, which R4
+> later extends), remain allowed. Resume with R0 when the maintainer lifts the pause, because the
+> trading journal will need the general charts, then continue in dependency order.
+
 | Phase | Scope | Status | Done so far | Next |
 | --- | --- | --- | --- | --- |
-| R0 | Auditable competitive baseline | **Open** | — | Pin Recharts version, map the matrix, reconcile docs |
+| R0 | Auditable competitive baseline | **Open (paused)** | — | Resume point: pin Recharts version, map the matrix, reconcile docs |
 | R1 | Lifecycle and mutable object foundations | **Open** | — | Standalone general creation, in-place mutations, failure cleanup |
 | R2 | Scales, axes and responsive layout | **Open** | — | Temporal ticks and views, grid and zero lines, multiple axes |
-| R3 | Cartesian visual and data semantics | **In progress** | 9 delivered R3 slices (see **Delivered work**) | Bars and stacks, gradients, error bars, composition, per-item styling |
+| R3 | Cartesian visual and data semantics | **In progress (paused)** | 9 delivered R3 slices (see **Delivered work**) | Bars and stacks, gradients, error bars, composition, per-item styling |
 | R4 | Components and interaction | **Open** | — | Legend, tooltip, brush, selection, sync (shared with Expansion.md PD5), export (PD6) |
 | R5 | React and framework-neutral authoring | **Open** | — | Composable components over complete mutations |
 | R6 | Polar families and transitions | **Open** | — | Polar transforms, pie/donut, radar, radial bar, polar area, animation |
@@ -158,7 +165,7 @@ enforced bound.
 
 ### R3 — Cartesian visual and data semantics
 
-**Depends on:** R1–R2. **Status:** in progress.
+**Depends on:** R1–R2. **Status:** in progress, paused (see **Status at a glance**).
 
 - [x] Line width (item 1).
 - [x] Line dash styles (item 2).
