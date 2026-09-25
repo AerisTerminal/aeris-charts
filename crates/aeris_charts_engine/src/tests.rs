@@ -2959,6 +2959,8 @@ fn typed_indicator_bindings_preserve_duplicates_output_order_and_dependencies() 
 fn generic_indicator_creation_rejects_invalid_definitions_atomically() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     let stale = chart.add_series(SeriesKind::Histogram);
+    let candle_volume = chart.add_series(SeriesKind::Candlestick);
+    let scalar_volume = chart.add_series(SeriesKind::Histogram);
     assert!(chart.remove_series(stale));
     let order = chart.series_order().to_vec();
     let pane_count = chart.panes.len();
@@ -2979,12 +2981,24 @@ fn generic_indicator_creation_rejects_invalid_definitions_atomically() {
         .add_indicator_kind(0, IndicatorKind::Vwap, Some(stale))
         .is_empty());
     assert!(chart
+        .add_indicator_kind(0, IndicatorKind::Vwap, Some(candle_volume))
+        .is_empty());
+    assert!(chart
+        .add_indicator_kind(0, IndicatorKind::Vwap, Some(0))
+        .is_empty());
+    assert!(chart
         .add_indicator_kind(0, IndicatorKind::Rsi { period: 2 }, Some(0))
         .is_empty());
 
     assert_eq!(chart.series_order(), order);
     assert_eq!(chart.panes.len(), pane_count);
     assert!(chart.indicator_bindings().is_empty());
+    assert_eq!(
+        chart
+            .add_indicator_kind(0, IndicatorKind::Vwap, Some(scalar_volume))
+            .len(),
+        1
+    );
 }
 
 #[test]

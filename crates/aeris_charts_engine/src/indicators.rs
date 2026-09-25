@@ -887,7 +887,12 @@ impl ChartEngine {
         if self.series_entry(source).is_none()
             || match &kind {
                 IndicatorKind::Vwap | IndicatorKind::VwapBands { .. } => {
-                    volume_source.is_some_and(|id| self.series_entry(id).is_none())
+                    volume_source.is_some_and(|id| {
+                        id == source
+                            || self
+                                .series_entry(id)
+                                .is_none_or(|series| !series.kind.stores_scalar_values())
+                    })
                 }
                 _ => volume_source.is_some(),
             }

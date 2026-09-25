@@ -234,9 +234,10 @@ matches its reference.
 
 Implementation evidence so far: the F4 foundation now carries the open OHLC column through
 `IndicatorInput`, exposes close/open/high/low plus hl2/hlc3/ohlc4/hlcc4 scalar sources, retains
-output identities when a binding is rebound, and publishes typed parameter/output schemas. The
-engine, WASM shell and TypeScript package expose the explicit-source path and bounded schema query;
-existing convenience methods remain close-based. Indicator outputs now also expose and atomically
+output identities when a binding is rebound, and publishes typed parameter/output schemas. VWAP
+multi-input bindings reject missing, duplicate, non-scalar, and stale volume sources before any
+state is created. The engine, WASM shell and TypeScript package expose the explicit-source path and
+bounded schema query; existing convenience methods remain close-based. Indicator outputs now also expose and atomically
 replace a compact engine-owned style snapshot, preserving per-output presentation independently
 of binding kind. VWAP's optional volume input now aligns by exact timestamp and keeps missing rows
 on the documented unit-weight fallback. OF9 now adds five engine-owned VWAP-band outputs with

@@ -683,3 +683,6 @@ declaration and release-policy guards, V1 fixtures, Node import, and pack smoke 
 checks. Configured `perf_gate` budgets run strictly. Machine-calibrated screenshots, GPU timings,
 heap sampling, and wall-clock evidence stay in separate non-blocking diagnostic steps; approved hashes
 are never changed merely to satisfy a different host.
+
+Indicator multi-input validation is engine-owned: VWAP and VWAP-band bindings require a distinct
+live scalar volume series, while missing volume remains the explicit unit-weight fallback.
