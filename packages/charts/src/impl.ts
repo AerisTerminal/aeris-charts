@@ -32,7 +32,7 @@ import type {
   box_plot_row, bubble_columns, bubble_row, category_box_columns, category_error_columns, category_heatmap_columns, category_range_columns, category_xy_columns, numeric_error_columns, numeric_heatmap_columns, numeric_range_columns, numeric_xy_columns,
   error_bar_row, heatmap_grid_row, range_area_row, temporal_error_columns, temporal_heatmap_columns, temporal_range_columns, temporal_xy_columns,
   ingestion_diagnostics,
-  handle_scale_options, handle_scroll_options, indicator_info, kinetic_scroll_options,
+  handle_scale_options, handle_scroll_options, indicator_info, indicator_input_source, kinetic_scroll_options,
   last_value_data, localization_options, logical_range,
   mismatch_direction, mouse_event_handler, mouse_event_params, ohlc_columns, ohlc_data, options_change_handler, pane_api, pane_geometry, price_line_api, price_line_options,
   persistence_restore_result, price_range, price_scale_api, price_scale_create_options,
@@ -2047,6 +2047,7 @@ class series_impl implements series_api {
       period: raw.period,
       deviation: raw.deviation,
       source: this.chart.series_handle(raw.source),
+      source_input: raw.source_input,
       volume_source: raw.volume_source === null ? null : this.chart.series_handle(raw.volume_source),
       output_name: raw.output_name,
       output_index: raw.output_index,
@@ -4679,6 +4680,10 @@ export class chart_impl implements chart_api {
     return this.indicator_series(this.wasm.add_sma(source.id, Math.max(1, Math.floor(period))), options);
   }
 
+  add_sma_with_source(source: series_api, input: indicator_input_source, period: number, options?: Partial<series_options>): series_api {
+    return this.indicator_series(this.wasm.add_sma_with_source(source.id, input, Math.max(1, Math.floor(period))), options);
+  }
+
   add_ema(source: series_api, period: number, options?: Partial<series_options>): series_api {
     return this.indicator_series(this.wasm.add_ema(source.id, Math.max(1, Math.floor(period))), options);
   }
@@ -4713,8 +4718,24 @@ export class chart_impl implements chart_api {
     return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options), this.indicator_series(ids[2]!, options)];
   }
 
+  add_bollinger_with_source(source: series_api, input: indicator_input_source, period: number, deviation = 2, options?: Partial<series_options>): [series_api, series_api, series_api] {
+    const ids = this.wasm.add_bollinger_with_source(source.id, input, Math.max(1, Math.floor(period)), deviation);
+    if (ids.length !== 3) throw new AerisChartsError("invalid_options", "invalid Bollinger configuration");
+    return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options), this.indicator_series(ids[2]!, options)];
+  }
+
   add_rsi(source: series_api, period: number, options?: Partial<series_options>): series_api {
     return this.indicator_series(this.wasm.add_rsi(source.id, Math.max(1, Math.floor(period))), options);
+  }
+
+  add_rsi_with_source(source: series_api, input: indicator_input_source, period: number, options?: Partial<series_options>): series_api {
+    return this.indicator_series(this.wasm.add_rsi_with_source(source.id, input, Math.max(1, Math.floor(period))), options);
+  }
+
+  set_indicator_input_source(indicator: series_api, input: indicator_input_source): boolean {
+    const updated = this.wasm.set_indicator_input_source(indicator.id, input);
+    if (updated) this.repaint();
+    return updated;
   }
 
   add_macd(source: series_api, fast: number, slow: number, signal: number, options?: Partial<series_options>): [series_api, series_api, series_api] {

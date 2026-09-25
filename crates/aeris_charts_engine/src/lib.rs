@@ -112,7 +112,9 @@ pub use general_series::{
 pub use hit_test::{SeriesHit, SeriesHitKind};
 pub(crate) use indicators::{IndicatorBinding, IndicatorChange};
 pub use indicators::{
-    IndicatorBindingInfo, IndicatorKind, EMA_RIBBON_DEFAULT_COLORS, EMA_RIBBON_DEFAULT_PERIODS,
+    IndicatorBindingInfo, IndicatorInputSource, IndicatorKind, IndicatorOutputDescriptor,
+    IndicatorParameterDescriptor, IndicatorParameterType, IndicatorSchema,
+    EMA_RIBBON_DEFAULT_COLORS, EMA_RIBBON_DEFAULT_PERIODS, INDICATOR_SCHEMA_REVISION,
 };
 pub use interaction::{
     pinch_zoom_scale, wheel_zoom_scale, CancelReason, ChartContext, GestureResolver, GestureState,

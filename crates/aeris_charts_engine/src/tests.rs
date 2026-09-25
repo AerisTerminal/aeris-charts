@@ -2869,6 +2869,84 @@ fn generic_indicator_creation_rejects_invalid_definitions_atomically() {
 }
 
 #[test]
+fn typed_indicator_inputs_select_ohlc_aggregates_and_rebind_incrementally() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let source = chart.add_series(SeriesKind::Candlestick);
+    let times = [0.0, 60.0, 120.0, 180.0, 240.0, 300.0];
+    let open = [10.0, 11.0, 12.0, 13.0, 14.0, 15.0];
+    let high = [12.0, 14.0, 16.0, 18.0, 20.0, 22.0];
+    let low = [8.0, 9.0, 10.0, 11.0, 12.0, 13.0];
+    let close = [11.0, 13.0, 15.0, 17.0, 19.0, 21.0];
+    chart
+        .set_series_data(source, &times, &open, &high, &low, &close)
+        .unwrap();
+
+    let rsi = chart
+        .add_indicator_kind_with_input(
+            source,
+            IndicatorInputSource::Hlc3,
+            IndicatorKind::Rsi { period: 2 },
+            None,
+        )
+        .into_iter()
+        .next()
+        .unwrap();
+    let expected_input = high
+        .iter()
+        .zip(low.iter())
+        .zip(close.iter())
+        .map(|((&high, &low), &close)| (high + low + close) / 3.0)
+        .collect::<Vec<_>>();
+    let expected = aeris_charts_indicators::rsi(&expected_input, 2);
+    let actual = &chart.data.series_data(rsi).unwrap().1[3];
+    for (actual, expected) in actual.iter().zip(expected.into_iter().skip(2)) {
+        match expected {
+            Some(expected) => assert!((*actual - expected).abs() < 1e-12),
+            None => panic!("warm-up row was not expected in the aligned output: {actual}"),
+        }
+    }
+    assert_eq!(
+        chart.indicator_info(rsi).unwrap().source_input,
+        IndicatorInputSource::Hlc3
+    );
+
+    let sma = chart.add_sma(rsi, 2).unwrap();
+    assert_eq!(
+        chart.indicator_info(sma).unwrap().source_input,
+        IndicatorInputSource::Close
+    );
+    assert!(chart.set_indicator_input_source(rsi, IndicatorInputSource::Open));
+    assert_eq!(
+        chart.indicator_info(rsi).unwrap().source_input,
+        IndicatorInputSource::Open
+    );
+    assert!(chart
+        .indicator_bindings()
+        .iter()
+        .any(|binding| { binding.outputs.contains(&sma) && binding.source == rsi }));
+    assert!(!chart.set_indicator_input_source(u32::MAX, IndicatorInputSource::Close));
+}
+
+#[test]
+fn indicator_schema_exposes_typed_parameters_and_outputs() {
+    let schema = ChartEngine::indicator_schema(&IndicatorKind::Bollinger {
+        period: 20,
+        deviation: 2.0,
+    });
+    assert_eq!(schema.revision, INDICATOR_SCHEMA_REVISION);
+    assert_eq!(schema.kind, "bollinger");
+    assert_eq!(
+        schema.parameters[0].parameter_type,
+        IndicatorParameterType::Source
+    );
+    assert_eq!(schema.parameters[1].name, "period");
+    assert_eq!(schema.parameters[2].name, "deviation");
+    assert_eq!(schema.outputs.len(), 3);
+    assert_eq!(schema.outputs[0].name, "Upper");
+    assert!(schema.outputs.iter().all(|output| output.supports_style));
+}
+
+#[test]
 fn indicator_snapshot_values_and_complete_multi_output_metadata_stay_ordered() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     let values = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];

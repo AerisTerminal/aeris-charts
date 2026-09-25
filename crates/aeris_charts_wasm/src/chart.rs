@@ -2074,6 +2074,12 @@ impl AerisChart {
         self.inner.borrow_mut().add_sma(source_id, period)
     }
 
+    pub fn add_sma_with_source(&mut self, source_id: u32, source: &str, period: u32) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_sma_with_source(source_id, source, period)
+    }
+
     /// Add a Rust-native exponential moving-average line derived from `source_id`.
     pub fn add_ema(&mut self, source_id: u32, period: u32) -> u32 {
         self.inner.borrow_mut().add_ema(source_id, period)
@@ -2117,9 +2123,33 @@ impl AerisChart {
             .add_bollinger(source_id, period, deviation)
     }
 
+    pub fn add_bollinger_with_source(
+        &mut self,
+        source_id: u32,
+        source: &str,
+        period: u32,
+        deviation: f64,
+    ) -> Vec<u32> {
+        self.inner
+            .borrow_mut()
+            .add_bollinger_with_source(source_id, source, period, deviation)
+    }
+
     /// Add a Wilder RSI line in its own oscillator pane (30/70 band lines + channel fill).
     pub fn add_rsi(&mut self, source_id: u32, period: u32) -> u32 {
         self.inner.borrow_mut().add_rsi(source_id, period)
+    }
+
+    pub fn add_rsi_with_source(&mut self, source_id: u32, source: &str, period: u32) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_rsi_with_source(source_id, source, period)
+    }
+
+    pub fn set_indicator_input_source(&mut self, id: u32, source: &str) -> bool {
+        self.inner
+            .borrow_mut()
+            .set_indicator_input_source(id, source)
     }
 
     /// Add MACD line, signal line, and histogram (four-state colors) in their own pane.

@@ -3,6 +3,7 @@
 
 use super::inner_render::measure_text_ctx;
 use super::*;
+use aeris_charts_engine::{IndicatorInputSource, IndicatorKind};
 
 impl ChartInner {
     pub fn set_series_area_brush_state(&mut self, id: u32, state_json: &str) -> bool {
@@ -112,9 +113,41 @@ impl ChartInner {
         }
     }
 
+    fn indicator_input_source(value: &str) -> Option<IndicatorInputSource> {
+        match value {
+            "open" => Some(IndicatorInputSource::Open),
+            "high" => Some(IndicatorInputSource::High),
+            "low" => Some(IndicatorInputSource::Low),
+            "close" => Some(IndicatorInputSource::Close),
+            "hl2" => Some(IndicatorInputSource::Hl2),
+            "hlc3" => Some(IndicatorInputSource::Hlc3),
+            "ohlc4" => Some(IndicatorInputSource::Ohlc4),
+            "hlcc4" => Some(IndicatorInputSource::Hlcc4),
+            _ => None,
+        }
+    }
+
     pub fn add_sma(&mut self, source_id: u32, period: u32) -> u32 {
         self.engine
             .add_sma(source_id as SeriesId, period as usize)
+            .unwrap_or(u32::MAX)
+    }
+
+    pub fn add_sma_with_source(&mut self, source_id: u32, source: &str, period: u32) -> u32 {
+        let Some(source_input) = Self::indicator_input_source(source) else {
+            return u32::MAX;
+        };
+        self.engine
+            .add_indicator_kind_with_input(
+                source_id as SeriesId,
+                source_input,
+                IndicatorKind::Sma {
+                    period: period as usize,
+                },
+                None,
+            )
+            .into_iter()
+            .next()
             .unwrap_or(u32::MAX)
     }
 
@@ -139,10 +172,56 @@ impl ChartInner {
             .add_bollinger(source_id as SeriesId, period as usize, deviation)
     }
 
+    pub fn add_bollinger_with_source(
+        &mut self,
+        source_id: u32,
+        source: &str,
+        period: u32,
+        deviation: f64,
+    ) -> Vec<u32> {
+        let Some(source_input) = Self::indicator_input_source(source) else {
+            return Vec::new();
+        };
+        self.engine.add_indicator_kind_with_input(
+            source_id as SeriesId,
+            source_input,
+            IndicatorKind::Bollinger {
+                period: period as usize,
+                deviation,
+            },
+            None,
+        )
+    }
+
     pub fn add_rsi(&mut self, source_id: u32, period: u32) -> u32 {
         self.engine
             .add_rsi(source_id as SeriesId, period as usize)
             .unwrap_or(u32::MAX)
+    }
+
+    pub fn add_rsi_with_source(&mut self, source_id: u32, source: &str, period: u32) -> u32 {
+        let Some(source_input) = Self::indicator_input_source(source) else {
+            return u32::MAX;
+        };
+        self.engine
+            .add_indicator_kind_with_input(
+                source_id as SeriesId,
+                source_input,
+                IndicatorKind::Rsi {
+                    period: period as usize,
+                },
+                None,
+            )
+            .into_iter()
+            .next()
+            .unwrap_or(u32::MAX)
+    }
+
+    pub fn set_indicator_input_source(&mut self, id: u32, source: &str) -> bool {
+        Self::indicator_input_source(source).is_some_and(|source_input| {
+            self.engine
+                .set_indicator_input_source(id as SeriesId, source_input)
+        })
     }
 
     pub fn add_macd(&mut self, source_id: u32, fast: u32, slow: u32, signal: u32) -> Vec<u32> {

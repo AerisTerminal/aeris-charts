@@ -966,6 +966,9 @@ export interface pane_geometry {
   height: number;
 }
 
+/** Scalar input accepted by a built-in indicator. The source series may itself be an indicator output. */
+export type indicator_input_source = "open" | "high" | "low" | "close" | "hl2" | "hlc3" | "ohlc4" | "hlcc4";
+
 /**
  * An indicator output series' lineage (engine `IndicatorInfo`): which binding it belongs to
  * (kind + params), the source series it derives from, and which output slot it is — everything
@@ -993,6 +996,8 @@ export interface indicator_info {
    *  Stochastic %D period; otherwise `null`. */
   deviation: number | null;
   source: series_api;
+  /** Scalar OHLC/aggregate input selected for the binding. */
+  source_input: indicator_input_source;
   /** VWAP's bound volume series, otherwise `null`. */
   volume_source: series_api | null;
   /** Stable display name for this output, preserving binding output order. */
@@ -2798,6 +2803,8 @@ export interface chart_api {
   set_series_order(ordered: series_api[]): boolean;
   /** Add a Rust-native simple moving-average line derived from an existing series. */
   add_sma(source: series_api, period: number, options?: Partial<series_options>): series_api;
+  /** Add an SMA using an explicit OHLC/aggregate input from the source series. */
+  add_sma_with_source(source: series_api, input: indicator_input_source, period: number, options?: Partial<series_options>): series_api;
   /** Add a Rust-native exponential moving-average line derived from an existing series. */
   add_ema(source: series_api, period: number, options?: Partial<series_options>): series_api;
   /** Add one five-output EMA ribbon on the source pane. Defaults to 5/10/20/50/200; the third
@@ -2809,9 +2816,15 @@ export interface chart_api {
   /** Add upper, middle, and lower Rust-native Bollinger-band lines (with the industry-standard
    *  background fill between the bands). */
   add_bollinger(source: series_api, period: number, deviation?: number, options?: Partial<series_options>): [series_api, series_api, series_api];
+  /** Add Bollinger bands using an explicit OHLC/aggregate input from the source series. */
+  add_bollinger_with_source(source: series_api, input: indicator_input_source, period: number, deviation?: number, options?: Partial<series_options>): [series_api, series_api, series_api];
   /** Add a Rust-native Wilder RSI line in its own oscillator pane (dotted 30/70 band lines and
    *  the translucent channel strip between them). */
   add_rsi(source: series_api, period: number, options?: Partial<series_options>): series_api;
+  /** Add RSI using an explicit OHLC/aggregate input from the source series. */
+  add_rsi_with_source(source: series_api, input: indicator_input_source, period: number, options?: Partial<series_options>): series_api;
+  /** Change an existing indicator binding's scalar input while retaining its output handle. */
+  set_indicator_input_source(indicator: series_api, input: indicator_input_source): boolean;
   /** Add MACD line, signal line, and histogram in their own oscillator pane; the histogram's
    *  per-bar color follows four conventional states (strong/weak × above/below zero). */
   add_macd(source: series_api, fast: number, slow: number, signal: number, options?: Partial<series_options>): [series_api, series_api, series_api];

@@ -4,6 +4,74 @@
 //! ordinary engine series (`aeris_charts_indicators` holds the pure math). Extracted from `lib.rs`.
 
 use super::*;
+use std::borrow::Cow;
+
+/// Scalar source selected by a study.  The aggregate sources are calculated from the source
+/// bar's OHLC columns without changing the canonical source series or duplicating its storage.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IndicatorInputSource {
+    Open,
+    High,
+    Low,
+    #[default]
+    Close,
+    Hl2,
+    Hlc3,
+    Ohlc4,
+    Hlcc4,
+}
+
+impl IndicatorInputSource {
+    pub const ALL: [Self; 8] = [
+        Self::Open,
+        Self::High,
+        Self::Low,
+        Self::Close,
+        Self::Hl2,
+        Self::Hlc3,
+        Self::Ohlc4,
+        Self::Hlcc4,
+    ];
+}
+
+/// Typed parameter kinds exposed to hosts when building study editors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IndicatorParameterType {
+    Integer,
+    Number,
+    Source,
+    Series,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct IndicatorParameterDescriptor {
+    pub name: String,
+    pub parameter_type: IndicatorParameterType,
+    pub default: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct IndicatorOutputDescriptor {
+    pub name: String,
+    pub index: usize,
+    pub supports_style: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct IndicatorSchema {
+    pub revision: u32,
+    pub kind: String,
+    pub parameters: Vec<IndicatorParameterDescriptor>,
+    pub outputs: Vec<IndicatorOutputDescriptor>,
+}
+
+pub const INDICATOR_SCHEMA_REVISION: u32 = 1;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum IndicatorKind {
@@ -52,6 +120,7 @@ pub struct IndicatorBindingInfo {
     pub binding_id: SeriesId,
     pub kind: IndicatorKind,
     pub source: SeriesId,
+    pub source_input: IndicatorInputSource,
     /// Parallel volume column source for VWAP; `None` means unit weights.
     pub volume_source: Option<SeriesId>,
     /// Output identities in the indicator's documented order.
@@ -61,6 +130,7 @@ pub struct IndicatorBindingInfo {
 #[derive(Clone, Debug)]
 pub(crate) struct IndicatorBinding {
     pub(crate) source: SeriesId,
+    pub(crate) source_input: IndicatorInputSource,
     pub(crate) kind: IndicatorKind,
     pub(crate) outputs: Vec<SeriesId>,
     /// Parallel volume column source (VWAP); `None` = unit weights.
@@ -117,6 +187,7 @@ pub struct IndicatorInfo {
     pub period: usize,
     pub deviation: Option<f64>,
     pub source: SeriesId,
+    pub source_input: IndicatorInputSource,
     pub volume_source: Option<SeriesId>,
     pub output_name: &'static str,
     pub output_index: usize,
@@ -200,6 +271,7 @@ impl ChartEngine {
                 binding_id: binding.outputs[0],
                 kind: binding.kind.clone(),
                 source: binding.source,
+                source_input: binding.source_input,
                 volume_source: binding.volume_source,
                 outputs: binding.outputs.clone(),
             })
@@ -311,6 +383,7 @@ impl ChartEngine {
                         period,
                         deviation,
                         source: binding.source,
+                        source_input: binding.source_input,
                         volume_source: binding.volume_source,
                         output_name: indicator_output_name(&binding.kind, output_index),
                         output_index,
@@ -467,7 +540,19 @@ impl ChartEngine {
         kind: IndicatorKind,
         volume_source: Option<SeriesId>,
     ) -> Vec<SeriesId> {
-        let ids = self.add_indicator(source, kind.clone(), volume_source);
+        self.add_indicator_kind_with_input(source, IndicatorInputSource::Close, kind, volume_source)
+    }
+
+    /// Add an indicator with an explicit scalar source. Existing convenience methods use close;
+    /// this typed path is used for hlc3/hl2 and other study-input selections.
+    pub fn add_indicator_kind_with_input(
+        &mut self,
+        source: SeriesId,
+        source_input: IndicatorInputSource,
+        kind: IndicatorKind,
+        volume_source: Option<SeriesId>,
+    ) -> Vec<SeriesId> {
+        let ids = self.add_indicator(source, source_input, kind.clone(), volume_source);
         match kind {
             IndicatorKind::Rsi { .. } => {
                 if !ids.is_empty() {
@@ -498,6 +583,106 @@ impl ChartEngine {
             | IndicatorKind::Wma { .. } => {}
         }
         ids
+    }
+
+    /// Change the scalar source of an existing binding while retaining all output identities.
+    /// The owner rebuilds from the source and propagates the revision to chained studies.
+    pub fn set_indicator_input_source(
+        &mut self,
+        output: SeriesId,
+        source_input: IndicatorInputSource,
+    ) -> bool {
+        let Some(index) = self
+            .indicators
+            .iter()
+            .position(|binding| binding.outputs.contains(&output))
+        else {
+            return false;
+        };
+        if self.indicators[index].source_input == source_input {
+            return true;
+        }
+        let kind = self.indicators[index].kind.clone();
+        self.indicators[index].source_input = source_input;
+        self.indicators[index].runtime = incremental_state(&kind);
+        self.indicator_changes.clear();
+        let changes = self.rebuild_indicator(index, 0, true);
+        self.indicator_changes.extend(changes.into_iter().flatten());
+        self.propagate_indicator_changes();
+        self.sync_time_points();
+        true
+    }
+
+    /// Return the bounded typed editor schema for an indicator definition.
+    pub fn indicator_schema(kind: &IndicatorKind) -> IndicatorSchema {
+        let mut parameters = vec![IndicatorParameterDescriptor {
+            name: "source".into(),
+            parameter_type: IndicatorParameterType::Source,
+            default: serde_json::json!(IndicatorInputSource::Close),
+            min: None,
+            max: None,
+        }];
+        let integer = |name: &str, default: usize| IndicatorParameterDescriptor {
+            name: name.into(),
+            parameter_type: IndicatorParameterType::Integer,
+            default: serde_json::json!(default),
+            min: Some(1.0),
+            max: Some(1_000_000.0),
+        };
+        let number = |name: &str, default: f64| IndicatorParameterDescriptor {
+            name: name.into(),
+            parameter_type: IndicatorParameterType::Number,
+            default: serde_json::json!(default),
+            min: Some(0.0),
+            max: Some(1_000_000.0),
+        };
+        match *kind {
+            IndicatorKind::Sma { period }
+            | IndicatorKind::Ema { period }
+            | IndicatorKind::Rsi { period }
+            | IndicatorKind::Atr { period }
+            | IndicatorKind::Wma { period } => parameters.push(integer("period", period)),
+            IndicatorKind::EmaRibbon { periods } => {
+                for (index, period) in periods.into_iter().enumerate() {
+                    parameters.push(integer(&format!("period_{}", index + 1), period));
+                }
+            }
+            IndicatorKind::Bollinger { period, deviation } => {
+                parameters.push(integer("period", period));
+                parameters.push(number("deviation", deviation));
+            }
+            IndicatorKind::Macd { fast, slow, signal } => {
+                parameters.push(integer("fast", fast));
+                parameters.push(integer("slow", slow));
+                parameters.push(integer("signal", signal));
+            }
+            IndicatorKind::Stochastic { k_period, d_period } => {
+                parameters.push(integer("k_period", k_period));
+                parameters.push(integer("d_period", d_period));
+            }
+            IndicatorKind::Vwap => {
+                parameters.push(IndicatorParameterDescriptor {
+                    name: "volume_source".into(),
+                    parameter_type: IndicatorParameterType::Series,
+                    default: serde_json::Value::Null,
+                    min: None,
+                    max: None,
+                });
+            }
+        }
+        let output_count = incremental_state(kind).output_count();
+        IndicatorSchema {
+            revision: INDICATOR_SCHEMA_REVISION,
+            kind: indicator_kind_name(kind).into(),
+            parameters,
+            outputs: (0..output_count)
+                .map(|index| IndicatorOutputDescriptor {
+                    name: indicator_output_name(kind, index).into(),
+                    index,
+                    supports_style: true,
+                })
+                .collect(),
+        }
     }
 
     /// Move output series into a fresh oscillator pane below everything (the public reference
@@ -557,6 +742,7 @@ impl ChartEngine {
     fn add_indicator(
         &mut self,
         source: SeriesId,
+        source_input: IndicatorInputSource,
         kind: IndicatorKind,
         volume_source: Option<SeriesId>,
     ) -> Vec<SeriesId> {
@@ -633,6 +819,7 @@ impl ChartEngine {
         }
         self.indicators.push(IndicatorBinding {
             source,
+            source_input,
             runtime,
             kind,
             outputs: ids.clone(),
@@ -715,11 +902,13 @@ impl ChartEngine {
         }
 
         let source = self.indicators[index].source;
+        let source_input = self.indicators[index].source_input;
         let volume_source = self.indicators[index].volume_source;
         {
             let Some((times, values)) = self.data.series_data(source) else {
                 return changes;
             };
+            let selected_close = selected_input(source_input, values);
             let volume = volume_source
                 .and_then(|id| self.data.series_data(id))
                 .map_or(&[][..], |(_, values)| values[3]);
@@ -727,9 +916,10 @@ impl ChartEngine {
             binding.runtime.rebuild_from(
                 aeris_charts_indicators::IndicatorInput {
                     times,
+                    open: values[0],
                     high: values[1],
                     low: values[2],
-                    close: values[3],
+                    close: selected_close.as_ref(),
                     volume,
                 },
                 if full_replace { 0 } else { from },
@@ -817,6 +1007,62 @@ fn momentum_histogram_colors(values: &[f64]) -> Vec<u32> {
         }
     }
     colors
+}
+
+fn selected_input<'a>(source: IndicatorInputSource, values: [&'a [f64]; 4]) -> Cow<'a, [f64]> {
+    match source {
+        IndicatorInputSource::Open => Cow::Borrowed(values[0]),
+        IndicatorInputSource::High => Cow::Borrowed(values[1]),
+        IndicatorInputSource::Low => Cow::Borrowed(values[2]),
+        IndicatorInputSource::Close => Cow::Borrowed(values[3]),
+        IndicatorInputSource::Hl2 => Cow::Owned(
+            values[1]
+                .iter()
+                .zip(values[2])
+                .map(|(&high, &low)| (high + low) * 0.5)
+                .collect(),
+        ),
+        IndicatorInputSource::Hlc3 => Cow::Owned(
+            values[1]
+                .iter()
+                .zip(values[2])
+                .zip(values[3])
+                .map(|((&high, &low), &close)| (high + low + close) / 3.0)
+                .collect(),
+        ),
+        IndicatorInputSource::Ohlc4 => Cow::Owned(
+            values[0]
+                .iter()
+                .zip(values[1])
+                .zip(values[2])
+                .zip(values[3])
+                .map(|(((&open, &high), &low), &close)| (open + high + low + close) * 0.25)
+                .collect(),
+        ),
+        IndicatorInputSource::Hlcc4 => Cow::Owned(
+            values[1]
+                .iter()
+                .zip(values[2])
+                .zip(values[3])
+                .map(|((&high, &low), &close)| (high + low + 2.0 * close) * 0.25)
+                .collect(),
+        ),
+    }
+}
+
+fn indicator_kind_name(kind: &IndicatorKind) -> &'static str {
+    match kind {
+        IndicatorKind::Sma { .. } => "sma",
+        IndicatorKind::Ema { .. } => "ema",
+        IndicatorKind::EmaRibbon { .. } => "ema_ribbon",
+        IndicatorKind::Bollinger { .. } => "bollinger",
+        IndicatorKind::Rsi { .. } => "rsi",
+        IndicatorKind::Macd { .. } => "macd",
+        IndicatorKind::Stochastic { .. } => "stochastic",
+        IndicatorKind::Atr { .. } => "atr",
+        IndicatorKind::Vwap => "vwap",
+        IndicatorKind::Wma { .. } => "wma",
+    }
 }
 
 fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators::IncrementalState {

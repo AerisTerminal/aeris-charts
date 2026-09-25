@@ -232,6 +232,14 @@ retention evicts both), and PD10 budgets hold on GPUI.
 round-trip through persistence and render identically on every executor) and every I1 fixture
 matches its reference.
 
+Implementation evidence so far: the F4 foundation now carries the open OHLC column through
+`IndicatorInput`, exposes close/open/high/low plus hl2/hlc3/ohlc4/hlcc4 scalar sources, retains
+output identities when a binding is rebound, and publishes typed parameter/output schemas. The
+engine, WASM shell and TypeScript package expose the explicit-source path; existing convenience
+methods remain close-based. Multi-input validation, per-output style persistence, the next
+persistence schema, VWAP bands, chart-type additions and the I1 catalog remain open until the
+whole batch is implemented and reference fixtures are added.
+
 ### B5 — Non-time bars and replay
 
 **Scope:** F1, OF14, CT3, CT4, PD2 for bars and tape. **Depends on:** B3. **Status:** open.

@@ -327,6 +327,7 @@ pub fn vwap(
 #[derive(Clone, Copy)]
 pub struct IndicatorInput<'a> {
     pub times: &'a [i64],
+    pub open: &'a [f64],
     pub high: &'a [f64],
     pub low: &'a [f64],
     pub close: &'a [f64],
@@ -2560,6 +2561,7 @@ mod tests {
                 states,
                 IndicatorInput {
                     times,
+                    open: close,
                     high,
                     low,
                     close,
@@ -2645,6 +2647,7 @@ mod tests {
         let low = close.iter().map(|value| value - 1.0).collect::<Vec<_>>();
         let input = IndicatorInput {
             times: &times,
+            open: &close,
             high: &high,
             low: &low,
             close: &close,
