@@ -2123,6 +2123,12 @@ impl AerisChart {
             .add_vwma(source_id, volume_source, period)
     }
 
+    pub fn add_standard_deviation(&mut self, source_id: u32, period: u32) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_standard_deviation(source_id, period)
+    }
+
     /// Add one five-output EMA ribbon on the source pane.
     pub fn add_ema_ribbon(
         &mut self,
