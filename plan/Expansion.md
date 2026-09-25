@@ -185,8 +185,9 @@ Implementation evidence so far: `chart_trade_stream_is_shared_by_bound_footprint
 `trade_bubbles_are_bounded_and_rebuilt_from_the_shared_tape`, and
 `footprint_retention_evicts_shared_studies_with_the_same_bar_boundary` cover shared revisions,
 derived-study updates, bounded markers, and retention. Rust, WASM, and TypeScript APIs expose the
-same stream/dependent contracts. PD10 benchmark capture, screenshot/accessibility evidence, and the
-final full gate remain open until the batch is closed.
+same stream/dependent contracts. The native release `perf_gate` now exercises the shared-study tape,
+tip/correction paths, retention, and dependent incremental work. Dense GPUI/WebGPU text capture,
+screenshot/accessibility evidence, and the final full gate remain open until the batch is closed.
 
 **Exit:** the F2 exit criterion passes (footprint and CVD share one tape, a late trade updates both,
 retention evicts both), and PD10 budgets hold on GPUI.
