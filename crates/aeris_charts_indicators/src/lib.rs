@@ -433,6 +433,44 @@ pub fn williams_r(highs: &[f64], lows: &[f64], closes: &[f64], period: usize) ->
     out
 }
 
+/// Stochastic RSI: normalize Wilder RSI within a rolling RSI range.
+/// The first value is available after both the RSI and stochastic windows warm up.
+pub fn stochastic_rsi(
+    values: &[f64],
+    rsi_period: usize,
+    stochastic_period: usize,
+) -> Vec<Option<f64>> {
+    let mut out = vec![None; values.len()];
+    if rsi_period == 0 || stochastic_period == 0 {
+        return out;
+    }
+    let rsi_values = rsi(values, rsi_period);
+    let first = rsi_period
+        .saturating_add(stochastic_period)
+        .saturating_sub(1);
+    for (row, output) in out.iter_mut().enumerate().skip(first) {
+        let start = row + 1 - stochastic_period;
+        let window = &rsi_values[start..=row];
+        let current = rsi_values[row].expect("RSI after stochastic warmup");
+        let low = window
+            .iter()
+            .copied()
+            .map(Option::unwrap)
+            .fold(f64::INFINITY, f64::min);
+        let high = window
+            .iter()
+            .copied()
+            .map(Option::unwrap)
+            .fold(f64::NEG_INFINITY, f64::max);
+        *output = Some(if high > low {
+            100.0 * (current - low) / (high - low)
+        } else {
+            0.0
+        });
+    }
+    out
+}
+
 fn wma_at(values: &[f64], row: usize, period: usize) -> Option<f64> {
     if period == 0 || row.saturating_add(1) < period {
         return None;
@@ -2089,6 +2127,10 @@ enum IncrementalKind {
     WilliamsR {
         period: usize,
     },
+    StochasticRsi {
+        rsi_period: usize,
+        stochastic_period: usize,
+    },
     Donchian {
         period: usize,
     },
@@ -2238,6 +2280,16 @@ impl IncrementalState {
 
     pub fn williams_r(period: usize) -> Self {
         Self::new(IncrementalKind::WilliamsR { period }, 1)
+    }
+
+    pub fn stochastic_rsi(rsi_period: usize, stochastic_period: usize) -> Self {
+        Self::new(
+            IncrementalKind::StochasticRsi {
+                rsi_period,
+                stochastic_period,
+            },
+            1,
+        )
     }
 
     pub fn donchian(period: usize) -> Self {
@@ -2440,6 +2492,7 @@ impl IncrementalState {
             IncrementalKind::StandardDeviation { .. } => 0,
             IncrementalKind::Cci { .. } => 0,
             IncrementalKind::WilliamsR { .. } => 0,
+            IncrementalKind::StochasticRsi { .. } => 0,
             IncrementalKind::Donchian { .. } => 0,
         }
     }
@@ -2593,6 +2646,15 @@ impl IncrementalState {
                 let start = self.output_from[0];
                 self.last_work_rows = n - start;
                 let values = williams_r(input.high, input.low, input.close, *period);
+                self.outputs[0].extend(values.into_iter().skip(start).flatten());
+            }
+            IncrementalKind::StochasticRsi {
+                rsi_period,
+                stochastic_period,
+            } => {
+                let start = self.output_from[0];
+                self.last_work_rows = n - start;
+                let values = stochastic_rsi(input.close, *rsi_period, *stochastic_period);
                 self.outputs[0].extend(values.into_iter().skip(start).flatten());
             }
             IncrementalKind::Donchian { period } => {
@@ -3060,6 +3122,18 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
         IncrementalKind::StandardDeviation { period } => [period.saturating_sub(1), 0, 0, 0, 0],
         IncrementalKind::Cci { period } => [period.saturating_sub(1), 0, 0, 0, 0],
         IncrementalKind::WilliamsR { period } => [period.saturating_sub(1), 0, 0, 0, 0],
+        IncrementalKind::StochasticRsi {
+            rsi_period,
+            stochastic_period,
+        } => [
+            rsi_period
+                .saturating_add(*stochastic_period)
+                .saturating_sub(1),
+            0,
+            0,
+            0,
+            0,
+        ],
         IncrementalKind::Donchian { period } => [
             period.saturating_sub(1),
             period.saturating_sub(1),
@@ -3269,6 +3343,16 @@ mod tests {
             williams_r(&[5.0, 5.0], &[5.0, 5.0], &[5.0, 5.0], 2),
             vec![None, Some(0.0)]
         );
+    }
+
+    #[test]
+    fn stochastic_rsi_warms_up_both_windows_and_normalizes_the_range() {
+        let values = (0..12).map(|index| index as f64).collect::<Vec<_>>();
+        let points = stochastic_rsi(&values, 3, 3);
+        assert!(points[..5].iter().all(Option::is_none));
+        assert_eq!(points[5], Some(0.0));
+        assert!(points[6..].iter().all(|value| *value == Some(0.0)));
+        assert!(stochastic_rsi(&values, 0, 3).iter().all(Option::is_none));
     }
 
     #[test]
@@ -4101,6 +4185,7 @@ mod tests {
         StandardDeviation,
         Cci,
         WilliamsR,
+        StochasticRsi,
         Donchian,
         Keltner,
         AdxDmi,
@@ -4129,6 +4214,7 @@ mod tests {
             TestKind::StandardDeviation => vec![standard_deviation(input.close, 5)],
             TestKind::Cci => vec![cci(input.high, input.low, input.close, 5)],
             TestKind::WilliamsR => vec![williams_r(input.high, input.low, input.close, 5)],
+            TestKind::StochasticRsi => vec![stochastic_rsi(input.close, 5, 5)],
             TestKind::Donchian => {
                 let points = donchian(input.high, input.low, 5);
                 vec![
@@ -4250,6 +4336,10 @@ mod tests {
             ),
             (TestKind::Cci, IncrementalState::cci(5)),
             (TestKind::WilliamsR, IncrementalState::williams_r(5)),
+            (
+                TestKind::StochasticRsi,
+                IncrementalState::stochastic_rsi(5, 5),
+            ),
             (TestKind::Donchian, IncrementalState::donchian(5)),
             (TestKind::Keltner, IncrementalState::keltner(5, 2.0)),
             (TestKind::AdxDmi, IncrementalState::adx_dmi(5)),

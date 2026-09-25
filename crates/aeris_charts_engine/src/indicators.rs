@@ -124,6 +124,10 @@ pub enum IndicatorKind {
     WilliamsR {
         period: usize,
     },
+    StochasticRsi {
+        rsi_period: usize,
+        stochastic_period: usize,
+    },
     Donchian {
         period: usize,
     },
@@ -495,6 +499,19 @@ impl ChartEngine {
                                 ..IndicatorParameters::default()
                             },
                         ),
+                        IndicatorKind::StochasticRsi {
+                            rsi_period,
+                            stochastic_period,
+                        } => (
+                            "stochastic_rsi",
+                            rsi_period,
+                            Some(stochastic_period as f64),
+                            IndicatorParameters {
+                                period: Some(rsi_period),
+                                k_period: Some(stochastic_period),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
                         IndicatorKind::Donchian { period } => (
                             "donchian",
                             period,
@@ -715,6 +732,24 @@ impl ChartEngine {
         self.add_indicator_kind(source, IndicatorKind::WilliamsR { period }, None)
             .into_iter()
             .next()
+    }
+
+    pub fn add_stochastic_rsi(
+        &mut self,
+        source: SeriesId,
+        rsi_period: usize,
+        stochastic_period: usize,
+    ) -> Option<SeriesId> {
+        self.add_indicator_kind(
+            source,
+            IndicatorKind::StochasticRsi {
+                rsi_period,
+                stochastic_period,
+            },
+            None,
+        )
+        .into_iter()
+        .next()
     }
 
     pub fn add_donchian(&mut self, source: SeriesId, period: usize) -> Vec<SeriesId> {
@@ -961,6 +996,11 @@ impl ChartEngine {
                     self.place_outputs_in_oscillator_pane(&ids);
                 }
             }
+            IndicatorKind::StochasticRsi { .. } => {
+                if !ids.is_empty() {
+                    self.place_outputs_in_oscillator_pane(&ids);
+                }
+            }
             IndicatorKind::Sma { .. }
             | IndicatorKind::Ema { .. }
             | IndicatorKind::Dema { .. }
@@ -1060,6 +1100,13 @@ impl ChartEngine {
             IndicatorKind::Keltner { period, multiplier } => {
                 parameters.push(integer("period", period));
                 parameters.push(number("multiplier", multiplier));
+            }
+            IndicatorKind::StochasticRsi {
+                rsi_period,
+                stochastic_period,
+            } => {
+                parameters.push(integer("rsi_period", rsi_period));
+                parameters.push(integer("stochastic_period", stochastic_period));
             }
             IndicatorKind::AdxDmi { period } => parameters.push(integer("period", period)),
             IndicatorKind::ParabolicSar => {}
@@ -1228,6 +1275,10 @@ impl ChartEngine {
                 IndicatorKind::AdxDmi { period } => *period == 0,
                 IndicatorKind::Cci { period } => *period == 0,
                 IndicatorKind::WilliamsR { period } => *period == 0,
+                IndicatorKind::StochasticRsi {
+                    rsi_period,
+                    stochastic_period,
+                } => *rsi_period == 0 || *stochastic_period == 0,
                 IndicatorKind::ParabolicSar => false,
                 IndicatorKind::SuperTrend { period, multiplier } => {
                     *period == 0 || !multiplier.is_finite() || *multiplier < 0.0
@@ -1293,6 +1344,10 @@ impl ChartEngine {
                         IndicatorKind::WilliamsR { .. } => Some(SeriesThresholdRegion {
                             lower: -80.0,
                             upper: -20.0,
+                        }),
+                        IndicatorKind::StochasticRsi { .. } => Some(SeriesThresholdRegion {
+                            lower: 20.0,
+                            upper: 80.0,
                         }),
                         _ => None,
                     };
@@ -1580,6 +1635,7 @@ fn indicator_kind_name(kind: &IndicatorKind) -> &'static str {
         IndicatorKind::StandardDeviation { .. } => "standard_deviation",
         IndicatorKind::Cci { .. } => "cci",
         IndicatorKind::WilliamsR { .. } => "williams_r",
+        IndicatorKind::StochasticRsi { .. } => "stochastic_rsi",
         IndicatorKind::Donchian { .. } => "donchian",
         IndicatorKind::Keltner { .. } => "keltner",
         IndicatorKind::AdxDmi { .. } => "adx_dmi",
@@ -1622,6 +1678,12 @@ fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators::Increment
         IndicatorKind::Cci { period } => aeris_charts_indicators::IncrementalState::cci(period),
         IndicatorKind::WilliamsR { period } => {
             aeris_charts_indicators::IncrementalState::williams_r(period)
+        }
+        IndicatorKind::StochasticRsi {
+            rsi_period,
+            stochastic_period,
+        } => {
+            aeris_charts_indicators::IncrementalState::stochastic_rsi(rsi_period, stochastic_period)
         }
         IndicatorKind::ParabolicSar => aeris_charts_indicators::IncrementalState::parabolic_sar(),
         IndicatorKind::SuperTrend { period, multiplier } => {
@@ -1693,6 +1755,10 @@ fn indicator_title(kind: &IndicatorKind) -> String {
         IndicatorKind::StandardDeviation { period } => format!("Std Dev {period}"),
         IndicatorKind::Cci { period } => format!("CCI {period}"),
         IndicatorKind::WilliamsR { period } => format!("Williams %R {period}"),
+        IndicatorKind::StochasticRsi {
+            rsi_period,
+            stochastic_period,
+        } => format!("Stochastic RSI {rsi_period} {stochastic_period}"),
         IndicatorKind::Donchian { period } => format!("Donchian {period}"),
         IndicatorKind::Keltner { period, multiplier } => {
             format!("Keltner {period} {}", params(*multiplier))
@@ -1765,6 +1831,7 @@ fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static 
         IndicatorKind::StandardDeviation { .. } => "Std Dev",
         IndicatorKind::Cci { .. } => "CCI",
         IndicatorKind::WilliamsR { .. } => "%R",
+        IndicatorKind::StochasticRsi { .. } => "Stoch RSI",
         IndicatorKind::Donchian { .. } => ["Upper", "Basis", "Lower"][output_index],
         IndicatorKind::Keltner { .. } => ["Upper", "Basis", "Lower"][output_index],
         IndicatorKind::AdxDmi { .. } => ["+DI", "-DI", "ADX"][output_index],

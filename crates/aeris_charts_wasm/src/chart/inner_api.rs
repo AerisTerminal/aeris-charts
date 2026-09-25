@@ -135,6 +135,10 @@ impl ChartInner {
             "standard_deviation" => IndicatorKind::StandardDeviation { period },
             "cci" => IndicatorKind::Cci { period },
             "williams_r" => IndicatorKind::WilliamsR { period },
+            "stochastic_rsi" => IndicatorKind::StochasticRsi {
+                rsi_period: period,
+                stochastic_period: period,
+            },
             "donchian" => IndicatorKind::Donchian { period },
             "keltner" => IndicatorKind::Keltner {
                 period,
@@ -269,6 +273,21 @@ impl ChartInner {
     pub fn add_williams_r(&mut self, source_id: u32, period: u32) -> u32 {
         self.engine
             .add_williams_r(source_id as SeriesId, period as usize)
+            .unwrap_or(u32::MAX)
+    }
+
+    pub fn add_stochastic_rsi(
+        &mut self,
+        source_id: u32,
+        rsi_period: u32,
+        stochastic_period: u32,
+    ) -> u32 {
+        self.engine
+            .add_stochastic_rsi(
+                source_id as SeriesId,
+                rsi_period as usize,
+                stochastic_period as usize,
+            )
             .unwrap_or(u32::MAX)
     }
 

@@ -4893,6 +4893,17 @@ export class chart_impl implements chart_api {
     );
   }
 
+  add_stochastic_rsi(source: series_api, rsi_period: number, stochastic_period: number, options?: Partial<series_options>): series_api {
+    return this.indicator_series(
+      this.wasm.add_stochastic_rsi(
+        source.id,
+        Math.max(1, Math.floor(rsi_period)),
+        Math.max(1, Math.floor(stochastic_period)),
+      ),
+      options,
+    );
+  }
+
   add_donchian(source: series_api, period: number, options?: Partial<series_options>): [series_api, series_api, series_api] {
     const ids = this.wasm.add_donchian(source.id, Math.max(1, Math.floor(period)));
     if (ids.length !== 3) throw new AerisChartsError("invalid_options", "invalid Donchian configuration");

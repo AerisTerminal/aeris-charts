@@ -1698,6 +1698,14 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
                 source[1], source[2], source[3], period,
             )]
         }
+        IndicatorKind::StochasticRsi {
+            rsi_period,
+            stochastic_period,
+        } => vec![aeris_charts_indicators::stochastic_rsi(
+            source[3],
+            rsi_period,
+            stochastic_period,
+        )],
         IndicatorKind::Donchian { period } => {
             let points = aeris_charts_indicators::donchian(source[1], source[2], period);
             vec![
@@ -1899,6 +1907,10 @@ fn every_indicator_engine_path_matches_full_recomputation() {
         IndicatorKind::Ichimoku,
         IndicatorKind::Cci { period: 5 },
         IndicatorKind::WilliamsR { period: 5 },
+        IndicatorKind::StochasticRsi {
+            rsi_period: 5,
+            stochastic_period: 5,
+        },
     ];
     for kind in kinds {
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);

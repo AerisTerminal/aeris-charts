@@ -356,6 +356,7 @@ fn incremental_output_count(kind: &IndicatorKind) -> usize {
         | IndicatorKind::StandardDeviation { .. }
         | IndicatorKind::Cci { .. }
         | IndicatorKind::WilliamsR { .. }
+        | IndicatorKind::StochasticRsi { .. }
         | IndicatorKind::Rsi { .. }
         | IndicatorKind::Atr { .. }
         | IndicatorKind::Vwap
@@ -420,6 +421,10 @@ fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
             *period > 0 && multiplier.is_finite() && *multiplier >= 0.0
         }
         IndicatorKind::AdxDmi { period } => *period > 0,
+        IndicatorKind::StochasticRsi {
+            rsi_period,
+            stochastic_period,
+        } => *rsi_period > 0 && *stochastic_period > 0,
         IndicatorKind::ParabolicSar => true,
         IndicatorKind::SuperTrend { period, multiplier } => {
             *period > 0 && multiplier.is_finite() && *multiplier >= 0.0
@@ -2060,6 +2065,25 @@ mod tests {
         restored.import_state_json(&document).unwrap();
         let binding = &restored.indicator_bindings()[0];
         assert_eq!(binding.kind, crate::IndicatorKind::WilliamsR { period: 3 });
+        assert_eq!(binding.outputs, vec![output]);
+    }
+
+    #[test]
+    fn stochastic_rsi_persistence_round_trips_two_periods() {
+        let mut chart = settled_chart();
+        let output = chart.add_stochastic_rsi(0, 3, 4).unwrap();
+        let document = chart.export_state_json().unwrap();
+
+        let mut restored = settled_chart();
+        restored.import_state_json(&document).unwrap();
+        let binding = &restored.indicator_bindings()[0];
+        assert_eq!(
+            binding.kind,
+            crate::IndicatorKind::StochasticRsi {
+                rsi_period: 3,
+                stochastic_period: 4,
+            }
+        );
         assert_eq!(binding.outputs, vec![output]);
     }
 
