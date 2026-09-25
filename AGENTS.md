@@ -78,9 +78,30 @@ A passing unit test that bypasses the real host or executor path is not sufficie
 - Never commit credentials, tokens, proprietary provider data, generated packages, build outputs, browser reports, or local fixtures accidentally.
 - Check the project and third-party licenses before copying external implementation code or assets.
 
+## Work cadence
+
+Delivery speed matters. Work in large, coherent batches and verify each batch completely once,
+instead of stopping to run the complete gates after every small change.
+
+- **Batch.** A batch is a coherent capability area that is dependency-complete on its own, for
+  example a full plan phase section, several related coverage-matrix rows, or one Expansion.md
+  foundation with its dependent items. Implement every slice in the batch before running the
+  complete gates. Do not pause between slices for complete gates, commits, or pushes.
+- **While implementing.** Run only focused checks for what changed: `cargo check`, unit tests and
+  `cargo clippy` for the touched crates, and the frame fixtures of the affected families. Write the
+  regression tests and fixtures for each slice as it is built so the batch gate exercises them.
+- **End of batch.** Run the complete gates below once, fix every failure, rerun until green, then
+  commit and push the batch. Never commit or push a batch with a failing or skipped required gate.
+- **Failure isolation.** When the batch gate fails and the cause is not obvious, rerun the focused
+  checks slice by slice to locate it rather than weakening or skipping the gate.
+- **Phase closure.** Manual evidence (themed and overflow screenshots, accessibility review,
+  competitor comparison, recorded benchmarks) is collected once when a plan phase closes, not per
+  batch.
+
 ## Verification and delivery
 
-Use focused checks while iterating. Before committing code, run the applicable complete gates with zero warnings:
+Use focused checks while iterating, as described in **Work cadence**. At the end of each batch,
+before committing, run the applicable complete gates with zero warnings:
 
 ```text
 cargo fmt --all -- --check
@@ -97,7 +118,7 @@ npm run typecheck
 npm run test:pack
 ```
 
-Run Playwright for browser-facing changes and GPUI parity/replay checks for GPUI executor changes. Documentation-only changes may skip code gates, but still require diff, link/path, architecture-consistency, and documentation-hygiene checks.
+Run Playwright once per batch when the batch changes browser-facing behavior, and GPUI parity/replay checks once per batch when it changes GPUI executor behavior. Documentation-only changes may skip code gates, but still require diff, link/path, architecture-consistency, and documentation-hygiene checks.
 
 ### crates.io releases
 
@@ -121,6 +142,6 @@ nucleuscharts_wasm
 Run a package or publish dry run at each layer before its irreversible upload. Never place a crates.io
 token in repository files, shell history, logs, or task messages.
 
-When complete, review the diff, commit once with a structured message describing the outcome and verification, push `main` to `github` without force, and report remaining manual verification honestly.
+When a batch is complete and its gates pass, review the diff, commit the batch once with a structured message describing the delivered capabilities and verification, push `main` to `github` without force, and report remaining manual verification honestly.
 
 Do not stop at a plan when implementation is authorized and safe. Do not claim completion while a required check is failing.
