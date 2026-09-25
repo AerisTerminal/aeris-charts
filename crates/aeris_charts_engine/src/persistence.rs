@@ -1972,6 +1972,74 @@ mod tests {
     }
 
     #[test]
+    fn f4_exit_fixture_round_trips_hlc3_rsi_sma_and_bollinger_fill() {
+        let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+        let times = (0..16)
+            .map(|index| (index * 3_600) as f64)
+            .collect::<Vec<_>>();
+        let close = (0..16)
+            .map(|index| 100.0 + (index as f64 * 0.7).sin() * 3.0 + index as f64 * 0.2)
+            .collect::<Vec<_>>();
+        let high = close.iter().map(|value| value + 1.25).collect::<Vec<_>>();
+        let low = close.iter().map(|value| value - 1.0).collect::<Vec<_>>();
+        let open = close.iter().map(|value| value - 0.15).collect::<Vec<_>>();
+        chart
+            .set_series_data(0, &times, &open, &high, &low, &close)
+            .unwrap();
+        let rsi = chart
+            .add_indicator_kind_with_input(
+                0,
+                crate::IndicatorInputSource::Hlc3,
+                crate::IndicatorKind::Rsi { period: 3 },
+                None,
+            )
+            .into_iter()
+            .next()
+            .unwrap();
+        let sma = chart.add_sma(rsi, 2).unwrap();
+        let bands = chart.add_bollinger(sma, 2, 2.0);
+        let fill_style = IndicatorOutputStyle {
+            area_top_color: Some("rgba(20, 120, 220, 0.24)".into()),
+            area_bottom_color: Some("rgba(20, 120, 220, 0.04)".into()),
+            ..IndicatorOutputStyle::default()
+        };
+        assert!(chart.set_indicator_output_style(bands[0], fill_style.clone()));
+        let document = chart.export_state_json().unwrap();
+        let original_values = chart
+            .indicator_bindings()
+            .iter()
+            .flat_map(|binding| {
+                binding
+                    .outputs
+                    .iter()
+                    .map(|&id| chart.data.series_data(id).unwrap().1[3].to_vec())
+            })
+            .collect::<Vec<_>>();
+
+        let mut restored = ChartEngine::new(800.0, 500.0, 1.0);
+        restored
+            .set_series_data(0, &times, &open, &high, &low, &close)
+            .unwrap();
+        restored.import_state_json(&document).unwrap();
+        let bindings = restored.indicator_bindings();
+        assert_eq!(bindings.len(), 3);
+        assert_eq!(bindings[0].source_input, crate::IndicatorInputSource::Hlc3);
+        assert_eq!(bindings[1].source, bindings[0].outputs[0]);
+        assert_eq!(bindings[2].source, bindings[1].outputs[0]);
+        assert_eq!(bindings[2].styles[0], fill_style);
+        let restored_values = bindings
+            .iter()
+            .flat_map(|binding| {
+                binding
+                    .outputs
+                    .iter()
+                    .map(|&id| restored.data.series_data(id).unwrap().1[3].to_vec())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(restored_values, original_values);
+    }
+
+    #[test]
     fn obv_persistence_round_trips_volume_source() {
         let mut chart = settled_chart();
         let volume = chart.add_series(crate::SeriesKind::Histogram);
