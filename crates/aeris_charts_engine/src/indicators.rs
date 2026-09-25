@@ -115,6 +115,9 @@ pub enum IndicatorKind {
     Vwma {
         period: usize,
     },
+    StandardDeviation {
+        period: usize,
+    },
     EmaRibbon {
         periods: [usize; aeris_charts_indicators::MAX_OUTPUTS],
     },
@@ -443,6 +446,15 @@ impl ChartEngine {
                                 ..IndicatorParameters::default()
                             },
                         ),
+                        IndicatorKind::StandardDeviation { period } => (
+                            "standard_deviation",
+                            period,
+                            None,
+                            IndicatorParameters {
+                                period: Some(period),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
                         IndicatorKind::EmaRibbon { periods } => (
                             "ema_ribbon",
                             periods[output_index],
@@ -599,6 +611,12 @@ impl ChartEngine {
         period: usize,
     ) -> Option<SeriesId> {
         self.add_indicator_kind(source, IndicatorKind::Vwma { period }, volume_source)
+            .into_iter()
+            .next()
+    }
+
+    pub fn add_standard_deviation(&mut self, source: SeriesId, period: usize) -> Option<SeriesId> {
+        self.add_indicator_kind(source, IndicatorKind::StandardDeviation { period }, None)
             .into_iter()
             .next()
     }
@@ -797,6 +815,7 @@ impl ChartEngine {
             | IndicatorKind::Smma { .. }
             | IndicatorKind::Hma { .. }
             | IndicatorKind::Vwma { .. }
+            | IndicatorKind::StandardDeviation { .. }
             | IndicatorKind::EmaRibbon { .. }
             | IndicatorKind::Bollinger { .. }
             | IndicatorKind::Vwap
@@ -864,6 +883,7 @@ impl ChartEngine {
             | IndicatorKind::Tema { period }
             | IndicatorKind::Smma { period }
             | IndicatorKind::Hma { period }
+            | IndicatorKind::StandardDeviation { period }
             | IndicatorKind::Rsi { period }
             | IndicatorKind::Atr { period }
             | IndicatorKind::Wma { period } => parameters.push(integer("period", period)),
@@ -1023,6 +1043,7 @@ impl ChartEngine {
                 | IndicatorKind::Smma { period }
                 | IndicatorKind::Hma { period }
                 | IndicatorKind::Vwma { period }
+                | IndicatorKind::StandardDeviation { period }
                 | IndicatorKind::Bollinger { period, .. }
                 | IndicatorKind::Rsi { period }
                 | IndicatorKind::Atr { period }
@@ -1364,6 +1385,7 @@ fn indicator_kind_name(kind: &IndicatorKind) -> &'static str {
         IndicatorKind::Smma { .. } => "smma",
         IndicatorKind::Hma { .. } => "hma",
         IndicatorKind::Vwma { .. } => "vwma",
+        IndicatorKind::StandardDeviation { .. } => "standard_deviation",
         IndicatorKind::EmaRibbon { .. } => "ema_ribbon",
         IndicatorKind::Bollinger { .. } => "bollinger",
         IndicatorKind::Rsi { .. } => "rsi",
@@ -1385,6 +1407,9 @@ fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators::Increment
         IndicatorKind::Smma { period } => aeris_charts_indicators::IncrementalState::smma(period),
         IndicatorKind::Hma { period } => aeris_charts_indicators::IncrementalState::hma(period),
         IndicatorKind::Vwma { period } => aeris_charts_indicators::IncrementalState::vwma(period),
+        IndicatorKind::StandardDeviation { period } => {
+            aeris_charts_indicators::IncrementalState::standard_deviation(period)
+        }
         IndicatorKind::EmaRibbon { periods } => {
             aeris_charts_indicators::IncrementalState::ema_ribbon(periods)
         }
@@ -1447,6 +1472,7 @@ fn indicator_title(kind: &IndicatorKind) -> String {
         IndicatorKind::Smma { period } => format!("SMMA {period}"),
         IndicatorKind::Hma { period } => format!("HMA {period}"),
         IndicatorKind::Vwma { period } => format!("VWMA {period}"),
+        IndicatorKind::StandardDeviation { period } => format!("Std Dev {period}"),
         IndicatorKind::EmaRibbon { periods } => format!(
             "EMA Ribbon {} {} {} {} {}",
             periods[0], periods[1], periods[2], periods[3], periods[4]
@@ -1506,6 +1532,7 @@ fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static 
         IndicatorKind::Smma { .. } => "SMMA",
         IndicatorKind::Hma { .. } => "HMA",
         IndicatorKind::Vwma { .. } => "VWMA",
+        IndicatorKind::StandardDeviation { .. } => "Std Dev",
         IndicatorKind::EmaRibbon { .. } => {
             ["EMA 1", "EMA 2", "EMA 3", "EMA 4", "EMA 5"][output_index]
         }

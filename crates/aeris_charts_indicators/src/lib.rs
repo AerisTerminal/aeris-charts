@@ -159,6 +159,26 @@ pub fn vwma(values: &[f64], volumes: &[f64], period: usize) -> Vec<Option<f64>> 
     out
 }
 
+/// Population standard deviation over a rolling window.
+pub fn standard_deviation(values: &[f64], period: usize) -> Vec<Option<f64>> {
+    if period == 0 {
+        return vec![None; values.len()];
+    }
+    let mut out = vec![None; values.len()];
+    for (row, output) in out.iter_mut().enumerate().skip(period.saturating_sub(1)) {
+        let start = row + 1 - period;
+        let window = &values[start..=row];
+        let mean = window.iter().sum::<f64>() / period as f64;
+        let variance = window
+            .iter()
+            .map(|value| (value - mean).powi(2))
+            .sum::<f64>()
+            / period as f64;
+        *output = Some(variance.sqrt());
+    }
+    out
+}
+
 fn wma_at(values: &[f64], row: usize, period: usize) -> Option<f64> {
     if period == 0 || row.saturating_add(1) < period {
         return None;
@@ -1511,6 +1531,9 @@ enum IncrementalKind {
     Vwma {
         period: usize,
     },
+    StandardDeviation {
+        period: usize,
+    },
     EmaRibbon {
         periods: [usize; MAX_OUTPUTS],
         states: Box<[RecursiveHistory<EmaState>; MAX_OUTPUTS]>,
@@ -1627,6 +1650,10 @@ impl IncrementalState {
 
     pub fn vwma(period: usize) -> Self {
         Self::new(IncrementalKind::Vwma { period }, 1)
+    }
+
+    pub fn standard_deviation(period: usize) -> Self {
+        Self::new(IncrementalKind::StandardDeviation { period }, 1)
     }
 
     pub fn ema_ribbon(periods: [usize; MAX_OUTPUTS]) -> Self {
@@ -1772,6 +1799,7 @@ impl IncrementalState {
             | IncrementalKind::Wma { .. }
             | IncrementalKind::Hma { .. } => 0,
             IncrementalKind::Vwma { .. } => 0,
+            IncrementalKind::StandardDeviation { .. } => 0,
         }
     }
 
@@ -1907,6 +1935,12 @@ impl IncrementalState {
                             .expect("VWMA after warmup"),
                     );
                 }
+            }
+            IncrementalKind::StandardDeviation { period } => {
+                let start = self.output_from[0];
+                self.last_work_rows = n - start;
+                let values = standard_deviation(input.close, *period);
+                self.outputs[0].extend(values.into_iter().skip(start).flatten());
             }
             IncrementalKind::EmaRibbon { periods, states } => {
                 for (output_index, (&period, state)) in
@@ -2218,6 +2252,7 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
             ]
         }
         IncrementalKind::Vwma { period } => [period.saturating_sub(1), 0, 0, 0, 0],
+        IncrementalKind::StandardDeviation { period } => [period.saturating_sub(1), 0, 0, 0, 0],
         IncrementalKind::EmaRibbon { periods, .. } => {
             periods.map(|period| period.saturating_sub(1))
         }
@@ -2329,6 +2364,19 @@ mod tests {
         assert_eq!(
             vwma(&[10.0, 20.0, 30.0], &[0.0, 0.0, 0.0], 2),
             vec![None, Some(15.0), Some(25.0)]
+        );
+    }
+
+    #[test]
+    fn standard_deviation_uses_population_window_variance() {
+        assert_eq!(
+            standard_deviation(&[1.0, 2.0, 3.0, 5.0], 3),
+            vec![
+                None,
+                None,
+                Some((2.0_f64 / 3.0).sqrt()),
+                Some((14.0_f64 / 9.0).sqrt())
+            ]
         );
     }
 
@@ -3102,6 +3150,7 @@ mod tests {
         Smma,
         Hma,
         Vwma,
+        StandardDeviation,
         EmaRibbon,
         Bollinger,
         Rsi,
@@ -3121,6 +3170,7 @@ mod tests {
             TestKind::Smma => vec![smma(input.close, 5)],
             TestKind::Hma => vec![hma(input.close, 5)],
             TestKind::Vwma => vec![vwma(input.close, input.volume, 5)],
+            TestKind::StandardDeviation => vec![standard_deviation(input.close, 5)],
             TestKind::EmaRibbon => [3, 5, 8, 13, 21]
                 .into_iter()
                 .map(|period| ema(input.close, period))
@@ -3200,6 +3250,10 @@ mod tests {
             (TestKind::Smma, IncrementalState::smma(5)),
             (TestKind::Hma, IncrementalState::hma(5)),
             (TestKind::Vwma, IncrementalState::vwma(5)),
+            (
+                TestKind::StandardDeviation,
+                IncrementalState::standard_deviation(5),
+            ),
             (
                 TestKind::EmaRibbon,
                 IncrementalState::ema_ribbon([3, 5, 8, 13, 21]),

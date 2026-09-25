@@ -353,6 +353,7 @@ fn incremental_output_count(kind: &IndicatorKind) -> usize {
         | IndicatorKind::Smma { .. }
         | IndicatorKind::Hma { .. }
         | IndicatorKind::Vwma { .. }
+        | IndicatorKind::StandardDeviation { .. }
         | IndicatorKind::Rsi { .. }
         | IndicatorKind::Atr { .. }
         | IndicatorKind::Vwap
@@ -400,6 +401,7 @@ fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
         | IndicatorKind::Smma { period }
         | IndicatorKind::Hma { period }
         | IndicatorKind::Vwma { period }
+        | IndicatorKind::StandardDeviation { period }
         | IndicatorKind::Rsi { period }
         | IndicatorKind::Atr { period }
         | IndicatorKind::Wma { period } => *period > 0,
