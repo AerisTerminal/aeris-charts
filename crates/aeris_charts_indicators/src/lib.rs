@@ -22,6 +22,13 @@ pub struct DonchianPoint {
     pub lower: Option<f64>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KeltnerPoint {
+    pub upper: Option<f64>,
+    pub middle: Option<f64>,
+    pub lower: Option<f64>,
+}
+
 /// Simple moving average. The first `period - 1` values are warm-up `None` entries.
 pub fn sma(values: &[f64], period: usize) -> Vec<Option<f64>> {
     if period == 0 {
@@ -215,6 +222,42 @@ pub fn donchian(high: &[f64], low: &[f64], period: usize) -> Vec<DonchianPoint> 
             middle: Some((upper + lower) * 0.5),
             lower: Some(lower),
         };
+    }
+    out
+}
+
+/// Keltner channel using an EMA center and Wilder ATR envelope.
+pub fn keltner(
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    period: usize,
+    multiplier: f64,
+) -> Vec<KeltnerPoint> {
+    let n = highs.len().min(lows.len()).min(closes.len());
+    let mut out = vec![
+        KeltnerPoint {
+            upper: None,
+            middle: None,
+            lower: None,
+        };
+        n
+    ];
+    if period == 0 {
+        return out;
+    }
+    let middle = ema(&closes[..n], period);
+    let range = atr(&highs[..n], &lows[..n], &closes[..n], period);
+    let factor = multiplier.max(0.0);
+    for row in 0..n {
+        if let (Some(middle), Some(range)) = (middle[row], range[row]) {
+            let spread = range * factor;
+            out[row] = KeltnerPoint {
+                upper: Some(middle + spread),
+                middle: Some(middle),
+                lower: Some(middle - spread),
+            };
+        }
     }
     out
 }
@@ -1360,6 +1403,12 @@ struct AtrState {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+struct KeltnerState {
+    middle: EmaState,
+    atr: AtrState,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
 struct MacdState {
     fast: EmaState,
     slow: EmaState,
@@ -1457,6 +1506,31 @@ fn atr_step(state: &mut AtrState, sample: AtrSample, period: usize) -> Option<f6
     } else {
         state.value = (state.value * (period as f64 - 1.0) + tr) / period as f64;
         Some(state.value)
+    }
+}
+
+fn keltner_step(
+    state: &mut KeltnerState,
+    sample: AtrSample,
+    period: usize,
+    multiplier: f64,
+) -> KeltnerPoint {
+    let middle = ema_step(&mut state.middle, sample.close, period);
+    let range = atr_step(&mut state.atr, sample, period);
+    match (middle, range) {
+        (Some(middle), Some(range)) => {
+            let spread = range * multiplier.max(0.0);
+            KeltnerPoint {
+                upper: Some(middle + spread),
+                middle: Some(middle),
+                lower: Some(middle - spread),
+            }
+        }
+        _ => KeltnerPoint {
+            upper: None,
+            middle: None,
+            lower: None,
+        },
     }
 }
 
@@ -1576,6 +1650,11 @@ enum IncrementalKind {
     },
     Donchian {
         period: usize,
+    },
+    Keltner {
+        period: usize,
+        multiplier: f64,
+        state: RecursiveHistory<KeltnerState>,
     },
     EmaRibbon {
         periods: [usize; MAX_OUTPUTS],
@@ -1701,6 +1780,17 @@ impl IncrementalState {
 
     pub fn donchian(period: usize) -> Self {
         Self::new(IncrementalKind::Donchian { period }, 3)
+    }
+
+    pub fn keltner(period: usize, multiplier: f64) -> Self {
+        Self::new(
+            IncrementalKind::Keltner {
+                period,
+                multiplier,
+                state: RecursiveHistory::new(),
+            },
+            3,
+        )
     }
 
     pub fn ema_ribbon(periods: [usize; MAX_OUTPUTS]) -> Self {
@@ -1839,6 +1929,7 @@ impl IncrementalState {
                 state.bytes() + tail_k.capacity() * std::mem::size_of::<f64>()
             }
             IncrementalKind::Atr { state, .. } => state.bytes(),
+            IncrementalKind::Keltner { state, .. } => state.bytes(),
             IncrementalKind::Vwap { state } => state.bytes(),
             IncrementalKind::VwapBands { state, .. } => state.bytes(),
             IncrementalKind::Sma { .. }
@@ -1999,6 +2090,40 @@ impl IncrementalState {
                     self.outputs[1].push(point.middle.expect("Donchian middle after warmup"));
                     self.outputs[2].push(point.lower.expect("Donchian lower after warmup"));
                 }
+            }
+            IncrementalKind::Keltner {
+                period,
+                multiplier,
+                state,
+            } => {
+                let (start, mut accumulator) = state.begin(n, requested);
+                self.last_work_rows = n - start;
+                let mut tail = None;
+                let mut before_tail = None;
+                for row in start..n {
+                    let previous = accumulator;
+                    let point = keltner_step(
+                        &mut accumulator,
+                        AtrSample {
+                            high: input.high[row],
+                            low: input.low[row],
+                            close: input.close[row],
+                        },
+                        *period,
+                        *multiplier,
+                    );
+                    state.checkpoint(row, accumulator);
+                    if row >= self.output_from[0] {
+                        self.outputs[0].push(point.upper.expect("Keltner upper after warmup"));
+                        self.outputs[1].push(point.middle.expect("Keltner middle after warmup"));
+                        self.outputs[2].push(point.lower.expect("Keltner lower after warmup"));
+                    }
+                    if row + 1 == n {
+                        tail = Some(accumulator);
+                        before_tail = (row > 0).then_some(previous);
+                    }
+                }
+                state.finish(n, tail, before_tail);
             }
             IncrementalKind::EmaRibbon { periods, states } => {
                 for (output_index, (&period, state)) in
@@ -2318,6 +2443,7 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
             0,
             0,
         ],
+        IncrementalKind::Keltner { period, .. } => [*period, *period, *period, 0, 0],
         IncrementalKind::EmaRibbon { periods, .. } => {
             periods.map(|period| period.saturating_sub(1))
         }
@@ -3189,6 +3315,20 @@ mod tests {
     }
 
     #[test]
+    fn keltner_uses_ema_center_and_atr_envelope() {
+        let highs = [11.0, 12.0, 14.0, 15.0];
+        let lows = [9.0, 10.0, 11.0, 12.0];
+        let closes = [10.0, 11.0, 13.0, 14.0];
+        let points = keltner(&highs, &lows, &closes, 2, 2.0);
+        assert!(points[1].middle.is_none());
+        let center = ema(&closes, 2)[2].expect("EMA warmup");
+        let range = atr(&highs, &lows, &closes, 2)[2].expect("ATR warmup");
+        assert_eq!(points[2].middle, Some(center));
+        assert_eq!(points[2].upper, Some(center + range * 2.0));
+        assert_eq!(points[2].lower, Some(center - range * 2.0));
+    }
+
+    #[test]
     fn vwap_weights_by_volume_and_resets_each_utc_day() {
         // Day 0: tp 10 @ vol 1, tp 20 @ vol 3 → (10 + 60) / 4 = 17.5; day 1 restarts at tp 30.
         let times = [0, 3_600, 86_400];
@@ -3239,6 +3379,7 @@ mod tests {
         Vwma,
         StandardDeviation,
         Donchian,
+        Keltner,
         EmaRibbon,
         Bollinger,
         Rsi,
@@ -3261,6 +3402,14 @@ mod tests {
             TestKind::StandardDeviation => vec![standard_deviation(input.close, 5)],
             TestKind::Donchian => {
                 let points = donchian(input.high, input.low, 5);
+                vec![
+                    points.iter().map(|point| point.upper).collect(),
+                    points.iter().map(|point| point.middle).collect(),
+                    points.iter().map(|point| point.lower).collect(),
+                ]
+            }
+            TestKind::Keltner => {
+                let points = keltner(input.high, input.low, input.close, 5, 2.0);
                 vec![
                     points.iter().map(|point| point.upper).collect(),
                     points.iter().map(|point| point.middle).collect(),
@@ -3351,6 +3500,7 @@ mod tests {
                 IncrementalState::standard_deviation(5),
             ),
             (TestKind::Donchian, IncrementalState::donchian(5)),
+            (TestKind::Keltner, IncrementalState::keltner(5, 2.0)),
             (
                 TestKind::EmaRibbon,
                 IncrementalState::ema_ribbon([3, 5, 8, 13, 21]),

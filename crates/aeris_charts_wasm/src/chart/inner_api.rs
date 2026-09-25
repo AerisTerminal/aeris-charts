@@ -134,6 +134,10 @@ impl ChartInner {
             "vwma" => IndicatorKind::Vwma { period },
             "standard_deviation" => IndicatorKind::StandardDeviation { period },
             "donchian" => IndicatorKind::Donchian { period },
+            "keltner" => IndicatorKind::Keltner {
+                period,
+                multiplier: deviation,
+            },
             "ema_ribbon" => IndicatorKind::EmaRibbon {
                 periods: [period; 5],
             },
@@ -250,6 +254,11 @@ impl ChartInner {
     pub fn add_donchian(&mut self, source_id: u32, period: u32) -> Vec<u32> {
         self.engine
             .add_donchian(source_id as SeriesId, period as usize)
+    }
+
+    pub fn add_keltner(&mut self, source_id: u32, period: u32, multiplier: f64) -> Vec<u32> {
+        self.engine
+            .add_keltner(source_id as SeriesId, period as usize, multiplier)
     }
 
     pub fn add_ema_ribbon(&mut self, source_id: u32, periods: [u32; 5]) -> Vec<u32> {

@@ -358,7 +358,7 @@ fn incremental_output_count(kind: &IndicatorKind) -> usize {
         | IndicatorKind::Atr { .. }
         | IndicatorKind::Vwap
         | IndicatorKind::Wma { .. } => 1,
-        IndicatorKind::Donchian { .. } => 3,
+        IndicatorKind::Donchian { .. } | IndicatorKind::Keltner { .. } => 3,
         IndicatorKind::EmaRibbon { .. } => aeris_charts_indicators::MAX_OUTPUTS,
         IndicatorKind::Bollinger { .. } => 3,
         IndicatorKind::Macd { .. } => 3,
@@ -407,6 +407,9 @@ fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
         | IndicatorKind::Rsi { period }
         | IndicatorKind::Atr { period }
         | IndicatorKind::Wma { period } => *period > 0,
+        IndicatorKind::Keltner { period, multiplier } => {
+            *period > 0 && multiplier.is_finite() && *multiplier >= 0.0
+        }
         IndicatorKind::EmaRibbon { periods } => periods.iter().all(|period| *period > 0),
         IndicatorKind::Bollinger { period, deviation } => *period > 0 && deviation.is_finite(),
         IndicatorKind::Macd { fast, slow, signal } => *fast > 0 && *slow > 0 && *signal > 0,
@@ -1935,6 +1938,27 @@ mod tests {
         let baseline = untouched.export_state_json().unwrap();
         assert!(untouched.import_state_json(&invalid_document).is_err());
         assert_eq!(untouched.export_state_json().unwrap(), baseline);
+    }
+
+    #[test]
+    fn keltner_study_persistence_round_trips_three_outputs() {
+        let mut chart = settled_chart();
+        let outputs = chart.add_keltner(0, 3, 1.5);
+        assert_eq!(outputs.len(), 3);
+        let document = chart.export_state_json().unwrap();
+
+        let mut restored = settled_chart();
+        restored.import_state_json(&document).unwrap();
+        let bindings = restored.indicator_bindings();
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(
+            bindings[0].kind,
+            crate::IndicatorKind::Keltner {
+                period: 3,
+                multiplier: 1.5,
+            }
+        );
+        assert_eq!(bindings[0].outputs.len(), 3);
     }
 
     #[test]

@@ -968,7 +968,7 @@ export interface pane_geometry {
 
 /** Scalar input accepted by a built-in indicator. The source series may itself be an indicator output. */
 export type indicator_input_source = "open" | "high" | "low" | "close" | "hl2" | "hlc3" | "ohlc4" | "hlcc4";
-export type indicator_kind = "sma" | "ema" | "dema" | "tema" | "smma" | "hma" | "vwma" | "standard_deviation" | "donchian" | "ema_ribbon" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "vwap_bands" | "wma";
+export type indicator_kind = "sma" | "ema" | "dema" | "tema" | "smma" | "hma" | "vwma" | "standard_deviation" | "donchian" | "keltner" | "ema_ribbon" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "vwap_bands" | "wma";
 export type vwap_reset = "session" | "weekly" | "monthly";
 export type indicator_parameter_type = "integer" | "number" | "source" | "series";
 export interface indicator_parameter_descriptor {
@@ -2898,6 +2898,8 @@ export interface chart_api {
   add_vwma(source: series_api, period: number, volume_source?: series_api | null, options?: Partial<series_options>): series_api;
   add_standard_deviation(source: series_api, period: number, options?: Partial<series_options>): series_api;
   add_donchian(source: series_api, period: number, options?: Partial<series_options>): [series_api, series_api, series_api];
+  /** Add Keltner channel upper, middle, and lower lines using an EMA center and Wilder ATR envelope. */
+  add_keltner(source: series_api, period: number, multiplier?: number, options?: Partial<series_options>): [series_api, series_api, series_api];
   apply_options(options: deep_partial<chart_options>): void;
   options(): unknown;
   time_scale(): time_scale_api;

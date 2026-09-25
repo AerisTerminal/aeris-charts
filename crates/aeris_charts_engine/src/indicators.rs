@@ -121,6 +121,10 @@ pub enum IndicatorKind {
     Donchian {
         period: usize,
     },
+    Keltner {
+        period: usize,
+        multiplier: f64,
+    },
     EmaRibbon {
         periods: [usize; aeris_charts_indicators::MAX_OUTPUTS],
     },
@@ -467,6 +471,16 @@ impl ChartEngine {
                                 ..IndicatorParameters::default()
                             },
                         ),
+                        IndicatorKind::Keltner { period, multiplier } => (
+                            "keltner",
+                            period,
+                            Some(multiplier),
+                            IndicatorParameters {
+                                period: Some(period),
+                                deviation: Some(multiplier),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
                         IndicatorKind::EmaRibbon { periods } => (
                             "ema_ribbon",
                             periods[output_index],
@@ -635,6 +649,15 @@ impl ChartEngine {
 
     pub fn add_donchian(&mut self, source: SeriesId, period: usize) -> Vec<SeriesId> {
         self.add_indicator_kind(source, IndicatorKind::Donchian { period }, None)
+    }
+
+    pub fn add_keltner(
+        &mut self,
+        source: SeriesId,
+        period: usize,
+        multiplier: f64,
+    ) -> Vec<SeriesId> {
+        self.add_indicator_kind(source, IndicatorKind::Keltner { period, multiplier }, None)
     }
 
     /// Add five exponential moving averages as one binding in fastest-to-slowest output order.
@@ -833,6 +856,7 @@ impl ChartEngine {
             | IndicatorKind::Vwma { .. }
             | IndicatorKind::StandardDeviation { .. }
             | IndicatorKind::Donchian { .. }
+            | IndicatorKind::Keltner { .. }
             | IndicatorKind::EmaRibbon { .. }
             | IndicatorKind::Bollinger { .. }
             | IndicatorKind::Vwap
@@ -913,6 +937,10 @@ impl ChartEngine {
             IndicatorKind::Bollinger { period, deviation } => {
                 parameters.push(integer("period", period));
                 parameters.push(number("deviation", deviation));
+            }
+            IndicatorKind::Keltner { period, multiplier } => {
+                parameters.push(integer("period", period));
+                parameters.push(number("multiplier", multiplier));
             }
             IndicatorKind::Macd { fast, slow, signal } => {
                 parameters.push(integer("fast", fast));
@@ -1068,6 +1096,9 @@ impl ChartEngine {
                 | IndicatorKind::Atr { period }
                 | IndicatorKind::Wma { period } => *period == 0,
                 IndicatorKind::EmaRibbon { periods } => periods.contains(&0),
+                IndicatorKind::Keltner { period, multiplier } => {
+                    *period == 0 || !multiplier.is_finite() || *multiplier < 0.0
+                }
                 IndicatorKind::Macd { fast, slow, signal } => {
                     *fast == 0 || *slow == 0 || *signal == 0
                 }
@@ -1406,6 +1437,7 @@ fn indicator_kind_name(kind: &IndicatorKind) -> &'static str {
         IndicatorKind::Vwma { .. } => "vwma",
         IndicatorKind::StandardDeviation { .. } => "standard_deviation",
         IndicatorKind::Donchian { .. } => "donchian",
+        IndicatorKind::Keltner { .. } => "keltner",
         IndicatorKind::EmaRibbon { .. } => "ema_ribbon",
         IndicatorKind::Bollinger { .. } => "bollinger",
         IndicatorKind::Rsi { .. } => "rsi",
@@ -1432,6 +1464,9 @@ fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators::Increment
         }
         IndicatorKind::Donchian { period } => {
             aeris_charts_indicators::IncrementalState::donchian(period)
+        }
+        IndicatorKind::Keltner { period, multiplier } => {
+            aeris_charts_indicators::IncrementalState::keltner(period, multiplier)
         }
         IndicatorKind::EmaRibbon { periods } => {
             aeris_charts_indicators::IncrementalState::ema_ribbon(periods)
@@ -1497,6 +1532,9 @@ fn indicator_title(kind: &IndicatorKind) -> String {
         IndicatorKind::Vwma { period } => format!("VWMA {period}"),
         IndicatorKind::StandardDeviation { period } => format!("Std Dev {period}"),
         IndicatorKind::Donchian { period } => format!("Donchian {period}"),
+        IndicatorKind::Keltner { period, multiplier } => {
+            format!("Keltner {period} {}", params(*multiplier))
+        }
         IndicatorKind::EmaRibbon { periods } => format!(
             "EMA Ribbon {} {} {} {} {}",
             periods[0], periods[1], periods[2], periods[3], periods[4]
@@ -1558,6 +1596,7 @@ fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static 
         IndicatorKind::Vwma { .. } => "VWMA",
         IndicatorKind::StandardDeviation { .. } => "Std Dev",
         IndicatorKind::Donchian { .. } => ["Upper", "Basis", "Lower"][output_index],
+        IndicatorKind::Keltner { .. } => ["Upper", "Basis", "Lower"][output_index],
         IndicatorKind::EmaRibbon { .. } => {
             ["EMA 1", "EMA 2", "EMA 3", "EMA 4", "EMA 5"][output_index]
         }

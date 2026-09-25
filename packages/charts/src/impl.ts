@@ -4889,6 +4889,16 @@ export class chart_impl implements chart_api {
     ];
   }
 
+  add_keltner(source: series_api, period: number, multiplier = 2, options?: Partial<series_options>): [series_api, series_api, series_api] {
+    const ids = this.wasm.add_keltner(source.id, Math.max(1, Math.floor(period)), multiplier);
+    if (ids.length !== 3) throw new AerisChartsError("invalid_options", "invalid Keltner configuration");
+    return [
+      this.indicator_series(ids[0]!, options),
+      this.indicator_series(ids[1]!, options),
+      this.indicator_series(ids[2]!, options),
+    ];
+  }
+
   subscribe_crosshair_move(handler: mouse_event_handler): void {
     this.crosshair_subs.add(handler);
   }
