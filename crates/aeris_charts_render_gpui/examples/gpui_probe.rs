@@ -16,6 +16,8 @@
 //! - `AERIS_CHARTS_PROBE_BARS` — synthetic bars to load (default 500).
 //! - `AERIS_CHARTS_PROBE_FRAMES` — quit after N painted frames and print a metrics summary. Unset runs
 //!   interactively until the window closes.
+//! - `AERIS_CHARTS_PROBE_FEATURE=footprint` — finite probes start in the deterministic detailed-LOD
+//!   footprint fixture instead of the default candlestick fixture.
 
 use std::{
     collections::HashMap,
@@ -4347,6 +4349,10 @@ fn main() {
                 } else {
                     AppRoot::Finite(cx.new(|cx| {
                         let mut probe = Probe::new(bars, budget);
+                        if std::env::var("AERIS_CHARTS_PROBE_FEATURE").as_deref() == Ok("footprint")
+                        {
+                            probe.enable_footprint();
+                        }
                         probe.focus_handle = Some(cx.focus_handle());
                         probe
                     }))
