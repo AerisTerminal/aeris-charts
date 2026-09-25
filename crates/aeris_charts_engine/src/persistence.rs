@@ -355,6 +355,7 @@ fn incremental_output_count(kind: &IndicatorKind) -> usize {
         | IndicatorKind::Vwma { .. }
         | IndicatorKind::StandardDeviation { .. }
         | IndicatorKind::Cci { .. }
+        | IndicatorKind::WilliamsR { .. }
         | IndicatorKind::Rsi { .. }
         | IndicatorKind::Atr { .. }
         | IndicatorKind::Vwap
@@ -410,6 +411,7 @@ fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
         | IndicatorKind::Vwma { period }
         | IndicatorKind::StandardDeviation { period }
         | IndicatorKind::Cci { period }
+        | IndicatorKind::WilliamsR { period }
         | IndicatorKind::Donchian { period }
         | IndicatorKind::Rsi { period }
         | IndicatorKind::Atr { period }
@@ -2045,6 +2047,19 @@ mod tests {
         restored.import_state_json(&document).unwrap();
         let binding = &restored.indicator_bindings()[0];
         assert_eq!(binding.kind, crate::IndicatorKind::Cci { period: 3 });
+        assert_eq!(binding.outputs, vec![output]);
+    }
+
+    #[test]
+    fn williams_r_persistence_round_trips_period_and_output() {
+        let mut chart = settled_chart();
+        let output = chart.add_williams_r(0, 3).unwrap();
+        let document = chart.export_state_json().unwrap();
+
+        let mut restored = settled_chart();
+        restored.import_state_json(&document).unwrap();
+        let binding = &restored.indicator_bindings()[0];
+        assert_eq!(binding.kind, crate::IndicatorKind::WilliamsR { period: 3 });
         assert_eq!(binding.outputs, vec![output]);
     }
 

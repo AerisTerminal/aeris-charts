@@ -968,7 +968,7 @@ export interface pane_geometry {
 
 /** Scalar input accepted by a built-in indicator. The source series may itself be an indicator output. */
 export type indicator_input_source = "open" | "high" | "low" | "close" | "hl2" | "hlc3" | "ohlc4" | "hlcc4";
-export type indicator_kind = "sma" | "ema" | "dema" | "tema" | "smma" | "hma" | "vwma" | "standard_deviation" | "cci" | "donchian" | "keltner" | "adx_dmi" | "parabolic_sar" | "supertrend" | "ichimoku" | "ema_ribbon" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "vwap_bands" | "wma";
+export type indicator_kind = "sma" | "ema" | "dema" | "tema" | "smma" | "hma" | "vwma" | "standard_deviation" | "cci" | "williams_r" | "donchian" | "keltner" | "adx_dmi" | "parabolic_sar" | "supertrend" | "ichimoku" | "ema_ribbon" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "vwap_bands" | "wma";
 export type vwap_reset = "session" | "weekly" | "monthly";
 export type indicator_parameter_type = "integer" | "number" | "source" | "series";
 export interface indicator_parameter_descriptor {
@@ -2899,6 +2899,8 @@ export interface chart_api {
   add_standard_deviation(source: series_api, period: number, options?: Partial<series_options>): series_api;
   /** Add a Commodity Channel Index line in its own oscillator pane with ±100 bands. */
   add_cci(source: series_api, period: number, options?: Partial<series_options>): series_api;
+  /** Add Williams %R in its own oscillator pane with conventional -80/-20 bands. */
+  add_williams_r(source: series_api, period: number, options?: Partial<series_options>): series_api;
   add_donchian(source: series_api, period: number, options?: Partial<series_options>): [series_api, series_api, series_api];
   /** Add Keltner channel upper, middle, and lower lines using an EMA center and Wilder ATR envelope. */
   add_keltner(source: series_api, period: number, multiplier?: number, options?: Partial<series_options>): [series_api, series_api, series_api];

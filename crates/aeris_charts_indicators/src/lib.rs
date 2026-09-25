@@ -407,6 +407,32 @@ pub fn cci(highs: &[f64], lows: &[f64], closes: &[f64], period: usize) -> Vec<Op
     out
 }
 
+/// Williams %R over a rolling high/low window. Flat windows emit zero instead of NaN.
+pub fn williams_r(highs: &[f64], lows: &[f64], closes: &[f64], period: usize) -> Vec<Option<f64>> {
+    let n = highs.len().min(lows.len()).min(closes.len());
+    let mut out = vec![None; n];
+    if period == 0 {
+        return out;
+    }
+    for (row, output) in out.iter_mut().enumerate().skip(period.saturating_sub(1)) {
+        let start = row + 1 - period;
+        let high = highs[start..=row]
+            .iter()
+            .copied()
+            .fold(f64::NEG_INFINITY, f64::max);
+        let low = lows[start..=row]
+            .iter()
+            .copied()
+            .fold(f64::INFINITY, f64::min);
+        *output = Some(if high > low {
+            -100.0 * (high - closes[row]) / (high - low)
+        } else {
+            0.0
+        });
+    }
+    out
+}
+
 fn wma_at(values: &[f64], row: usize, period: usize) -> Option<f64> {
     if period == 0 || row.saturating_add(1) < period {
         return None;
@@ -2060,6 +2086,9 @@ enum IncrementalKind {
     Cci {
         period: usize,
     },
+    WilliamsR {
+        period: usize,
+    },
     Donchian {
         period: usize,
     },
@@ -2205,6 +2234,10 @@ impl IncrementalState {
 
     pub fn cci(period: usize) -> Self {
         Self::new(IncrementalKind::Cci { period }, 1)
+    }
+
+    pub fn williams_r(period: usize) -> Self {
+        Self::new(IncrementalKind::WilliamsR { period }, 1)
     }
 
     pub fn donchian(period: usize) -> Self {
@@ -2406,6 +2439,7 @@ impl IncrementalState {
             IncrementalKind::Vwma { .. } => 0,
             IncrementalKind::StandardDeviation { .. } => 0,
             IncrementalKind::Cci { .. } => 0,
+            IncrementalKind::WilliamsR { .. } => 0,
             IncrementalKind::Donchian { .. } => 0,
         }
     }
@@ -2553,6 +2587,12 @@ impl IncrementalState {
                 let start = self.output_from[0];
                 self.last_work_rows = n - start;
                 let values = cci(input.high, input.low, input.close, *period);
+                self.outputs[0].extend(values.into_iter().skip(start).flatten());
+            }
+            IncrementalKind::WilliamsR { period } => {
+                let start = self.output_from[0];
+                self.last_work_rows = n - start;
+                let values = williams_r(input.high, input.low, input.close, *period);
                 self.outputs[0].extend(values.into_iter().skip(start).flatten());
             }
             IncrementalKind::Donchian { period } => {
@@ -3019,6 +3059,7 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
         IncrementalKind::Vwma { period } => [period.saturating_sub(1), 0, 0, 0, 0],
         IncrementalKind::StandardDeviation { period } => [period.saturating_sub(1), 0, 0, 0, 0],
         IncrementalKind::Cci { period } => [period.saturating_sub(1), 0, 0, 0, 0],
+        IncrementalKind::WilliamsR { period } => [period.saturating_sub(1), 0, 0, 0, 0],
         IncrementalKind::Donchian { period } => [
             period.saturating_sub(1),
             period.saturating_sub(1),
@@ -3212,6 +3253,21 @@ mod tests {
         assert_eq!(
             cci(&[5.0, 5.0, 5.0], &[5.0, 5.0, 5.0], &[5.0, 5.0, 5.0], 3),
             vec![None, None, Some(0.0)]
+        );
+    }
+
+    #[test]
+    fn williams_r_uses_rolling_extremes_and_zero_for_flat_window() {
+        let highs = [10.0, 11.0, 12.0, 13.0];
+        let lows = [0.0, 0.0, 0.0, 0.0];
+        let closes = [5.0, 6.0, 9.0, 12.0];
+        let points = williams_r(&highs, &lows, &closes, 3);
+        assert_eq!(points[..2], [None, None]);
+        assert!((points[2].unwrap() + 25.0).abs() < 1e-12);
+        assert!((points[3].unwrap() + 7.692307692307692).abs() < 1e-12);
+        assert_eq!(
+            williams_r(&[5.0, 5.0], &[5.0, 5.0], &[5.0, 5.0], 2),
+            vec![None, Some(0.0)]
         );
     }
 
@@ -4044,6 +4100,7 @@ mod tests {
         Vwma,
         StandardDeviation,
         Cci,
+        WilliamsR,
         Donchian,
         Keltner,
         AdxDmi,
@@ -4071,6 +4128,7 @@ mod tests {
             TestKind::Vwma => vec![vwma(input.close, input.volume, 5)],
             TestKind::StandardDeviation => vec![standard_deviation(input.close, 5)],
             TestKind::Cci => vec![cci(input.high, input.low, input.close, 5)],
+            TestKind::WilliamsR => vec![williams_r(input.high, input.low, input.close, 5)],
             TestKind::Donchian => {
                 let points = donchian(input.high, input.low, 5);
                 vec![
@@ -4191,6 +4249,7 @@ mod tests {
                 IncrementalState::standard_deviation(5),
             ),
             (TestKind::Cci, IncrementalState::cci(5)),
+            (TestKind::WilliamsR, IncrementalState::williams_r(5)),
             (TestKind::Donchian, IncrementalState::donchian(5)),
             (TestKind::Keltner, IncrementalState::keltner(5, 2.0)),
             (TestKind::AdxDmi, IncrementalState::adx_dmi(5)),
