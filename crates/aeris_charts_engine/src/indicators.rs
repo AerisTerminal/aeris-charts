@@ -91,7 +91,8 @@ pub struct IndicatorSchema {
 
 pub const INDICATOR_SCHEMA_REVISION: u32 = 1;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum IndicatorKind {
     Sma {
         period: usize,
@@ -910,7 +911,17 @@ impl ChartEngine {
                 IndicatorKind::Stochastic { k_period, d_period } => {
                     *k_period == 0 || *d_period == 0
                 }
-                IndicatorKind::Vwap | IndicatorKind::VwapBands { .. } => false,
+                IndicatorKind::Vwap => false,
+                IndicatorKind::VwapBands {
+                    standard_deviation,
+                    percent,
+                    ..
+                } => {
+                    !standard_deviation.is_finite()
+                        || *standard_deviation < 0.0
+                        || !percent.is_finite()
+                        || *percent < 0.0
+                }
             }
         {
             return Vec::new();
@@ -1328,7 +1339,7 @@ fn indicator_output_color(kind: &IndicatorKind, output_index: usize) -> Option<&
     matches!(kind, IndicatorKind::EmaRibbon { .. }).then(|| EMA_RIBBON_DEFAULT_COLORS[output_index])
 }
 
-fn indicator_output_style(series: &SeriesEntry) -> IndicatorOutputStyle {
+pub(crate) fn indicator_output_style(series: &SeriesEntry) -> IndicatorOutputStyle {
     IndicatorOutputStyle {
         visible: series.visible,
         line_color: series.line_color.clone(),

@@ -685,4 +685,6 @@ heap sampling, and wall-clock evidence stay in separate non-blocking diagnostic 
 are never changed merely to satisfy a different host.
 
 Indicator multi-input validation is engine-owned: VWAP and VWAP-band bindings require a distinct
-live scalar volume series, while missing volume remains the explicit unit-weight fallback.
+live scalar volume series, while missing volume remains the explicit unit-weight fallback. Financial
+study persistence V3 stores binding definitions, dependency references, scalar inputs, volume inputs,
+and output styles while leaving market history and ordinary series data host-owned.

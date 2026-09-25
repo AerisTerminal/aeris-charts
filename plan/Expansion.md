@@ -243,9 +243,10 @@ of binding kind. VWAP's optional volume input now aligns by exact timestamp and 
 on the documented unit-weight fallback. OF9 now adds five engine-owned VWAP-band outputs with
 session, weekly and monthly reset keys, weighted population-deviation bands and percentage bands;
 pure-math and incremental rebuild tests cover the monthly reference path. Typed multi-input
-validation now rejects invalid VWAP volume bindings atomically. Style-document persistence, the
-next persistence schema, chart-type additions and the I1 catalog remain open until the whole batch
-is implemented and reference fixtures are added.
+validation now rejects invalid VWAP volume bindings atomically. Financial persistence V3 now
+round-trips ordered study dependencies, scalar inputs, volume references and per-output styles while
+leaving market data host-owned. Chart-type additions, the remaining F4 exit fixtures and the I1
+catalog remain open until the whole batch is implemented.
 
 ### B5 — Non-time bars and replay
 
@@ -423,7 +424,7 @@ Source-confirmed on 2026-09-24. This is the starting point, not a claim of compl
 | Native primitives | Series-attached vertical line, text and image watermarks, volume-profile handle | `native_primitives.rs` |
 | General charts | Step interpolation, bubble, heatmap grid, column, axis-bound reference regions (general panes only, not the financial time axis) | `general_series.rs` |
 | Workspace | Split-grid of chart cells with stable identities | `workspace.rs` |
-| Persistence | V1 panes and built-in drawings; V2 adds general datasets/series; indicators and profiles are recreated by hosts | `persistence.rs` |
+| Persistence | V1 panes/drawings, V2 general datasets/series, V3 financial study bindings/styles; profiles remain host-recreated | `persistence.rs` |
 | Telemetry | WASM `frame_stats` (CPU/GPU ms, draw calls, rebuild counters, buffer traffic); `ChartEngine::memory_usage` structural attribution | `wasm/src/telemetry.rs`, `EngineMemoryUsage` |
 | Image export | Browser `take_screenshot` only; no native or GPUI image export | `packages/charts/src/types.ts` |
 | Order book / depth | **Absent.** No Level 2 model, DOM, or liquidity heatmap. The feature heatmap accepts only host-precomputed cells and lowers each cell to its own rectangle primitive | `FeatureSeriesKind::Heatmap`, `HeatmapCell` |

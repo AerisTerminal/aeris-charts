@@ -2987,6 +2987,17 @@ fn generic_indicator_creation_rejects_invalid_definitions_atomically() {
         .add_indicator_kind(0, IndicatorKind::Vwap, Some(0))
         .is_empty());
     assert!(chart
+        .add_indicator_kind(
+            0,
+            IndicatorKind::VwapBands {
+                reset: VwapReset::Session,
+                standard_deviation: f64::NAN,
+                percent: 10.0,
+            },
+            None,
+        )
+        .is_empty());
+    assert!(chart
         .add_indicator_kind(0, IndicatorKind::Rsi { period: 2 }, Some(0))
         .is_empty());
 

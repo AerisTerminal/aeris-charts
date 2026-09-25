@@ -13,16 +13,21 @@ use aeris_charts_render::color::Color;
 use aeris_charts_render::draw_list::LineStyle;
 
 use crate::drawings::{DrawingPriceScale, DrawingTextHAlign, DrawingTextVAlign};
-use crate::{ChartEngine, ChartError, Drawing, DrawingKind, DrawingPoint, ErrorCode, Pane, PaneId};
+use crate::{
+    ChartEngine, ChartError, Drawing, DrawingKind, DrawingPoint, ErrorCode, IndicatorInputSource,
+    IndicatorKind, IndicatorOutputStyle, Pane, PaneId, SeriesId,
+};
 
 pub const PERSISTENCE_SCHEMA_VERSION: u32 = 1;
 pub const PERSISTENCE_SCHEMA_VERSION_GENERAL: u32 = 2;
+pub const PERSISTENCE_SCHEMA_VERSION_STUDIES: u32 = 3;
 pub const PERSISTENCE_MAX_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
 pub const PERSISTENCE_MAX_GENERAL_DOCUMENT_BYTES: usize = 32 * 1024 * 1024;
 pub const PERSISTENCE_MAX_PANES: usize = 64;
 pub const PERSISTENCE_MAX_DRAWINGS: usize = 10_000;
 pub const PERSISTENCE_MAX_POINTS_PER_DRAWING: usize = crate::drawings::MAX_DRAWING_POINTS;
 pub const PERSISTENCE_MAX_TOTAL_POINTS: usize = 250_000;
+pub const PERSISTENCE_MAX_INDICATORS: usize = 256;
 const MAX_TEXT_BYTES: usize = 65_536;
 const MAX_TOTAL_TEXT_BYTES: usize = 1_048_576;
 const MAX_COLOR_BYTES: usize = 256;
@@ -94,6 +99,33 @@ struct StateV2 {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     references: Vec<crate::GeneralReferenceOptions>,
     chart_options: serde_json::Value,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StateV3 {
+    schema: String,
+    schema_version: u32,
+    panes: Vec<PaneV1>,
+    drawings: Vec<DrawingV1>,
+    #[serde(default)]
+    indicators: Vec<IndicatorV3>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum IndicatorSourceV3 {
+    Series { id: SeriesId },
+    Output { study: usize, output: usize },
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct IndicatorV3 {
+    kind: IndicatorKind,
+    source: IndicatorSourceV3,
+    source_input: IndicatorInputSource,
+    #[serde(default)]
+    volume_source: Option<IndicatorSourceV3>,
+    styles: Vec<IndicatorOutputStyle>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -312,9 +344,155 @@ fn validate_positive_number(value: f64, field: &str) -> Result<(), ChartError> {
     Ok(())
 }
 
+fn incremental_output_count(kind: &IndicatorKind) -> usize {
+    match kind {
+        IndicatorKind::Sma { .. }
+        | IndicatorKind::Ema { .. }
+        | IndicatorKind::Rsi { .. }
+        | IndicatorKind::Atr { .. }
+        | IndicatorKind::Vwap
+        | IndicatorKind::Wma { .. } => 1,
+        IndicatorKind::EmaRibbon { .. } => aeris_charts_indicators::MAX_OUTPUTS,
+        IndicatorKind::Bollinger { .. } => 3,
+        IndicatorKind::Macd { .. } => 3,
+        IndicatorKind::Stochastic { .. } => 2,
+        IndicatorKind::VwapBands { .. } => 5,
+    }
+}
+
+fn validate_indicator_style(style: &IndicatorOutputStyle) -> Result<(), &'static str> {
+    if style
+        .line_width
+        .is_some_and(|width| !width.is_finite() || width <= 0.0)
+    {
+        return Err("line width is invalid");
+    }
+    if style.line_style > 4 {
+        return Err("line style is invalid");
+    }
+    for (field, color) in [
+        ("line color", style.line_color.as_deref()),
+        ("up color", style.up_color.as_deref()),
+        ("down color", style.down_color.as_deref()),
+        ("area top color", style.area_top_color.as_deref()),
+        ("area bottom color", style.area_bottom_color.as_deref()),
+    ] {
+        if let Some(color) = color {
+            if color.len() > MAX_COLOR_BYTES || Color::parse_css(color).is_none() {
+                return Err(field);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
+    match kind {
+        IndicatorKind::Sma { period }
+        | IndicatorKind::Ema { period }
+        | IndicatorKind::Rsi { period }
+        | IndicatorKind::Atr { period }
+        | IndicatorKind::Wma { period } => *period > 0,
+        IndicatorKind::EmaRibbon { periods } => periods.iter().all(|period| *period > 0),
+        IndicatorKind::Bollinger { period, deviation } => *period > 0 && deviation.is_finite(),
+        IndicatorKind::Macd { fast, slow, signal } => *fast > 0 && *slow > 0 && *signal > 0,
+        IndicatorKind::Stochastic { k_period, d_period } => *k_period > 0 && *d_period > 0,
+        IndicatorKind::Vwap => true,
+        IndicatorKind::VwapBands {
+            standard_deviation,
+            percent,
+            ..
+        } => standard_deviation.is_finite() && percent.is_finite(),
+    }
+}
+
+fn source_refs_equal(left: &IndicatorSourceV3, right: &IndicatorSourceV3) -> bool {
+    match (left, right) {
+        (IndicatorSourceV3::Series { id: left }, IndicatorSourceV3::Series { id: right }) => {
+            left == right
+        }
+        (
+            IndicatorSourceV3::Output {
+                study: left_study,
+                output: left_output,
+            },
+            IndicatorSourceV3::Output {
+                study: right_study,
+                output: right_output,
+            },
+        ) => left_study == right_study && left_output == right_output,
+        _ => false,
+    }
+}
+
+fn source_is_scalar(chart: &ChartEngine, source: SeriesId) -> bool {
+    chart.series_entry(source).is_some_and(|series| {
+        matches!(
+            series.kind,
+            crate::SeriesKind::Line
+                | crate::SeriesKind::Area
+                | crate::SeriesKind::Histogram
+                | crate::SeriesKind::Baseline
+        )
+    })
+}
+
+fn resolve_indicator_source(
+    source: &IndicatorSourceV3,
+    study: usize,
+    expected_outputs: &[Vec<SeriesId>],
+    chart: &ChartEngine,
+) -> Result<SeriesId, ChartError> {
+    match source {
+        IndicatorSourceV3::Series { id } => {
+            if chart.series_entry(*id).is_none() {
+                return Err(invalid(format!("indicator source {id} is not live")));
+            }
+            Ok(*id)
+        }
+        IndicatorSourceV3::Output {
+            study: source_study,
+            output,
+        } => {
+            if *source_study >= study || *source_study >= expected_outputs.len() {
+                return Err(invalid(
+                    "indicator output source must reference an earlier study",
+                ));
+            }
+            if *output >= expected_outputs[*source_study].len() {
+                return Err(invalid("indicator output source index is out of range"));
+            }
+            Ok(u32::MAX)
+        }
+    }
+}
+
+fn remap_indicator_source(
+    source: &IndicatorSourceV3,
+    remapped_outputs: &[Vec<SeriesId>],
+    plain_source: SeriesId,
+) -> SeriesId {
+    match source {
+        IndicatorSourceV3::Series { .. } => plain_source,
+        IndicatorSourceV3::Output { study, output } => remapped_outputs
+            .get(*study)
+            .and_then(|outputs| outputs.get(*output))
+            .copied()
+            .unwrap_or(u32::MAX),
+    }
+}
+
 impl ChartEngine {
     /// Deterministic JSON of stable chart state. Financial-only charts retain the V1 wire format.
     pub fn export_state_json(&self) -> Result<String, ChartError> {
+        if !self.indicators.is_empty()
+            && self
+                .panes
+                .iter()
+                .all(|pane| pane.general_horizontal_domain.is_none())
+        {
+            return self.export_state_v3_json();
+        }
         if self
             .panes
             .iter()
@@ -326,6 +504,84 @@ impl ChartEngine {
             return self.export_state_v2_json();
         }
         self.export_state_v1_json()
+    }
+
+    fn export_state_v3_json(&self) -> Result<String, ChartError> {
+        if self.indicators.len() > PERSISTENCE_MAX_INDICATORS {
+            return Err(resource("indicator count exceeds the persistence limit"));
+        }
+        let base_json = self.export_state_v1_json()?;
+        let base: StateV1 = serde_json::from_str(&base_json)
+            .map_err(|error| ChartError::new(ErrorCode::SerializationError, error.to_string()))?;
+        let indicators = self
+            .indicators
+            .iter()
+            .enumerate()
+            .map(|(study, binding)| {
+                let source = self.indicator_source_ref(binding.source, study)?;
+                let volume_source = binding
+                    .volume_source
+                    .map(|id| self.indicator_source_ref(id, study))
+                    .transpose()?;
+                let styles = binding
+                    .outputs
+                    .iter()
+                    .map(|&id| {
+                        self.series_entry(id)
+                            .map(crate::indicators::indicator_output_style)
+                            .ok_or_else(|| {
+                                ChartError::new(
+                                    ErrorCode::SerializationError,
+                                    format!("indicator output {id} is not live"),
+                                )
+                            })
+                    })
+                    .collect::<Result<Vec<_>, ChartError>>()?;
+                Ok(IndicatorV3 {
+                    kind: binding.kind.clone(),
+                    source,
+                    source_input: binding.source_input,
+                    volume_source,
+                    styles,
+                })
+            })
+            .collect::<Result<Vec<_>, ChartError>>()?;
+        let document = serde_json::to_string(&StateV3 {
+            schema: base.schema,
+            schema_version: PERSISTENCE_SCHEMA_VERSION_STUDIES,
+            panes: base.panes,
+            drawings: base.drawings,
+            indicators,
+        })
+        .map_err(|error| ChartError::new(ErrorCode::SerializationError, error.to_string()))?;
+        if document.len() > PERSISTENCE_MAX_DOCUMENT_BYTES {
+            return Err(resource(
+                "study persistence document exceeds the size limit",
+            ));
+        }
+        Ok(document)
+    }
+
+    fn indicator_source_ref(
+        &self,
+        source: SeriesId,
+        study: usize,
+    ) -> Result<IndicatorSourceV3, ChartError> {
+        for (source_study, binding) in self.indicators.iter().enumerate().take(study) {
+            if let Some(output) = binding.outputs.iter().position(|&id| id == source) {
+                return Ok(IndicatorSourceV3::Output {
+                    study: source_study,
+                    output,
+                });
+            }
+        }
+        if self.series_entry(source).is_none() {
+            return Err(ChartError::new(
+                ErrorCode::SerializationError,
+                format!("indicator source {source} is not live"),
+            ));
+        }
+        Ok(IndicatorSourceV3::Series { id: source })
     }
 
     fn export_state_v1_json(&self) -> Result<String, ChartError> {
@@ -1268,8 +1524,29 @@ impl ChartEngine {
             .get("schema_version")
             .and_then(serde_json::Value::as_u64)
             == Some(u64::from(PERSISTENCE_SCHEMA_VERSION_GENERAL));
+        let is_v3 = envelope
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64)
+            == Some(u64::from(PERSISTENCE_SCHEMA_VERSION_STUDIES));
         if !is_v2 && json.len() > PERSISTENCE_MAX_DOCUMENT_BYTES {
             return Err(resource("persistence document exceeds the V1 size limit"));
+        }
+        if is_v3 {
+            if envelope.get("schema").and_then(serde_json::Value::as_str)
+                != Some("aeris_charts-state")
+            {
+                return Err(ChartError::new(
+                    ErrorCode::SerializationError,
+                    "unsupported or missing persistence schema",
+                ));
+            }
+            let state: StateV3 = serde_json::from_value(envelope).map_err(|error| {
+                ChartError::new(
+                    ErrorCode::SerializationError,
+                    format!("invalid study persistence document: {error}"),
+                )
+            })?;
+            return self.import_state_v3(state);
         }
         if is_v2 {
             if envelope.get("schema").and_then(serde_json::Value::as_str)
@@ -1290,6 +1567,117 @@ impl ChartEngine {
         }
         let state = Self::validate_state_json(json)?;
         self.install_validated_state(state)
+    }
+
+    fn import_state_v3(&mut self, state: StateV3) -> Result<PersistenceRestoreResult, ChartError> {
+        if state.indicators.len() > PERSISTENCE_MAX_INDICATORS {
+            return Err(resource("indicator count exceeds the persistence limit"));
+        }
+        if self.panes.len() != 1
+            || !self.drawings.is_empty()
+            || self.next_drawing_id != 1
+            || !self.indicators.is_empty()
+            || self.general_dataset_count() != 0
+            || self.general_series_count() != 0
+        {
+            return Err(ChartError::new(
+                ErrorCode::UnsupportedOperation,
+                "study state import requires a fresh financial chart",
+            ));
+        }
+        let validated = Self::validate_state_v1(StateV1 {
+            schema: state.schema.clone(),
+            schema_version: PERSISTENCE_SCHEMA_VERSION,
+            panes: state.panes,
+            drawings: state.drawings,
+        })?;
+        let mut resolved = Vec::with_capacity(state.indicators.len());
+        let mut expected_outputs = Vec::with_capacity(state.indicators.len());
+        for (study, indicator) in state.indicators.iter().enumerate() {
+            if !indicator_kind_is_valid(&indicator.kind) {
+                return Err(invalid(format!("indicator {study} has invalid parameters")));
+            }
+            if indicator.styles.len() > aeris_charts_indicators::MAX_OUTPUTS {
+                return Err(resource(format!(
+                    "indicator {study} has too many output styles"
+                )));
+            }
+            let source =
+                resolve_indicator_source(&indicator.source, study, &expected_outputs, self)?;
+            let volume_source = indicator
+                .volume_source
+                .as_ref()
+                .map(|source| resolve_indicator_source(source, study, &expected_outputs, self))
+                .transpose()?;
+            if let Some(volume_source) = volume_source {
+                if source_refs_equal(&indicator.source, indicator.volume_source.as_ref().unwrap()) {
+                    return Err(invalid(format!(
+                        "indicator {study} volume source duplicates its price source"
+                    )));
+                }
+                if matches!(
+                    indicator.volume_source.as_ref(),
+                    Some(IndicatorSourceV3::Series { .. })
+                ) && !source_is_scalar(self, volume_source)
+                {
+                    return Err(invalid(format!(
+                        "indicator {study} volume source must be scalar"
+                    )));
+                }
+            }
+            let expected = incremental_output_count(&indicator.kind);
+            if indicator.styles.len() != expected {
+                return Err(invalid(format!(
+                    "indicator {study} style count does not match its output count"
+                )));
+            }
+            for (output, style) in indicator.styles.iter().enumerate() {
+                validate_indicator_style(style).map_err(|message| {
+                    invalid(format!("indicator {study} output {output}: {message}"))
+                })?;
+            }
+            resolved.push((
+                source,
+                indicator.source_input,
+                indicator.kind.clone(),
+                volume_source,
+                indicator.styles.clone(),
+            ));
+            expected_outputs.push(vec![u32::MAX; expected]);
+        }
+        let mut result = self.install_validated_state(validated)?;
+        let mut remapped_outputs = Vec::with_capacity(resolved.len());
+        for (study, (source, source_input, kind, volume_source, styles)) in
+            resolved.into_iter().enumerate()
+        {
+            let source =
+                remap_indicator_source(&state.indicators[study].source, &remapped_outputs, source);
+            let volume_source = state.indicators[study]
+                .volume_source
+                .as_ref()
+                .map(|source| {
+                    remap_indicator_source(
+                        source,
+                        &remapped_outputs,
+                        volume_source.unwrap_or_default(),
+                    )
+                });
+            let outputs =
+                self.add_indicator_kind_with_input(source, source_input, kind, volume_source);
+            if outputs.len() != styles.len() {
+                return Err(invalid(format!("indicator {study} could not be restored")));
+            }
+            for (&output, style) in outputs.iter().zip(styles) {
+                if !self.set_indicator_output_style(output, style) {
+                    return Err(invalid(format!(
+                        "indicator {study} style could not be restored"
+                    )));
+                }
+            }
+            remapped_outputs.push(outputs);
+        }
+        result.schema_version = PERSISTENCE_SCHEMA_VERSION_STUDIES;
+        Ok(result)
     }
 
     fn import_state_v2(&mut self, state: StateV2) -> Result<PersistenceRestoreResult, ChartError> {
@@ -1470,6 +1858,69 @@ mod tests {
         chart.fit_content();
         chart.build_frame();
         chart
+    }
+
+    #[test]
+    fn study_persistence_round_trips_dependencies_inputs_volume_and_styles() {
+        let mut chart = settled_chart();
+        let volume = chart.add_series(crate::SeriesKind::Histogram);
+        let times = (0..10).map(|i| (i * 3600) as f64).collect::<Vec<_>>();
+        let values = [11.0, 12.0, 11.0, 10.0, 11.0, 12.0, 13.0, 12.0, 11.0, 10.0];
+        chart
+            .set_series_data(volume, &times, &values, &values, &values, &values)
+            .unwrap();
+        let sma = chart
+            .add_indicator_kind_with_input(
+                0,
+                crate::IndicatorInputSource::Hlc3,
+                crate::IndicatorKind::Sma { period: 2 },
+                None,
+            )
+            .into_iter()
+            .next()
+            .unwrap();
+        let bands = chart.add_bollinger(sma, 3, 2.0);
+        let vwap = chart.add_vwap(0, Some(volume)).unwrap();
+        let style = IndicatorOutputStyle {
+            visible: false,
+            line_color: Some("#123456".into()),
+            line_width: Some(3.0),
+            line_style: 2,
+            point_markers: true,
+            up_color: Some("#00ff00".into()),
+            down_color: Some("#ff0000".into()),
+            area_top_color: Some("rgba(1, 2, 3, 0.4)".into()),
+            area_bottom_color: Some("rgba(4, 5, 6, 0.2)".into()),
+        };
+        assert!(chart.set_indicator_output_style(vwap, style.clone()));
+        let document = chart.export_state_json().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&document).unwrap();
+        assert_eq!(value["schema_version"], PERSISTENCE_SCHEMA_VERSION_STUDIES);
+        assert_eq!(value["indicators"].as_array().unwrap().len(), 3);
+
+        let mut restored = settled_chart();
+        let restored_volume = restored.add_series(crate::SeriesKind::Histogram);
+        restored
+            .set_series_data(restored_volume, &times, &values, &values, &values, &values)
+            .unwrap();
+        restored.import_state_json(&document).unwrap();
+        assert_eq!(restored.export_state_json().unwrap(), document);
+        let bindings = restored.indicator_bindings();
+        assert_eq!(bindings.len(), 3);
+        assert_eq!(bindings[0].source_input, crate::IndicatorInputSource::Hlc3);
+        assert_eq!(bindings[1].source, bindings[0].outputs[0]);
+        assert_eq!(bindings[2].volume_source, Some(restored_volume));
+        assert_eq!(bindings[2].styles[0], style);
+        assert_eq!(bands.len(), 3);
+
+        let mut invalid_document: serde_json::Value = serde_json::from_str(&document).unwrap();
+        invalid_document["indicators"][0]["kind"]["period"] = serde_json::json!(0);
+        let invalid_document = serde_json::to_string(&invalid_document).unwrap();
+        let mut untouched = settled_chart();
+        untouched.add_series(crate::SeriesKind::Histogram);
+        let baseline = untouched.export_state_json().unwrap();
+        assert!(untouched.import_state_json(&invalid_document).is_err());
+        assert_eq!(untouched.export_state_json().unwrap(), baseline);
     }
 
     #[test]

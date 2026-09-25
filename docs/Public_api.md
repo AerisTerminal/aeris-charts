@@ -301,6 +301,17 @@ IDs, invalid anchor counts, non-finite/unsafe numbers, and limit violations fail
 leave the chart unchanged. V1 fixtures are compatibility inputs; future versions must retain an
 explicit V1 migration path for the documented compatibility window.
 
+## Persistence V3 studies
+
+Financial charts with engine-owned indicators export schema version 3. V3 keeps market history and
+ordinary series data host-owned, but persists ordered study bindings, scalar input selection, typed
+indicator parameters, timestamp-aligned volume-source references, and per-output styles. Chained
+sources are encoded as references to an earlier study output so restore does not depend on old live
+series identities. Hosts must recreate the source series and their data before importing V3; import
+validates every dependency, parameter, output-style count, and resource limit before mutation.
+V1 and V2 documents remain accepted unchanged, and a V3 document restores into a fresh financial
+chart only.
+
 ## Version policy
 
 While the browser package is below 1.0:
