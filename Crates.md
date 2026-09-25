@@ -48,13 +48,13 @@ The prepared `0.3.0` crates are published in dependency order: `aeris_charts_ind
 legacy family should receive a final deprecation release that points to the matching
 `aeris_charts_*` crate, then remain available for one coordinated migration window before being
 marked deprecated. The former scoped npm package should receive the same notice and
-redirect consumers to `aeris-charts`; keep its last release available for the migration window.
+redirect consumers to `@aeristerminal/aeris-charts`; keep its last release available for the migration window.
 
 ## Aeris Terminal platform follow-ups
 
 The separate Aeris Terminal repository must update pinned Git revisions and Cargo package names
 to the `aeris_charts_*` crates, replace workspace paths and Rust `use` imports, and update its npm
-dependency and `/react` import from the legacy scoped npm package to `aeris-charts`. It must regenerate
+dependency and `/react` import from the legacy scoped npm package to `@aeristerminal/aeris-charts`. It must regenerate
 lockfiles, update any WASM asset names and release automation, and replace repository URLs with
 the `aeristerminal/aeris-charts` repository. No platform repository files are changed here.
 

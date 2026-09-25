@@ -73,7 +73,7 @@ export async function measure_size({ build = true } = {}) {
       typescript_declarations_bytes: metric([await declaration_bytes(dist)], "bytes", "lower_is_better", "public_candidate", "Sum of .d.ts files in the production dist directory."),
       ...await compressed_metrics("javascript", path.join(dist, "index.js")),
       ...await compressed_metrics("wasm", path.join(dist, "aeris_charts_wasm_bg.wasm")),
-      ...await consumer_bundle("minimal", `import { aeris_charts_error } from ${JSON.stringify(package_url)}; console.log(aeris_charts_error);`, temporary),
+      ...await consumer_bundle("minimal", `import { AerisChartsError } from ${JSON.stringify(package_url)}; console.log(AerisChartsError);`, temporary),
       ...await consumer_bundle("typical", `import { create_chart, init_wasm } from ${JSON.stringify(package_url)}; console.log(create_chart, init_wasm);`, temporary),
       ...await consumer_bundle("full", `import * as charts from ${JSON.stringify(package_url)}; console.log(charts);`, temporary),
     };

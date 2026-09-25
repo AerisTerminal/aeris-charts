@@ -1,5 +1,5 @@
 /**
- * Public data, option, and handle types for `aeris-charts`. The original snake-case
+ * Public data, option, and handle types for `@aeristerminal/aeris-charts`. The original snake-case
  * methods remain canonical and supported; common browser lifecycle methods also expose camel-case
  * aliases on the same handles. Extracted from `index.ts`.
  */

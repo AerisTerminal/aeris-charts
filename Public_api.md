@@ -2,7 +2,7 @@
 
 ## Supported product surface
 
-The supported product is the pre-1.0 browser package `aeris-charts`. Its framework-neutral
+The supported product is the pre-1.0 browser package `@aeristerminal/aeris-charts`. Its framework-neutral
 root ESM entry point, optional `./react` adapter, `./wasm` asset, and `./design.css` stylesheet are the
 supported npm export paths. React is an optional peer dependency and is not loaded by root consumers.
 The supported root surface is:
@@ -228,7 +228,7 @@ codes: `disposed`, `invalid_handle`, `stale_handle`, `invalid_data`, `invalid_op
 
 ## Brand rename
 
-The browser package is `aeris-charts` (with `aeris-charts/react`). The former branded error
+The browser package is `@aeristerminal/aeris-charts` (with `@aeristerminal/aeris-charts/react`). The former branded error
 exports were renamed to `AerisChartsError` and `AerisChartsErrorCode`; update imports and
 `instanceof` checks when migrating. Rust consumers use the `aeris_charts_*` crates listed in
 `Crates.md`.

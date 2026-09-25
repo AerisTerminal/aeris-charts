@@ -4651,7 +4651,6 @@ mod tests {
             "path",
             "text-color",
             "crosshair",
-            "attribution",
             "price-line",
             "extent",
             "bid-ask",

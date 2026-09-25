@@ -34,10 +34,15 @@ future releases use the [AGPL and commercial dual-license model](#license).
 
 ## Browser package
 
-The browser SDK is prepared for the public npm registry as `aeris-charts`.
+The browser SDK is published through GitHub Packages as `@aeristerminal/aeris-charts`. Configure
+the Aeris Terminal scope before installing:
+
+```text
+@aeristerminal:registry=https://npm.pkg.github.com
+```
 
 ```sh
-npm install aeris-charts
+npm install @aeristerminal/aeris-charts
 ```
 
 Version tags publish automatically after release credentials are configured and the tag matches
@@ -47,7 +52,7 @@ Version tags publish automatically after release credentials are configured and 
 Create a chart with the asynchronous camel-case API:
 
 ```ts
-import { createChart } from "aeris-charts";
+import { createChart } from "@aeristerminal/aeris-charts";
 
 const container = document.querySelector<HTMLElement>("#chart");
 if (!container) throw new Error("missing chart container");
@@ -91,11 +96,11 @@ use it, then import the adapter from the package subpath; framework-neutral appl
 or depend on React:
 
 ```sh
-npm install aeris-charts react
+npm install @aeristerminal/aeris-charts react
 ```
 
 ```tsx
-import { FinancialSeries, GeneralPane, AerisChart } from "aeris-charts/react";
+import { FinancialSeries, GeneralPane, AerisChart } from "@aeristerminal/aeris-charts/react";
 
 const axes = [
   { id: "month", dimension: "x", scale: "band" },
@@ -127,7 +132,7 @@ during SSR because chart creation and DOM access begin only after the component 
 framework-neutral and React combined examples live in `examples/all_in_one/`.
 
 The optimized WASM binary is shipped beside the ESM entry and resolves there automatically. Bundlers
-that require an explicit asset URL may import `aeris-charts/wasm` (or their normal URL-loader
+that require an explicit asset URL may import `@aeristerminal/aeris-charts/wasm` (or their normal URL-loader
 form of that export) and pass the resulting URL to `initWasm()` before creating a chart; no `pkg/`,
 `crates/`, demo, or repository path is part of the consumer contract.
 
@@ -144,7 +149,7 @@ geometry, lifecycle, and rendering are shared by every backend; the browser pack
 public data and options at the WASM boundary:
 
 ```ts
-import { create_volume_profile } from "aeris-charts";
+import { create_volume_profile } from "@aeristerminal/aeris-charts";
 
 const heatmap = chart.add_series("heatmap", {
   cell_border_width: 1,
@@ -232,7 +237,7 @@ Give the container an explicit size; the chart canvases fill it.
 Import the portable design system once in browser hosts:
 
 ```ts
-import "aeris-charts/design.css";
+import "@aeristerminal/aeris-charts/design.css";
 ```
 
 Light is the CSS default. Set `data-theme="dark"` (or class `dark`) on a root element for dark
@@ -301,6 +306,6 @@ and to build development-only compatibility comparisons. Those references do not
 engine, rendering, or state-management implementation.
 
 Development tests use Lightweight Charts as a pinned Apache-2.0 dependency through its public API.
-That dependency is not included in the published `aeris-charts` package. TradingView and
+That dependency is not included in the published `@aeristerminal/aeris-charts` package. TradingView and
 Lightweight Charts are trademarks of their respective owners; Aeris Charts is not affiliated with
 or endorsed by TradingView. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

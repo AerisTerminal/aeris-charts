@@ -21,12 +21,14 @@ function verify(ciSource, publishSource) {
     "machine-calibrated evidence must remain non-authoritative");
   assert.match(publishSource, /tags: \["v\*"\]/,
     "version tags must trigger publication");
-  assert.match(publishSource, /actions: read[\s\S]*contents: read/,
-    "publication must be able to verify CI and read the release source");
-  assert.match(publishSource, /registry-url: https:\/\/registry\.npmjs\.org/,
-    "the unscoped browser package must publish through the public npm registry");
-  assert.match(publishSource, /NODE_AUTH_TOKEN: \$\{\{ secrets\.NPM_TOKEN \}\}/,
-    "npm publication must use the configured npm release token");
+  assert.match(publishSource, /actions: read[\s\S]*contents: read[\s\S]*packages: write/,
+    "publication must be able to verify CI, read the release source, and publish packages");
+  assert.match(publishSource, /registry-url: https:\/\/npm\.pkg\.github\.com/,
+    "the scoped browser package must publish through GitHub Packages");
+  assert.match(publishSource, /scope: "@aeristerminal"/,
+    "GitHub Packages publication must use the Aeris Terminal scope");
+  assert.match(publishSource, /NODE_AUTH_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}/,
+    "GitHub Packages publication must use the workflow token");
   assert.match(publishSource, /Verify source passed CI[\s\S]*actions\/workflows\/ci\.yml\/runs/,
     "publication must require successful CI for the release source");
   assert.match(publishSource, /npm publish --tag latest/,
@@ -39,7 +41,7 @@ for (const [brokenCi, brokenPublish] of [
   [ci.replace("node benchmarks/benchmark.mjs size", "node benchmarks/benchmark.mjs test"), publish],
   [ci.replace("id: portable-browser-suite", "id: portable-browser-suite\n        continue-on-error: true"), publish],
   [ci, publish.replace("actions/workflows/ci.yml/runs", "actions/workflows/missing.yml/runs")],
-  [ci, publish.replace("https://registry.npmjs.org", "https://npm.pkg.github.com")],
+  [ci, publish.replace("https://npm.pkg.github.com", "https://registry.npmjs.org")],
   [ci, publish.replace("npm publish --tag latest", "npm publish")],
 ]) {
   assert.throws(() => verify(brokenCi, brokenPublish), "a simulated release-gate regression was not detected");

@@ -305,7 +305,7 @@ lifecycle, responsive layout, documentation, distribution and measured performan
 
 Keep one public library, one `ChartEngine` and one ordered frame contract. Preserve the specialized
 financial data and coordinate paths while completing general charting as a first-class capability.
-The browser package remains `aeris-charts` with an optional `/react` entry. Package naming
+The browser package is `@aeristerminal/aeris-charts` with an optional `/react` entry. Package naming
 or distribution changes require a compatibility decision; this plan does not introduce another
 product. [Architecture.md](Architecture.md) describes current ownership and execution; this document
 specifies the target and acceptance gates.

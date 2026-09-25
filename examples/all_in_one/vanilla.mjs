@@ -1,4 +1,4 @@
-import { createChart } from "aeris-charts";
+import { createChart } from "@aeristerminal/aeris-charts";
 
 const container = document.querySelector("#chart");
 if (!(container instanceof HTMLElement)) throw new Error("missing #chart container");

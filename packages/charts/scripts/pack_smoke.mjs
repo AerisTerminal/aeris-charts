@@ -59,7 +59,8 @@ try {
   run("npm", ["install", "--silent", "--no-audit", "--no-fund", join(pkg_dir, tgz)], scratch);
 
   // 3. Import the installed module (must be side-effect-free) and check the API surface.
-  const entry = join(scratch, "node_modules", "aeris-charts", "dist", "index.js");
+  const installed_package = join(scratch, "node_modules", "@aeristerminal", "aeris-charts");
+  const entry = join(installed_package, "dist", "index.js");
   const mod = await import(pathToFileURL(entry).href);
   assert.equal(typeof mod.create_chart, "function", "create_chart not exported");
   assert.equal(typeof mod.createChart, "function", "createChart not exported");
@@ -73,12 +74,12 @@ try {
 
   // 4. The wasm binary shipped with real content.
   const wasm = statSync(
-    join(scratch, "node_modules", "aeris-charts", "dist", "aeris_charts_wasm_bg.wasm"),
+    join(installed_package, "dist", "aeris_charts_wasm_bg.wasm"),
   );
   assert.ok(wasm.size > 100_000, `wasm binary suspiciously small (${wasm.size} bytes)`);
 
   const pkg = JSON.parse(
-    readFileSync(join(scratch, "node_modules", "aeris-charts", "package.json"), "utf8"),
+    readFileSync(join(installed_package, "package.json"), "utf8"),
   );
   assert.equal(pkg.license, "AGPL-3.0-only");
   assert.equal(pkg.exports["./react"].import, "./dist/react.js");

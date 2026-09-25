@@ -3,8 +3,8 @@
   "files": [
     {
       "path": "accessibility.d.ts",
-      "bytes": 3375,
-      "sha256": "76a0767713d2d479e0a213d2a3d027d4bf9e198493851ded14f6e83d252ed541"
+      "bytes": 3373,
+      "sha256": "fef6339560cdec61e04dcec7bade45efa1c395049b144f03006e2a417fc6a42d"
     },
     {
       "path": "builtin_plugins.d.ts",
@@ -23,8 +23,8 @@
     },
     {
       "path": "errors.d.ts",
-      "bytes": 656,
-      "sha256": "ba7f59658dee30f2ed33aeb5242c66e41ab1142e1bfe2a1c38897fbabc228cde"
+      "bytes": 639,
+      "sha256": "206a717a3935a070ba85529082a6c986a4253168be27f3a466b5faffdba09b19"
     },
     {
       "path": "feature_series.d.ts",
@@ -33,33 +33,33 @@
     },
     {
       "path": "grid.d.ts",
-      "bytes": 6458,
-      "sha256": "f9ab1bee833b3d98f13492d7b1b2e5c3e304ede8c49921c1725c9ce7c45ac554"
+      "bytes": 6454,
+      "sha256": "23715cd68729d52020a9630858d74052961ab9d86b48f0ac1d3407191517a9b9"
     },
     {
       "path": "index.d.ts",
-      "bytes": 2191,
-      "sha256": "f9b6666803d302645750f8030494983e3e3d7f785b274f058beffa489ef462a2"
+      "bytes": 2200,
+      "sha256": "b742ef2f2628095a9f86c5750df5cc8eab8507820267602b6562699349353882"
     },
     {
       "path": "offscreen.d.ts",
-      "bytes": 6808,
-      "sha256": "5b6fe847b46fb47b7c5ff803e1c4e19a4a230b319ad709d4bb4173fe0f6d7e25"
+      "bytes": 6801,
+      "sha256": "3644b2683010eb37f747b686c97920561ce7814a8203903f051b0e564d4aafdb"
     },
     {
       "path": "primitive_features.d.ts",
-      "bytes": 9697,
-      "sha256": "3b63358c373b9b32a277652e5664ae71b29c031d8354dc78edc62815fa283f87"
+      "bytes": 9685,
+      "sha256": "092afb5f9aaa822e876f9acb53846b8c7e5a037c28f10f85a25a4857c590af54"
     },
     {
       "path": "primitives.d.ts",
-      "bytes": 16590,
-      "sha256": "bf6a09b59dbb8390d03c39383545aa3ac6022817106daf664de22cc26ec76859"
+      "bytes": 16586,
+      "sha256": "f3f35bde37909ee7b8e8873967d6cbe4faa4406bfb47a52f1525a5e211168b76"
     },
     {
       "path": "react.d.ts",
-      "bytes": 76837,
-      "sha256": "20ccde425daf445af4d070dba74565156eb5e12cd2ef3582e796fd0d24a9c9a3"
+      "bytes": 76825,
+      "sha256": "0bbe02c8668ffe746452abd74db133454878c24d8fdd292ce98e1e0f26ffd0d9"
     },
     {
       "path": "shortcuts.d.ts",
@@ -68,13 +68,13 @@
     },
     {
       "path": "theme.d.ts",
-      "bytes": 1836,
-      "sha256": "10dbc2ed1405f07ed1c747f36b3ae683aef708acb6ea1cc532e0c872217c77a9"
+      "bytes": 1833,
+      "sha256": "a916c5652557d636d4170d7e56e12e3af25c8736ee7544077296de928deebb1c"
     },
     {
       "path": "types.d.ts",
-      "bytes": 128888,
-      "sha256": "fd61611f0301522dbb73948d7ddbe38530d0a557600881512d0a331939bddf9f"
+      "bytes": 130029,
+      "sha256": "cfc631bb652752f45b2a81e182d614a8efcef8184687a8888b2069bfcf67332f"
     }
   ]
 }

@@ -1,5 +1,5 @@
 {
-  "name": "aeris-charts",
+  "name": "@aeristerminal/aeris-charts",
   "version": "0.11.0",
   "type": "module",
   "description": "Aeris all-in-one financial and general charting SDK powered by Rust and WebAssembly.",
@@ -33,7 +33,7 @@
   },
   "publishConfig": {
     "access": "public",
-    "registry": "https://registry.npmjs.org"
+    "registry": "https://npm.pkg.github.com"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

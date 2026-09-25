@@ -4,8 +4,8 @@ import {
   AerisChart,
   type GeneralAxisSpec,
   type GeneralSeriesSpec,
-} from "aeris-charts/react";
-import type { series_data } from "aeris-charts";
+} from "@aeristerminal/aeris-charts/react";
+import type { series_data } from "@aeristerminal/aeris-charts";
 
 const summaryAxes: readonly GeneralAxisSpec[] = [
   { id: "month", dimension: "x", position: "bottom", scale: "band" },
