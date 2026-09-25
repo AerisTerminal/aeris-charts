@@ -113,7 +113,7 @@ pub use hit_test::{SeriesHit, SeriesHitKind};
 pub(crate) use indicators::{IndicatorBinding, IndicatorChange};
 pub use indicators::{
     IndicatorBindingInfo, IndicatorInputSource, IndicatorKind, IndicatorOutputDescriptor,
-    IndicatorParameterDescriptor, IndicatorParameterType, IndicatorSchema,
+    IndicatorOutputStyle, IndicatorParameterDescriptor, IndicatorParameterType, IndicatorSchema,
     EMA_RIBBON_DEFAULT_COLORS, EMA_RIBBON_DEFAULT_PERIODS, INDICATOR_SCHEMA_REVISION,
 };
 pub use interaction::{

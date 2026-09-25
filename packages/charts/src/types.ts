@@ -982,6 +982,18 @@ export interface indicator_output_descriptor {
   index: number;
   supports_style: boolean;
 }
+/** Engine-owned presentation state for one output of a study binding. */
+export interface indicator_output_style {
+  visible: boolean;
+  line_color: string | null;
+  line_width: number | null;
+  line_style: number;
+  point_markers: boolean;
+  up_color: string | null;
+  down_color: string | null;
+  area_top_color: string | null;
+  area_bottom_color: string | null;
+}
 export interface indicator_schema {
   revision: number;
   kind: indicator_kind;
@@ -1020,6 +1032,8 @@ export interface indicator_info {
   source_input: indicator_input_source;
   /** VWAP's bound volume series, otherwise `null`. */
   volume_source: series_api | null;
+  /** Current engine-owned presentation state for this output. */
+  style: indicator_output_style;
   /** Stable display name for this output, preserving binding output order. */
   output_name: string;
   /** Bollinger: 0 = upper, 1 = middle, 2 = lower. EMA ribbon: fastest-to-slowest configured
@@ -2202,6 +2216,10 @@ export interface series_api {
   data_by_index(logical_index: number, mismatch_direction?: mismatch_direction): series_data | null;
   data(): readonly series_data[];
   series_type(): series_kind;
+  /** Current engine-owned style snapshot for this output, or `null` for a plain series. */
+  indicator_output_style(): indicator_output_style | null;
+  /** Atomically update an indicator output's persisted presentation style. */
+  set_indicator_output_style(patch: Partial<indicator_output_style>): boolean;
   subscribe_data_changed(handler: data_changed_handler): void;
   unsubscribe_data_changed(handler: data_changed_handler): void;
   /**

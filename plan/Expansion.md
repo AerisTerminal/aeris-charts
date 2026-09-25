@@ -236,9 +236,11 @@ Implementation evidence so far: the F4 foundation now carries the open OHLC colu
 `IndicatorInput`, exposes close/open/high/low plus hl2/hlc3/ohlc4/hlcc4 scalar sources, retains
 output identities when a binding is rebound, and publishes typed parameter/output schemas. The
 engine, WASM shell and TypeScript package expose the explicit-source path and bounded schema query;
-existing convenience methods remain close-based. Multi-input validation, per-output style persistence, the next
-persistence schema, VWAP bands, chart-type additions and the I1 catalog remain open until the
-whole batch is implemented and reference fixtures are added.
+existing convenience methods remain close-based. Indicator outputs now also expose and atomically
+replace a compact engine-owned style snapshot, preserving per-output presentation independently
+of binding kind. Multi-input validation, style-document persistence, the next persistence schema,
+VWAP bands, chart-type additions and the I1 catalog remain open until the whole batch is implemented
+and reference fixtures are added.
 
 ### B5 — Non-time bars and replay
 

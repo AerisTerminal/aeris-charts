@@ -2947,6 +2947,52 @@ fn indicator_schema_exposes_typed_parameters_and_outputs() {
 }
 
 #[test]
+fn indicator_output_styles_are_queryable_and_rebound_without_losing_identity() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let values = [1.0, 2.0, 3.0, 4.0, 5.0];
+    chart
+        .set_series_data(
+            0,
+            &[1.0, 2.0, 3.0, 4.0, 5.0],
+            &values,
+            &values,
+            &values,
+            &values,
+        )
+        .unwrap();
+    let outputs = chart.add_bollinger(0, 2, 2.0);
+    let style = IndicatorOutputStyle {
+        visible: false,
+        line_color: Some("#123456".into()),
+        line_width: Some(3.5),
+        line_style: 2,
+        point_markers: true,
+        up_color: Some("#00ff00".into()),
+        down_color: Some("#ff0000".into()),
+        area_top_color: Some("rgba(1, 2, 3, 0.4)".into()),
+        area_bottom_color: Some("rgba(4, 5, 6, 0.2)".into()),
+    };
+    assert!(chart.set_indicator_output_style(outputs[0], style.clone()));
+    let binding = chart
+        .indicator_bindings()
+        .into_iter()
+        .find(|binding| binding.outputs == outputs)
+        .unwrap();
+    assert_eq!(binding.styles[0], style);
+    assert_eq!(
+        chart.indicator_info(outputs[0]).unwrap().binding_id,
+        outputs[0]
+    );
+    assert!(!chart.set_indicator_output_style(
+        outputs[0],
+        IndicatorOutputStyle {
+            line_width: Some(0.0),
+            ..style
+        }
+    ));
+}
+
+#[test]
 fn indicator_snapshot_values_and_complete_multi_output_metadata_stay_ordered() {
     let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
     let values = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];

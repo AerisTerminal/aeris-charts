@@ -63,6 +63,24 @@ pub struct IndicatorOutputDescriptor {
     pub supports_style: bool,
 }
 
+/// Persistable presentation state for one output of an indicator binding.
+///
+/// The series store remains the owner of the live style. This compact snapshot is exposed with
+/// the binding contract so a host can persist and restore a study without reconstructing styles
+/// from indicator kind heuristics.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct IndicatorOutputStyle {
+    pub visible: bool,
+    pub line_color: Option<String>,
+    pub line_width: Option<f64>,
+    pub line_style: u8,
+    pub point_markers: bool,
+    pub up_color: Option<String>,
+    pub down_color: Option<String>,
+    pub area_top_color: Option<String>,
+    pub area_bottom_color: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IndicatorSchema {
     pub revision: u32,
@@ -125,6 +143,8 @@ pub struct IndicatorBindingInfo {
     pub volume_source: Option<SeriesId>,
     /// Output identities in the indicator's documented order.
     pub outputs: Vec<SeriesId>,
+    /// Per-output presentation snapshots in the same order as `outputs`.
+    pub styles: Vec<IndicatorOutputStyle>,
 }
 
 #[derive(Clone, Debug)]
@@ -189,6 +209,8 @@ pub struct IndicatorInfo {
     pub source: SeriesId,
     pub source_input: IndicatorInputSource,
     pub volume_source: Option<SeriesId>,
+    /// Current engine-owned presentation state for this output.
+    pub style: IndicatorOutputStyle,
     pub output_name: &'static str,
     pub output_index: usize,
     pub output_count: usize,
@@ -274,8 +296,54 @@ impl ChartEngine {
                 source_input: binding.source_input,
                 volume_source: binding.volume_source,
                 outputs: binding.outputs.clone(),
+                styles: binding
+                    .outputs
+                    .iter()
+                    .filter_map(|&id| self.series_entry(id).map(indicator_output_style))
+                    .collect(),
             })
             .collect()
+    }
+
+    /// Replace one output's presentation atomically while retaining the binding and output id.
+    /// Invalid widths are rejected before any series state is changed.
+    pub fn set_indicator_output_style(
+        &mut self,
+        output: SeriesId,
+        style: IndicatorOutputStyle,
+    ) -> bool {
+        if !style
+            .line_width
+            .is_none_or(|width| width.is_finite() && width > 0.0)
+            || style.line_style > 4
+            || !style_color_is_valid(style.line_color.as_deref())
+            || !style_color_is_valid(style.up_color.as_deref())
+            || !style_color_is_valid(style.down_color.as_deref())
+            || !style_color_is_valid(style.area_top_color.as_deref())
+            || !style_color_is_valid(style.area_bottom_color.as_deref())
+        {
+            return false;
+        }
+        if !self
+            .indicators
+            .iter()
+            .any(|binding| binding.outputs.contains(&output))
+        {
+            return false;
+        }
+        let Some(series) = self.series_entry_mut(output) else {
+            return false;
+        };
+        series.visible = style.visible;
+        series.line_color = style.line_color;
+        series.line_width = style.line_width;
+        series.line_style = style.line_style;
+        series.point_markers = style.point_markers;
+        series.up_color = style.up_color;
+        series.down_color = style.down_color;
+        series.area_top_color = style.area_top_color;
+        series.area_bottom_color = style.area_bottom_color;
+        true
     }
 
     /// The binding an output series belongs to, or `None` when `id` is not an indicator output
@@ -385,6 +453,10 @@ impl ChartEngine {
                         source: binding.source,
                         source_input: binding.source_input,
                         volume_source: binding.volume_source,
+                        style: self
+                            .series_entry(binding.outputs[output_index])
+                            .map(indicator_output_style)
+                            .unwrap_or_default(),
                         output_name: indicator_output_name(&binding.kind, output_index),
                         output_index,
                         output_count: binding.outputs.len(),
@@ -1144,6 +1216,26 @@ fn indicator_output_title(kind: &IndicatorKind, output_index: usize) -> String {
 
 fn indicator_output_color(kind: &IndicatorKind, output_index: usize) -> Option<&'static str> {
     matches!(kind, IndicatorKind::EmaRibbon { .. }).then(|| EMA_RIBBON_DEFAULT_COLORS[output_index])
+}
+
+fn indicator_output_style(series: &SeriesEntry) -> IndicatorOutputStyle {
+    IndicatorOutputStyle {
+        visible: series.visible,
+        line_color: series.line_color.clone(),
+        line_width: series.line_width,
+        line_style: series.line_style,
+        point_markers: series.point_markers,
+        up_color: series.up_color.clone(),
+        down_color: series.down_color.clone(),
+        area_top_color: series.area_top_color.clone(),
+        area_bottom_color: series.area_bottom_color.clone(),
+    }
+}
+
+fn style_color_is_valid(value: Option<&str>) -> bool {
+    value.is_none_or(|value| {
+        value.len() <= 256 && aeris_charts_render::color::Color::parse_css(value).is_some()
+    })
 }
 
 fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static str {

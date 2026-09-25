@@ -2038,6 +2038,12 @@ impl AerisChart {
         self.inner.borrow().series_indicator_info_json(id)
     }
 
+    pub fn set_indicator_output_style(&mut self, id: u32, style_json: &str) -> bool {
+        self.inner
+            .borrow_mut()
+            .set_indicator_output_style(id, style_json)
+    }
+
     pub fn indicator_schema_json(&self, kind: &str, period: u32, deviation: f64) -> String {
         self.inner
             .borrow()

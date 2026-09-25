@@ -3,7 +3,7 @@
 
 use super::inner_render::measure_text_ctx;
 use super::*;
-use aeris_charts_engine::{ChartEngine, IndicatorInputSource, IndicatorKind};
+use aeris_charts_engine::{ChartEngine, IndicatorInputSource, IndicatorKind, IndicatorOutputStyle};
 
 impl ChartInner {
     pub fn set_series_area_brush_state(&mut self, id: u32, state_json: &str) -> bool {
@@ -111,6 +111,13 @@ impl ChartInner {
             Some(info) => serde_json::to_string(&info).unwrap_or_else(|_| "null".to_string()),
             None => "null".to_string(),
         }
+    }
+
+    pub fn set_indicator_output_style(&mut self, id: u32, style_json: &str) -> bool {
+        serde_json::from_str::<IndicatorOutputStyle>(style_json).is_ok_and(|style| {
+            self.engine
+                .set_indicator_output_style(id as SeriesId, style)
+        })
     }
 
     pub fn indicator_schema_json(&self, kind: &str, period: u32, deviation: f64) -> String {
