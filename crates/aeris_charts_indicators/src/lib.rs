@@ -2359,6 +2359,9 @@ enum IncrementalKind {
     Mfi {
         period: usize,
     },
+    Volume {
+        period: usize,
+    },
     VwapBands {
         reset: VwapReset,
         standard_deviation: f64,
@@ -2609,6 +2612,10 @@ impl IncrementalState {
         Self::new(IncrementalKind::Mfi { period }, 1)
     }
 
+    pub fn volume(period: usize) -> Self {
+        Self::new(IncrementalKind::Volume { period }, 2)
+    }
+
     pub fn vwap_bands(reset: VwapReset, standard_deviation: f64, percent: f64) -> Self {
         Self::new(
             IncrementalKind::VwapBands {
@@ -2686,6 +2693,7 @@ impl IncrementalState {
             IncrementalKind::Obv { state } => state.bytes(),
             IncrementalKind::Cmf { .. } => 0,
             IncrementalKind::Mfi { .. } => 0,
+            IncrementalKind::Volume { .. } => 0,
             IncrementalKind::VwapBands { state, .. } => state.bytes(),
             IncrementalKind::Sma { .. }
             | IncrementalKind::Bollinger { .. }
@@ -3287,6 +3295,21 @@ impl IncrementalState {
                 let values = mfi(input.high, input.low, input.close, input.volume, *period);
                 self.outputs[0].extend(values.into_iter().skip(start).flatten());
             }
+            IncrementalKind::Volume { period } => {
+                let volume = input.volume;
+                let volume_start = self.output_from[0];
+                let average_start = self.output_from[1];
+                self.last_work_rows = n.saturating_sub(volume_start.min(average_start));
+                for row in volume_start..n {
+                    self.outputs[0].push(volume.get(row).copied().unwrap_or(0.0).max(0.0));
+                }
+                for row in average_start..n {
+                    let window = &volume[row + 1 - *period..=row];
+                    self.outputs[1].push(
+                        window.iter().map(|value| value.max(0.0)).sum::<f64>() / *period as f64,
+                    );
+                }
+            }
             IncrementalKind::VwapBands {
                 reset,
                 standard_deviation,
@@ -3434,6 +3457,7 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
         ],
         IncrementalKind::Cmf { period } => [period.saturating_sub(1), 0, 0, 0, 0],
         IncrementalKind::Mfi { period } => [*period, 0, 0, 0, 0],
+        IncrementalKind::Volume { period } => [0, period.saturating_sub(1), 0, 0, 0],
         IncrementalKind::Vwap { .. }
         | IncrementalKind::Obv { .. }
         | IncrementalKind::VwapBands { .. } => [0; MAX_OUTPUTS],

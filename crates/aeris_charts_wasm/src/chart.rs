@@ -2294,6 +2294,13 @@ impl AerisChart {
             .add_mfi(source_id, volume_source, period)
     }
 
+    /// Add volume columns and their moving average in an oscillator pane.
+    pub fn add_volume(&mut self, source_id: u32, volume_source: i32, period: u32) -> Vec<u32> {
+        self.inner
+            .borrow_mut()
+            .add_volume(source_id, volume_source, period)
+    }
+
     /// Add VWAP basis, standard-deviation and percentage bands. `reset` is session, weekly, or monthly.
     pub fn add_vwap_bands(
         &mut self,

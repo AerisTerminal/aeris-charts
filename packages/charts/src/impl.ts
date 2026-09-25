@@ -4817,6 +4817,12 @@ export class chart_impl implements chart_api {
     );
   }
 
+  add_volume(source: series_api, period: number, volume_source: series_api, options?: Partial<series_options>): [series_api, series_api] {
+    const ids = this.wasm.add_volume(source.id, volume_source.id, Math.max(1, Math.floor(period)));
+    if (ids.length !== 2) throw new AerisChartsError("invalid_options", "invalid volume study configuration");
+    return [this.indicator_series(ids[0]!, options), this.indicator_series(ids[1]!, options)];
+  }
+
   add_vwap_bands(
     source: series_api,
     reset: vwap_reset = "session",

@@ -366,6 +366,7 @@ fn incremental_output_count(kind: &IndicatorKind) -> usize {
         | IndicatorKind::Cmf { .. }
         | IndicatorKind::Mfi { .. }
         | IndicatorKind::Wma { .. } => 1,
+        IndicatorKind::Volume { .. } => 2,
         IndicatorKind::Donchian { .. }
         | IndicatorKind::Keltner { .. }
         | IndicatorKind::AdxDmi { .. } => 3,
@@ -444,6 +445,7 @@ fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
         IndicatorKind::Obv => true,
         IndicatorKind::Cmf { period } => *period > 0,
         IndicatorKind::Mfi { period } => *period > 0,
+        IndicatorKind::Volume { period } => *period > 0,
         IndicatorKind::VwapBands {
             standard_deviation,
             percent,
@@ -2039,6 +2041,31 @@ mod tests {
         assert_eq!(binding.kind, crate::IndicatorKind::Mfi { period: 3 });
         assert_eq!(binding.volume_source, Some(restored_volume));
         assert_eq!(binding.outputs, vec![output]);
+    }
+
+    #[test]
+    fn volume_study_persistence_round_trips_outputs_and_volume_source() {
+        let mut chart = settled_chart();
+        let volume = chart.add_series(crate::SeriesKind::Histogram);
+        let times = (0..10).map(|i| (i * 3600) as f64).collect::<Vec<_>>();
+        let values = [11.0, 12.0, 11.0, 10.0, 11.0, 12.0, 13.0, 12.0, 11.0, 10.0];
+        chart
+            .set_series_data(volume, &times, &values, &values, &values, &values)
+            .unwrap();
+        let outputs = chart.add_volume(0, volume, 3);
+        assert_eq!(outputs.len(), 2);
+        let document = chart.export_state_json().unwrap();
+
+        let mut restored = settled_chart();
+        let restored_volume = restored.add_series(crate::SeriesKind::Histogram);
+        restored
+            .set_series_data(restored_volume, &times, &values, &values, &values, &values)
+            .unwrap();
+        restored.import_state_json(&document).unwrap();
+        let binding = &restored.indicator_bindings()[0];
+        assert_eq!(binding.kind, crate::IndicatorKind::Volume { period: 3 });
+        assert_eq!(binding.volume_source, Some(restored_volume));
+        assert_eq!(binding.outputs, outputs);
     }
 
     #[test]

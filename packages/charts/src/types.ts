@@ -968,7 +968,7 @@ export interface pane_geometry {
 
 /** Scalar input accepted by a built-in indicator. The source series may itself be an indicator output. */
 export type indicator_input_source = "open" | "high" | "low" | "close" | "hl2" | "hlc3" | "ohlc4" | "hlcc4";
-export type indicator_kind = "sma" | "ema" | "dema" | "tema" | "smma" | "hma" | "vwma" | "standard_deviation" | "cci" | "williams_r" | "stochastic_rsi" | "momentum" | "roc" | "donchian" | "keltner" | "adx_dmi" | "parabolic_sar" | "supertrend" | "ichimoku" | "ema_ribbon" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "obv" | "cmf" | "mfi" | "vwap_bands" | "wma";
+export type indicator_kind = "sma" | "ema" | "dema" | "tema" | "smma" | "hma" | "vwma" | "standard_deviation" | "cci" | "williams_r" | "stochastic_rsi" | "momentum" | "roc" | "donchian" | "keltner" | "adx_dmi" | "parabolic_sar" | "supertrend" | "ichimoku" | "ema_ribbon" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "obv" | "cmf" | "mfi" | "volume" | "vwap_bands" | "wma";
 export type vwap_reset = "session" | "weekly" | "monthly";
 export type indicator_parameter_type = "integer" | "number" | "source" | "series";
 export interface indicator_parameter_descriptor {
@@ -2888,6 +2888,7 @@ export interface chart_api {
   add_obv(source: series_api, volume_source: series_api, options?: Partial<series_options>): series_api;
   add_cmf(source: series_api, period: number, volume_source: series_api, options?: Partial<series_options>): series_api;
   add_mfi(source: series_api, period: number, volume_source: series_api, options?: Partial<series_options>): series_api;
+  add_volume(source: series_api, period: number, volume_source: series_api, options?: Partial<series_options>): [series_api, series_api];
   /** Add VWAP basis, standard-deviation bands, and percentage bands with an explicit reset. */
   add_vwap_bands(source: series_api, reset?: vwap_reset, standard_deviation?: number, percent?: number, volume_source?: series_api | null, options?: Partial<series_options>): [series_api, series_api, series_api, series_api, series_api];
   /** Create a Rust-calculated visible-range volume profile. Source must initially be OHLC;

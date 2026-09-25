@@ -172,6 +172,7 @@ impl ChartInner {
             "obv" => IndicatorKind::Obv,
             "cmf" => IndicatorKind::Cmf { period },
             "mfi" => IndicatorKind::Mfi { period },
+            "volume" => IndicatorKind::Volume { period },
             "vwap_bands" => IndicatorKind::VwapBands {
                 reset: VwapReset::Session,
                 standard_deviation: deviation,
@@ -467,6 +468,17 @@ impl ChartInner {
                 period as usize,
             )
             .unwrap_or(u32::MAX)
+    }
+
+    pub fn add_volume(&mut self, source_id: u32, volume_source: i32, period: u32) -> Vec<u32> {
+        if volume_source < 0 {
+            return Vec::new();
+        }
+        self.engine.add_volume(
+            source_id as SeriesId,
+            volume_source as SeriesId,
+            period as usize,
+        )
     }
 
     pub fn add_vwap_bands(

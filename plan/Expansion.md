@@ -239,7 +239,7 @@ retention evicts both), and PD10 budgets hold on GPUI.
 - [x] **I1 volume slice:** CMF with pure, incremental, schema, persistence and package coverage.
 - [x] **I1 volume slice:** MFI with pure, incremental, schema, persistence and package coverage.
 - [x] **I1 oscillators:** CCI, Williams %R, Stochastic RSI, ROC/Momentum, MFI.
-- [ ] **I1 volume:** Volume study with MA.
+- [x] **I1 volume:** Volume study with MA.
 - [ ] **I1 levels:** pivot points (standard, Fibonacci, Camarilla, Woodie, DeMark), ZigZag.
 - [ ] Every indicator has incremental state, rebuild equivalence, a typed schema, persistence and an
       independently computed reference fixture.
@@ -265,7 +265,7 @@ round-trips ordered study dependencies, scalar inputs, volume references and per
 leaving market data host-owned. Chart-type additions, the remaining F4 exit fixtures and the I1
 catalog remain open until the whole batch is implemented. DEMA, TEMA, SMMA/RMA, HMA, VWMA,
 standard deviation, CCI, Williams %R, Stochastic RSI, ROC, Momentum, Donchian Channels, Keltner Channels, ADX/DMI, Parabolic SAR, SuperTrend, Ichimoku are
-OBV, CMF and MFI are now exposed through the engine, WASM and TypeScript APIs, with pure and incremental rebuild
+OBV, CMF, MFI and the volume/MA study are now exposed through the engine, WASM and TypeScript APIs, with pure and incremental rebuild
 coverage; the remaining I1 catalog is still open.
 
 ### B5 — Non-time bars and replay
@@ -903,7 +903,7 @@ candle-only approximation mode that is clearly labeled as such; tape items never
 
 ### Indicator catalog
 
-Current: SMA, EMA, DEMA, TEMA, SMMA/RMA, HMA, VWMA, standard deviation, CCI, Williams %R, Stochastic RSI, ROC, Momentum, OBV, CMF, MFI, Donchian Channels, Keltner Channels, ADX/DMI, Parabolic SAR, SuperTrend, Ichimoku, EMA ribbon, WMA, Bollinger, RSI, MACD, Stochastic, ATR, VWAP. Each new indicator
+Current: SMA, EMA, DEMA, TEMA, SMMA/RMA, HMA, VWMA, standard deviation, CCI, Williams %R, Stochastic RSI, ROC, Momentum, OBV, CMF, MFI, Volume/MA, Donchian Channels, Keltner Channels, ADX/DMI, Parabolic SAR, SuperTrend, Ichimoku, EMA ribbon, WMA, Bollinger, RSI, MACD, Stochastic, ATR, VWAP. Each new indicator
 ships with incremental state, rebuild tests, typed schema, persistence and an independently
 computed reference-value fixture.
 
