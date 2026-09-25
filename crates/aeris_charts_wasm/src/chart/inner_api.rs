@@ -129,6 +129,7 @@ impl ChartInner {
             "ema" => IndicatorKind::Ema { period },
             "dema" => IndicatorKind::Dema { period },
             "tema" => IndicatorKind::Tema { period },
+            "smma" | "rma" => IndicatorKind::Smma { period },
             "ema_ribbon" => IndicatorKind::EmaRibbon {
                 periods: [period; 5],
             },
@@ -211,6 +212,16 @@ impl ChartInner {
         self.engine
             .add_tema(source_id as SeriesId, period as usize)
             .unwrap_or(u32::MAX)
+    }
+
+    pub fn add_smma(&mut self, source_id: u32, period: u32) -> u32 {
+        self.engine
+            .add_smma(source_id as SeriesId, period as usize)
+            .unwrap_or(u32::MAX)
+    }
+
+    pub fn add_rma(&mut self, source_id: u32, period: u32) -> u32 {
+        self.add_smma(source_id, period)
     }
 
     pub fn add_ema_ribbon(&mut self, source_id: u32, periods: [u32; 5]) -> Vec<u32> {

@@ -103,6 +103,32 @@ pub fn tema(values: &[f64], period: usize) -> Vec<Option<f64>> {
     out
 }
 
+/// Smoothed moving average (also called Wilder's moving average or RMA).
+/// The first value is an SMA seed; later values use Wilder's `1 / period` smoothing.
+pub fn smma(values: &[f64], period: usize) -> Vec<Option<f64>> {
+    if period == 0 {
+        return vec![None; values.len()];
+    }
+    let mut out = vec![None; values.len()];
+    let mut current = None;
+    for (index, &value) in values.iter().enumerate() {
+        current = match current {
+            Some(previous) => Some((previous * (period as f64 - 1.0) + value) / period as f64),
+            None if index + 1 >= period => {
+                Some(values[index + 1 - period..=index].iter().sum::<f64>() / period as f64)
+            }
+            None => None,
+        };
+        out[index] = current;
+    }
+    out
+}
+
+/// Wilder's moving average (RMA), an alias of [`smma`].
+pub fn rma(values: &[f64], period: usize) -> Vec<Option<f64>> {
+    smma(values, period)
+}
+
 /// Bollinger Bands using a simple moving-average center and population standard deviation.
 pub fn bollinger(values: &[f64], period: usize, deviation: f64) -> Vec<BollingerPoint> {
     if period == 0 {
@@ -552,6 +578,13 @@ struct TemaState {
     third: EmaState,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct SmmaState {
+    seen: usize,
+    seed_sum: f64,
+    value: f64,
+}
+
 fn dema_step(state: &mut DemaState, sample: f64, period: usize) -> Option<f64> {
     let first = ema_step(&mut state.first, sample, period)?;
     let second = ema_step(&mut state.second, first, period)?;
@@ -563,6 +596,22 @@ fn tema_step(state: &mut TemaState, sample: f64, period: usize) -> Option<f64> {
     let second = ema_step(&mut state.second, first, period)?;
     let third = ema_step(&mut state.third, second, period)?;
     Some(3.0 * first - 3.0 * second + third)
+}
+
+fn smma_step(state: &mut SmmaState, sample: f64, period: usize) -> Option<f64> {
+    state.seen += 1;
+    if state.seen <= period {
+        state.seed_sum += sample;
+        if state.seen == period {
+            state.value = state.seed_sum / period as f64;
+            Some(state.value)
+        } else {
+            None
+        }
+    } else {
+        state.value = (state.value * (period as f64 - 1.0) + sample) / period as f64;
+        Some(state.value)
+    }
 }
 
 fn ema_step(state: &mut EmaState, sample: f64, period: usize) -> Option<f64> {
@@ -1369,6 +1418,10 @@ enum IncrementalKind {
         period: usize,
         state: RecursiveHistory<TemaState>,
     },
+    Smma {
+        period: usize,
+        state: RecursiveHistory<SmmaState>,
+    },
     EmaRibbon {
         periods: [usize; MAX_OUTPUTS],
         states: Box<[RecursiveHistory<EmaState>; MAX_OUTPUTS]>,
@@ -1462,6 +1515,16 @@ impl IncrementalState {
     pub fn tema(period: usize) -> Self {
         Self::new(
             IncrementalKind::Tema {
+                period,
+                state: RecursiveHistory::new(),
+            },
+            1,
+        )
+    }
+
+    pub fn smma(period: usize) -> Self {
+        Self::new(
+            IncrementalKind::Smma {
                 period,
                 state: RecursiveHistory::new(),
             },
@@ -1595,6 +1658,7 @@ impl IncrementalState {
             IncrementalKind::Ema { state, .. } => state.bytes(),
             IncrementalKind::Dema { state, .. } => state.bytes(),
             IncrementalKind::Tema { state, .. } => state.bytes(),
+            IncrementalKind::Smma { state, .. } => state.bytes(),
             IncrementalKind::EmaRibbon { states, .. } => {
                 states.iter().map(RecursiveHistory::bytes).sum()
             }
@@ -1700,6 +1764,25 @@ impl IncrementalState {
                     state.checkpoint(row, accumulator);
                     if row >= self.output_from[0] {
                         self.outputs[0].push(value.expect("TEMA after warmup"));
+                    }
+                    if row + 1 == n {
+                        tail = Some(accumulator);
+                        before_tail = (row > 0).then_some(previous);
+                    }
+                }
+                state.finish(n, tail, before_tail);
+            }
+            IncrementalKind::Smma { period, state } => {
+                let (start, mut accumulator) = state.begin(n, requested);
+                self.last_work_rows = n - start;
+                let mut tail = None;
+                let mut before_tail = None;
+                for row in start..n {
+                    let previous = accumulator;
+                    let value = smma_step(&mut accumulator, input.close[row], *period);
+                    state.checkpoint(row, accumulator);
+                    if row >= self.output_from[0] {
+                        self.outputs[0].push(value.expect("SMMA after warmup"));
                     }
                     if row + 1 == n {
                         tail = Some(accumulator);
@@ -2003,6 +2086,7 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
         IncrementalKind::Tema { period, .. } => {
             [period.saturating_mul(3).saturating_sub(3), 0, 0, 0, 0]
         }
+        IncrementalKind::Smma { period, .. } => [period.saturating_sub(1), 0, 0, 0, 0],
         IncrementalKind::EmaRibbon { periods, .. } => {
             periods.map(|period| period.saturating_sub(1))
         }
@@ -2070,6 +2154,27 @@ mod tests {
             tema(&[1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0], 3),
             vec![None, None, None, None, None, None, Some(20.0)]
         );
+    }
+
+    #[test]
+    fn smma_uses_wilder_smoothing_and_rma_aliases_it() {
+        let values = [1.0, 2.0, 4.0, 8.0, 16.0];
+        let actual = smma(&values, 3);
+        let expected = [
+            None,
+            None,
+            Some(7.0 / 3.0),
+            Some(38.0 / 9.0),
+            Some(220.0 / 27.0),
+        ];
+        for (actual, expected) in actual.into_iter().zip(expected) {
+            match (actual, expected) {
+                (None, None) => {}
+                (Some(actual), Some(expected)) => assert!((actual - expected).abs() < 1e-12),
+                other => panic!("unexpected SMMA result: {other:?}"),
+            }
+        }
+        assert_eq!(rma(&values, 3), smma(&values, 3));
     }
 
     #[test]
@@ -2839,6 +2944,7 @@ mod tests {
         Ema,
         Dema,
         Tema,
+        Smma,
         EmaRibbon,
         Bollinger,
         Rsi,
@@ -2855,6 +2961,7 @@ mod tests {
             TestKind::Ema => vec![ema(input.close, 5)],
             TestKind::Dema => vec![dema(input.close, 5)],
             TestKind::Tema => vec![tema(input.close, 5)],
+            TestKind::Smma => vec![smma(input.close, 5)],
             TestKind::EmaRibbon => [3, 5, 8, 13, 21]
                 .into_iter()
                 .map(|period| ema(input.close, period))
@@ -2931,6 +3038,7 @@ mod tests {
             (TestKind::Ema, IncrementalState::ema(5)),
             (TestKind::Dema, IncrementalState::dema(5)),
             (TestKind::Tema, IncrementalState::tema(5)),
+            (TestKind::Smma, IncrementalState::smma(5)),
             (
                 TestKind::EmaRibbon,
                 IncrementalState::ema_ribbon([3, 5, 8, 13, 21]),
