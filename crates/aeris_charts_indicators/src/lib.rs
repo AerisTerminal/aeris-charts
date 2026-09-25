@@ -382,6 +382,31 @@ pub fn adx_dmi(highs: &[f64], lows: &[f64], closes: &[f64], period: usize) -> Ve
     out
 }
 
+/// Commodity Channel Index using the typical price and a rolling mean deviation.
+/// The conventional constant is 0.015; a zero-deviation window emits zero rather than NaN.
+pub fn cci(highs: &[f64], lows: &[f64], closes: &[f64], period: usize) -> Vec<Option<f64>> {
+    let n = highs.len().min(lows.len()).min(closes.len());
+    let mut out = vec![None; n];
+    if period == 0 {
+        return out;
+    }
+    for (row, output) in out.iter_mut().enumerate().skip(period.saturating_sub(1)) {
+        let start = row + 1 - period;
+        let typical = |index: usize| (highs[index] + lows[index] + closes[index]) / 3.0;
+        let mean = (start..=row).map(typical).sum::<f64>() / period as f64;
+        let mean_deviation = (start..=row)
+            .map(|index| (typical(index) - mean).abs())
+            .sum::<f64>()
+            / period as f64;
+        *output = Some(if mean_deviation > 0.0 {
+            (typical(row) - mean) / (0.015 * mean_deviation)
+        } else {
+            0.0
+        });
+    }
+    out
+}
+
 fn wma_at(values: &[f64], row: usize, period: usize) -> Option<f64> {
     if period == 0 || row.saturating_add(1) < period {
         return None;
@@ -2032,6 +2057,9 @@ enum IncrementalKind {
     StandardDeviation {
         period: usize,
     },
+    Cci {
+        period: usize,
+    },
     Donchian {
         period: usize,
     },
@@ -2173,6 +2201,10 @@ impl IncrementalState {
 
     pub fn standard_deviation(period: usize) -> Self {
         Self::new(IncrementalKind::StandardDeviation { period }, 1)
+    }
+
+    pub fn cci(period: usize) -> Self {
+        Self::new(IncrementalKind::Cci { period }, 1)
     }
 
     pub fn donchian(period: usize) -> Self {
@@ -2373,6 +2405,7 @@ impl IncrementalState {
             | IncrementalKind::Hma { .. } => 0,
             IncrementalKind::Vwma { .. } => 0,
             IncrementalKind::StandardDeviation { .. } => 0,
+            IncrementalKind::Cci { .. } => 0,
             IncrementalKind::Donchian { .. } => 0,
         }
     }
@@ -2514,6 +2547,12 @@ impl IncrementalState {
                 let start = self.output_from[0];
                 self.last_work_rows = n - start;
                 let values = standard_deviation(input.close, *period);
+                self.outputs[0].extend(values.into_iter().skip(start).flatten());
+            }
+            IncrementalKind::Cci { period } => {
+                let start = self.output_from[0];
+                self.last_work_rows = n - start;
+                let values = cci(input.high, input.low, input.close, *period);
                 self.outputs[0].extend(values.into_iter().skip(start).flatten());
             }
             IncrementalKind::Donchian { period } => {
@@ -2979,6 +3018,7 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
         }
         IncrementalKind::Vwma { period } => [period.saturating_sub(1), 0, 0, 0, 0],
         IncrementalKind::StandardDeviation { period } => [period.saturating_sub(1), 0, 0, 0, 0],
+        IncrementalKind::Cci { period } => [period.saturating_sub(1), 0, 0, 0, 0],
         IncrementalKind::Donchian { period } => [
             period.saturating_sub(1),
             period.saturating_sub(1),
@@ -3160,6 +3200,19 @@ mod tests {
         assert_eq!(points[25].leading_a, Some(21.75));
         assert_eq!(points[51].leading_b, Some(30.5));
         assert_eq!(points[59].lagging, Some(59.5));
+    }
+
+    #[test]
+    fn cci_uses_typical_price_and_zero_for_flat_deviation() {
+        let values = [1.0, 2.0, 3.0, 4.0];
+        let points = cci(&values, &values, &values, 3);
+        assert_eq!(points[..2], [None, None]);
+        assert!((points[2].unwrap() - 100.0).abs() < 1e-12);
+        assert!((points[3].unwrap() - 100.0).abs() < 1e-12);
+        assert_eq!(
+            cci(&[5.0, 5.0, 5.0], &[5.0, 5.0, 5.0], &[5.0, 5.0, 5.0], 3),
+            vec![None, None, Some(0.0)]
+        );
     }
 
     #[test]
@@ -3990,6 +4043,7 @@ mod tests {
         Hma,
         Vwma,
         StandardDeviation,
+        Cci,
         Donchian,
         Keltner,
         AdxDmi,
@@ -4016,6 +4070,7 @@ mod tests {
             TestKind::Hma => vec![hma(input.close, 5)],
             TestKind::Vwma => vec![vwma(input.close, input.volume, 5)],
             TestKind::StandardDeviation => vec![standard_deviation(input.close, 5)],
+            TestKind::Cci => vec![cci(input.high, input.low, input.close, 5)],
             TestKind::Donchian => {
                 let points = donchian(input.high, input.low, 5);
                 vec![
@@ -4135,6 +4190,7 @@ mod tests {
                 TestKind::StandardDeviation,
                 IncrementalState::standard_deviation(5),
             ),
+            (TestKind::Cci, IncrementalState::cci(5)),
             (TestKind::Donchian, IncrementalState::donchian(5)),
             (TestKind::Keltner, IncrementalState::keltner(5, 2.0)),
             (TestKind::AdxDmi, IncrementalState::adx_dmi(5)),

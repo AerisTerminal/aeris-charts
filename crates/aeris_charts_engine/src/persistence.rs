@@ -354,6 +354,7 @@ fn incremental_output_count(kind: &IndicatorKind) -> usize {
         | IndicatorKind::Hma { .. }
         | IndicatorKind::Vwma { .. }
         | IndicatorKind::StandardDeviation { .. }
+        | IndicatorKind::Cci { .. }
         | IndicatorKind::Rsi { .. }
         | IndicatorKind::Atr { .. }
         | IndicatorKind::Vwap
@@ -408,6 +409,7 @@ fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
         | IndicatorKind::Hma { period }
         | IndicatorKind::Vwma { period }
         | IndicatorKind::StandardDeviation { period }
+        | IndicatorKind::Cci { period }
         | IndicatorKind::Donchian { period }
         | IndicatorKind::Rsi { period }
         | IndicatorKind::Atr { period }
@@ -2031,6 +2033,19 @@ mod tests {
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].kind, crate::IndicatorKind::Ichimoku);
         assert_eq!(bindings[0].outputs.len(), 5);
+    }
+
+    #[test]
+    fn cci_persistence_round_trips_period_and_output() {
+        let mut chart = settled_chart();
+        let output = chart.add_cci(0, 3).unwrap();
+        let document = chart.export_state_json().unwrap();
+
+        let mut restored = settled_chart();
+        restored.import_state_json(&document).unwrap();
+        let binding = &restored.indicator_bindings()[0];
+        assert_eq!(binding.kind, crate::IndicatorKind::Cci { period: 3 });
+        assert_eq!(binding.outputs, vec![output]);
     }
 
     #[test]

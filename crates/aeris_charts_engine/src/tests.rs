@@ -156,6 +156,7 @@ fn financial_product_compatibility_fixture_survives_shared_frame_mutations() {
     assert!(chart.add_parabolic_sar(0).is_some());
     assert!(chart.add_supertrend(0, 14, 3.0).is_some());
     assert_eq!(chart.add_ichimoku(0).len(), 5);
+    assert!(chart.add_cci(0, 14).is_some());
     assert!(chart.add_rsi(0, 14).is_some());
     assert_eq!(chart.add_macd(0, 12, 26, 9).len(), 3);
     assert_eq!(chart.add_stochastic(0, 14, 3).len(), 2);
@@ -189,6 +190,7 @@ fn financial_product_compatibility_fixture_survives_shared_frame_mutations() {
                 multiplier: 3.0,
             },
             IndicatorKind::Ichimoku,
+            IndicatorKind::Cci { period: 14 },
             IndicatorKind::Rsi { period: 14 },
             IndicatorKind::Macd {
                 fast: 12,
@@ -1686,6 +1688,11 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
                 source[3], period,
             )]
         }
+        IndicatorKind::Cci { period } => {
+            vec![aeris_charts_indicators::cci(
+                source[1], source[2], source[3], period,
+            )]
+        }
         IndicatorKind::Donchian { period } => {
             let points = aeris_charts_indicators::donchian(source[1], source[2], period);
             vec![
@@ -1885,6 +1892,7 @@ fn every_indicator_engine_path_matches_full_recomputation() {
             multiplier: 3.0,
         },
         IndicatorKind::Ichimoku,
+        IndicatorKind::Cci { period: 5 },
     ];
     for kind in kinds {
         let mut chart = ChartEngine::new(800.0, 500.0, 1.0);

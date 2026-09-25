@@ -133,6 +133,7 @@ impl ChartInner {
             "hma" => IndicatorKind::Hma { period },
             "vwma" => IndicatorKind::Vwma { period },
             "standard_deviation" => IndicatorKind::StandardDeviation { period },
+            "cci" => IndicatorKind::Cci { period },
             "donchian" => IndicatorKind::Donchian { period },
             "keltner" => IndicatorKind::Keltner {
                 period,
@@ -255,6 +256,12 @@ impl ChartInner {
     pub fn add_standard_deviation(&mut self, source_id: u32, period: u32) -> u32 {
         self.engine
             .add_standard_deviation(source_id as SeriesId, period as usize)
+            .unwrap_or(u32::MAX)
+    }
+
+    pub fn add_cci(&mut self, source_id: u32, period: u32) -> u32 {
+        self.engine
+            .add_cci(source_id as SeriesId, period as usize)
             .unwrap_or(u32::MAX)
     }
 

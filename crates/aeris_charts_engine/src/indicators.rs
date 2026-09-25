@@ -118,6 +118,9 @@ pub enum IndicatorKind {
     StandardDeviation {
         period: usize,
     },
+    Cci {
+        period: usize,
+    },
     Donchian {
         period: usize,
     },
@@ -471,6 +474,15 @@ impl ChartEngine {
                                 ..IndicatorParameters::default()
                             },
                         ),
+                        IndicatorKind::Cci { period } => (
+                            "cci",
+                            period,
+                            None,
+                            IndicatorParameters {
+                                period: Some(period),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
                         IndicatorKind::Donchian { period } => (
                             "donchian",
                             period,
@@ -677,6 +689,12 @@ impl ChartEngine {
 
     pub fn add_standard_deviation(&mut self, source: SeriesId, period: usize) -> Option<SeriesId> {
         self.add_indicator_kind(source, IndicatorKind::StandardDeviation { period }, None)
+            .into_iter()
+            .next()
+    }
+
+    pub fn add_cci(&mut self, source: SeriesId, period: usize) -> Option<SeriesId> {
+        self.add_indicator_kind(source, IndicatorKind::Cci { period }, None)
             .into_iter()
             .next()
     }
@@ -915,6 +933,11 @@ impl ChartEngine {
                     self.place_outputs_in_oscillator_pane(&ids);
                 }
             }
+            IndicatorKind::Cci { .. } => {
+                if !ids.is_empty() {
+                    self.place_outputs_in_oscillator_pane(&ids);
+                }
+            }
             IndicatorKind::Sma { .. }
             | IndicatorKind::Ema { .. }
             | IndicatorKind::Dema { .. }
@@ -996,6 +1019,7 @@ impl ChartEngine {
             | IndicatorKind::Smma { period }
             | IndicatorKind::Hma { period }
             | IndicatorKind::StandardDeviation { period }
+            | IndicatorKind::Cci { period }
             | IndicatorKind::Donchian { period }
             | IndicatorKind::Rsi { period }
             | IndicatorKind::Atr { period }
@@ -1178,6 +1202,7 @@ impl ChartEngine {
                     *period == 0 || !multiplier.is_finite() || *multiplier < 0.0
                 }
                 IndicatorKind::AdxDmi { period } => *period == 0,
+                IndicatorKind::Cci { period } => *period == 0,
                 IndicatorKind::ParabolicSar => false,
                 IndicatorKind::SuperTrend { period, multiplier } => {
                     *period == 0 || !multiplier.is_finite() || *multiplier < 0.0
@@ -1235,6 +1260,10 @@ impl ChartEngine {
                         IndicatorKind::Stochastic { .. } => Some(SeriesThresholdRegion {
                             lower: 20.0,
                             upper: 80.0,
+                        }),
+                        IndicatorKind::Cci { .. } => Some(SeriesThresholdRegion {
+                            lower: -100.0,
+                            upper: 100.0,
                         }),
                         _ => None,
                     };
@@ -1520,6 +1549,7 @@ fn indicator_kind_name(kind: &IndicatorKind) -> &'static str {
         IndicatorKind::Hma { .. } => "hma",
         IndicatorKind::Vwma { .. } => "vwma",
         IndicatorKind::StandardDeviation { .. } => "standard_deviation",
+        IndicatorKind::Cci { .. } => "cci",
         IndicatorKind::Donchian { .. } => "donchian",
         IndicatorKind::Keltner { .. } => "keltner",
         IndicatorKind::AdxDmi { .. } => "adx_dmi",
@@ -1559,6 +1589,7 @@ fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators::Increment
         IndicatorKind::AdxDmi { period } => {
             aeris_charts_indicators::IncrementalState::adx_dmi(period)
         }
+        IndicatorKind::Cci { period } => aeris_charts_indicators::IncrementalState::cci(period),
         IndicatorKind::ParabolicSar => aeris_charts_indicators::IncrementalState::parabolic_sar(),
         IndicatorKind::SuperTrend { period, multiplier } => {
             aeris_charts_indicators::IncrementalState::supertrend(period, multiplier)
@@ -1627,6 +1658,7 @@ fn indicator_title(kind: &IndicatorKind) -> String {
         IndicatorKind::Hma { period } => format!("HMA {period}"),
         IndicatorKind::Vwma { period } => format!("VWMA {period}"),
         IndicatorKind::StandardDeviation { period } => format!("Std Dev {period}"),
+        IndicatorKind::Cci { period } => format!("CCI {period}"),
         IndicatorKind::Donchian { period } => format!("Donchian {period}"),
         IndicatorKind::Keltner { period, multiplier } => {
             format!("Keltner {period} {}", params(*multiplier))
@@ -1697,6 +1729,7 @@ fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static 
         IndicatorKind::Hma { .. } => "HMA",
         IndicatorKind::Vwma { .. } => "VWMA",
         IndicatorKind::StandardDeviation { .. } => "Std Dev",
+        IndicatorKind::Cci { .. } => "CCI",
         IndicatorKind::Donchian { .. } => ["Upper", "Basis", "Lower"][output_index],
         IndicatorKind::Keltner { .. } => ["Upper", "Basis", "Lower"][output_index],
         IndicatorKind::AdxDmi { .. } => ["+DI", "-DI", "ADX"][output_index],

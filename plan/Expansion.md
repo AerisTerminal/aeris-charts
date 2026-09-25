@@ -222,7 +222,7 @@ retention evicts both), and PD10 budgets hold on GPUI.
 - [x] **I1 Hull moving-average slice:** HMA with pure, incremental, schema, persistence and package coverage.
 - [x] **I1 moving average slice:** DEMA with pure, incremental, schema, persistence and package coverage.
 - [x] **I1 Wilder moving-average slice:** SMMA/RMA with pure, incremental, schema, persistence and package coverage.
-- [ ] **I1 trend:** Ichimoku.
+- [x] **I1 trend:** Ichimoku.
 - [x] **I1 trend slice:** ADX/DMI with pure, incremental, schema, persistence and package coverage.
 - [x] **I1 trend slice:** Parabolic SAR with pure, incremental, schema, persistence and package coverage.
 - [x] **I1 trend slice:** SuperTrend with pure, incremental, schema, persistence and package coverage.
@@ -231,6 +231,7 @@ retention evicts both), and PD10 budgets hold on GPUI.
 - [x] **I1 volatility slice:** population standard deviation with pure, incremental, schema, persistence and package coverage.
 - [x] **I1 channel slice:** Donchian Channels with pure, incremental, schema, persistence and package coverage.
 - [x] **I1 channel slice:** Keltner Channels with EMA/ATR pure, incremental, schema, persistence and package coverage.
+- [x] **I1 oscillator slice:** CCI with pure, incremental, schema, persistence and package coverage.
 - [ ] **I1 oscillators:** CCI, Williams %R, Stochastic RSI, ROC/Momentum, MFI.
 - [ ] **I1 volume:** Volume study with MA, OBV, CMF.
 - [ ] **I1 levels:** pivot points (standard, Fibonacci, Camarilla, Woodie, DeMark), ZigZag.
@@ -257,7 +258,7 @@ validation now rejects invalid VWAP volume bindings atomically. Financial persis
 round-trips ordered study dependencies, scalar inputs, volume references and per-output styles while
 leaving market data host-owned. Chart-type additions, the remaining F4 exit fixtures and the I1
 catalog remain open until the whole batch is implemented. DEMA, TEMA, SMMA/RMA, HMA, VWMA,
-standard deviation, Donchian Channels, Keltner Channels, ADX/DMI, Parabolic SAR, SuperTrend and Ichimoku are
+standard deviation, Donchian Channels, Keltner Channels, ADX/DMI, Parabolic SAR, SuperTrend, Ichimoku and CCI are
 now exposed through the engine, WASM and TypeScript APIs, with pure and incremental rebuild
 coverage; the remaining I1 catalog is still open.
 
@@ -896,7 +897,7 @@ candle-only approximation mode that is clearly labeled as such; tape items never
 
 ### Indicator catalog
 
-Current: SMA, EMA, DEMA, TEMA, SMMA/RMA, HMA, VWMA, standard deviation, Donchian Channels, Keltner Channels, ADX/DMI, Parabolic SAR, SuperTrend, Ichimoku, EMA ribbon, WMA, Bollinger, RSI, MACD, Stochastic, ATR, VWAP. Each new indicator
+Current: SMA, EMA, DEMA, TEMA, SMMA/RMA, HMA, VWMA, standard deviation, CCI, Donchian Channels, Keltner Channels, ADX/DMI, Parabolic SAR, SuperTrend, Ichimoku, EMA ribbon, WMA, Bollinger, RSI, MACD, Stochastic, ATR, VWAP. Each new indicator
 ships with incremental state, rebuild tests, typed schema, persistence and an independently
 computed reference-value fixture.
 

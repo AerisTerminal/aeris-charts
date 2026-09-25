@@ -2129,6 +2129,10 @@ impl AerisChart {
             .add_standard_deviation(source_id, period)
     }
 
+    pub fn add_cci(&mut self, source_id: u32, period: u32) -> u32 {
+        self.inner.borrow_mut().add_cci(source_id, period)
+    }
+
     pub fn add_donchian(&mut self, source_id: u32, period: u32) -> Vec<u32> {
         self.inner.borrow_mut().add_donchian(source_id, period)
     }
