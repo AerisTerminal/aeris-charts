@@ -362,6 +362,7 @@ fn incremental_output_count(kind: &IndicatorKind) -> usize {
         | IndicatorKind::Rsi { .. }
         | IndicatorKind::Atr { .. }
         | IndicatorKind::Vwap
+        | IndicatorKind::Obv
         | IndicatorKind::Wma { .. } => 1,
         IndicatorKind::Donchian { .. }
         | IndicatorKind::Keltner { .. }
@@ -438,6 +439,7 @@ fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
         IndicatorKind::Macd { fast, slow, signal } => *fast > 0 && *slow > 0 && *signal > 0,
         IndicatorKind::Stochastic { k_period, d_period } => *k_period > 0 && *d_period > 0,
         IndicatorKind::Vwap => true,
+        IndicatorKind::Obv => true,
         IndicatorKind::VwapBands {
             standard_deviation,
             percent,
@@ -1961,6 +1963,30 @@ mod tests {
         let baseline = untouched.export_state_json().unwrap();
         assert!(untouched.import_state_json(&invalid_document).is_err());
         assert_eq!(untouched.export_state_json().unwrap(), baseline);
+    }
+
+    #[test]
+    fn obv_persistence_round_trips_volume_source() {
+        let mut chart = settled_chart();
+        let volume = chart.add_series(crate::SeriesKind::Histogram);
+        let times = (0..10).map(|i| (i * 3600) as f64).collect::<Vec<_>>();
+        let values = [11.0, 12.0, 11.0, 10.0, 11.0, 12.0, 13.0, 12.0, 11.0, 10.0];
+        chart
+            .set_series_data(volume, &times, &values, &values, &values, &values)
+            .unwrap();
+        let output = chart.add_obv(0, volume).unwrap();
+        let document = chart.export_state_json().unwrap();
+
+        let mut restored = settled_chart();
+        let restored_volume = restored.add_series(crate::SeriesKind::Histogram);
+        restored
+            .set_series_data(restored_volume, &times, &values, &values, &values, &values)
+            .unwrap();
+        restored.import_state_json(&document).unwrap();
+        let binding = &restored.indicator_bindings()[0];
+        assert_eq!(binding.kind, crate::IndicatorKind::Obv);
+        assert_eq!(binding.volume_source, Some(restored_volume));
+        assert_eq!(binding.outputs, vec![output]);
     }
 
     #[test]

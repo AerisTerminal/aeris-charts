@@ -821,6 +821,29 @@ pub fn vwap(
     out
 }
 
+/// On-balance volume, seeded at zero and accumulated using each bar's volume according to the
+/// close-to-close direction. Non-positive volumes contribute zero so malformed provider values
+/// cannot invert the direction signal.
+pub fn obv(closes: &[f64], volumes: &[f64]) -> Vec<Option<f64>> {
+    let n = closes.len().min(volumes.len());
+    let mut out = vec![None; n];
+    if n == 0 {
+        return out;
+    }
+    let mut cumulative = 0.0;
+    out[0] = Some(cumulative);
+    for row in 1..n {
+        let volume = volumes[row].max(0.0);
+        if closes[row] > closes[row - 1] {
+            cumulative += volume;
+        } else if closes[row] < closes[row - 1] {
+            cumulative -= volume;
+        }
+        out[row] = Some(cumulative);
+    }
+    out
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VwapReset {
@@ -1774,6 +1797,13 @@ struct VwapState {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+struct ObvState {
+    cumulative: f64,
+    previous_close: f64,
+    initialized: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
 struct VwapBandsState {
     period: i64,
     cumulative_pv: f64,
@@ -2057,6 +2087,22 @@ fn vwap_step(state: &mut VwapState, sample: VwapSample) -> f64 {
     }
 }
 
+fn obv_step(state: &mut ObvState, close: f64, volume: f64) -> f64 {
+    if !state.initialized {
+        state.previous_close = close;
+        state.initialized = true;
+        return state.cumulative;
+    }
+    let volume = volume.max(0.0);
+    if close > state.previous_close {
+        state.cumulative += volume;
+    } else if close < state.previous_close {
+        state.cumulative -= volume;
+    }
+    state.previous_close = close;
+    state.cumulative
+}
+
 fn vwap_bands_step(
     state: &mut VwapBandsState,
     sample: VwapBandsSample,
@@ -2219,6 +2265,9 @@ enum IncrementalKind {
     },
     Vwap {
         state: RecursiveHistory<VwapState>,
+    },
+    Obv {
+        state: RecursiveHistory<ObvState>,
     },
     VwapBands {
         reset: VwapReset,
@@ -2453,6 +2502,15 @@ impl IncrementalState {
         )
     }
 
+    pub fn obv() -> Self {
+        Self::new(
+            IncrementalKind::Obv {
+                state: RecursiveHistory::new(),
+            },
+            1,
+        )
+    }
+
     pub fn vwap_bands(reset: VwapReset, standard_deviation: f64, percent: f64) -> Self {
         Self::new(
             IncrementalKind::VwapBands {
@@ -2527,6 +2585,7 @@ impl IncrementalState {
             IncrementalKind::SuperTrend { state, .. } => state.bytes(),
             IncrementalKind::Ichimoku => 0,
             IncrementalKind::Vwap { state } => state.bytes(),
+            IncrementalKind::Obv { state } => state.bytes(),
             IncrementalKind::VwapBands { state, .. } => state.bytes(),
             IncrementalKind::Sma { .. }
             | IncrementalKind::Bollinger { .. }
@@ -3093,6 +3152,29 @@ impl IncrementalState {
                 }
                 state.finish(n, tail, before_tail);
             }
+            IncrementalKind::Obv { state } => {
+                let (start, mut accumulator) = state.begin(n, requested);
+                self.last_work_rows = n - start;
+                let mut tail = None;
+                let mut before_tail = None;
+                for row in start..n {
+                    let previous = accumulator;
+                    let value = obv_step(
+                        &mut accumulator,
+                        input.close[row],
+                        input.volume.get(row).copied().unwrap_or(0.0),
+                    );
+                    state.checkpoint(row, accumulator);
+                    if row >= self.output_from[0] {
+                        self.outputs[0].push(value);
+                    }
+                    if row + 1 == n {
+                        tail = Some(accumulator);
+                        before_tail = (row > 0).then_some(previous);
+                    }
+                }
+                state.finish(n, tail, before_tail);
+            }
             IncrementalKind::VwapBands {
                 reset,
                 standard_deviation,
@@ -3238,7 +3320,9 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
             0,
             0,
         ],
-        IncrementalKind::Vwap { .. } | IncrementalKind::VwapBands { .. } => [0; MAX_OUTPUTS],
+        IncrementalKind::Vwap { .. }
+        | IncrementalKind::Obv { .. }
+        | IncrementalKind::VwapBands { .. } => [0; MAX_OUTPUTS],
     }
 }
 
@@ -4244,6 +4328,14 @@ mod tests {
         assert_eq!(points[2].percent_lower, Some(18.0));
     }
 
+    #[test]
+    fn obv_uses_current_volume_and_direction() {
+        assert_eq!(
+            obv(&[10.0, 12.0, 11.0, 11.0, 13.0], &[4.0, 5.0, 3.0, -2.0, 7.0]),
+            vec![Some(0.0), Some(5.0), Some(2.0), Some(2.0), Some(9.0)]
+        );
+    }
+
     #[derive(Clone, Copy)]
     enum TestKind {
         Sma,
@@ -4272,6 +4364,7 @@ mod tests {
         Stochastic,
         Atr,
         Vwap,
+        Obv,
         Wma,
     }
 
@@ -4362,6 +4455,7 @@ mod tests {
                 input.close,
                 input.volume,
             )],
+            TestKind::Obv => vec![obv(input.close, input.volume)],
             TestKind::Wma => vec![wma(input.close, 5)],
         }
     }
@@ -4433,6 +4527,7 @@ mod tests {
             (TestKind::Stochastic, IncrementalState::stochastic(5, 3)),
             (TestKind::Atr, IncrementalState::atr(5)),
             (TestKind::Vwap, IncrementalState::vwap()),
+            (TestKind::Obv, IncrementalState::obv()),
             (TestKind::Wma, IncrementalState::wma(5)),
         ];
         let mut times = (0..40).map(|index| index * 3_600).collect::<Vec<_>>();

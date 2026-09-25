@@ -173,6 +173,7 @@ pub enum IndicatorKind {
         period: usize,
     },
     Vwap,
+    Obv,
     VwapBands {
         reset: aeris_charts_indicators::VwapReset,
         standard_deviation: f64,
@@ -640,6 +641,7 @@ impl ChartEngine {
                             },
                         ),
                         IndicatorKind::Vwap => ("vwap", 0, None, IndicatorParameters::default()),
+                        IndicatorKind::Obv => ("obv", 0, None, IndicatorParameters::default()),
                         IndicatorKind::VwapBands {
                             reset,
                             standard_deviation,
@@ -946,6 +948,14 @@ impl ChartEngine {
             .next()
     }
 
+    /// Add on-balance volume in its own oscillator pane. `volume_source` is required and supplies
+    /// the per-bar volume column used by the cumulative direction signal.
+    pub fn add_obv(&mut self, source: SeriesId, volume_source: SeriesId) -> Option<SeriesId> {
+        self.add_indicator_kind(source, IndicatorKind::Obv, Some(volume_source))
+            .into_iter()
+            .next()
+    }
+
     /// Add session/weekly/monthly VWAP basis, standard-deviation and percentage bands.
     pub fn add_vwap_bands(
         &mut self,
@@ -1043,6 +1053,11 @@ impl ChartEngine {
                 }
             }
             IndicatorKind::RateOfChange { .. } => {
+                if !ids.is_empty() {
+                    self.place_outputs_in_oscillator_pane(&ids);
+                }
+            }
+            IndicatorKind::Obv => {
                 if !ids.is_empty() {
                     self.place_outputs_in_oscillator_pane(&ids);
                 }
@@ -1182,6 +1197,15 @@ impl ChartEngine {
                     max: None,
                 });
             }
+            IndicatorKind::Obv => {
+                parameters.push(IndicatorParameterDescriptor {
+                    name: "volume_source".into(),
+                    parameter_type: IndicatorParameterType::Series,
+                    default: serde_json::Value::Null,
+                    min: None,
+                    max: None,
+                });
+            }
             IndicatorKind::Vwma { period } => {
                 parameters.push(integer("period", period));
                 parameters.push(IndicatorParameterDescriptor {
@@ -1293,6 +1317,12 @@ impl ChartEngine {
     ) -> Vec<SeriesId> {
         if self.series_entry(source).is_none()
             || match &kind {
+                IndicatorKind::Obv => volume_source.is_none_or(|id| {
+                    id == source
+                        || self
+                            .series_entry(id)
+                            .is_none_or(|series| !series.kind.stores_scalar_values())
+                }),
                 IndicatorKind::Vwap
                 | IndicatorKind::VwapBands { .. }
                 | IndicatorKind::Vwma { .. } => volume_source.is_some_and(|id| {
@@ -1343,6 +1373,7 @@ impl ChartEngine {
                     *k_period == 0 || *d_period == 0
                 }
                 IndicatorKind::Vwap => false,
+                IndicatorKind::Obv => false,
                 IndicatorKind::VwapBands {
                     standard_deviation,
                     percent,
@@ -1512,7 +1543,14 @@ impl ChartEngine {
                     if volume_times == times {
                         Cow::Borrowed(values[3])
                     } else {
-                        Cow::Owned(align_volume_to_source_times(times, volume_times, values[3]))
+                        Cow::Owned(align_volume_to_source_times(
+                            times,
+                            volume_times,
+                            values[3],
+                            matches!(&self.indicators[index].kind, IndicatorKind::Obv)
+                                .then_some(0.0)
+                                .unwrap_or(1.0),
+                        ))
                     }
                 });
             let binding = &mut self.indicators[index];
@@ -1659,8 +1697,9 @@ fn align_volume_to_source_times(
     source_times: &[i64],
     volume_times: &[i64],
     values: &[f64],
+    default: f64,
 ) -> Vec<f64> {
-    let mut aligned = vec![1.0; source_times.len()];
+    let mut aligned = vec![default; source_times.len()];
     let mut volume_row = 0;
     for (source_row, &source_time) in source_times.iter().enumerate() {
         while volume_row < volume_times.len() && volume_times[volume_row] < source_time {
@@ -1703,6 +1742,7 @@ fn indicator_kind_name(kind: &IndicatorKind) -> &'static str {
         IndicatorKind::Stochastic { .. } => "stochastic",
         IndicatorKind::Atr { .. } => "atr",
         IndicatorKind::Vwap => "vwap",
+        IndicatorKind::Obv => "obv",
         IndicatorKind::VwapBands { .. } => "vwap_bands",
         IndicatorKind::Wma { .. } => "wma",
     }
@@ -1759,6 +1799,7 @@ fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators::Increment
         }
         IndicatorKind::Atr { period } => aeris_charts_indicators::IncrementalState::atr(period),
         IndicatorKind::Vwap => aeris_charts_indicators::IncrementalState::vwap(),
+        IndicatorKind::Obv => aeris_charts_indicators::IncrementalState::obv(),
         IndicatorKind::VwapBands {
             reset,
             standard_deviation,
@@ -1845,6 +1886,7 @@ fn indicator_title(kind: &IndicatorKind) -> String {
         }
         IndicatorKind::Atr { period } => format!("ATR {period}"),
         IndicatorKind::Vwap => "VWAP".to_string(),
+        IndicatorKind::Obv => "OBV".to_string(),
         IndicatorKind::VwapBands { .. } => "VWAP Bands".to_string(),
         IndicatorKind::Wma { period } => format!("WMA {period}"),
     }
@@ -1913,6 +1955,7 @@ fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static 
         IndicatorKind::Stochastic { .. } => ["%K", "%D"][output_index],
         IndicatorKind::Atr { .. } => "ATR",
         IndicatorKind::Vwap => "VWAP",
+        IndicatorKind::Obv => "OBV",
         IndicatorKind::VwapBands { .. } => {
             ["Basis", "Std Upper", "Std Lower", "% Upper", "% Lower"][output_index]
         }

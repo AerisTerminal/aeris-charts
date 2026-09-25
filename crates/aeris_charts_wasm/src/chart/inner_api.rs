@@ -169,6 +169,7 @@ impl ChartInner {
             },
             "atr" => IndicatorKind::Atr { period },
             "vwap" => IndicatorKind::Vwap,
+            "obv" => IndicatorKind::Obv,
             "vwap_bands" => IndicatorKind::VwapBands {
                 reset: VwapReset::Session,
                 standard_deviation: deviation,
@@ -428,6 +429,15 @@ impl ChartInner {
         let volume = (volume_source >= 0).then_some(volume_source as SeriesId);
         self.engine
             .add_vwap(source_id as SeriesId, volume)
+            .unwrap_or(u32::MAX)
+    }
+
+    pub fn add_obv(&mut self, source_id: u32, volume_source: i32) -> u32 {
+        if volume_source < 0 {
+            return u32::MAX;
+        }
+        self.engine
+            .add_obv(source_id as SeriesId, volume_source as SeriesId)
             .unwrap_or(u32::MAX)
     }
 

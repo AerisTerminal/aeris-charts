@@ -2275,6 +2275,11 @@ impl AerisChart {
         self.inner.borrow_mut().add_vwap(source_id, volume_source)
     }
 
+    /// Add on-balance volume in its own oscillator pane (`volume_source` is required).
+    pub fn add_obv(&mut self, source_id: u32, volume_source: i32) -> u32 {
+        self.inner.borrow_mut().add_obv(source_id, volume_source)
+    }
+
     /// Add VWAP basis, standard-deviation and percentage bands. `reset` is session, weekly, or monthly.
     pub fn add_vwap_bands(
         &mut self,
