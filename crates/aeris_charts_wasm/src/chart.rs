@@ -1525,6 +1525,66 @@ impl AerisChart {
             .add_footprint_series(adopt_primary, options_json)
     }
 
+    pub fn add_trade_stream(&mut self, key: &str, options_json: &str) -> u32 {
+        self.inner.borrow_mut().add_trade_stream(key, options_json)
+    }
+
+    pub fn trade_stream_id(&self, key: &str) -> u32 {
+        self.inner.borrow().trade_stream_id(key)
+    }
+
+    pub fn trade_stream_revision(&self, stream_id: u32) -> u32 {
+        self.inner.borrow().trade_stream_revision(stream_id)
+    }
+
+    pub fn trade_stream_stats_json(&self, stream_id: u32) -> String {
+        self.inner.borrow().trade_stream_stats_json(stream_id)
+    }
+
+    pub fn bind_footprint_series_to_stream(&mut self, id: u32, stream_id: u32) -> bool {
+        self.inner
+            .borrow_mut()
+            .bind_footprint_series_to_stream(id, stream_id)
+    }
+
+    pub fn add_cvd_series(
+        &mut self,
+        stream_id: u32,
+        pane_index: usize,
+        reset: u8,
+        anchor_timestamp_micros: f64,
+    ) -> u32 {
+        self.inner.borrow_mut().add_cvd_series(
+            stream_id,
+            pane_index,
+            reset,
+            anchor_timestamp_micros,
+        )
+    }
+
+    pub fn add_delta_series(&mut self, stream_id: u32, pane_index: usize) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_delta_series(stream_id, pane_index)
+    }
+
+    pub fn add_trade_bubbles(
+        &mut self,
+        stream_id: u32,
+        series_id: u32,
+        minimum_volume: f64,
+        max_markers: usize,
+        aggregation_window_micros: f64,
+    ) -> bool {
+        self.inner.borrow_mut().add_trade_bubbles(
+            stream_id,
+            series_id,
+            minimum_volume,
+            max_markers,
+            aggregation_window_micros,
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn set_footprint_trades_typed(
         &mut self,
@@ -1611,7 +1671,7 @@ impl AerisChart {
             .borrow()
             .engine
             .footprint_bars(id)
-            .and_then(|bars| serde_json::to_string(bars).ok())
+            .and_then(|bars| serde_json::to_string(&bars).ok())
             .unwrap_or_else(|| "null".to_string())
     }
 
@@ -1620,7 +1680,7 @@ impl AerisChart {
             .borrow()
             .engine
             .footprint_bar(id, index)
-            .and_then(|bar| serde_json::to_string(bar).ok())
+            .and_then(|bar| serde_json::to_string(&bar).ok())
             .unwrap_or_else(|| "null".to_string())
     }
 

@@ -39,6 +39,7 @@ import type {
   price_scale_info, price_scale_options, ring_source_layout,
   series_api, series_change_handler, series_data, series_kind,
   series_marker, series_marker_options, series_options, single_value_data, size_change_handler, time, time_range,
+  trade_stream_stats,
   time_scale_api, time_scale_options, tracking_mode_options, trading_api, trading_execution, trading_hit,
   chart_sync_event, crosshair_sync_position,
   trading_intent, trading_intent_handler, trading_position, trading_preview, trading_snapshot,
@@ -4345,6 +4346,84 @@ export class chart_impl implements chart_api {
       cancelAnimationFrame(this.anim_frame);
       this.anim_frame = null;
     }
+  }
+
+  add_trade_stream(key: string, options: Partial<footprint_series_options> = {}): number {
+    const id = this.wasm.add_trade_stream(key, JSON.stringify(options));
+    if (id === 0xffffffff) {
+      throw new AerisChartsError("invalid_options", "trade stream options were rejected by the engine");
+    }
+    return id;
+  }
+
+  trade_stream_id(key: string): number | null {
+    const id = this.wasm.trade_stream_id(key);
+    return id === 0 ? null : id;
+  }
+
+  trade_stream_revision(stream_id: number): number | null {
+    const revision = this.wasm.trade_stream_revision(stream_id);
+    return revision === 0xffffffff ? null : revision;
+  }
+
+  trade_stream_stats(stream_id: number): trade_stream_stats | null {
+    return JSON.parse(this.wasm.trade_stream_stats_json(stream_id)) as trade_stream_stats | null;
+  }
+
+  bind_footprint_series_to_stream(series: footprint_series_api | number, stream_id: number): void {
+    const id = typeof series === "number" ? series : series.id;
+    if (!this.wasm.bind_footprint_series_to_stream(id, stream_id)) {
+      throw new AerisChartsError("invalid_options", "trade stream binding was rejected by the engine");
+    }
+    this.repaint();
+  }
+
+  add_cvd_series(
+    stream_id: number,
+    pane = 1,
+    reset: "session" | "continuous" | "anchored" = "session",
+    anchor_timestamp_micros = Number.NaN,
+  ): series_api {
+    const reset_code = reset === "session" ? 0 : reset === "continuous" ? 1 : 2;
+    const id = this.wasm.add_cvd_series(stream_id, pane, reset_code, anchor_timestamp_micros);
+    if (id === 0xffffffff) {
+      throw new AerisChartsError("invalid_options", "CVD series options were rejected by the engine");
+    }
+    const series = new series_impl(id, "line", this);
+    this.series_by_id.set(id, series);
+    this.emit_series_change(this.series_added_subs, series, this.pane_of_series(id));
+    this.repaint();
+    return series;
+  }
+
+  add_delta_series(stream_id: number, pane = 1): series_api {
+    const id = this.wasm.add_delta_series(stream_id, pane);
+    if (id === 0xffffffff) {
+      throw new AerisChartsError("invalid_options", "delta series options were rejected by the engine");
+    }
+    const series = new series_impl(id, "histogram", this);
+    this.series_by_id.set(id, series);
+    this.emit_series_change(this.series_added_subs, series, this.pane_of_series(id));
+    this.repaint();
+    return series;
+  }
+
+  add_trade_bubbles(
+    series: series_api | number,
+    stream_id: number,
+    options: { minimum_volume?: number; max_markers?: number; aggregation_window_micros?: number } = {},
+  ): void {
+    const series_id = typeof series === "number" ? series : series.id;
+    if (!this.wasm.add_trade_bubbles(
+      stream_id,
+      series_id,
+      options.minimum_volume ?? 0,
+      options.max_markers ?? 2048,
+      options.aggregation_window_micros ?? 0,
+    )) {
+      throw new AerisChartsError("invalid_options", "trade bubbles were rejected by the engine");
+    }
+    this.repaint();
   }
 
   add_series(

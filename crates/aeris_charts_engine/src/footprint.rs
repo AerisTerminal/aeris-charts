@@ -11,11 +11,68 @@ use aeris_charts_core::model::data_validation::{MAX_SAFE_VALUE, MIN_SAFE_VALUE};
 use aeris_charts_core::style::MARKET_UP_RGB;
 use aeris_charts_render::color::Color;
 
-use crate::{ChartEngine, PriceFormatKind, SeriesKind, SeriesPriceFormat};
+use crate::{
+    marker_pos, marker_shape, ChartEngine, Marker, PriceFormatKind, SeriesKind, SeriesPriceFormat,
+};
 
 const MICROS_PER_SECOND: i64 = 1_000_000;
 const MIN_TIMESTAMP_MICROS: i64 = -62_167_219_200 * MICROS_PER_SECOND;
 const MAX_TIMESTAMP_MICROS: i64 = 253_402_300_799 * MICROS_PER_SECOND + 999_999;
+pub const MAX_TRADE_STREAMS: usize = 64;
+pub const MAX_TRADE_STREAM_KEY_BYTES: usize = 128;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TradeStudyKind {
+    CumulativeDelta,
+    DeltaHistogram,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CumulativeDeltaReset {
+    #[default]
+    Session,
+    Continuous,
+    Anchored,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TradeStudyOptions {
+    pub cumulative_delta_reset: CumulativeDeltaReset,
+    pub anchor_timestamp_micros: Option<i64>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct TradeStreamStats {
+    pub revision: u64,
+    pub stream_capacity_bytes: usize,
+    pub dependent_count: usize,
+    pub dependent_rebuilds: u64,
+    pub dependent_incremental_updates: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TradeBubbleOptions {
+    pub minimum_volume: f64,
+    pub max_markers: usize,
+    pub aggregation_window_micros: i64,
+}
+
+impl Default for TradeBubbleOptions {
+    fn default() -> Self {
+        Self {
+            minimum_volume: 0.0,
+            max_markers: 2_048,
+            aggregation_window_micros: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TradeBubbleDependent {
+    pub series_id: SeriesId,
+    pub options: TradeBubbleOptions,
+    pub applied_revision: u64,
+}
 
 /// Which side initiated a trade. Unknown trades remain in total volume but never manufacture bid
 /// or ask volume.
@@ -107,6 +164,10 @@ pub enum FootprintCellMode {
     BidAsk,
     Total,
     Delta,
+    ProfileInBar,
+    VolumeLadder,
+    HorizontalImbalance,
+    BidAskHistogram,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -209,6 +270,7 @@ pub struct FootprintBar {
     pub unknown_volume: f64,
     pub total_volume: f64,
     pub delta: f64,
+    pub delta_percent: f64,
     /// Highest running bar delta observed after applying each trade, with zero as the initial
     /// state. This deliberately cannot be reconstructed from final `delta`.
     pub max_delta: f64,
@@ -232,6 +294,10 @@ pub struct FootprintWorkStats {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FootprintError {
+    InvalidTradeStreamKey,
+    TradeStreamCapacity,
+    UnknownTradeStream(u64),
+    TradeStreamInUse(u64),
     InvalidTickSize,
     InvalidAggregation,
     InvalidImbalance,
@@ -251,6 +317,10 @@ pub enum FootprintError {
 impl core::fmt::Display for FootprintError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::InvalidTradeStreamKey => write!(f, "trade stream key is empty or too long"),
+            Self::TradeStreamCapacity => write!(f, "trade stream capacity is exhausted"),
+            Self::UnknownTradeStream(id) => write!(f, "unknown trade stream {id}"),
+            Self::TradeStreamInUse(id) => write!(f, "trade stream {id} still has dependents"),
             Self::InvalidTickSize => write!(f, "tick_size must be finite and greater than zero"),
             Self::InvalidAggregation => write!(f, "footprint bar aggregation is invalid"),
             Self::InvalidImbalance => write!(f, "footprint imbalance options are invalid"),
@@ -309,12 +379,23 @@ pub struct FootprintAggregator {
     active_session: Option<Option<u64>>,
     session_delta: f64,
     work: FootprintWorkStats,
+    revision: u64,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct FootprintSeriesState {
-    pub aggregator: FootprintAggregator,
+    pub trade_stream_id: u64,
     pub visual: FootprintVisualOptions,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TradeStudyDependent {
+    pub series_id: SeriesId,
+    pub kind: TradeStudyKind,
+    pub options: TradeStudyOptions,
+    pub applied_revision: u64,
+    pub rebuilds: u64,
+    pub incremental_updates: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -338,6 +419,7 @@ impl FootprintAggregator {
             active_session: None,
             session_delta: 0.0,
             work: FootprintWorkStats::default(),
+            revision: 1,
         })
     }
 
@@ -355,6 +437,10 @@ impl FootprintAggregator {
 
     pub fn work_stats(&self) -> FootprintWorkStats {
         self.work
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub fn reset_work_stats(&mut self) {
@@ -385,6 +471,7 @@ impl FootprintAggregator {
             self.active_session = None;
             self.session_delta = 0.0;
             self.rebuild_seed = RebuildSeed::default();
+            self.revision = self.revision.saturating_add(1);
             return;
         }
         let first = self.bars.len() - keep;
@@ -414,6 +501,7 @@ impl FootprintAggregator {
         self.trades.drain(..trade_start);
         self.bars.drain(..first);
         self.reindex_trade_ids();
+        self.revision = self.revision.saturating_add(1);
     }
 
     /// Atomically replace the tape, sort it by feed order, and reconstruct every derived bar.
@@ -434,6 +522,7 @@ impl FootprintAggregator {
         self.reindex_trade_ids();
         self.rebuild_seed = RebuildSeed::default();
         self.rebuild();
+        self.revision = self.revision.saturating_add(1);
         Ok(())
     }
 
@@ -471,6 +560,7 @@ impl FootprintAggregator {
                 self.trades.push(stored);
                 self.work.incremental_ticks += 1;
             }
+            self.revision = self.revision.saturating_add(1);
             return Ok(FootprintUpdateKind::Tip);
         }
 
@@ -494,6 +584,7 @@ impl FootprintAggregator {
         self.next_input_order = next_input_order;
         self.reindex_trade_ids();
         self.rebuild();
+        self.revision = self.revision.saturating_add(1);
         Ok(FootprintUpdateKind::Historical)
     }
 
@@ -532,6 +623,7 @@ impl FootprintAggregator {
             active_session: self.active_session,
             session_delta: self.session_delta,
             work: self.work,
+            revision: self.revision,
         }
     }
 
@@ -613,6 +705,7 @@ impl FootprintAggregator {
                 unknown_volume: 0.0,
                 total_volume: 0.0,
                 delta: 0.0,
+                delta_percent: 0.0,
                 max_delta: 0.0,
                 min_delta: 0.0,
                 session_delta: self.session_delta,
@@ -698,6 +791,204 @@ impl FootprintAggregator {
 }
 
 impl ChartEngine {
+    /// Create a bounded chart-level trade stream keyed by the host instrument identity. The
+    /// stream owns canonical ordering, classification, corrections and retention; dependent
+    /// footprint/study series refer to it by the returned opaque id.
+    pub fn add_trade_stream(
+        &mut self,
+        key: &str,
+        options: FootprintAggregationOptions,
+    ) -> Result<u64, FootprintError> {
+        if key.is_empty() || key.len() > MAX_TRADE_STREAM_KEY_BYTES {
+            return Err(FootprintError::InvalidTradeStreamKey);
+        }
+        if let Some(&stream_id) = self.trade_stream_keys.get(key) {
+            let existing = self
+                .trade_stream(stream_id)
+                .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
+            if existing.options() != options {
+                return Err(FootprintError::InvalidAggregation);
+            }
+            return Ok(stream_id);
+        }
+        if self.trade_streams.len() >= MAX_TRADE_STREAMS {
+            return Err(FootprintError::TradeStreamCapacity);
+        }
+        let stream_id = self.next_trade_stream_id;
+        self.next_trade_stream_id = self.next_trade_stream_id.saturating_add(1).max(1);
+        self.trade_streams
+            .insert(stream_id, FootprintAggregator::new(options)?);
+        self.trade_stream_keys.insert(key.to_string(), stream_id);
+        Ok(stream_id)
+    }
+
+    pub fn trade_stream_id(&self, key: &str) -> Option<u64> {
+        self.trade_stream_keys.get(key).copied()
+    }
+
+    pub fn trade_stream_revision(&self, stream_id: u64) -> Option<u64> {
+        self.trade_stream(stream_id)
+            .map(FootprintAggregator::revision)
+    }
+
+    pub fn trade_stream_stats(&self, stream_id: u64) -> Option<TradeStreamStats> {
+        let stream = self.trade_stream(stream_id)?;
+        let dependents = self.trade_dependents.get(&stream_id);
+        let bubbles = self.trade_bubbles.get(&stream_id);
+        Some(TradeStreamStats {
+            revision: stream.revision(),
+            stream_capacity_bytes: stream.capacity_bytes(),
+            dependent_count: dependents.map_or(0, Vec::len) + bubbles.map_or(0, Vec::len),
+            dependent_rebuilds: dependents
+                .into_iter()
+                .flatten()
+                .map(|dependent| dependent.rebuilds)
+                .sum(),
+            dependent_incremental_updates: dependents
+                .into_iter()
+                .flatten()
+                .map(|dependent| dependent.incremental_updates)
+                .sum(),
+        })
+    }
+
+    pub fn remove_trade_stream(&mut self, stream_id: u64) -> Result<(), FootprintError> {
+        if !self.trade_streams.contains_key(&stream_id) {
+            return Err(FootprintError::UnknownTradeStream(stream_id));
+        }
+        if self.series.iter().any(|series| {
+            series
+                .footprint
+                .as_ref()
+                .is_some_and(|state| state.trade_stream_id == stream_id && !series.removed)
+        }) || self
+            .trade_dependents
+            .get(&stream_id)
+            .is_some_and(|dependents| !dependents.is_empty())
+            || self
+                .trade_bubbles
+                .get(&stream_id)
+                .is_some_and(|dependents| !dependents.is_empty())
+        {
+            return Err(FootprintError::TradeStreamInUse(stream_id));
+        }
+        self.trade_streams.remove(&stream_id);
+        self.trade_stream_keys.retain(|_, id| *id != stream_id);
+        Ok(())
+    }
+
+    /// Rebind a footprint series to a canonical chart stream. The stream's aggregation policy is
+    /// authoritative; the visual options remain series-local.
+    pub fn bind_footprint_series_to_stream(
+        &mut self,
+        id: SeriesId,
+        stream_id: u64,
+    ) -> Result<(), FootprintError> {
+        self.validate_series_id(id).map_err(series_error)?;
+        let stream = self
+            .trade_stream(stream_id)
+            .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
+        let (times, open, high, low, close) = projection_columns(stream.bars())?;
+        let visual = self
+            .series_entry(id)
+            .and_then(|series| series.footprint.as_ref())
+            .map(|state| state.visual.clone())
+            .ok_or(FootprintError::UnknownSeries(id))?;
+        self.series_entry_mut(id)
+            .and_then(|series| series.footprint.as_mut())
+            .ok_or(FootprintError::UnknownSeries(id))?
+            .clone_from(&FootprintSeriesState {
+                trade_stream_id: stream_id,
+                visual,
+            });
+        self.install_footprint_projection(id, times, open, high, low, close);
+        self.invalidate_frame_series(id);
+        Ok(())
+    }
+
+    pub fn add_cvd_series(
+        &mut self,
+        stream_id: u64,
+        pane_index: usize,
+        options: TradeStudyOptions,
+    ) -> Result<SeriesId, FootprintError> {
+        self.trade_stream(stream_id)
+            .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
+        if options.cumulative_delta_reset == CumulativeDeltaReset::Anchored
+            && options.anchor_timestamp_micros.is_none()
+        {
+            return Err(FootprintError::InvalidAggregation);
+        }
+        let id = self.add_series(SeriesKind::Line);
+        self.set_series_pane(id, pane_index, 1.0);
+        if let Some(series) = self.series_entry_mut(id) {
+            series.title = "CVD".to_string();
+        }
+        self.register_trade_dependent(stream_id, TradeStudyKind::CumulativeDelta, id, options);
+        if let Err(error) = self.refresh_trade_dependents(stream_id) {
+            self.remove_series(id);
+            return Err(error);
+        }
+        Ok(id)
+    }
+
+    pub fn add_delta_series(
+        &mut self,
+        stream_id: u64,
+        pane_index: usize,
+    ) -> Result<SeriesId, FootprintError> {
+        self.trade_stream(stream_id)
+            .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
+        let id = self.add_series(SeriesKind::Histogram);
+        self.set_series_pane(id, pane_index, 1.0);
+        if let Some(series) = self.series_entry_mut(id) {
+            series.title = "Delta".to_string();
+        }
+        self.register_trade_dependent(
+            stream_id,
+            TradeStudyKind::DeltaHistogram,
+            id,
+            TradeStudyOptions::default(),
+        );
+        if let Err(error) = self.refresh_trade_dependents(stream_id) {
+            self.remove_series(id);
+            return Err(error);
+        }
+        Ok(id)
+    }
+
+    pub fn add_trade_bubbles(
+        &mut self,
+        stream_id: u64,
+        series_id: SeriesId,
+        options: TradeBubbleOptions,
+    ) -> Result<(), FootprintError> {
+        self.trade_stream(stream_id)
+            .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
+        self.validate_series_id(series_id).map_err(series_error)?;
+        if !options.minimum_volume.is_finite()
+            || options.minimum_volume < 0.0
+            || options.max_markers == 0
+            || options.max_markers > 4_096
+            || options.aggregation_window_micros < 0
+        {
+            return Err(FootprintError::InvalidAggregation);
+        }
+        self.trade_bubbles
+            .entry(stream_id)
+            .or_default()
+            .retain(|dependent| dependent.series_id != series_id);
+        self.trade_bubbles
+            .entry(stream_id)
+            .or_default()
+            .push(TradeBubbleDependent {
+                series_id,
+                options,
+                applied_revision: 0,
+            });
+        self.refresh_trade_bubbles(stream_id)
+    }
+
     /// Add a first-class tick-driven footprint series. The shared chart time axis currently
     /// projects whole-second aligned time bars; analytical aggregation also supports trade-count
     /// and volume bars without pretending that several bars share one canonical second.
@@ -722,6 +1013,16 @@ impl ChartEngine {
         validate_visual_options(&options.visual)?;
         self.validate_series_id(id).map_err(series_error)?;
         let aggregator = FootprintAggregator::new(options.aggregation)?;
+        let stream_id = self
+            .series_entry(id)
+            .and_then(|series| series.footprint.as_ref())
+            .map(|state| state.trade_stream_id)
+            .unwrap_or_else(|| {
+                let stream_id = self.next_trade_stream_id;
+                self.next_trade_stream_id = self.next_trade_stream_id.saturating_add(1).max(1);
+                stream_id
+            });
+        self.trade_streams.insert(stream_id, aggregator);
         let had_data = !self.data_layer().plot(id).is_empty();
         let series = self
             .series_entry_mut(id)
@@ -729,7 +1030,7 @@ impl ChartEngine {
         series.kind = SeriesKind::Footprint;
         series.feature = None;
         series.footprint = Some(FootprintSeriesState {
-            aggregator,
+            trade_stream_id: stream_id,
             visual: options.visual,
         });
         series.price_format = footprint_price_format(options.aggregation.tick_size);
@@ -753,7 +1054,7 @@ impl ChartEngine {
     pub fn footprint_series_options(&self, id: SeriesId) -> Option<FootprintSeriesOptions> {
         let state = self.series_entry(id)?.footprint.as_ref()?;
         Some(FootprintSeriesOptions {
-            aggregation: state.aggregator.options(),
+            aggregation: self.trade_stream(state.trade_stream_id)?.options(),
             visual: state.visual.clone(),
         })
     }
@@ -766,11 +1067,17 @@ impl ChartEngine {
         validate_chart_projection(options.aggregation)?;
         validate_visual_options(&options.visual)?;
         self.validate_series_id(id).map_err(series_error)?;
-        let state = self
+        let stream_id = self
             .series_entry(id)
             .and_then(|series| series.footprint.as_ref())
+            .map(|state| state.trade_stream_id)
             .ok_or(FootprintError::UnknownSeries(id))?;
-        if state.aggregator.options() == options.aggregation {
+        if self
+            .trade_stream(stream_id)
+            .ok_or(FootprintError::UnknownSeries(id))?
+            .options()
+            == options.aggregation
+        {
             self.series_entry_mut(id)
                 .and_then(|series| series.footprint.as_mut())
                 .expect("validated footprint series")
@@ -778,10 +1085,32 @@ impl ChartEngine {
             self.invalidate_frame_series(id);
             return Ok(());
         }
-        let trades = state.aggregator.trades().cloned().collect::<Vec<_>>();
+        let dependent_count = self
+            .series
+            .iter()
+            .filter(|series| {
+                !series.removed
+                    && series
+                        .footprint
+                        .as_ref()
+                        .is_some_and(|state| state.trade_stream_id == stream_id)
+            })
+            .count()
+            + self.trade_dependents.get(&stream_id).map_or(0, Vec::len)
+            + self.trade_bubbles.get(&stream_id).map_or(0, Vec::len);
+        if dependent_count > 1 {
+            return Err(FootprintError::TradeStreamInUse(stream_id));
+        }
+        let trades = self
+            .trade_stream(stream_id)
+            .ok_or(FootprintError::UnknownSeries(id))?
+            .trades()
+            .cloned()
+            .collect::<Vec<_>>();
         let mut aggregator = FootprintAggregator::new(options.aggregation)?;
         aggregator.set_trades(trades)?;
         let (times, open, high, low, close) = projection_columns(aggregator.bars())?;
+        self.trade_streams.insert(stream_id, aggregator);
         let series = self
             .series_entry_mut(id)
             .expect("validated footprint series");
@@ -790,7 +1119,7 @@ impl ChartEngine {
             .as_mut()
             .expect("validated footprint series")
             .clone_from(&FootprintSeriesState {
-                aggregator,
+                trade_stream_id: stream_id,
                 visual: options.visual,
             });
         series.price_format = footprint_price_format(options.aggregation.tick_size);
@@ -801,24 +1130,19 @@ impl ChartEngine {
         Ok(())
     }
 
-    pub fn footprint_bars(&self, id: SeriesId) -> Option<&[FootprintBar]> {
-        Some(self.series_entry(id)?.footprint.as_ref()?.aggregator.bars())
+    pub fn footprint_bars(&self, id: SeriesId) -> Option<Vec<FootprintBar>> {
+        let stream_id = self.series_entry(id)?.footprint.as_ref()?.trade_stream_id;
+        Some(self.trade_stream(stream_id)?.bars().to_vec())
     }
 
-    pub fn footprint_bar(&self, id: SeriesId, bar_index: usize) -> Option<&FootprintBar> {
-        self.series_entry(id)?
-            .footprint
-            .as_ref()?
-            .aggregator
-            .bar(bar_index)
+    pub fn footprint_bar(&self, id: SeriesId, bar_index: usize) -> Option<FootprintBar> {
+        let stream_id = self.series_entry(id)?.footprint.as_ref()?.trade_stream_id;
+        self.trade_stream(stream_id)?.bar(bar_index).cloned()
     }
 
     pub fn footprint_work_stats(&self, id: SeriesId) -> Option<FootprintWorkStats> {
         Some(
-            self.series_entry(id)?
-                .footprint
-                .as_ref()?
-                .aggregator
+            self.trade_stream(self.series_entry(id)?.footprint.as_ref()?.trade_stream_id)?
                 .work_stats(),
         )
     }
@@ -829,18 +1153,19 @@ impl ChartEngine {
         trades: Vec<FootprintTrade>,
     ) -> Result<(), FootprintError> {
         self.validate_series_id(id).map_err(series_error)?;
-        let mut next = self
+        let stream_id = self
             .series_entry(id)
             .and_then(|series| series.footprint.as_ref())
+            .map(|state| state.trade_stream_id)
+            .ok_or(FootprintError::UnknownSeries(id))?;
+        let mut next = self
+            .trade_stream(stream_id)
             .ok_or(FootprintError::UnknownSeries(id))?
-            .aggregator
             .clone();
         next.set_trades(trades)?;
         let (times, open, high, low, close) = projection_columns(next.bars())?;
-        self.series_entry_mut(id)
-            .and_then(|series| series.footprint.as_mut())
-            .expect("validated footprint series")
-            .aggregator = next;
+        self.trade_streams.insert(stream_id, next);
+        self.refresh_trade_dependents(stream_id)?;
         if !self.install_footprint_projection(id, times, open, high, low, close) {
             return Err(FootprintError::UnknownSeries(id));
         }
@@ -868,23 +1193,25 @@ impl ChartEngine {
         if trades.is_empty() {
             return Ok(FootprintUpdateKind::Tip);
         }
-        let state = self
+        let stream_id = self
             .series_entry(id)
             .and_then(|series| series.footprint.as_ref())
+            .map(|state| state.trade_stream_id)
             .ok_or(FootprintError::UnknownSeries(id))?;
-        let options = state.aggregator.options();
+        let stream = self
+            .trade_stream(stream_id)
+            .ok_or(FootprintError::UnknownSeries(id))?;
+        let options = stream.options();
         validate_trade_batch(options, &trades)?;
-        let historical = !state.aggregator.batch_is_tip(&trades);
-        let previous_bar_count = state.aggregator.bars().len();
+        let historical = !stream.batch_is_tip(&trades);
+        let previous_bar_count = stream.bars().len();
         if historical {
-            let mut next = state.aggregator.historical_update_candidate();
+            let mut next = stream.historical_update_candidate();
             let result = next.update_trades(trades)?;
             debug_assert_eq!(result, FootprintUpdateKind::Historical);
             let (times, open, high, low, close) = projection_columns(next.bars())?;
-            self.series_entry_mut(id)
-                .and_then(|series| series.footprint.as_mut())
-                .expect("validated footprint series")
-                .aggregator = next;
+            self.trade_streams.insert(stream_id, next);
+            self.refresh_trade_dependents(stream_id)?;
             if !self.install_footprint_projection(id, times, open, high, low, close) {
                 return Err(FootprintError::UnknownSeries(id));
             }
@@ -892,15 +1219,12 @@ impl ChartEngine {
             return Ok(FootprintUpdateKind::Historical);
         }
 
-        validate_projection_sessions(state.aggregator.bars(), options, &trades)?;
-        let result = {
-            let aggregator = &mut self
-                .series_entry_mut(id)
-                .and_then(|series| series.footprint.as_mut())
-                .expect("validated footprint series")
-                .aggregator;
-            aggregator.update_trades(trades)?
-        };
+        validate_projection_sessions(stream.bars(), options, &trades)?;
+        let result = self
+            .trade_streams
+            .get_mut(&stream_id)
+            .ok_or(FootprintError::UnknownSeries(id))?
+            .update_trades(trades)?;
         debug_assert_eq!(result, FootprintUpdateKind::Tip);
         let from = previous_bar_count.saturating_sub(1);
         let (times, open, high, low, close) = projection_columns(
@@ -909,6 +1233,7 @@ impl ChartEngine {
         if self.update_footprint_projection_bars(id, times, open, high, low, close) == 0 {
             return Err(FootprintError::UnknownSeries(id));
         }
+        self.refresh_trade_dependents_from(stream_id, Some(from))?;
         self.invalidate_frame_series(id);
         Ok(result)
     }
@@ -917,18 +1242,231 @@ impl ChartEngine {
         self.series
             .iter()
             .filter_map(|series| series.footprint.as_ref())
-            .map(|state| state.aggregator.capacity_bytes())
+            .filter_map(|state| self.trade_stream(state.trade_stream_id))
+            .map(FootprintAggregator::capacity_bytes)
             .sum()
     }
 
     pub(crate) fn trim_footprint_rows_front(&mut self, id: SeriesId, keep: usize) {
-        if let Some(state) = self
+        if let Some(stream_id) = self
             .series_entry_mut(id)
             .and_then(|series| series.footprint.as_mut())
+            .map(|state| state.trade_stream_id)
         {
-            state.aggregator.retain_last_bars(keep);
+            if let Some(stream) = self.trade_streams.get_mut(&stream_id) {
+                stream.retain_last_bars(keep);
+            }
+            if let Some(dependents) = self.trade_dependents.get(&stream_id).cloned() {
+                for dependent in dependents {
+                    self.data.trim_front(dependent.series_id, keep);
+                }
+            }
+            let _ = self.refresh_trade_bubbles(stream_id);
         }
     }
+
+    pub(crate) fn trade_stream(&self, stream_id: u64) -> Option<&FootprintAggregator> {
+        self.trade_streams.get(&stream_id)
+    }
+
+    fn register_trade_dependent(
+        &mut self,
+        stream_id: u64,
+        kind: TradeStudyKind,
+        series_id: SeriesId,
+        options: TradeStudyOptions,
+    ) {
+        let dependents = self.trade_dependents.entry(stream_id).or_default();
+        dependents.retain(|dependent| dependent.series_id != series_id);
+        dependents.push(TradeStudyDependent {
+            series_id,
+            kind,
+            options,
+            applied_revision: 0,
+            rebuilds: 0,
+            incremental_updates: 0,
+        });
+    }
+
+    fn refresh_trade_dependents(&mut self, stream_id: u64) -> Result<(), FootprintError> {
+        self.refresh_trade_dependents_from(stream_id, None)
+    }
+
+    fn refresh_trade_dependents_from(
+        &mut self,
+        stream_id: u64,
+        incremental_from: Option<usize>,
+    ) -> Result<(), FootprintError> {
+        let stream = self
+            .trade_stream(stream_id)
+            .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
+        let bars = stream.bars().to_vec();
+        let revision = stream.revision();
+        let dependents = self
+            .trade_dependents
+            .get(&stream_id)
+            .cloned()
+            .unwrap_or_default();
+        let mut updates = Vec::with_capacity(dependents.len());
+        for dependent in &dependents {
+            let times = bars
+                .iter()
+                .map(|bar| bar.start_timestamp_micros.div_euclid(MICROS_PER_SECOND))
+                .collect::<Vec<_>>();
+            let values = match dependent.kind {
+                TradeStudyKind::CumulativeDelta => {
+                    cumulative_delta_values(&bars, dependent.options)
+                }
+                TradeStudyKind::DeltaHistogram => bars.iter().map(|bar| bar.delta).collect(),
+            };
+            let columns = match dependent.kind {
+                TradeStudyKind::CumulativeDelta => (
+                    times,
+                    values.clone(),
+                    values.clone(),
+                    values.clone(),
+                    values,
+                ),
+                TradeStudyKind::DeltaHistogram => {
+                    let open = vec![0.0; values.len()];
+                    let high = values.iter().map(|value| value.max(0.0)).collect();
+                    let low = values.iter().map(|value| value.min(0.0)).collect();
+                    (times, open, high, low, values)
+                }
+            };
+            updates.push((dependent.series_id, columns));
+        }
+        for (series_id, (times, open, high, low, close)) in updates {
+            let from = incremental_from.unwrap_or(0).min(times.len());
+            let installed = if incremental_from.is_some() {
+                self.update_series_bars_sanitized(
+                    series_id,
+                    times[from..].to_vec(),
+                    open[from..].to_vec(),
+                    high[from..].to_vec(),
+                    low[from..].to_vec(),
+                    close[from..].to_vec(),
+                ) > 0
+            } else {
+                self.install_series_data(series_id, times, open, high, low, close)
+            };
+            if !installed && from != 0 {
+                return Err(FootprintError::UnknownSeries(series_id));
+            }
+        }
+        if let Some(dependents) = self.trade_dependents.get_mut(&stream_id) {
+            for dependent in dependents {
+                if dependent.applied_revision != revision {
+                    dependent.applied_revision = revision;
+                    if incremental_from.is_some() {
+                        dependent.incremental_updates =
+                            dependent.incremental_updates.saturating_add(1);
+                    } else {
+                        dependent.rebuilds = dependent.rebuilds.saturating_add(1);
+                    }
+                }
+            }
+        }
+        self.refresh_trade_bubbles(stream_id)
+    }
+
+    fn refresh_trade_bubbles(&mut self, stream_id: u64) -> Result<(), FootprintError> {
+        let stream = self
+            .trade_stream(stream_id)
+            .ok_or(FootprintError::UnknownTradeStream(stream_id))?;
+        let trades = stream.trades().cloned().collect::<Vec<_>>();
+        let revision = stream.revision();
+        let dependents = self
+            .trade_bubbles
+            .get(&stream_id)
+            .cloned()
+            .unwrap_or_default();
+        for dependent in &dependents {
+            let mut markers = Vec::with_capacity(dependent.options.max_markers);
+            for trade in &trades {
+                if trade.volume < dependent.options.minimum_volume {
+                    continue;
+                }
+                let position = match trade.aggressor {
+                    AggressorSide::Buy => marker_pos::BELOW,
+                    AggressorSide::Sell => marker_pos::ABOVE,
+                    AggressorSide::Unknown => marker_pos::IN_BAR,
+                };
+                let shape = match trade.aggressor {
+                    AggressorSide::Buy => marker_shape::ARROW_UP,
+                    AggressorSide::Sell => marker_shape::ARROW_DOWN,
+                    AggressorSide::Unknown => marker_shape::CIRCLE,
+                };
+                let color = match trade.aggressor {
+                    AggressorSide::Buy => Color::rgb(76, 175, 80),
+                    AggressorSide::Sell => Color::rgb(239, 83, 80),
+                    AggressorSide::Unknown => Color::rgb(158, 158, 158),
+                };
+                let time = trade.timestamp_micros.div_euclid(MICROS_PER_SECOND);
+                let can_merge = dependent.options.aggregation_window_micros > 0
+                    && markers.last().is_some_and(|marker: &Marker| {
+                        marker.position == position
+                            && marker.price == Some(trade.price)
+                            && (marker.time * MICROS_PER_SECOND - trade.timestamp_micros).abs()
+                                <= dependent.options.aggregation_window_micros
+                    });
+                if can_merge {
+                    if let Some(marker) = markers.last_mut() {
+                        marker.size += trade.volume.sqrt();
+                    }
+                } else {
+                    markers.push(Marker {
+                        time,
+                        position,
+                        shape,
+                        color,
+                        text: String::new(),
+                        id: trade
+                            .trade_id
+                            .map_or_else(|| format!("trade-{time}"), |id| format!("trade-{id}")),
+                        size: trade.volume.sqrt().clamp(1.0, 16.0),
+                        price: Some(trade.price),
+                    });
+                }
+                if markers.len() >= dependent.options.max_markers {
+                    break;
+                }
+            }
+            self.set_series_markers(dependent.series_id, markers);
+        }
+        if let Some(dependents) = self.trade_bubbles.get_mut(&stream_id) {
+            for dependent in dependents {
+                dependent.applied_revision = revision;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn cumulative_delta_values(bars: &[FootprintBar], options: TradeStudyOptions) -> Vec<f64> {
+    let mut cumulative = 0.0;
+    let mut anchor_base = None;
+    let mut values = Vec::with_capacity(bars.len());
+    for bar in bars {
+        cumulative += bar.delta;
+        let value = match options.cumulative_delta_reset {
+            CumulativeDeltaReset::Session => bar.session_delta,
+            CumulativeDeltaReset::Continuous => cumulative,
+            CumulativeDeltaReset::Anchored => {
+                if options
+                    .anchor_timestamp_micros
+                    .is_some_and(|anchor| bar.end_timestamp_micros < anchor)
+                {
+                    0.0
+                } else {
+                    let base = *anchor_base.get_or_insert(cumulative - bar.delta);
+                    cumulative - base
+                }
+            }
+        };
+        values.push(value);
+    }
+    values
 }
 
 fn validate_chart_projection(options: FootprintAggregationOptions) -> Result<(), FootprintError> {
@@ -1162,6 +1700,11 @@ fn aligned_bucket_start(timestamp: i64, interval: i64, anchor: i64) -> i64 {
 }
 
 fn recompute_bar_derived(bar: &mut FootprintBar, options: FootprintImbalanceOptions) {
+    bar.delta_percent = if bar.total_volume > 0.0 {
+        bar.delta / bar.total_volume * 100.0
+    } else {
+        0.0
+    };
     for level in &mut bar.levels {
         level.bid_imbalance = false;
         level.ask_imbalance = false;
@@ -1724,6 +2267,169 @@ mod tests {
     }
 
     #[test]
+    fn chart_trade_stream_is_shared_by_bound_footprint_dependents() {
+        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
+        let stream = chart
+            .add_trade_stream(
+                "CME:ES",
+                FootprintAggregationOptions {
+                    tick_size: 1.0,
+                    ..FootprintAggregationOptions::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            chart.add_trade_stream("CME:ES", FootprintAggregationOptions::default()),
+            Err(FootprintError::InvalidAggregation)
+        );
+        chart
+            .configure_footprint_series(0, FootprintSeriesOptions::default())
+            .unwrap();
+        let second = chart.add_series(SeriesKind::Footprint);
+        chart
+            .configure_footprint_series(second, FootprintSeriesOptions::default())
+            .unwrap();
+        chart.bind_footprint_series_to_stream(0, stream).unwrap();
+        chart
+            .bind_footprint_series_to_stream(second, stream)
+            .unwrap();
+        chart
+            .set_footprint_trades(0, vec![trade(1, 100.0, 2.0, AggressorSide::Buy)])
+            .unwrap();
+        assert_eq!(chart.footprint_bars(0), chart.footprint_bars(second));
+        let revision = chart.trade_stream_revision(stream).unwrap();
+        chart
+            .update_footprint_trade(second, trade(2, 101.0, 1.0, AggressorSide::Sell))
+            .unwrap();
+        assert!(chart.trade_stream_revision(stream).unwrap() > revision);
+        assert_eq!(chart.footprint_bars(0), chart.footprint_bars(second));
+    }
+
+    #[test]
+    fn cvd_and_delta_dependents_follow_late_corrections_and_report_rebuilds() {
+        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
+        let stream = chart
+            .add_trade_stream("CME:NQ", FootprintAggregationOptions::default())
+            .unwrap();
+        let footprint = chart.add_series(SeriesKind::Footprint);
+        chart
+            .configure_footprint_series(footprint, FootprintSeriesOptions::default())
+            .unwrap();
+        chart
+            .bind_footprint_series_to_stream(footprint, stream)
+            .unwrap();
+        let cvd = chart
+            .add_cvd_series(stream, 1, TradeStudyOptions::default())
+            .unwrap();
+        let delta = chart.add_delta_series(stream, 1).unwrap();
+        let mut initial_sell = trade(2_000_000, 100.0, 3.0, AggressorSide::Sell);
+        initial_sell.trade_id = Some(2);
+        chart
+            .set_footprint_trades(
+                footprint,
+                vec![
+                    trade(1_000_000, 100.0, 4.0, AggressorSide::Buy),
+                    initial_sell,
+                ],
+            )
+            .unwrap();
+        let cvd_values = chart.data_layer().series_data(cvd).unwrap().1[3];
+        let delta_values = chart.data_layer().series_data(delta).unwrap().1[3];
+        assert_eq!(cvd_values.last().copied(), Some(1.0));
+        assert_eq!(delta_values.last().copied(), Some(1.0));
+        let before = chart.trade_stream_stats(stream).unwrap();
+        let mut correction = trade(2_000_000, 100.0, 8.0, AggressorSide::Sell);
+        correction.trade_id = Some(2);
+        chart.update_footprint_trade(footprint, correction).unwrap();
+        let after = chart.trade_stream_stats(stream).unwrap();
+        assert!(after.revision > before.revision);
+        assert!(after.dependent_rebuilds > before.dependent_rebuilds);
+        assert_eq!(
+            chart.data_layer().series_data(cvd).unwrap().1[3]
+                .last()
+                .copied(),
+            Some(-4.0)
+        );
+        assert_eq!(
+            chart.data_layer().series_data(delta).unwrap().1[3]
+                .last()
+                .copied(),
+            Some(-4.0)
+        );
+    }
+
+    #[test]
+    fn trade_bubbles_are_bounded_and_rebuilt_from_the_shared_tape() {
+        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
+        let stream = chart
+            .add_trade_stream("CME:RTY", FootprintAggregationOptions::default())
+            .unwrap();
+        let series = chart.add_series(SeriesKind::Footprint);
+        chart
+            .configure_footprint_series(series, FootprintSeriesOptions::default())
+            .unwrap();
+        chart
+            .bind_footprint_series_to_stream(series, stream)
+            .unwrap();
+        chart
+            .set_footprint_trades(
+                series,
+                vec![
+                    trade(1_000_000, 100.0, 1.0, AggressorSide::Buy),
+                    trade(1_100_000, 100.0, 3.0, AggressorSide::Buy),
+                    trade(2_000_000, 101.0, 10.0, AggressorSide::Sell),
+                ],
+            )
+            .unwrap();
+        chart
+            .add_trade_bubbles(
+                stream,
+                series,
+                TradeBubbleOptions {
+                    minimum_volume: 2.0,
+                    max_markers: 2,
+                    aggregation_window_micros: 200_000,
+                },
+            )
+            .unwrap();
+        let entry = chart.series_entry(series).unwrap();
+        assert_eq!(entry.markers.len(), 2);
+        assert_eq!(entry.markers[0].size, 3.0_f64.sqrt().min(16.0));
+        assert_eq!(chart.trade_stream_stats(stream).unwrap().dependent_count, 1);
+    }
+
+    #[test]
+    fn footprint_retention_evicts_shared_studies_with_the_same_bar_boundary() {
+        let mut chart = ChartEngine::new(600.0, 400.0, 1.0);
+        let stream = chart
+            .add_trade_stream("CME:YM", FootprintAggregationOptions::default())
+            .unwrap();
+        let footprint = chart.add_series(SeriesKind::Footprint);
+        chart
+            .configure_footprint_series(footprint, FootprintSeriesOptions::default())
+            .unwrap();
+        chart
+            .bind_footprint_series_to_stream(footprint, stream)
+            .unwrap();
+        let cvd = chart
+            .add_cvd_series(stream, 1, TradeStudyOptions::default())
+            .unwrap();
+        chart.set_series_max_points(footprint, Some(1));
+        chart
+            .set_footprint_trades(
+                footprint,
+                vec![
+                    trade(1_000_000, 100.0, 1.0, AggressorSide::Buy),
+                    trade(61_000_000, 101.0, 2.0, AggressorSide::Buy),
+                ],
+            )
+            .unwrap();
+        assert_eq!(chart.footprint_bars(footprint).unwrap().len(), 1);
+        assert_eq!(chart.data_layer().series_data(cvd).unwrap().0.len(), 1);
+        assert_eq!(chart.trade_stream_stats(stream).unwrap().revision, 3);
+    }
+
+    #[test]
     fn generic_ohlc_mutations_cannot_desynchronize_footprint_source_truth() {
         let mut chart = ChartEngine::new(800.0, 420.0, 1.0);
         let id = chart.add_series(SeriesKind::Footprint);
@@ -1741,7 +2447,7 @@ mod tests {
                 .unwrap_err(),
             aeris_charts_core::model::data_validation::ValidationError::UnsupportedSeriesData(id)
         );
-        assert_eq!(chart.footprint_bar(id, 0), Some(&source_bar));
+        assert_eq!(chart.footprint_bar(id, 0), Some(source_bar));
         assert_eq!(chart.data_layer().series_data(id).unwrap().0.len(), 1);
 
         chart.convert_series_kind(id, SeriesKind::Candlestick);
@@ -2237,12 +2943,16 @@ mod tests {
         assert_eq!((bars[0].session_delta, bars[1].session_delta), (5.0, 7.0));
         assert_eq!(
             chart
-                .series_entry(0)
+                .trade_stream(
+                    chart
+                        .series_entry(0)
+                        .unwrap()
+                        .footprint
+                        .as_ref()
+                        .unwrap()
+                        .trade_stream_id,
+                )
                 .unwrap()
-                .footprint
-                .as_ref()
-                .unwrap()
-                .aggregator
                 .trades()
                 .len(),
             2

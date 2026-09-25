@@ -38,7 +38,7 @@ mod workspace;
 
 use serde::{Deserialize, Serialize};
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::num::NonZeroU32;
 use std::ops::{Deref, DerefMut};
 
@@ -70,10 +70,12 @@ pub use feature_series::{
     StackedAreaColor,
 };
 pub use footprint::{
-    AggressorSide, FootprintAggregationOptions, FootprintAggregator, FootprintBar,
-    FootprintBarAggregation, FootprintCellMode, FootprintError, FootprintImbalanceOptions,
-    FootprintLevel, FootprintSeriesOptions, FootprintTrade, FootprintUpdateKind,
-    FootprintVisualOptions, FootprintWorkStats,
+    AggressorSide, CumulativeDeltaReset, FootprintAggregationOptions, FootprintAggregator,
+    FootprintBar, FootprintBarAggregation, FootprintCellMode, FootprintError,
+    FootprintImbalanceOptions, FootprintLevel, FootprintSeriesOptions, FootprintTrade,
+    FootprintUpdateKind, FootprintVisualOptions, FootprintWorkStats, TradeBubbleOptions,
+    TradeStreamStats, TradeStudyKind, TradeStudyOptions, MAX_TRADE_STREAMS,
+    MAX_TRADE_STREAM_KEY_BYTES,
 };
 pub use frame::{
     AxisBand, AxisFrame, AxisIcon, AxisLabel, AxisLabelCorners, AxisRotatedLabel, AxisTextAlign,
@@ -1542,6 +1544,13 @@ pub struct ChartEngine {
     pub(crate) right_builtin_axis_w: f64,
     indicators: Vec<IndicatorBinding>,
     indicator_changes: Vec<(SeriesId, IndicatorChange)>,
+    /// Canonical chart-level trade streams. Footprint and future tape-derived studies refer to a
+    /// stream identity instead of retaining a second provider-event tape.
+    trade_streams: HashMap<u64, footprint::FootprintAggregator>,
+    trade_stream_keys: HashMap<String, u64>,
+    trade_dependents: HashMap<u64, Vec<footprint::TradeStudyDependent>>,
+    trade_bubbles: HashMap<u64, Vec<footprint::TradeBubbleDependent>>,
+    next_trade_stream_id: u64,
     synced_points_len: usize,
     synced_time_points_generation: u64,
     synced_last_time: Option<i64>,
@@ -1722,6 +1731,11 @@ impl ChartEngine {
             right_builtin_axis_w: 0.0,
             indicators: Vec::new(),
             indicator_changes: Vec::new(),
+            trade_streams: HashMap::new(),
+            trade_stream_keys: HashMap::new(),
+            trade_dependents: HashMap::new(),
+            trade_bubbles: HashMap::new(),
+            next_trade_stream_id: 1,
             synced_points_len: 0,
             synced_time_points_generation: 0,
             synced_last_time: None,
@@ -2043,9 +2057,15 @@ impl ChartEngine {
             self.series[slot] = SeriesEntry::new(id, kind);
         }
         if kind == SeriesKind::Footprint {
-            self.series[slot].footprint = Some(footprint::FootprintSeriesState {
-                aggregator: footprint::FootprintAggregator::new(Default::default())
+            let stream_id = self.next_trade_stream_id;
+            self.next_trade_stream_id = self.next_trade_stream_id.saturating_add(1).max(1);
+            self.trade_streams.insert(
+                stream_id,
+                footprint::FootprintAggregator::new(Default::default())
                     .expect("default footprint options must remain valid"),
+            );
+            self.series[slot].footprint = Some(footprint::FootprintSeriesState {
+                trade_stream_id: stream_id,
                 visual: Default::default(),
             });
         }
@@ -2156,6 +2176,30 @@ impl ChartEngine {
             let removed = self.data.remove_series(rid);
             debug_assert!(removed, "tracked live series must own a data slot");
         }
+        let mut live_streams = self
+            .series
+            .iter()
+            .filter_map(|series| series.footprint.as_ref().map(|state| state.trade_stream_id))
+            .collect::<std::collections::HashSet<_>>();
+        live_streams.extend(self.trade_stream_keys.values().copied());
+        live_streams.extend(self.trade_dependents.keys().copied());
+        live_streams.extend(self.trade_bubbles.keys().copied());
+        self.trade_streams
+            .retain(|stream_id, _| live_streams.contains(stream_id));
+        self.trade_stream_keys
+            .retain(|_, stream_id| live_streams.contains(stream_id));
+        for dependents in self.trade_dependents.values_mut() {
+            dependents.retain(|dependent| !tombstones.contains(&dependent.series_id));
+        }
+        self.trade_dependents.retain(|stream_id, dependents| {
+            live_streams.contains(stream_id) && !dependents.is_empty()
+        });
+        for dependents in self.trade_bubbles.values_mut() {
+            dependents.retain(|dependent| !tombstones.contains(&dependent.series_id));
+        }
+        self.trade_bubbles.retain(|stream_id, dependents| {
+            live_streams.contains(stream_id) && !dependents.is_empty()
+        });
         self.series_order.retain(|sid| !tombstones.contains(sid));
         // A hovered series leaving the chart releases the hovered-on-top z-bump with it.
         if self

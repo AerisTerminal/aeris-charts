@@ -671,6 +671,7 @@ export interface footprint_level {
   unknown_volume: number;
   total_volume: number;
   delta: number;
+  delta_percent: number;
   bid_imbalance: boolean;
   ask_imbalance: boolean;
   stacked_bid_imbalance: boolean;
@@ -1599,7 +1600,7 @@ export interface footprint_series_options {
   imbalance_ratio: number;
   imbalance_minimum_volume: number;
   stacked_imbalance_levels: number;
-  cell_mode: "bid_ask" | "total" | "delta";
+  cell_mode: "bid_ask" | "total" | "delta" | "profile_in_bar" | "volume_ladder" | "horizontal_imbalance" | "bid_ask_histogram";
   font_size: number;
   bid_color: string;
   ask_color: string;
@@ -1940,6 +1941,14 @@ export interface chart_state_v1 {
   schema_version: 1;
   panes: persisted_pane_v1[];
   drawings: persisted_drawing_v1[];
+}
+
+export interface trade_stream_stats {
+  revision: number;
+  stream_capacity_bytes: number;
+  dependent_count: number;
+  dependent_rebuilds: number;
+  dependent_incremental_updates: number;
 }
 
 /** V2 adds engine-owned general pane, axis, dataset, and series state. */
@@ -2734,6 +2743,15 @@ export interface chart_api {
    * and whitespace remain present with null data and never borrow a neighboring value.
    */
   value_snapshot(logical_index?: number): chart_value_snapshot[];
+  /** Create or reuse a chart-level canonical trade stream for tape-derived studies. */
+  add_trade_stream(key: string, options?: Partial<footprint_series_options>): number;
+  trade_stream_id(key: string): number | null;
+  trade_stream_revision(stream_id: number): number | null;
+  trade_stream_stats(stream_id: number): trade_stream_stats | null;
+  bind_footprint_series_to_stream(series: footprint_series_api | number, stream_id: number): void;
+  add_cvd_series(stream_id: number, pane?: number, reset?: "session" | "continuous" | "anchored", anchor_timestamp_micros?: number): series_api;
+  add_delta_series(stream_id: number, pane?: number): series_api;
+  add_trade_bubbles(series: series_api | number, stream_id: number, options?: { minimum_volume?: number; max_markers?: number; aggregation_window_micros?: number }): void;
   add_series(kind: "footprint", options?: Partial<any_series_options> & Partial<footprint_series_options>): footprint_series_api;
   add_series(kind: general_series_kind, options: general_series_options): general_series_api;
   add_series(kind: series_kind, options?: Partial<any_series_options>): series_api;

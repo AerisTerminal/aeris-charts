@@ -352,12 +352,17 @@ Built-in frame geometry and series hit testing share one viewport-density query.
 
 The official advanced-series examples are engine-owned feature series, not browser drawing callbacks. Each retains its complete validated payload beside an OHLC-shaped canonical projection used by the shared time/price-scale and query machinery. Grouped bars, heatmap, HLC area, pretty histogram, background shade, stacked area/bars, and whisker boxes construct backend-neutral primitives in the same ordered series layer as built-in geometry. Their official defaults, visible-range rules, pixel snapping, autoscale semantics, and source-data lifecycle are therefore identical in browser and native hosts. Brushable Area is deliberately not an advanced-series data type: it is an ordinary built-in Area series plus transient engine-owned range styling, so data ingestion, retention, LOD, hit testing, price-scale ownership, and all ordinary Area APIs remain on the canonical Area path. The legacy browser input name `brushable_area` is only a compatibility alias and normalizes to `area` immediately.
 
-Professional footprint / numbers-bar data has a separate tick-truth owner described in
-`Footprint.md`. The engine retains canonical microsecond trade events with explicit or deterministically
-classified aggressor side and derives integer tick-grid levels, bid/ask/unknown/total volume, POC,
-final/session delta, running Max/Min Delta, and diagonal stacked imbalances. Live tip events update
-only the active derived bar; a late-event or provider-correction batch merges atomically into the
-final canonical tape, validates its final session/bar projection, and reconstructs exactly once.
+Professional footprint / numbers-bar data has a chart-level tick-truth owner described in
+`Footprint.md`. `ChartEngine::add_trade_stream` retains one bounded keyed canonical microsecond tape;
+footprints, CVD, delta histograms, and bounded large-trade bubble markers hold dependent handles, not
+provider-event copies. The stream derives integer tick-grid levels, bid/ask/unknown/total volume, POC,
+final/session delta, delta percentage, running Max/Min Delta, and diagonal stacked imbalances. CVD
+supports session, continuous, and anchored resets, and every dependent carries the stream revision
+through tip, correction, and retention updates. Stream telemetry attributes retained tape capacity
+and dependent rebuild work.
+Live tip events update only the active derived bar; a late-event or provider-correction batch merges
+atomically into the final canonical tape, validates its final session/bar projection, and reconstructs
+exactly once.
 The configured tick size owns the series min-move/formatter and the shared autoscale, frame, and hit
 paths use complete half-tick outer cell bounds on the series' ordinary pane-local price scale.
 Footprint bars ultimately emit the same ordered `ChartFrame` as every other series, and no backend

@@ -39,6 +39,9 @@ impl ChartEngine {
         else {
             return;
         };
+        let Some(stream) = self.trade_stream(state.trade_stream_id) else {
+            return;
+        };
         let plot = self.data.plot(rs.id);
         let spacing = self.time_scale.bar_spacing();
         let font_size = state.visual.font_size;
@@ -67,7 +70,7 @@ impl ChartEngine {
             pixel_ratio: vpr,
         };
         for row in plot.visible_rows(from, to) {
-            let Some(bar) = state.aggregator.bars().get(row) else {
+            let Some(bar) = stream.bars().get(row) else {
                 continue;
             };
             let Some(logical) = plot.index_at(row) else {
@@ -77,7 +80,7 @@ impl ChartEngine {
             let left = ((x - spacing * 0.48) * hpr).round() as i32;
             let right = ((x + spacing * 0.48) * hpr).round() as i32;
             let width = (right - left).max(1);
-            let tick_size = state.aggregator.options().tick_size;
+            let tick_size = stream.options().tick_size;
             let representative_row_height = bar
                 .levels
                 .first()
@@ -127,19 +130,26 @@ impl ChartEngine {
                     let text_style = if detailed {
                         let row_px = (representative_row_height * vpr) as f32;
                         let span = match state.visual.cell_mode {
-                            FootprintCellMode::BidAsk => {
+                            FootprintCellMode::BidAsk
+                            | FootprintCellMode::HorizontalImbalance
+                            | FootprintCellMode::BidAskHistogram => {
                                 let split = left + width / 2;
                                 let left_w = (split - left).max(1);
                                 let right_w =
                                     (right - (split + i32::from(width > 3)).min(right)).max(1);
                                 left_w.min(right_w) as f32
                             }
-                            FootprintCellMode::Total | FootprintCellMode::Delta => width as f32,
+                            FootprintCellMode::Total
+                            | FootprintCellMode::Delta
+                            | FootprintCellMode::ProfileInBar
+                            | FootprintCellMode::VolumeLadder => width as f32,
                         };
                         let mut chars = 1usize;
                         for level in &bar.levels {
                             match state.visual.cell_mode {
-                                FootprintCellMode::BidAsk => {
+                                FootprintCellMode::BidAsk
+                                | FootprintCellMode::HorizontalImbalance
+                                | FootprintCellMode::BidAskHistogram => {
                                     if level.bid_volume > 0.0 {
                                         chars = chars.max(compact_volume(level.bid_volume).len());
                                     }
@@ -147,7 +157,9 @@ impl ChartEngine {
                                         chars = chars.max(compact_volume(level.ask_volume).len());
                                     }
                                 }
-                                FootprintCellMode::Total => {
+                                FootprintCellMode::Total
+                                | FootprintCellMode::ProfileInBar
+                                | FootprintCellMode::VolumeLadder => {
                                     chars = chars.max(compact_volume(level.total_volume).len());
                                 }
                                 FootprintCellMode::Delta => {
@@ -183,7 +195,9 @@ impl ChartEngine {
                         let center_y = top as f32 + height as f32 / 2.0;
                         let is_poc = level.level == bar.poc_level;
                         match state.visual.cell_mode {
-                            FootprintCellMode::BidAsk => {
+                            FootprintCellMode::BidAsk
+                            | FootprintCellMode::HorizontalImbalance
+                            | FootprintCellMode::BidAskHistogram => {
                                 // 1px center gap doubles as the bid/ask divider.
                                 let split = left + width / 2;
                                 let left_w = (split - left).max(1);
@@ -340,8 +354,16 @@ impl ChartEngine {
                                     }
                                 }
                             }
-                            FootprintCellMode::Total | FootprintCellMode::Delta => {
-                                let total_mode = state.visual.cell_mode == FootprintCellMode::Total;
+                            FootprintCellMode::Total
+                            | FootprintCellMode::Delta
+                            | FootprintCellMode::ProfileInBar
+                            | FootprintCellMode::VolumeLadder => {
+                                let total_mode = matches!(
+                                    state.visual.cell_mode,
+                                    FootprintCellMode::Total
+                                        | FootprintCellMode::ProfileInBar
+                                        | FootprintCellMode::VolumeLadder
+                                );
                                 let (value, base, peak) = if total_mode {
                                     let base = if level.ask_volume >= level.bid_volume {
                                         state.visual.ask_color

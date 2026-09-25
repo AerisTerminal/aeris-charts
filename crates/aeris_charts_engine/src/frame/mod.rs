@@ -860,7 +860,10 @@ impl ChartEngine {
             SeriesKind::Footprint => series
                 .footprint
                 .as_ref()
-                .and_then(|state| state.aggregator.bars().get(row).map(|bar| (state, bar)))
+                .and_then(|state| {
+                    self.trade_stream(state.trade_stream_id)
+                        .and_then(|stream| stream.bars().get(row).map(|bar| (state, bar)))
+                })
                 .map_or(UP, |(state, bar)| {
                     if bar.delta >= 0.0 {
                         state.visual.positive_delta_color
@@ -2344,10 +2347,13 @@ impl ChartEngine {
                 let Some(state) = s.footprint.as_ref() else {
                     continue;
                 };
+                let Some(stream) = self.trade_stream(state.trade_stream_id) else {
+                    continue;
+                };
                 crate::footprint::footprint_cell_price_bounds(
                     mm.min,
                     mm.max,
-                    state.aggregator.options().tick_size,
+                    stream.options().tick_size,
                 )
             } else {
                 (mm.min, mm.max)

@@ -57,8 +57,8 @@ time axis currently has one logical row per UTC second. The standalone Rust aggr
 tests trade-count and volume policies; exposing those policies as chart series requires a composite
 logical bar identity and is deliberately not emulated by assigning false timestamps.
 
-Each bar retains OHLC, bid/ask/unknown/total volume, trade count, final delta, session cumulative
-delta, and sorted price levels. Each level retains bid, ask, unknown, total, and delta. Integer level
+Each bar retains OHLC, bid/ask/unknown/total volume, trade count, final delta, delta percentage,
+session cumulative delta, and sorted price levels. Each level retains bid, ask, unknown, total, and delta. Integer level
 identity is `round(price / tick_size)` after strict grid validation, avoiding repeated floating-point
 price comparisons.
 
@@ -78,11 +78,25 @@ The professional diagonal imbalance rule compares:
 The dominant side must meet the configured minimum volume and the configured ratio. Zero opposite
 volume qualifies once the minimum is met. Missing intermediate levels break a stack. Every member of
 an adjacent run at least `consecutive_levels` long is marked as a stacked bid or ask imbalance.
-Horizontal and alternative imbalance modes remain future extensions; they cannot alter the stored
+Horizontal and alternative imbalance modes are visual projections only; they cannot alter the stored
 bid/ask truth.
 
 The visual aggregation mode is independent of bar construction: hosts can request Bid × Ask, Total,
-or Delta cells from the same data without rebuilding the tape.
+Delta, profile-in-bar, volume-ladder, horizontal-imbalance, or bid/ask-histogram cells from the same
+data without rebuilding the tape.
+
+### Shared chart tape and derived studies
+
+`ChartEngine::add_trade_stream` creates one bounded stream keyed by a host instrument identity.
+The stream owns classification, canonical ordering, corrections, retention, and a monotonic revision;
+footprints, CVD, delta histograms, and bubble markers bind to that identity rather than retaining a
+second provider-event tape. CVD supports session, continuous, and anchored resets. Delta dependents
+read final delta, Max/Min Delta, delta percentage, and bid/ask/unknown volumes from the same bars.
+
+Large-trade bubbles are bounded marker dependents with minimum-volume filtering, side-aware shape and
+color, optional same-price consecutive-print aggregation, and a hard marker cap. Late events refresh
+all dependents after one canonical rebuild; stream telemetry reports revision, retained capacity,
+dependent count, and dependent rebuilds.
 
 ## 4. Rendering and LOD
 
@@ -117,7 +131,9 @@ Every backend therefore receives exactly the same chosen LOD.
 
 ## 5. Storage, invalidation, and recovery
 
-One series owns one canonical trade tape and one derived bar vector. A bar owns sorted price levels;
+One chart-level stream owns one canonical trade tape and one derived bar vector. A footprint series
+owns only visual options and a stream handle; CVD, delta, and bubble dependents own no provider tape.
+A bar owns sorted price levels;
 there is no renderer-side cluster cache. Tip append mutates only the active bar or appends one bar,
 updates its canonical scale projection, and invalidates that series. Closed bars are immutable on the
 live path. Historical insertion/correction reconstructs canonical state once after the final tape is
@@ -142,11 +158,12 @@ ingest; object conversion is reserved for the low-frequency single-event API.
 The TypeScript package exposes a dedicated `footprint_series_api` from
 `chart.add_series("footprint", options)`. Its input is `footprint_trade`, not `series_data`; generic
 OHLC `set_data` is rejected for this kind. Queries expose bar OHLC, price levels, POC, final/Max/Min
-Delta, bid/ask/unknown/total volume, session delta, and stacked flags. Data-change notifications use
+Delta, delta percentage, bid/ask/unknown/total volume, session delta, and stacked flags. Chart-level
+methods create CVD, delta, and bounded bubble dependents and query stream revision/telemetry. Data-change notifications use
 `full` for replacement/historical reconstruction and `update` for a true tip update.
 
 Options cover tick size, whole-second time-bar interval/anchor, imbalance
-ratio/minimum/consecutive count, visual cell mode, colors, text size, summaries, and generic series
+ratio/minimum/consecutive count, visual cell modes, colors, text size, summaries, and generic series
 retention. Changing tick size or time aggregation rebuilds from the tape atomically. Visual-only
 options invalidate only the series frame layer.
 

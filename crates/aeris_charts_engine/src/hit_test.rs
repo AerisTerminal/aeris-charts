@@ -312,7 +312,8 @@ impl ChartEngine {
                 let footprint_tick_size = series
                     .footprint
                     .as_ref()
-                    .map(|state| state.aggregator.options().tick_size);
+                    .and_then(|state| self.trade_stream(state.trade_stream_id))
+                    .map(|stream| stream.options().tick_size);
                 let mut work = crate::frame::conflation::DensityWork::default();
                 let visible = crate::frame::conflation::visible_ohlc_with_work(
                     plot,

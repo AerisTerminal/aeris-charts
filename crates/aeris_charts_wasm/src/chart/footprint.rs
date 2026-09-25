@@ -2,8 +2,9 @@
 
 use super::*;
 use aeris_charts_engine::{
-    AggressorSide, FootprintBarAggregation, FootprintCellMode, FootprintSeriesOptions,
-    FootprintTrade, FootprintUpdateKind,
+    AggressorSide, CumulativeDeltaReset, FootprintBarAggregation, FootprintCellMode,
+    FootprintSeriesOptions, FootprintTrade, FootprintUpdateKind, TradeBubbleOptions,
+    TradeStudyOptions,
 };
 
 const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
@@ -88,6 +89,10 @@ fn parse_options(json: &str) -> Result<FootprintSeriesOptions, String> {
             "bid_ask" => FootprintCellMode::BidAsk,
             "total" => FootprintCellMode::Total,
             "delta" => FootprintCellMode::Delta,
+            "profile_in_bar" => FootprintCellMode::ProfileInBar,
+            "volume_ladder" => FootprintCellMode::VolumeLadder,
+            "horizontal_imbalance" => FootprintCellMode::HorizontalImbalance,
+            "bid_ask_histogram" => FootprintCellMode::BidAskHistogram,
             _ => return Err(format!("unsupported footprint cell_mode '{mode}'")),
         };
     }
@@ -143,10 +148,14 @@ pub(super) fn options_json(options: &FootprintSeriesOptions) -> String {
         "imbalance_ratio": options.aggregation.imbalance.ratio,
         "imbalance_minimum_volume": options.aggregation.imbalance.minimum_volume,
         "stacked_imbalance_levels": options.aggregation.imbalance.consecutive_levels,
-        "cell_mode": match options.visual.cell_mode {
+            "cell_mode": match options.visual.cell_mode {
             FootprintCellMode::BidAsk => "bid_ask",
             FootprintCellMode::Total => "total",
             FootprintCellMode::Delta => "delta",
+            FootprintCellMode::ProfileInBar => "profile_in_bar",
+            FootprintCellMode::VolumeLadder => "volume_ladder",
+            FootprintCellMode::HorizontalImbalance => "horizontal_imbalance",
+            FootprintCellMode::BidAskHistogram => "bid_ask_histogram",
         },
         "font_size": options.visual.font_size,
         "bid_color": options.visual.bid_color.to_css(),
@@ -277,6 +286,105 @@ fn trades_from_columns(
 }
 
 impl ChartInner {
+    pub(super) fn add_trade_stream(&mut self, key: &str, options_json: &str) -> u32 {
+        let Ok(options) = parse_options(options_json) else {
+            return u32::MAX;
+        };
+        self.engine
+            .add_trade_stream(key, options.aggregation)
+            .unwrap_or(u64::from(u32::MAX)) as u32
+    }
+
+    pub(super) fn trade_stream_id(&self, key: &str) -> u32 {
+        self.engine.trade_stream_id(key).unwrap_or(0) as u32
+    }
+
+    pub(super) fn trade_stream_revision(&self, stream_id: u32) -> u32 {
+        self.engine
+            .trade_stream_revision(stream_id as u64)
+            .map_or(u32::MAX, |revision| revision.min(u32::MAX as u64) as u32)
+    }
+
+    pub(super) fn trade_stream_stats_json(&self, stream_id: u32) -> String {
+        self.engine
+            .trade_stream_stats(stream_id as u64)
+            .and_then(|stats| serde_json::to_string(&stats).ok())
+            .unwrap_or_else(|| "null".to_string())
+    }
+
+    pub(super) fn bind_footprint_series_to_stream(&mut self, id: u32, stream_id: u32) -> bool {
+        self.engine
+            .bind_footprint_series_to_stream(id, stream_id as u64)
+            .is_ok()
+    }
+
+    pub(super) fn add_cvd_series(
+        &mut self,
+        stream_id: u32,
+        pane_index: usize,
+        reset: u8,
+        anchor: f64,
+    ) -> u32 {
+        let reset = match reset {
+            0 => CumulativeDeltaReset::Session,
+            1 => CumulativeDeltaReset::Continuous,
+            2 => CumulativeDeltaReset::Anchored,
+            _ => return u32::MAX,
+        };
+        let anchor_timestamp_micros = if anchor.is_nan() {
+            None
+        } else if anchor.is_finite() && anchor.abs() <= MAX_SAFE_INTEGER && anchor.fract() == 0.0 {
+            Some(anchor as i64)
+        } else {
+            return u32::MAX;
+        };
+        self.engine
+            .add_cvd_series(
+                stream_id as u64,
+                pane_index,
+                TradeStudyOptions {
+                    cumulative_delta_reset: reset,
+                    anchor_timestamp_micros,
+                },
+            )
+            .map(|id| id as u32)
+            .unwrap_or(u32::MAX)
+    }
+
+    pub(super) fn add_delta_series(&mut self, stream_id: u32, pane_index: usize) -> u32 {
+        self.engine
+            .add_delta_series(stream_id as u64, pane_index)
+            .map(|id| id as u32)
+            .unwrap_or(u32::MAX)
+    }
+
+    pub(super) fn add_trade_bubbles(
+        &mut self,
+        stream_id: u32,
+        series_id: u32,
+        minimum_volume: f64,
+        max_markers: usize,
+        aggregation_window_micros: f64,
+    ) -> bool {
+        if !aggregation_window_micros.is_finite()
+            || aggregation_window_micros < 0.0
+            || aggregation_window_micros.fract() != 0.0
+        {
+            return false;
+        }
+        self.engine
+            .add_trade_bubbles(
+                stream_id as u64,
+                series_id,
+                TradeBubbleOptions {
+                    minimum_volume,
+                    max_markers,
+                    aggregation_window_micros: aggregation_window_micros as i64,
+                },
+            )
+            .is_ok()
+    }
+
     pub(super) fn add_footprint_series(&mut self, adopt_primary: bool, options_json: &str) -> u32 {
         let Ok(options) = parse_options(options_json) else {
             return u32::MAX;

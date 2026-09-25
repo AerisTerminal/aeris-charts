@@ -162,23 +162,31 @@ builds a generic property panel from schemas alone, and old layouts migrate.
 **Status:** open.
 
 - [ ] Record reference behavior and release baselines for footprint and tape-derived studies.
-- [ ] **F2** Chart-level trade stream handle keyed by host instrument stream; footprint rebound to
+- [x] **F2** Chart-level trade stream handle keyed by host instrument stream; footprint rebound to
       it; classification once per event; revisions; per-dependent incremental state with a rebuild
       path; memory telemetry per stream and per dependent. Checkpoints are designed so F1 bars and
       PD2 seeks can use them.
-- [ ] **OF1** Cumulative volume delta pane (candles or line; session, continuous and anchored
+- [x] **OF1** Cumulative volume delta pane (candles or line; session, continuous and anchored
       reset).
-- [ ] **OF2** Bar delta histogram, delta %, max/min delta and buy/sell/unknown volume split.
-- [ ] **OF11** Large-trade bubbles and volume dots with size by volume, color by side, threshold
+- [x] **OF2** Bar delta histogram, delta %, max/min delta and buy/sell/unknown volume split.
+- [x] **OF11** Large-trade bubbles and volume dots with size by volume, color by side, threshold
       filters and consecutive-print aggregation, on a bounded marker primitive path.
-- [ ] **OF12** Footprint variants: profile-in-bar, volume ladder, horizontal imbalance, delta-only
+- [x] **OF12** Footprint variants: profile-in-bar, volume ladder, horizontal imbalance, delta-only
       and bid/ask histogram cells.
 - [ ] **PD10** Release benchmarks for dense footprint text on GPUI and WebGPU; shared caching of
       repeated numeric runs where measurement shows shaping dominates; budgets added to `perf_gate`.
-- [ ] Early F1 design note in `docs/Architecture.md` so later work does not assume the second-based
+- [x] Early F1 design note in `docs/Architecture.md` so later work does not assume the second-based
       axis.
 - [ ] Full gate green; batch committed and pushed.
 - [ ] Milestone evidence: screenshots, accessibility review and recorded benchmarks for order flow.
+
+Implementation evidence so far: `chart_trade_stream_is_shared_by_bound_footprint_dependents`,
+`cvd_and_delta_dependents_follow_late_corrections_and_report_rebuilds`,
+`trade_bubbles_are_bounded_and_rebuilt_from_the_shared_tape`, and
+`footprint_retention_evicts_shared_studies_with_the_same_bar_boundary` cover shared revisions,
+derived-study updates, bounded markers, and retention. Rust, WASM, and TypeScript APIs expose the
+same stream/dependent contracts. PD10 benchmark capture, screenshot/accessibility evidence, and the
+final full gate remain open until the batch is closed.
 
 **Exit:** the F2 exit criterion passes (footprint and CVD share one tape, a late trade updates both,
 retention evicts both), and PD10 budgets hold on GPUI.
