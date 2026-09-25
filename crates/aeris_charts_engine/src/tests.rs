@@ -1695,9 +1695,22 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
             let volume = binding
                 .volume_source
                 .and_then(|id| chart.data.series_data(id))
-                .map_or(&[][..], |(_, values)| values[3]);
+                .map(|(volume_times, values)| {
+                    let mut aligned = vec![1.0; times.len()];
+                    let mut volume_row = 0;
+                    for (source_row, &time) in times.iter().enumerate() {
+                        while volume_row < volume_times.len() && volume_times[volume_row] < time {
+                            volume_row += 1;
+                        }
+                        if volume_times.get(volume_row) == Some(&time) {
+                            aligned[source_row] = values[3][volume_row];
+                        }
+                    }
+                    aligned
+                })
+                .unwrap_or_default();
             vec![aeris_charts_indicators::vwap(
-                times, source[1], source[2], source[3], volume,
+                times, source[1], source[2], source[3], &volume,
             )]
         }
         IndicatorKind::Wma { period } => vec![aeris_charts_indicators::wma(source[3], period)],
