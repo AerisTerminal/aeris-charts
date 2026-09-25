@@ -2038,6 +2038,12 @@ impl AerisChart {
         self.inner.borrow().series_indicator_info_json(id)
     }
 
+    pub fn indicator_schema_json(&self, kind: &str, period: u32, deviation: f64) -> String {
+        self.inner
+            .borrow()
+            .indicator_schema_json(kind, period, deviation)
+    }
+
     /// reference v5.2 `ISeriesApi.pop(count)`: remove the last `count` data points (count clamps
     /// to the data length; per-point colors shift along). Returns the new data length.
     pub fn series_pop(&mut self, id: u32, count: u32) -> u32 {

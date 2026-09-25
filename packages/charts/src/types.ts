@@ -968,6 +968,26 @@ export interface pane_geometry {
 
 /** Scalar input accepted by a built-in indicator. The source series may itself be an indicator output. */
 export type indicator_input_source = "open" | "high" | "low" | "close" | "hl2" | "hlc3" | "ohlc4" | "hlcc4";
+export type indicator_kind = "sma" | "ema" | "ema_ribbon" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "wma";
+export type indicator_parameter_type = "integer" | "number" | "source" | "series";
+export interface indicator_parameter_descriptor {
+  name: string;
+  parameter_type: indicator_parameter_type;
+  default: unknown;
+  min: number | null;
+  max: number | null;
+}
+export interface indicator_output_descriptor {
+  name: string;
+  index: number;
+  supports_style: boolean;
+}
+export interface indicator_schema {
+  revision: number;
+  kind: indicator_kind;
+  parameters: indicator_parameter_descriptor[];
+  outputs: indicator_output_descriptor[];
+}
 
 /**
  * An indicator output series' lineage (engine `IndicatorInfo`): which binding it belongs to
@@ -979,7 +999,7 @@ export type indicator_input_source = "open" | "high" | "low" | "close" | "hl2" |
 export interface indicator_info {
   /** Stable identity shared by all outputs in one indicator binding. */
   binding_id: number;
-  kind: "sma" | "ema" | "ema_ribbon" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "wma";
+  kind: indicator_kind;
   /** Complete structured parameters. Fields not used by this kind are `null`. */
   parameters: {
     period: number | null;
@@ -2825,6 +2845,8 @@ export interface chart_api {
   add_rsi_with_source(source: series_api, input: indicator_input_source, period: number, options?: Partial<series_options>): series_api;
   /** Change an existing indicator binding's scalar input while retaining its output handle. */
   set_indicator_input_source(indicator: series_api, input: indicator_input_source): boolean;
+  /** Return the bounded typed editor schema for a built-in indicator kind. */
+  indicator_schema(kind: indicator_kind, period?: number, deviation?: number): indicator_schema;
   /** Add MACD line, signal line, and histogram in their own oscillator pane; the histogram's
    *  per-bar color follows four conventional states (strong/weak × above/below zero). */
   add_macd(source: series_api, fast: number, slow: number, signal: number, options?: Partial<series_options>): [series_api, series_api, series_api];

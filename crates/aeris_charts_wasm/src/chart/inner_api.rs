@@ -3,7 +3,7 @@
 
 use super::inner_render::measure_text_ctx;
 use super::*;
-use aeris_charts_engine::{IndicatorInputSource, IndicatorKind};
+use aeris_charts_engine::{ChartEngine, IndicatorInputSource, IndicatorKind};
 
 impl ChartInner {
     pub fn set_series_area_brush_state(&mut self, id: u32, state_json: &str) -> bool {
@@ -111,6 +111,34 @@ impl ChartInner {
             Some(info) => serde_json::to_string(&info).unwrap_or_else(|_| "null".to_string()),
             None => "null".to_string(),
         }
+    }
+
+    pub fn indicator_schema_json(&self, kind: &str, period: u32, deviation: f64) -> String {
+        let period = period as usize;
+        let definition = match kind {
+            "sma" => IndicatorKind::Sma { period },
+            "ema" => IndicatorKind::Ema { period },
+            "ema_ribbon" => IndicatorKind::EmaRibbon {
+                periods: [period; 5],
+            },
+            "bollinger" => IndicatorKind::Bollinger { period, deviation },
+            "rsi" => IndicatorKind::Rsi { period },
+            "macd" => IndicatorKind::Macd {
+                fast: period,
+                slow: period.saturating_mul(2),
+                signal: period,
+            },
+            "stochastic" => IndicatorKind::Stochastic {
+                k_period: period,
+                d_period: period,
+            },
+            "atr" => IndicatorKind::Atr { period },
+            "vwap" => IndicatorKind::Vwap,
+            "wma" => IndicatorKind::Wma { period },
+            _ => return "null".into(),
+        };
+        serde_json::to_string(&ChartEngine::indicator_schema(&definition))
+            .unwrap_or_else(|_| "null".into())
     }
 
     fn indicator_input_source(value: &str) -> Option<IndicatorInputSource> {
