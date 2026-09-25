@@ -4,7 +4,7 @@
 use super::inner_render::measure_text_ctx;
 use super::*;
 use aeris_charts_engine::{
-    ChartEngine, IndicatorInputSource, IndicatorKind, IndicatorOutputStyle, VwapReset,
+    ChartEngine, IndicatorInputSource, IndicatorKind, IndicatorOutputStyle, PivotKind, VwapReset,
 };
 
 impl ChartInner {
@@ -142,6 +142,17 @@ impl ChartInner {
             "momentum" => IndicatorKind::Momentum { period },
             "roc" => IndicatorKind::RateOfChange { period },
             "donchian" => IndicatorKind::Donchian { period },
+            "pivot_points" => {
+                let variant = match period {
+                    1 => PivotKind::Standard,
+                    2 => PivotKind::Fibonacci,
+                    3 => PivotKind::Camarilla,
+                    4 => PivotKind::Woodie,
+                    5 => PivotKind::DeMark,
+                    _ => return "null".into(),
+                };
+                IndicatorKind::PivotPoints { variant }
+            }
             "keltner" => IndicatorKind::Keltner {
                 period,
                 multiplier: deviation,
@@ -197,6 +208,17 @@ impl ChartInner {
             "hlcc4" => Some(IndicatorInputSource::Hlcc4),
             _ => None,
         }
+    }
+
+    fn pivot_kind(value: u32) -> Option<PivotKind> {
+        Some(match value {
+            1 => PivotKind::Standard,
+            2 => PivotKind::Fibonacci,
+            3 => PivotKind::Camarilla,
+            4 => PivotKind::Woodie,
+            5 => PivotKind::DeMark,
+            _ => return None,
+        })
     }
 
     pub fn add_sma(&mut self, source_id: u32, period: u32) -> u32 {
@@ -312,6 +334,13 @@ impl ChartInner {
     pub fn add_donchian(&mut self, source_id: u32, period: u32) -> Vec<u32> {
         self.engine
             .add_donchian(source_id as SeriesId, period as usize)
+    }
+
+    pub fn add_pivot_points(&mut self, source_id: u32, variant: u32) -> Vec<u32> {
+        let Some(kind) = Self::pivot_kind(variant) else {
+            return Vec::new();
+        };
+        self.engine.add_pivot_points(source_id as SeriesId, kind)
     }
 
     pub fn add_keltner(&mut self, source_id: u32, period: u32, multiplier: f64) -> Vec<u32> {

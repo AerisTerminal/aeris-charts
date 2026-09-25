@@ -137,6 +137,9 @@ pub enum IndicatorKind {
     Donchian {
         period: usize,
     },
+    PivotPoints {
+        variant: aeris_charts_indicators::PivotKind,
+    },
     Keltner {
         period: usize,
         multiplier: f64,
@@ -286,6 +289,7 @@ pub struct IndicatorInfo {
 pub struct IndicatorParameters {
     pub period: Option<usize>,
     pub periods: Option<[usize; aeris_charts_indicators::MAX_OUTPUTS]>,
+    pub pivot_kind: Option<aeris_charts_indicators::PivotKind>,
     pub deviation: Option<f64>,
     pub fast: Option<usize>,
     pub slow: Option<usize>,
@@ -552,6 +556,15 @@ impl ChartEngine {
                             None,
                             IndicatorParameters {
                                 period: Some(period),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
+                        IndicatorKind::PivotPoints { variant } => (
+                            "pivot_points",
+                            0,
+                            None,
+                            IndicatorParameters {
+                                pivot_kind: Some(variant),
                                 ..IndicatorParameters::default()
                             },
                         ),
@@ -828,6 +841,14 @@ impl ChartEngine {
 
     pub fn add_donchian(&mut self, source: SeriesId, period: usize) -> Vec<SeriesId> {
         self.add_indicator_kind(source, IndicatorKind::Donchian { period }, None)
+    }
+
+    pub fn add_pivot_points(
+        &mut self,
+        source: SeriesId,
+        kind: aeris_charts_indicators::PivotKind,
+    ) -> Vec<SeriesId> {
+        self.add_indicator_kind(source, IndicatorKind::PivotPoints { variant: kind }, None)
     }
 
     pub fn add_keltner(
@@ -1161,6 +1182,7 @@ impl ChartEngine {
             | IndicatorKind::Vwma { .. }
             | IndicatorKind::StandardDeviation { .. }
             | IndicatorKind::Donchian { .. }
+            | IndicatorKind::PivotPoints { .. }
             | IndicatorKind::Keltner { .. }
             | IndicatorKind::EmaRibbon { .. }
             | IndicatorKind::Bollinger { .. }
@@ -1239,6 +1261,9 @@ impl ChartEngine {
             | IndicatorKind::Rsi { period }
             | IndicatorKind::Atr { period }
             | IndicatorKind::Wma { period } => parameters.push(integer("period", period)),
+            IndicatorKind::PivotPoints { variant } => {
+                parameters.push(integer("kind", pivot_kind_index(variant)))
+            }
             IndicatorKind::EmaRibbon { periods } => {
                 for (index, period) in periods.into_iter().enumerate() {
                     parameters.push(integer(&format!("period_{}", index + 1), period));
@@ -1492,7 +1517,7 @@ impl ChartEngine {
                 IndicatorKind::Momentum { period } | IndicatorKind::RateOfChange { period } => {
                     *period == 0
                 }
-                IndicatorKind::ParabolicSar => false,
+                IndicatorKind::ParabolicSar | IndicatorKind::PivotPoints { .. } => false,
                 IndicatorKind::SuperTrend { period, multiplier } => {
                     *period == 0 || !multiplier.is_finite() || *multiplier < 0.0
                 }
@@ -1870,6 +1895,7 @@ fn indicator_kind_name(kind: &IndicatorKind) -> &'static str {
         IndicatorKind::Momentum { .. } => "momentum",
         IndicatorKind::RateOfChange { .. } => "roc",
         IndicatorKind::Donchian { .. } => "donchian",
+        IndicatorKind::PivotPoints { .. } => "pivot_points",
         IndicatorKind::Keltner { .. } => "keltner",
         IndicatorKind::AdxDmi { .. } => "adx_dmi",
         IndicatorKind::ParabolicSar => "parabolic_sar",
@@ -1891,6 +1917,16 @@ fn indicator_kind_name(kind: &IndicatorKind) -> &'static str {
     }
 }
 
+fn pivot_kind_index(kind: aeris_charts_indicators::PivotKind) -> usize {
+    match kind {
+        aeris_charts_indicators::PivotKind::Standard => 1,
+        aeris_charts_indicators::PivotKind::Fibonacci => 2,
+        aeris_charts_indicators::PivotKind::Camarilla => 3,
+        aeris_charts_indicators::PivotKind::Woodie => 4,
+        aeris_charts_indicators::PivotKind::DeMark => 5,
+    }
+}
+
 fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators::IncrementalState {
     match *kind {
         IndicatorKind::Sma { period } => aeris_charts_indicators::IncrementalState::sma(period),
@@ -1905,6 +1941,9 @@ fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators::Increment
         }
         IndicatorKind::Donchian { period } => {
             aeris_charts_indicators::IncrementalState::donchian(period)
+        }
+        IndicatorKind::PivotPoints { variant } => {
+            aeris_charts_indicators::IncrementalState::pivot_points(variant)
         }
         IndicatorKind::Keltner { period, multiplier } => {
             aeris_charts_indicators::IncrementalState::keltner(period, multiplier)
@@ -2011,6 +2050,7 @@ fn indicator_title(kind: &IndicatorKind) -> String {
         IndicatorKind::Momentum { period } => format!("Momentum {period}"),
         IndicatorKind::RateOfChange { period } => format!("ROC {period}"),
         IndicatorKind::Donchian { period } => format!("Donchian {period}"),
+        IndicatorKind::PivotPoints { variant } => format!("Pivot Points {variant:?}"),
         IndicatorKind::Keltner { period, multiplier } => {
             format!("Keltner {period} {}", params(*multiplier))
         }
@@ -2090,6 +2130,7 @@ fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static 
         IndicatorKind::Momentum { .. } => "Momentum",
         IndicatorKind::RateOfChange { .. } => "ROC",
         IndicatorKind::Donchian { .. } => ["Upper", "Basis", "Lower"][output_index],
+        IndicatorKind::PivotPoints { .. } => ["Pivot", "R1", "S1", "R2", "S2"][output_index],
         IndicatorKind::Keltner { .. } => ["Upper", "Basis", "Lower"][output_index],
         IndicatorKind::AdxDmi { .. } => ["+DI", "-DI", "ADX"][output_index],
         IndicatorKind::ParabolicSar => "SAR",

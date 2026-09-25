@@ -2160,6 +2160,12 @@ impl AerisChart {
         self.inner.borrow_mut().add_donchian(source_id, period)
     }
 
+    /// Add five previous-session pivot levels. `variant` is 1=standard, 2=Fibonacci,
+    /// 3=Camarilla, 4=Woodie, or 5=DeMark; invalid values return an empty array.
+    pub fn add_pivot_points(&mut self, source_id: u32, variant: u32) -> Vec<u32> {
+        self.inner.borrow_mut().add_pivot_points(source_id, variant)
+    }
+
     pub fn add_keltner(&mut self, source_id: u32, period: u32, multiplier: f64) -> Vec<u32> {
         self.inner
             .borrow_mut()

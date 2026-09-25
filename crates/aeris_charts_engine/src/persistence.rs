@@ -370,6 +370,7 @@ fn incremental_output_count(kind: &IndicatorKind) -> usize {
         IndicatorKind::Donchian { .. }
         | IndicatorKind::Keltner { .. }
         | IndicatorKind::AdxDmi { .. } => 3,
+        IndicatorKind::PivotPoints { .. } => 5,
         IndicatorKind::ParabolicSar => 1,
         IndicatorKind::SuperTrend { .. } => 1,
         IndicatorKind::Ichimoku => 5,
@@ -423,6 +424,7 @@ fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
         | IndicatorKind::Rsi { period }
         | IndicatorKind::Atr { period }
         | IndicatorKind::Wma { period } => *period > 0,
+        IndicatorKind::PivotPoints { .. } => true,
         IndicatorKind::Keltner { period, multiplier } => {
             *period > 0 && multiplier.is_finite() && *multiplier >= 0.0
         }
@@ -2288,6 +2290,40 @@ mod tests {
             assert_eq!(restored.indicator_bindings()[0].outputs, vec![id]);
             assert_eq!(restored.indicator_info(id).unwrap().kind, output);
         }
+    }
+
+    #[test]
+    fn pivot_points_persistence_round_trips_formula_family() {
+        let mut chart = settled_chart();
+        let outputs = chart.add_pivot_points(0, aeris_charts_indicators::PivotKind::Camarilla);
+        let document = chart.export_state_json().unwrap();
+        let mut restored = ChartEngine::new(800.0, 500.0, 1.0);
+        restored
+            .set_series_data(
+                0,
+                &[
+                    0.0, 3_600.0, 7_200.0, 10_800.0, 14_400.0, 18_000.0, 21_600.0, 25_200.0,
+                    28_800.0, 32_400.0,
+                ],
+                &[11.0; 10],
+                &[11.0; 10],
+                &[11.0; 10],
+                &[11.0; 10],
+            )
+            .unwrap();
+        restored.import_state_json(&document).unwrap();
+        let binding = &restored.indicator_bindings()[0];
+        assert_eq!(
+            binding.kind,
+            crate::IndicatorKind::PivotPoints {
+                variant: aeris_charts_indicators::PivotKind::Camarilla,
+            }
+        );
+        assert_eq!(binding.outputs.len(), 5);
+        assert_eq!(
+            restored.indicator_info(outputs[0]).unwrap().kind,
+            "pivot_points"
+        );
     }
 
     #[test]

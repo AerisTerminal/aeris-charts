@@ -244,6 +244,8 @@ retention evicts both), and PD10 budgets hold on GPUI.
 - [x] **I1 volume slice:** MFI with pure, incremental, schema, persistence and package coverage.
 - [x] **I1 oscillators:** CCI, Williams %R, Stochastic RSI, ROC/Momentum, MFI.
 - [x] **I1 volume:** Volume study with MA.
+- [x] **I1 levels slice:** daily UTC previous-session pivot points (standard, Fibonacci, Camarilla,
+      Woodie, DeMark) with pure, incremental, schema, persistence and package coverage.
 - [ ] **I1 levels:** pivot points (standard, Fibonacci, Camarilla, Woodie, DeMark), ZigZag.
 - [ ] Every indicator has incremental state, rebuild equivalence, a typed schema, persistence and an
       independently computed reference fixture.
@@ -269,8 +271,9 @@ round-trips ordered study dependencies, scalar inputs, volume references and per
 leaving market data host-owned. Chart-type additions, the remaining F4 exit fixtures and the I1
 catalog remain open until the whole batch is implemented. DEMA, TEMA, SMMA/RMA, HMA, VWMA,
 standard deviation, CCI, Williams %R, Stochastic RSI, ROC, Momentum, Donchian Channels, Keltner Channels, ADX/DMI, Parabolic SAR, SuperTrend, Ichimoku are
-OBV, CMF, MFI and the volume/MA study are now exposed through the engine, WASM and TypeScript APIs, with pure and incremental rebuild
-coverage; the remaining I1 catalog is still open.
+OBV, CMF, MFI, the volume/MA study and daily previous-session pivot points are now exposed through
+the engine, WASM and TypeScript APIs, with pure and incremental rebuild coverage; the remaining I1
+catalog (including ZigZag) is still open.
 
 ### B5 — Non-time bars and replay
 

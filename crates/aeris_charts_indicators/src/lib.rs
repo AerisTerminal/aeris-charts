@@ -36,6 +36,154 @@ pub struct AdxDmiPoint {
     pub adx: Option<f64>,
 }
 
+/// Pivot-point formula families supported by the built-in daily level study.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PivotKind {
+    #[default]
+    Standard,
+    Fibonacci,
+    Camarilla,
+    Woodie,
+    DeMark,
+}
+
+/// Previous-session pivot levels aligned to the first row of the next UTC day.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PivotPoint {
+    pub pivot: Option<f64>,
+    pub resistance_1: Option<f64>,
+    pub support_1: Option<f64>,
+    pub resistance_2: Option<f64>,
+    pub support_2: Option<f64>,
+}
+
+/// Compute daily pivot levels without looking ahead into the current UTC session.
+///
+/// The first session has no prior completed range and therefore emits `None`. Every later
+/// session receives the immediately preceding session's OHLC-derived levels at its first row;
+/// values remain constant until the next UTC day. The five outputs are pivot, R1, S1, R2, S2.
+pub fn pivot_points(
+    times: &[i64],
+    opens: &[f64],
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    kind: PivotKind,
+) -> Vec<PivotPoint> {
+    let n = times
+        .len()
+        .min(opens.len())
+        .min(highs.len())
+        .min(lows.len())
+        .min(closes.len());
+    let mut out = vec![PivotPoint::default(); n];
+    if n == 0 {
+        return out;
+    }
+
+    let mut current_day = None;
+    let mut current = None;
+    let mut previous = None;
+    for row in 0..n {
+        let day = times[row].div_euclid(86_400);
+        if current_day != Some(day) {
+            if let Some(session) = current.replace(Session {
+                open: opens[row],
+                high: highs[row],
+                low: lows[row],
+                close: closes[row],
+            }) {
+                previous = Some(session);
+            }
+            current_day = Some(day);
+        } else if let Some(session) = current.as_mut() {
+            session.high = session.high.max(highs[row]);
+            session.low = session.low.min(lows[row]);
+            session.close = closes[row];
+        }
+        if let Some(session) = previous {
+            out[row] = pivot_levels(session, kind);
+        }
+    }
+    out
+}
+
+#[derive(Clone, Copy)]
+struct Session {
+    open: f64,
+    high: f64,
+    low: f64,
+    close: f64,
+}
+
+fn pivot_levels(session: Session, kind: PivotKind) -> PivotPoint {
+    let range = session.high - session.low;
+    let (pivot, r1, s1, r2, s2) = match kind {
+        PivotKind::Standard => {
+            let pivot = (session.high + session.low + session.close) / 3.0;
+            (
+                pivot,
+                2.0 * pivot - session.low,
+                2.0 * pivot - session.high,
+                pivot + range,
+                pivot - range,
+            )
+        }
+        PivotKind::Fibonacci => {
+            let pivot = (session.high + session.low + session.close) / 3.0;
+            (
+                pivot,
+                pivot + range * 0.382,
+                pivot - range * 0.382,
+                pivot + range * 0.618,
+                pivot - range * 0.618,
+            )
+        }
+        PivotKind::Camarilla => (
+            session.close,
+            session.close + range * 1.1 / 12.0,
+            session.close - range * 1.1 / 12.0,
+            session.close + range * 1.1 / 6.0,
+            session.close - range * 1.1 / 6.0,
+        ),
+        PivotKind::Woodie => {
+            let pivot = (session.high + session.low + 2.0 * session.close) / 4.0;
+            (
+                pivot,
+                2.0 * pivot - session.low,
+                2.0 * pivot - session.high,
+                pivot + range,
+                pivot - range,
+            )
+        }
+        PivotKind::DeMark => {
+            let weighted = if session.close < session.open {
+                session.high + 2.0 * session.low + session.close
+            } else if session.close > session.open {
+                2.0 * session.high + session.low + session.close
+            } else {
+                session.high + session.low + 2.0 * session.close
+            };
+            let pivot = weighted / 4.0;
+            (
+                pivot,
+                weighted / 2.0 - session.low,
+                weighted / 2.0 - session.high,
+                pivot + range,
+                pivot - range,
+            )
+        }
+    };
+    PivotPoint {
+        pivot: Some(pivot),
+        resistance_1: Some(r1),
+        support_1: Some(s1),
+        resistance_2: Some(r2),
+        support_2: Some(s2),
+    }
+}
+
 /// Parabolic SAR with the conventional 0.02 acceleration step and 0.20 cap.
 pub fn parabolic_sar(highs: &[f64], lows: &[f64]) -> Vec<Option<f64>> {
     let n = highs.len().min(lows.len());
@@ -2300,6 +2448,9 @@ enum IncrementalKind {
     Donchian {
         period: usize,
     },
+    PivotPoints {
+        kind: PivotKind,
+    },
     Keltner {
         period: usize,
         multiplier: f64,
@@ -2480,6 +2631,10 @@ impl IncrementalState {
 
     pub fn donchian(period: usize) -> Self {
         Self::new(IncrementalKind::Donchian { period }, 3)
+    }
+
+    pub fn pivot_points(kind: PivotKind) -> Self {
+        Self::new(IncrementalKind::PivotPoints { kind }, 5)
     }
 
     pub fn keltner(period: usize, multiplier: f64) -> Self {
@@ -2706,6 +2861,7 @@ impl IncrementalState {
             IncrementalKind::StochasticRsi { .. } => 0,
             IncrementalKind::Momentum { .. } | IncrementalKind::RateOfChange { .. } => 0,
             IncrementalKind::Donchian { .. } => 0,
+            IncrementalKind::PivotPoints { .. } => 0,
         }
     }
 
@@ -2889,6 +3045,25 @@ impl IncrementalState {
                     self.outputs[0].push(point.upper.expect("Donchian upper after warmup"));
                     self.outputs[1].push(point.middle.expect("Donchian middle after warmup"));
                     self.outputs[2].push(point.lower.expect("Donchian lower after warmup"));
+                }
+            }
+            IncrementalKind::PivotPoints { kind } => {
+                let start = self.output_from[0];
+                self.last_work_rows = n - start;
+                let points = pivot_points(
+                    input.times,
+                    input.open,
+                    input.high,
+                    input.low,
+                    input.close,
+                    *kind,
+                );
+                for point in points.into_iter().skip(start) {
+                    self.outputs[0].push(point.pivot.unwrap_or(f64::NAN));
+                    self.outputs[1].push(point.resistance_1.unwrap_or(f64::NAN));
+                    self.outputs[2].push(point.support_1.unwrap_or(f64::NAN));
+                    self.outputs[3].push(point.resistance_2.unwrap_or(f64::NAN));
+                    self.outputs[4].push(point.support_2.unwrap_or(f64::NAN));
                 }
             }
             IncrementalKind::Ichimoku => {
@@ -3418,6 +3593,7 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
             0,
             0,
         ],
+        IncrementalKind::PivotPoints { .. } => [0; MAX_OUTPUTS],
         IncrementalKind::Keltner { period, .. } => [*period, *period, *period, 0, 0],
         IncrementalKind::AdxDmi { period, .. } => {
             let start = period.saturating_add(period.saturating_sub(1));
@@ -3578,6 +3754,58 @@ mod tests {
                 lower: Some(2.0),
             }
         );
+    }
+
+    #[test]
+    fn pivot_points_use_the_previous_utc_session_without_lookahead() {
+        let points = pivot_points(
+            &[0, 3_600, 86_400, 90_000],
+            &[10.0, 11.0, 12.0, 13.0],
+            &[12.0, 14.0, 15.0, 16.0],
+            &[8.0, 9.0, 10.0, 11.0],
+            &[11.0, 13.0, 14.0, 15.0],
+            PivotKind::Standard,
+        );
+        assert_eq!(points[0], PivotPoint::default());
+        assert_eq!(points[1], PivotPoint::default());
+        let point = points[2];
+        let expected = [35.0 / 3.0, 46.0 / 3.0, 28.0 / 3.0, 53.0 / 3.0, 17.0 / 3.0];
+        for (actual, expected) in [
+            point.pivot,
+            point.resistance_1,
+            point.support_1,
+            point.resistance_2,
+            point.support_2,
+        ]
+        .into_iter()
+        .zip(expected)
+        {
+            assert!((actual.unwrap() - expected).abs() < 1e-12);
+        }
+        assert_eq!(points[3], point);
+
+        for (kind, expected_pivot) in [
+            (PivotKind::Fibonacci, 35.0 / 3.0),
+            (PivotKind::Camarilla, 13.0),
+            (PivotKind::Woodie, 12.0),
+            (PivotKind::DeMark, 49.0 / 4.0),
+        ] {
+            let points = pivot_points(
+                &[0, 3_600, 86_400],
+                &[10.0, 11.0, 12.0],
+                &[12.0, 14.0, 15.0],
+                &[8.0, 9.0, 10.0],
+                &[11.0, 13.0, 14.0],
+                kind,
+            );
+            assert!((points[2].pivot.unwrap() - expected_pivot).abs() < 1e-12);
+            assert!(
+                points[2].resistance_1.is_some()
+                    && points[2].support_1.is_some()
+                    && points[2].resistance_2.is_some()
+                    && points[2].support_2.is_some()
+            );
+        }
     }
 
     #[test]

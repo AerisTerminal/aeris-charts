@@ -1735,6 +1735,18 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
                 points.iter().map(|point| point.lower).collect(),
             ]
         }
+        IndicatorKind::PivotPoints { variant } => {
+            let points = aeris_charts_indicators::pivot_points(
+                times, source[0], source[1], source[2], source[3], variant,
+            );
+            vec![
+                points.iter().map(|point| point.pivot).collect(),
+                points.iter().map(|point| point.resistance_1).collect(),
+                points.iter().map(|point| point.support_1).collect(),
+                points.iter().map(|point| point.resistance_2).collect(),
+                points.iter().map(|point| point.support_2).collect(),
+            ]
+        }
         IndicatorKind::Keltner { period, multiplier } => {
             let points = aeris_charts_indicators::keltner(
                 source[1], source[2], source[3], period, multiplier,
@@ -1959,24 +1971,44 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
     };
 
     for (&output, expected) in binding.outputs.iter().zip(expected) {
-        let expected = times
-            .iter()
-            .copied()
-            .zip(expected)
-            .filter_map(|(time, value)| value.map(|value| (time, value)))
-            .collect::<Vec<_>>();
+        let expected = if matches!(binding.kind, IndicatorKind::PivotPoints { .. }) {
+            times
+                .iter()
+                .copied()
+                .zip(expected)
+                .map(|(time, value)| (time, value.unwrap_or(f64::NAN)))
+                .collect::<Vec<_>>()
+        } else {
+            times
+                .iter()
+                .copied()
+                .zip(expected)
+                .filter_map(|(time, value)| value.map(|value| (time, value)))
+                .collect::<Vec<_>>()
+        };
         let (actual_times, actual) = chart.data.series_data(output).unwrap();
         assert_eq!(
             actual_times,
-            expected.iter().map(|(time, _)| *time).collect::<Vec<_>>()
+            expected.iter().map(|(time, _)| *time).collect::<Vec<_>>(),
+            "{kind:?} output {output:?}",
+            kind = binding.kind,
+            output = output,
         );
         assert_eq!(actual[3].len(), expected.len());
         for (index, (&actual, (_, expected))) in actual[3].iter().zip(expected).enumerate() {
-            assert!(
-                (actual - expected).abs() < 1e-10,
-                "{:?} row {index}: {actual} != {expected}",
-                binding.kind,
-            );
+            if expected.is_nan() {
+                assert!(
+                    actual.is_nan(),
+                    "{:?} row {index}: expected NaN",
+                    binding.kind
+                );
+            } else {
+                assert!(
+                    (actual - expected).abs() < 1e-10,
+                    "{:?} row {index}: {actual} != {expected}",
+                    binding.kind,
+                );
+            }
         }
     }
 }
@@ -2010,6 +2042,9 @@ fn every_indicator_engine_path_matches_full_recomputation() {
         IndicatorKind::Mfi { period: 5 },
         IndicatorKind::Volume { period: 5 },
         IndicatorKind::Wma { period: 5 },
+        IndicatorKind::PivotPoints {
+            variant: aeris_charts_indicators::PivotKind::Standard,
+        },
         IndicatorKind::Keltner {
             period: 5,
             multiplier: 2.0,
@@ -3338,6 +3373,45 @@ fn typed_indicator_inputs_select_ohlc_aggregates_and_rebind_incrementally() {
         .iter()
         .any(|binding| { binding.outputs.contains(&sma) && binding.source == rsi }));
     assert!(!chart.set_indicator_input_source(u32::MAX, IndicatorInputSource::Close));
+}
+
+#[test]
+fn pivot_points_align_previous_session_levels_and_expose_all_outputs() {
+    let mut chart = ChartEngine::new(800.0, 500.0, 1.0);
+    let times = [0.0, 3_600.0, 86_400.0, 90_000.0];
+    let open = [10.0, 11.0, 12.0, 13.0];
+    let high = [12.0, 14.0, 15.0, 16.0];
+    let low = [8.0, 9.0, 10.0, 11.0];
+    let close = [11.0, 13.0, 14.0, 15.0];
+    chart
+        .set_series_data(0, &times, &open, &high, &low, &close)
+        .unwrap();
+    let outputs = chart.add_pivot_points(0, aeris_charts_indicators::PivotKind::Standard);
+    assert_eq!(outputs.len(), 5);
+    let expected = aeris_charts_indicators::pivot_points(
+        &[0, 3_600, 86_400, 90_000],
+        &open,
+        &high,
+        &low,
+        &close,
+        aeris_charts_indicators::PivotKind::Standard,
+    );
+    for (output_index, output) in outputs.iter().enumerate() {
+        let (output_times, values) = chart.data.series_data(*output).unwrap();
+        assert_eq!(output_times, &[0, 3_600, 86_400, 90_000]);
+        let expected = [
+            expected[2].pivot,
+            expected[2].resistance_1,
+            expected[2].support_1,
+            expected[2].resistance_2,
+            expected[2].support_2,
+        ][output_index]
+            .unwrap();
+        assert!(values[3][0].is_nan(), "output {output_index}");
+        let actual = values[3][2];
+        assert!((actual - expected).abs() < 1e-12, "output {output_index}");
+        assert_eq!(values[3][3], values[3][2]);
+    }
 }
 
 #[test]
