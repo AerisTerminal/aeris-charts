@@ -25,7 +25,7 @@ use aeris_charts_engine::{
     FootprintAggregationOptions, FootprintBarAggregation, FootprintSeriesOptions, FootprintTrade,
     FootprintVisualOptions, GeneralAxisOptions, GeneralHitMode, GeneralScaleType,
     GeneralSeriesOptions, GeneralXyInput, GestureResolver, HorizontalDomain, InputDevice,
-    InputTarget, PointerSample, SeriesKind,
+    InputTarget, PointerSample, SeriesKind, TradeBubbleOptions, TradeStudyOptions,
 };
 
 /// Parallel `(times, open, high, low, close)` columns.
@@ -216,6 +216,39 @@ fn main() {
             },
         )
         .expect("valid footprint options");
+    let footprint_stream = footprint
+        .add_trade_stream(
+            "PERF:ES",
+            FootprintAggregationOptions {
+                tick_size: 0.25,
+                bars: FootprintBarAggregation::Time {
+                    interval_micros: 60_000_000,
+                    anchor_micros: 0,
+                },
+                ..FootprintAggregationOptions::default()
+            },
+        )
+        .expect("valid shared footprint stream");
+    footprint
+        .bind_footprint_series_to_stream(0, footprint_stream)
+        .expect("bind footprint stream");
+    let _cvd = footprint
+        .add_cvd_series(footprint_stream, 1, TradeStudyOptions::default())
+        .expect("add CVD dependent");
+    let _delta = footprint
+        .add_delta_series(footprint_stream, 1)
+        .expect("add delta dependent");
+    footprint
+        .add_trade_bubbles(
+            footprint_stream,
+            0,
+            TradeBubbleOptions {
+                minimum_volume: 10.0,
+                max_markers: 2_048,
+                aggregation_window_micros: 0,
+            },
+        )
+        .expect("add bubble dependent");
     let history = gen_footprint_trades(0, FOOTPRINT_HISTORY_BARS, FOOTPRINT_TRADES_PER_BAR);
     let start = Instant::now();
     footprint
@@ -269,13 +302,18 @@ fn main() {
     );
     let footprint_retained_bars = footprint.footprint_bars(0).expect("footprint bars").len();
     let footprint_memory_after = footprint.memory_usage().footprint_capacity_bytes;
+    let footprint_stream_stats = footprint
+        .trade_stream_stats(footprint_stream)
+        .expect("shared footprint stream stats");
+    assert_eq!(footprint_stream_stats.dependent_count, 3);
     println!(
-        "Target D — {} footprint trades / {} bars + {}-trade live batch ({} incremental ticks, {} historical rebuilds, {} retained bars, {:.2}/{:.2} MiB footprint capacity):",
+        "Target D — {} footprint trades / {} bars + {}-trade live batch ({} incremental ticks, {} historical rebuilds, {} dependent incremental updates, {} retained bars, {:.2}/{:.2} MiB footprint capacity):",
         FOOTPRINT_HISTORY_BARS * FOOTPRINT_TRADES_PER_BAR,
         FOOTPRINT_HISTORY_BARS,
         FOOTPRINT_LIVE_BARS * FOOTPRINT_TRADES_PER_BAR,
         footprint_stats.incremental_ticks,
         footprint_stats.historical_rebuilds,
+        footprint_stream_stats.dependent_incremental_updates,
         footprint_retained_bars,
         footprint_memory_before as f64 / (1024.0 * 1024.0),
         footprint_memory_after as f64 / (1024.0 * 1024.0),

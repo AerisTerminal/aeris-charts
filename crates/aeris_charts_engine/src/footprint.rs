@@ -1338,7 +1338,7 @@ impl ChartEngine {
         }
         for (series_id, (times, open, high, low, close)) in updates {
             let from = incremental_from.unwrap_or(0).min(times.len());
-            let installed = if incremental_from.is_some() {
+            let incremental_accepted = if incremental_from.is_some() {
                 self.update_series_bars_sanitized(
                     series_id,
                     times[from..].to_vec(),
@@ -1346,11 +1346,16 @@ impl ChartEngine {
                     high[from..].to_vec(),
                     low[from..].to_vec(),
                     close[from..].to_vec(),
-                ) > 0
+                )
+            } else {
+                0
+            };
+            let installed = if incremental_accepted > 0 {
+                true
             } else {
                 self.install_series_data(series_id, times, open, high, low, close)
             };
-            if !installed && from != 0 {
+            if !installed {
                 return Err(FootprintError::UnknownSeries(series_id));
             }
         }
