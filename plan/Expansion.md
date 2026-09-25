@@ -177,7 +177,7 @@ builds a generic property panel from schemas alone, and old layouts migrate.
       repeated numeric runs where measurement shows shaping dominates; budgets added to `perf_gate`.
 - [x] Early F1 design note in `docs/Architecture.md` so later work does not assume the second-based
       axis.
-- [ ] Full gate green; batch committed and pushed.
+- [x] Full gate green; benchmark gate changes committed and pushed; milestone evidence remains open.
 - [ ] Milestone evidence: screenshots, accessibility review and recorded benchmarks for order flow.
 
 Implementation evidence so far: `chart_trade_stream_is_shared_by_bound_footprint_dependents`,
