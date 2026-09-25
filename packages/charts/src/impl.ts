@@ -4909,6 +4909,10 @@ export class chart_impl implements chart_api {
     ];
   }
 
+  add_parabolic_sar(source: series_api, options?: Partial<series_options>): series_api {
+    return this.indicator_series(this.wasm.add_parabolic_sar(source.id), options);
+  }
+
   subscribe_crosshair_move(handler: mouse_event_handler): void {
     this.crosshair_subs.add(handler);
   }

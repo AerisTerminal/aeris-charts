@@ -361,6 +361,7 @@ fn incremental_output_count(kind: &IndicatorKind) -> usize {
         IndicatorKind::Donchian { .. }
         | IndicatorKind::Keltner { .. }
         | IndicatorKind::AdxDmi { .. } => 3,
+        IndicatorKind::ParabolicSar => 1,
         IndicatorKind::EmaRibbon { .. } => aeris_charts_indicators::MAX_OUTPUTS,
         IndicatorKind::Bollinger { .. } => 3,
         IndicatorKind::Macd { .. } => 3,
@@ -413,6 +414,7 @@ fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
             *period > 0 && multiplier.is_finite() && *multiplier >= 0.0
         }
         IndicatorKind::AdxDmi { period } => *period > 0,
+        IndicatorKind::ParabolicSar => true,
         IndicatorKind::EmaRibbon { periods } => periods.iter().all(|period| *period > 0),
         IndicatorKind::Bollinger { period, deviation } => *period > 0 && deviation.is_finite(),
         IndicatorKind::Macd { fast, slow, signal } => *fast > 0 && *slow > 0 && *signal > 0,
@@ -1977,6 +1979,20 @@ mod tests {
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].kind, crate::IndicatorKind::AdxDmi { period: 3 });
         assert_eq!(bindings[0].outputs.len(), 3);
+    }
+
+    #[test]
+    fn parabolic_sar_persistence_round_trips_output() {
+        let mut chart = settled_chart();
+        let output = chart.add_parabolic_sar(0).unwrap();
+        let document = chart.export_state_json().unwrap();
+
+        let mut restored = settled_chart();
+        restored.import_state_json(&document).unwrap();
+        let bindings = restored.indicator_bindings();
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].kind, crate::IndicatorKind::ParabolicSar);
+        assert_eq!(bindings[0].outputs, vec![output]);
     }
 
     #[test]

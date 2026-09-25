@@ -2143,6 +2143,10 @@ impl AerisChart {
         self.inner.borrow_mut().add_adx_dmi(source_id, period)
     }
 
+    pub fn add_parabolic_sar(&mut self, source_id: u32) -> u32 {
+        self.inner.borrow_mut().add_parabolic_sar(source_id)
+    }
+
     /// Add one five-output EMA ribbon on the source pane.
     pub fn add_ema_ribbon(
         &mut self,

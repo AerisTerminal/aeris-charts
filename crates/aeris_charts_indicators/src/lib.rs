@@ -36,6 +36,19 @@ pub struct AdxDmiPoint {
     pub adx: Option<f64>,
 }
 
+/// Parabolic SAR with the conventional 0.02 acceleration step and 0.20 cap.
+pub fn parabolic_sar(highs: &[f64], lows: &[f64]) -> Vec<Option<f64>> {
+    let n = highs.len().min(lows.len());
+    let mut out = vec![None; n];
+    let mut state = ParabolicSarState::default();
+    for row in 0..n {
+        out[row] = Some(parabolic_sar_step(
+            &mut state, highs[row], lows[row], 0.02, 0.20,
+        ));
+    }
+    out
+}
+
 /// Simple moving average. The first `period - 1` values are warm-up `None` entries.
 pub fn sma(values: &[f64], period: usize) -> Vec<Option<f64>> {
     if period == 0 {
@@ -1462,6 +1475,35 @@ struct AdxDmiState {
     adx: f64,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ParabolicSarState {
+    initialized: bool,
+    rising: bool,
+    sar: f64,
+    extreme: f64,
+    acceleration: f64,
+    previous_high: f64,
+    previous_low: f64,
+    before_previous_high: Option<f64>,
+    before_previous_low: Option<f64>,
+}
+
+impl Default for ParabolicSarState {
+    fn default() -> Self {
+        Self {
+            initialized: false,
+            rising: true,
+            sar: 0.0,
+            extreme: 0.0,
+            acceleration: 0.02,
+            previous_high: 0.0,
+            previous_low: 0.0,
+            before_previous_high: None,
+            before_previous_low: None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 struct MacdState {
     fast: EmaState,
@@ -1676,6 +1718,60 @@ fn adx_dmi_step(state: &mut AdxDmiState, sample: DirectionalSample, period: usiz
     }
 }
 
+fn parabolic_sar_step(
+    state: &mut ParabolicSarState,
+    high: f64,
+    low: f64,
+    step: f64,
+    max_step: f64,
+) -> f64 {
+    if !state.initialized {
+        state.initialized = true;
+        state.previous_high = high;
+        state.previous_low = low;
+        state.sar = low;
+        state.extreme = high;
+        state.acceleration = step;
+        return state.sar;
+    }
+    let mut candidate = state.sar + state.acceleration * (state.extreme - state.sar);
+    if state.rising {
+        candidate = candidate.min(state.previous_low);
+        if let Some(before) = state.before_previous_low {
+            candidate = candidate.min(before);
+        }
+        if low < candidate {
+            state.rising = false;
+            candidate = state.extreme;
+            state.extreme = low;
+            state.acceleration = step;
+        } else if high > state.extreme {
+            state.extreme = high;
+            state.acceleration = (state.acceleration + step).min(max_step);
+        }
+    } else {
+        candidate = candidate.max(state.previous_high);
+        if let Some(before) = state.before_previous_high {
+            candidate = candidate.max(before);
+        }
+        if high > candidate {
+            state.rising = true;
+            candidate = state.extreme;
+            state.extreme = high;
+            state.acceleration = step;
+        } else if low < state.extreme {
+            state.extreme = low;
+            state.acceleration = (state.acceleration + step).min(max_step);
+        }
+    }
+    state.before_previous_high = Some(state.previous_high);
+    state.before_previous_low = Some(state.previous_low);
+    state.previous_high = high;
+    state.previous_low = low;
+    state.sar = candidate;
+    candidate
+}
+
 fn vwap_step(state: &mut VwapState, sample: VwapSample) -> f64 {
     let day = sample.time_unix_seconds.div_euclid(86_400);
     if !state.initialized || state.day != day {
@@ -1801,6 +1897,9 @@ enum IncrementalKind {
     AdxDmi {
         period: usize,
         state: RecursiveHistory<AdxDmiState>,
+    },
+    ParabolicSar {
+        state: RecursiveHistory<ParabolicSarState>,
     },
     EmaRibbon {
         periods: [usize; MAX_OUTPUTS],
@@ -1949,6 +2048,15 @@ impl IncrementalState {
         )
     }
 
+    pub fn parabolic_sar() -> Self {
+        Self::new(
+            IncrementalKind::ParabolicSar {
+                state: RecursiveHistory::new(),
+            },
+            1,
+        )
+    }
+
     pub fn ema_ribbon(periods: [usize; MAX_OUTPUTS]) -> Self {
         Self::new(
             IncrementalKind::EmaRibbon {
@@ -2087,6 +2195,7 @@ impl IncrementalState {
             IncrementalKind::Atr { state, .. } => state.bytes(),
             IncrementalKind::Keltner { state, .. } => state.bytes(),
             IncrementalKind::AdxDmi { state, .. } => state.bytes(),
+            IncrementalKind::ParabolicSar { state } => state.bytes(),
             IncrementalKind::Vwap { state } => state.bytes(),
             IncrementalKind::VwapBands { state, .. } => state.bytes(),
             IncrementalKind::Sma { .. }
@@ -2305,6 +2414,31 @@ impl IncrementalState {
                     }
                     if row >= self.output_from[2] {
                         self.outputs[2].push(point.adx.expect("ADX after warmup"));
+                    }
+                    if row + 1 == n {
+                        tail = Some(accumulator);
+                        before_tail = (row > 0).then_some(previous);
+                    }
+                }
+                state.finish(n, tail, before_tail);
+            }
+            IncrementalKind::ParabolicSar { state } => {
+                let (start, mut accumulator) = state.begin(n, requested);
+                self.last_work_rows = n - start;
+                let mut tail = None;
+                let mut before_tail = None;
+                for row in start..n {
+                    let previous = accumulator;
+                    let value = parabolic_sar_step(
+                        &mut accumulator,
+                        input.high[row],
+                        input.low[row],
+                        0.02,
+                        0.20,
+                    );
+                    state.checkpoint(row, accumulator);
+                    if row >= self.output_from[0] {
+                        self.outputs[0].push(value);
                     }
                     if row + 1 == n {
                         tail = Some(accumulator);
@@ -2636,6 +2770,7 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
             let start = period.saturating_add(period.saturating_sub(1));
             [*period, *period, start, 0, 0]
         }
+        IncrementalKind::ParabolicSar { .. } => [0, 0, 0, 0, 0],
         IncrementalKind::EmaRibbon { periods, .. } => {
             periods.map(|period| period.saturating_sub(1))
         }
@@ -3542,6 +3677,16 @@ mod tests {
     }
 
     #[test]
+    fn parabolic_sar_reverses_and_stays_inside_prior_extremes() {
+        let highs = [10.0, 11.0, 12.0, 9.0, 8.0, 10.0];
+        let lows = [8.0, 9.0, 10.0, 7.0, 6.0, 8.0];
+        let values = parabolic_sar(&highs, &lows);
+        assert_eq!(values[0], Some(8.0));
+        assert!(values.iter().all(|value| value.is_some_and(f64::is_finite)));
+        assert!(values[3].unwrap() >= highs[2]);
+    }
+
+    #[test]
     fn vwap_weights_by_volume_and_resets_each_utc_day() {
         // Day 0: tp 10 @ vol 1, tp 20 @ vol 3 → (10 + 60) / 4 = 17.5; day 1 restarts at tp 30.
         let times = [0, 3_600, 86_400];
@@ -3594,6 +3739,7 @@ mod tests {
         Donchian,
         Keltner,
         AdxDmi,
+        ParabolicSar,
         EmaRibbon,
         Bollinger,
         Rsi,
@@ -3638,6 +3784,7 @@ mod tests {
                     points.iter().map(|point| point.adx).collect(),
                 ]
             }
+            TestKind::ParabolicSar => vec![parabolic_sar(input.high, input.low)],
             TestKind::EmaRibbon => [3, 5, 8, 13, 21]
                 .into_iter()
                 .map(|period| ema(input.close, period))
@@ -3724,6 +3871,7 @@ mod tests {
             (TestKind::Donchian, IncrementalState::donchian(5)),
             (TestKind::Keltner, IncrementalState::keltner(5, 2.0)),
             (TestKind::AdxDmi, IncrementalState::adx_dmi(5)),
+            (TestKind::ParabolicSar, IncrementalState::parabolic_sar()),
             (
                 TestKind::EmaRibbon,
                 IncrementalState::ema_ribbon([3, 5, 8, 13, 21]),

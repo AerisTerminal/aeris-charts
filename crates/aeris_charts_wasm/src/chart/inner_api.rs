@@ -139,6 +139,7 @@ impl ChartInner {
                 multiplier: deviation,
             },
             "adx_dmi" => IndicatorKind::AdxDmi { period },
+            "parabolic_sar" => IndicatorKind::ParabolicSar,
             "ema_ribbon" => IndicatorKind::EmaRibbon {
                 periods: [period; 5],
             },
@@ -265,6 +266,12 @@ impl ChartInner {
     pub fn add_adx_dmi(&mut self, source_id: u32, period: u32) -> Vec<u32> {
         self.engine
             .add_adx_dmi(source_id as SeriesId, period as usize)
+    }
+
+    pub fn add_parabolic_sar(&mut self, source_id: u32) -> u32 {
+        self.engine
+            .add_parabolic_sar(source_id as SeriesId)
+            .unwrap_or(u32::MAX)
     }
 
     pub fn add_ema_ribbon(&mut self, source_id: u32, periods: [u32; 5]) -> Vec<u32> {

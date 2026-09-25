@@ -128,6 +128,7 @@ pub enum IndicatorKind {
     AdxDmi {
         period: usize,
     },
+    ParabolicSar,
     EmaRibbon {
         periods: [usize; aeris_charts_indicators::MAX_OUTPUTS],
     },
@@ -493,6 +494,9 @@ impl ChartEngine {
                                 ..IndicatorParameters::default()
                             },
                         ),
+                        IndicatorKind::ParabolicSar => {
+                            ("parabolic_sar", 0, None, IndicatorParameters::default())
+                        }
                         IndicatorKind::EmaRibbon { periods } => (
                             "ema_ribbon",
                             periods[output_index],
@@ -674,6 +678,12 @@ impl ChartEngine {
 
     pub fn add_adx_dmi(&mut self, source: SeriesId, period: usize) -> Vec<SeriesId> {
         self.add_indicator_kind(source, IndicatorKind::AdxDmi { period }, None)
+    }
+
+    pub fn add_parabolic_sar(&mut self, source: SeriesId) -> Option<SeriesId> {
+        self.add_indicator_kind(source, IndicatorKind::ParabolicSar, None)
+            .into_iter()
+            .next()
     }
 
     /// Add five exponential moving averages as one binding in fastest-to-slowest output order.
@@ -880,6 +890,7 @@ impl ChartEngine {
             | IndicatorKind::Keltner { .. }
             | IndicatorKind::EmaRibbon { .. }
             | IndicatorKind::Bollinger { .. }
+            | IndicatorKind::ParabolicSar
             | IndicatorKind::Vwap
             | IndicatorKind::VwapBands { .. }
             | IndicatorKind::Wma { .. } => {}
@@ -964,6 +975,7 @@ impl ChartEngine {
                 parameters.push(number("multiplier", multiplier));
             }
             IndicatorKind::AdxDmi { period } => parameters.push(integer("period", period)),
+            IndicatorKind::ParabolicSar => {}
             IndicatorKind::Macd { fast, slow, signal } => {
                 parameters.push(integer("fast", fast));
                 parameters.push(integer("slow", slow));
@@ -1122,6 +1134,7 @@ impl ChartEngine {
                     *period == 0 || !multiplier.is_finite() || *multiplier < 0.0
                 }
                 IndicatorKind::AdxDmi { period } => *period == 0,
+                IndicatorKind::ParabolicSar => false,
                 IndicatorKind::Macd { fast, slow, signal } => {
                     *fast == 0 || *slow == 0 || *signal == 0
                 }
@@ -1462,6 +1475,7 @@ fn indicator_kind_name(kind: &IndicatorKind) -> &'static str {
         IndicatorKind::Donchian { .. } => "donchian",
         IndicatorKind::Keltner { .. } => "keltner",
         IndicatorKind::AdxDmi { .. } => "adx_dmi",
+        IndicatorKind::ParabolicSar => "parabolic_sar",
         IndicatorKind::EmaRibbon { .. } => "ema_ribbon",
         IndicatorKind::Bollinger { .. } => "bollinger",
         IndicatorKind::Rsi { .. } => "rsi",
@@ -1495,6 +1509,7 @@ fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators::Increment
         IndicatorKind::AdxDmi { period } => {
             aeris_charts_indicators::IncrementalState::adx_dmi(period)
         }
+        IndicatorKind::ParabolicSar => aeris_charts_indicators::IncrementalState::parabolic_sar(),
         IndicatorKind::EmaRibbon { periods } => {
             aeris_charts_indicators::IncrementalState::ema_ribbon(periods)
         }
@@ -1563,6 +1578,7 @@ fn indicator_title(kind: &IndicatorKind) -> String {
             format!("Keltner {period} {}", params(*multiplier))
         }
         IndicatorKind::AdxDmi { period } => format!("ADX/DMI {period}"),
+        IndicatorKind::ParabolicSar => "Parabolic SAR".to_string(),
         IndicatorKind::EmaRibbon { periods } => format!(
             "EMA Ribbon {} {} {} {} {}",
             periods[0], periods[1], periods[2], periods[3], periods[4]
@@ -1626,6 +1642,7 @@ fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static 
         IndicatorKind::Donchian { .. } => ["Upper", "Basis", "Lower"][output_index],
         IndicatorKind::Keltner { .. } => ["Upper", "Basis", "Lower"][output_index],
         IndicatorKind::AdxDmi { .. } => ["+DI", "-DI", "ADX"][output_index],
+        IndicatorKind::ParabolicSar => "SAR",
         IndicatorKind::EmaRibbon { .. } => {
             ["EMA 1", "EMA 2", "EMA 3", "EMA 4", "EMA 5"][output_index]
         }
