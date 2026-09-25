@@ -17,7 +17,7 @@ use aeris_charts_engine::{
     AggressorSide, ChartEngine, ChartFrame, FootprintAggregationOptions, FootprintBarAggregation,
     FootprintImbalanceOptions, FootprintSeriesOptions, FootprintTrade,
 };
-use aeris_charts_render_gpui::{AerisViewport, GpuiChartRenderer, PreparedAerisFrame};
+use aeris_charts_render_gpui::{AerisViewport, GpuiChartRenderer, Paint, PreparedAerisFrame};
 use gpui::{
     canvas, div, prelude::*, px, size, App, Bounds, Context, Entity, Render, Window, WindowBounds,
     WindowOptions,
@@ -43,6 +43,7 @@ struct Capture {
     done: bool,
     scale_factor: f32,
     background: gpui::Hsla,
+    frame_background: Paint,
     case_name: String,
     theme: String,
     spacing: Option<f64>,
@@ -161,6 +162,7 @@ impl Capture {
         )
         .expect("fixture background color is valid");
         let background = aeris_charts_render_gpui::backend::to_hsla(background_color);
+        let frame_background = Paint::Solid(background_color);
         let frame = engine.build_frame();
         let expected_width = fixture.css_width - fixture.price_axis_width;
         let expected_height = fixture.css_height - fixture.time_axis_height;
@@ -195,6 +197,7 @@ impl Capture {
             done: false,
             scale_factor,
             background,
+            frame_background,
             case_name,
             theme,
             spacing,
@@ -410,6 +413,7 @@ impl Render for Capture {
         let entity: Entity<Capture> = cx.entity();
 
         let background = self.background;
+        let frame_background = self.frame_background;
         div().bg(background).size_full().child(
             canvas(
                 move |bounds: Bounds<gpui::Pixels>, _window, _cx| bounds,
@@ -424,7 +428,12 @@ impl Render for Capture {
                         capture
                             .renderer
                             .paint_frame(
-                                &PreparedAerisFrame::new(&capture.frame),
+                                &PreparedAerisFrame {
+                                    frame: &capture.frame,
+                                    axis_prims: &[],
+                                    axis_points: &[],
+                                    background: frame_background,
+                                },
                                 viewport,
                                 window.scale_factor(),
                                 window,
