@@ -218,7 +218,8 @@ retention evicts both), and PD10 budgets hold on GPUI.
 - [ ] **CT2** Heikin Ashi with real OHLC exposed separately for trading and crosshair.
 - [ ] **CT6** Symbol comparison overlays with a shared comparison anchor and per-symbol legend
       values.
-- [ ] **I1 moving averages:** HMA, VWMA, DEMA, TEMA, SMMA/RMA.
+- [ ] **I1 moving averages:** HMA, VWMA, TEMA, SMMA/RMA.
+- [x] **I1 moving average slice:** DEMA with pure, incremental, schema, persistence and package coverage.
 - [ ] **I1 trend:** ADX/DMI, Parabolic SAR, SuperTrend, Ichimoku.
 - [ ] **I1 channels and volatility:** Keltner Channels, Donchian Channels, standard deviation.
 - [ ] **I1 oscillators:** CCI, Williams %R, Stochastic RSI, ROC/Momentum, MFI.
@@ -246,9 +247,9 @@ pure-math and incremental rebuild tests cover the monthly reference path. Typed 
 validation now rejects invalid VWAP volume bindings atomically. Financial persistence V3 now
 round-trips ordered study dependencies, scalar inputs, volume references and per-output styles while
 leaving market data host-owned. Chart-type additions, the remaining F4 exit fixtures and the I1
-catalog remain open until the whole batch is implemented. DEMA is now exposed through the engine,
-WASM and TypeScript APIs, with pure and incremental rebuild coverage; the remaining I1 catalog is
-still open.
+catalog remain open until the whole batch is implemented. DEMA and TEMA are now exposed through
+the engine, WASM and TypeScript APIs, with pure and incremental rebuild coverage; the remaining I1
+catalog is still open.
 
 ### B5 — Non-time bars and replay
 
@@ -885,7 +886,7 @@ candle-only approximation mode that is clearly labeled as such; tape items never
 
 ### Indicator catalog
 
-Current: SMA, EMA, EMA ribbon, WMA, Bollinger, RSI, MACD, Stochastic, ATR, VWAP. Each new indicator
+Current: SMA, EMA, DEMA, TEMA, EMA ribbon, WMA, Bollinger, RSI, MACD, Stochastic, ATR, VWAP. Each new indicator
 ships with incremental state, rebuild tests, typed schema, persistence and an independently
 computed reference-value fixture.
 

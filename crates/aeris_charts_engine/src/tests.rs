@@ -1659,6 +1659,7 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
         IndicatorKind::Sma { period } => vec![aeris_charts_indicators::sma(source[3], period)],
         IndicatorKind::Ema { period } => vec![aeris_charts_indicators::ema(source[3], period)],
         IndicatorKind::Dema { period } => vec![aeris_charts_indicators::dema(source[3], period)],
+        IndicatorKind::Tema { period } => vec![aeris_charts_indicators::tema(source[3], period)],
         IndicatorKind::EmaRibbon { periods } => periods
             .into_iter()
             .map(|period| aeris_charts_indicators::ema(source[3], period))
@@ -2776,6 +2777,10 @@ fn wma_atr_and_stochastic_place_and_report() {
     assert_eq!(chart.indicator_info(dema).unwrap().kind, "dema");
     let dema_values = &chart.data.series_data(dema).unwrap().1[3];
     assert!((dema_values[0] - 5.0).abs() < 1e-9);
+    let tema = chart.add_tema(0, 2).expect("valid tema");
+    assert_eq!(chart.indicator_info(tema).unwrap().kind, "tema");
+    let tema_values = &chart.data.series_data(tema).unwrap().1[3];
+    assert!((tema_values[0] - 4.0).abs() < 1e-9);
 
     let atr = chart.add_atr(0, 2).expect("valid atr");
     assert_ne!(

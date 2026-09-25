@@ -103,6 +103,9 @@ pub enum IndicatorKind {
     Dema {
         period: usize,
     },
+    Tema {
+        period: usize,
+    },
     EmaRibbon {
         periods: [usize; aeris_charts_indicators::MAX_OUTPUTS],
     },
@@ -395,6 +398,15 @@ impl ChartEngine {
                                 ..IndicatorParameters::default()
                             },
                         ),
+                        IndicatorKind::Tema { period } => (
+                            "tema",
+                            period,
+                            None,
+                            IndicatorParameters {
+                                period: Some(period),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
                         IndicatorKind::EmaRibbon { periods } => (
                             "ema_ribbon",
                             periods[output_index],
@@ -518,6 +530,12 @@ impl ChartEngine {
 
     pub fn add_dema(&mut self, source: SeriesId, period: usize) -> Option<SeriesId> {
         self.add_indicator_kind(source, IndicatorKind::Dema { period }, None)
+            .into_iter()
+            .next()
+    }
+
+    pub fn add_tema(&mut self, source: SeriesId, period: usize) -> Option<SeriesId> {
+        self.add_indicator_kind(source, IndicatorKind::Tema { period }, None)
             .into_iter()
             .next()
     }
@@ -712,6 +730,7 @@ impl ChartEngine {
             IndicatorKind::Sma { .. }
             | IndicatorKind::Ema { .. }
             | IndicatorKind::Dema { .. }
+            | IndicatorKind::Tema { .. }
             | IndicatorKind::EmaRibbon { .. }
             | IndicatorKind::Bollinger { .. }
             | IndicatorKind::Vwap
@@ -776,6 +795,7 @@ impl ChartEngine {
             IndicatorKind::Sma { period }
             | IndicatorKind::Ema { period }
             | IndicatorKind::Dema { period }
+            | IndicatorKind::Tema { period }
             | IndicatorKind::Rsi { period }
             | IndicatorKind::Atr { period }
             | IndicatorKind::Wma { period } => parameters.push(integer("period", period)),
@@ -921,6 +941,7 @@ impl ChartEngine {
                 IndicatorKind::Sma { period }
                 | IndicatorKind::Ema { period }
                 | IndicatorKind::Dema { period }
+                | IndicatorKind::Tema { period }
                 | IndicatorKind::Bollinger { period, .. }
                 | IndicatorKind::Rsi { period }
                 | IndicatorKind::Atr { period }
@@ -1258,6 +1279,7 @@ fn indicator_kind_name(kind: &IndicatorKind) -> &'static str {
         IndicatorKind::Sma { .. } => "sma",
         IndicatorKind::Ema { .. } => "ema",
         IndicatorKind::Dema { .. } => "dema",
+        IndicatorKind::Tema { .. } => "tema",
         IndicatorKind::EmaRibbon { .. } => "ema_ribbon",
         IndicatorKind::Bollinger { .. } => "bollinger",
         IndicatorKind::Rsi { .. } => "rsi",
@@ -1275,6 +1297,7 @@ fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators::Increment
         IndicatorKind::Sma { period } => aeris_charts_indicators::IncrementalState::sma(period),
         IndicatorKind::Ema { period } => aeris_charts_indicators::IncrementalState::ema(period),
         IndicatorKind::Dema { period } => aeris_charts_indicators::IncrementalState::dema(period),
+        IndicatorKind::Tema { period } => aeris_charts_indicators::IncrementalState::tema(period),
         IndicatorKind::EmaRibbon { periods } => {
             aeris_charts_indicators::IncrementalState::ema_ribbon(periods)
         }
@@ -1333,6 +1356,7 @@ fn indicator_title(kind: &IndicatorKind) -> String {
         IndicatorKind::Sma { period } => format!("SMA {period}"),
         IndicatorKind::Ema { period } => format!("EMA {period}"),
         IndicatorKind::Dema { period } => format!("DEMA {period}"),
+        IndicatorKind::Tema { period } => format!("TEMA {period}"),
         IndicatorKind::EmaRibbon { periods } => format!(
             "EMA Ribbon {} {} {} {} {}",
             periods[0], periods[1], periods[2], periods[3], periods[4]
@@ -1388,6 +1412,7 @@ fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static 
         IndicatorKind::Sma { .. } => "SMA",
         IndicatorKind::Ema { .. } => "EMA",
         IndicatorKind::Dema { .. } => "DEMA",
+        IndicatorKind::Tema { .. } => "TEMA",
         IndicatorKind::EmaRibbon { .. } => {
             ["EMA 1", "EMA 2", "EMA 3", "EMA 4", "EMA 5"][output_index]
         }

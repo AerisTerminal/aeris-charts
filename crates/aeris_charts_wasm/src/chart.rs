@@ -2101,6 +2101,10 @@ impl AerisChart {
         self.inner.borrow_mut().add_dema(source_id, period)
     }
 
+    pub fn add_tema(&mut self, source_id: u32, period: u32) -> u32 {
+        self.inner.borrow_mut().add_tema(source_id, period)
+    }
+
     /// Add one five-output EMA ribbon on the source pane.
     pub fn add_ema_ribbon(
         &mut self,
