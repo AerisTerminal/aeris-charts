@@ -192,7 +192,8 @@ fixture and reports primitive/text counts plus p50/p95/p99 scene-lowering cost. 
 stops at GPUI scene construction, while native `perf_gate` Target J covers WebGPU CPU-side
 frame encoding and verifies every resolved dense text run is scheduled. Neither benchmark covers
 native window shaping or actual GPU present time; `gpui_probe` now accepts
-`AERIS_CHARTS_PROBE_FEATURE=footprint` for that real-window capture. WebGPU executor timing,
+`AERIS_CHARTS_PROBE_FEATURE=footprint` for that real-window capture and reports the shaped-run
+cache. WebGPU executor timing,
 screenshot/accessibility evidence, and the final full gate remain open until the batch is closed.
 
 **Exit:** the F2 exit criterion passes (footprint and CVD share one tape, a late trade updates both,
