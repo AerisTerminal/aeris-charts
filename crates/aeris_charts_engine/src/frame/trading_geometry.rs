@@ -53,6 +53,14 @@ struct TradingControlCluster<'a> {
     color: Color,
 }
 
+struct TradingTriggerLine {
+    pane_index: usize,
+    price_scale: crate::TradingPriceScale,
+    trigger_price: Option<f64>,
+    display_price: f64,
+    color: Color,
+}
+
 impl<'a> TradingControlCluster<'a> {
     fn start(&self) -> f64 {
         self.left
@@ -318,6 +326,149 @@ impl ChartEngine {
             + PNL_WIDTH
             + CONTROL_GAP
             + self.trading_close_width()
+    }
+
+    pub(crate) fn trading_annotation_hit(
+        &self,
+        annotations: &[crate::TradingAnnotation],
+        line_y: f64,
+        x: f64,
+        y: f64,
+    ) -> Option<String> {
+        let height = self.trading_control_height();
+        let mut cursor = self.trading_marker_start();
+        let visible = annotations.len().min(3);
+        for annotation in annotations.iter().take(visible) {
+            let width = self.trading_annotation_width(&annotation.text);
+            let center_y = match annotation.placement {
+                crate::TradingAnnotationPlacement::Above => line_y - height - 2.0,
+                crate::TradingAnnotationPlacement::Below => line_y + height + 2.0,
+                crate::TradingAnnotationPlacement::Inline => line_y,
+            };
+            if x >= cursor && x <= cursor + width && (y - center_y).abs() <= height / 2.0 {
+                return Some(annotation.id.clone());
+            }
+            cursor += width + CONTROL_GAP;
+        }
+        None
+    }
+
+    fn trading_annotation_width(&self, text: &str) -> f64 {
+        (self.measure_text_run(
+            text,
+            self.options.get().layout.font_size,
+            &self.options.get().layout.font_family,
+            400,
+            false,
+        ) + 10.0)
+            .ceil()
+            .clamp(24.0, 180.0)
+    }
+
+    fn trading_annotation_color(&self, tone: crate::TradingAnnotationTone) -> Color {
+        match tone {
+            crate::TradingAnnotationTone::Neutral => self.trading_state.style.control,
+            crate::TradingAnnotationTone::Info => self.trading_state.style.buy,
+            crate::TradingAnnotationTone::Warning => self.trading_state.style.pending,
+            crate::TradingAnnotationTone::Danger => self.trading_state.style.risk,
+        }
+    }
+
+    pub(crate) fn push_trading_annotations(
+        &self,
+        out: &mut Vec<Prim>,
+        annotations: &[crate::TradingAnnotation],
+        line_y: f64,
+        hpr: f64,
+        vpr: f64,
+    ) {
+        let height = self.trading_control_height();
+        let mut cursor = self.trading_marker_start();
+        let visible = annotations.len().min(3);
+        for annotation in annotations.iter().take(visible) {
+            let width = self.trading_annotation_width(&annotation.text);
+            let center_y = match annotation.placement {
+                crate::TradingAnnotationPlacement::Above => line_y - height - 2.0,
+                crate::TradingAnnotationPlacement::Below => line_y + height + 2.0,
+                crate::TradingAnnotationPlacement::Inline => line_y,
+            };
+            let color = self.trading_annotation_color(annotation.tone);
+            out.push(Prim::RoundRect {
+                x: (cursor * hpr) as f32,
+                y: ((center_y - height / 2.0) * vpr) as f32,
+                w: (width * hpr) as f32,
+                h: (height * vpr) as f32,
+                radii: [2.0; 4],
+                fill: self.trading_chip_background(),
+                border_width: vpr.floor().max(1.0) as f32,
+                border_color: color,
+            });
+            out.push(Prim::Text {
+                x: ((cursor + width / 2.0) * hpr) as f32,
+                y: (center_y * vpr) as f32,
+                text: annotation.text.clone(),
+                color,
+                size: (self.options.get().layout.font_size * vpr) as f32,
+                family: self.options.get().layout.font_family.clone(),
+                align: TextAlign::Center,
+                weight: 400,
+                italic: false,
+            });
+            cursor += width + CONTROL_GAP;
+        }
+        if annotations.len() > visible {
+            let text = format!("+{}", annotations.len() - visible);
+            let width = self.trading_annotation_width(&text);
+            out.push(Prim::RoundRect {
+                x: (cursor * hpr) as f32,
+                y: ((line_y - height / 2.0) * vpr) as f32,
+                w: (width * hpr) as f32,
+                h: (height * vpr) as f32,
+                radii: [2.0; 4],
+                fill: self.trading_chip_background(),
+                border_width: vpr.floor().max(1.0) as f32,
+                border_color: self.trading_state.style.control,
+            });
+            out.push(Prim::Text {
+                x: ((cursor + width / 2.0) * hpr) as f32,
+                y: (line_y * vpr) as f32,
+                text,
+                color: self.trading_state.style.control,
+                size: (self.options.get().layout.font_size * vpr) as f32,
+                family: self.options.get().layout.font_family.clone(),
+                align: TextAlign::Center,
+                weight: 400,
+                italic: false,
+            });
+        }
+    }
+
+    fn push_host_trigger_line(
+        &self,
+        lines: &mut Vec<Prim>,
+        trigger: TradingTriggerLine,
+        hpr: f64,
+        vpr: f64,
+    ) {
+        let Some(trigger_price) = trigger
+            .trigger_price
+            .filter(|price| *price != trigger.display_price)
+        else {
+            return;
+        };
+        let Some(y) =
+            self.trading_price_coordinate(trigger.pane_index, trigger.price_scale, trigger_price)
+        else {
+            return;
+        };
+        lines.push(Prim::HLine {
+            y: (y * vpr).round() as i32,
+            x0: (self.trading_marker_start() * hpr).round() as i32,
+            x1: (self.pane_w * hpr).round() as i32,
+            width: vpr.floor().max(1.0) as i32,
+            style: LineStyle::Dotted,
+            color: trigger.color,
+        });
     }
 
     fn trading_cluster_hit(
@@ -723,7 +874,80 @@ impl ChartEngine {
         let min_line_width = vpr.floor().max(1.0) as i32;
         let mut tooltip = None;
 
+        // Host context is a separate, non-persisted layer. Windows are lowered first and event
+        // markers use deterministic LOD collapse when releases share the same pixel column.
+        let times = self.data.merged_times();
+        if !times.is_empty() {
+            let logical = |time: i64| match times.binary_search(&time) {
+                Ok(index) => index,
+                Err(index) if index < times.len() => index,
+                Err(_) => times.len() - 1,
+            } as i64;
+            for window in &self.trading_state.host_overlay.windows {
+                let x0 = self
+                    .time_scale
+                    .index_to_coordinate(logical(window.start_time));
+                let x1 = self
+                    .time_scale
+                    .index_to_coordinate(logical(window.end_time));
+                regions.push(Prim::Rect {
+                    rect: IRect {
+                        x: (x0.min(x1) * hpr).round() as i32,
+                        y: (pane.top * vpr).round() as i32,
+                        w: ((x1 - x0).abs() * hpr).round().max(1.0) as i32,
+                        h: (pane.height * vpr).round().max(1.0) as i32,
+                    },
+                    color: Color::rgba(
+                        self.trading_state.style.pending.r(),
+                        self.trading_state.style.pending.g(),
+                        self.trading_state.style.pending.b(),
+                        24,
+                    ),
+                });
+            }
+            let mut last_event_x = f64::NEG_INFINITY;
+            for event in &self.trading_state.host_overlay.events {
+                let x = self.time_scale.index_to_coordinate(logical(event.time));
+                if x - last_event_x < 8.0 {
+                    continue;
+                }
+                last_event_x = x;
+                let color = if event.importance >= 2 {
+                    self.trading_state.style.risk
+                } else {
+                    self.trading_state.style.control
+                };
+                lines.push(Prim::VLine {
+                    x: (x * hpr).round() as i32,
+                    y0: (pane.top * vpr).round() as i32,
+                    y1: ((pane.top + pane.height) * vpr).round() as i32,
+                    width: min_line_width,
+                    style: LineStyle::Dotted,
+                    color,
+                });
+                if !event.label.is_empty() {
+                    lines.push(Prim::Text {
+                        x: (x * hpr) as f32,
+                        y: ((pane.top + 12.0) * vpr) as f32,
+                        text: event.label.clone(),
+                        color,
+                        size: (self.options.get().layout.font_size * vpr) as f32,
+                        family: self.options.get().layout.font_family.clone(),
+                        align: TextAlign::Center,
+                        weight: if event.importance >= 2 { 700 } else { 400 },
+                        italic: false,
+                    });
+                }
+            }
+        }
+
         for position in &self.trading_state.positions {
+            if !self
+                .trading_state
+                .account_visible(position.account_id.as_ref())
+            {
+                continue;
+            }
             if position.pane_index != pane_index {
                 continue;
             }
@@ -813,6 +1037,7 @@ impl ChartEngine {
                     vpr,
                 },
             );
+            self.push_trading_annotations(lines, &position.annotations, y, hpr, vpr);
             if self.trading_state.tooltip_armed
                 && hovered.is_some_and(|hit| hit.kind == crate::TradingHitKind::CancelButton)
             {
@@ -829,6 +1054,12 @@ impl ChartEngine {
         }
 
         for order in &self.trading_state.orders {
+            if !self
+                .trading_state
+                .account_visible(order.account_id.as_ref())
+            {
+                continue;
+            }
             if order.pane_index != pane_index {
                 continue;
             }
@@ -1004,6 +1235,7 @@ impl ChartEngine {
                     vpr,
                 },
             );
+            self.push_trading_annotations(lines, &order.annotations, y, hpr, vpr);
             if self.trading_state.tooltip_armed
                 && hovered.is_some_and(|hit| hit.kind == crate::TradingHitKind::CancelButton)
             {
@@ -1052,6 +1284,30 @@ impl ChartEngine {
                     }
                 }
             }
+            self.push_host_trigger_line(
+                lines,
+                TradingTriggerLine {
+                    pane_index,
+                    price_scale: order.price_scale,
+                    trigger_price: order.trailing_trigger_price,
+                    display_price,
+                    color: self.trading_state.style.pending,
+                },
+                hpr,
+                vpr,
+            );
+            self.push_host_trigger_line(
+                lines,
+                TradingTriggerLine {
+                    pane_index,
+                    price_scale: order.price_scale,
+                    trigger_price: order.break_even_trigger_price,
+                    display_price,
+                    color: self.trading_state.style.take_profit,
+                },
+                hpr,
+                vpr,
+            );
         }
 
         if let Some(preview) = self
@@ -1187,6 +1443,12 @@ impl ChartEngine {
                 member_count += 1;
             };
             for position in &self.trading_state.positions {
+                if !self
+                    .trading_state
+                    .account_visible(position.account_id.as_ref())
+                {
+                    continue;
+                }
                 if position.pane_index == pane_index
                     && self.trading_group_contains_position(group, position)
                 {
@@ -1200,6 +1462,12 @@ impl ChartEngine {
                 }
             }
             for order in &self.trading_state.orders {
+                if !self
+                    .trading_state
+                    .account_visible(order.account_id.as_ref())
+                {
+                    continue;
+                }
                 if order.pane_index == pane_index && self.trading_group_contains_order(group, order)
                 {
                     if let Some(y) = self.trading_price_coordinate(
@@ -1223,6 +1491,12 @@ impl ChartEngine {
                     color: connector_color,
                 });
                 for position in &self.trading_state.positions {
+                    if !self
+                        .trading_state
+                        .account_visible(position.account_id.as_ref())
+                    {
+                        continue;
+                    }
                     if position.pane_index == pane_index
                         && self.trading_group_contains_position(group, position)
                     {
@@ -1236,6 +1510,12 @@ impl ChartEngine {
                     }
                 }
                 for order in &self.trading_state.orders {
+                    if !self
+                        .trading_state
+                        .account_visible(order.account_id.as_ref())
+                    {
+                        continue;
+                    }
                     if order.pane_index == pane_index
                         && self.trading_group_contains_order(group, order)
                     {
@@ -1251,8 +1531,97 @@ impl ChartEngine {
             }
         }
 
-        let times = self.data.merged_times();
+        for round_trip in self
+            .trading_state
+            .round_trips
+            .iter()
+            .take(crate::MAX_TRADING_ROUND_TRIPS)
+        {
+            let Some(entry) = self
+                .trading_state
+                .executions
+                .iter()
+                .find(|execution| execution.id == round_trip.entry_execution_id)
+            else {
+                continue;
+            };
+            let Some(exit) = self
+                .trading_state
+                .executions
+                .iter()
+                .find(|execution| execution.id == round_trip.exit_execution_id)
+            else {
+                continue;
+            };
+            if !self
+                .trading_state
+                .account_visible(entry.account_id.as_ref())
+                || !self.trading_state.account_visible(exit.account_id.as_ref())
+                || entry.pane_index != pane_index
+                || exit.pane_index != pane_index
+                || times.is_empty()
+            {
+                continue;
+            }
+            let logical = |time: i64| match times.binary_search(&time) {
+                Ok(index) => index,
+                Err(index) if index < times.len() => index,
+                Err(_) => times.len() - 1,
+            } as i64;
+            let entry_x = self.time_scale.index_to_coordinate(logical(entry.time));
+            let exit_x = self.time_scale.index_to_coordinate(logical(exit.time));
+            let Some(entry_y) =
+                self.trading_price_coordinate(pane_index, entry.price_scale, entry.price)
+            else {
+                continue;
+            };
+            let Some(exit_y) =
+                self.trading_price_coordinate(pane_index, exit.price_scale, exit.price)
+            else {
+                continue;
+            };
+            let color = match round_trip.outcome {
+                crate::TradingRoundTripOutcome::Profit => self.trading_state.style.profit,
+                crate::TradingRoundTripOutcome::Loss => self.trading_state.style.risk,
+                crate::TradingRoundTripOutcome::Flat => self.trading_state.style.control,
+            };
+            let x0 = (entry_x * hpr).round() as i32;
+            let x1 = (exit_x * hpr).round() as i32;
+            lines.push(Prim::VLine {
+                x: x0,
+                y0: (entry_y.min(exit_y) * vpr).round() as i32,
+                y1: (entry_y.max(exit_y) * vpr).round() as i32,
+                width: min_line_width,
+                style: LineStyle::Dotted,
+                color,
+            });
+            lines.push(Prim::HLine {
+                y: (exit_y * vpr).round() as i32,
+                x0: x0.min(x1),
+                x1: x0.max(x1),
+                width: min_line_width,
+                style: LineStyle::Dotted,
+                color,
+            });
+            lines.push(Prim::Text {
+                x: (((entry_x + exit_x) / 2.0) * hpr) as f32,
+                y: (exit_y * vpr) as f32,
+                text: round_trip.result_label.clone(),
+                color,
+                size: (self.options.get().layout.font_size * vpr) as f32,
+                family: self.options.get().layout.font_family.clone(),
+                align: TextAlign::Center,
+                weight: 400,
+                italic: false,
+            });
+        }
         for execution in &self.trading_state.executions {
+            if !self
+                .trading_state
+                .account_visible(execution.account_id.as_ref())
+            {
+                continue;
+            }
             if execution.pane_index != pane_index || times.is_empty() {
                 continue;
             }
@@ -1274,14 +1643,45 @@ impl ChartEngine {
             let hovered = self.trading_state.feedback_hover.as_ref().is_some_and(|hit| {
                 matches!(&hit.object, crate::TradingObjectId::Execution(id) if id == &execution.id)
             });
-            lines.push(Prim::Circle {
-                cx: (x * hpr) as f32,
-                cy: (y * vpr) as f32,
-                radius: ((if hovered { 10.0 } else { 8.0 }) * vpr) as f32,
-                fill: color,
-                stroke_width: (1.0 * vpr) as f32,
-                stroke: color.contrast_text(),
-            });
+            let radius = (if hovered { 10.0 } else { 8.0 })
+                * if execution.size_by_quantity {
+                    (execution.quantity.abs().sqrt() / 2.0).clamp(0.75, 2.0)
+                } else {
+                    1.0
+                }
+                * vpr;
+            match execution.marker_shape {
+                crate::ExecutionMarkerShape::Circle => lines.push(Prim::Circle {
+                    cx: (x * hpr) as f32,
+                    cy: (y * vpr) as f32,
+                    radius: radius as f32,
+                    fill: color,
+                    stroke_width: (1.0 * vpr) as f32,
+                    stroke: color.contrast_text(),
+                }),
+                crate::ExecutionMarkerShape::Triangle | crate::ExecutionMarkerShape::Arrow => {
+                    let direction = if execution.side == OrderSide::Buy {
+                        -1.0
+                    } else {
+                        1.0
+                    };
+                    let tip = [(x * hpr) as f32, ((y * vpr) + direction * radius) as f32];
+                    let left = [
+                        ((x * hpr) - radius) as f32,
+                        ((y * vpr) - direction * radius) as f32,
+                    ];
+                    let right = [
+                        ((x * hpr) + radius) as f32,
+                        ((y * vpr) - direction * radius) as f32,
+                    ];
+                    lines.push(Prim::Triangle {
+                        a: tip,
+                        b: left,
+                        c: right,
+                        color,
+                    });
+                }
+            }
             lines.push(Prim::Text {
                 x: (x * hpr) as f32,
                 y: (y * vpr) as f32,

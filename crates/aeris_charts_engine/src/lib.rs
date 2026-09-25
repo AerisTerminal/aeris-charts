@@ -35,7 +35,9 @@ mod tests;
 mod trading;
 mod workspace;
 
+use serde::{Deserialize, Serialize};
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::num::NonZeroU32;
 use std::ops::{Deref, DerefMut};
 
@@ -122,11 +124,15 @@ pub use persistence::{
     PERSISTENCE_MAX_TOTAL_POINTS, PERSISTENCE_SCHEMA_VERSION,
 };
 pub use trading::{
-    ExecutionId, ExecutionKind, InstrumentMetadata, OrderId, OrderKind, OrderRole, OrderSide,
-    OrderStatus, PositionId, PositionSide, TradingExecution, TradingGroupId, TradingHit,
-    TradingHitKind, TradingIntent, TradingIntentAction, TradingObjectId, TradingPosition,
-    TradingPreview, TradingPreviewSource, TradingPriceScale, TradingSnapshot, TradingStyle,
-    TradingStyleOptions, WorkingOrder, MAX_TRADING_OBJECTS,
+    AccountId, ExecutionId, ExecutionKind, ExecutionMarkerShape, HostEventHit, HostEventMarker,
+    HostOverlaySnapshot, HostTimeWindow, InstrumentMetadata, OrderId, OrderKind, OrderRole,
+    OrderSide, OrderStatus, PositionId, PositionSide, TradingAnnotation,
+    TradingAnnotationPlacement, TradingAnnotationTone, TradingExecution, TradingGroupId,
+    TradingHit, TradingHitKind, TradingIntent, TradingIntentAction, TradingObjectId,
+    TradingPosition, TradingPreview, TradingPreviewSource, TradingPriceScale, TradingRoundTrip,
+    TradingRoundTripOutcome, TradingSnapshot, TradingStyle, TradingStyleOptions, WorkingOrder,
+    MAX_HOST_EVENTS, MAX_HOST_WINDOWS, MAX_TRADING_ANNOTATIONS, MAX_TRADING_OBJECTS,
+    MAX_TRADING_ROUND_TRIPS,
 };
 pub use workspace::{SplitDirection, Workspace, WorkspaceError, WorkspaceLayout};
 
@@ -1414,6 +1420,43 @@ impl Default for Pane {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CrosshairSyncPosition {
+    pub time: f64,
+    pub price: f64,
+    pub pane_index: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct VisibleTimeRangeSync {
+    pub from: f64,
+    pub to: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ChartSyncEventKind {
+    Crosshair { position: CrosshairSyncPosition },
+    ClearCrosshair,
+    VisibleTimeRange { range: VisibleTimeRangeSync },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChartSyncEvent {
+    pub source: String,
+    pub revision: u64,
+    #[serde(flatten)]
+    pub kind: ChartSyncEventKind,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncMismatchPolicy {
+    #[default]
+    Nearest,
+    Clear,
+}
+
 /// Platform-independent state for one chart instance.
 pub struct ChartEngine {
     pub time_scale: TimeScaleCore,
@@ -1472,6 +1515,9 @@ pub struct ChartEngine {
     /// time every frame unless a value is pinned; tests pin one here for determinism.
     pub now_override: Option<f64>,
     pub crosshair: Option<(f64, f64)>,
+    sync_events: VecDeque<ChartSyncEvent>,
+    sync_revision: u64,
+    sync_mismatch_policy: SyncMismatchPolicy,
     pub pane_w: f64,
     pub pane_h: f64,
     /// Media-coordinate x offset of the pane after reserving a visible left axis.
@@ -1643,6 +1689,9 @@ impl ChartEngine {
             dpr,
             now_override: None,
             crosshair: None,
+            sync_events: VecDeque::new(),
+            sync_revision: 0,
+            sync_mismatch_policy: SyncMismatchPolicy::Nearest,
             pane_w: css_width,
             pane_h: css_height,
             pane_left: 0.0,
@@ -3390,6 +3439,15 @@ impl ChartEngine {
         };
         let x = self.time_scale.index_to_coordinate(index);
         self.crosshair = Some((x, y));
+        self.queue_sync_event(ChartSyncEventKind::Crosshair {
+            position: CrosshairSyncPosition {
+                time,
+                price,
+                pane_index: self
+                    .series_entry(series_id)
+                    .map_or(0, |series| series.pane_index),
+            },
+        });
         self.invalidate_frame_overlay();
         true
     }
@@ -3401,6 +3459,69 @@ impl ChartEngine {
     /// a scale change could resurrect.
     pub fn clear_crosshair_position(&mut self) {
         self.clear_crosshair_at();
+        self.queue_sync_event(ChartSyncEventKind::ClearCrosshair);
+    }
+
+    fn queue_sync_event(&mut self, kind: ChartSyncEventKind) {
+        self.sync_revision = self.sync_revision.wrapping_add(1).max(1);
+        if self.sync_events.len() >= 64 {
+            self.sync_events.pop_front();
+        }
+        self.sync_events.push_back(ChartSyncEvent {
+            source: "local".to_string(),
+            revision: self.sync_revision,
+            kind,
+        });
+    }
+
+    pub fn set_sync_mismatch_policy(&mut self, policy: SyncMismatchPolicy) {
+        self.sync_mismatch_policy = policy;
+    }
+
+    #[must_use]
+    pub fn crosshair_sync_position(&self) -> Option<CrosshairSyncPosition> {
+        let (x, y) = self.crosshair?;
+        let logical = self.time_scale.coordinate_to_index(x);
+        let time = self.data.merged_times().get(logical as usize).copied()? as f64;
+        let pane_index = self.pane_at_y(y).unwrap_or(0);
+        let pane = self.panes.get(pane_index)?;
+        Some(CrosshairSyncPosition {
+            time,
+            price: pane.price_scale.coordinate_to_price(y - pane.top, 0.0),
+            pane_index,
+        })
+    }
+
+    pub fn apply_external_crosshair(&mut self, position: Option<CrosshairSyncPosition>) -> bool {
+        let Some(position) = position else {
+            let changed = self.crosshair.take().is_some();
+            if changed {
+                self.invalidate_frame_overlay();
+            }
+            return changed;
+        };
+        let Some(index) = self.time_to_index(
+            position.time,
+            matches!(self.sync_mismatch_policy, SyncMismatchPolicy::Nearest),
+        ) else {
+            return false;
+        };
+        let Some(pane) = self.panes.get(position.pane_index) else {
+            return false;
+        };
+        let y = pane.price_scale.price_to_coordinate(position.price, 0.0) + pane.top;
+        let next = (self.time_scale.index_to_coordinate(index), y);
+        let changed = self.crosshair != Some(next);
+        self.crosshair = Some(next);
+        if changed {
+            self.invalidate_frame_overlay();
+        }
+        changed
+    }
+
+    #[must_use]
+    pub fn take_sync_events(&mut self) -> Vec<ChartSyncEvent> {
+        self.sync_events.drain(..).collect()
     }
 
     /// Host-pushed "all scaling and scrolling disabled" aggregate (reference
@@ -3840,6 +3961,9 @@ impl ChartEngine {
         if left <= right {
             self.time_scale
                 .set_visible_range(StrictRange::new(left, right), false);
+            self.queue_sync_event(ChartSyncEventKind::VisibleTimeRange {
+                range: VisibleTimeRangeSync { from, to },
+            });
             self.invalidate_frame_scene();
         }
     }

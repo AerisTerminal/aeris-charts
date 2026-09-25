@@ -54,14 +54,14 @@ use aeris_charts_core::model::plot_list::MismatchDirection;
 use aeris_charts_core::options::{ChartOptions, ChartTheme};
 use aeris_charts_core::scale::price_scale_core::PriceScaleMode;
 use aeris_charts_engine::{
-    crosshair_mode_from_u8, line_style_from_u8, marker_pos, marker_shape, AlertId, AlertLine,
-    AlertSnapshot, AxisFrame, AxisLabel, AxisLabelCorners, AxisTextAlign, AxisTextMidpoint,
-    BrushRange, BrushStyle, ChartEngine, DrawingKind, DrawingModifiers, DrawingPoint, ExecutionId,
-    FeatureSeriesKind, GestureResolver, GestureUpdate, InputDevice, InputModifiers, InputTarget,
-    InstrumentMetadata, Marker, OrderId, PaneId, PointerSample, PositionId, PriceFormatterFn,
-    PriceScaleId, PriceScaleSide, PriceScaleTarget, PrimitiveAutoscaleContribution, SeriesKind,
-    TickMarkFormatterFn, TimeFormatterFn, TradingExecution, TradingPosition, TradingSnapshot,
-    TradingStyleOptions, WorkingOrder,
+    crosshair_mode_from_u8, line_style_from_u8, marker_pos, marker_shape, AccountId, AlertId,
+    AlertLine, AlertSnapshot, AxisFrame, AxisLabel, AxisLabelCorners, AxisTextAlign,
+    AxisTextMidpoint, BrushRange, BrushStyle, ChartEngine, DrawingKind, DrawingModifiers,
+    DrawingPoint, ExecutionId, FeatureSeriesKind, GestureResolver, GestureUpdate, InputDevice,
+    InputModifiers, InputTarget, InstrumentMetadata, Marker, OrderId, PaneId, PointerSample,
+    PositionId, PriceFormatterFn, PriceScaleId, PriceScaleSide, PriceScaleTarget,
+    PrimitiveAutoscaleContribution, SeriesKind, TickMarkFormatterFn, TimeFormatterFn,
+    TradingExecution, TradingPosition, TradingSnapshot, TradingStyleOptions, WorkingOrder,
 };
 use aeris_charts_render::canvas2d::{
     execute as execute_canvas2d, Canvas2d, Viewport as CanvasViewport,
@@ -1024,6 +1024,45 @@ impl AerisChart {
             .unwrap_or_else(|_| "{}".to_string())
     }
 
+    pub fn set_trading_visible_account(&mut self, account_id: Option<String>) -> String {
+        let account_id = match account_id {
+            Some(value) => match AccountId::new(value) {
+                Ok(account_id) => Some(account_id),
+                Err(error) => return trading_result_json(Err(error)),
+            },
+            None => None,
+        };
+        self.inner
+            .borrow_mut()
+            .engine
+            .set_trading_visible_account(account_id);
+        trading_result_json(Ok(()))
+    }
+
+    pub fn set_host_overlay_json(&mut self, overlay_json: &str) -> String {
+        let overlay =
+            match serde_json::from_str::<aeris_charts_engine::HostOverlaySnapshot>(overlay_json) {
+                Ok(overlay) => overlay,
+                Err(error) => {
+                    return trading_result_json(Err(aeris_charts_engine::ChartError::new(
+                        aeris_charts_engine::ErrorCode::InvalidData,
+                        error.to_string(),
+                    )))
+                }
+            };
+        trading_result_json(self.inner.borrow_mut().engine.set_host_overlay(overlay))
+    }
+
+    pub fn host_overlay_json(&self) -> String {
+        serde_json::to_string(self.inner.borrow().engine.host_overlay())
+            .unwrap_or_else(|_| "{}".to_string())
+    }
+
+    pub fn host_event_hit_json(&self, x_css: f64, y_css: f64) -> String {
+        serde_json::to_string(&self.inner.borrow().engine.host_event_hit_at(x_css, y_css))
+            .unwrap_or_else(|_| "null".to_string())
+    }
+
     pub fn update_trading_position_json(&mut self, position_json: &str) -> String {
         let position = match serde_json::from_str::<TradingPosition>(position_json) {
             Ok(position) => position,
@@ -1157,12 +1196,14 @@ impl AerisChart {
                     aeris_charts_engine::TradingHitKind::OrderLine => "order_line",
                     aeris_charts_engine::TradingHitKind::CancelButton => "cancel_button",
                     aeris_charts_engine::TradingHitKind::ExecutionMarker => "execution_marker",
+                    aeris_charts_engine::TradingHitKind::Annotation => "annotation",
                 };
                 serde_json::json!({
                     "object_type": object_type,
                     "id": id,
                     "kind": kind,
                     "distance": hit.distance,
+                    "annotation_id": hit.annotation_id,
                 })
                 .to_string()
             }
@@ -4513,6 +4554,27 @@ impl AerisChart {
     /// so later scale changes cannot resurrect it.
     pub fn clear_crosshair_position(&mut self) {
         self.inner.borrow_mut().clear_crosshair_position();
+    }
+
+    pub fn crosshair_sync_json(&self) -> String {
+        serde_json::to_string(&self.inner.borrow().crosshair_sync_position())
+            .unwrap_or_else(|_| "null".to_string())
+    }
+
+    pub fn apply_external_crosshair_json(&mut self, position_json: &str) -> bool {
+        let position = serde_json::from_str::<Option<aeris_charts_engine::CrosshairSyncPosition>>(
+            position_json,
+        )
+        .ok();
+        let Some(position) = position else {
+            return false;
+        };
+        self.inner.borrow_mut().apply_external_crosshair(position)
+    }
+
+    pub fn take_sync_events_json(&mut self) -> String {
+        serde_json::to_string(&self.inner.borrow_mut().take_sync_events())
+            .unwrap_or_else(|_| "[]".to_string())
     }
     pub fn bar_spacing(&self) -> f64 {
         self.inner.borrow().bar_spacing()

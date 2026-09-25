@@ -741,6 +741,7 @@ fn real_engine_frame(dpr: f64) -> ChartEngine {
     engine
         .update_trading_position(TradingPosition {
             id: position_id.clone(),
+            account_id: None,
             pane_index: 0,
             price_scale: TradingPriceScale::Right,
             side: PositionSide::Long,
@@ -748,6 +749,7 @@ fn real_engine_frame(dpr: f64) -> ChartEngine {
             quantity: 2.0,
             display_pnl: Some(14.0),
             currency: Some("USD".into()),
+            annotations: Vec::new(),
         })
         .unwrap();
     for (id, role, kind, price) in [
@@ -757,6 +759,7 @@ fn real_engine_frame(dpr: f64) -> ChartEngine {
         engine
             .update_working_order(WorkingOrder {
                 id: OrderId::new(id).unwrap(),
+                account_id: None,
                 pane_index: 0,
                 price_scale: TradingPriceScale::Right,
                 side: OrderSide::Sell,
@@ -765,6 +768,8 @@ fn real_engine_frame(dpr: f64) -> ChartEngine {
                 status: OrderStatus::Working,
                 price,
                 stop_price: None,
+                trailing_trigger_price: None,
+                break_even_trigger_price: None,
                 quantity: 2.0,
                 filled_quantity: 0.0,
                 position_id: Some(position_id.clone()),
@@ -772,6 +777,7 @@ fn real_engine_frame(dpr: f64) -> ChartEngine {
                 bracket_id: None,
                 oco_group_id: None,
                 revision: 1,
+                annotations: Vec::new(),
             })
             .unwrap();
     }

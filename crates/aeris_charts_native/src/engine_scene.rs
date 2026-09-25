@@ -5,9 +5,9 @@ use aeris_charts_engine::ChartEngine;
 
 pub fn install_trading_fixture(chart: &mut ChartEngine) {
     use aeris_charts_engine::{
-        ExecutionId, ExecutionKind, InstrumentMetadata, OrderId, OrderKind, OrderRole, OrderSide,
-        OrderStatus, PositionId, PositionSide, TradingExecution, TradingGroupId, TradingPosition,
-        TradingPriceScale, TradingSnapshot, WorkingOrder,
+        ExecutionId, ExecutionKind, ExecutionMarkerShape, InstrumentMetadata, OrderId, OrderKind,
+        OrderRole, OrderSide, OrderStatus, PositionId, PositionSide, TradingExecution,
+        TradingGroupId, TradingPosition, TradingPriceScale, TradingSnapshot, WorkingOrder,
     };
 
     let point = chart.series_data(0)[620];
@@ -19,6 +19,7 @@ pub fn install_trading_fixture(chart: &mut ChartEngine) {
     let oco_id = TradingGroupId::new("demo-oco").unwrap();
     let make_order = |id: &str, kind, role, price, filled_quantity| WorkingOrder {
         id: OrderId::new(id).unwrap(),
+        account_id: None,
         pane_index: 0,
         price_scale: TradingPriceScale::Right,
         side: if role == OrderRole::Working {
@@ -35,6 +36,8 @@ pub fn install_trading_fixture(chart: &mut ChartEngine) {
         },
         price,
         stop_price: None,
+        trailing_trigger_price: None,
+        break_even_trigger_price: None,
         quantity: 12.0,
         filled_quantity,
         position_id: (role != OrderRole::Working).then(|| position_id.clone()),
@@ -42,6 +45,7 @@ pub fn install_trading_fixture(chart: &mut ChartEngine) {
         bracket_id: (role != OrderRole::Working).then(|| bracket_id.clone()),
         oco_group_id: (role != OrderRole::Working).then(|| oco_id.clone()),
         revision: 0,
+        annotations: Vec::new(),
     };
     chart
         .set_trading_snapshot(TradingSnapshot {
@@ -55,6 +59,7 @@ pub fn install_trading_fixture(chart: &mut ChartEngine) {
             },
             positions: vec![TradingPosition {
                 id: position_id.clone(),
+                account_id: None,
                 pane_index: 0,
                 price_scale: TradingPriceScale::Right,
                 side: PositionSide::Long,
@@ -62,6 +67,7 @@ pub fn install_trading_fixture(chart: &mut ChartEngine) {
                 quantity: 12.0,
                 display_pnl: Some(184.5),
                 currency: None,
+                annotations: Vec::new(),
             }],
             orders: vec![
                 make_order(
@@ -82,6 +88,7 @@ pub fn install_trading_fixture(chart: &mut ChartEngine) {
             ],
             executions: vec![TradingExecution {
                 id: ExecutionId::new("demo-fill").unwrap(),
+                account_id: None,
                 pane_index: 0,
                 price_scale: TradingPriceScale::Right,
                 side: OrderSide::Buy,
@@ -91,7 +98,10 @@ pub fn install_trading_fixture(chart: &mut ChartEngine) {
                 quantity: 5.0,
                 order_id: Some(OrderId::new("demo-partial").unwrap()),
                 position_id: Some(position_id),
+                marker_shape: ExecutionMarkerShape::Circle,
+                size_by_quantity: false,
             }],
+            round_trips: Vec::new(),
         })
         .unwrap();
 }

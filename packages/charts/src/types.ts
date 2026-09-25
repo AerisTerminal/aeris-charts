@@ -2363,6 +2363,7 @@ export interface instrument_metadata {
 
 export interface trading_position {
   id: string;
+  account_id?: string;
   pane_index?: number;
   price_scale?: trading_price_scale;
   side: position_side;
@@ -2370,10 +2371,22 @@ export interface trading_position {
   quantity: number;
   display_pnl?: number;
   currency?: string;
+  annotations?: trading_annotation[];
+}
+
+export type trading_annotation_tone = "neutral" | "info" | "warning" | "danger";
+export type trading_annotation_placement = "inline" | "above" | "below";
+export interface trading_annotation {
+  id: string;
+  text: string;
+  tone?: trading_annotation_tone;
+  tooltip?: string;
+  placement?: trading_annotation_placement;
 }
 
 export interface working_order {
   id: string;
+  account_id?: string;
   pane_index?: number;
   price_scale?: trading_price_scale;
   side: order_side;
@@ -2382,6 +2395,8 @@ export interface working_order {
   status: order_status;
   price: number;
   stop_price?: number;
+  trailing_trigger_price?: number;
+  break_even_trigger_price?: number;
   quantity: number;
   filled_quantity?: number;
   position_id?: string;
@@ -2389,10 +2404,12 @@ export interface working_order {
   bracket_id?: string;
   oco_group_id?: string;
   revision?: number;
+  annotations?: trading_annotation[];
 }
 
 export interface trading_execution {
   id: string;
+  account_id?: string;
   pane_index?: number;
   price_scale?: trading_price_scale;
   side: order_side;
@@ -2402,13 +2419,56 @@ export interface trading_execution {
   quantity: number;
   order_id?: string;
   position_id?: string;
+  marker_shape?: "circle" | "arrow" | "triangle";
+  size_by_quantity?: boolean;
 }
+
+export interface trading_round_trip {
+  id: string;
+  entry_execution_id: string;
+  exit_execution_id: string;
+  result_label: string;
+  outcome: "profit" | "loss" | "flat";
+}
+
+export interface host_event_marker {
+  id: string;
+  time: number;
+  importance?: number;
+  label: string;
+  icon?: string;
+}
+export interface host_time_window {
+  id: string;
+  start_time: number;
+  end_time: number;
+  label?: string;
+}
+export interface host_overlay_snapshot {
+  events?: host_event_marker[];
+  windows?: host_time_window[];
+}
+export interface host_event_hit {
+  id: string;
+  window: boolean;
+}
+
+export interface crosshair_sync_position {
+  time: number;
+  price: number;
+  pane_index: number;
+}
+export type chart_sync_event =
+  | { source: string; revision: number; kind: "crosshair"; position: crosshair_sync_position }
+  | { source: string; revision: number; kind: "clear_crosshair" }
+  | { source: string; revision: number; kind: "visible_time_range"; range: { from: number; to: number } };
 
 export interface trading_snapshot {
   instrument?: instrument_metadata;
   positions?: trading_position[];
   orders?: working_order[];
   executions?: trading_execution[];
+  round_trips?: trading_round_trip[];
 }
 
 export interface trading_hit {
@@ -2418,8 +2478,10 @@ export interface trading_hit {
     | "position_line"
     | "order_line"
     | "cancel_button"
-    | "execution_marker";
+    | "execution_marker"
+    | "annotation";
   distance: number;
+  annotation_id?: string;
 }
 
 export type trading_intent_action =
@@ -2433,6 +2495,7 @@ export type trading_intent_action =
 export interface trading_intent {
   sequence: number;
   action: trading_intent_action;
+  account_id?: string;
   drawing_id?: number;
   order_id?: string;
   position_id?: string;
@@ -2442,6 +2505,7 @@ export interface trading_intent {
   kind?: order_kind;
   role?: order_role;
   price?: number;
+  price_tick_index?: number;
   stop_price?: number;
   take_profit_price?: number;
   stop_loss_price?: number;
@@ -2485,6 +2549,10 @@ export interface trading_style_options {
 export interface trading_api {
   apply_snapshot(snapshot: trading_snapshot): void;
   state(): Required<trading_snapshot>;
+  set_visible_account(account_id: string | null): void;
+  set_host_overlay(overlay: host_overlay_snapshot): void;
+  host_overlay(): host_overlay_snapshot;
+  host_event_hit_at(x: number, y: number): host_event_hit | null;
   update_position(position: trading_position): void;
   remove_position(id: string): boolean;
   update_order(order: working_order): void;
@@ -2789,6 +2857,12 @@ export interface chart_api {
   set_crosshair_position(price: number, time: time, series: series_api): void;
   /** Clear the crosshair position within the chart (reference `IChartApi.clearCrosshairPosition`). */
   clear_crosshair_position(): void;
+  /** Read the semantic crosshair state for linked-chart coordinators. */
+  crosshair_sync_position(): crosshair_sync_position | null;
+  /** Apply a coordinator-provided crosshair without generating local pointer input. */
+  apply_external_crosshair(position: crosshair_sync_position | null): void;
+  /** Drain bounded semantic synchronization events; callers route them with source/revision. */
+  take_sync_events(): chart_sync_event[];
   /** Fire on every crosshair move (and once with `point: null` when the cursor leaves). */
   subscribe_crosshair_move(handler: mouse_event_handler): void;
   unsubscribe_crosshair_move(handler: mouse_event_handler): void;

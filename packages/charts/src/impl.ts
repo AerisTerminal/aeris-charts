@@ -40,8 +40,9 @@ import type {
   series_api, series_change_handler, series_data, series_kind,
   series_marker, series_marker_options, series_options, single_value_data, size_change_handler, time, time_range,
   time_scale_api, time_scale_options, tracking_mode_options, trading_api, trading_execution, trading_hit,
+  chart_sync_event, crosshair_sync_position,
   trading_intent, trading_intent_handler, trading_position, trading_preview, trading_snapshot,
-  trading_style_options, instrument_metadata, working_order,
+  trading_style_options, instrument_metadata, working_order, host_overlay_snapshot, host_event_hit,
   visible_logical_range_handler, visible_time_range_handler,
   volume_profile_indicator_api, volume_profile_indicator_options, volume_profile_indicator_snapshot,
 } from "./types.js";
@@ -3504,6 +3505,24 @@ class trading_impl implements trading_api {
     return JSON.parse(this.chart.wasm.trading_snapshot_json()) as Required<trading_snapshot>;
   }
 
+  set_visible_account(account_id: string | null): void {
+    assert_trading_result(this.chart.wasm.set_trading_visible_account(account_id));
+    this.chart.repaint();
+  }
+
+  set_host_overlay(overlay: host_overlay_snapshot): void {
+    assert_trading_result(this.chart.wasm.set_host_overlay_json(JSON.stringify(overlay)));
+    this.chart.repaint();
+  }
+
+  host_overlay(): host_overlay_snapshot {
+    return JSON.parse(this.chart.wasm.host_overlay_json()) as host_overlay_snapshot;
+  }
+
+  host_event_hit_at(x: number, y: number): host_event_hit | null {
+    return JSON.parse(this.chart.wasm.host_event_hit_json(x, y)) as host_event_hit | null;
+  }
+
   update_position(position: trading_position): void {
     assert_trading_result(this.chart.wasm.update_trading_position_json(JSON.stringify(position)));
     this.chart.repaint();
@@ -5998,6 +6017,18 @@ export class chart_impl implements chart_api {
     this.wasm.clear_crosshair_position();
     this.repaint();
     this.emit_crosshair_left();
+  }
+
+  crosshair_sync_position(): crosshair_sync_position | null {
+    return JSON.parse(this.wasm.crosshair_sync_json()) as crosshair_sync_position | null;
+  }
+
+  apply_external_crosshair(position: crosshair_sync_position | null): void {
+    if (this.wasm.apply_external_crosshair_json(JSON.stringify(position))) this.repaint();
+  }
+
+  take_sync_events(): chart_sync_event[] {
+    return JSON.parse(this.wasm.take_sync_events_json()) as chart_sync_event[];
   }
 
   resize(width: number, height: number, dpr?: number): void {

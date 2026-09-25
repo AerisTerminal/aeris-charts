@@ -547,6 +547,113 @@ pub fn render_engine(chart: &mut ChartEngine) -> TinySkiaCanvas {
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ImageExportOptions {
+    pub width: u32,
+    pub height: u32,
+    pub scale: f32,
+    pub include_crosshair: bool,
+    pub include_trading: bool,
+}
+
+impl Default for ImageExportOptions {
+    fn default() -> Self {
+        Self {
+            width: 0,
+            height: 0,
+            scale: 1.0,
+            include_crosshair: true,
+            include_trading: true,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RgbaImage {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<u8>,
+}
+
+/// Export the ordered engine frame without mutating the live chart. Dimensions are requested in
+/// CSS pixels and multiplied by `scale`; a zero dimension uses the chart's current viewport.
+pub fn render_engine_rgba(
+    chart: &mut ChartEngine,
+    options: ImageExportOptions,
+) -> Result<RgbaImage, String> {
+    if !options.scale.is_finite() || options.scale <= 0.0 || options.scale > 8.0 {
+        return Err("image export scale must be finite and in 0..=8".to_string());
+    }
+    let frame = chart.build_frame();
+    let source_width = (frame.width * frame.pixel_ratio).round().max(1.0) as u32;
+    let source_height = (frame.height * frame.pixel_ratio).round().max(1.0) as u32;
+    let mut prims = Vec::new();
+    let mut points = Vec::new();
+    for (index, pane) in frame.panes.iter().enumerate() {
+        let point_base = points.len() as u32;
+        points.extend_from_slice(&pane.points);
+        prims.extend(pane.under.iter().cloned());
+        let segments = chart
+            .frame_pane_segments(index)
+            .ok_or_else(|| "frame pane segments unavailable".to_string())?;
+        let base_end = if options.include_trading {
+            segments.trading_end
+        } else {
+            segments.series_end
+        };
+        for prim in pane.main[..base_end.min(pane.main.len())].iter().cloned() {
+            prims.push(remap_prim_points(prim, point_base));
+        }
+        if options.include_crosshair {
+            for prim in pane.main[segments.trading_end.min(pane.main.len())
+                ..segments.overlay_end.min(pane.main.len())]
+                .iter()
+                .cloned()
+            {
+                prims.push(remap_prim_points(prim, point_base));
+            }
+        }
+        if options.include_crosshair {
+            for prim in pane.top_prims.iter().cloned() {
+                prims.push(remap_prim_points(prim, point_base));
+            }
+        }
+    }
+    let background = aeris_charts_core::style::DEFAULT_SURFACE_RGB;
+    let source = render_prims(
+        source_width,
+        source_height,
+        Color::rgb(background.0, background.1, background.2),
+        &prims,
+        &points,
+    );
+    let width = if options.width == 0 {
+        (frame.width * f64::from(options.scale)).round().max(1.0) as u32
+    } else {
+        (options.width as f32 * options.scale).round().max(1.0) as u32
+    };
+    let height = if options.height == 0 {
+        (frame.height * f64::from(options.scale)).round().max(1.0) as u32
+    } else {
+        (options.height as f32 * options.scale).round().max(1.0) as u32
+    };
+    let mut pixels = vec![0; width as usize * height as usize * 4];
+    for y in 0..height {
+        let source_y = (y as u64 * source_height as u64 / height as u64) as u32;
+        for x in 0..width {
+            let source_x = (x as u64 * source_width as u64 / width as u64) as u32;
+            let pixel = source.pixel_rgba(source_x, source_y);
+            let offset = ((y * width + x) * 4) as usize;
+            pixels[offset..offset + 4].copy_from_slice(&pixel);
+        }
+    }
+    Ok(RgbaImage {
+        width,
+        height,
+        pixels,
+    })
+}
+
 fn remap_prim_points(prim: Prim, base: u32) -> Prim {
     match prim {
         Prim::Polyline {

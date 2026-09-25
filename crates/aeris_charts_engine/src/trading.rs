@@ -19,6 +19,12 @@ use aeris_charts_render::color::Color;
 
 pub const MAX_TRADING_OBJECTS: usize = 4_096;
 const MAX_TRADING_ID_BYTES: usize = 128;
+pub const MAX_TRADING_ANNOTATIONS: usize = 8;
+pub const MAX_TRADING_ROUND_TRIPS: usize = 4_096;
+pub const MAX_HOST_EVENTS: usize = 2_048;
+pub const MAX_HOST_WINDOWS: usize = 512;
+const MAX_TRADING_ANNOTATION_TEXT_BYTES: usize = 96;
+const MAX_TRADING_ANNOTATION_TOOLTIP_BYTES: usize = 256;
 
 macro_rules! trading_id {
     ($name:ident) => {
@@ -54,6 +60,7 @@ trading_id!(PositionId);
 trading_id!(OrderId);
 trading_id!(ExecutionId);
 trading_id!(TradingGroupId);
+trading_id!(AccountId);
 
 fn validate_id(kind: &str, value: &str) -> Result<(), ChartError> {
     if value.is_empty() || value.len() > MAX_TRADING_ID_BYTES {
@@ -120,6 +127,59 @@ pub enum OrderStatus {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum TradingAnnotationTone {
+    #[default]
+    Neutral,
+    Info,
+    Warning,
+    Danger,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TradingAnnotationPlacement {
+    #[default]
+    Inline,
+    Above,
+    Below,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TradingAnnotation {
+    pub id: String,
+    pub text: String,
+    #[serde(default)]
+    pub tone: TradingAnnotationTone,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tooltip: Option<String>,
+    #[serde(default)]
+    pub placement: TradingAnnotationPlacement,
+}
+
+impl TradingAnnotation {
+    fn validate(&self) -> Result<(), ChartError> {
+        validate_id("TradingAnnotation.id", &self.id)?;
+        if self.text.is_empty() || self.text.len() > MAX_TRADING_ANNOTATION_TEXT_BYTES {
+            return Err(invalid(format!(
+                "trading annotation text must contain 1..={MAX_TRADING_ANNOTATION_TEXT_BYTES} UTF-8 bytes"
+            )));
+        }
+        if self
+            .tooltip
+            .as_ref()
+            .is_some_and(|tooltip| tooltip.len() > MAX_TRADING_ANNOTATION_TOOLTIP_BYTES)
+        {
+            return Err(invalid(format!(
+                "trading annotation tooltip must be at most {MAX_TRADING_ANNOTATION_TOOLTIP_BYTES} UTF-8 bytes"
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TradingPriceScale {
     #[default]
     Right,
@@ -158,6 +218,8 @@ pub struct InstrumentMetadata {
 #[serde(deny_unknown_fields)]
 pub struct TradingPosition {
     pub id: PositionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<AccountId>,
     #[serde(default)]
     pub pane_index: usize,
     #[serde(default)]
@@ -169,12 +231,16 @@ pub struct TradingPosition {
     pub display_pnl: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub currency: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub annotations: Vec<TradingAnnotation>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkingOrder {
     pub id: OrderId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<AccountId>,
     #[serde(default)]
     pub pane_index: usize,
     #[serde(default)]
@@ -187,6 +253,12 @@ pub struct WorkingOrder {
     pub price: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_price: Option<f64>,
+    /// Host-computed trailing trigger shown without moving the broker order line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trailing_trigger_price: Option<f64>,
+    /// Host-computed break-even trigger shown without moving the broker order line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub break_even_trigger_price: Option<f64>,
     pub quantity: f64,
     #[serde(default)]
     pub filled_quantity: f64,
@@ -200,6 +272,8 @@ pub struct WorkingOrder {
     pub oco_group_id: Option<TradingGroupId>,
     #[serde(default)]
     pub revision: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub annotations: Vec<TradingAnnotation>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -210,10 +284,71 @@ pub enum ExecutionKind {
     Exit,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionMarkerShape {
+    #[default]
+    Circle,
+    Arrow,
+    Triangle,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TradingRoundTripOutcome {
+    Profit,
+    Loss,
+    Flat,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TradingRoundTrip {
+    pub id: TradingGroupId,
+    pub entry_execution_id: ExecutionId,
+    pub exit_execution_id: ExecutionId,
+    pub result_label: String,
+    pub outcome: TradingRoundTripOutcome,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HostEventMarker {
+    pub id: String,
+    pub time: i64,
+    pub importance: u8,
+    pub label: String,
+    pub icon: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HostTimeWindow {
+    pub id: String,
+    pub start_time: i64,
+    pub end_time: i64,
+    pub label: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HostOverlaySnapshot {
+    pub events: Vec<HostEventMarker>,
+    pub windows: Vec<HostTimeWindow>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostEventHit {
+    pub id: String,
+    pub window: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TradingExecution {
     pub id: ExecutionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<AccountId>,
     #[serde(default)]
     pub pane_index: usize,
     #[serde(default)]
@@ -227,6 +362,10 @@ pub struct TradingExecution {
     pub order_id: Option<OrderId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position_id: Option<PositionId>,
+    #[serde(default)]
+    pub marker_shape: ExecutionMarkerShape,
+    #[serde(default)]
+    pub size_by_quantity: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -236,6 +375,8 @@ pub struct TradingSnapshot {
     pub positions: Vec<TradingPosition>,
     pub orders: Vec<WorkingOrder>,
     pub executions: Vec<TradingExecution>,
+    #[serde(default)]
+    pub round_trips: Vec<TradingRoundTrip>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -321,6 +462,8 @@ pub enum TradingIntentAction {
 pub struct TradingIntent {
     pub sequence: u32,
     pub action: TradingIntentAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<AccountId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub drawing_id: Option<DrawingId>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -339,6 +482,9 @@ pub struct TradingIntent {
     pub role: Option<OrderRole>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub price: Option<f64>,
+    /// Exact price index in the instrument tick lattice when tick metadata is available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_tick_index: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_price: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -494,9 +640,12 @@ impl TradingInteractionState {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TradingState {
     pub instrument: InstrumentMetadata,
+    pub visible_account_id: Option<AccountId>,
     pub positions: Vec<TradingPosition>,
     pub orders: Vec<WorkingOrder>,
     pub executions: Vec<TradingExecution>,
+    pub round_trips: Vec<TradingRoundTrip>,
+    pub host_overlay: HostOverlaySnapshot,
     pub style: TradingStyle,
     pub interaction: TradingInteractionState,
     pub feedback_hover: Option<TradingHit>,
@@ -516,7 +665,14 @@ impl TradingState {
             positions: self.positions.clone(),
             orders: self.orders.clone(),
             executions: self.executions.clone(),
+            round_trips: self.round_trips.clone(),
         }
+    }
+
+    pub(crate) fn account_visible(&self, account_id: Option<&AccountId>) -> bool {
+        self.visible_account_id
+            .as_ref()
+            .is_none_or(|visible| account_id == Some(visible))
     }
 
     fn next_sequence(&mut self) -> u32 {
@@ -573,6 +729,10 @@ impl TradingState {
                 .currency
                 .as_ref()
                 .map_or(0, |value| value.capacity());
+        let visible_account_bytes = self
+            .visible_account_id
+            .as_ref()
+            .map_or(0, AccountId::heap_bytes);
         self.positions.capacity() * std::mem::size_of::<TradingPosition>()
             + self.orders.capacity() * std::mem::size_of::<WorkingOrder>()
             + self.executions.capacity() * std::mem::size_of::<TradingExecution>()
@@ -586,6 +746,7 @@ impl TradingState {
                 .as_ref()
                 .map_or(0, TradingHit::heap_bytes)
             + retained_strings
+            + visible_account_bytes
     }
 }
 
@@ -602,6 +763,7 @@ pub enum TradingHitKind {
     OrderLine,
     CancelButton,
     ExecutionMarker,
+    Annotation,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -609,6 +771,7 @@ pub struct TradingHit {
     pub object: TradingObjectId,
     pub kind: TradingHitKind,
     pub distance: f64,
+    pub annotation_id: Option<String>,
 }
 
 impl TradingHit {
@@ -666,6 +829,9 @@ fn parse_style_color(name: &str, value: Option<&str>) -> Result<Option<Color>, C
 
 fn validate_position(position: &TradingPosition) -> Result<(), ChartError> {
     validate_id("PositionId", position.id.as_str())?;
+    if let Some(account_id) = &position.account_id {
+        validate_id("AccountId", account_id.as_str())?;
+    }
     if !position.average_price.is_finite()
         || !position.quantity.is_finite()
         || position.quantity <= 0.0
@@ -677,13 +843,23 @@ fn validate_position(position: &TradingPosition) -> Result<(), ChartError> {
     if position.display_pnl.is_some_and(|value| !value.is_finite()) {
         return Err(invalid("position display_pnl must be finite"));
     }
+    validate_annotations(&position.annotations)?;
     Ok(())
 }
 
 fn validate_order(order: &WorkingOrder) -> Result<(), ChartError> {
     validate_id("OrderId", order.id.as_str())?;
+    if let Some(account_id) = &order.account_id {
+        validate_id("AccountId", account_id.as_str())?;
+    }
     if !order.price.is_finite()
         || order.stop_price.is_some_and(|value| !value.is_finite())
+        || order
+            .trailing_trigger_price
+            .is_some_and(|value| !value.is_finite())
+        || order
+            .break_even_trigger_price
+            .is_some_and(|value| !value.is_finite())
         || !order.quantity.is_finite()
         || order.quantity <= 0.0
         || !order.filled_quantity.is_finite()
@@ -692,17 +868,77 @@ fn validate_order(order: &WorkingOrder) -> Result<(), ChartError> {
     {
         return Err(invalid("order prices and quantities are invalid"));
     }
+    validate_annotations(&order.annotations)?;
+    Ok(())
+}
+
+fn validate_annotations(annotations: &[TradingAnnotation]) -> Result<(), ChartError> {
+    if annotations.len() > MAX_TRADING_ANNOTATIONS {
+        return Err(invalid(format!(
+            "trading annotations are capped at {MAX_TRADING_ANNOTATIONS} per object"
+        )));
+    }
+    validate_unique(
+        annotations.iter().map(|annotation| annotation.id.as_str()),
+        "annotation",
+    )?;
+    for annotation in annotations {
+        annotation.validate()?;
+    }
     Ok(())
 }
 
 fn validate_execution(execution: &TradingExecution) -> Result<(), ChartError> {
     validate_id("ExecutionId", execution.id.as_str())?;
+    if let Some(account_id) = &execution.account_id {
+        validate_id("AccountId", account_id.as_str())?;
+    }
     if !execution.price.is_finite() || !execution.quantity.is_finite() || execution.quantity <= 0.0
     {
         return Err(invalid(
             "execution price must be finite and quantity positive",
         ));
     }
+    Ok(())
+}
+
+fn validate_round_trip(round_trip: &TradingRoundTrip) -> Result<(), ChartError> {
+    validate_id("TradingGroupId", round_trip.id.as_str())?;
+    validate_id("ExecutionId", round_trip.entry_execution_id.as_str())?;
+    validate_id("ExecutionId", round_trip.exit_execution_id.as_str())?;
+    if round_trip.result_label.len() > 128 {
+        return Err(invalid("round-trip result label is too long"));
+    }
+    Ok(())
+}
+
+fn validate_host_overlay(overlay: &HostOverlaySnapshot) -> Result<(), ChartError> {
+    if overlay.events.len() > MAX_HOST_EVENTS || overlay.windows.len() > MAX_HOST_WINDOWS {
+        return Err(ChartError::new(
+            ErrorCode::ResourceLimit,
+            format!("host overlay exceeds {MAX_HOST_EVENTS} events or {MAX_HOST_WINDOWS} windows"),
+        ));
+    }
+    for event in &overlay.events {
+        validate_id("HostEventMarker.id", &event.id)?;
+        if event.label.len() > 96 || event.icon.as_ref().is_some_and(|icon| icon.len() > 64) {
+            return Err(invalid("host event label or icon is too long"));
+        }
+    }
+    for window in &overlay.windows {
+        validate_id("HostTimeWindow.id", &window.id)?;
+        if window.end_time <= window.start_time || window.label.len() > 96 {
+            return Err(invalid("host time window range or label is invalid"));
+        }
+    }
+    validate_unique(
+        overlay.events.iter().map(|value| value.id.as_str()),
+        "host event",
+    )?;
+    validate_unique(
+        overlay.windows.iter().map(|value| value.id.as_str()),
+        "host window",
+    )?;
     Ok(())
 }
 
@@ -737,10 +973,16 @@ impl ChartEngine {
         let line_tolerance = profile.trading_line_tolerance;
 
         for order in self.trading_state.orders.iter().rev() {
+            if !self
+                .trading_state
+                .account_visible(order.account_id.as_ref())
+            {
+                continue;
+            }
             if order.pane_index != pane_index {
                 continue;
             }
-            if x_css < self.trading_marker_start() || x_css > self.trading_marker_end() {
+            if x_css < self.trading_marker_start() || x_css > self.pane_w {
                 continue;
             }
             let Some(y) = self.trading_price_coordinate(
@@ -751,6 +993,16 @@ impl ChartEngine {
                 continue;
             };
             let distance = (y_css - y).abs();
+            if let Some(annotation_id) =
+                self.trading_annotation_hit(&order.annotations, y, x_css, y_css)
+            {
+                return Some(TradingHit {
+                    object: TradingObjectId::Order(order.id.clone()),
+                    kind: TradingHitKind::Annotation,
+                    distance: (y_css - y).abs(),
+                    annotation_id: Some(annotation_id),
+                });
+            }
             if distance > line_tolerance.max(self.trading_control_height() / 2.0) {
                 continue;
             }
@@ -769,14 +1021,21 @@ impl ChartEngine {
                 object: TradingObjectId::Order(order.id.clone()),
                 kind,
                 distance,
+                annotation_id: None,
             });
         }
 
         for position in self.trading_state.positions.iter().rev() {
+            if !self
+                .trading_state
+                .account_visible(position.account_id.as_ref())
+            {
+                continue;
+            }
             if position.pane_index != pane_index {
                 continue;
             }
-            if x_css < self.trading_marker_start() || x_css > self.trading_marker_end() {
+            if x_css < self.trading_marker_start() || x_css > self.pane_w {
                 continue;
             }
             let Some(y) = self.trading_price_coordinate(
@@ -787,6 +1046,16 @@ impl ChartEngine {
                 continue;
             };
             let distance = (y_css - y).abs();
+            if let Some(annotation_id) =
+                self.trading_annotation_hit(&position.annotations, y, x_css, y_css)
+            {
+                return Some(TradingHit {
+                    object: TradingObjectId::Position(position.id.clone()),
+                    kind: TradingHitKind::Annotation,
+                    distance: (y_css - y).abs(),
+                    annotation_id: Some(annotation_id),
+                });
+            }
             if distance > line_tolerance.max(self.trading_control_height() / 2.0) {
                 continue;
             }
@@ -803,11 +1072,18 @@ impl ChartEngine {
                 object: TradingObjectId::Position(position.id.clone()),
                 kind,
                 distance,
+                annotation_id: None,
             });
         }
 
         let times = self.data.merged_times();
         for execution in self.trading_state.executions.iter().rev() {
+            if !self
+                .trading_state
+                .account_visible(execution.account_id.as_ref())
+            {
+                continue;
+            }
             if execution.pane_index != pane_index || times.is_empty() {
                 continue;
             }
@@ -828,6 +1104,7 @@ impl ChartEngine {
                     object: TradingObjectId::Execution(execution.id.clone()),
                     kind: TradingHitKind::ExecutionMarker,
                     distance,
+                    annotation_id: None,
                 });
             }
         }
@@ -922,6 +1199,18 @@ impl ChartEngine {
             return price;
         };
         (price / tick).round() * tick
+    }
+
+    fn trading_price_tick_index(&self, price: f64) -> Option<i64> {
+        let tick = self.trading_state.instrument.tick_size?;
+        if !tick.is_finite() || tick <= 0.0 || !price.is_finite() {
+            return None;
+        }
+        let index = (price / tick).round();
+        if !index.is_finite() || (price - index * tick).abs() > tick * 1.0e-9 {
+            return None;
+        }
+        Some(index as i64)
     }
 
     fn trading_protection_quantity(&self, order: &WorkingOrder) -> f64 {
@@ -1184,6 +1473,26 @@ impl ChartEngine {
         let intent = TradingIntent {
             sequence,
             action,
+            account_id: order_id
+                .as_ref()
+                .and_then(|id| {
+                    self.trading_state
+                        .orders
+                        .iter()
+                        .find(|order| &order.id == id)
+                })
+                .and_then(|order| order.account_id.clone())
+                .or_else(|| {
+                    position_id
+                        .as_ref()
+                        .and_then(|id| {
+                            self.trading_state
+                                .positions
+                                .iter()
+                                .find(|position| &position.id == id)
+                        })
+                        .and_then(|position| position.account_id.clone())
+                }),
             drawing_id: None,
             order_id,
             position_id,
@@ -1193,6 +1502,7 @@ impl ChartEngine {
             kind,
             role: Some(preview.role),
             price: Some(preview.price),
+            price_tick_index: self.trading_price_tick_index(preview.price),
             stop_price,
             take_profit_price: None,
             stop_loss_price: None,
@@ -1477,6 +1787,7 @@ impl ChartEngine {
         self.trading_state.push_intent(TradingIntent {
             sequence,
             action: TradingIntentAction::PlaceBracketOrder,
+            account_id: None,
             drawing_id: Some(drawing_id),
             order_id: None,
             position_id: None,
@@ -1488,6 +1799,7 @@ impl ChartEngine {
             kind: Some(OrderKind::Limit),
             role: Some(OrderRole::Working),
             price: Some(entry_price),
+            price_tick_index: self.trading_price_tick_index(entry_price),
             stop_price: None,
             take_profit_price: Some(take_profit_price),
             stop_loss_price: Some(stop_loss_price),
@@ -1540,6 +1852,7 @@ impl ChartEngine {
                 let intent = TradingIntent {
                     sequence,
                     action: TradingIntentAction::CancelOrder,
+                    account_id: order.account_id.clone(),
                     drawing_id: None,
                     order_id: Some(order_id.clone()),
                     position_id: order.position_id.clone(),
@@ -1549,6 +1862,7 @@ impl ChartEngine {
                     kind: Some(order.kind),
                     role: Some(order.role),
                     price: Some(order.price),
+                    price_tick_index: self.trading_price_tick_index(order.price),
                     stop_price: order.stop_price,
                     take_profit_price: None,
                     stop_loss_price: None,
@@ -1578,6 +1892,7 @@ impl ChartEngine {
                 let intent = TradingIntent {
                     sequence,
                     action: TradingIntentAction::ClosePosition,
+                    account_id: self.trading_state.positions[index].account_id.clone(),
                     drawing_id: None,
                     order_id: None,
                     position_id: Some(position_id),
@@ -1587,6 +1902,7 @@ impl ChartEngine {
                     kind: None,
                     role: None,
                     price: None,
+                    price_tick_index: None,
                     stop_price: None,
                     take_profit_price: None,
                     stop_loss_price: None,
@@ -1685,6 +2001,79 @@ impl ChartEngine {
         self.trading_state.snapshot()
     }
 
+    /// Replace the bounded, host-owned context overlay atomically. It is not part of drawings,
+    /// persistence, undo history, or the broker snapshot.
+    pub fn set_host_overlay(&mut self, overlay: HostOverlaySnapshot) -> Result<(), ChartError> {
+        validate_host_overlay(&overlay)?;
+        self.trading_state.host_overlay = overlay;
+        self.invalidate_frame_trading();
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn host_overlay(&self) -> &HostOverlaySnapshot {
+        &self.trading_state.host_overlay
+    }
+
+    #[must_use]
+    pub fn host_event_hit_at(&self, x_css: f64, y_css: f64) -> Option<HostEventHit> {
+        let pane_index = self.pane_at_y(y_css)?;
+        let times = self.data.merged_times();
+        if times.is_empty() {
+            return None;
+        }
+        let coordinate = |time: i64| {
+            let logical = match times.binary_search(&time) {
+                Ok(index) => index,
+                Err(index) if index < times.len() => index,
+                Err(_) => times.len() - 1,
+            } as i64;
+            self.time_scale.index_to_coordinate(logical)
+        };
+        for event in &self.trading_state.host_overlay.events {
+            if (coordinate(event.time) - x_css).abs() <= 8.0 {
+                return Some(HostEventHit {
+                    id: event.id.clone(),
+                    window: false,
+                });
+            }
+        }
+        let pane = self.panes.get(pane_index)?;
+        for window in &self.trading_state.host_overlay.windows {
+            let x0 = coordinate(window.start_time);
+            let x1 = coordinate(window.end_time);
+            if x_css >= x0.min(x1)
+                && x_css <= x0.max(x1)
+                && y_css >= pane.top
+                && y_css <= pane.top + pane.height
+            {
+                return Some(HostEventHit {
+                    id: window.id.clone(),
+                    window: true,
+                });
+            }
+        }
+        None
+    }
+
+    /// Selects the account whose trading objects are visible in chart geometry and hit-testing.
+    /// `None` shows every account in the host projection.
+    pub fn set_trading_visible_account(&mut self, account_id: Option<AccountId>) {
+        self.trading_state.visible_account_id = account_id;
+        self.trading_state.feedback_hover = None;
+        self.trading_state.feedback_pressed = None;
+        self.trading_state.tooltip_armed = false;
+        self.trading_state.interaction = TradingInteractionState::Idle;
+        self.trading_state.group_visual = TradingGroupVisualState::Inactive;
+        self.invalidate_frame_trading();
+    }
+
+    /// Returns the host-selected visible account, if one is configured.
+    #[must_use]
+    pub fn trading_visible_account(&self) -> Option<&AccountId> {
+        self.trading_state.visible_account_id.as_ref()
+    }
+
     pub fn set_trading_snapshot(&mut self, snapshot: TradingSnapshot) -> Result<(), ChartError> {
         let total = snapshot.positions.len() + snapshot.orders.len() + snapshot.executions.len();
         if total > MAX_TRADING_OBJECTS {
@@ -1703,6 +2092,15 @@ impl ChartEngine {
         for execution in &snapshot.executions {
             validate_execution(execution)?;
         }
+        if snapshot.round_trips.len() > MAX_TRADING_ROUND_TRIPS {
+            return Err(ChartError::new(
+                ErrorCode::ResourceLimit,
+                format!("round trips exceed {MAX_TRADING_ROUND_TRIPS}"),
+            ));
+        }
+        for round_trip in &snapshot.round_trips {
+            validate_round_trip(round_trip)?;
+        }
         validate_unique(
             snapshot.positions.iter().map(|value| value.id.as_str()),
             "position",
@@ -1715,12 +2113,19 @@ impl ChartEngine {
             snapshot.executions.iter().map(|value| value.id.as_str()),
             "execution",
         )?;
+        validate_unique(
+            snapshot.round_trips.iter().map(|value| value.id.as_str()),
+            "round-trip",
+        )?;
         let prior = std::mem::take(&mut self.trading_state);
         self.trading_state = TradingState {
             instrument: snapshot.instrument,
+            visible_account_id: prior.visible_account_id,
             positions: snapshot.positions,
             orders: snapshot.orders,
             executions: snapshot.executions,
+            round_trips: snapshot.round_trips,
+            host_overlay: prior.host_overlay,
             style: prior.style,
             interaction: prior.interaction,
             feedback_hover: prior.feedback_hover,
@@ -2198,7 +2603,7 @@ impl ChartEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ChartEngine, DrawingPoint, TradingPriceScale};
+    use crate::{ChartEngine, CrosshairSyncPosition, DrawingPoint, TradingPriceScale};
     use aeris_charts_render::draw_list::Prim;
 
     fn id<T>(value: &str, constructor: impl FnOnce(String) -> Result<T, ChartError>) -> T {
@@ -2363,6 +2768,7 @@ mod tests {
     fn position(side: PositionSide) -> TradingPosition {
         TradingPosition {
             id: id("position-1", PositionId::new),
+            account_id: None,
             pane_index: 0,
             price_scale: TradingPriceScale::Right,
             side,
@@ -2370,12 +2776,14 @@ mod tests {
             quantity: 12.0,
             display_pnl: None,
             currency: None,
+            annotations: Vec::new(),
         }
     }
 
     fn order(id_value: &str, role: OrderRole, price: f64) -> WorkingOrder {
         WorkingOrder {
             id: id(id_value, OrderId::new),
+            account_id: None,
             pane_index: 0,
             price_scale: TradingPriceScale::Right,
             side: OrderSide::Sell,
@@ -2384,6 +2792,8 @@ mod tests {
             status: OrderStatus::Working,
             price,
             stop_price: None,
+            trailing_trigger_price: None,
+            break_even_trigger_price: None,
             quantity: 12.0,
             filled_quantity: 0.0,
             position_id: Some(id("position-1", PositionId::new)),
@@ -2391,6 +2801,7 @@ mod tests {
             bracket_id: Some(id("bracket-1", TradingGroupId::new)),
             oco_group_id: Some(id("oco-1", TradingGroupId::new)),
             revision: 1,
+            annotations: Vec::new(),
         }
     }
 
@@ -2487,6 +2898,7 @@ mod tests {
                 ],
                 executions: vec![TradingExecution {
                     id: id("fill-1", ExecutionId::new),
+                    account_id: None,
                     pane_index: 0,
                     price_scale: TradingPriceScale::Right,
                     side: OrderSide::Buy,
@@ -2496,7 +2908,10 @@ mod tests {
                     quantity: 5.0,
                     order_id: None,
                     position_id: Some(id("position-1", PositionId::new)),
+                    marker_shape: ExecutionMarkerShape::Circle,
+                    size_by_quantity: false,
                 }],
+                round_trips: Vec::new(),
             })
             .unwrap();
         let frame = chart.build_frame();
@@ -3425,6 +3840,7 @@ mod tests {
                     object: object.clone(),
                     kind: TradingHitKind::CancelButton,
                     distance: 0.0,
+                    annotation_id: None,
                 }),
                 "{object:?} close control is not reachable at its own price"
             );
@@ -3965,5 +4381,146 @@ mod tests {
         assert_ne!(pressed_fill, hover_fill);
         assert_ne!(pressed_fill, idle_fill);
         assert!(chart.clear_trading_pressed());
+    }
+
+    #[test]
+    fn visible_account_filter_is_host_owned_and_hit_tested() {
+        let mut chart = chart_with_market();
+        let account_a = AccountId::new("account-a").unwrap();
+        let account_b = AccountId::new("account-b").unwrap();
+        let mut first = position(PositionSide::Long);
+        first.account_id = Some(account_a.clone());
+        let mut second = position(PositionSide::Short);
+        second.id = PositionId::new("position-2").unwrap();
+        second.account_id = Some(account_b);
+        second.average_price = 99.0;
+        chart
+            .set_trading_snapshot(TradingSnapshot {
+                positions: vec![first, second],
+                ..TradingSnapshot::default()
+            })
+            .unwrap();
+        chart.set_trading_visible_account(Some(account_a));
+        chart.build_frame();
+        let y = chart
+            .trading_price_coordinate(0, TradingPriceScale::Right, 101.0)
+            .unwrap();
+        assert!(chart
+            .trading_hit_at(chart.trading_marker_start() + 10.0, y)
+            .is_some());
+        chart.set_trading_visible_account(Some(AccountId::new("account-b").unwrap()));
+        assert!(chart
+            .trading_hit_at(chart.trading_marker_start() + 10.0, y)
+            .is_none());
+        assert_eq!(chart.trading_snapshot().positions.len(), 2);
+    }
+
+    #[test]
+    fn trading_intents_expose_exact_tick_indices_when_metadata_is_available() {
+        let mut chart = chart_with_market();
+        chart
+            .set_instrument_metadata(InstrumentMetadata {
+                tick_size: Some(0.25),
+                ..InstrumentMetadata::default()
+            })
+            .unwrap();
+        assert_eq!(chart.trading_price_tick_index(102.5), Some(410));
+        assert_eq!(chart.trading_price_tick_index(102.6), None);
+    }
+
+    #[test]
+    fn annotations_are_bounded_rendered_and_hit_tested_atomically() {
+        let mut chart = chart_with_market();
+        let mut value = position(PositionSide::Long);
+        value.annotations = vec![TradingAnnotation {
+            id: "queue".to_string(),
+            text: "Q 12".to_string(),
+            tone: TradingAnnotationTone::Info,
+            tooltip: Some("queue position".to_string()),
+            placement: TradingAnnotationPlacement::Inline,
+        }];
+        chart
+            .set_trading_snapshot(TradingSnapshot {
+                positions: vec![value],
+                ..TradingSnapshot::default()
+            })
+            .unwrap();
+        let before = chart.trading_snapshot();
+        let mut invalid = before.clone();
+        invalid.positions[0].annotations = (0..=MAX_TRADING_ANNOTATIONS)
+            .map(|index| TradingAnnotation {
+                id: format!("a-{index}"),
+                text: "warning".to_string(),
+                ..TradingAnnotation::default()
+            })
+            .collect();
+        assert!(chart.set_trading_snapshot(invalid).is_err());
+        assert_eq!(chart.trading_snapshot(), before);
+        chart.build_frame();
+        let y = chart
+            .trading_price_coordinate(0, TradingPriceScale::Right, 101.0)
+            .unwrap();
+        assert!(matches!(
+            chart.trading_hit_at(chart.trading_marker_start() + 12.0, y),
+            Some(TradingHit {
+                kind: TradingHitKind::Annotation,
+                annotation_id: Some(_),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn host_overlay_and_round_trip_layers_are_runtime_only() {
+        let mut chart = chart_with_market();
+        let time = chart.series_data(0)[2].time;
+        chart
+            .set_host_overlay(HostOverlaySnapshot {
+                events: vec![HostEventMarker {
+                    id: "release".to_string(),
+                    time,
+                    importance: 2,
+                    label: "CPI".to_string(),
+                    icon: None,
+                }],
+                windows: vec![HostTimeWindow {
+                    id: "risk".to_string(),
+                    start_time: time,
+                    end_time: time + 10,
+                    label: "risk".to_string(),
+                }],
+            })
+            .unwrap();
+        chart.build_frame();
+        let frame = chart.build_frame();
+        assert!(frame.panes[0].main.iter().any(|primitive| matches!(
+            primitive,
+            Prim::VLine {
+                style: aeris_charts_render::draw_list::LineStyle::Dotted,
+                ..
+            }
+        )));
+        assert!(chart
+            .host_event_hit_at(chart.time_scale.index_to_coordinate(2), 20.0)
+            .is_some());
+        assert!(!chart.export_state_json().unwrap().contains("release"));
+    }
+
+    #[test]
+    fn sync_events_are_semantic_and_external_application_does_not_echo() {
+        let mut chart = chart_with_market();
+        chart.fit_content();
+        chart.build_frame();
+        let time = chart.series_data(0)[1].time as f64;
+        assert!(chart.set_crosshair_position(102.0, time, 0));
+        let events = chart.take_sync_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].source, "local");
+        assert!(!chart.apply_external_crosshair(Some(CrosshairSyncPosition {
+            time,
+            price: 102.0,
+            pane_index: 0,
+        })));
+        assert!(chart.take_sync_events().is_empty());
     }
 }

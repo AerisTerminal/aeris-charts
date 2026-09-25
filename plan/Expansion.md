@@ -31,7 +31,7 @@ Updated 2026-09-25. Baseline source-confirmed 2026-09-24.
 
 | Batch | Scope | Unblocks on the platform | Status |
 | --- | --- | --- | --- |
-| B1 | Platform chart contracts: PD11, PD1, PD3, PD4, PD5, PD6, PD7 | Multi-account chart trading, trailing and break-even stops, risk warnings on order lines, economic events and risk windows, trade review markers, linked charts, journal images, fundamentals | **Next** |
+| B1 | Platform chart contracts: PD11, PD1, PD3, PD4, PD5, PD6, PD7 | Multi-account chart trading, trailing and break-even stops, risk warnings on order lines, economic events and risk windows, trade review markers, linked charts, journal images, fundamentals | **Complete** |
 | B2 | Drawing model and customization: F5, schema conventions, existing tools | Configurable drawings, templates, drawing sync across cells | Open |
 | B3 | Shared tape and order flow: F2, OF1, OF2, OF11, OF12, PD10 | Footprint, CVD, delta, big-trade bubbles | Open |
 | B4 | Study inputs and core indicators: F4, OF9, CT1, CT2, CT6, I1 | Professional indicator set, VWAP bands, Heikin Ashi, comparisons | Open |
@@ -83,33 +83,33 @@ workspace and series paths. **Status:** next.
 These extend existing layers without new foundations, and the platform needs them first. The
 trading layer (`trading.rs`, `frame/trading_geometry.rs`) already renders positions, working
 orders and executions, supports drag and keyboard modify, brackets from drawings, and
-host-resolved intents. Aeris Terminal can wire basic chart trading against it today; B1 corrects
-it for the platform's multi-account runtime rather than rebuilding it.
+      host-resolved intents. Aeris Terminal can wire basic chart trading against it today; B1 corrects
+      it for the platform's multi-account runtime rather than rebuilding it. **Status: complete.**
 
-- [ ] **PD11** Trading layer alignment: optional account identifier on trading objects and
+- [x] **PD11** Trading layer alignment: optional account identifier on trading objects and
       intents with a host-set visible-account filter, trailing-stop and break-even presentation
       from host-supplied trigger prices, exact tick-index prices on intents, and a documented
       order-state contract with fixtures.
-- [ ] **PD1** Host annotations on working orders and positions: bounded list, semantic tones,
+- [x] **PD1** Host annotations on working orders and positions: bounded list, semantic tones,
       tooltip text, shared layout with the existing chips, deterministic overflow collapse, exact
       hit-testing, caps and atomic rejection of invalid annotations.
-- [ ] **PD4** Execution marker variants (circle, arrow, triangle, optional size by quantity) and
+- [x] **PD4** Execution marker variants (circle, arrow, triangle, optional size by quantity) and
       round-trip connectors with host result labels colored by outcome, identifier hit-testing and
       caps.
-- [ ] **PD3** Host event layer: typed event markers and shaded time windows on price and study
+- [x] **PD3** Host event layer: typed event markers and shaded time windows on price and study
       panes, LOD collapse, hit-testing to host identifiers, caps, and exclusion from drawing
       persistence and undo history.
-- [ ] **PD7** Sparse fundamental series: confirm or extend `LineType::WithSteps` step-after
+- [x] **PD7** Sparse fundamental series: confirm or extend `LineType::WithSteps` step-after
       semantics, add column/histogram presentation in its own pane, and add as-of release labels.
       Replay no-look-ahead is verified in B5.
-- [ ] **PD5** Cross-chart synchronization: read and set external crosshair and visible time range,
+- [x] **PD5** Cross-chart synchronization: read and set external crosshair and visible time range,
       semantic events with source and revision, echo-loop prevention, and subscription removal on
       disposal. Built once so plan.md R4 can reuse it for general charts.
-- [ ] **PD6** Native and GPUI image export: RGBA output at a requested size and scale, optional
+- [x] **PD6** Native and GPUI image export: RGBA output at a requested size and scale, optional
       crosshair and trading layer, the same composition rules as the browser `take_screenshot`, and
       no disturbance to live state or frame pacing. Works for financial and general panes.
-- [ ] `docs/Architecture.md` updated for the new host contracts.
-- [ ] Full gate green; batch committed and pushed.
+- [x] `docs/Architecture.md` updated for the new host contracts.
+- [x] Full gate green; batch committed and pushed.
 
 **Exit:** every PD exit criterion above passes on GPUI and in the browser, and live-rate updates to
 annotations do not rebuild unrelated trading geometry.

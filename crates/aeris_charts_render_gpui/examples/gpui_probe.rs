@@ -2334,9 +2334,13 @@ impl Probe {
             let zoom = aeris_charts_engine::wheel_zoom_scale(normalized_y);
             let pane = self.engine.pane_index_at_y(y);
             let price_target = self.engine.price_axis_target_at(pane, pane_x);
-            if self.gesture_config.wheel_behavior == WheelBehavior::Zoom && price_target.is_some() {
-                self.engine
-                    .price_axis_wheel_zoom(pane, price_target.unwrap(), y, zoom);
+            if self.gesture_config.wheel_behavior == WheelBehavior::Zoom {
+                if let Some(price_target) = price_target {
+                    self.engine
+                        .price_axis_wheel_zoom(pane, price_target, y, zoom);
+                } else {
+                    self.engine.time_scale_zoom(pane_x, zoom);
+                }
             } else {
                 // Auto mode implements the reference-informed behavior: every surface targets the time scale and
                 // modifiers do not change routing. Focused Ctrl zoom remains an explicit-mode
@@ -2350,9 +2354,7 @@ impl Probe {
                 }
             }
         }
-        let pan_delta = if self.gesture_config.wheel_behavior == WheelBehavior::Auto {
-            normalized_x
-        } else if normalized_x.abs() >= normalized_y.abs() {
+        let pan_delta = if normalized_x.abs() >= normalized_y.abs() {
             normalized_x
         } else {
             -normalized_y

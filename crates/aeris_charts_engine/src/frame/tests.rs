@@ -5346,6 +5346,7 @@ fn trading_objects_suppress_the_visual_crosshair_without_clearing_its_position()
         .set_trading_snapshot(crate::TradingSnapshot {
             orders: vec![crate::WorkingOrder {
                 id: crate::OrderId::new("crosshair-order").unwrap(),
+                account_id: None,
                 pane_index: 0,
                 price_scale: crate::TradingPriceScale::Right,
                 side: crate::OrderSide::Sell,
@@ -5354,6 +5355,8 @@ fn trading_objects_suppress_the_visual_crosshair_without_clearing_its_position()
                 status: crate::OrderStatus::Working,
                 price: 11.5,
                 stop_price: None,
+                trailing_trigger_price: None,
+                break_even_trigger_price: None,
                 quantity: 1.0,
                 filled_quantity: 0.0,
                 position_id: None,
@@ -5361,6 +5364,7 @@ fn trading_objects_suppress_the_visual_crosshair_without_clearing_its_position()
                 bracket_id: None,
                 oco_group_id: None,
                 revision: 1,
+                annotations: Vec::new(),
             }],
             ..crate::TradingSnapshot::default()
         })
