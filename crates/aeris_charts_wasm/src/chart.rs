@@ -2166,6 +2166,13 @@ impl AerisChart {
         self.inner.borrow_mut().add_pivot_points(source_id, variant)
     }
 
+    /// Add a ZigZag line. `deviation_percent` is the minimum reversal percentage.
+    pub fn add_zigzag(&mut self, source_id: u32, deviation_percent: f64) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_zigzag(source_id, deviation_percent)
+    }
+
     pub fn add_keltner(&mut self, source_id: u32, period: u32, multiplier: f64) -> Vec<u32> {
         self.inner
             .borrow_mut()

@@ -153,6 +153,9 @@ impl ChartInner {
                 };
                 IndicatorKind::PivotPoints { variant }
             }
+            "zigzag" => IndicatorKind::ZigZag {
+                deviation_percent: deviation,
+            },
             "keltner" => IndicatorKind::Keltner {
                 period,
                 multiplier: deviation,
@@ -341,6 +344,12 @@ impl ChartInner {
             return Vec::new();
         };
         self.engine.add_pivot_points(source_id as SeriesId, kind)
+    }
+
+    pub fn add_zigzag(&mut self, source_id: u32, deviation_percent: f64) -> u32 {
+        self.engine
+            .add_zigzag(source_id as SeriesId, deviation_percent)
+            .into()
     }
 
     pub fn add_keltner(&mut self, source_id: u32, period: u32, multiplier: f64) -> Vec<u32> {

@@ -1747,6 +1747,13 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
                 points.iter().map(|point| point.support_2).collect(),
             ]
         }
+        IndicatorKind::ZigZag { deviation_percent } => {
+            vec![aeris_charts_indicators::zigzag(
+                source[1],
+                source[2],
+                deviation_percent,
+            )]
+        }
         IndicatorKind::Keltner { period, multiplier } => {
             let points = aeris_charts_indicators::keltner(
                 source[1], source[2], source[3], period, multiplier,
@@ -1971,7 +1978,10 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
     };
 
     for (&output, expected) in binding.outputs.iter().zip(expected) {
-        let expected = if matches!(binding.kind, IndicatorKind::PivotPoints { .. }) {
+        let expected = if matches!(
+            binding.kind,
+            IndicatorKind::PivotPoints { .. } | IndicatorKind::ZigZag { .. }
+        ) {
             times
                 .iter()
                 .copied()
@@ -1999,8 +2009,8 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
             if expected.is_nan() {
                 assert!(
                     actual.is_nan(),
-                    "{:?} row {index}: expected NaN",
-                    binding.kind
+                    "{:?} row {index}: expected NaN, actual {actual}",
+                    binding.kind,
                 );
             } else {
                 assert!(
@@ -2044,6 +2054,9 @@ fn every_indicator_engine_path_matches_full_recomputation() {
         IndicatorKind::Wma { period: 5 },
         IndicatorKind::PivotPoints {
             variant: aeris_charts_indicators::PivotKind::Standard,
+        },
+        IndicatorKind::ZigZag {
+            deviation_percent: 5.0,
         },
         IndicatorKind::Keltner {
             period: 5,

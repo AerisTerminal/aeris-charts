@@ -371,6 +371,7 @@ fn incremental_output_count(kind: &IndicatorKind) -> usize {
         | IndicatorKind::Keltner { .. }
         | IndicatorKind::AdxDmi { .. } => 3,
         IndicatorKind::PivotPoints { .. } => 5,
+        IndicatorKind::ZigZag { .. } => 1,
         IndicatorKind::ParabolicSar => 1,
         IndicatorKind::SuperTrend { .. } => 1,
         IndicatorKind::Ichimoku => 5,
@@ -425,6 +426,9 @@ fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
         | IndicatorKind::Atr { period }
         | IndicatorKind::Wma { period } => *period > 0,
         IndicatorKind::PivotPoints { .. } => true,
+        IndicatorKind::ZigZag { deviation_percent } => {
+            deviation_percent.is_finite() && *deviation_percent > 0.0
+        }
         IndicatorKind::Keltner { period, multiplier } => {
             *period > 0 && multiplier.is_finite() && *multiplier >= 0.0
         }
@@ -2323,6 +2327,31 @@ mod tests {
         assert_eq!(
             restored.indicator_info(outputs[0]).unwrap().kind,
             "pivot_points"
+        );
+    }
+
+    #[test]
+    fn zigzag_persistence_round_trips_deviation() {
+        let mut chart = settled_chart();
+        let output = chart.add_zigzag(0, 4.5);
+        let document = chart.export_state_json().unwrap();
+        let mut restored = settled_chart();
+        restored.import_state_json(&document).unwrap();
+        assert_eq!(
+            restored.indicator_bindings()[0].kind,
+            crate::IndicatorKind::ZigZag {
+                deviation_percent: 4.5
+            }
+        );
+        assert_eq!(restored.indicator_bindings()[0].outputs, vec![output]);
+        assert_eq!(restored.indicator_info(output).unwrap().kind, "zigzag");
+        assert_eq!(
+            restored
+                .indicator_info(output)
+                .unwrap()
+                .parameters
+                .deviation_percent,
+            Some(4.5)
         );
     }
 

@@ -968,7 +968,7 @@ export interface pane_geometry {
 
 /** Scalar input accepted by a built-in indicator. The source series may itself be an indicator output. */
 export type indicator_input_source = "open" | "high" | "low" | "close" | "hl2" | "hlc3" | "ohlc4" | "hlcc4";
-export type indicator_kind = "sma" | "ema" | "dema" | "tema" | "smma" | "hma" | "vwma" | "standard_deviation" | "cci" | "williams_r" | "stochastic_rsi" | "momentum" | "roc" | "donchian" | "pivot_points" | "keltner" | "adx_dmi" | "parabolic_sar" | "supertrend" | "ichimoku" | "ema_ribbon" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "obv" | "cmf" | "mfi" | "volume" | "vwap_bands" | "wma";
+export type indicator_kind = "sma" | "ema" | "dema" | "tema" | "smma" | "hma" | "vwma" | "standard_deviation" | "cci" | "williams_r" | "stochastic_rsi" | "momentum" | "roc" | "donchian" | "pivot_points" | "zigzag" | "keltner" | "adx_dmi" | "parabolic_sar" | "supertrend" | "ichimoku" | "ema_ribbon" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "obv" | "cmf" | "mfi" | "volume" | "vwap_bands" | "wma";
 export type pivot_kind = "standard" | "fibonacci" | "camarilla" | "woodie" | "demark";
 export type vwap_reset = "session" | "weekly" | "monthly";
 export type indicator_parameter_type = "integer" | "number" | "source" | "series";
@@ -2916,6 +2916,8 @@ export interface chart_api {
   add_donchian(source: series_api, period: number, options?: Partial<series_options>): [series_api, series_api, series_api];
   /** Add previous-session pivot, R1, S1, R2, and S2 levels. */
   add_pivot_points(source: series_api, variant?: pivot_kind, options?: Partial<series_options>): [series_api, series_api, series_api, series_api, series_api];
+  /** Add a ZigZag line using a minimum reversal percentage. */
+  add_zigzag(source: series_api, deviation_percent?: number, options?: Partial<series_options>): series_api;
   /** Add Keltner channel upper, middle, and lower lines using an EMA center and Wilder ATR envelope. */
   add_keltner(source: series_api, period: number, multiplier?: number, options?: Partial<series_options>): [series_api, series_api, series_api];
   /** Add +DI, -DI, and ADX lines in an oscillator pane. */

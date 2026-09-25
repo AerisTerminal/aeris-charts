@@ -140,6 +140,9 @@ pub enum IndicatorKind {
     PivotPoints {
         variant: aeris_charts_indicators::PivotKind,
     },
+    ZigZag {
+        deviation_percent: f64,
+    },
     Keltner {
         period: usize,
         multiplier: f64,
@@ -290,6 +293,7 @@ pub struct IndicatorParameters {
     pub period: Option<usize>,
     pub periods: Option<[usize; aeris_charts_indicators::MAX_OUTPUTS]>,
     pub pivot_kind: Option<aeris_charts_indicators::PivotKind>,
+    pub deviation_percent: Option<f64>,
     pub deviation: Option<f64>,
     pub fast: Option<usize>,
     pub slow: Option<usize>,
@@ -565,6 +569,15 @@ impl ChartEngine {
                             None,
                             IndicatorParameters {
                                 pivot_kind: Some(variant),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
+                        IndicatorKind::ZigZag { deviation_percent } => (
+                            "zigzag",
+                            0,
+                            None,
+                            IndicatorParameters {
+                                deviation_percent: Some(deviation_percent),
                                 ..IndicatorParameters::default()
                             },
                         ),
@@ -849,6 +862,10 @@ impl ChartEngine {
         kind: aeris_charts_indicators::PivotKind,
     ) -> Vec<SeriesId> {
         self.add_indicator_kind(source, IndicatorKind::PivotPoints { variant: kind }, None)
+    }
+
+    pub fn add_zigzag(&mut self, source: SeriesId, deviation_percent: f64) -> SeriesId {
+        self.add_indicator_kind(source, IndicatorKind::ZigZag { deviation_percent }, None)[0]
     }
 
     pub fn add_keltner(
@@ -1183,6 +1200,7 @@ impl ChartEngine {
             | IndicatorKind::StandardDeviation { .. }
             | IndicatorKind::Donchian { .. }
             | IndicatorKind::PivotPoints { .. }
+            | IndicatorKind::ZigZag { .. }
             | IndicatorKind::Keltner { .. }
             | IndicatorKind::EmaRibbon { .. }
             | IndicatorKind::Bollinger { .. }
@@ -1263,6 +1281,9 @@ impl ChartEngine {
             | IndicatorKind::Wma { period } => parameters.push(integer("period", period)),
             IndicatorKind::PivotPoints { variant } => {
                 parameters.push(integer("kind", pivot_kind_index(variant)))
+            }
+            IndicatorKind::ZigZag { deviation_percent } => {
+                parameters.push(number("deviation_percent", deviation_percent))
             }
             IndicatorKind::EmaRibbon { periods } => {
                 for (index, period) in periods.into_iter().enumerate() {
@@ -1518,6 +1539,9 @@ impl ChartEngine {
                     *period == 0
                 }
                 IndicatorKind::ParabolicSar | IndicatorKind::PivotPoints { .. } => false,
+                IndicatorKind::ZigZag { deviation_percent } => {
+                    !deviation_percent.is_finite() || *deviation_percent <= 0.0
+                }
                 IndicatorKind::SuperTrend { period, multiplier } => {
                     *period == 0 || !multiplier.is_finite() || *multiplier < 0.0
                 }
@@ -1896,6 +1920,7 @@ fn indicator_kind_name(kind: &IndicatorKind) -> &'static str {
         IndicatorKind::RateOfChange { .. } => "roc",
         IndicatorKind::Donchian { .. } => "donchian",
         IndicatorKind::PivotPoints { .. } => "pivot_points",
+        IndicatorKind::ZigZag { .. } => "zigzag",
         IndicatorKind::Keltner { .. } => "keltner",
         IndicatorKind::AdxDmi { .. } => "adx_dmi",
         IndicatorKind::ParabolicSar => "parabolic_sar",
@@ -1944,6 +1969,9 @@ fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators::Increment
         }
         IndicatorKind::PivotPoints { variant } => {
             aeris_charts_indicators::IncrementalState::pivot_points(variant)
+        }
+        IndicatorKind::ZigZag { deviation_percent } => {
+            aeris_charts_indicators::IncrementalState::zigzag(deviation_percent)
         }
         IndicatorKind::Keltner { period, multiplier } => {
             aeris_charts_indicators::IncrementalState::keltner(period, multiplier)
@@ -2051,6 +2079,9 @@ fn indicator_title(kind: &IndicatorKind) -> String {
         IndicatorKind::RateOfChange { period } => format!("ROC {period}"),
         IndicatorKind::Donchian { period } => format!("Donchian {period}"),
         IndicatorKind::PivotPoints { variant } => format!("Pivot Points {variant:?}"),
+        IndicatorKind::ZigZag { deviation_percent } => {
+            format!("ZigZag {deviation_percent}%")
+        }
         IndicatorKind::Keltner { period, multiplier } => {
             format!("Keltner {period} {}", params(*multiplier))
         }
@@ -2131,6 +2162,7 @@ fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static 
         IndicatorKind::RateOfChange { .. } => "ROC",
         IndicatorKind::Donchian { .. } => ["Upper", "Basis", "Lower"][output_index],
         IndicatorKind::PivotPoints { .. } => ["Pivot", "R1", "S1", "R2", "S2"][output_index],
+        IndicatorKind::ZigZag { .. } => "ZigZag",
         IndicatorKind::Keltner { .. } => ["Upper", "Basis", "Lower"][output_index],
         IndicatorKind::AdxDmi { .. } => ["+DI", "-DI", "ADX"][output_index],
         IndicatorKind::ParabolicSar => "SAR",

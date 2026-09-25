@@ -4965,6 +4965,12 @@ export class chart_impl implements chart_api {
     ];
   }
 
+  add_zigzag(source: series_api, deviation_percent = 5, options?: Partial<series_options>): series_api {
+    const id = this.wasm.add_zigzag(source.id, deviation_percent);
+    if (id === 0xffffffff) throw new AerisChartsError("invalid_options", "invalid ZigZag deviation");
+    return this.indicator_series(id, options);
+  }
+
   add_keltner(source: series_api, period: number, multiplier = 2, options?: Partial<series_options>): [series_api, series_api, series_api] {
     const ids = this.wasm.add_keltner(source.id, Math.max(1, Math.floor(period)), multiplier);
     if (ids.length !== 3) throw new AerisChartsError("invalid_options", "invalid Keltner configuration");

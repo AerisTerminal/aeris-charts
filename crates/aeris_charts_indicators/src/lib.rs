@@ -109,6 +109,76 @@ pub fn pivot_points(
     out
 }
 
+/// Compute confirmed ZigZag turning points from high/low bars.
+///
+/// `deviation_percent` is the minimum percentage move required to confirm a reversal. The
+/// current extreme is emitted as a provisional endpoint, while earlier extrema are only emitted
+/// once the opposing move has crossed the threshold.
+pub fn zigzag(highs: &[f64], lows: &[f64], deviation_percent: f64) -> Vec<Option<f64>> {
+    let n = highs.len().min(lows.len());
+    let mut out = vec![None; n];
+    if n == 0 || !deviation_percent.is_finite() || deviation_percent <= 0.0 {
+        return out;
+    }
+    let threshold = deviation_percent / 100.0;
+    let mut direction = 0_i8;
+    let mut extreme_index = 0_usize;
+    let mut extreme = (highs[0] + lows[0]) / 2.0;
+    for index in 1..n {
+        if direction == 0 {
+            if high_at_least(highs[index], lows[0], threshold) {
+                direction = 1;
+                extreme_index = index;
+                extreme = highs[index];
+                out[0] = Some(lows[0]);
+            } else if low_at_most(lows[index], highs[0], threshold) {
+                direction = -1;
+                extreme_index = index;
+                extreme = lows[index];
+                out[0] = Some(highs[0]);
+            } else if highs[index] > extreme {
+                extreme = highs[index];
+                extreme_index = index;
+            } else if lows[index] < extreme {
+                extreme = lows[index];
+                extreme_index = index;
+            }
+            continue;
+        }
+        if direction > 0 {
+            if highs[index] >= extreme {
+                extreme = highs[index];
+                extreme_index = index;
+            } else if low_at_most(lows[index], extreme, threshold) {
+                out[extreme_index] = Some(extreme);
+                direction = -1;
+                extreme_index = index;
+                extreme = lows[index];
+            }
+        } else if lows[index] <= extreme {
+            extreme = lows[index];
+            extreme_index = index;
+        } else if high_at_least(highs[index], extreme, threshold) {
+            out[extreme_index] = Some(extreme);
+            direction = 1;
+            extreme_index = index;
+            extreme = highs[index];
+        }
+    }
+    if direction != 0 {
+        out[extreme_index] = Some(extreme);
+    }
+    out
+}
+
+fn high_at_least(high: f64, reference: f64, threshold: f64) -> bool {
+    high >= reference * (1.0 + threshold)
+}
+
+fn low_at_most(low: f64, reference: f64, threshold: f64) -> bool {
+    low <= reference * (1.0 - threshold)
+}
+
 #[derive(Clone, Copy)]
 struct Session {
     open: f64,
@@ -2451,6 +2521,9 @@ enum IncrementalKind {
     PivotPoints {
         kind: PivotKind,
     },
+    ZigZag {
+        deviation_percent: f64,
+    },
     Keltner {
         period: usize,
         multiplier: f64,
@@ -2635,6 +2708,10 @@ impl IncrementalState {
 
     pub fn pivot_points(kind: PivotKind) -> Self {
         Self::new(IncrementalKind::PivotPoints { kind }, 5)
+    }
+
+    pub fn zigzag(deviation_percent: f64) -> Self {
+        Self::new(IncrementalKind::ZigZag { deviation_percent }, 1)
     }
 
     pub fn keltner(period: usize, multiplier: f64) -> Self {
@@ -2862,6 +2939,7 @@ impl IncrementalState {
             IncrementalKind::Momentum { .. } | IncrementalKind::RateOfChange { .. } => 0,
             IncrementalKind::Donchian { .. } => 0,
             IncrementalKind::PivotPoints { .. } => 0,
+            IncrementalKind::ZigZag { .. } => 0,
         }
     }
 
@@ -3065,6 +3143,18 @@ impl IncrementalState {
                     self.outputs[3].push(point.resistance_2.unwrap_or(f64::NAN));
                     self.outputs[4].push(point.support_2.unwrap_or(f64::NAN));
                 }
+            }
+            IncrementalKind::ZigZag { deviation_percent } => {
+                // A new bar can move the provisional endpoint, and a historical correction can
+                // alter every later confirmation. Recompute the bounded source window so the
+                // sparse turning-point stream never leaves a stale endpoint behind.
+                self.output_from[0] = 0;
+                self.last_work_rows = n;
+                self.outputs[0].extend(
+                    zigzag(input.high, input.low, *deviation_percent)
+                        .into_iter()
+                        .map(|value| value.unwrap_or(f64::NAN)),
+                );
             }
             IncrementalKind::Ichimoku => {
                 let points = ichimoku(input.high, input.low, input.close);
@@ -3594,6 +3684,7 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
             0,
         ],
         IncrementalKind::PivotPoints { .. } => [0; MAX_OUTPUTS],
+        IncrementalKind::ZigZag { .. } => [0; MAX_OUTPUTS],
         IncrementalKind::Keltner { period, .. } => [*period, *period, *period, 0, 0],
         IncrementalKind::AdxDmi { period, .. } => {
             let start = period.saturating_add(period.saturating_sub(1));
@@ -3806,6 +3897,28 @@ mod tests {
                     && points[2].support_2.is_some()
             );
         }
+    }
+
+    #[test]
+    fn zigzag_confirms_reversals_at_the_requested_percentage() {
+        let values = zigzag(
+            &[100.0, 101.0, 106.0, 105.0, 99.0, 100.0, 108.0],
+            &[99.0, 100.0, 105.0, 104.0, 98.0, 99.0, 107.0],
+            5.0,
+        );
+        assert_eq!(
+            values,
+            vec![
+                Some(99.0),
+                None,
+                Some(106.0),
+                None,
+                Some(98.0),
+                None,
+                Some(108.0)
+            ]
+        );
+        assert!(zigzag(&[1.0], &[1.0], 0.0).iter().all(Option::is_none));
     }
 
     #[test]
