@@ -358,6 +358,7 @@ fn incremental_output_count(kind: &IndicatorKind) -> usize {
         | IndicatorKind::Atr { .. }
         | IndicatorKind::Vwap
         | IndicatorKind::Wma { .. } => 1,
+        IndicatorKind::Donchian { .. } => 3,
         IndicatorKind::EmaRibbon { .. } => aeris_charts_indicators::MAX_OUTPUTS,
         IndicatorKind::Bollinger { .. } => 3,
         IndicatorKind::Macd { .. } => 3,
@@ -402,6 +403,7 @@ fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
         | IndicatorKind::Hma { period }
         | IndicatorKind::Vwma { period }
         | IndicatorKind::StandardDeviation { period }
+        | IndicatorKind::Donchian { period }
         | IndicatorKind::Rsi { period }
         | IndicatorKind::Atr { period }
         | IndicatorKind::Wma { period } => *period > 0,

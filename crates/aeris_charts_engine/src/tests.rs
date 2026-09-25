@@ -1670,6 +1670,14 @@ fn assert_indicator_binding_matches_full(chart: &ChartEngine, binding_index: usi
                 source[3], period,
             )]
         }
+        IndicatorKind::Donchian { period } => {
+            let points = aeris_charts_indicators::donchian(source[1], source[2], period);
+            vec![
+                points.iter().map(|point| point.upper).collect(),
+                points.iter().map(|point| point.middle).collect(),
+                points.iter().map(|point| point.lower).collect(),
+            ]
+        }
         IndicatorKind::EmaRibbon { periods } => periods
             .into_iter()
             .map(|period| aeris_charts_indicators::ema(source[3], period))
@@ -2808,6 +2816,9 @@ fn wma_atr_and_stochastic_place_and_report() {
         chart.indicator_info(standard_deviation).unwrap().kind,
         "standard_deviation"
     );
+    let donchian = chart.add_donchian(0, 3);
+    assert_eq!(donchian.len(), 3);
+    assert_eq!(chart.indicator_info(donchian[0]).unwrap().kind, "donchian");
 
     let atr = chart.add_atr(0, 2).expect("valid atr");
     assert_ne!(

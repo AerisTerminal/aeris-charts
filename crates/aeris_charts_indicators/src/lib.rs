@@ -15,6 +15,13 @@ pub struct BollingerPoint {
     pub lower: Option<f64>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DonchianPoint {
+    pub upper: Option<f64>,
+    pub middle: Option<f64>,
+    pub lower: Option<f64>,
+}
+
 /// Simple moving average. The first `period - 1` values are warm-up `None` entries.
 pub fn sma(values: &[f64], period: usize) -> Vec<Option<f64>> {
     if period == 0 {
@@ -175,6 +182,39 @@ pub fn standard_deviation(values: &[f64], period: usize) -> Vec<Option<f64>> {
             .sum::<f64>()
             / period as f64;
         *output = Some(variance.sqrt());
+    }
+    out
+}
+
+/// Donchian channel: rolling high, midpoint, and rolling low over the high/low columns.
+pub fn donchian(high: &[f64], low: &[f64], period: usize) -> Vec<DonchianPoint> {
+    let length = high.len().min(low.len());
+    let mut out = vec![
+        DonchianPoint {
+            upper: None,
+            middle: None,
+            lower: None,
+        };
+        length
+    ];
+    if period == 0 {
+        return out;
+    }
+    for (row, output) in out.iter_mut().enumerate().skip(period.saturating_sub(1)) {
+        let start = row + 1 - period;
+        let upper = high[start..=row]
+            .iter()
+            .copied()
+            .fold(f64::NEG_INFINITY, f64::max);
+        let lower = low[start..=row]
+            .iter()
+            .copied()
+            .fold(f64::INFINITY, f64::min);
+        *output = DonchianPoint {
+            upper: Some(upper),
+            middle: Some((upper + lower) * 0.5),
+            lower: Some(lower),
+        };
     }
     out
 }
@@ -1534,6 +1574,9 @@ enum IncrementalKind {
     StandardDeviation {
         period: usize,
     },
+    Donchian {
+        period: usize,
+    },
     EmaRibbon {
         periods: [usize; MAX_OUTPUTS],
         states: Box<[RecursiveHistory<EmaState>; MAX_OUTPUTS]>,
@@ -1654,6 +1697,10 @@ impl IncrementalState {
 
     pub fn standard_deviation(period: usize) -> Self {
         Self::new(IncrementalKind::StandardDeviation { period }, 1)
+    }
+
+    pub fn donchian(period: usize) -> Self {
+        Self::new(IncrementalKind::Donchian { period }, 3)
     }
 
     pub fn ema_ribbon(periods: [usize; MAX_OUTPUTS]) -> Self {
@@ -1800,6 +1847,7 @@ impl IncrementalState {
             | IncrementalKind::Hma { .. } => 0,
             IncrementalKind::Vwma { .. } => 0,
             IncrementalKind::StandardDeviation { .. } => 0,
+            IncrementalKind::Donchian { .. } => 0,
         }
     }
 
@@ -1941,6 +1989,16 @@ impl IncrementalState {
                 self.last_work_rows = n - start;
                 let values = standard_deviation(input.close, *period);
                 self.outputs[0].extend(values.into_iter().skip(start).flatten());
+            }
+            IncrementalKind::Donchian { period } => {
+                let start = self.output_from[0];
+                self.last_work_rows = n - start;
+                let points = donchian(input.high, input.low, *period);
+                for point in points.into_iter().skip(start) {
+                    self.outputs[0].push(point.upper.expect("Donchian upper after warmup"));
+                    self.outputs[1].push(point.middle.expect("Donchian middle after warmup"));
+                    self.outputs[2].push(point.lower.expect("Donchian lower after warmup"));
+                }
             }
             IncrementalKind::EmaRibbon { periods, states } => {
                 for (output_index, (&period, state)) in
@@ -2253,6 +2311,13 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
         }
         IncrementalKind::Vwma { period } => [period.saturating_sub(1), 0, 0, 0, 0],
         IncrementalKind::StandardDeviation { period } => [period.saturating_sub(1), 0, 0, 0, 0],
+        IncrementalKind::Donchian { period } => [
+            period.saturating_sub(1),
+            period.saturating_sub(1),
+            period.saturating_sub(1),
+            0,
+            0,
+        ],
         IncrementalKind::EmaRibbon { periods, .. } => {
             periods.map(|period| period.saturating_sub(1))
         }
@@ -2377,6 +2442,28 @@ mod tests {
                 Some((2.0_f64 / 3.0).sqrt()),
                 Some((14.0_f64 / 9.0).sqrt())
             ]
+        );
+    }
+
+    #[test]
+    fn donchian_reports_rolling_high_low_and_midpoint() {
+        let points = donchian(&[3.0, 5.0, 4.0, 8.0], &[1.0, 2.0, 2.5, 6.0], 3);
+        assert_eq!(points[0].upper, None);
+        assert_eq!(
+            points[2],
+            DonchianPoint {
+                upper: Some(5.0),
+                middle: Some(3.0),
+                lower: Some(1.0),
+            }
+        );
+        assert_eq!(
+            points[3],
+            DonchianPoint {
+                upper: Some(8.0),
+                middle: Some(5.0),
+                lower: Some(2.0),
+            }
         );
     }
 
@@ -3151,6 +3238,7 @@ mod tests {
         Hma,
         Vwma,
         StandardDeviation,
+        Donchian,
         EmaRibbon,
         Bollinger,
         Rsi,
@@ -3171,6 +3259,14 @@ mod tests {
             TestKind::Hma => vec![hma(input.close, 5)],
             TestKind::Vwma => vec![vwma(input.close, input.volume, 5)],
             TestKind::StandardDeviation => vec![standard_deviation(input.close, 5)],
+            TestKind::Donchian => {
+                let points = donchian(input.high, input.low, 5);
+                vec![
+                    points.iter().map(|point| point.upper).collect(),
+                    points.iter().map(|point| point.middle).collect(),
+                    points.iter().map(|point| point.lower).collect(),
+                ]
+            }
             TestKind::EmaRibbon => [3, 5, 8, 13, 21]
                 .into_iter()
                 .map(|period| ema(input.close, period))
@@ -3254,6 +3350,7 @@ mod tests {
                 TestKind::StandardDeviation,
                 IncrementalState::standard_deviation(5),
             ),
+            (TestKind::Donchian, IncrementalState::donchian(5)),
             (
                 TestKind::EmaRibbon,
                 IncrementalState::ema_ribbon([3, 5, 8, 13, 21]),
