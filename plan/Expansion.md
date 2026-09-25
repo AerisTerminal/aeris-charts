@@ -243,8 +243,9 @@ of binding kind. VWAP's optional volume input now aligns by exact timestamp and 
 on the documented unit-weight fallback. OF9 now adds five engine-owned VWAP-band outputs with
 session, weekly and monthly reset keys, weighted population-deviation bands and percentage bands;
 pure-math and incremental rebuild tests cover the monthly reference path. Typed multi-input
-validation, style-document persistence, the next persistence schema, chart-type additions and the
-I1 catalog remain open until the whole batch is implemented and reference fixtures are added.
+validation now rejects invalid VWAP volume bindings atomically. Style-document persistence, the
+next persistence schema, chart-type additions and the I1 catalog remain open until the whole batch
+is implemented and reference fixtures are added.
 
 ### B5 — Non-time bars and replay
 
