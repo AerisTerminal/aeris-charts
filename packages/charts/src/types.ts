@@ -968,7 +968,7 @@ export interface pane_geometry {
 
 /** Scalar input accepted by a built-in indicator. The source series may itself be an indicator output. */
 export type indicator_input_source = "open" | "high" | "low" | "close" | "hl2" | "hlc3" | "ohlc4" | "hlcc4";
-export type indicator_kind = "sma" | "ema" | "dema" | "tema" | "smma" | "hma" | "vwma" | "standard_deviation" | "cci" | "williams_r" | "stochastic_rsi" | "donchian" | "keltner" | "adx_dmi" | "parabolic_sar" | "supertrend" | "ichimoku" | "ema_ribbon" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "vwap_bands" | "wma";
+export type indicator_kind = "sma" | "ema" | "dema" | "tema" | "smma" | "hma" | "vwma" | "standard_deviation" | "cci" | "williams_r" | "stochastic_rsi" | "momentum" | "roc" | "donchian" | "keltner" | "adx_dmi" | "parabolic_sar" | "supertrend" | "ichimoku" | "ema_ribbon" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "vwap_bands" | "wma";
 export type vwap_reset = "session" | "weekly" | "monthly";
 export type indicator_parameter_type = "integer" | "number" | "source" | "series";
 export interface indicator_parameter_descriptor {
@@ -2903,6 +2903,10 @@ export interface chart_api {
   add_williams_r(source: series_api, period: number, options?: Partial<series_options>): series_api;
   /** Add Stochastic RSI in its own oscillator pane with conventional 20/80 bands. */
   add_stochastic_rsi(source: series_api, rsi_period: number, stochastic_period: number, options?: Partial<series_options>): series_api;
+  /** Add Momentum in its own oscillator pane. */
+  add_momentum(source: series_api, period: number, options?: Partial<series_options>): series_api;
+  /** Add Rate of Change (percentage) in its own oscillator pane. */
+  add_roc(source: series_api, period: number, options?: Partial<series_options>): series_api;
   add_donchian(source: series_api, period: number, options?: Partial<series_options>): [series_api, series_api, series_api];
   /** Add Keltner channel upper, middle, and lower lines using an EMA center and Wilder ATR envelope. */
   add_keltner(source: series_api, period: number, multiplier?: number, options?: Partial<series_options>): [series_api, series_api, series_api];

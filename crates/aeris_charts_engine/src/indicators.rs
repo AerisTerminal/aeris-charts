@@ -128,6 +128,12 @@ pub enum IndicatorKind {
         rsi_period: usize,
         stochastic_period: usize,
     },
+    Momentum {
+        period: usize,
+    },
+    RateOfChange {
+        period: usize,
+    },
     Donchian {
         period: usize,
     },
@@ -512,6 +518,24 @@ impl ChartEngine {
                                 ..IndicatorParameters::default()
                             },
                         ),
+                        IndicatorKind::Momentum { period } => (
+                            "momentum",
+                            period,
+                            None,
+                            IndicatorParameters {
+                                period: Some(period),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
+                        IndicatorKind::RateOfChange { period } => (
+                            "roc",
+                            period,
+                            None,
+                            IndicatorParameters {
+                                period: Some(period),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
                         IndicatorKind::Donchian { period } => (
                             "donchian",
                             period,
@@ -750,6 +774,18 @@ impl ChartEngine {
         )
         .into_iter()
         .next()
+    }
+
+    pub fn add_momentum(&mut self, source: SeriesId, period: usize) -> Option<SeriesId> {
+        self.add_indicator_kind(source, IndicatorKind::Momentum { period }, None)
+            .into_iter()
+            .next()
+    }
+
+    pub fn add_roc(&mut self, source: SeriesId, period: usize) -> Option<SeriesId> {
+        self.add_indicator_kind(source, IndicatorKind::RateOfChange { period }, None)
+            .into_iter()
+            .next()
     }
 
     pub fn add_donchian(&mut self, source: SeriesId, period: usize) -> Vec<SeriesId> {
@@ -1001,6 +1037,16 @@ impl ChartEngine {
                     self.place_outputs_in_oscillator_pane(&ids);
                 }
             }
+            IndicatorKind::Momentum { .. } => {
+                if !ids.is_empty() {
+                    self.place_outputs_in_oscillator_pane(&ids);
+                }
+            }
+            IndicatorKind::RateOfChange { .. } => {
+                if !ids.is_empty() {
+                    self.place_outputs_in_oscillator_pane(&ids);
+                }
+            }
             IndicatorKind::Sma { .. }
             | IndicatorKind::Ema { .. }
             | IndicatorKind::Dema { .. }
@@ -1107,6 +1153,9 @@ impl ChartEngine {
             } => {
                 parameters.push(integer("rsi_period", rsi_period));
                 parameters.push(integer("stochastic_period", stochastic_period));
+            }
+            IndicatorKind::Momentum { period } | IndicatorKind::RateOfChange { period } => {
+                parameters.push(integer("period", period));
             }
             IndicatorKind::AdxDmi { period } => parameters.push(integer("period", period)),
             IndicatorKind::ParabolicSar => {}
@@ -1279,6 +1328,9 @@ impl ChartEngine {
                     rsi_period,
                     stochastic_period,
                 } => *rsi_period == 0 || *stochastic_period == 0,
+                IndicatorKind::Momentum { period } | IndicatorKind::RateOfChange { period } => {
+                    *period == 0
+                }
                 IndicatorKind::ParabolicSar => false,
                 IndicatorKind::SuperTrend { period, multiplier } => {
                     *period == 0 || !multiplier.is_finite() || *multiplier < 0.0
@@ -1636,6 +1688,8 @@ fn indicator_kind_name(kind: &IndicatorKind) -> &'static str {
         IndicatorKind::Cci { .. } => "cci",
         IndicatorKind::WilliamsR { .. } => "williams_r",
         IndicatorKind::StochasticRsi { .. } => "stochastic_rsi",
+        IndicatorKind::Momentum { .. } => "momentum",
+        IndicatorKind::RateOfChange { .. } => "roc",
         IndicatorKind::Donchian { .. } => "donchian",
         IndicatorKind::Keltner { .. } => "keltner",
         IndicatorKind::AdxDmi { .. } => "adx_dmi",
@@ -1714,6 +1768,12 @@ fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators::Increment
             standard_deviation,
             percent,
         ),
+        IndicatorKind::Momentum { period } => {
+            aeris_charts_indicators::IncrementalState::momentum(period)
+        }
+        IndicatorKind::RateOfChange { period } => {
+            aeris_charts_indicators::IncrementalState::rate_of_change(period)
+        }
         IndicatorKind::Wma { period } => aeris_charts_indicators::IncrementalState::wma(period),
     }
 }
@@ -1759,6 +1819,8 @@ fn indicator_title(kind: &IndicatorKind) -> String {
             rsi_period,
             stochastic_period,
         } => format!("Stochastic RSI {rsi_period} {stochastic_period}"),
+        IndicatorKind::Momentum { period } => format!("Momentum {period}"),
+        IndicatorKind::RateOfChange { period } => format!("ROC {period}"),
         IndicatorKind::Donchian { period } => format!("Donchian {period}"),
         IndicatorKind::Keltner { period, multiplier } => {
             format!("Keltner {period} {}", params(*multiplier))
@@ -1832,6 +1894,8 @@ fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static 
         IndicatorKind::Cci { .. } => "CCI",
         IndicatorKind::WilliamsR { .. } => "%R",
         IndicatorKind::StochasticRsi { .. } => "Stoch RSI",
+        IndicatorKind::Momentum { .. } => "Momentum",
+        IndicatorKind::RateOfChange { .. } => "ROC",
         IndicatorKind::Donchian { .. } => ["Upper", "Basis", "Lower"][output_index],
         IndicatorKind::Keltner { .. } => ["Upper", "Basis", "Lower"][output_index],
         IndicatorKind::AdxDmi { .. } => ["+DI", "-DI", "ADX"][output_index],

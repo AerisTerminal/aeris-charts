@@ -357,6 +357,8 @@ fn incremental_output_count(kind: &IndicatorKind) -> usize {
         | IndicatorKind::Cci { .. }
         | IndicatorKind::WilliamsR { .. }
         | IndicatorKind::StochasticRsi { .. }
+        | IndicatorKind::Momentum { .. }
+        | IndicatorKind::RateOfChange { .. }
         | IndicatorKind::Rsi { .. }
         | IndicatorKind::Atr { .. }
         | IndicatorKind::Vwap
@@ -425,6 +427,7 @@ fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
             rsi_period,
             stochastic_period,
         } => *rsi_period > 0 && *stochastic_period > 0,
+        IndicatorKind::Momentum { period } | IndicatorKind::RateOfChange { period } => *period > 0,
         IndicatorKind::ParabolicSar => true,
         IndicatorKind::SuperTrend { period, multiplier } => {
             *period > 0 && multiplier.is_finite() && *multiplier >= 0.0
@@ -2085,6 +2088,29 @@ mod tests {
             }
         );
         assert_eq!(binding.outputs, vec![output]);
+    }
+
+    #[test]
+    fn momentum_and_roc_persistence_round_trip_periods() {
+        for (kind, output) in [
+            (crate::IndicatorKind::Momentum { period: 3 }, "momentum"),
+            (crate::IndicatorKind::RateOfChange { period: 4 }, "roc"),
+        ] {
+            let mut chart = settled_chart();
+            let id = match &kind {
+                crate::IndicatorKind::Momentum { period } => {
+                    chart.add_momentum(0, *period).unwrap()
+                }
+                crate::IndicatorKind::RateOfChange { period } => chart.add_roc(0, *period).unwrap(),
+                _ => unreachable!("test kind"),
+            };
+            let document = chart.export_state_json().unwrap();
+            let mut restored = settled_chart();
+            restored.import_state_json(&document).unwrap();
+            assert_eq!(restored.indicator_bindings()[0].kind, kind);
+            assert_eq!(restored.indicator_bindings()[0].outputs, vec![id]);
+            assert_eq!(restored.indicator_info(id).unwrap().kind, output);
+        }
     }
 
     #[test]

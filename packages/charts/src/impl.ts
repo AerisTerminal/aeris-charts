@@ -4904,6 +4904,20 @@ export class chart_impl implements chart_api {
     );
   }
 
+  add_momentum(source: series_api, period: number, options?: Partial<series_options>): series_api {
+    return this.indicator_series(
+      this.wasm.add_momentum(source.id, Math.max(1, Math.floor(period))),
+      options,
+    );
+  }
+
+  add_roc(source: series_api, period: number, options?: Partial<series_options>): series_api {
+    return this.indicator_series(
+      this.wasm.add_roc(source.id, Math.max(1, Math.floor(period))),
+      options,
+    );
+  }
+
   add_donchian(source: series_api, period: number, options?: Partial<series_options>): [series_api, series_api, series_api] {
     const ids = this.wasm.add_donchian(source.id, Math.max(1, Math.floor(period)));
     if (ids.length !== 3) throw new AerisChartsError("invalid_options", "invalid Donchian configuration");

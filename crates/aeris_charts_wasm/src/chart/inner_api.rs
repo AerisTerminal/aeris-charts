@@ -139,6 +139,8 @@ impl ChartInner {
                 rsi_period: period,
                 stochastic_period: period,
             },
+            "momentum" => IndicatorKind::Momentum { period },
+            "roc" => IndicatorKind::RateOfChange { period },
             "donchian" => IndicatorKind::Donchian { period },
             "keltner" => IndicatorKind::Keltner {
                 period,
@@ -288,6 +290,18 @@ impl ChartInner {
                 rsi_period as usize,
                 stochastic_period as usize,
             )
+            .unwrap_or(u32::MAX)
+    }
+
+    pub fn add_momentum(&mut self, source_id: u32, period: u32) -> u32 {
+        self.engine
+            .add_momentum(source_id as SeriesId, period as usize)
+            .unwrap_or(u32::MAX)
+    }
+
+    pub fn add_roc(&mut self, source_id: u32, period: u32) -> u32 {
+        self.engine
+            .add_roc(source_id as SeriesId, period as usize)
             .unwrap_or(u32::MAX)
     }
 

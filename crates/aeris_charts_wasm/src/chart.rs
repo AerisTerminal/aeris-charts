@@ -2148,6 +2148,14 @@ impl AerisChart {
             .add_stochastic_rsi(source_id, rsi_period, stochastic_period)
     }
 
+    pub fn add_momentum(&mut self, source_id: u32, period: u32) -> u32 {
+        self.inner.borrow_mut().add_momentum(source_id, period)
+    }
+
+    pub fn add_roc(&mut self, source_id: u32, period: u32) -> u32 {
+        self.inner.borrow_mut().add_roc(source_id, period)
+    }
+
     pub fn add_donchian(&mut self, source_id: u32, period: u32) -> Vec<u32> {
         self.inner.borrow_mut().add_donchian(source_id, period)
     }

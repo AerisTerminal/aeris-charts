@@ -471,6 +471,36 @@ pub fn stochastic_rsi(
     out
 }
 
+/// Momentum as the current value minus the value `period` rows earlier.
+pub fn momentum(values: &[f64], period: usize) -> Vec<Option<f64>> {
+    let mut out = vec![None; values.len()];
+    if period == 0 {
+        return out;
+    }
+    for (row, output) in out.iter_mut().enumerate().skip(period) {
+        *output = Some(values[row] - values[row - period]);
+    }
+    out
+}
+
+/// Rate of change as a percentage difference from the value `period` rows earlier.
+/// A zero denominator emits zero instead of a non-finite value.
+pub fn rate_of_change(values: &[f64], period: usize) -> Vec<Option<f64>> {
+    let mut out = vec![None; values.len()];
+    if period == 0 {
+        return out;
+    }
+    for (row, output) in out.iter_mut().enumerate().skip(period) {
+        let previous = values[row - period];
+        *output = Some(if previous != 0.0 {
+            (values[row] / previous - 1.0) * 100.0
+        } else {
+            0.0
+        });
+    }
+    out
+}
+
 fn wma_at(values: &[f64], row: usize, period: usize) -> Option<f64> {
     if period == 0 || row.saturating_add(1) < period {
         return None;
@@ -2131,6 +2161,12 @@ enum IncrementalKind {
         rsi_period: usize,
         stochastic_period: usize,
     },
+    Momentum {
+        period: usize,
+    },
+    RateOfChange {
+        period: usize,
+    },
     Donchian {
         period: usize,
     },
@@ -2290,6 +2326,14 @@ impl IncrementalState {
             },
             1,
         )
+    }
+
+    pub fn momentum(period: usize) -> Self {
+        Self::new(IncrementalKind::Momentum { period }, 1)
+    }
+
+    pub fn rate_of_change(period: usize) -> Self {
+        Self::new(IncrementalKind::RateOfChange { period }, 1)
     }
 
     pub fn donchian(period: usize) -> Self {
@@ -2493,6 +2537,7 @@ impl IncrementalState {
             IncrementalKind::Cci { .. } => 0,
             IncrementalKind::WilliamsR { .. } => 0,
             IncrementalKind::StochasticRsi { .. } => 0,
+            IncrementalKind::Momentum { .. } | IncrementalKind::RateOfChange { .. } => 0,
             IncrementalKind::Donchian { .. } => 0,
         }
     }
@@ -2655,6 +2700,18 @@ impl IncrementalState {
                 let start = self.output_from[0];
                 self.last_work_rows = n - start;
                 let values = stochastic_rsi(input.close, *rsi_period, *stochastic_period);
+                self.outputs[0].extend(values.into_iter().skip(start).flatten());
+            }
+            IncrementalKind::Momentum { period } => {
+                let start = self.output_from[0];
+                self.last_work_rows = n - start;
+                let values = momentum(input.close, *period);
+                self.outputs[0].extend(values.into_iter().skip(start).flatten());
+            }
+            IncrementalKind::RateOfChange { period } => {
+                let start = self.output_from[0];
+                self.last_work_rows = n - start;
+                let values = rate_of_change(input.close, *period);
                 self.outputs[0].extend(values.into_iter().skip(start).flatten());
             }
             IncrementalKind::Donchian { period } => {
@@ -3134,6 +3191,9 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
             0,
             0,
         ],
+        IncrementalKind::Momentum { period } | IncrementalKind::RateOfChange { period } => {
+            [*period, 0, 0, 0, 0]
+        }
         IncrementalKind::Donchian { period } => [
             period.saturating_sub(1),
             period.saturating_sub(1),
@@ -3353,6 +3413,17 @@ mod tests {
         assert_eq!(points[5], Some(0.0));
         assert!(points[6..].iter().all(|value| *value == Some(0.0)));
         assert!(stochastic_rsi(&values, 0, 3).iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn momentum_and_rate_of_change_use_lagged_values() {
+        let values = [10.0, 12.0, 15.0, 20.0];
+        assert_eq!(momentum(&values, 2), vec![None, None, Some(5.0), Some(8.0)]);
+        assert_eq!(
+            rate_of_change(&values, 2),
+            vec![None, None, Some(50.0), Some(66.66666666666667)]
+        );
+        assert_eq!(rate_of_change(&[0.0, 1.0], 1), vec![None, Some(0.0)]);
     }
 
     #[test]
@@ -4186,6 +4257,8 @@ mod tests {
         Cci,
         WilliamsR,
         StochasticRsi,
+        Momentum,
+        RateOfChange,
         Donchian,
         Keltner,
         AdxDmi,
@@ -4215,6 +4288,8 @@ mod tests {
             TestKind::Cci => vec![cci(input.high, input.low, input.close, 5)],
             TestKind::WilliamsR => vec![williams_r(input.high, input.low, input.close, 5)],
             TestKind::StochasticRsi => vec![stochastic_rsi(input.close, 5, 5)],
+            TestKind::Momentum => vec![momentum(input.close, 5)],
+            TestKind::RateOfChange => vec![rate_of_change(input.close, 5)],
             TestKind::Donchian => {
                 let points = donchian(input.high, input.low, 5);
                 vec![
@@ -4340,6 +4415,8 @@ mod tests {
                 TestKind::StochasticRsi,
                 IncrementalState::stochastic_rsi(5, 5),
             ),
+            (TestKind::Momentum, IncrementalState::momentum(5)),
+            (TestKind::RateOfChange, IncrementalState::rate_of_change(5)),
             (TestKind::Donchian, IncrementalState::donchian(5)),
             (TestKind::Keltner, IncrementalState::keltner(5, 2.0)),
             (TestKind::AdxDmi, IncrementalState::adx_dmi(5)),
