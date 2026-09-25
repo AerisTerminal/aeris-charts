@@ -55,6 +55,27 @@ pub fn ema(values: &[f64], period: usize) -> Vec<Option<f64>> {
     out
 }
 
+/// Double exponential moving average: `2 * EMA(source) - EMA(EMA(source))`.
+pub fn dema(values: &[f64], period: usize) -> Vec<Option<f64>> {
+    if period == 0 {
+        return vec![None; values.len()];
+    }
+    let mut out = vec![None; values.len()];
+    let first = ema(values, period);
+    let compact = first.iter().flatten().copied().collect::<Vec<_>>();
+    let second = ema(&compact, period);
+    let mut second_index = 0;
+    for (index, first) in first.into_iter().enumerate() {
+        if let Some(first) = first {
+            if let Some(second) = second.get(second_index).copied().flatten() {
+                out[index] = Some(2.0 * first - second);
+            }
+            second_index += 1;
+        }
+    }
+    out
+}
+
 /// Bollinger Bands using a simple moving-average center and population standard deviation.
 pub fn bollinger(values: &[f64], period: usize, deviation: f64) -> Vec<BollingerPoint> {
     if period == 0 {
@@ -489,6 +510,18 @@ struct EmaState {
     seen: usize,
     seed_sum: f64,
     value: f64,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct DemaState {
+    first: EmaState,
+    second: EmaState,
+}
+
+fn dema_step(state: &mut DemaState, sample: f64, period: usize) -> Option<f64> {
+    let first = ema_step(&mut state.first, sample, period)?;
+    let second = ema_step(&mut state.second, first, period)?;
+    Some(2.0 * first - second)
 }
 
 fn ema_step(state: &mut EmaState, sample: f64, period: usize) -> Option<f64> {
@@ -1287,6 +1320,10 @@ enum IncrementalKind {
         period: usize,
         state: RecursiveHistory<EmaState>,
     },
+    Dema {
+        period: usize,
+        state: RecursiveHistory<DemaState>,
+    },
     EmaRibbon {
         periods: [usize; MAX_OUTPUTS],
         states: Box<[RecursiveHistory<EmaState>; MAX_OUTPUTS]>,
@@ -1360,6 +1397,16 @@ impl IncrementalState {
     pub fn ema(period: usize) -> Self {
         Self::new(
             IncrementalKind::Ema {
+                period,
+                state: RecursiveHistory::new(),
+            },
+            1,
+        )
+    }
+
+    pub fn dema(period: usize) -> Self {
+        Self::new(
+            IncrementalKind::Dema {
                 period,
                 state: RecursiveHistory::new(),
             },
@@ -1491,6 +1538,7 @@ impl IncrementalState {
     pub fn runtime_bytes(&self) -> usize {
         match &self.kind {
             IncrementalKind::Ema { state, .. } => state.bytes(),
+            IncrementalKind::Dema { state, .. } => state.bytes(),
             IncrementalKind::EmaRibbon { states, .. } => {
                 states.iter().map(RecursiveHistory::bytes).sum()
             }
@@ -1558,6 +1606,25 @@ impl IncrementalState {
                     state.checkpoint(row, accumulator);
                     if row >= self.output_from[0] {
                         self.outputs[0].push(value.expect("EMA after warmup"));
+                    }
+                    if row + 1 == n {
+                        tail = Some(accumulator);
+                        before_tail = (row > 0).then_some(previous);
+                    }
+                }
+                state.finish(n, tail, before_tail);
+            }
+            IncrementalKind::Dema { period, state } => {
+                let (start, mut accumulator) = state.begin(n, requested);
+                self.last_work_rows = n - start;
+                let mut tail = None;
+                let mut before_tail = None;
+                for row in start..n {
+                    let previous = accumulator;
+                    let value = dema_step(&mut accumulator, input.close[row], *period);
+                    state.checkpoint(row, accumulator);
+                    if row >= self.output_from[0] {
+                        self.outputs[0].push(value.expect("DEMA after warmup"));
                     }
                     if row + 1 == n {
                         tail = Some(accumulator);
@@ -1855,6 +1922,9 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
         IncrementalKind::Sma { period }
         | IncrementalKind::Ema { period, .. }
         | IncrementalKind::Wma { period } => [period.saturating_sub(1), 0, 0, 0, 0],
+        IncrementalKind::Dema { period, .. } => {
+            [period.saturating_mul(2).saturating_sub(2), 0, 0, 0, 0]
+        }
         IncrementalKind::EmaRibbon { periods, .. } => {
             periods.map(|period| period.saturating_sub(1))
         }
@@ -1905,6 +1975,14 @@ mod tests {
         assert_eq!(
             ema(&[1.0, 2.0, 3.0, 5.0], 3),
             vec![None, None, Some(2.0), Some(3.5)]
+        );
+    }
+
+    #[test]
+    fn dema_uses_two_sma_seeded_ema_stages() {
+        assert_eq!(
+            dema(&[1.0, 2.0, 3.0, 5.0, 8.0], 3),
+            vec![None, None, None, None, Some(7.75)]
         );
     }
 
@@ -2673,6 +2751,7 @@ mod tests {
     enum TestKind {
         Sma,
         Ema,
+        Dema,
         EmaRibbon,
         Bollinger,
         Rsi,
@@ -2687,6 +2766,7 @@ mod tests {
         match kind {
             TestKind::Sma => vec![sma(input.close, 5)],
             TestKind::Ema => vec![ema(input.close, 5)],
+            TestKind::Dema => vec![dema(input.close, 5)],
             TestKind::EmaRibbon => [3, 5, 8, 13, 21]
                 .into_iter()
                 .map(|period| ema(input.close, period))
@@ -2761,6 +2841,7 @@ mod tests {
         let mut states = vec![
             (TestKind::Sma, IncrementalState::sma(5)),
             (TestKind::Ema, IncrementalState::ema(5)),
+            (TestKind::Dema, IncrementalState::dema(5)),
             (
                 TestKind::EmaRibbon,
                 IncrementalState::ema_ribbon([3, 5, 8, 13, 21]),

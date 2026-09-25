@@ -348,6 +348,7 @@ fn incremental_output_count(kind: &IndicatorKind) -> usize {
     match kind {
         IndicatorKind::Sma { .. }
         | IndicatorKind::Ema { .. }
+        | IndicatorKind::Dema { .. }
         | IndicatorKind::Rsi { .. }
         | IndicatorKind::Atr { .. }
         | IndicatorKind::Vwap
@@ -390,6 +391,7 @@ fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
     match kind {
         IndicatorKind::Sma { period }
         | IndicatorKind::Ema { period }
+        | IndicatorKind::Dema { period }
         | IndicatorKind::Rsi { period }
         | IndicatorKind::Atr { period }
         | IndicatorKind::Wma { period } => *period > 0,

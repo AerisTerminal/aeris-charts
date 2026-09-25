@@ -127,6 +127,7 @@ impl ChartInner {
         let definition = match kind {
             "sma" => IndicatorKind::Sma { period },
             "ema" => IndicatorKind::Ema { period },
+            "dema" => IndicatorKind::Dema { period },
             "ema_ribbon" => IndicatorKind::EmaRibbon {
                 periods: [period; 5],
             },
@@ -196,6 +197,12 @@ impl ChartInner {
     pub fn add_ema(&mut self, source_id: u32, period: u32) -> u32 {
         self.engine
             .add_ema(source_id as SeriesId, period as usize)
+            .unwrap_or(u32::MAX)
+    }
+
+    pub fn add_dema(&mut self, source_id: u32, period: u32) -> u32 {
+        self.engine
+            .add_dema(source_id as SeriesId, period as usize)
             .unwrap_or(u32::MAX)
     }
 

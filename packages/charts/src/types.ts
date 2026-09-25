@@ -968,7 +968,7 @@ export interface pane_geometry {
 
 /** Scalar input accepted by a built-in indicator. The source series may itself be an indicator output. */
 export type indicator_input_source = "open" | "high" | "low" | "close" | "hl2" | "hlc3" | "ohlc4" | "hlcc4";
-export type indicator_kind = "sma" | "ema" | "ema_ribbon" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "vwap_bands" | "wma";
+export type indicator_kind = "sma" | "ema" | "dema" | "ema_ribbon" | "bollinger" | "rsi" | "macd" | "stochastic" | "atr" | "vwap" | "vwap_bands" | "wma";
 export type vwap_reset = "session" | "weekly" | "monthly";
 export type indicator_parameter_type = "integer" | "number" | "source" | "series";
 export interface indicator_parameter_descriptor {
@@ -2849,6 +2849,7 @@ export interface chart_api {
   add_sma_with_source(source: series_api, input: indicator_input_source, period: number, options?: Partial<series_options>): series_api;
   /** Add a Rust-native exponential moving-average line derived from an existing series. */
   add_ema(source: series_api, period: number, options?: Partial<series_options>): series_api;
+  add_dema(source: series_api, period: number, options?: Partial<series_options>): series_api;
   /** Add one five-output EMA ribbon on the source pane. Defaults to 5/10/20/50/200; the third
    *  output (EMA 20 by default) uses violet `#7d52f4`. */
   add_ema_ribbon(source: series_api, periods?: ema_ribbon_periods, options?: ema_ribbon_options): [series_api, series_api, series_api, series_api, series_api];
