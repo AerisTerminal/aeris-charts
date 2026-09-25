@@ -189,6 +189,12 @@ construction, with retention bounded to the configured history. Commands and thr
 in the release examples so a clean `--release` run can be compared without importing machine-
 specific timings into the repository.
 
+The finite GPUI real-window probe was also exercised on the current Windows display with the
+footprint fixture: 30 frames at DPR 1.25 and 500 source bars produced 24 cached text runs (zero
+misses), with adapter p50/p99 of 2.005/4.508 ms and GPUI paint p50/p95/p99 of 2.005/2.369/4.341 ms.
+These numbers are an observed host run, not a portable release budget; the probe does not expose
+native WebGPU device-present timing.
+
 Deterministic synthetic tapes cover grid boundaries, unknown-side handling, quote/tick-rule
 classification, equal timestamps and sequences, late events, corrections, session resets, all bar
 modes, bid/ask/total/delta levels, POC ties, mean-reverting Max/Min Delta paths, both imbalance sides,

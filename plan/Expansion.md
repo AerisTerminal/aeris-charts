@@ -196,7 +196,10 @@ native window shaping or actual GPU present time; `gpui_probe` now accepts
 cache. WebGPU executor timing,
 and accessibility review remain open until the batch is closed. The screenshot harness now accepts
 `AERIS_CHARTS_GPUI_FEATURE=footprint` and emits a DPR-aware PNG plus metadata for the dense
-12-bar fixture; the capture has been exercised on the current Windows display.
+12-bar fixture; the capture has been exercised on the current Windows display after fixing the
+harness to pass the configured frame background through the GPUI prepared frame. The observed
+30-frame footprint probe run is recorded in `docs/Footprint.md`; it remains machine-specific
+evidence, not a portable budget.
 
 **Exit:** the F2 exit criterion passes (footprint and CVD share one tape, a late trade updates both,
 retention evicts both), and PD10 budgets hold on GPUI.
