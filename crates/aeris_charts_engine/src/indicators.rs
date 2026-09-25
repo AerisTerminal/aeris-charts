@@ -112,6 +112,9 @@ pub enum IndicatorKind {
     Hma {
         period: usize,
     },
+    Vwma {
+        period: usize,
+    },
     EmaRibbon {
         periods: [usize; aeris_charts_indicators::MAX_OUTPUTS],
     },
@@ -431,6 +434,15 @@ impl ChartEngine {
                                 ..IndicatorParameters::default()
                             },
                         ),
+                        IndicatorKind::Vwma { period } => (
+                            "vwma",
+                            period,
+                            None,
+                            IndicatorParameters {
+                                period: Some(period),
+                                ..IndicatorParameters::default()
+                            },
+                        ),
                         IndicatorKind::EmaRibbon { periods } => (
                             "ema_ribbon",
                             periods[output_index],
@@ -576,6 +588,17 @@ impl ChartEngine {
 
     pub fn add_hma(&mut self, source: SeriesId, period: usize) -> Option<SeriesId> {
         self.add_indicator_kind(source, IndicatorKind::Hma { period }, None)
+            .into_iter()
+            .next()
+    }
+
+    pub fn add_vwma(
+        &mut self,
+        source: SeriesId,
+        volume_source: Option<SeriesId>,
+        period: usize,
+    ) -> Option<SeriesId> {
+        self.add_indicator_kind(source, IndicatorKind::Vwma { period }, volume_source)
             .into_iter()
             .next()
     }
@@ -773,6 +796,7 @@ impl ChartEngine {
             | IndicatorKind::Tema { .. }
             | IndicatorKind::Smma { .. }
             | IndicatorKind::Hma { .. }
+            | IndicatorKind::Vwma { .. }
             | IndicatorKind::EmaRibbon { .. }
             | IndicatorKind::Bollinger { .. }
             | IndicatorKind::Vwap
@@ -862,6 +886,16 @@ impl ChartEngine {
                 parameters.push(integer("d_period", d_period));
             }
             IndicatorKind::Vwap => {
+                parameters.push(IndicatorParameterDescriptor {
+                    name: "volume_source".into(),
+                    parameter_type: IndicatorParameterType::Series,
+                    default: serde_json::Value::Null,
+                    min: None,
+                    max: None,
+                });
+            }
+            IndicatorKind::Vwma { period } => {
+                parameters.push(integer("period", period));
                 parameters.push(IndicatorParameterDescriptor {
                     name: "volume_source".into(),
                     parameter_type: IndicatorParameterType::Series,
@@ -971,14 +1005,14 @@ impl ChartEngine {
     ) -> Vec<SeriesId> {
         if self.series_entry(source).is_none()
             || match &kind {
-                IndicatorKind::Vwap | IndicatorKind::VwapBands { .. } => {
-                    volume_source.is_some_and(|id| {
-                        id == source
-                            || self
-                                .series_entry(id)
-                                .is_none_or(|series| !series.kind.stores_scalar_values())
-                    })
-                }
+                IndicatorKind::Vwap
+                | IndicatorKind::VwapBands { .. }
+                | IndicatorKind::Vwma { .. } => volume_source.is_some_and(|id| {
+                    id == source
+                        || self
+                            .series_entry(id)
+                            .is_none_or(|series| !series.kind.stores_scalar_values())
+                }),
                 _ => volume_source.is_some(),
             }
             || match &kind {
@@ -988,6 +1022,7 @@ impl ChartEngine {
                 | IndicatorKind::Tema { period }
                 | IndicatorKind::Smma { period }
                 | IndicatorKind::Hma { period }
+                | IndicatorKind::Vwma { period }
                 | IndicatorKind::Bollinger { period, .. }
                 | IndicatorKind::Rsi { period }
                 | IndicatorKind::Atr { period }
@@ -1328,6 +1363,7 @@ fn indicator_kind_name(kind: &IndicatorKind) -> &'static str {
         IndicatorKind::Tema { .. } => "tema",
         IndicatorKind::Smma { .. } => "smma",
         IndicatorKind::Hma { .. } => "hma",
+        IndicatorKind::Vwma { .. } => "vwma",
         IndicatorKind::EmaRibbon { .. } => "ema_ribbon",
         IndicatorKind::Bollinger { .. } => "bollinger",
         IndicatorKind::Rsi { .. } => "rsi",
@@ -1348,6 +1384,7 @@ fn incremental_state(kind: &IndicatorKind) -> aeris_charts_indicators::Increment
         IndicatorKind::Tema { period } => aeris_charts_indicators::IncrementalState::tema(period),
         IndicatorKind::Smma { period } => aeris_charts_indicators::IncrementalState::smma(period),
         IndicatorKind::Hma { period } => aeris_charts_indicators::IncrementalState::hma(period),
+        IndicatorKind::Vwma { period } => aeris_charts_indicators::IncrementalState::vwma(period),
         IndicatorKind::EmaRibbon { periods } => {
             aeris_charts_indicators::IncrementalState::ema_ribbon(periods)
         }
@@ -1409,6 +1446,7 @@ fn indicator_title(kind: &IndicatorKind) -> String {
         IndicatorKind::Tema { period } => format!("TEMA {period}"),
         IndicatorKind::Smma { period } => format!("SMMA {period}"),
         IndicatorKind::Hma { period } => format!("HMA {period}"),
+        IndicatorKind::Vwma { period } => format!("VWMA {period}"),
         IndicatorKind::EmaRibbon { periods } => format!(
             "EMA Ribbon {} {} {} {} {}",
             periods[0], periods[1], periods[2], periods[3], periods[4]
@@ -1467,6 +1505,7 @@ fn indicator_output_name(kind: &IndicatorKind, output_index: usize) -> &'static 
         IndicatorKind::Tema { .. } => "TEMA",
         IndicatorKind::Smma { .. } => "SMMA",
         IndicatorKind::Hma { .. } => "HMA",
+        IndicatorKind::Vwma { .. } => "VWMA",
         IndicatorKind::EmaRibbon { .. } => {
             ["EMA 1", "EMA 2", "EMA 3", "EMA 4", "EMA 5"][output_index]
         }

@@ -131,6 +131,7 @@ impl ChartInner {
             "tema" => IndicatorKind::Tema { period },
             "smma" | "rma" => IndicatorKind::Smma { period },
             "hma" => IndicatorKind::Hma { period },
+            "vwma" => IndicatorKind::Vwma { period },
             "ema_ribbon" => IndicatorKind::EmaRibbon {
                 periods: [period; 5],
             },
@@ -228,6 +229,13 @@ impl ChartInner {
     pub fn add_hma(&mut self, source_id: u32, period: u32) -> u32 {
         self.engine
             .add_hma(source_id as SeriesId, period as usize)
+            .unwrap_or(u32::MAX)
+    }
+
+    pub fn add_vwma(&mut self, source_id: u32, volume_source: i32, period: u32) -> u32 {
+        let volume = (volume_source >= 0).then_some(volume_source as SeriesId);
+        self.engine
+            .add_vwma(source_id as SeriesId, volume, period as usize)
             .unwrap_or(u32::MAX)
     }
 

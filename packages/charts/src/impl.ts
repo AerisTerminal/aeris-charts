@@ -4865,6 +4865,13 @@ export class chart_impl implements chart_api {
     return this.indicator_series(this.wasm.add_wma(source.id, Math.max(1, Math.floor(period))), options);
   }
 
+  add_vwma(source: series_api, period: number, volume_source?: series_api | null, options?: Partial<series_options>): series_api {
+    return this.indicator_series(
+      this.wasm.add_vwma(source.id, volume_source?.id ?? -1, Math.max(1, Math.floor(period))),
+      options,
+    );
+  }
+
   subscribe_crosshair_move(handler: mouse_event_handler): void {
     this.crosshair_subs.add(handler);
   }

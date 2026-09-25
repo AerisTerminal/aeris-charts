@@ -146,6 +146,19 @@ pub fn hma(values: &[f64], period: usize) -> Vec<Option<f64>> {
     out
 }
 
+/// Volume-weighted moving average. Missing volume rows use unit weight; nonpositive volume
+/// contributes zero, and an all-zero window falls back to its simple average.
+pub fn vwma(values: &[f64], volumes: &[f64], period: usize) -> Vec<Option<f64>> {
+    if period == 0 {
+        return vec![None; values.len()];
+    }
+    let mut out = vec![None; values.len()];
+    for (row, output) in out.iter_mut().enumerate().skip(period.saturating_sub(1)) {
+        *output = vwma_at(values, volumes, row, period);
+    }
+    out
+}
+
 fn wma_at(values: &[f64], row: usize, period: usize) -> Option<f64> {
     if period == 0 || row.saturating_add(1) < period {
         return None;
@@ -176,6 +189,27 @@ fn hma_at(values: &[f64], row: usize, period: usize) -> Option<f64> {
         })
         .collect::<Option<Vec<_>>>()?;
     Some(weighted.into_iter().sum::<f64>() / denominator)
+}
+
+fn vwma_at(values: &[f64], volumes: &[f64], row: usize, period: usize) -> Option<f64> {
+    if period == 0 || row.saturating_add(1) < period {
+        return None;
+    }
+    let start = row + 1 - period;
+    let mut weighted_sum = 0.0;
+    let mut volume_sum = 0.0;
+    let mut simple_sum = 0.0;
+    for (index, &value) in values.iter().enumerate().take(row + 1).skip(start) {
+        let volume = volumes.get(index).copied().unwrap_or(1.0).max(0.0);
+        weighted_sum += value * volume;
+        volume_sum += volume;
+        simple_sum += value;
+    }
+    Some(if volume_sum > 0.0 {
+        weighted_sum / volume_sum
+    } else {
+        simple_sum / period as f64
+    })
 }
 
 /// Bollinger Bands using a simple moving-average center and population standard deviation.
@@ -1474,6 +1508,9 @@ enum IncrementalKind {
     Hma {
         period: usize,
     },
+    Vwma {
+        period: usize,
+    },
     EmaRibbon {
         periods: [usize; MAX_OUTPUTS],
         states: Box<[RecursiveHistory<EmaState>; MAX_OUTPUTS]>,
@@ -1586,6 +1623,10 @@ impl IncrementalState {
 
     pub fn hma(period: usize) -> Self {
         Self::new(IncrementalKind::Hma { period }, 1)
+    }
+
+    pub fn vwma(period: usize) -> Self {
+        Self::new(IncrementalKind::Vwma { period }, 1)
     }
 
     pub fn ema_ribbon(periods: [usize; MAX_OUTPUTS]) -> Self {
@@ -1730,6 +1771,7 @@ impl IncrementalState {
             | IncrementalKind::Bollinger { .. }
             | IncrementalKind::Wma { .. }
             | IncrementalKind::Hma { .. } => 0,
+            IncrementalKind::Vwma { .. } => 0,
         }
     }
 
@@ -1854,6 +1896,16 @@ impl IncrementalState {
                 for row in start..n {
                     self.outputs[0]
                         .push(hma_at(&input.close[..n], row, *period).expect("HMA after warmup"));
+                }
+            }
+            IncrementalKind::Vwma { period } => {
+                let start = self.output_from[0];
+                self.last_work_rows = n - start;
+                for row in start..n {
+                    self.outputs[0].push(
+                        vwma_at(input.close, input.volume, row, *period)
+                            .expect("VWMA after warmup"),
+                    );
                 }
             }
             IncrementalKind::EmaRibbon { periods, states } => {
@@ -2165,6 +2217,7 @@ fn output_starts(kind: &IncrementalKind) -> [usize; MAX_OUTPUTS] {
                 0,
             ]
         }
+        IncrementalKind::Vwma { period } => [period.saturating_sub(1), 0, 0, 0, 0],
         IncrementalKind::EmaRibbon { periods, .. } => {
             periods.map(|period| period.saturating_sub(1))
         }
@@ -2260,6 +2313,22 @@ mod tests {
         assert_eq!(
             hma(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0], 4),
             vec![None, None, None, None, Some(5.0), Some(6.0), Some(7.0)]
+        );
+    }
+
+    #[test]
+    fn vwma_weights_the_window_and_falls_back_for_missing_or_zero_volume() {
+        assert_eq!(
+            vwma(&[10.0, 20.0, 30.0], &[1.0, 2.0, 3.0], 2),
+            vec![None, Some(50.0 / 3.0), Some(130.0 / 5.0)]
+        );
+        assert_eq!(
+            vwma(&[10.0, 20.0, 30.0], &[], 2),
+            vec![None, Some(15.0), Some(25.0)]
+        );
+        assert_eq!(
+            vwma(&[10.0, 20.0, 30.0], &[0.0, 0.0, 0.0], 2),
+            vec![None, Some(15.0), Some(25.0)]
         );
     }
 
@@ -3032,6 +3101,7 @@ mod tests {
         Tema,
         Smma,
         Hma,
+        Vwma,
         EmaRibbon,
         Bollinger,
         Rsi,
@@ -3050,6 +3120,7 @@ mod tests {
             TestKind::Tema => vec![tema(input.close, 5)],
             TestKind::Smma => vec![smma(input.close, 5)],
             TestKind::Hma => vec![hma(input.close, 5)],
+            TestKind::Vwma => vec![vwma(input.close, input.volume, 5)],
             TestKind::EmaRibbon => [3, 5, 8, 13, 21]
                 .into_iter()
                 .map(|period| ema(input.close, period))
@@ -3128,6 +3199,7 @@ mod tests {
             (TestKind::Tema, IncrementalState::tema(5)),
             (TestKind::Smma, IncrementalState::smma(5)),
             (TestKind::Hma, IncrementalState::hma(5)),
+            (TestKind::Vwma, IncrementalState::vwma(5)),
             (
                 TestKind::EmaRibbon,
                 IncrementalState::ema_ribbon([3, 5, 8, 13, 21]),

@@ -2117,6 +2117,12 @@ impl AerisChart {
         self.inner.borrow_mut().add_hma(source_id, period)
     }
 
+    pub fn add_vwma(&mut self, source_id: u32, volume_source: i32, period: u32) -> u32 {
+        self.inner
+            .borrow_mut()
+            .add_vwma(source_id, volume_source, period)
+    }
+
     /// Add one five-output EMA ribbon on the source pane.
     pub fn add_ema_ribbon(
         &mut self,

@@ -352,6 +352,7 @@ fn incremental_output_count(kind: &IndicatorKind) -> usize {
         | IndicatorKind::Tema { .. }
         | IndicatorKind::Smma { .. }
         | IndicatorKind::Hma { .. }
+        | IndicatorKind::Vwma { .. }
         | IndicatorKind::Rsi { .. }
         | IndicatorKind::Atr { .. }
         | IndicatorKind::Vwap
@@ -398,6 +399,7 @@ fn indicator_kind_is_valid(kind: &IndicatorKind) -> bool {
         | IndicatorKind::Tema { period }
         | IndicatorKind::Smma { period }
         | IndicatorKind::Hma { period }
+        | IndicatorKind::Vwma { period }
         | IndicatorKind::Rsi { period }
         | IndicatorKind::Atr { period }
         | IndicatorKind::Wma { period } => *period > 0,
