@@ -218,7 +218,7 @@ retention evicts both), and PD10 budgets hold on GPUI.
 - [ ] **CT2** Heikin Ashi with real OHLC exposed separately for trading and crosshair.
 - [ ] **CT6** Symbol comparison overlays with a shared comparison anchor and per-symbol legend
       values.
-- [ ] **I1 moving averages:** VWMA, TEMA.
+- [ ] **I1 moving averages:** VWMA.
 - [x] **I1 Hull moving-average slice:** HMA with pure, incremental, schema, persistence and package coverage.
 - [x] **I1 moving average slice:** DEMA with pure, incremental, schema, persistence and package coverage.
 - [x] **I1 Wilder moving-average slice:** SMMA/RMA with pure, incremental, schema, persistence and package coverage.
