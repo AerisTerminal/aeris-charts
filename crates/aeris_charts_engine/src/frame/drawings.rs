@@ -14,9 +14,9 @@ use aeris_charts_render::draw_list::{IRect, LineStyle, LineType, Prim, TextAlign
 
 use super::{POSITION_ENTRY, PRIMARY};
 use crate::drawings::{
-    resolve_drawing_geometry, Drawing, DrawingBodyGeometry, DrawingHandleMode, DrawingId,
-    DrawingKind, DrawingTextHAlign, PositionGeometry, PositionZone, TEXT_CHROME_PAD, TEXT_PAD,
-    TREND_TEXT_PLACEHOLDER,
+    resolve_drawing_geometry, Drawing, DrawingBodyGeometry, DrawingGeometryOptions,
+    DrawingHandleMode, DrawingId, DrawingKind, DrawingTextHAlign, PositionGeometry, PositionZone,
+    TEXT_CHROME_PAD, TEXT_PAD, TREND_TEXT_PLACEHOLDER,
 };
 use crate::ChartEngine;
 use aeris_charts_core::model::plot_list::PlotValueIndex;
@@ -65,6 +65,51 @@ fn push_segment(
         line_type: LineType::Simple,
         color,
     });
+}
+
+fn push_drawing_cap(
+    cap: crate::DrawingLineCap,
+    endpoint: (f64, f64),
+    toward: (f64, f64),
+    width: f64,
+    color: Color,
+    out: &mut Vec<Prim>,
+) {
+    if cap == crate::DrawingLineCap::None {
+        return;
+    }
+    let dx = toward.0 - endpoint.0;
+    let dy = toward.1 - endpoint.1;
+    let distance = dx.hypot(dy);
+    if distance <= f64::EPSILON {
+        return;
+    }
+    let ux = dx / distance;
+    let uy = dy / distance;
+    let radius = (width * 1.75).max(3.0);
+    match cap {
+        crate::DrawingLineCap::Circle => out.push(Prim::Circle {
+            cx: endpoint.0 as f32,
+            cy: endpoint.1 as f32,
+            radius: radius as f32,
+            fill: color,
+            stroke_width: 0.0,
+            stroke: color,
+        }),
+        crate::DrawingLineCap::Arrow => {
+            let base_x = endpoint.0 + ux * radius * 2.0;
+            let base_y = endpoint.1 + uy * radius * 2.0;
+            let side_x = -uy * radius;
+            let side_y = ux * radius;
+            out.push(Prim::Triangle {
+                a: [endpoint.0 as f32, endpoint.1 as f32],
+                b: [(base_x + side_x) as f32, (base_y + side_y) as f32],
+                c: [(base_x - side_x) as f32, (base_y - side_y) as f32],
+                color,
+            });
+        }
+        crate::DrawingLineCap::None => {}
+    }
 }
 
 #[cfg(test)]
@@ -202,6 +247,8 @@ impl ChartEngine {
     ) {
         for drawing in &self.drawings {
             if drawing.pane_index != pane_index
+                || !drawing.visible
+                || !drawing.interval_visibility.allows(self.drawing_interval)
                 || !self.drawing_viewport_candidate_reference(drawing)
             {
                 continue;
@@ -215,6 +262,7 @@ impl ChartEngine {
                 .collect::<Vec<_>>();
             self.build_drawing_prims(drawing, &px, pane_w_px, vpr, out, points);
             self.build_drawing_text(drawing, &px, pane_w_px, vpr, out);
+            self.build_drawing_labels(drawing, &px, vpr, out);
         }
     }
 
@@ -239,7 +287,10 @@ impl ChartEngine {
         parts.clear();
         if self.drawing_runtime.borrow().pane_count(pane_index) <= 20 {
             for drawing in &self.drawings {
-                if drawing.pane_index != pane_index {
+                if drawing.pane_index != pane_index
+                    || !drawing.visible
+                    || !drawing.interval_visibility.allows(self.drawing_interval)
+                {
                     continue;
                 }
                 let Some(px) = self.drawing_px(drawing) else {
@@ -253,6 +304,7 @@ impl ChartEngine {
                 let point_start = points.len();
                 self.build_drawing_prims(drawing, &px, pane_w_px, vpr, out, points);
                 self.build_drawing_text(drawing, &px, pane_w_px, vpr, out);
+                self.build_drawing_labels(drawing, &px, vpr, out);
                 parts.push(super::RetainedDrawingPart {
                     id: drawing.id,
                     prim_start,
@@ -271,6 +323,9 @@ impl ChartEngine {
                 let Some(drawing) = self.drawings.get(position) else {
                     continue;
                 };
+                if !drawing.visible || !drawing.interval_visibility.allows(self.drawing_interval) {
+                    continue;
+                }
                 let Some(key) = self.drawing_coordinate_key(drawing) else {
                     continue;
                 };
@@ -285,6 +340,7 @@ impl ChartEngine {
                 let point_start = points.len();
                 self.build_drawing_prims(drawing, &px, pane_w_px, vpr, out, points);
                 self.build_drawing_text(drawing, &px, pane_w_px, vpr, out);
+                self.build_drawing_labels(drawing, &px, vpr, out);
                 parts.push(super::RetainedDrawingPart {
                     id: drawing.id,
                     prim_start,
@@ -390,7 +446,10 @@ impl ChartEngine {
         vpr: f64,
     ) -> Option<Vec<(f64, f64)>> {
         let drawing = self.drawing(id)?;
-        if drawing.pane_index != pane_index {
+        if drawing.pane_index != pane_index
+            || !drawing.visible
+            || !drawing.interval_visibility.allows(self.drawing_interval)
+        {
             return None;
         }
         let key = self.drawing_coordinate_key(drawing)?;
@@ -501,8 +560,12 @@ impl ChartEngine {
             f64::from(pane_w_px),
             pane.top * vpr,
             pane.height * vpr,
-            drawing.width,
-            vpr,
+            DrawingGeometryOptions {
+                line_width: drawing.width,
+                device_scale: vpr,
+                extend_left: drawing.extend_left,
+                extend_right: drawing.extend_right,
+            },
         ) else {
             return;
         };
@@ -566,6 +629,8 @@ impl ChartEngine {
                 } else {
                     push_segment(a, b, drawing, color, vpr, out, points);
                 }
+                push_drawing_cap(drawing.stroke_start, a, b, drawing.width * vpr, color, out);
+                push_drawing_cap(drawing.stroke_end, b, a, drawing.width * vpr, color, out);
             }
             DrawingBodyGeometry::Horizontal { y, x0, x1 } => {
                 let x0 = (x0.round() as i32).clamp(0, pane_w_px);
@@ -612,15 +677,17 @@ impl ChartEngine {
                     .as_deref()
                     .and_then(Color::parse_css)
                     .unwrap_or(Color::rgba(color.r(), color.g(), color.b(), 51));
-                out.push(Prim::Rect {
-                    rect: IRect {
-                        x: left,
-                        y: top,
-                        w: width,
-                        h: height,
-                    },
-                    color: fill,
-                });
+                if drawing.fill_enabled {
+                    out.push(Prim::Rect {
+                        rect: IRect {
+                            x: left,
+                            y: top,
+                            w: width,
+                            h: height,
+                        },
+                        color: fill,
+                    });
+                }
                 if !drawing.border_visible {
                     return;
                 }
@@ -706,6 +773,26 @@ impl ChartEngine {
                     line_type,
                     color,
                 });
+                if let (Some(first), Some(last)) = (line_points.first(), line_points.last()) {
+                    if line_points.len() >= 2 {
+                        push_drawing_cap(
+                            drawing.stroke_start,
+                            *first,
+                            line_points[1],
+                            drawing.width * vpr,
+                            color,
+                            out,
+                        );
+                        push_drawing_cap(
+                            drawing.stroke_end,
+                            *last,
+                            line_points[line_points.len() - 2],
+                            drawing.width * vpr,
+                            color,
+                            out,
+                        );
+                    }
+                }
                 if let Some(terminal) = terminal {
                     let first_point = points.len() as u32;
                     for (x, y) in terminal {
@@ -917,6 +1004,113 @@ impl ChartEngine {
         }
     }
 
+    fn build_drawing_labels(
+        &self,
+        drawing: &Drawing,
+        px: &[(f64, f64)],
+        vpr: f64,
+        out: &mut Vec<Prim>,
+    ) {
+        let Some(anchor) = px.first().copied() else {
+            return;
+        };
+        if drawing.labels.is_empty() {
+            return;
+        }
+        let color = drawing
+            .text_color
+            .as_deref()
+            .and_then(Color::parse_css)
+            .or_else(|| Color::parse_css(&drawing.color))
+            .unwrap_or_else(|| Color::rgb(255, 255, 255));
+        let size = drawing.resolved_text_size(self.options.get().layout.font_size) * vpr;
+        for (index, label) in drawing.labels.iter().enumerate() {
+            if !label.visible {
+                continue;
+            }
+            let value = label.text.clone().unwrap_or_else(|| {
+                let first = drawing.points.first().map_or(0.0, |point| point.price);
+                let second = drawing.points.get(1).map(|point| point.price);
+                match label.metric {
+                    crate::DrawingLabelMetric::Price => self.price_formatter.format(first),
+                    crate::DrawingLabelMetric::PriceChange => second
+                        .map(|value| self.price_formatter.format(value - first))
+                        .unwrap_or_default(),
+                    crate::DrawingLabelMetric::PercentChange => second
+                        .filter(|_| first.abs() > f64::EPSILON)
+                        .map(|value| format!("{:.2}%", (value - first) / first * 100.0))
+                        .unwrap_or_default(),
+                    crate::DrawingLabelMetric::Ticks => second
+                        .map(|value| format!("{:.4}", value - first))
+                        .unwrap_or_default(),
+                    crate::DrawingLabelMetric::BarCount => drawing
+                        .points
+                        .get(1)
+                        .map(|value| {
+                            format!(
+                                "{} bars",
+                                (value.logical - drawing.points[0].logical).abs().round() as i64
+                            )
+                        })
+                        .unwrap_or_default(),
+                    crate::DrawingLabelMetric::DateTimeRange => "range".to_string(),
+                    crate::DrawingLabelMetric::Duration => drawing
+                        .points
+                        .get(1)
+                        .map(|value| {
+                            format!(
+                                "{:.2} bars",
+                                (value.logical - drawing.points[0].logical).abs()
+                            )
+                        })
+                        .unwrap_or_default(),
+                    crate::DrawingLabelMetric::Angle => drawing
+                        .points
+                        .get(1)
+                        .map(|value| {
+                            let dx = value.logical - drawing.points[0].logical;
+                            let dy = value.price - first;
+                            format!("{:.1}°", dy.atan2(dx).to_degrees())
+                        })
+                        .unwrap_or_default(),
+                    crate::DrawingLabelMetric::Distance => drawing
+                        .points
+                        .get(1)
+                        .map(|value| {
+                            format!(
+                                "{:.2}",
+                                (value.logical - drawing.points[0].logical)
+                                    .hypot(value.price - first)
+                            )
+                        })
+                        .unwrap_or_default(),
+                    crate::DrawingLabelMetric::VolumeInRange => "volume".to_string(),
+                }
+            });
+            if value.is_empty() {
+                continue;
+            }
+            let offset = (index as f64 + 1.0) * size * 1.25;
+            let y = match label.position {
+                crate::DrawingLabelPosition::Above => anchor.1 - offset,
+                crate::DrawingLabelPosition::Below => anchor.1 + offset,
+                crate::DrawingLabelPosition::Inside | crate::DrawingLabelPosition::On => anchor.1,
+                crate::DrawingLabelPosition::Outside => anchor.1 + offset,
+            };
+            out.push(Prim::Text {
+                x: anchor.0 as f32,
+                y: y as f32,
+                text: value,
+                color,
+                size: size as f32,
+                family: self.options.get().layout.font_family.clone(),
+                align: TextAlign::Left,
+                weight: drawing.text_weight.unwrap_or(400),
+                italic: drawing.text_italic,
+            });
+        }
+    }
+
     fn build_position_labels(
         &self,
         drawing: &Drawing,
@@ -1012,8 +1206,12 @@ impl ChartEngine {
                 self.pane_w * hpr,
                 self.panes[pane_index].top * vpr,
                 self.panes[pane_index].height * vpr,
-                drawing.width,
-                vpr,
+                DrawingGeometryOptions {
+                    line_width: drawing.width,
+                    device_scale: vpr,
+                    extend_left: drawing.extend_left,
+                    extend_right: drawing.extend_right,
+                },
             ) else {
                 continue;
             };
@@ -1338,8 +1536,12 @@ impl ChartEngine {
                 self.pane_w * hpr,
                 self.panes[pane_index].top * vpr,
                 self.panes[pane_index].height * vpr,
-                drawing.width,
-                vpr,
+                DrawingGeometryOptions {
+                    line_width: drawing.width,
+                    device_scale: vpr,
+                    extend_left: drawing.extend_left,
+                    extend_right: drawing.extend_right,
+                },
             ) else {
                 continue;
             };

@@ -2112,6 +2112,20 @@ impl ChartInner {
     pub fn drawing_options_json(&self, id: u32) -> String {
         self.engine.drawing_options_json(id).unwrap_or_default()
     }
+    pub fn drawing_property_schema_json(&self, id: u32) -> String {
+        self.engine
+            .drawing_property_schema_json(id)
+            .unwrap_or_default()
+    }
+
+    pub fn drawing_kind_options_json(&self, id: u32) -> String {
+        self.engine
+            .drawing_kind_options_json(id)
+            .unwrap_or_default()
+    }
+    pub fn drawing_object_tree_json(&self) -> String {
+        self.engine.drawing_object_tree_json()
+    }
     pub fn drawing_points_json(&self, id: u32) -> String {
         self.engine.drawing_points_json(id).unwrap_or_default()
     }
@@ -2140,6 +2154,95 @@ impl ChartInner {
     }
     pub fn drawings_json(&self) -> String {
         self.engine.drawings_json()
+    }
+    pub fn set_drawing_interval(&mut self, interval_json: &str) -> bool {
+        let interval = if interval_json.is_empty() {
+            None
+        } else {
+            serde_json::from_str(interval_json).ok()
+        };
+        if !interval_json.is_empty() && interval.is_none() {
+            return false;
+        }
+        self.engine.set_drawing_interval(interval);
+        true
+    }
+    pub fn selected_drawings_json(&self) -> String {
+        serde_json::to_string(self.engine.selected_drawings()).unwrap_or_else(|_| "[]".to_string())
+    }
+    pub fn set_selected_drawings(&mut self, ids_json: &str) -> bool {
+        let Ok(ids) = serde_json::from_str::<Vec<u32>>(ids_json) else {
+            return false;
+        };
+        self.engine.set_selected_drawings(&ids)
+    }
+    pub fn copy_drawings_json(&self, ids_json: &str) -> String {
+        let ids = serde_json::from_str::<Vec<u32>>(ids_json).unwrap_or_default();
+        self.engine.copy_drawings_json(&ids).unwrap_or_default()
+    }
+    pub fn paste_drawings_json(
+        &mut self,
+        payload: &str,
+        pane: usize,
+        logical_offset: f64,
+        price_offset: f64,
+    ) -> String {
+        serde_json::to_string(
+            &self
+                .engine
+                .paste_drawings_json(payload, pane, logical_offset, price_offset)
+                .unwrap_or_default(),
+        )
+        .unwrap_or_else(|_| "[]".to_string())
+    }
+    pub fn clone_drawing(&mut self, id: u32, logical_offset: f64, price_offset: f64) -> u32 {
+        self.engine
+            .clone_drawing(id, logical_offset, price_offset)
+            .unwrap_or(0)
+    }
+    pub fn move_drawing_z_order(&mut self, id: u32, delta: i32) -> bool {
+        self.engine.move_drawing_z_order(id, delta)
+    }
+    pub fn set_drawing_visibility(&mut self, id: u32, visible: bool) -> bool {
+        self.engine.set_drawing_visibility(id, visible)
+    }
+    pub fn set_drawing_locked(&mut self, id: u32, locked: bool) -> bool {
+        self.engine.set_drawing_locked(id, locked)
+    }
+    pub fn set_drawing_group(&mut self, id: u32, group_json: &str) -> bool {
+        let group = serde_json::from_str::<Option<String>>(group_json).unwrap_or(None);
+        self.engine.set_drawing_group(id, group)
+    }
+    pub fn set_drawing_group_visibility(&mut self, group_id: &str, visible: bool) -> u32 {
+        self.engine.set_drawing_group_visibility(group_id, visible) as u32
+    }
+    pub fn set_drawing_group_locked(&mut self, group_id: &str, locked: bool) -> u32 {
+        self.engine.set_drawing_group_locked(group_id, locked) as u32
+    }
+    pub fn move_drawing_group(
+        &mut self,
+        group_id: &str,
+        logical_delta: f64,
+        price_delta: f64,
+    ) -> u32 {
+        self.engine
+            .move_drawing_group(group_id, logical_delta, price_delta) as u32
+    }
+    pub fn drawing_sync_payload_json(&self, source: &str) -> String {
+        self.engine
+            .drawing_sync_payload_json(source)
+            .unwrap_or_default()
+    }
+    pub fn apply_drawing_sync_payload_json(&mut self, payload: &str) -> bool {
+        self.engine.apply_drawing_sync_payload_json(payload)
+    }
+    pub fn apply_drawing_template_json(&mut self, id: u32, template_json: &str) -> bool {
+        self.engine.apply_drawing_template_json(id, template_json)
+    }
+    pub fn drawing_template_json(&self, id: u32, name: &str) -> String {
+        self.engine
+            .drawing_template_json(id, name)
+            .unwrap_or_default()
     }
     pub fn remove_drawing(&mut self, id: u32) -> bool {
         self.engine.remove_drawing(id)

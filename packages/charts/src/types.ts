@@ -1777,6 +1777,24 @@ export interface drawing_point {
 export type drawing_text_h_align = "left" | "center" | "right";
 /** Vertical label alignment: above / inline with / below the tool at the selected horizontal slot. */
 export type drawing_text_v_align = "top" | "middle" | "bottom";
+export type drawing_line_cap = "none" | "arrow" | "circle";
+export type drawing_magnet_mode = "off" | "weak" | "strong";
+export type drawing_interval_unit = "seconds" | "minutes" | "hours" | "days" | "weeks" | "months" | "ticks" | "ranges";
+export interface drawing_interval { unit: drawing_interval_unit; value: number }
+export interface drawing_interval_visibility { enabled: boolean; intervals: drawing_interval[] }
+export type drawing_label_metric = "price" | "price_change" | "percent_change" | "ticks" | "bar_count" | "date_time_range" | "duration" | "angle" | "distance" | "volume_in_range";
+export type drawing_label_position = "above" | "on" | "below" | "inside" | "outside";
+export interface drawing_label_options { metric: drawing_label_metric; visible: boolean; position: drawing_label_position; text?: string }
+export interface drawing_level { value: number; color: string; visible: boolean; style: string; fill_between: boolean; fill_color?: string; label_visible: boolean }
+export type drawing_property_type = "boolean" | "number" | "integer" | "string" | "color" | "enum" | "points" | "levels" | "interval_set";
+export interface drawing_property_descriptor { name: string; property_type: drawing_property_type; default: unknown; min?: number; max?: number; enum_values: string[] }
+export interface drawing_property_schema { revision: number; kind: drawing_kind; properties: drawing_property_descriptor[] }
+export interface drawing_template { name: string; kind: drawing_kind; options: Partial<drawing_options> }
+export type drawing_kind_options =
+  | { kind: "rectangle"; fill_color?: string; preview_fill_color?: string; border_visible: boolean; show_labels: boolean; axis_bands_visible: boolean; label_color?: string; label_text_color?: string; snap_time_to_data: boolean }
+  | { kind: "text"; box_color?: string; box_border_color?: string; box_border_width: number }
+  | { kind: "position"; levels: drawing_level[] }
+  | { kind: "generic" };
 
 /**
  * A drawing's options (engine `Drawing`). Every tool can carry a text label placed by the
@@ -1786,6 +1804,21 @@ export type drawing_text_v_align = "top" | "middle" | "bottom";
  * `text_size: null` follows `layout.fontSize`.
  */
 export interface drawing_options {
+  name: string;
+  group_id: string;
+  revision: number;
+  visible: boolean;
+  locked: boolean;
+  z_order: number;
+  interval_visibility: drawing_interval_visibility;
+  stroke_start: drawing_line_cap;
+  stroke_end: drawing_line_cap;
+  extend_left: boolean;
+  extend_right: boolean;
+  fill_enabled: boolean;
+  magnet: drawing_magnet_mode;
+  labels: drawing_label_options[];
+  levels: drawing_level[];
   /** Price scale used for price-coordinate conversion (`overlay` is the pane's overlay scale). */
   price_scale_id: "left" | "right" | "overlay";
   /** Line/border color (default: the canonical primary token). */
@@ -1853,6 +1886,21 @@ export interface persisted_pane_v1 {
 
 /** Stable semantic drawing style persisted by schema V1. Omitted fields restore defaults. */
 export interface persisted_drawing_style_v1 {
+  name?: string;
+  group_id?: string;
+  revision?: number;
+  visible?: boolean;
+  locked?: boolean;
+  z_order?: number;
+  interval_visibility?: drawing_interval_visibility;
+  stroke_start?: drawing_line_cap;
+  stroke_end?: drawing_line_cap;
+  extend_left?: boolean;
+  extend_right?: boolean;
+  fill_enabled?: boolean;
+  magnet?: drawing_magnet_mode;
+  labels?: drawing_label_options[];
+  levels?: drawing_level[];
   price_scale_id?: "left" | "right" | "overlay";
   color?: string;
   width?: number;
@@ -2905,6 +2953,30 @@ export interface chart_api {
   add_drawing(kind: drawing_kind, points: drawing_point[], options?: Partial<drawing_options>, pane_index?: number): drawing_api;
   /** Every drawing as live handles, in z-order (bottom first). */
   drawings(): drawing_api[];
+  /** Return the typed common property schema for a live drawing. */
+  drawing_property_schema(drawing: drawing_api | number): drawing_property_schema;
+  drawing_kind_options(drawing: drawing_api | number): drawing_kind_options;
+  /** Return the object-tree snapshot as stable JSON-compatible records. */
+  drawing_object_tree(): unknown[];
+  /** Set host-supplied interval metadata used by interval visibility. */
+  set_drawing_interval(interval: drawing_interval | null): void;
+  /** Copy selected or explicit drawings into a bounded payload. */
+  copy_drawings(ids?: readonly number[]): string;
+  /** Paste a payload into a pane and return newly allocated drawing handles. */
+  paste_drawings(payload: string, pane_index?: number, logical_offset?: number, price_offset?: number): drawing_api[];
+  /** Clone one drawing with a semantic anchor offset. */
+  clone_drawing(drawing: drawing_api | number, logical_offset?: number, price_offset?: number): drawing_api;
+  /** Move a drawing by a bounded relative z-order delta. */
+  move_drawing_z_order(drawing: drawing_api | number, delta: number): boolean;
+  set_drawing_group_visibility(group_id: string, visible: boolean): number;
+  set_drawing_group_locked(group_id: string, locked: boolean): number;
+  move_drawing_group(group_id: string, logical_delta: number, price_delta: number): number;
+  /** Apply or export a typed template. */
+  drawing_template(drawing: drawing_api | number, name: string): drawing_template;
+  apply_drawing_template(drawing: drawing_api | number, template: drawing_template): void;
+  /** Export/import revisioned cross-cell drawing payloads. */
+  drawing_sync_payload(source: string): string;
+  apply_drawing_sync_payload(payload: string): boolean;
   /** Export V1 financial state or V2 general state; neither includes financial market data or runtime caches. */
   export_state(): chart_state;
   /** Validate and atomically restore V1 into a fresh chart. Throws {@link AerisChartsError} on failure. */

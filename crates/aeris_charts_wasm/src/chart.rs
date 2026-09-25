@@ -4258,6 +4258,16 @@ impl AerisChart {
     pub fn drawing_options_json(&self, id: u32) -> String {
         self.inner.borrow().drawing_options_json(id)
     }
+    pub fn drawing_property_schema_json(&self, id: u32) -> String {
+        self.inner.borrow().drawing_property_schema_json(id)
+    }
+
+    pub fn drawing_kind_options_json(&self, id: u32) -> String {
+        self.inner.borrow().drawing_kind_options_json(id)
+    }
+    pub fn drawing_object_tree_json(&self) -> String {
+        self.inner.borrow().drawing_object_tree_json()
+    }
     /// The drawing's anchors as a JSON `[{logical, price}, ...]` array ("" for an unknown id).
     pub fn drawing_points_json(&self, id: u32) -> String {
         self.inner.borrow().drawing_points_json(id)
@@ -4281,6 +4291,82 @@ impl AerisChart {
     /// Every drawing as a JSON array in z-order (`{id, kind, pane_index, points, ...options}`).
     pub fn drawings_json(&self) -> String {
         self.inner.borrow().drawings_json()
+    }
+    pub fn set_drawing_interval(&mut self, interval_json: &str) -> bool {
+        self.inner.borrow_mut().set_drawing_interval(interval_json)
+    }
+    pub fn selected_drawings_json(&self) -> String {
+        self.inner.borrow().selected_drawings_json()
+    }
+    pub fn set_selected_drawings(&mut self, ids_json: &str) -> bool {
+        self.inner.borrow_mut().set_selected_drawings(ids_json)
+    }
+    pub fn copy_drawings_json(&self, ids_json: &str) -> String {
+        self.inner.borrow().copy_drawings_json(ids_json)
+    }
+    pub fn paste_drawings_json(
+        &mut self,
+        payload: &str,
+        pane: usize,
+        logical_offset: f64,
+        price_offset: f64,
+    ) -> String {
+        self.inner
+            .borrow_mut()
+            .paste_drawings_json(payload, pane, logical_offset, price_offset)
+    }
+    pub fn clone_drawing(&mut self, id: u32, logical_offset: f64, price_offset: f64) -> u32 {
+        self.inner
+            .borrow_mut()
+            .clone_drawing(id, logical_offset, price_offset)
+    }
+    pub fn move_drawing_z_order(&mut self, id: u32, delta: i32) -> bool {
+        self.inner.borrow_mut().move_drawing_z_order(id, delta)
+    }
+    pub fn set_drawing_visibility(&mut self, id: u32, visible: bool) -> bool {
+        self.inner.borrow_mut().set_drawing_visibility(id, visible)
+    }
+    pub fn set_drawing_locked(&mut self, id: u32, locked: bool) -> bool {
+        self.inner.borrow_mut().set_drawing_locked(id, locked)
+    }
+    pub fn set_drawing_group(&mut self, id: u32, group_json: &str) -> bool {
+        self.inner.borrow_mut().set_drawing_group(id, group_json)
+    }
+    pub fn set_drawing_group_visibility(&mut self, group_id: &str, visible: bool) -> u32 {
+        self.inner
+            .borrow_mut()
+            .set_drawing_group_visibility(group_id, visible)
+    }
+    pub fn set_drawing_group_locked(&mut self, group_id: &str, locked: bool) -> u32 {
+        self.inner
+            .borrow_mut()
+            .set_drawing_group_locked(group_id, locked)
+    }
+    pub fn move_drawing_group(
+        &mut self,
+        group_id: &str,
+        logical_delta: f64,
+        price_delta: f64,
+    ) -> u32 {
+        self.inner
+            .borrow_mut()
+            .move_drawing_group(group_id, logical_delta, price_delta)
+    }
+    pub fn drawing_sync_payload_json(&self, source: &str) -> String {
+        self.inner.borrow().drawing_sync_payload_json(source)
+    }
+    pub fn apply_drawing_sync_payload_json(&mut self, payload: &str) -> bool {
+        self.inner
+            .borrow_mut()
+            .apply_drawing_sync_payload_json(payload)
+    }
+    pub fn apply_drawing_template_json(&mut self, id: u32, template_json: &str) -> bool {
+        self.inner
+            .borrow_mut()
+            .apply_drawing_template_json(id, template_json)
+    }
+    pub fn drawing_template_json(&self, id: u32, name: &str) -> String {
+        self.inner.borrow().drawing_template_json(id, name)
     }
     /// Internal benchmark counters; not part of the package chart API.
     pub fn drawing_work_stats_json(&self) -> String {

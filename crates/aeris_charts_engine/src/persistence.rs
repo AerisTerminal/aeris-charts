@@ -181,6 +181,36 @@ struct DrawingV1 {
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 struct DrawingStyleV1 {
     #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    group_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    visible: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    locked: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    z_order: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    interval_visibility: Option<crate::DrawingIntervalVisibility>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stroke_start: Option<crate::DrawingLineCap>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stroke_end: Option<crate::DrawingLineCap>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    extend_left: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    extend_right: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fill_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    magnet: Option<crate::DrawingMagnetMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    labels: Option<Vec<crate::DrawingLabelOptions>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    levels: Option<Vec<crate::DrawingLevel>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     price_scale_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     color: Option<String>,
@@ -338,6 +368,29 @@ impl ChartEngine {
                     pane_id: pane_wire_id(persistent_id),
                     anchors: drawing.points.clone(),
                     style: DrawingStyleV1 {
+                        name: (!drawing.name.is_empty()).then(|| drawing.name.clone()),
+                        group_id: drawing.group_id.clone(),
+                        revision: (drawing.revision != 1).then_some(drawing.revision),
+                        visible: (!drawing.visible).then_some(false),
+                        locked: drawing.locked.then_some(true),
+                        z_order: (drawing.z_order != drawing.id as i32).then_some(drawing.z_order),
+                        interval_visibility: drawing
+                            .interval_visibility
+                            .enabled
+                            .then_some(drawing.interval_visibility.clone()),
+                        stroke_start: (drawing.stroke_start != crate::DrawingLineCap::None)
+                            .then_some(drawing.stroke_start),
+                        stroke_end: (drawing.stroke_end != crate::DrawingLineCap::None)
+                            .then_some(drawing.stroke_end),
+                        extend_left: drawing.extend_left.then_some(true),
+                        extend_right: drawing.extend_right.then_some(true),
+                        fill_enabled: (drawing.fill_enabled
+                            != (drawing.kind == DrawingKind::Rectangle))
+                            .then_some(drawing.fill_enabled),
+                        magnet: (drawing.magnet != crate::DrawingMagnetMode::Off)
+                            .then_some(drawing.magnet),
+                        labels: (!drawing.labels.is_empty()).then_some(drawing.labels.clone()),
+                        levels: (!drawing.levels.is_empty()).then_some(drawing.levels.clone()),
                         price_scale_id: (drawing.price_scale != DrawingPriceScale::Right)
                             .then(|| drawing.price_scale.name().to_string()),
                         color: Some(drawing.color.clone()),
@@ -914,6 +967,76 @@ impl ChartEngine {
             })?;
             let mut drawing = Drawing::new(item.id, kind, pane_index, item.anchors);
             let style = item.style;
+            if let Some(name) = style.name {
+                if name.len() > crate::MAX_DRAWING_NAME_BYTES {
+                    return Err(resource(format!("drawing {} name is too large", item.id)));
+                }
+                drawing.name = name;
+            }
+            if let Some(group_id) = style.group_id {
+                if group_id.len() > crate::MAX_DRAWING_GROUP_BYTES {
+                    return Err(resource(format!(
+                        "drawing {} group id is too large",
+                        item.id
+                    )));
+                }
+                drawing.group_id = (!group_id.is_empty()).then_some(group_id);
+            }
+            if let Some(revision) = style.revision {
+                drawing.revision = revision.max(1);
+            }
+            if let Some(visible) = style.visible {
+                drawing.visible = visible;
+            }
+            if let Some(locked) = style.locked {
+                drawing.locked = locked;
+            }
+            if let Some(z_order) = style.z_order {
+                drawing.z_order = z_order;
+            }
+            if let Some(interval_visibility) = style.interval_visibility {
+                if !interval_visibility.validate() {
+                    return Err(invalid(format!(
+                        "drawing {} has invalid interval visibility",
+                        item.id
+                    )));
+                }
+                drawing.interval_visibility = interval_visibility;
+            }
+            if let Some(stroke_start) = style.stroke_start {
+                drawing.stroke_start = stroke_start;
+            }
+            if let Some(stroke_end) = style.stroke_end {
+                drawing.stroke_end = stroke_end;
+            }
+            if let Some(extend_left) = style.extend_left {
+                drawing.extend_left = extend_left;
+            }
+            if let Some(extend_right) = style.extend_right {
+                drawing.extend_right = extend_right;
+            }
+            if let Some(fill_enabled) = style.fill_enabled {
+                drawing.fill_enabled = fill_enabled;
+            }
+            if let Some(magnet) = style.magnet {
+                drawing.magnet = magnet;
+            }
+            if let Some(labels) = style.labels {
+                if labels.len() > crate::MAX_DRAWING_LABELS
+                    || !labels.iter().all(|label| label.validate())
+                {
+                    return Err(invalid(format!("drawing {} has invalid labels", item.id)));
+                }
+                drawing.labels = labels;
+            }
+            if let Some(levels) = style.levels {
+                if levels.len() > crate::MAX_DRAWING_LEVELS
+                    || !levels.iter().all(|level| level.validate())
+                {
+                    return Err(invalid(format!("drawing {} has invalid levels", item.id)));
+                }
+                drawing.levels = levels;
+            }
             if let Some(scale) = style.price_scale_id {
                 drawing.price_scale = DrawingPriceScale::from_name(&scale)
                     .ok_or_else(|| invalid(format!("unknown drawing price scale {scale:?}")))?;
@@ -1086,6 +1209,7 @@ impl ChartEngine {
             }
         }
         self.selected_drawing = None;
+        self.selected_drawings.clear();
         self.drawing_drag = None;
         self.drawing_history = crate::DrawingHistory::default();
         // Persistence replaces committed semantic state, but an armed host tool is transient UI
@@ -1273,6 +1397,7 @@ impl ChartEngine {
         self.apply_options(&options_json)
             .expect("validated V2 chart options must serialize");
         self.selected_drawing = None;
+        self.selected_drawings.clear();
         self.drawing_drag = None;
         self.drawing_history = crate::DrawingHistory::default();
         self.drawing_controller.pending = None;
@@ -1357,6 +1482,44 @@ mod tests {
             second.import_state_json(&canonical).unwrap();
             assert_eq!(second.export_state_json().unwrap(), canonical);
         }
+    }
+
+    #[test]
+    fn b2_common_drawing_state_persists_losslessly() {
+        let mut chart = settled_chart();
+        let id = chart
+            .add_drawing(
+                DrawingKind::TrendLine,
+                0,
+                vec![
+                    DrawingPoint {
+                        logical: 1.0,
+                        price: 10.0,
+                    },
+                    DrawingPoint {
+                        logical: 6.0,
+                        price: 12.0,
+                    },
+                ],
+                None,
+            )
+            .unwrap();
+        chart
+            .drawing_apply_options(
+                id,
+                r#"{"name":"release","group_id":"macro","visible":false,"locked":true,"z_order":-4,"stroke_end":"arrow","extend_right":true,"labels":[{"metric":"price","visible":true,"position":"above"}]}"#,
+            );
+        let document = chart.export_state_json().unwrap();
+        assert!(document.contains("release"));
+        let mut restored = ChartEngine::new(800.0, 500.0, 1.0);
+        restored.import_state_json(&document).unwrap();
+        let drawing = restored.drawing(id).unwrap();
+        assert_eq!(drawing.name, "release");
+        assert_eq!(drawing.group_id.as_deref(), Some("macro"));
+        assert!(!drawing.visible);
+        assert!(drawing.locked);
+        assert_eq!(drawing.stroke_end, crate::DrawingLineCap::Arrow);
+        assert_eq!(drawing.labels.len(), 1);
     }
 
     #[test]

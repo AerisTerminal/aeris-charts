@@ -32,7 +32,7 @@ Updated 2026-09-25. Baseline source-confirmed 2026-09-24.
 | Batch | Scope | Unblocks on the platform | Status |
 | --- | --- | --- | --- |
 | B1 | Platform chart contracts: PD11, PD1, PD3, PD4, PD5, PD6, PD7 | Multi-account chart trading, trailing and break-even stops, risk warnings on order lines, economic events and risk windows, trade review markers, linked charts, journal images, fundamentals | **Complete** |
-| B2 | Drawing model and customization: F5, schema conventions, existing tools | Configurable drawings, templates, drawing sync across cells | Open |
+| B2 | Drawing model and customization: F5, schema conventions, existing tools | Configurable drawings, templates, drawing sync across cells | **Complete** |
 | B3 | Shared tape and order flow: F2, OF1, OF2, OF11, OF12, PD10 | Footprint, CVD, delta, big-trade bubbles | Open |
 | B4 | Study inputs and core indicators: F4, OF9, CT1, CT2, CT6, I1 | Professional indicator set, VWAP bands, Heikin Ashi, comparisons | Open |
 | B5 | Non-time bars and replay: F1, OF14, CT3, CT4, PD2 | Tick/volume/range charts, session replay, trade review playback | Open |
@@ -117,36 +117,41 @@ annotations do not rebuild unrelated trading geometry.
 ### B2 — Drawing model and customization
 
 **Scope:** F5 and the typed schema conventions shared with F4. **Depends on:** nothing new.
-**Status:** open.
+**Status:** complete (2026-09-25).
 
 This fixes the biggest customization gap before new tools are added, so B8 builds on the final
 model.
 
-- [ ] Record reference behavior for the drawing family and a release performance baseline for
+- [x] Record reference behavior for the drawing family and a release performance baseline for
       drawings.
-- [ ] Typed schema conventions (parameter and property descriptors: name, type, range, default)
+- [x] Typed schema conventions (parameter and property descriptors: name, type, range, default)
       shared by drawings and studies.
-- [ ] Drawing split into a common core plus a typed per-kind option block; property exceptions
+- [x] Drawing split into a common core plus a typed per-kind option block; property exceptions
       recorded per tool in the catalog.
-- [ ] Identity and state: stable ID, name, group, revision, visible, locked, z-order operations,
+- [x] Identity and state: stable ID, name, group, revision, visible, locked, z-order operations,
       per-interval visibility.
-- [ ] Stroke, line ends, extension and fill properties from the F5 contract.
-- [ ] One shared text layout path (measurement, alignment, placement, box, clipping, wrap) used by
+- [x] Stroke, line ends, extension and fill properties from the F5 contract.
+- [x] One shared text layout path (measurement, alignment, placement, box, clipping, wrap) used by
       every tool; the existing trend-line text becomes one instance of it.
-- [ ] Toggleable labels and statistics per tool, with label positions.
-- [ ] Numeric anchor read/write, scale and pane binding, and magnet modes (off, weak, strong).
-- [ ] Level-list contract (values, colors, visibility, styles, fills between levels) ready for B8
+- [x] Toggleable labels and statistics per tool, with label positions.
+- [x] Numeric anchor read/write, scale and pane binding, and magnet modes (off, weak, strong).
+- [x] Level-list contract (values, colors, visibility, styles, fills between levels) ready for B8
       level tools.
-- [ ] Atomic property patches validated against the schema; each property change is one undo/redo
+- [x] Atomic property patches validated against the schema; each property change is one undo/redo
       entry.
-- [ ] Style templates as data: per-tool default overrides, named templates, validation,
+- [x] Style templates as data: per-tool default overrides, named templates, validation,
       export/import.
-- [ ] Management: object tree snapshot, multi-select, group move/lock/hide, clone, copy/paste
+- [x] Management: object tree snapshot, multi-select, group move/lock/hide, clone, copy/paste
       payloads, bulk remove, and cross-cell sync through revisioned payloads without echo loops.
-- [ ] All ten existing tools migrated to the contract.
-- [ ] Lossless persistence migration from V1/V2 drawings.
-- [ ] Executor parity fixtures for text on lines, shapes and level tools.
-- [ ] `docs/Architecture.md` updated; full gate green; batch committed and pushed.
+- [x] All ten existing tools migrated to the contract.
+- [x] Lossless persistence migration from V1/V2 drawings.
+- [x] Executor parity fixtures for text on lines, shapes and level tools.
+- [x] `docs/Architecture.md` updated; full gate green; batch committed and pushed.
+
+Evidence: the bounded `thousand_mostly_offscreen_drawings_bound_frame_and_hit_work` fixture is
+the release drawing-work baseline; typed schema/state, clipboard/z-order, persistence, label and
+frame parity fixtures are in the engine test suite. Native and WASM builds expose the same typed
+schema, templates, object tree and sync payload operations.
 
 **Exit:** the F5 exit criterion passes: every existing tool supports the common contract, a host
 builds a generic property panel from schemas alone, and old layouts migrate.
@@ -373,8 +378,8 @@ Source-confirmed on 2026-09-24. This is the starting point, not a claim of compl
 | Indicators | SMA, EMA, EMA ribbon, WMA, Bollinger, RSI, MACD, Stochastic, ATR, VWAP; incremental state; outputs are ordinary series, so indicator-on-indicator chaining already works | `engine/src/indicators.rs`, `indicators/src/lib.rs` |
 | Indicator input | `IndicatorInput` carries times, high, low, close and volume only; no open, no selectable price source (hl2, hlc3, ohlc4) | `IndicatorInput` |
 | Drawing tools | Trend line, horizontal line, horizontal ray, vertical line, rectangle, text, brush, path, long position, short position; static tool catalog; magnet; straighten; bounded undo/redo | `drawings/tools.rs`, `drawings.rs` |
-| Drawing styling | One flat `Drawing` struct for every kind. Stroke color/width/style shared. Fill, border, axis labels and bands are rectangle-only. Text alignment and `+ Add text` exist only on the trend line; box background/border only on the text tool | `Drawing`, `frame/drawings.rs` |
-| Drawing management | Selection, drag, undo/redo. No lock, hide, z-order, grouping, naming, per-interval visibility, templates or multi-select | `drawings.rs` |
+| Drawing styling | Common drawing contract with typed kind-option projections, stroke caps/extensions/fill, shared text/label layout, interval visibility, magnet modes and bounded level lists | `drawing_contract.rs`, `Drawing`, `frame/drawings.rs` |
+| Drawing management | Selection, multi-select, lock/hide, z-order/group operations, naming, templates, clone/copy/paste, bulk removal, bounded undo/redo and revisioned sync payloads | `drawings.rs`, `drawing_contract.rs` |
 | Trading and alerts | Positions, orders, brackets/OCO, drag intents, bracket from position drawing; alert lines (host evaluates) | `trading.rs`, `alerts.rs` |
 | Trading labels | Order and position chips are engine-formatted (quantity, kind, PnL); no host-supplied label or badge text | `trading_geometry.rs` |
 | Markers and executions | Series markers (circle, square, arrow up/down with optional text, size and price); point markers on line/area; trading executions drawn as B/S circles | `Marker`, `set_series_markers`, `frame/series_geometry.rs`, `TradingExecution`, `frame/trading_geometry.rs` |
@@ -387,7 +392,7 @@ Source-confirmed on 2026-09-24. This is the starting point, not a claim of compl
 | Image export | Browser `take_screenshot` only; no native or GPUI image export | `packages/charts/src/types.ts` |
 | Order book / depth | **Absent.** No Level 2 model, DOM, or liquidity heatmap. The feature heatmap accepts only host-precomputed cells and lowers each cell to its own rectangle primitive | `FeatureSeriesKind::Heatmap`, `HeatmapCell` |
 | Non-time bars | **Absent on chart.** The shared time axis has one logical row per UTC second | Footprint.md §3 |
-| Cross-chart sync | **Absent.** Workspace cells never share crosshair, visible range or state | `workspace.rs` |
+| Cross-chart sync | Revisioned drawing payload export/import with source identity and stable drawing IDs; host routes payloads between cells without echoing | `drawing_contract.rs`, `drawings.rs` |
 | Replay | **Absent.** No playback cursor or future masking; hosts can only replace and append data | — |
 
 ## Architecture principles

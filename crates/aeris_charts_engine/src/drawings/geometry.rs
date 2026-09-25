@@ -56,6 +56,14 @@ pub(crate) struct PositionZone {
     pub(crate) y1: f64,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct DrawingGeometryOptions {
+    pub(crate) line_width: f64,
+    pub(crate) device_scale: f64,
+    pub(crate) extend_left: bool,
+    pub(crate) extend_right: bool,
+}
+
 impl PositionGeometry {
     fn from_points(entry: (f64, f64), target: (f64, f64), stop: (f64, f64)) -> Self {
         Self {
@@ -123,17 +131,29 @@ pub(crate) fn resolve_drawing_geometry<'a>(
     pane_w: f64,
     pane_top: f64,
     pane_h: f64,
-    line_width: f64,
-    device_scale: f64,
+    options: DrawingGeometryOptions,
 ) -> Option<ResolvedDrawingGeometry<'a>> {
     if px.is_empty() {
         return None;
     }
     let body = match kind {
-        DrawingKind::TrendLine => DrawingBodyGeometry::Segment {
-            a: *px.first()?,
-            b: *px.get(1)?,
-        },
+        DrawingKind::TrendLine => {
+            let mut a = *px.first()?;
+            let mut b = *px.get(1)?;
+            let dx = b.0 - a.0;
+            if dx.abs() > f64::EPSILON {
+                let slope = (b.1 - a.1) / dx;
+                if options.extend_left {
+                    a.1 += (0.0 - a.0) * slope;
+                    a.0 = 0.0;
+                }
+                if options.extend_right {
+                    b.1 += (pane_w - b.0) * slope;
+                    b.0 = pane_w;
+                }
+            }
+            DrawingBodyGeometry::Segment { a, b }
+        }
         DrawingKind::HorizontalLine => DrawingBodyGeometry::Horizontal {
             y: px[0].1,
             x0: 0.0,
@@ -141,7 +161,7 @@ pub(crate) fn resolve_drawing_geometry<'a>(
         },
         DrawingKind::HorizontalRay => DrawingBodyGeometry::Horizontal {
             y: px[0].1,
-            x0: px[0].0,
+            x0: if options.extend_left { 0.0 } else { px[0].0 },
             x1: pane_w,
         },
         DrawingKind::VerticalLine => DrawingBodyGeometry::Vertical {
@@ -167,7 +187,7 @@ pub(crate) fn resolve_drawing_geometry<'a>(
         DrawingKind::Path => DrawingBodyGeometry::Polyline {
             points: px,
             line_type: LineType::Simple,
-            terminal: path_arrow_points(px, line_width, device_scale),
+            terminal: path_arrow_points(px, options.line_width, options.device_scale),
         },
         DrawingKind::LongPosition | DrawingKind::ShortPosition => {
             let entry = *px.first()?;

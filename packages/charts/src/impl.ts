@@ -23,7 +23,7 @@ import type {
   crosshair_action_request, crosshair_action_request_handler,
   any_series_options, backend_status, bars_info, chart_api, chart_context_handler, chart_context_params, chart_options, chart_state, chart_value_snapshot, data_changed_handler, dbl_click_handler,
   deep_partial, drawing_api, drawing_created_handler, drawing_info, drawing_kind, drawing_options,
-  drawing_point, drawing_tool_change_handler,
+  drawing_point, drawing_tool_change_handler, drawing_interval, drawing_property_schema, drawing_kind_options, drawing_template,
   ema_ribbon_options, ema_ribbon_periods,
   feature_series_kind, frame_stats,
   footprint_bar, footprint_series_api, footprint_series_options, footprint_trade, footprint_trade_columns,
@@ -5014,6 +5014,110 @@ export class chart_impl implements chart_api {
   drawings(): drawing_api[] {
     const list = JSON.parse(this.wasm.drawings_json()) as drawing_info[];
     return list.map((d) => new drawing_impl(this, d.id, d.kind, d.pane_index));
+  }
+
+  drawing_property_schema(drawing: drawing_api | number): drawing_property_schema {
+    const id = typeof drawing === "number" ? drawing : drawing.id;
+    const value = this.wasm.drawing_property_schema_json(id);
+    if (value === "") throw new AerisChartsError("stale_handle", "drawing has been removed");
+    return JSON.parse(value) as drawing_property_schema;
+  }
+
+  drawing_kind_options(drawing: drawing_api | number): drawing_kind_options {
+    const id = typeof drawing === "number" ? drawing : drawing.id;
+    const value = this.wasm.drawing_kind_options_json(id);
+    if (value === "") throw new AerisChartsError("stale_handle", "drawing has been removed");
+    return JSON.parse(value) as drawing_kind_options;
+  }
+
+  drawing_object_tree(): unknown[] {
+    return JSON.parse(this.wasm.drawing_object_tree_json()) as unknown[];
+  }
+
+  set_drawing_interval(interval: drawing_interval | null): void {
+    if (!this.wasm.set_drawing_interval(interval === null ? "" : JSON.stringify(interval))) {
+      throw new AerisChartsError("invalid_options", "drawing interval metadata is invalid");
+    }
+    this.repaint();
+  }
+
+  copy_drawings(ids: readonly number[] = []): string {
+    const payload = this.wasm.copy_drawings_json(JSON.stringify(ids));
+    if (payload === "") throw new AerisChartsError("invalid_data", "no drawings could be copied");
+    return payload;
+  }
+
+  paste_drawings(payload: string, pane_index = 0, logical_offset = 0, price_offset = 0): drawing_api[] {
+    const ids = JSON.parse(this.wasm.paste_drawings_json(payload, pane_index, logical_offset, price_offset)) as number[];
+    if (ids.length === 0) throw new AerisChartsError("invalid_data", "drawing payload was rejected");
+    const list = JSON.parse(this.wasm.drawings_json()) as drawing_info[];
+    this.repaint();
+    return ids
+      .map((id) => list.find((drawing) => drawing.id === id))
+      .filter((drawing): drawing is drawing_info => drawing !== undefined)
+      .map((drawing) => new drawing_impl(this, drawing.id, drawing.kind, drawing.pane_index));
+  }
+
+  clone_drawing(drawing: drawing_api | number, logical_offset = 0, price_offset = 0): drawing_api {
+    const id = typeof drawing === "number" ? drawing : drawing.id;
+    const cloned = this.wasm.clone_drawing(id, logical_offset, price_offset);
+    if (cloned === 0) throw new AerisChartsError("invalid_data", "drawing could not be cloned");
+    const info = (JSON.parse(this.wasm.drawings_json()) as drawing_info[]).find((entry) => entry.id === cloned);
+    if (info === undefined) throw new AerisChartsError("renderer_platform_error", "cloned drawing is missing");
+    this.repaint();
+    return new drawing_impl(this, info.id, info.kind, info.pane_index);
+  }
+
+  move_drawing_z_order(drawing: drawing_api | number, delta: number): boolean {
+    const id = typeof drawing === "number" ? drawing : drawing.id;
+    const changed = this.wasm.move_drawing_z_order(id, delta);
+    if (changed) this.repaint();
+    return changed;
+  }
+
+  set_drawing_group_visibility(group_id: string, visible: boolean): number {
+    const changed = this.wasm.set_drawing_group_visibility(group_id, visible);
+    if (changed !== 0) this.repaint();
+    return changed;
+  }
+
+  set_drawing_group_locked(group_id: string, locked: boolean): number {
+    const changed = this.wasm.set_drawing_group_locked(group_id, locked);
+    if (changed !== 0) this.repaint();
+    return changed;
+  }
+
+  move_drawing_group(group_id: string, logical_delta: number, price_delta: number): number {
+    const changed = this.wasm.move_drawing_group(group_id, logical_delta, price_delta);
+    if (changed !== 0) this.repaint();
+    return changed;
+  }
+
+  apply_drawing_template(drawing: drawing_api | number, template: drawing_template): void {
+    const id = typeof drawing === "number" ? drawing : drawing.id;
+    if (!this.wasm.apply_drawing_template_json(id, JSON.stringify(template))) {
+      throw new AerisChartsError("invalid_options", "drawing template was rejected");
+    }
+    this.repaint();
+  }
+
+  drawing_template(drawing: drawing_api | number, name: string): drawing_template {
+    const id = typeof drawing === "number" ? drawing : drawing.id;
+    const value = this.wasm.drawing_template_json(id, name);
+    if (value === "") throw new AerisChartsError("invalid_options", "drawing template is invalid");
+    return JSON.parse(value) as drawing_template;
+  }
+
+  drawing_sync_payload(source: string): string {
+    const payload = this.wasm.drawing_sync_payload_json(source);
+    if (payload === "") throw new AerisChartsError("invalid_options", "drawing sync source is invalid");
+    return payload;
+  }
+
+  apply_drawing_sync_payload(payload: string): boolean {
+    const changed = this.wasm.apply_drawing_sync_payload_json(payload);
+    if (changed) this.repaint();
+    return changed;
   }
 
   export_state(): chart_state {

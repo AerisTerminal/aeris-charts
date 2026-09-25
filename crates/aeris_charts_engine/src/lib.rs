@@ -9,6 +9,7 @@ mod alerts;
 mod axis_metrics;
 mod axis_primitives;
 mod domains;
+mod drawing_contract;
 mod drawings;
 mod feature_series;
 mod footprint;
@@ -47,6 +48,16 @@ pub use alerts::{
 };
 pub use domains::{
     CategoryScaleType, ContinuousScaleType, HorizontalDomain, MAX_GENERAL_HORIZONTAL_DOMAINS,
+};
+pub use drawing_contract::drawing_property_schema;
+pub use drawing_contract::{
+    DrawingClipboardItem, DrawingClipboardPayload, DrawingCommonSnapshot, DrawingInterval,
+    DrawingIntervalUnit, DrawingIntervalVisibility, DrawingKindOptions, DrawingLabelMetric,
+    DrawingLabelOptions, DrawingLabelPosition, DrawingLevel, DrawingLineCap, DrawingMagnetMode,
+    DrawingPropertyDescriptor, DrawingPropertySchema, DrawingPropertyType, DrawingSyncPayload,
+    DrawingTemplate, DRAWING_CONTRACT_REVISION, MAX_DRAWING_GROUP_BYTES, MAX_DRAWING_LABELS,
+    MAX_DRAWING_LEVELS, MAX_DRAWING_NAME_BYTES, MAX_DRAWING_OBJECTS, MAX_DRAWING_TEMPLATES,
+    MAX_DRAWING_TEMPLATE_BYTES,
 };
 pub use drawings::{
     Drawing, DrawingCreationUpdate, DrawingDragPart, DrawingHit, DrawingId, DrawingKind,
@@ -1515,6 +1526,9 @@ pub struct ChartEngine {
     /// time every frame unless a value is pinned; tests pin one here for determinism.
     pub now_override: Option<f64>,
     pub crosshair: Option<(f64, f64)>,
+    /// Host-supplied interval metadata used by drawing visibility ranges. `None` means no
+    /// interval filter is active and keeps legacy drawings visible.
+    pub drawing_interval: Option<DrawingInterval>,
     sync_events: VecDeque<ChartSyncEvent>,
     sync_revision: u64,
     sync_mismatch_policy: SyncMismatchPolicy,
@@ -1572,6 +1586,8 @@ pub struct ChartEngine {
     /// The drawing the host last clicked (industry-standard selection): while set, the frame
     /// build paints anchor handles at its defining points and its anchors accept drags.
     selected_drawing: Option<DrawingId>,
+    /// Additional object-tree selections. `selected_drawing` remains the compatibility primary.
+    selected_drawings: Vec<DrawingId>,
     /// Active anchor/body drag session on a drawing (drawings.rs; the interaction.rs session
     /// pattern — the engine owns the start snapshot and the math).
     drawing_drag: Option<DrawingDrag>,
@@ -1584,6 +1600,10 @@ pub struct ChartEngine {
     /// One engine-owned drawing-tool controller: armed tool/template, anchored placement and
     /// freehand capture. Hosts forward normalized actions and never own per-tool creation logic.
     drawing_controller: DrawingController,
+    /// Last accepted cross-cell drawing sync envelope, used to reject stale revisions and echo
+    /// loops without making the host coordinator stateful inside the renderer.
+    drawing_sync_source: String,
+    drawing_sync_revision: u64,
     /// The drawing whose dedicated host editor currently owns text input (drawings.rs).
     /// Frame construction keeps committed glyphs for the transparent overlay-caret model and
     /// keeps an empty trend label's measured middle gap while its editor is open.
@@ -1689,6 +1709,7 @@ impl ChartEngine {
             dpr,
             now_override: None,
             crosshair: None,
+            drawing_interval: None,
             sync_events: VecDeque::new(),
             sync_revision: 0,
             sync_mismatch_policy: SyncMismatchPolicy::Nearest,
@@ -1716,10 +1737,13 @@ impl ChartEngine {
             drawing_runtime: RefCell::new(DrawingRuntime::default()),
             next_drawing_id: 1,
             selected_drawing: None,
+            selected_drawings: Vec::new(),
             drawing_drag: None,
             drawing_baselines_need_frame_refresh: false,
             drawing_history: DrawingHistory::default(),
             drawing_controller: DrawingController::default(),
+            drawing_sync_source: String::new(),
+            drawing_sync_revision: 0,
             editing_drawing: None,
             hovered_text: None,
             hovered_drawing: None,

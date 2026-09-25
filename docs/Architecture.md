@@ -389,6 +389,21 @@ snapshot without adding commands; pointer-up records one start-to-end update. Un
 only the affected drawing runtime state, a new mutation clears the redo branch, and persistence
 never contains either history stack.
 
+B2 extends that owner boundary with a versioned typed drawing contract. `drawing_contract.rs`
+defines bounded property descriptors, interval visibility, line caps, magnet modes, labels,
+levels, templates, clipboard payloads, and revisioned sync payloads. The live `Drawing` remains
+the sole source of truth; its common snapshot and discriminated kind-option projection are
+computed views, so a property panel cannot create a second state model. Patches validate all
+bounded contract fields on a clone before installation and record one undo entry per semantic
+change. The shared resolved-geometry path applies line extensions and is consumed by both frame
+emission and hit testing. Hidden or interval-ineligible drawings remain in persistence and the
+object tree but are excluded from rendering and hit testing; locked drawings remain selectable
+but cannot be edited. Selection, clone/copy/paste, z-order, group operations, bulk removal, and
+sync are chart-owned and bounded, with sync IDs/revisions preventing stale or echoed updates.
+Named templates are validated data rather than host-side drawing copies. V1/V2 persistence keeps
+these fields optional for lossless migration of existing layouts, while browser/WASM exposes the
+same schema, template, object-tree, and payload operations as the native engine.
+
 Versioned persistence is an engine-owned semantic DTO boundary, never serialization of live engine
 structs. Financial-only charts continue to export V1 with ordered pane topology and built-in
 drawings only. V2 adds pane horizontal domains, general axes, typed general datasets (including

@@ -27,7 +27,8 @@ mod geometry;
 mod tools;
 
 pub(crate) use geometry::{
-    resolve_drawing_geometry, DrawingBodyGeometry, PositionGeometry, PositionZone,
+    resolve_drawing_geometry, DrawingBodyGeometry, DrawingGeometryOptions, PositionGeometry,
+    PositionZone,
 };
 pub(crate) use tools::{
     DrawingHandleMode, DrawingLogicalExtent, DrawingMovementAxis, DrawingPlacement,
@@ -340,7 +341,8 @@ impl DrawingRuntime {
 
 /// The drawing-tool kinds. Wire values cross the wasm boundary as `u8`; names cross as the
 /// snake_case strings [`DrawingKind::name`] returns.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DrawingKind {
     /// Two-anchor segment (reference plugin-examples trend-line).
     TrendLine,
@@ -451,7 +453,8 @@ pub enum DrawingTextVAlign {
 
 /// Price scale used to convert a drawing's price anchors. Official series-bound primitives use
 /// the attached series' scale; generic drawings keep the right-scale default.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DrawingPriceScale {
     Right,
     Left,
@@ -508,6 +511,29 @@ pub struct Drawing {
     pub kind: DrawingKind,
     pub pane_index: usize,
     pub points: Vec<DrawingPoint>,
+    /// Stable host-facing identity. Empty names are allowed and mean "use the tool name".
+    pub name: String,
+    /// Optional host-owned group identity used by the object tree and bulk operations.
+    pub group_id: Option<String>,
+    /// Monotonic semantic revision. Geometry/style changes increment it; render-cache changes do
+    /// not. Hosts use it to route cross-cell drawing sync without echo loops.
+    pub revision: u64,
+    /// Hidden drawings remain in persistence and the object tree but do not render or hit-test.
+    pub visible: bool,
+    /// Locked drawings remain selectable but cannot be dragged or edited.
+    pub locked: bool,
+    /// Stable layer order within the drawing layer. The vector order remains the deterministic
+    /// tie-breaker for equal values.
+    pub z_order: i32,
+    pub interval_visibility: crate::DrawingIntervalVisibility,
+    pub stroke_start: crate::DrawingLineCap,
+    pub stroke_end: crate::DrawingLineCap,
+    pub extend_left: bool,
+    pub extend_right: bool,
+    pub fill_enabled: bool,
+    pub magnet: crate::DrawingMagnetMode,
+    pub labels: Vec<crate::DrawingLabelOptions>,
+    pub levels: Vec<crate::DrawingLevel>,
     pub price_scale: DrawingPriceScale,
     /// Line/border color CSS string (default [`DRAWING_DEFAULT_COLOR`]).
     pub color: String,
@@ -587,6 +613,21 @@ impl Drawing {
             kind,
             pane_index,
             points,
+            name: String::new(),
+            group_id: None,
+            revision: 1,
+            visible: true,
+            locked: false,
+            z_order: id as i32,
+            interval_visibility: Default::default(),
+            stroke_start: Default::default(),
+            stroke_end: Default::default(),
+            extend_left: false,
+            extend_right: false,
+            fill_enabled: kind == DrawingKind::Rectangle,
+            magnet: Default::default(),
+            labels: Vec::new(),
+            levels: Vec::new(),
             price_scale: DrawingPriceScale::Right,
             color: DRAWING_DEFAULT_COLOR.to_string(),
             width: kind.spec().default_width,
@@ -655,6 +696,59 @@ impl Drawing {
             DrawingKind::Text => TEXT_TOOL_DEFAULT_SIZE,
             _ => layout_font_size,
         })
+    }
+
+    /// Typed common-contract view used by property panels and sync adapters.  It is derived from
+    /// the authoritative live drawing, so the view cannot drift from render or hit-test state.
+    pub fn common_snapshot(&self) -> crate::DrawingCommonSnapshot {
+        crate::DrawingCommonSnapshot {
+            id: self.id,
+            kind: self.kind,
+            name: self.name.clone(),
+            group_id: self.group_id.clone(),
+            revision: self.revision,
+            visible: self.visible,
+            locked: self.locked,
+            z_order: self.z_order,
+            pane_index: self.pane_index,
+            price_scale: self.price_scale,
+            magnet: self.magnet,
+            interval_visibility: self.interval_visibility.clone(),
+            stroke_start: self.stroke_start,
+            stroke_end: self.stroke_end,
+            extend_left: self.extend_left,
+            extend_right: self.extend_right,
+            fill_enabled: self.fill_enabled,
+            labels: self.labels.clone(),
+            levels: self.levels.clone(),
+        }
+    }
+
+    /// Typed kind-specific option block derived from the authoritative live drawing.
+    pub fn kind_options(&self) -> crate::DrawingKindOptions {
+        match self.kind {
+            DrawingKind::Rectangle => crate::DrawingKindOptions::Rectangle {
+                fill_color: self.fill_color.clone(),
+                preview_fill_color: self.preview_fill_color.clone(),
+                border_visible: self.border_visible,
+                show_labels: self.show_labels,
+                axis_bands_visible: self.axis_bands_visible,
+                label_color: self.label_color.clone(),
+                label_text_color: self.label_text_color.clone(),
+                snap_time_to_data: self.snap_time_to_data,
+            },
+            DrawingKind::Text => crate::DrawingKindOptions::Text {
+                box_color: self.box_color.clone(),
+                box_border_color: self.box_border_color.clone(),
+                box_border_width: self.box_border_width,
+            },
+            DrawingKind::LongPosition | DrawingKind::ShortPosition => {
+                crate::DrawingKindOptions::Position {
+                    levels: self.levels.clone(),
+                }
+            }
+            _ => crate::DrawingKindOptions::Generic,
+        }
     }
 
     fn rebase_logical(&mut self, mapping: &MergedTimeMapping) -> bool {
@@ -747,6 +841,14 @@ enum DrawingCommand {
     Clear {
         drawings: Vec<Drawing>,
     },
+    Reorder {
+        before: Vec<Drawing>,
+        after: Vec<Drawing>,
+    },
+    BatchUpdate {
+        before: Vec<Drawing>,
+        after: Vec<Drawing>,
+    },
 }
 
 impl DrawingCommand {
@@ -761,6 +863,16 @@ impl DrawingCommand {
             }
             Self::Clear { drawings } => {
                 for drawing in drawings {
+                    drawing.rebase_logical(mapping);
+                }
+            }
+            Self::Reorder { before, after } => {
+                for drawing in before.iter_mut().chain(after.iter_mut()) {
+                    drawing.rebase_logical(mapping);
+                }
+            }
+            Self::BatchUpdate { before, after } => {
+                for drawing in before.iter_mut().chain(after.iter_mut()) {
                     drawing.rebase_logical(mapping);
                 }
             }
@@ -871,6 +983,29 @@ fn distance_to_segment(x: f64, y: f64, x1: f64, y1: f64, x2: f64, y2: f64) -> f6
 /// keep their current values (reference merge semantics).
 #[derive(Clone, serde::Deserialize, Default)]
 pub(crate) struct DrawingPatch {
+    name: Option<String>,
+    #[serde(alias = "groupId")]
+    group_id: Option<String>,
+    revision: Option<u64>,
+    visible: Option<bool>,
+    locked: Option<bool>,
+    #[serde(alias = "zOrder")]
+    z_order: Option<i32>,
+    #[serde(alias = "intervalVisibility")]
+    interval_visibility: Option<crate::DrawingIntervalVisibility>,
+    #[serde(alias = "strokeStart")]
+    stroke_start: Option<crate::DrawingLineCap>,
+    #[serde(alias = "strokeEnd")]
+    stroke_end: Option<crate::DrawingLineCap>,
+    #[serde(alias = "extendLeft")]
+    extend_left: Option<bool>,
+    #[serde(alias = "extendRight")]
+    extend_right: Option<bool>,
+    #[serde(alias = "fillEnabled")]
+    fill_enabled: Option<bool>,
+    magnet: Option<crate::DrawingMagnetMode>,
+    labels: Option<Vec<crate::DrawingLabelOptions>>,
+    levels: Option<Vec<crate::DrawingLevel>>,
     #[serde(alias = "priceScaleId")]
     price_scale_id: Option<String>,
     color: Option<String>,
@@ -961,7 +1096,81 @@ fn update_css_slot(slot: &mut Option<String>, value: String) {
 }
 
 impl Drawing {
-    fn apply_patch(&mut self, patch: DrawingPatch) {
+    fn apply_patch(&mut self, patch: DrawingPatch) -> bool {
+        if let Some(name) = patch.name.as_ref() {
+            if name.len() > crate::MAX_DRAWING_NAME_BYTES {
+                return false;
+            }
+        }
+        if let Some(group_id) = patch.group_id.as_ref() {
+            if group_id.len() > crate::MAX_DRAWING_GROUP_BYTES {
+                return false;
+            }
+        }
+        if let Some(intervals) = patch.interval_visibility.as_ref() {
+            if !intervals.validate() {
+                return false;
+            }
+        }
+        if let Some(labels) = patch.labels.as_ref() {
+            if labels.len() > crate::MAX_DRAWING_LABELS
+                || !labels.iter().all(|label| label.validate())
+            {
+                return false;
+            }
+        }
+        if let Some(levels) = patch.levels.as_ref() {
+            if levels.len() > crate::MAX_DRAWING_LEVELS
+                || !levels.iter().all(|level| level.validate())
+            {
+                return false;
+            }
+        }
+        if let Some(name) = patch.name {
+            self.name = name;
+        }
+        if let Some(group_id) = patch.group_id {
+            self.group_id = (!group_id.is_empty()).then_some(group_id);
+        }
+        if let Some(revision) = patch.revision {
+            self.revision = revision;
+        }
+        if let Some(visible) = patch.visible {
+            self.visible = visible;
+        }
+        if let Some(locked) = patch.locked {
+            self.locked = locked;
+        }
+        if let Some(z_order) = patch.z_order {
+            self.z_order = z_order;
+        }
+        if let Some(interval_visibility) = patch.interval_visibility {
+            self.interval_visibility = interval_visibility;
+        }
+        if let Some(stroke_start) = patch.stroke_start {
+            self.stroke_start = stroke_start;
+        }
+        if let Some(stroke_end) = patch.stroke_end {
+            self.stroke_end = stroke_end;
+        }
+        if let Some(extend_left) = patch.extend_left {
+            self.extend_left = extend_left;
+        }
+        if let Some(extend_right) = patch.extend_right {
+            self.extend_right = extend_right;
+        }
+        if let Some(fill_enabled) = patch.fill_enabled {
+            self.fill_enabled = fill_enabled;
+        }
+        if let Some(magnet) = patch.magnet {
+            self.magnet = magnet;
+        }
+        if let Some(labels) = patch.labels {
+            self.labels = labels;
+        }
+        if let Some(levels) = patch.levels {
+            self.levels = levels;
+        }
         if let Some(scale) = patch
             .price_scale_id
             .as_deref()
@@ -1054,10 +1263,26 @@ impl Drawing {
                 self.box_border_width = width;
             }
         }
+        true
     }
 
     fn options_json(&self) -> serde_json::Value {
         serde_json::json!({
+            "name": self.name,
+            "group_id": self.group_id.as_deref().unwrap_or(""),
+            "revision": self.revision,
+            "visible": self.visible,
+            "locked": self.locked,
+            "z_order": self.z_order,
+            "interval_visibility": self.interval_visibility,
+            "stroke_start": self.stroke_start,
+            "stroke_end": self.stroke_end,
+            "extend_left": self.extend_left,
+            "extend_right": self.extend_right,
+            "fill_enabled": self.fill_enabled,
+            "magnet": self.magnet,
+            "labels": self.labels,
+            "levels": self.levels,
             "price_scale_id": self.price_scale.name(),
             "color": self.color,
             "width": self.width,
@@ -1098,6 +1323,24 @@ pub(crate) struct TextBox {
 }
 
 impl ChartEngine {
+    /// Set host-owned interval metadata used by per-drawing visibility ranges.  The engine does
+    /// not infer a timeframe from provider or browser state.
+    pub fn set_drawing_interval(&mut self, interval: Option<crate::DrawingInterval>) {
+        if interval.as_ref().is_some_and(|value| !value.validate()) {
+            return;
+        }
+        if self.drawing_interval != interval {
+            self.drawing_interval = interval;
+            self.invalidate_frame_drawings();
+        }
+    }
+
+    pub fn drawing_is_visible(&self, id: DrawingId) -> bool {
+        self.drawing(id).is_some_and(|drawing| {
+            drawing.visible && drawing.interval_visibility.allows(self.drawing_interval)
+        })
+    }
+
     pub(crate) fn rebase_drawing_logicals(&mut self, mapping: &MergedTimeMapping) {
         let mut committed_changed = false;
         for drawing in &mut self.drawings {
@@ -1166,6 +1409,10 @@ impl ChartEngine {
         }
         self.drawing_history.undo.push(command);
         self.drawing_history.redo.clear();
+    }
+
+    fn bump_drawing_sync_revision(&mut self) {
+        self.drawing_sync_revision = self.drawing_sync_revision.wrapping_add(1).max(1);
     }
 
     fn insert_drawing_snapshot(&mut self, drawing: Drawing, index: usize) {
@@ -1248,6 +1495,18 @@ impl ChartEngine {
                 self.hovered_drawing = None;
                 self.hovered_text = None;
             }
+            DrawingCommand::Reorder { before, after } => {
+                self.drawings = if undo { before.clone() } else { after.clone() };
+                self.drawing_runtime
+                    .borrow_mut()
+                    .rebuild_all(&self.drawings, self.panes.len());
+            }
+            DrawingCommand::BatchUpdate { before, after } => {
+                self.drawings = if undo { before.clone() } else { after.clone() };
+                self.drawing_runtime
+                    .borrow_mut()
+                    .rebuild_all(&self.drawings, self.panes.len());
+            }
         }
     }
 
@@ -1260,6 +1519,7 @@ impl ChartEngine {
         self.drawing_controller.pending = None;
         self.drawing_controller.brush = None;
         self.apply_drawing_command(&command, true);
+        self.bump_drawing_sync_revision();
         self.drawing_history.redo.push(command);
         true
     }
@@ -1273,6 +1533,7 @@ impl ChartEngine {
         self.drawing_controller.pending = None;
         self.drawing_controller.brush = None;
         self.apply_drawing_command(&command, false);
+        self.bump_drawing_sync_revision();
         self.drawing_history.undo.push(command);
         true
     }
@@ -1843,9 +2104,20 @@ impl ChartEngine {
         pane_top: f64,
         pane_h: f64,
     ) -> TextBox {
-        resolve_drawing_geometry(kind, px, pane_w, pane_top, pane_h, 1.0, 1.0)
-            .map(|geometry| geometry.text_box)
-            .unwrap_or_default()
+        resolve_drawing_geometry(
+            kind,
+            px,
+            pane_w,
+            pane_top,
+            pane_h,
+            DrawingGeometryOptions {
+                line_width: 1.0,
+                device_scale: 1.0,
+                ..Default::default()
+            },
+        )
+        .map(|geometry| geometry.text_box)
+        .unwrap_or_default()
     }
 
     /// The label's draw anchor `(x, y_center)` and horizontal alignment in the caller's units,
@@ -2033,7 +2305,7 @@ impl ChartEngine {
         let mut drawing = Drawing::new(id, kind, pane_index, points);
         if let Some(json) = options_json {
             if let Ok(patch) = serde_json::from_str::<DrawingPatch>(json) {
-                drawing.apply_patch(patch);
+                let _ = drawing.apply_patch(patch);
             }
         }
         self.drawings.push(drawing);
@@ -2043,6 +2315,7 @@ impl ChartEngine {
             drawing: self.drawings[index].clone(),
             index,
         });
+        self.bump_drawing_sync_revision();
         Some(id)
     }
 
@@ -2057,15 +2330,21 @@ impl ChartEngine {
             return false;
         };
         let before = self.drawings[index].clone();
-        let drawing = &mut self.drawings[index];
-        drawing.apply_patch(patch);
-        let after = drawing.clone();
+        let mut after = before.clone();
+        if !after.apply_patch(patch) {
+            return false;
+        }
+        if after != before {
+            after.revision = after.revision.saturating_add(1);
+        }
+        self.drawings[index] = after.clone();
         self.update_drawing_runtime(id);
         if before != after {
             self.record_drawing_command(DrawingCommand::Update {
                 before,
                 after: Box::new(after),
             });
+            self.bump_drawing_sync_revision();
         }
         true
     }
@@ -2099,6 +2378,7 @@ impl ChartEngine {
                 before,
                 after: Box::new(after),
             });
+            self.bump_drawing_sync_revision();
         }
         true
     }
@@ -2111,6 +2391,7 @@ impl ChartEngine {
             return false;
         };
         self.record_drawing_command(DrawingCommand::Delete { drawing, index });
+        self.bump_drawing_sync_revision();
         true
     }
 
@@ -2128,12 +2409,398 @@ impl ChartEngine {
         self.hovered_text = None;
         self.editing_drawing = None;
         self.record_drawing_command(DrawingCommand::Clear { drawings });
+        self.bump_drawing_sync_revision();
     }
 
     /// The drawing's full options as a snake_case JSON object (reference `options`). `None` for
     /// an unknown id.
     pub fn drawing_options_json(&self, id: DrawingId) -> Option<String> {
         Some(self.drawing(id)?.options_json().to_string())
+    }
+
+    /// Typed schema for a drawing's generic property panel.  The schema is deterministic and
+    /// independent of the current drawing instance.
+    pub fn drawing_property_schema_json(&self, id: DrawingId) -> Option<String> {
+        Some(
+            serde_json::to_string(&crate::drawing_contract::drawing_property_schema(
+                self.drawing(id)?.kind,
+            ))
+            .unwrap_or_default(),
+        )
+    }
+
+    /// Typed per-kind option block for a property panel or template editor.
+    pub fn drawing_kind_options_json(&self, id: DrawingId) -> Option<String> {
+        serde_json::to_string(&self.drawing(id)?.kind_options()).ok()
+    }
+
+    /// The object-tree snapshot. Runtime caches, hover, selection and editor state are excluded.
+    pub fn drawing_object_tree_json(&self) -> String {
+        let values = self
+            .drawings
+            .iter()
+            .map(|drawing| drawing.common_snapshot())
+            .collect::<Vec<_>>();
+        serde_json::to_string(&values).unwrap_or_default()
+    }
+
+    /// Set a bounded multi-selection. The first id becomes the compatibility primary selection.
+    pub fn set_selected_drawings(&mut self, ids: &[DrawingId]) -> bool {
+        let mut selected = Vec::with_capacity(ids.len().min(crate::MAX_DRAWING_OBJECTS));
+        for &id in ids.iter().take(crate::MAX_DRAWING_OBJECTS) {
+            if self.drawing(id).is_some() && !selected.contains(&id) {
+                selected.push(id);
+            }
+        }
+        let changed = selected != self.selected_drawings;
+        self.selected_drawings = selected;
+        self.selected_drawing = self.selected_drawings.first().copied();
+        if changed {
+            self.invalidate_frame_overlay();
+        }
+        changed
+    }
+
+    pub fn selected_drawings(&self) -> &[DrawingId] {
+        &self.selected_drawings
+    }
+
+    /// Copy selected or explicitly supplied drawings to a bounded, revisioned payload.
+    pub fn copy_drawings_json(&self, ids: &[DrawingId]) -> Option<String> {
+        let ids = if ids.is_empty() {
+            &self.selected_drawings
+        } else {
+            ids
+        };
+        let drawings = ids
+            .iter()
+            .take(crate::MAX_DRAWING_OBJECTS)
+            .filter_map(|id| self.drawing(*id))
+            .map(|drawing| crate::DrawingClipboardItem {
+                id: None,
+                kind: drawing.kind,
+                pane_index: drawing.pane_index,
+                points: drawing.points.clone(),
+                options: drawing.options_json(),
+            })
+            .collect::<Vec<_>>();
+        let payload = crate::DrawingClipboardPayload {
+            schema: "aeris_charts-drawings".to_string(),
+            revision: self.drawing_sync_revision,
+            drawings,
+        };
+        let bytes = serde_json::to_vec(&payload).ok()?;
+        (bytes.len() <= crate::MAX_DRAWING_TEMPLATE_BYTES).then(|| String::from_utf8(bytes).ok())?
+    }
+
+    /// Paste a clipboard payload into one pane with a semantic anchor offset. Validation happens
+    /// before mutation, so malformed or oversized payloads cannot partially change the chart.
+    pub fn paste_drawings_json(
+        &mut self,
+        json: &str,
+        pane_index: usize,
+        logical_offset: f64,
+        price_offset: f64,
+    ) -> Option<Vec<DrawingId>> {
+        if json.len() > crate::MAX_DRAWING_TEMPLATE_BYTES
+            || !logical_offset.is_finite()
+            || !price_offset.is_finite()
+            || pane_index >= self.panes.len()
+            || !self.pane_uses_financial_time(pane_index)
+        {
+            return None;
+        }
+        let payload = serde_json::from_str::<crate::DrawingClipboardPayload>(json).ok()?;
+        if payload.schema != "aeris_charts-drawings"
+            || payload.drawings.is_empty()
+            || payload.drawings.len() > crate::MAX_DRAWING_OBJECTS
+        {
+            return None;
+        }
+        let mut staged = Vec::with_capacity(payload.drawings.len());
+        for item in payload.drawings {
+            let mut points = item.points;
+            for point in &mut points {
+                point.logical += logical_offset;
+                point.price += price_offset;
+            }
+            if points.len() > MAX_DRAWING_POINTS
+                || !item.kind.valid_point_count(points.len())
+                || points
+                    .iter()
+                    .any(|point| !point.logical.is_finite() || !point.price.is_finite())
+            {
+                return None;
+            }
+            let options = serde_json::to_string(&item.options).ok()?;
+            staged.push((item.kind, points, options));
+        }
+        let mut ids = Vec::with_capacity(staged.len());
+        for (kind, points, options) in staged {
+            ids.push(self.add_drawing(kind, pane_index, points, Some(&options))?);
+        }
+        Some(ids)
+    }
+
+    pub fn clone_drawing(
+        &mut self,
+        id: DrawingId,
+        logical_offset: f64,
+        price_offset: f64,
+    ) -> Option<DrawingId> {
+        let payload = self.copy_drawings_json(&[id])?;
+        self.paste_drawings_json(
+            &payload,
+            self.drawing(id)?.pane_index,
+            logical_offset,
+            price_offset,
+        )?
+        .into_iter()
+        .next()
+    }
+
+    /// Move one drawing within the layer and normalize its stable z-order values. `delta` is a
+    /// bounded relative position; negative moves backward, positive moves forward.
+    pub fn move_drawing_z_order(&mut self, id: DrawingId, delta: i32) -> bool {
+        let Some(index) = self.drawings.iter().position(|drawing| drawing.id == id) else {
+            return false;
+        };
+        let target = (index as i32 + delta.clamp(-100, 100))
+            .clamp(0, self.drawings.len().saturating_sub(1) as i32) as usize;
+        if target == index {
+            return false;
+        }
+        let before = self.drawings.clone();
+        let drawing = self.drawings.remove(index);
+        self.drawings.insert(target, drawing);
+        for (position, drawing) in self.drawings.iter_mut().enumerate() {
+            drawing.z_order = position as i32;
+        }
+        let after = self.drawings.clone();
+        self.record_drawing_command(DrawingCommand::Reorder { before, after });
+        self.bump_drawing_sync_revision();
+        self.drawing_runtime
+            .borrow_mut()
+            .rebuild_all(&self.drawings, self.panes.len());
+        self.invalidate_frame_drawings();
+        true
+    }
+
+    pub fn set_drawing_group(&mut self, id: DrawingId, group_id: Option<String>) -> bool {
+        if group_id
+            .as_ref()
+            .is_some_and(|group| group.len() > crate::MAX_DRAWING_GROUP_BYTES)
+        {
+            return false;
+        }
+        let value = serde_json::json!({ "group_id": group_id.unwrap_or_default() });
+        self.drawing_apply_options(id, &value.to_string())
+    }
+
+    pub fn set_drawing_visibility(&mut self, id: DrawingId, visible: bool) -> bool {
+        self.drawing_apply_options(id, &serde_json::json!({ "visible": visible }).to_string())
+    }
+
+    pub fn set_drawing_locked(&mut self, id: DrawingId, locked: bool) -> bool {
+        self.drawing_apply_options(id, &serde_json::json!({ "locked": locked }).to_string())
+    }
+
+    fn update_group<F>(&mut self, group_id: &str, mut update: F) -> usize
+    where
+        F: FnMut(&mut Drawing),
+    {
+        if group_id.is_empty() {
+            return 0;
+        }
+        let before = self.drawings.clone();
+        let mut changed = 0;
+        for drawing in &mut self.drawings {
+            if drawing.group_id.as_deref() == Some(group_id) {
+                let original = drawing.clone();
+                update(drawing);
+                if *drawing != original {
+                    drawing.revision = drawing.revision.saturating_add(1);
+                    changed += 1;
+                }
+            }
+        }
+        if changed != 0 {
+            let after = self.drawings.clone();
+            self.record_drawing_command(DrawingCommand::BatchUpdate { before, after });
+            self.bump_drawing_sync_revision();
+            self.drawing_runtime
+                .borrow_mut()
+                .rebuild_all(&self.drawings, self.panes.len());
+            self.invalidate_frame_drawings();
+        }
+        changed
+    }
+
+    pub fn set_drawing_group_visibility(&mut self, group_id: &str, visible: bool) -> usize {
+        self.update_group(group_id, |drawing| drawing.visible = visible)
+    }
+
+    pub fn set_drawing_group_locked(&mut self, group_id: &str, locked: bool) -> usize {
+        self.update_group(group_id, |drawing| drawing.locked = locked)
+    }
+
+    pub fn move_drawing_group(
+        &mut self,
+        group_id: &str,
+        logical_delta: f64,
+        price_delta: f64,
+    ) -> usize {
+        if !logical_delta.is_finite() || !price_delta.is_finite() {
+            return 0;
+        }
+        self.update_group(group_id, |drawing| {
+            if drawing.locked {
+                return;
+            }
+            for point in &mut drawing.points {
+                point.logical += logical_delta;
+                point.price += price_delta;
+            }
+        })
+    }
+
+    /// Atomically remove a set of drawings in object-tree order.
+    pub fn remove_drawings(&mut self, ids: &[DrawingId]) -> usize {
+        let mut removed = 0;
+        for id in ids
+            .iter()
+            .take(crate::MAX_DRAWING_OBJECTS)
+            .copied()
+            .collect::<Vec<_>>()
+        {
+            removed += usize::from(self.remove_drawing(id));
+        }
+        let live_ids = self
+            .drawings
+            .iter()
+            .map(|drawing| drawing.id)
+            .collect::<std::collections::HashSet<_>>();
+        self.selected_drawings.retain(|id| live_ids.contains(id));
+        self.selected_drawing = self.selected_drawings.first().copied();
+        removed
+    }
+
+    pub fn apply_drawing_template_json(&mut self, id: DrawingId, json: &str) -> bool {
+        let Ok(template) = serde_json::from_str::<crate::DrawingTemplate>(json) else {
+            return false;
+        };
+        if !template.validate()
+            || self
+                .drawing(id)
+                .is_none_or(|drawing| drawing.kind != template.kind)
+        {
+            return false;
+        }
+        let options = template.options.to_string();
+        self.drawing_apply_options(id, &options)
+    }
+
+    pub fn drawing_template_json(&self, id: DrawingId, name: &str) -> Option<String> {
+        if name.is_empty() || name.len() > crate::MAX_DRAWING_NAME_BYTES {
+            return None;
+        }
+        let drawing = self.drawing(id)?;
+        serde_json::to_string(&crate::DrawingTemplate {
+            name: name.to_string(),
+            kind: drawing.kind,
+            options: drawing.options_json(),
+        })
+        .ok()
+    }
+
+    pub fn drawing_sync_payload_json(&self, source: &str) -> Option<String> {
+        if source.is_empty() || source.len() > crate::MAX_DRAWING_GROUP_BYTES {
+            return None;
+        }
+        let drawings = self
+            .drawings
+            .iter()
+            .map(|drawing| crate::DrawingClipboardItem {
+                id: Some(drawing.id),
+                kind: drawing.kind,
+                pane_index: drawing.pane_index,
+                points: drawing.points.clone(),
+                options: drawing.options_json(),
+            })
+            .collect();
+        serde_json::to_string(&crate::DrawingSyncPayload {
+            schema: "aeris_charts-drawing-sync".to_string(),
+            source: source.to_string(),
+            revision: self.drawing_sync_revision.max(1),
+            drawings,
+        })
+        .ok()
+    }
+
+    /// Apply a complete cross-cell payload. Stale revisions and same-source echoes are ignored;
+    /// all entries are validated and staged before replacing live semantic state.
+    pub fn apply_drawing_sync_payload_json(&mut self, json: &str) -> bool {
+        let Ok(payload) = serde_json::from_str::<crate::DrawingSyncPayload>(json) else {
+            return false;
+        };
+        if payload.schema != "aeris_charts-drawing-sync"
+            || payload.source.is_empty()
+            || payload.source.len() > crate::MAX_DRAWING_GROUP_BYTES
+            || payload.revision <= self.drawing_sync_revision
+            || (payload.source == self.drawing_sync_source
+                && payload.revision <= self.drawing_sync_revision)
+            || payload.drawings.len() > crate::MAX_DRAWING_OBJECTS
+        {
+            return false;
+        }
+        let mut staged = Vec::with_capacity(payload.drawings.len());
+        let mut ids = std::collections::HashSet::new();
+        for item in payload.drawings {
+            if item.pane_index >= self.panes.len()
+                || !self.pane_uses_financial_time(item.pane_index)
+                || !ids.insert(item.id.unwrap_or(0))
+                || !item.kind.valid_point_count(item.points.len())
+                || item
+                    .points
+                    .iter()
+                    .any(|point| !point.logical.is_finite() || !point.price.is_finite())
+            {
+                return false;
+            }
+            let id = item.id.unwrap_or(0);
+            if id == 0 {
+                return false;
+            }
+            let mut drawing = Drawing::new(id, item.kind, item.pane_index, item.points);
+            let Ok(options) = serde_json::to_string(&item.options) else {
+                return false;
+            };
+            let Ok(patch) = serde_json::from_str::<DrawingPatch>(&options) else {
+                return false;
+            };
+            if !drawing.apply_patch(patch) {
+                return false;
+            }
+            staged.push(drawing);
+        }
+        self.drawings = staged;
+        self.next_drawing_id = self
+            .drawings
+            .iter()
+            .map(|drawing| drawing.id)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+        self.drawing_sync_source = payload.source;
+        self.drawing_sync_revision = payload.revision;
+        self.selected_drawing = None;
+        self.selected_drawings.clear();
+        self.drawing_history.clear();
+        self.drawing_runtime
+            .borrow_mut()
+            .rebuild_all(&self.drawings, self.panes.len());
+        self.invalidate_frame_all();
+        true
     }
 
     /// The drawing's anchors as a JSON `[{logical, price}, ...]` array. `None` for an unknown id.
@@ -2194,7 +2861,11 @@ impl ChartEngine {
         let candidates = self.take_drawing_candidates(pane_index, Some((x, y)));
         let hit = candidates.iter().rev().find_map(|&id| {
             let drawing = self.drawing(id)?;
-            if drawing.kind != DrawingKind::TrendLine {
+            if drawing.kind != DrawingKind::TrendLine
+                || !drawing.visible
+                || drawing.locked
+                || !drawing.interval_visibility.allows(self.drawing_interval)
+            {
                 return None;
             }
             let text = if drawing.text.is_empty() {
@@ -2270,6 +2941,7 @@ impl ChartEngine {
     pub fn set_selected_drawing(&mut self, id: Option<DrawingId>) {
         self.invalidate_frame_overlay();
         self.selected_drawing = id.filter(|&sid| self.drawings.iter().any(|d| d.id == sid));
+        self.selected_drawings = self.selected_drawing.into_iter().collect();
     }
 
     pub fn selected_drawing(&self) -> Option<DrawingId> {
@@ -2283,7 +2955,11 @@ impl ChartEngine {
     pub fn set_editing_drawing(&mut self, id: Option<DrawingId>) {
         let valid = id.filter(|&eid| {
             self.drawings.iter().any(|d| {
-                d.id == eid && matches!(d.kind, DrawingKind::Text | DrawingKind::TrendLine)
+                d.id == eid
+                    && !d.locked
+                    && d.visible
+                    && d.interval_visibility.allows(self.drawing_interval)
+                    && matches!(d.kind, DrawingKind::Text | DrawingKind::TrendLine)
             })
         });
         let changes_trend_placeholder =
@@ -2361,6 +3037,7 @@ impl ChartEngine {
     pub fn select_drawing_at(&mut self, x: f64, y: f64) -> bool {
         self.invalidate_frame_overlay();
         self.selected_drawing = self.hit_test_drawing(x, y).map(|hit| hit.id);
+        self.selected_drawings = self.selected_drawing.into_iter().collect();
         self.selected_drawing.is_some()
     }
 
@@ -2414,7 +3091,10 @@ impl ChartEngine {
         // defining anchor.
         if let Some(selected) = self.selected_drawing {
             if let Some(drawing) = self.drawing(selected) {
-                if drawing.pane_index == pane {
+                if drawing.pane_index == pane
+                    && drawing.visible
+                    && drawing.interval_visibility.allows(self.drawing_interval)
+                {
                     if let Some(px) = self.drawing_px(drawing) {
                         match drawing.kind.spec().handles {
                             DrawingHandleMode::None => {}
@@ -2482,7 +3162,10 @@ impl ChartEngine {
         }
         if !indexed {
             for drawing in self.drawings.iter().rev() {
-                if drawing.pane_index != pane {
+                if drawing.pane_index != pane
+                    || !drawing.visible
+                    || !drawing.interval_visibility.allows(self.drawing_interval)
+                {
                     continue;
                 }
                 let Some(px) = self.drawing_px(drawing) else {
@@ -2510,6 +3193,9 @@ impl ChartEngine {
                 let Some(drawing) = self.drawings.get(position) else {
                     continue;
                 };
+                if !drawing.visible || !drawing.interval_visibility.allows(self.drawing_interval) {
+                    continue;
+                }
                 let Some(key) = self.drawing_coordinate_key(drawing) else {
                     continue;
                 };
@@ -2552,8 +3238,12 @@ impl ChartEngine {
             self.pane_w,
             pane.top,
             pane.height,
-            drawing.width,
-            1.0,
+            DrawingGeometryOptions {
+                line_width: drawing.width,
+                device_scale: 1.0,
+                extend_left: drawing.extend_left,
+                extend_right: drawing.extend_right,
+            },
         ) else {
             return false;
         };
@@ -2679,6 +3369,12 @@ impl ChartEngine {
         let Some(drawing) = self.drawing(hit.id) else {
             return false;
         };
+        if drawing.locked {
+            // Locked objects remain selectable/hit-testable but never open a mutation session.
+            self.selected_drawing = Some(hit.id);
+            self.selected_drawings = vec![hit.id];
+            return false;
+        }
         let start_points = drawing.points.clone();
         let Some(start_px) = self.drawing_px(drawing) else {
             return false;
@@ -3706,11 +4402,30 @@ impl ChartEngine {
             &mut self.drawing_controller.brush,
         ) {
             (Some(pending), Some(capture)) => {
-                pending.drawing.apply_patch(patch.clone());
-                capture.options.apply_patch(patch);
+                let mut pending_drawing = pending.drawing.clone();
+                let mut capture_options = capture.options.clone();
+                if !pending_drawing.apply_patch(patch.clone())
+                    || !capture_options.apply_patch(patch)
+                {
+                    return false;
+                }
+                pending.drawing = pending_drawing;
+                capture.options = capture_options;
             }
-            (Some(pending), None) => pending.drawing.apply_patch(patch),
-            (None, Some(capture)) => capture.options.apply_patch(patch),
+            (Some(pending), None) => {
+                let mut drawing = pending.drawing.clone();
+                if !drawing.apply_patch(patch) {
+                    return false;
+                }
+                pending.drawing = drawing;
+            }
+            (None, Some(capture)) => {
+                let mut options = capture.options.clone();
+                if !options.apply_patch(patch) {
+                    return false;
+                }
+                capture.options = options;
+            }
             (None, None) => return false,
         }
         true

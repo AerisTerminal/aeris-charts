@@ -672,6 +672,70 @@ fn options_patch_merges_and_serializes() {
 }
 
 #[test]
+fn b2_typed_schema_state_visibility_and_locked_contract() {
+    let mut chart = settled_chart();
+    let id = add_trend(&mut chart);
+    let schema: serde_json::Value =
+        serde_json::from_str(&chart.drawing_property_schema_json(id).unwrap()).unwrap();
+    assert_eq!(schema["revision"], crate::DRAWING_CONTRACT_REVISION);
+    assert!(schema["properties"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|property| property["name"] == "locked"));
+    let kind_options: serde_json::Value =
+        serde_json::from_str(&chart.drawing_kind_options_json(id).unwrap()).unwrap();
+    assert_eq!(kind_options["kind"], "generic");
+    assert!(chart.drawing_apply_options(
+        id,
+        r#"{"name":"risk","group_id":"orders","locked":true,"visible":false,"stroke_end":"arrow"}"#,
+    ));
+    assert!(!chart.drawing_is_visible(id));
+    assert!(chart.set_drawing_visibility(id, true));
+    assert!(chart.set_drawing_locked(id, true));
+    let (x, y) = chart.drawing_point_to_coordinate(id, 0).unwrap();
+    assert!(!chart.drawing_drag_start_at(x, y));
+    assert_eq!(chart.drawing(id).unwrap().name, "risk");
+    assert_eq!(
+        chart.drawing(id).unwrap().group_id.as_deref(),
+        Some("orders")
+    );
+    let before = chart.drawing_options_json(id).unwrap();
+    assert!(!chart.drawing_apply_options(
+        id,
+        &format!(
+            r#"{{"name":"{}"}}"#,
+            "x".repeat(crate::MAX_DRAWING_NAME_BYTES + 1)
+        ),
+    ));
+    assert_eq!(chart.drawing_options_json(id).unwrap(), before);
+}
+
+#[test]
+fn b2_clipboard_clone_and_z_order_are_bounded_and_undoable() {
+    let mut chart = settled_chart();
+    let first = add_trend(&mut chart);
+    let second = chart
+        .add_drawing(
+            DrawingKind::HorizontalLine,
+            0,
+            vec![DrawingPoint {
+                logical: 4.0,
+                price: 11.0,
+            }],
+            None,
+        )
+        .unwrap();
+    let payload = chart.copy_drawings_json(&[first]).unwrap();
+    let pasted = chart.paste_drawings_json(&payload, 0, 1.0, 0.5).unwrap();
+    assert_eq!(pasted.len(), 1);
+    assert_ne!(pasted[0], first);
+    assert!(chart.move_drawing_z_order(second, -1));
+    assert!(chart.undo_drawing());
+    assert!(chart.drawing(second).is_some());
+}
+
+#[test]
 fn set_points_validates_count_and_finiteness() {
     let mut chart = settled_chart();
     let id = add_trend(&mut chart);
