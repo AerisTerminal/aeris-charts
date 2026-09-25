@@ -173,6 +173,22 @@ session IDs; none of those concerns enter the renderer.
 
 ## 7. Verification and performance evidence
 
+### Reference fixture and release baseline
+
+The dense order-flow reference view is deterministic: 20 one-minute bars, 11 price levels per
+bar, a 0.25 tick size, and paired buy/sell prints at every level. It is used by the GPUI
+`plan_bench` fixture at 1600×900 CSS pixels, DPR 1.5, and 72 px bar spacing, where detailed LOD
+must emit the cell text runs. The WebGPU `perf_gate` Target J consumes the same frame contract
+with a resolved atlas quad for every text primitive and guards a 2 ms p99 CPU-side encoding
+budget; this measures scheduling and upload preparation, not device present time.
+
+The sustained native release baseline remains Target D: 2,500 retained one-minute bars with 100
+trades per bar, a 100-bar live batch, and a 10-bar correction batch. Its budgets are 300 ms for
+historical load, 50 ms for the live batch, 300 ms for correction, and 16.67 ms for frame
+construction, with retention bounded to the configured history. Commands and thresholds are kept
+in the release examples so a clean `--release` run can be compared without importing machine-
+specific timings into the repository.
+
 Deterministic synthetic tapes cover grid boundaries, unknown-side handling, quote/tick-rule
 classification, equal timestamps and sequences, late events, corrections, session resets, all bar
 modes, bid/ask/total/delta levels, POC ties, mean-reverting Max/Min Delta paths, both imbalance sides,

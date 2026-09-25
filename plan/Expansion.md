@@ -161,7 +161,7 @@ builds a generic property panel from schemas alone, and old layouts migrate.
 **Scope:** F2, OF1, OF2, OF11, OF12, PD10. **Depends on:** the existing footprint.
 **Status:** open.
 
-- [ ] Record reference behavior and release baselines for footprint and tape-derived studies.
+- [x] Record reference behavior and release baselines for footprint and tape-derived studies.
 - [x] **F2** Chart-level trade stream handle keyed by host instrument stream; footprint rebound to
       it; classification once per event; revisions; per-dependent incremental state with a rebuild
       path; memory telemetry per stream and per dependent. Checkpoints are designed so F1 bars and
