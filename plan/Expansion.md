@@ -238,8 +238,8 @@ retention evicts both), and PD10 budgets hold on GPUI.
 - [x] **I1 volume slice:** OBV with pure, incremental, schema, persistence and package coverage.
 - [x] **I1 volume slice:** CMF with pure, incremental, schema, persistence and package coverage.
 - [x] **I1 volume slice:** MFI with pure, incremental, schema, persistence and package coverage.
-- [ ] **I1 oscillators:** CCI, Williams %R, Stochastic RSI, ROC/Momentum, MFI.
-- [ ] **I1 volume:** Volume study with MA, OBV, CMF.
+- [x] **I1 oscillators:** CCI, Williams %R, Stochastic RSI, ROC/Momentum, MFI.
+- [ ] **I1 volume:** Volume study with MA.
 - [ ] **I1 levels:** pivot points (standard, Fibonacci, Camarilla, Woodie, DeMark), ZigZag.
 - [ ] Every indicator has incremental state, rebuild equivalence, a typed schema, persistence and an
       independently computed reference fixture.
