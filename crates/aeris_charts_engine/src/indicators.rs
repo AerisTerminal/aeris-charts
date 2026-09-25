@@ -1377,7 +1377,15 @@ impl ChartEngine {
     /// Move output series into a fresh oscillator pane below everything (the public reference
     /// separate-pane default, reduced stretch).
     fn place_outputs_in_oscillator_pane(&mut self, ids: &[SeriesId]) {
-        let Some(pane) = self.add_pane(false) else {
+        let restored_pane = self.study_restore_pane_cursor.take().and_then(|index| {
+            if index > 0 && index < self.panes.len() {
+                self.study_restore_pane_cursor = Some(index + 1);
+                Some(index)
+            } else {
+                None
+            }
+        });
+        let Some(pane) = restored_pane.or_else(|| self.add_pane(false)) else {
             return;
         };
         if let Some(p) = self.panes.get_mut(pane) {

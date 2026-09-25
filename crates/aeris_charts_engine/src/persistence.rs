@@ -1695,6 +1695,7 @@ impl ChartEngine {
         }
         let mut result = self.install_validated_state(validated)?;
         let mut remapped_outputs = Vec::with_capacity(resolved.len());
+        self.study_restore_pane_cursor = Some(1);
         for (study, (source, source_input, kind, volume_source, styles)) in
             resolved.into_iter().enumerate()
         {
@@ -1724,6 +1725,7 @@ impl ChartEngine {
             }
             remapped_outputs.push(outputs);
         }
+        self.study_restore_pane_cursor = None;
         result.schema_version = PERSISTENCE_SCHEMA_VERSION_STUDIES;
         Ok(result)
     }
@@ -2005,6 +2007,7 @@ mod tests {
         };
         assert!(chart.set_indicator_output_style(bands[0], fill_style.clone()));
         let document = chart.export_state_json().unwrap();
+        let original_frame = chart.build_frame();
         let original_values = chart
             .indicator_bindings()
             .iter()
@@ -2037,6 +2040,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(restored_values, original_values);
+        assert_eq!(restored.build_frame(), original_frame);
     }
 
     #[test]

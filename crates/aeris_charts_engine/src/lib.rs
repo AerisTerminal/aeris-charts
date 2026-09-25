@@ -1547,6 +1547,10 @@ pub struct ChartEngine {
     pub(crate) left_builtin_axis_w: f64,
     pub(crate) right_builtin_axis_w: f64,
     indicators: Vec<IndicatorBinding>,
+    /// During study-state restore, persisted oscillator panes are empty until their studies are
+    /// recreated. The cursor lets the normal placement path reuse those panes without changing
+    /// interactive study creation semantics.
+    study_restore_pane_cursor: Option<usize>,
     indicator_changes: Vec<(SeriesId, IndicatorChange)>,
     /// Canonical chart-level trade streams. Footprint and future tape-derived studies refer to a
     /// stream identity instead of retaining a second provider-event tape.
@@ -1734,6 +1738,7 @@ impl ChartEngine {
             left_builtin_axis_w: 0.0,
             right_builtin_axis_w: 0.0,
             indicators: Vec::new(),
+            study_restore_pane_cursor: None,
             indicator_changes: Vec::new(),
             trade_streams: HashMap::new(),
             trade_stream_keys: HashMap::new(),
